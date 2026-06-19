@@ -154,8 +154,8 @@ struct WorkerSyncArgs {
 // Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0.
 struct MetadataArgs {
     bool enabled = false;
-    uint32_t metadata_size_bytes = 0;     // user-specified size; <= socket_page_size
-    uint32_t metadata_l1_addr = 0;        // worker-grid L1 (mesh-wide L1-sharded Buffer)
+    uint32_t metadata_size_bytes = 0;  // user-specified size; <= socket_page_size
+    uint32_t metadata_l1_addr = 0;     // worker-grid L1 (mesh-wide L1-sharded Buffer)
 };
 
 // Builds the single-core persistent H2D program for one socket / device buffer.
@@ -269,6 +269,12 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
     per_shard_spec_ = device_tensor_.tensor_spec();
 
+    // isolated_claim: claim the service core ISOLATED so it is excluded from the per-op EnqueueMeshWorkload
+    // no-mixing routing (has_any_non_isolated_claims()) — concurrent model workloads keep the fast enqueue
+    // path with no per-op dispatch tax. The persistent receiver program is then launched via direct
+    // slow-dispatch below (like the realtime profiler) instead of EnqueueMeshWorkload.
+    const bool isolated = cfg_.isolated_claim;
+
     // Each device may resolve a different free service core; record it per coord.
     auto& svc = tt::tt_metal::internal::service_core_manager();
     const auto& coords = topology.mesh_coords();
@@ -280,7 +286,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             "H2DStreamService: no claimable service core on device at coord {}",
             coord);
         const CoreCoord chosen = claimable.front();
-        svc.claim(d, {chosen});
+        svc.claim(d, {chosen}, /*isolated=*/isolated);
         service_cores_.emplace(coord, chosen);
     }
 
@@ -425,10 +431,26 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             device_tensor_.dtype(),
             worker_sync,
             metadata);
+        if (isolated) {
+            // Launch directly via slow-dispatch (like the realtime profiler). The isolated claim keeps
+            // EnqueueMeshWorkload on its fast path, so it will NOT service-route this program for us.
+            auto* ld = mesh_device_->get_device(core.device_coord);
+            tt::tt_metal::detail::LaunchProgram(
+                ld, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        }
         workload_->add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    if (isolated) {
+        // The persistent receiver was already launched per-device via direct slow-dispatch above.
+        log_info(
+            tt::LogOp,
+            "[h2d] isolated_claim: persistent receiver launched via direct slow-dispatch; the service core "
+            "is excluded from per-op EnqueueMeshWorkload routing so concurrent model ops keep the fast "
+            "enqueue path");
+    } else {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    }
 }
 
 H2DStreamService::H2DStreamService(
@@ -628,13 +650,9 @@ const Tensor& H2DStreamService::get_backing_tensor() const {
     return device_tensor_;
 }
 
-std::size_t H2DStreamService::payload_size_bytes() const {
-    return cfg_.global_spec.compute_packed_buffer_size_bytes();
-}
+std::size_t H2DStreamService::payload_size_bytes() const { return cfg_.global_spec.compute_packed_buffer_size_bytes(); }
 
-std::size_t H2DStreamService::metadata_size_bytes() const {
-    return cfg_.metadata_size_bytes;
-}
+std::size_t H2DStreamService::metadata_size_bytes() const { return cfg_.metadata_size_bytes; }
 
 std::string H2DStreamService::export_descriptor(const std::string& service_id) {
     TT_FATAL(is_owner_, "H2DStreamService::export_descriptor: only owner-side services can be exported");
@@ -735,11 +753,8 @@ void H2DStreamService::forward_to_tensor(
     ttsl::Span<const std::byte> mapper_input = bytes;
     if (cfg_.preprocessor) {
         std::memcpy(preprocess_scratch_.data(), bytes.data(), bytes.size());
-        cfg_.preprocessor(
-            ttsl::Span<std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size()),
-            metadata);
-        mapper_input = ttsl::Span<const std::byte>(
-            preprocess_scratch_.data(), preprocess_scratch_.size());
+        cfg_.preprocessor(ttsl::Span<std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size()), metadata);
+        mapper_input = ttsl::Span<const std::byte>(preprocess_scratch_.data(), preprocess_scratch_.size());
     }
 
     Tensor borrowed = make_borrowed_host_tensor(mapper_input, cfg_.global_spec);

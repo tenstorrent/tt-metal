@@ -43,7 +43,7 @@ std::pair<DeviceAddr, DeviceAddr> l1_service_range(const Hal& hal) {
 
 ServiceCoreManagerImpl::ServiceCoreManagerImpl(MetalEnvImpl& env) : env_(env) {}
 
-void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>& cores) {
+void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>& cores, bool isolated) {
     const auto& cluster = env_.get_cluster();
     TT_FATAL(
         cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE,
@@ -69,6 +69,7 @@ void ServiceCoreManagerImpl::claim(IDevice* device, const std::vector<CoreCoord>
         slot.alloc = std::make_unique<allocator::FreeListOpt>(
             size, base, dram_align, dram_align, allocator::FreeListOpt::SearchPolicy::FIRST);
         slot.alloc->init();
+        slot.isolated = isolated;
     }
 }
 
@@ -138,9 +139,24 @@ std::vector<CoreCoord> ServiceCoreManagerImpl::get_claimable_cores(IDevice* devi
 void ServiceCoreManagerImpl::on_device_close(ChipId device_id) { devices_.erase(device_id); }
 
 bool ServiceCoreManagerImpl::has_any_claims() const {
+    // Includes isolated cores: used by program placement / CB-region validation, which must account for
+    // the service kernel's core. The per-op EnqueueMeshWorkload routing uses has_any_non_isolated_claims().
     for (const auto& [id, state] : devices_) {
         if (!state.cores.empty()) {
             return true;
+        }
+    }
+    return false;
+}
+
+bool ServiceCoreManagerImpl::has_any_non_isolated_claims() const {
+    // Excludes isolated cores so model workloads keep the fast EnqueueMeshWorkload path when the only
+    // claim is an isolated (self-launched) service like the H2D stream service.
+    for (const auto& [id, state] : devices_) {
+        for (const auto& [core, slot] : state.cores) {
+            if (!slot.isolated) {
+                return true;
+            }
         }
     }
     return false;
@@ -165,6 +181,9 @@ void ServiceCoreManagerImpl::mark_launched(ChipId device_id, CoreCoord core) {
 }
 
 bool ServiceCoreManagerImpl::is_service_core(ChipId device_id, CoreCoord core) const {
+    // Includes isolated cores: program-placement validation (program.cpp) must still permit the service
+    // kernel on this dispatch-column core. Only has_any_claims() excludes isolated (to skip the per-op
+    // EnqueueMeshWorkload routing for model workloads).
     auto it = devices_.find(device_id);
     return it != devices_.end() && it->second.cores.contains(core);
 }
@@ -258,7 +277,9 @@ ServiceCoreManager::~ServiceCoreManager() = default;
 std::vector<CoreCoord> ServiceCoreManager::get_claimable_cores(IDevice* device) const {
     return pimpl_->get_claimable_cores(device);
 }
-void ServiceCoreManager::claim(IDevice* device, const std::vector<CoreCoord>& cores) { pimpl_->claim(device, cores); }
+void ServiceCoreManager::claim(IDevice* device, const std::vector<CoreCoord>& cores, bool isolated) {
+    pimpl_->claim(device, cores, isolated);
+}
 void ServiceCoreManager::release(IDevice* device, const std::vector<CoreCoord>& cores) {
     pimpl_->release(device, cores);
 }

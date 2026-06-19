@@ -608,6 +608,11 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     h2d_service = None
     if is_first_rank:
         mesh_device.clear_loaded_sub_device_manager()
+        # The service's per-push token buffer holds one chunk (the request loop streams one chunk per push).
+        # isolated_claim: the resident service no longer adds a per-op dispatch tax to forward_chunk
+        # (claimed isolated + launched via direct slow-dispatch). Opt-in via PREFILL_H2D_ISOLATED_CLAIM
+        # (default on). See H2D_DISPATCH_TAX.md.
+        h2d_isolated_claim = os.environ.get("PREFILL_H2D_ISOLATED_CLAIM", "1") == "1"
         h2d_service = build_h2d_service(
             mesh_device,
             mesh_shape=GLOBAL_MESH_SHAPE,
@@ -615,6 +620,7 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
             mapper_config=H2D_MAPPER_CONFIG,
             worker_cores=H2D_SYNC_WORKER_CORES,
             metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+            isolated_claim=h2d_isolated_claim,
         )
         service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
         descriptor_path = h2d_service.export_descriptor(service_id)

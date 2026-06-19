@@ -40,7 +40,11 @@ public:
 
     // ── User-facing surface (forwarded by ServiceCoreManager) ──────────────────────────────────
     std::vector<CoreCoord> get_claimable_cores(IDevice* device) const;
-    void claim(IDevice* device, const std::vector<CoreCoord>& cores);
+    // `isolated` cores get a per-core L1 allocator (and CB-collision protection) like a normal claim, but
+    // are EXCLUDED from has_any_claims()/is_service_core()/claimed_cores(). Used by services that launch
+    // their own program via direct slow-dispatch (like the RT profiler) instead of EnqueueMeshWorkload's
+    // service-routing path — so the per-op no-mixing validation is never triggered for model workloads.
+    void claim(IDevice* device, const std::vector<CoreCoord>& cores, bool isolated = false);
     void release(IDevice* device, const std::vector<CoreCoord>& cores);
     void wait_done(IDevice* device, CoreCoord core) const;
     std::unordered_set<CoreCoord> claimed_cores(ChipId device_id) const;
@@ -71,7 +75,11 @@ public:
     std::optional<CoreCoord> get_safe_compute_grid(ChipId device_id) const;
 
     // Called on every EnqueueMeshWorkload - common case is no claims, in which case routing is skipped.
+    // has_any_claims() includes isolated cores (used by program placement / CB validation).
     bool has_any_claims() const;
+    // Excludes isolated cores. Used at the EnqueueMeshWorkload routing gate so an isolated (self-launched)
+    // service does NOT force every model op through the no-mixing validation loop.
+    bool has_any_non_isolated_claims() const;
     // True if `core` is claimed as a service core on `device_id`. Used at enqueue time to route
     // programs to the SD path and to device-scope placement/CB validation.
     bool is_service_core(ChipId device_id, CoreCoord core) const;
@@ -87,6 +95,7 @@ private:
     struct CoreState {
         std::unique_ptr<allocator::FreeListOpt> alloc;
         bool launched = false;  // a service workload has been enqueued on this core (launch-once)
+        bool isolated = false;  // excluded from has_any_claims/is_service_core/claimed_cores (self-launched)
     };
     struct DeviceServiceState {
         std::unordered_map<CoreCoord, CoreState> cores;
