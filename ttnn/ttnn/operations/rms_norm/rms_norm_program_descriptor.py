@@ -311,6 +311,9 @@ def _regime_a_descriptor(
         CB_PARTIAL_SUMSQ,  # cb_local_sumsq (unused in Regime A; num_partials==1 elides it)
         gamma_is_rm,
         CB_GAMMA_RM,
+        0,  # layout_is_rm = 0 (TILE input)
+        CB_INPUT_RESIDENT,  # cb_rm_in (unused for TILE)
+        CB_OUTPUT,  # cb_rm_out (unused for TILE)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -528,6 +531,9 @@ def _regime_b_descriptor(
         CB_LOCAL_SUMSQ,
         gamma_is_rm,
         CB_GAMMA_RM,
+        0,  # layout_is_rm = 0 (TILE input)
+        CB_INPUT_RESIDENT,  # cb_rm_in (unused for TILE)
+        CB_OUTPUT,  # cb_rm_out (unused for TILE)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -612,8 +618,12 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         cb(CB_RM_OUT_TILED, dt, db * reduce_block),
     ]
     if has_gamma:
+        # CB_RM_GAMMA: ROW_MAJOR gamma stick staging (double-buffered chunks; only
+        # fed when gamma is ROW_MAJOR). CB_RM_GAMMA_TILED: resident tiled gamma
+        # (Wt_padded tiles), the unified compute's resident-gamma model — read once,
+        # held across all blocks, indexed by per-chunk TileOffset in PASS-2.
         cbs.append(cb(CB_RM_GAMMA, gamma_dt, db * reduce_block))
-        cbs.append(cb(CB_RM_GAMMA_TILED, gamma_dt, db * reduce_block))
+        cbs.append(cb(CB_RM_GAMMA_TILED, gamma_dt, Wt_padded))
         cbs.append(cb(CB_RM_NORMALIZED, inter, reduce_block))
 
     # ---------- reader ----------
@@ -667,28 +677,33 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         config=ttnn.WriterConfigDescriptor(),
     )
 
-    # ---------- compute ----------
+    # ---------- compute (unified kernel; layout_is_rm = 1) ----------
+    gamma_is_rm = 1 if (has_gamma and not gamma_is_tile) else 0
     compute_ct = [
-        CB_RM_IN,
-        CB_RM_GAMMA,
-        CB_RM_GAMMA_TILED,
+        CB_RM_INPUT_RESIDENT,  # cb_input_resident (tilize dest, resident)
+        CB_RM_GAMMA_TILED,  # cb_gamma (resident tiled gamma)
         CB_SCALER,
-        CB_RM_OUT,
-        CB_RM_INPUT_RESIDENT,
+        CB_PARTIALS_GATHERED,  # cb_partials_gathered (unused; num_partials==1)
+        CB_RM_OUT_TILED,  # cb_pass2_out (untilize source)
         CB_RM_SQUARED,
         CB_RM_PARTIAL_SUMSQ,
         CB_RM_RECIP_RMS,
         CB_RM_NORMALIZED,
-        CB_RM_OUT_TILED,
+        Wt_padded,  # Wt (padded shard width -> every chunk is a full reduce_block)
         reduce_block,
-        num_chunks,
         int(has_gamma),
-        gamma_is_tile,
         inv_W_bits,
         eps_bits,
+        1,  # num_partials = 1 (row-parallel RM)
+        CB_RM_PARTIAL_SUMSQ,  # cb_local_sumsq (unused; num_partials==1)
+        gamma_is_rm,  # ROW_MAJOR gamma -> tilize once into cb_gamma
+        CB_RM_GAMMA,  # cb_gamma_rm (stick staging)
+        1,  # layout_is_rm = 1 (ROW_MAJOR input)
+        CB_RM_IN,  # cb_rm_in (input stick source -> tilize)
+        CB_RM_OUT,  # cb_rm_out (untilize dest)
     ]
     compute_kernel = ttnn.KernelDescriptor(
-        kernel_source=str(KERNEL_DIR / "rms_norm_compute_rm.cpp"),
+        kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
         core_ranges=core_ranges,
         compile_time_args=compute_ct,
         runtime_args=compute_rt,

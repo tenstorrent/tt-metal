@@ -32,3 +32,6 @@
 {"event":"fix_applied","note":"Golden 350 fails were host-side ValueError: element_size() on bf8b tensor (block format has no datum size). gamma_elem now only computed when gamma is RM (non-bf8b). bf8b+non-aligned works numerically pcc>=0.9999 once crash fixed.","ts":"2026-06-19T18:16:47+00:00"}
 {"event":"test_run","status":"pass","test":"golden test_golden.py","params":"full suite","detail":"1683 passed, 2940 skipped, 420 xfailed, 0 failed, 0 xpass-drift (was 1333 passed/350 failed)","ts":"2026-06-19T18:19:29+00:00"}
 {"event":"test_run","status":"pass","test":"test_rms_norm_layout_matrix.py","params":"10 shapes x {bf16,fp32} x {TILE,RM} x 3 gamma modes","detail":"120 passed; output layout matches input","ts":"2026-06-19T18:29:18+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-06-19T19:11:57+00:00"}
+{"event":"test_run","status":"pass","tests":"test_rms_norm.py + test_rms_norm_layout_matrix.py","detail":"baseline green 140 passed before R4 refactor","ts":"2026-06-19T19:16:38+00:00"}
+{"event":"test_run","status":"pass","tests":"layout_matrix(120)+acceptance+regime_b","detail":"Phase 1: unified single compute kernel, RM resident-gamma model; TILE byte-identical, no regression","ts":"2026-06-19T19:24:45+00:00"}

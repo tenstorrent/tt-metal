@@ -1,14 +1,30 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 // SPDX-License-Identifier: Apache-2.0
 //
-// rms_norm compute kernel (shared by Regime A and Regime B).
+// rms_norm UNIFIED compute kernel — the single compute for all paths
+// (TILE Regime A, TILE Regime B mcast, ROW_MAJOR tilize-wrapped, and ROW_MAJOR
+// routed through the mcast all-gather). Refinement 4 merged the former
+// rms_norm_compute.cpp (TILE) and rms_norm_compute_rm.cpp (RM) into this one
+// kernel: the TILE-vs-RM difference is purely a data-access boundary (sticks vs
+// tiles), expressed here as a constexpr tilize prologue + untilize epilogue. The
+// core square -> reduce -> rsqrt -> normalize arithmetic is shared verbatim, and
+// for the bf16/TILE Phase-0 corner this kernel is numerically byte-identical to
+// the pre-R4 compute.
 //
-// Per tile-row block (Phase 0: bh = 1 tile-row, Wt_s tiles wide):
-//   PASS 1   sum of squares over the resident shard, chunked by REDUCE_BLOCK
+// Per resident shard (one tile-row, Wt tiles wide; RM: Wt = num_chunks*reduce_block,
+// the padded shard width so each chunk is a full reduce_block):
+//   [RM]     tilize cb_rm_in chunks -> cb_input_resident (held resident)
+//   PASS 1   sum of squares over the resident shard, chunked by reduce_block
 //            (square -> reduce<SUM,REDUCE_ROW,Accumulate>) -> cb_partial_sumsq
-//   [B]      combine the K gathered partials (plain elementwise add) -> cb_partial_sumsq
+//   [B]      combine the K gathered partials (copy slot 0 + K-1 adds) -> cb_partial_sumsq
 //   FINALIZE rsqrt(sum * inv_W + eps) -> cb_recip_rms
-//   PASS 2   normalize x * recip (Col bcast) [* gamma (Row bcast)] -> cb_output
+//   PASS 2   normalize x * recip (Col bcast) [* gamma (Row bcast)] -> cb_pass2_out
+//   [RM]     untilize cb_pass2_out chunk -> cb_rm_out (writer drains sticks)
+//
+// Gamma is unified to the resident model regardless of layout: TILE gamma is fed
+// as resident column tiles by the reader; ROW_MAJOR gamma is staged as sticks in
+// cb_gamma_rm and tilized ONCE into cb_gamma here. PASS-2 always reads cb_gamma at
+// an explicit per-chunk TileOffset — identical for every layout/regime.
 //
 // Helpers own all CB and DST ops; manual CB ops only appear between helper calls.
 // Caller (this kernel) owns the single compute_kernel_hw_startup at boot.
@@ -17,6 +33,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -31,32 +48,36 @@ void kernel_main() {
     constexpr uint32_t cb_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t cb_scaler = get_compile_time_arg_val(2);
     constexpr uint32_t cb_partials_gathered = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_output = get_compile_time_arg_val(4);
+    constexpr uint32_t cb_pass2_out = get_compile_time_arg_val(4);  // TILE: cb_output; RM: cb_out_tiled
     constexpr uint32_t cb_squared = get_compile_time_arg_val(5);
     constexpr uint32_t cb_partial_sumsq = get_compile_time_arg_val(6);
     constexpr uint32_t cb_recip_rms = get_compile_time_arg_val(7);
     constexpr uint32_t cb_normalized = get_compile_time_arg_val(8);
-    constexpr uint32_t Wt = get_compile_time_arg_val(9);  // tiles per shard along W
+    constexpr uint32_t Wt = get_compile_time_arg_val(9);  // tiles per shard along W (RM: padded)
     constexpr uint32_t reduce_block = get_compile_time_arg_val(10);
     constexpr uint32_t has_gamma = get_compile_time_arg_val(11);
     constexpr uint32_t inv_W_bits = get_compile_time_arg_val(12);    // fp32 bits of 1/W
     constexpr uint32_t eps_bits = get_compile_time_arg_val(13);      // fp32 bits of epsilon
     constexpr uint32_t num_partials = get_compile_time_arg_val(14);  // K (1 in Regime A)
     // Regime B only: dedicated single-push CB that hands the fully-accumulated local
-    // Sum(x^2) to the reader's mcast all-gather. Decoupling this from cb_partial_sumsq
-    // (the PASS-1 accumulator, whose front transiently advances mid-accumulation) is the
-    // Refinement-1 correctness fix — see the combine block below. Unused in Regime A.
+    // Sum(x^2) to the reader's mcast all-gather (Refinement-1 correctness fix). Unused
+    // when num_partials == 1.
     constexpr uint32_t cb_local_sumsq = get_compile_time_arg_val(15);
-    // Refinement 3: when gamma is supplied ROW_MAJOR (1,1,1,W) but the input is
-    // TILE, the reader fills cb_gamma_rm with row-major gamma sticks and this
-    // kernel tilizes them ONCE into cb_gamma (resident) before the row loop. For
-    // TILE gamma (gamma_is_rm == 0, the default) the reader fills cb_gamma
-    // directly and this block is elided — byte-identical to prior phases.
+    // gamma supplied ROW_MAJOR (1,1,1,W): reader fills cb_gamma_rm with gamma sticks
+    // and this kernel tilizes them ONCE into cb_gamma. For TILE gamma (gamma_is_rm==0)
+    // the reader fills cb_gamma directly and this block is elided.
     constexpr uint32_t gamma_is_rm = get_compile_time_arg_val(16);
     constexpr uint32_t cb_gamma_rm = get_compile_time_arg_val(17);
+    // Refinement 4: input supplied ROW_MAJOR. Reader fills cb_rm_in with input sticks;
+    // this kernel tilizes them per chunk into cb_input_resident and untilizes the
+    // per-chunk pass-2 result from cb_pass2_out into cb_rm_out. For TILE (==0) the
+    // reader fills cb_input_resident directly and the writer drains cb_pass2_out.
+    constexpr uint32_t layout_is_rm = get_compile_time_arg_val(18);
+    constexpr uint32_t cb_rm_in = get_compile_time_arg_val(19);
+    constexpr uint32_t cb_rm_out = get_compile_time_arg_val(20);
 
     // ---- runtime args ----
-    const uint32_t num_rows = get_arg_val<uint32_t>(0);
+    const uint32_t num_rows = get_arg_val<uint32_t>(0);  // RM: number of 32-stick blocks
 
     using ckl::Accumulate;
     using ckl::BinaryDataFormatReconfig;
@@ -75,13 +96,17 @@ void kernel_main() {
     using ckl::ReduceInputPolicy;
     using ckl::TileOffset;
 
-    compute_kernel_hw_startup(cb_input_resident, cb_scaler, cb_output);
+    if constexpr (layout_is_rm) {
+        compute_kernel_hw_startup(cb_rm_in, cb_input_resident);
+    } else {
+        compute_kernel_hw_startup(cb_input_resident, cb_scaler, cb_pass2_out);
+    }
 
     constexpr uint32_t num_chunks = (Wt + reduce_block - 1) / reduce_block;
 
-    // ROW_MAJOR gamma (with TILE input): tilize the gamma sticks into cb_gamma
-    // once, resident for all rows. cb_gamma is sized to num_chunks*reduce_block
-    // tiles here (the descriptor pads it); PASS-2 only reads offsets [0, Wt).
+    // ROW_MAJOR gamma: tilize the staged gamma sticks into cb_gamma once, resident
+    // for all rows. cb_gamma is sized to num_chunks*reduce_block tiles (the descriptor
+    // pads it); PASS-2 reads offsets [0, Wt).
     if constexpr (has_gamma && gamma_is_rm) {
         for (uint32_t c = 0; c < num_chunks; ++c) {
             ckl::tilize<reduce_block, cb_gamma_rm, cb_gamma>(1);
@@ -89,6 +114,13 @@ void kernel_main() {
     }
 
     for (uint32_t row = 0; row < num_rows; ++row) {
+        // ---------- [RM] tilize input sticks -> resident tiles ----------
+        if constexpr (layout_is_rm) {
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                ckl::tilize<reduce_block, cb_rm_in, cb_input_resident>(1);
+            }
+        }
+
         // ---------- PASS 1: sum of squares over the resident shard ----------
         for (uint32_t c = 0; c < num_chunks; ++c) {
             const uint32_t base = c * reduce_block;
@@ -124,21 +156,12 @@ void kernel_main() {
 
         // ---------- (Regime B) cross-core combine ----------
         if constexpr (num_partials > 1) {
-            // (1) Hand the FULLY-accumulated local Sum(x^2) to the reader on a dedicated,
-            //     single-push CB. PASS-1's reduce-accumulate pushes/pops cb_partial_sumsq
-            //     once per W-chunk, so the reader could not safely cb_wait_front it (a wait
-            //     for 1 tile is satisfied after the FIRST chunk, mid-accumulation, and the
-            //     final sum lands in a different physical page). copy<> here pops
-            //     cb_partial_sumsq (Streaming) AND pushes cb_local_sumsq exactly once, after
-            //     the whole accumulation is complete — the reader's wait now observes only
-            //     the final value. Popping cb_partial_sumsq also empties it so the combine
-            //     below can reuse it with no stale-front aliasing.
+            // (1) Hand the FULLY-accumulated local Sum(x^2) to the reader on a dedicated
+            //     single-push CB (copy also pops cb_partial_sumsq, emptying it).
             ckl::copy<cb_partial_sumsq, cb_local_sumsq>(EltwiseShape::tiles(1));
 
-            // (2) The reader all-gathers K peer partials into cb_partials_gathered (one
-            //     column-tile per W-shard). Their plain elementwise sum is the global
-            //     Sum(x^2) over the full W. cb_partial_sumsq is now empty, so this stream
-            //     (copy slot 0, then in-place add the remaining K-1) accumulates cleanly.
+            // (2) The reader all-gathered K peer partials into cb_partials_gathered;
+            //     their plain elementwise sum is the global Sum(x^2) over the full W.
             ckl::copy<cb_partials_gathered, cb_partial_sumsq>(EltwiseShape::tiles(1));
             for (uint32_t k = 1; k < num_partials; ++k) {
                 ckl::add<cb_partials_gathered, cb_partial_sumsq, cb_partial_sumsq>(EltwiseShape::tiles(1));
@@ -156,16 +179,9 @@ void kernel_main() {
 
         // ---------- PASS 2: normalize ----------
         if constexpr (has_gamma) {
-            // Streaming fused Col->Row multiply, chunked by REDUCE_BLOCK. cb_normalized is
-            // sized to ONE block (not Wt), so the per-core L1 footprint no longer scales
-            // with the shard width — the sanctioned pass-2 optimization (op_design.md
-            // "Helpers considered", verification_report.md deferred item). Per chunk:
-            //   x[next block] * recip (Col bcast) -> cb_normalized
-            //   cb_normalized * gamma[block] (Row bcast) -> cb_output
-            // Lifecycles: cb_input_resident streams in shard order (this is its single
-            // PASS-2 pop, cw per chunk summing to Wt); cb_recip_rms is held across chunks
-            // and freed once at the end of the row; cb_gamma is held resident (indexed by
-            // an explicit per-chunk TileOffset) and reused across this core's rows.
+            // Streaming fused Col->Row multiply, chunked by reduce_block. cb_normalized is
+            // sized to ONE block (not Wt), so per-core L1 does not scale with shard width.
+            // Per chunk: x * recip (Col bcast) -> cb_normalized; * gamma (Row bcast) -> out.
             for (uint32_t c = 0; c < num_chunks; ++c) {
                 const uint32_t base = c * reduce_block;
                 const uint32_t cw = (base + reduce_block <= Wt) ? reduce_block : (Wt - base);
@@ -200,15 +216,43 @@ void kernel_main() {
                         OperandKind::Block,
                         TileOffset::Unset,
                         TileOffset::Set>{0, base},
-                    PackTile<cb_output, OutputLifecycle::Streaming>{});
+                    PackTile<cb_pass2_out, OutputLifecycle::Streaming>{});
+
+                if constexpr (layout_is_rm) {
+                    ckl::untilize<reduce_block, cb_pass2_out, cb_rm_out>(1);
+                }
             }
             // recip was held across the chunk loop; free this row's tile.
             cb_pop_front(cb_recip_rms, 1);
+        } else if constexpr (layout_is_rm) {
+            // No-gamma RM: chunked Col-bcast multiply so the per-chunk untilize can
+            // interleave (recip held across chunks, freed once at the row's end).
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                ckl::eltwise_chain(
+                    EltwiseShape::tiles(reduce_block),
+                    BinaryFpu<
+                        cb_input_resident,
+                        cb_recip_rms,
+                        BinaryFpuOp::Mul,
+                        BroadcastDim::Col,
+                        InputLifecycle::Streaming,
+                        InputLifecycle::HeldBulk,
+                        BinaryDataFormatReconfig::Input,
+                        Dst::D0,
+                        OperandKind::Scalar,
+                        OperandKind::Scalar>{},
+                    PackTile<cb_pass2_out, OutputLifecycle::Streaming>{});
+
+                ckl::untilize<reduce_block, cb_pass2_out, cb_rm_out>(1);
+            }
+            cb_pop_front(cb_recip_rms, 1);
         } else {
+            // No-gamma TILE: single Col-bcast multiply over the whole shard
+            // (byte-identical to the pre-R4 compute).
             ckl::mul<
                 cb_input_resident,
                 cb_recip_rms,
-                cb_output,
+                cb_pass2_out,
                 BroadcastDim::Col,
                 InputLifecycle::Streaming,
                 InputLifecycle::Bulk>(EltwiseShape::tiles(Wt));

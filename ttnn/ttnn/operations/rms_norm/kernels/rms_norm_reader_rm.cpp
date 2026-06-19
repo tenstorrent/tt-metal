@@ -4,25 +4,22 @@
 // rms_norm ROW_MAJOR reader (tilize-wrapped, row-parallel / Regime A style).
 //
 // Reads row-major sticks (one per (b,c,h) position; the RMS is computed
-// independently per stick over its W elements) and feeds them to compute for
-// tilize. The op is chunked along W by `reduce_block` tiles: per 32-stick
-// tile-block, the reader pushes `num_chunks` chunks of `reduce_block` tile-pages
-// each, so the per-core L1 footprint is bounded regardless of W.
+// independently per stick over its W elements) and feeds them to the unified
+// compute for tilize. Chunked along W by `reduce_block` tiles, so the per-core
+// L1 footprint is bounded regardless of W.
+//
+// Refinement 4: gamma is fed ONCE into a resident CB (the unified compute's
+// resident-gamma model), matching the TILE readers. TILE gamma is read as Wt
+// column tiles (padding tiles to Wt_padded zeroed) directly into cb_gamma_tiled;
+// ROW_MAJOR gamma is read as num_chunks chunks of sticks into cb_gamma_rm and
+// compute tilizes it once into cb_gamma_tiled.
 //
 // Native non-aligned handling (no host-side pad/slice):
 //   - W non-aligned: the trailing columns of the last real W-tile (and any
-//     wholly-synthetic padding tiles needed to round Wt up to a multiple of
-//     reduce_block) are ZEROED here so they contribute 0 to the per-stick
-//     sum-of-squares. The compute kernel uses inv_W = 1/W (true element count),
-//     so the RMS denominator counts only valid elements.
+//     wholly-synthetic padding tiles) are ZEROED here so they contribute 0 to
+//     the per-stick sum-of-squares. inv_W = 1/W (true count) in compute.
 //   - H non-aligned: the last tile-block has < 32 valid sticks; the extra
-//     padding sticks are zeroed (their garbage output rows are never written by
-//     the writer, which writes only the valid sticks).
-//
-// Gamma (optional, RM (1,1,1,W)) is STREAMED per block in PASS-2 order: only
-// stick row 0 carries gamma data; the row-broadcast multiply in compute reads
-// only row 0, and gamma padding columns multiply solely into padding output
-// columns (discarded), so gamma padding needs no zeroing.
+//     padding sticks are zeroed (never written by the writer).
 
 #include <stdint.h>
 
@@ -78,10 +75,63 @@ void kernel_main() {
     constexpr uint32_t gamma_tile_row_bytes = TILE_W * gamma_elem;
     constexpr uint32_t gamma_padded_chunk_bytes = reduce_block * gamma_tile_row_bytes;
     constexpr uint32_t chunk_cols = reduce_block * TILE_W;  // columns spanned by one chunk
+    constexpr uint32_t Wt_padded = num_chunks * reduce_block;
 
     // 2-arg TensorAccessor: page size taken from the tensor's encoded layout
     // (the row-major stick size), NOT the tile size.
     const auto input_accessor = TensorAccessor(input_args, input_addr);
+
+    // ---- gamma read ONCE into a resident CB (unified resident-gamma model) ----
+    if constexpr (has_gamma) {
+        if constexpr (gamma_is_tile) {
+            // gamma is TILE (1,1,1,W) -> Wt column tiles, data in row 0. Read Wt real
+            // tiles into cb_gamma_tiled; zero the (Wt_padded - Wt) synthetic padding
+            // tiles. Compute holds these resident across all blocks.
+            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiled);
+            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+            cb_reserve_back(cb_gamma_tiled, Wt_padded);
+            uint32_t l1 = get_write_ptr(cb_gamma_tiled);
+            for (uint32_t gt = 0; gt < Wt_padded; ++gt) {
+                if (gt < Wt) {
+                    noc_async_read_tile(gt, gamma_accessor, l1);
+                } else {
+                    zero_l1(l1, gamma_tile_bytes);
+                }
+                l1 += gamma_tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma_tiled, Wt_padded);
+        } else {
+            // gamma is ROW_MAJOR (1,1,1,W): one stick. Stage num_chunks chunks of
+            // reduce_block tile-pages (row 0 carries data); compute tilizes once into
+            // cb_gamma_tiled. Padding columns are zeroed (kept well-formed).
+            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                const uint32_t col0 = c * chunk_cols;
+                uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
+                if (valid_cols > chunk_cols) {
+                    valid_cols = chunk_cols;
+                }
+                const uint32_t chunk_row_bytes = valid_cols * gamma_elem;
+                const uint32_t byte_off = col0 * gamma_elem;
+
+                cb_reserve_back(cb_gamma_rm, reduce_block);
+                uint32_t l1 = get_write_ptr(cb_gamma_rm);
+                if (chunk_row_bytes > 0) {
+                    const uint32_t zstart = chunk_row_bytes & ~3u;
+                    if (zstart < gamma_padded_chunk_bytes) {
+                        zero_l1(l1 + zstart, gamma_padded_chunk_bytes - zstart);
+                    }
+                    const uint64_t noc_addr = gamma_accessor.get_noc_addr(0, byte_off);
+                    noc_async_read(noc_addr, l1, chunk_row_bytes);
+                } else {
+                    zero_l1(l1, gamma_padded_chunk_bytes);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_gamma_rm, reduce_block);
+            }
+        }
+    }
 
     for (uint32_t b = 0; b < num_blocks; ++b) {
         const uint32_t global_block = start_block + b;
@@ -121,63 +171,6 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_rm_in, reduce_block);
-        }
-
-        // ---- PASS-2 gamma feed (streamed, per chunk) ----
-        if constexpr (has_gamma) {
-            if constexpr (gamma_is_tile) {
-                // gamma is already TILE-laid-out (1,1,1,W) -> Wt column tiles, data
-                // in row 0 of each tile. Read tiles directly into cb_gamma_tiled
-                // (compute skips the tilize step). Synthetic padding tiles (beyond
-                // Wt, when reduce_block doesn't divide Wt) are zeroed.
-                const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_tiled);
-                const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
-                for (uint32_t c = 0; c < num_chunks; ++c) {
-                    cb_reserve_back(cb_gamma_tiled, reduce_block);
-                    uint32_t l1 = get_write_ptr(cb_gamma_tiled);
-                    for (uint32_t t = 0; t < reduce_block; ++t) {
-                        const uint32_t gt = c * reduce_block + t;
-                        if (gt < Wt) {
-                            noc_async_read_tile(gt, gamma_accessor, l1);
-                        } else {
-                            zero_l1(l1, gamma_tile_bytes);
-                        }
-                        l1 += gamma_tile_bytes;
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_gamma_tiled, reduce_block);
-                }
-            } else {
-                // gamma is ROW_MAJOR (1,1,1,W): one stick. Only row 0 carries data;
-                // the row-broadcast multiply reads only row 0, and gamma padding
-                // columns multiply into padding output columns (discarded), so the
-                // padding tail is zeroed just to keep the tile well-formed.
-                const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
-                for (uint32_t c = 0; c < num_chunks; ++c) {
-                    const uint32_t col0 = c * chunk_cols;
-                    uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
-                    if (valid_cols > chunk_cols) {
-                        valid_cols = chunk_cols;
-                    }
-                    const uint32_t chunk_row_bytes = valid_cols * gamma_elem;
-                    const uint32_t byte_off = col0 * gamma_elem;
-
-                    cb_reserve_back(cb_gamma_rm, reduce_block);
-                    uint32_t l1 = get_write_ptr(cb_gamma_rm);
-                    if (chunk_row_bytes > 0) {
-                        const uint32_t zstart = chunk_row_bytes & ~3u;
-                        if (zstart < gamma_padded_chunk_bytes) {
-                            zero_l1(l1 + zstart, gamma_padded_chunk_bytes - zstart);
-                        }
-                        const uint64_t noc_addr = gamma_accessor.get_noc_addr(0, byte_off);
-                        noc_async_read(noc_addr, l1, chunk_row_bytes);
-                    } else {
-                        zero_l1(l1, gamma_padded_chunk_bytes);
-                    }
-                    noc_async_read_barrier();
-                    cb_push_back(cb_gamma_rm, reduce_block);
-                }
-            }
         }
     }
 }

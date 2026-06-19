@@ -175,3 +175,233 @@ in manipulation ops is a `[~]` partial-tick escape hatch only (name it in the
 changelog and file the in-kernel follow-up) — it is **not** the default.
 **Done when** the ROW_MAJOR and non-aligned golden cells pass natively at the
 bf16 tolerance band, output layout matching input.
+
+---
+
+## Non-registry refinements (code-quality + performance)
+
+> Refinements 4–6 add **no** `SUPPORTED` axis value — the TARGET universe is
+> already fully covered (1683/1683 golden passing as of Refinement 3). They are
+> structural / correctness-preserving / performance work, the same shape as
+> Refinement 1 (a pure fix that added no axis). Consequently:
+> - **No drift signal applies** — `verify_supported` must stay all-green with
+>   0 `xpass_drift` / 0 `supported_fail` throughout; do not look for new cells.
+> - **Non-regression is the hard gate**: the full golden suite stays
+>   **1683/1683**, `test_rms_norm_precision_matrix.py`, `test_rms_norm_layout_matrix.py`,
+>   `test_rms_norm_regime_b.py`, and `test_rms_norm.py` all stay green. Any red
+>   cell means the refactor changed behavior — fix before ticking.
+> - **Ordering / coupling**: R4 and R5 both rewrite the compute kernel(s) and
+>   should be co-designed (do R5's simplification first, then fold the result
+>   into R4's unification, OR land them as one combined kernel rewrite — the
+>   implementer's call, recorded in `changelog.md`). R6 (perf tuning) lands
+>   **last**, on the clean unified base, so its measurements reflect the final
+>   structure.
+
+### [ ] Refinement 4 — Unify the kernel set (7 → 3–4 max; single compute non-negotiable)
+
+**Goal**: collapse the current **7 kernels** to **3–4 total**. The **one
+non-negotiable** is a **single compute kernel** — the two computes must merge.
+Unifying the readers (and writers) is **preferred** and is the path to the 3–4
+budget, but not mandatory in the same hard sense as the compute. Also make the
+ROW_MAJOR path use the **same cross-core mcast all-gather** as TILE Regime B
+instead of being row-parallel-only.
+
+Current inventory (all in `kernels/`):
+- `rms_norm_compute.cpp` (TILE math) **and** `rms_norm_compute_rm.cpp` (RM:
+  tilize → identical TILE math → untilize) — **two computes** doing the same
+  core arithmetic. Merge into one.
+- `rms_norm_reader.cpp` (Regime A, TILE), `rms_norm_reader_mcast.cpp`
+  (Regime B all-gather, TILE), `rms_norm_reader_rm.cpp` (RM sticks, no mcast).
+- `rms_norm_writer.cpp` (TILE), `rms_norm_writer_rm.cpp` (RM sticks).
+
+**Three concrete defects this removes**:
+1. **Duplicated math.** `rms_norm_compute_rm.cpp:84-188` is byte-for-byte the same
+   square→reduce→rsqrt→normalize as `rms_norm_compute.cpp` with a `tilize` prologue
+   and `untilize` epilogue bolted on. The TILE-vs-RM difference is purely a
+   data-access boundary (sticks vs tiles), which belongs in the dataflow kernels
+   (or a constexpr-gated tilize/untilize wrap), **not** a forked compute. Unify to
+   one compute parameterized by a `layout_is_rm` (or tilize-wrap) compile-time arg.
+2. **Three forked readers.** `rms_norm_reader.cpp` (Regime A TILE),
+   `rms_norm_reader_mcast.cpp` (Regime B all-gather TILE), and
+   `rms_norm_reader_rm.cpp` (RM sticks, no mcast) are three kernels for what is one
+   read-then-optionally-all-gather flow. Unify into **one reader** gated by
+   compile-time args (`layout_is_rm`, `num_partials`) — a degenerate `num_partials==1`
+   is the Regime-A no-gather case, sticks-vs-tiles is the layout branch. This is the
+   bulk of getting to ≤4 kernels.
+3. **RM never goes cross-core.** `_regime_rm_descriptor` is row-parallel only
+   (`rms_norm_program_descriptor.py:134` short-circuits before the A/B heuristic),
+   so a wide-W ROW_MAJOR row that exceeds one core's L1 budget has **no** Regime-B
+   fallback — it either OOMs or under-parallelizes. After unification the RM legs
+   must route through the **same** `_select_k` / mcast all-gather path (the
+   tilize-wrapped sticks become the resident shard; the partial-Σx² combine is
+   identical). This is also a prerequisite for R6 measuring RM perf on wide shapes.
+
+**Where to look**:
+- `kernels/rms_norm_compute.cpp` vs `kernels/rms_norm_compute_rm.cpp` — diff them;
+  the shared body is the merge target. The RM-only pieces are the per-block
+  `tilize<reduce_block, cb_rm_in, cb_input_resident>` prologue and the per-chunk
+  `untilize<reduce_block, cb_out_tiled, cb_rm_out>` epilogue.
+- `kernels/rms_norm_reader_mcast.cpp` — the `SenderPipe`/`ReceiverPipe` all-gather
+  the RM path must adopt; `kernels/rms_norm_reader_rm.cpp` — the stick read +
+  W-padding-zeroing the unified reader must preserve.
+- `rms_norm_program_descriptor.py:131-175` (regime dispatch) and `_regime_rm_descriptor`
+  / `_regime_a_descriptor` / `_regime_b_descriptor` — these likely collapse toward a
+  single descriptor builder selecting reader/writer variant + tilize-wrap by layout,
+  and selecting A/B by the same L1-fit heuristic for both layouts.
+
+**Implementation skill**: /memory-layouts (the tilize-wrapped vs pure-TILE access
+patterns and the "math stays on tiles" invariant) + the cross-core mcast machinery
+from Refinement 1 (no skill — out of every skill's scope) for extending the
+all-gather to RM.
+
+**Verifier notes**: structural refactor — **golden must stay 1683/1683 and all
+auxiliary suites green** before and after (it is the only correctness oracle here,
+since SUPPORTED is unchanged). Co-design with R5. The unified compute must remain
+byte-identical numerically for the bf16/TILE Phase-0 corner (the regression anchor).
+Count the kernels in `kernels/` before/after and record the reduction in
+`changelog.md`. **Done when**: (a) there is **exactly one compute kernel** (the
+hard requirement) and `kernels/` holds **≤4** kernel files total (readers/writers
+unified as far as is clean); (b) the ROW_MAJOR path exercises the mcast all-gather
+on a wide-W RM shape (add a probe/test proving a ROW_MAJOR row routes through
+Regime B); (c) the full suite is non-regressed (1683/1683).
+
+### [ ] Refinement 5 — Remove the redundant DEST-level reduce-accumulate chunking
+
+**Goal**: eliminate the PASS-1 **DEST-level W-chunking + reduce-accumulate**
+pattern from the compute kernel(s). The chunked `Accumulate(cb_partial_sumsq, c)`
+loop exists to keep the squared block within DEST capacity and accumulate Σx²
+across chunks — i.e. it is an **OOM/capacity workaround for wide W**. But wide-W
+OOM is *already* solved structurally by the **distributed reduction** (Regime B
+W-split across cores, Refinement 1): each core's resident shard `Wt_s` is chosen
+to fit L1, and cross-core partials are combined by the all-gather. Carrying a
+*second*, DEST-level chunking-and-accumulate inside the per-core reduce is
+redundant and obscures the compute — DEST-level chunking makes no sense once the
+shard is already L1-bounded.
+
+**The pattern to remove** (both computes, identical):
+```cpp
+// rms_norm_compute.cpp:80, 91-123  (and rms_norm_compute_rm.cpp:80-112)
+constexpr uint32_t num_chunks = (Wt + reduce_block - 1) / reduce_block;
+for (uint32_t c = 0; c < num_chunks; ++c) {
+    // square resident[base..base+cw) -> cb_squared
+    // reduce<SUM,REDUCE_ROW>(..., Accumulate(cb_partial_sumsq, c));  // <-- accumulate across chunks
+}
+```
+
+**Target**: a single reduce over the whole resident shard producing the local Σx²
+directly — no `Accumulate`-across-chunks, no `num_chunks` loop on the reduce path.
+
+**Why there is no DEST constraint to worry about** (do not reintroduce one): the
+compute uses the **kernel-lib helpers** (`ckl::eltwise_chain` for the square,
+`ckl::reduce` for the sum), which are **L1→L1** operations. The helper owns the
+DEST lifecycle internally — it tiles its own work through DEST as needed, so the
+`square`/`reduce` over the full shard width is a single helper call regardless of
+how many tiles `Wt_s` is. The kernel does **not** see DEST capacity; the
+`reduce_block` / `num_chunks` loop is **not** required by any hardware limit. It is
+pure redundancy left over from a hand-rolled view of DEST, and OOM (bounding the
+resident shard) is already handled one level up by the distributed W-split. Remove
+the loop and pass the full shard to one `square` + one `reduce`.
+
+**Where to look**: `kernels/rms_norm_compute.cpp:80-123`,
+`kernels/rms_norm_compute_rm.cpp:80-112`; `reduce_helpers_compute.hpp` (confirm the
+reduce helper accepts an arbitrary-width `ReduceInputBlockShape` and manages DEST
+internally — so `Accumulate` is unnecessary); `op_design.md:62,223-224`
+(REDUCE_BLOCK = `min(Wt_s, DEST_AUTO_LIMIT)` rationale — **this is the line item
+being deleted**). Also re-check PASS-2's per-chunk normalize loop: if it shared the
+same `num_chunks` structure only to mirror PASS-1, simplify it consistently (the
+same L1→L1 helper reasoning applies to the normalize multiplies).
+
+**Implementation skill**: /memory-budget-metal (confirm the per-core shard is
+already L1-bounded by the distributed reduction, so no in-kernel reduction-chunking
+pattern is needed at all).
+
+**Verifier notes**: correctness-preserving simplification — golden stays
+**1683/1683**, precision matrix unchanged within tolerance (bf16 byte-identical
+anchor where possible). This is the natural partner of R4; if the unified compute
+from R4 lands first, apply this simplification to the single kernel. **Done when**
+the per-core PASS-1 reduce is a single `square` + single `reduce` over the full
+shard (no `num_chunks` / `reduce_block` / `Accumulate` loop), the kernel is simpler,
+and the full suite is non-regressed.
+
+### [ ] Refinement 6 — Performance: measure (tracy), tune the heuristic, exploit the forgotten knob
+
+**Goal**: make the op **fast**, measured, not assumed. Concretely:
+**minimize per-kernel device time, maximize active cores** (subject to that
+actually helping — see the crossover below), and tune the in-op blocking / mcast
+parameters against real measurements across both regimes.
+
+**Sub-tasks**:
+
+1. **Research the measurement methodology first.** Understand how kernel device
+   time is measured via the **Tracy profiler** on this stack before changing any
+   knob (`tt_metal/tools/profiler`, `TT_METAL_DEVICE_PROFILER`, the
+   `.device_timing.jsonl` artifact the eval harness already emits, and the
+   `device_run_seconds` / `device_timings` the runner records on sim). Write down
+   the exact command/flow used to get per-kernel device time for a single
+   `rms_norm` invocation. This is a prerequisite, not optional.
+
+2. **Stand up perf tests for both regimes.** A `test_rms_norm_perf.py` (or probe
+   harness) that sweeps representative shapes covering **Regime A** (many
+   tile-rows, narrow/moderate W) and **Regime B** (few rows, wide W:
+   4096/8192/16384/32768) × {bf16, fp32} × {±gamma} × {TILE, ROW_MAJOR}, capturing
+   per-kernel device time and active-core count per case. These drive the tuning;
+   commit the baseline numbers table (like `precision_matrix_results.md`).
+
+3. **Exploit the forgotten perf knob — row-blocking (`BLOCK_HEIGHT > 1`).** This is
+   explicitly flagged as an unimplemented pure-perf refinement in
+   `op_design.md:229-232`: "one compute init/reconfig amortized over a taller block"
+   and bigger (coalesced) mcasts. **Hard constraint from the design**: row-blocking
+   must **NOT** reduce active core count — `BLOCK_HEIGHT` may grow only after every
+   core already has work, and trades block height against occupancy under the same
+   L1 budget AND against DEST capacity (halved when `fp32_dest_acc_en`). The design
+   claims all CB sizings already reference `bh`, so this is a host-heuristic change
+   plus larger `cb_input_resident` / `cb_partial_sumsq` / `cb_recip_rms` /
+   `cb_partials_gathered` allocations — verify that claim against the current
+   descriptor (post-R4/R5 it may have shifted). "Less inits, bigger mcasts" is the
+   target win — measure it.
+
+4. **Tune the A-vs-B crossover — when is the W-split actually worth it?** The
+   current heuristic (`rms_norm_program_descriptor.py:152-166`) chooses Regime B
+   whenever a rectangular partition **adds cores** over Regime A (`Ht_total * K >
+   regime_a_cores`), with **no cost model for the mcast**. But:
+   - **For OOM, the W-split is mandatory** — when a full row doesn't fit one core's
+     L1 budget, Regime B (or, post-R4, the unified mcast path) is the only option.
+     Keep that as a hard correctness floor.
+   - **For performance, more cores is not automatically a win.** Setting up the
+     cross-core all-gather (semaphores, mcast rounds, the partial combine) has real
+     fixed cost; for a row that *fits* one core and is only moderately wide, paying
+     that overhead to gain a few cores can be **slower** than staying in Regime A.
+   Use the perf tests (sub-task 2) to **measure the crossover**: the W (or Wt/L1
+   occupancy) at which W-split's parallelism win exceeds its mcast setup cost.
+   Encode the result in the heuristic — e.g. only go B when the row doesn't fit L1
+   (OOM-forced) **or** when measured Wt exceeds the empirical crossover — instead of
+   the current "B whenever it adds any cores." Document the crossover number and the
+   measurements behind it in `changelog.md`.
+
+5. **In-op tuning of blocking / mcast parameters.** With the above in place, tune
+   the surviving blocking knobs — `BLOCK_HEIGHT` (row-blocking) and `K` (the
+   W-split factor), plus any L1-sizing parameter that outlived R5 — per
+   regime/shape to minimize measured device time, and record the chosen policy.
+   (Note: R5 removes the reduce-path `reduce_block` chunking, so it is not expected
+   to remain a tuning knob; tune what actually remains in the unified kernel.)
+
+**Where to look**: `rms_norm_program_descriptor.py:112-175,332-` (`_select_k`, the
+A/B heuristic, `RESIDENT_BUDGET_TILES`, `_dest_limit`); `op_design.md:13-16` (P2
+"use the whole grid"), `:62` (REDUCE_BLOCK), `:229-232` (row-blocking knob);
+`tt_metal/tools/profiler` + `references/cross_core_reduction_design.md`.
+
+**Implementation skill**: none directly — this is measurement + host-heuristic
+tuning. Pull on /memory-budget-metal for the L1/DEST budget arithmetic that bounds
+`BLOCK_HEIGHT`, and /interleaved-parallel for the grid-saturation reasoning.
+
+**Verifier notes**: lands **last**, on the unified+simplified base (R4+R5), so the
+numbers reflect the final kernel. This is a **non-registry** refinement — SUPPORTED
+is unchanged, golden stays **1683/1683** (a perf change that breaks a golden cell is
+a bug, not a tradeoff). Success is judged on the committed before/after device-time
+table, not on the support matrix. **Done when**: (a) the Tracy measurement flow is
+documented and reproducible; (b) a perf-test/baseline table exists for both regimes;
+(c) row-blocking is implemented without reducing core count and its win is measured;
+(d) the A/B heuristic has a measured crossover (not "B whenever it adds cores") with
+OOM kept as a hard floor; (e) measured per-kernel device time improves over the
+R5 baseline on the wide-W and many-row representative shapes, with numbers in
+`changelog.md`.
