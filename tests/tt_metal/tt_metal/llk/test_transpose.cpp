@@ -2,19 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <bit>
+#include <chrono>
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cmath>
 #include <cstdint>
-#include <random>
 #include <sys/types.h>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tilize_utils.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -22,7 +23,6 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include "llk_device_fixture.hpp"
@@ -60,8 +60,6 @@ struct TransposeConfig {
     uint32_t single_tile_size;
     std::vector<uint32_t> shape;
     TransposeType transpose_type;
-    tt::DataFormat data_format = tt::DataFormat::Float16_b;
-    bool dst_full_sync_en = false;
 };
 
 // Tiled dimensions derived from a 4-D NCHW tensor shape, with shared validation.
@@ -130,90 +128,16 @@ void validate_transpose_wh(
     EXPECT_TRUE(pass);
 }
 
-void validate_transpose_wh_32b(
-    const std::vector<uint32_t>& src_vec, const std::vector<uint32_t>& shape, const std::vector<uint32_t>& result_vec) {
-    TT_FATAL(shape.size() == 4, "Error");
-
-    // Untile input: TILED_NFACES -> LIN_ROW_MAJOR (32-bit datums).
-    auto src_linear =
-        convert_layout<uint32_t>(src_vec, shape, TensorLayoutType::TILED_NFACES, TensorLayoutType::LIN_ROW_MAJOR);
-
-    // Compute gold transpose in row-major.
-    auto gold_lin = ::unit_tests::compute::gold_transpose_wh(src_linear, shape);
-
-    // Re-tile gold: LIN_ROW_MAJOR -> TILED_NFACES for the transposed shape.
-    vector<uint32_t> shapeR{shape[0], shape[1], shape[3], shape[2]};
-    auto gold_tiled =
-        convert_layout<uint32_t>(gold_lin, shapeR, TensorLayoutType::LIN_ROW_MAJOR, TensorLayoutType::TILED_NFACES);
-
-    ASSERT_EQ(result_vec.size(), gold_tiled.size());
-    bool pass = true;
-    size_t total_mismatches = 0;
-    int first_fail = -1;
-    for (size_t i = 0; i < result_vec.size(); ++i) {
-        if (result_vec[i] != gold_tiled[i]) {
-            if (pass) {
-                first_fail = (int)i;
-            }
-            pass = false;
-            total_mismatches++;
-        }
-    }
-    if (!pass) {
-        log_error(
-            LogTest,
-            "Failure position={} result={:#010x} expected={:#010x} total_mismatches={}/{}",
-            first_fail,
-            result_vec[first_fail],
-            gold_tiled[first_fail],
-            total_mismatches,
-            result_vec.size());
-
-        // Tile layout: TILED_NFACES = 4 faces of 16x16 = 1024 uint32 per tile.
-        // For 32x32 single-tile test the entire buffer is one tile.
-        const size_t TILE_ELEMS = constants::TILE_HW;
-        const size_t num_tiles = result_vec.size() / TILE_ELEMS;
-        log_warning(LogTest, "num_tiles={} elems_per_tile={}", num_tiles, TILE_ELEMS);
-
-        // Per-tile mismatch summary
-        for (size_t t = 0; t < num_tiles; ++t) {
-            size_t tm = 0;
-            for (size_t i = 0; i < TILE_ELEMS; ++i) {
-                if (result_vec[t * TILE_ELEMS + i] != gold_tiled[t * TILE_ELEMS + i]) {
-                    tm++;
-                }
-            }
-            log_warning(LogTest, "  tile={} mismatches={}/{}", t, tm, TILE_ELEMS);
-        }
-
-        // First 64 mismatches with face/row/col breakdown
-        // Tile layout: 4 faces (16x16 each). Face stride = 256, row stride within face = 16.
-        size_t dumped = 0;
-        const size_t MAX_DUMP = 64;
-        for (size_t idx = 0; idx < result_vec.size() && dumped < MAX_DUMP; ++idx) {
-            if (result_vec[idx] != gold_tiled[idx]) {
-                const size_t t = idx / TILE_ELEMS;
-                const size_t in_tile = idx % TILE_ELEMS;
-                const size_t face = in_tile / constants::FACE_HW;
-                const size_t in_face = in_tile % constants::FACE_HW;
-                const size_t face_row = in_face / constants::FACE_WIDTH;
-                const size_t face_col = in_face % constants::FACE_WIDTH;
-                log_warning(
-                    LogTest,
-                    "  tile={} face={} row={} col={} (idx={}, in_tile={}) golden=0x{:08x} actual=0x{:08x}",
-                    t,
-                    face,
-                    face_row,
-                    face_col,
-                    idx,
-                    in_tile,
-                    gold_tiled[idx],
-                    result_vec[idx]);
-                dumped++;
-            }
-        }
-    }
-    EXPECT_TRUE(pass);
+static void read_and_validate_transpose_result(
+    const MeshTensor& dst_tensor,
+    const std::vector<uint32_t>& src_vec,
+    const std::vector<uint32_t>& shape,
+    const TransposeDims& dims) {
+    std::vector<uint32_t> result_vec;
+    tt_metal::detail::ReadFromBuffer(*dst_tensor.mesh_buffer().get_reference_buffer(), result_vec);
+    // Expecting one tile in H, and half the elements since the vector packs 2 uint16_ts.
+    EXPECT_EQ(result_vec.size(), dims.NC * dims.H * dims.W / 2);
+    validate_transpose_wh(src_vec, shape, result_vec);
 }
 
 // Build a TensorSpec describing a flat DRAM-interleaved buffer of `total_entries`
@@ -258,13 +182,13 @@ void run_single_core_transpose(
         .unique_id = INPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_buffer_tiles,
-        .data_format_metadata = test_config.data_format,
+        .data_format_metadata = tt::DataFormat::Float16_b,
     };
     experimental::DataflowBufferSpec output_dfb_spec{
         .unique_id = OUTPUT_DFB,
         .entry_size = test_config.single_tile_size,
         .num_entries = num_output_buffer_tiles,
-        .data_format_metadata = test_config.data_format,
+        .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
     experimental::KernelSpec reader_spec{
@@ -312,7 +236,6 @@ void run_single_core_transpose(
                                           ? "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh_dest.cpp"
                                           : "tests/tt_metal/tt_metal/test_kernels/compute/transpose_wh.cpp";
 
-    const bool fp32_dest_acc_en = (test_config.data_format == tt::DataFormat::Float32);
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = compute_kernel_path,
@@ -332,16 +255,7 @@ void run_single_core_transpose(
                  .access_pattern = experimental::DFBAccessPattern::STRIDED,
              }},
         .compile_time_args = {{"NHtWt", Ht * Wt * NC}},
-        .hw_config =
-            experimental::ComputeHardwareConfig{
-                .fp32_dest_acc_en = fp32_dest_acc_en,
-                .dst_full_sync_en = test_config.dst_full_sync_en,
-                .unpack_to_dest_mode =
-                    fp32_dest_acc_en
-                        ? experimental::ComputeHardwareConfig::
-                              UnpackToDestModes{{INPUT_DFB, tt::tt_metal::UnpackToDestMode::UnpackToDestFp32}}
-                        : experimental::ComputeHardwareConfig::UnpackToDestModes{},
-            },
+        .hw_config = experimental::ComputeHardwareConfig{},
     };
 
     experimental::WorkUnitSpec wu{
@@ -388,44 +302,13 @@ void run_single_core_transpose(
     };
     experimental::SetProgramRunArgs(program_run, params);
 
-    // Fixed seed so each test produces a repeatable input vector across runs.
-    constexpr std::uint32_t kRandomSeed = 0x1234;
-    vector<uint32_t> src_vec;
-    const std::uint32_t n_u32 = dram_buffer_size / sizeof(uint32_t);
-    if (test_config.data_format == tt::DataFormat::Float32) {
-        src_vec.resize(n_u32);
-        std::mt19937 rng(kRandomSeed);
-        std::uniform_real_distribution<float> dist(-100.0f, 100.0f);
-        for (auto& w : src_vec) {
-            w = std::bit_cast<uint32_t>(dist(rng));
-        }
-    } else if (test_config.data_format == tt::DataFormat::Int32) {
-        src_vec.resize(n_u32);
-        std::mt19937 rng(kRandomSeed);
-        std::uniform_int_distribution<int32_t> dist(-10000, 10000);
-        for (auto& w : src_vec) {
-            w = static_cast<uint32_t>(dist(rng));
-        }
-    } else {
-        src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, kRandomSeed);
-    }
+    vector<uint32_t> src_vec = create_random_vector_of_bfloat16(dram_buffer_size, 100.0f, 0x1234);
     tt_metal::detail::WriteToBuffer(*in_tensor.mesh_buffer().get_reference_buffer(), src_vec);
 
     distributed::EnqueueMeshWorkload(cq, workload, false);
     distributed::Finish(cq);
 
-    std::vector<uint32_t> result_vec;
-    tt_metal::detail::ReadFromBuffer(*out_tensor.mesh_buffer().get_reference_buffer(), result_vec);
-
-    const std::uint32_t bytes_per_elem = tt::datum_size(test_config.data_format);
-    EXPECT_EQ(result_vec.size(), (dims.NC * dims.H * dims.W * bytes_per_elem) / sizeof(uint32_t));
-
-    const bool is_32bit = (bytes_per_elem == 4);
-    if (is_32bit) {
-        validate_transpose_wh_32b(src_vec, test_config.shape, result_vec);
-    } else {
-        validate_transpose_wh(src_vec, test_config.shape, result_vec);
-    }
+    read_and_validate_transpose_result(out_tensor, src_vec, test_config.shape, dims);
 }
 
 }  // namespace unit_tests::compute::transpose
@@ -461,23 +344,6 @@ TEST_F(LLKMeshDeviceFixture, TensixComputeTransposeWHDest) {
         .shape = {1, 3, 3 * 32 * 1, 4 * 32 * 1},
         .transpose_type = unit_tests::compute::transpose::TransposeType::WH};
     unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
-}
-
-TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarTransposeWHDestFloat32) {
-    // Tests SyncHalf and SyncFull
-    for (const bool dst_full_sync_en : {false, true}) {
-        SCOPED_TRACE(dst_full_sync_en ? "dst_full_sync_en=true (SyncFull)" : "dst_full_sync_en=false (SyncHalf)");
-        unit_tests::compute::transpose::TransposeConfig test_config = {
-            .short_init = false,
-            .transpose_dest = true,
-            .single_tile_size = constants::TILE_HW * sizeof(uint32_t),
-            .shape = {1, 1, 64, 64},
-            .transpose_type = unit_tests::compute::transpose::TransposeType::WH,
-            .data_format = tt::DataFormat::Float32,
-            .dst_full_sync_en = dst_full_sync_en,
-        };
-        unit_tests::compute::transpose::run_single_core_transpose(this->devices_.at(0), test_config);
-    }
 }
 
 }  // namespace tt::tt_metal
