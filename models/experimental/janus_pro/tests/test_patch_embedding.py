@@ -16,7 +16,7 @@ from ttnn import ConcatMeshToTensor
 from ttnn.device import is_blackhole
 
 
-@pytest.mark.skipif(not is_blackhole(), reason="Janus Pro requires Blackhole")
+# @pytest.mark.skipif(not is_blackhole(), reason="Janus Pro requires Blackhole")
 @pytest.mark.parametrize(
     "mesh_device",
     [
