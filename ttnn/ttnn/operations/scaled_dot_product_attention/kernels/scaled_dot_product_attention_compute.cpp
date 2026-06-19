@@ -37,7 +37,6 @@
 // documented partner of compute_kernel_hw_startup and is exactly the boot the
 // production SDPA kernel uses for this matmul+reduce+eltwise mix.)
 
-#include "api/debug/device_print.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -90,25 +89,15 @@ void kernel_main() {
     CircularBuffer scores_buf(cb_scores), p_buf(cb_p);
     CircularBuffer out_accum_buf(cb_out_accum), pv_buf(cb_pv);
 
-    DEVICE_PRINT("C:boot num_units={}\n", num_units);
     for (uint32_t u = 0; u < num_units; ++u) {
         // Phase 0: scale Q in-place by `scale`.
-        // DEBUG EXPERIMENT 4: chain with NO SFPU op (copy+pack only) to test whether the
-        // SFPU MulUnary is what clobbers matmul state vs the chain's tile_regs/sync.
-        pack_reconfig_data_format(cb_q);
         eltwise_chain(
             Dt,
             CopyTile<cb_q, Dst::D0, CopyTilePolicy::WaitAndPop>{},
+            MulUnary<Dst::D0>{scale_u32},
             PackTile<cb_q, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-        pack_reconfig_data_format(cb_scores);  // DEBUG: restore for phase A
-        DEVICE_PRINT_UNPACK("C:scaleQ done UNPACK\n");
-        DEVICE_PRINT_MATH("C:scaleQ done MATH\n");
-        DEVICE_PRINT_PACK("C:scaleQ done PACK\n");
 
         for (uint32_t j = 0; j < num_kv_chunks; ++j) {
-            DEVICE_PRINT_UNPACK("C:preA UNPACK j={}\n", j);
-            DEVICE_PRINT_MATH("C:preA MATH j={}\n", j);
-            DEVICE_PRINT_PACK("C:preA PACK j={}\n", j);
             // A: cb_scores = (scaled Q)·Kⱼᵀ. transpose=true (within-tile) + reader
             // block-transpose => Q·Kᵀ. Q retained across KV blocks (popped in L).
             matmul_block<
@@ -124,9 +113,6 @@ void kernel_main() {
                 scores_buf,
                 scores_buf,
                 MatmulBlockShape::of(/*in0_sb=*/1, in1sb_qk, /*sbh=*/1, osw_qk, /*in0_block_k=*/Dt, /*num_k=*/1));
-            DEVICE_PRINT_UNPACK("C:A(QK) UNPACK j={} done\n", j);
-            DEVICE_PRINT_MATH("C:A(QK) MATH j={} done\n", j);
-            DEVICE_PRINT_PACK("C:A(QK) PACK j={} done\n", j);
 
             // B: cb_scores += maskⱼ (element-wise).
             if constexpr (use_mask) {
@@ -177,7 +163,6 @@ void kernel_main() {
                 copy<cb_mnew, cb_max>(1);
             }
 
-            DEVICE_PRINT("C:C(rowmax) j={} done\n", j);
             // E: cb_p = exp(cb_scores − m), m broadcast across columns.
             eltwise_chain(
                 kv_chunk_t,
@@ -195,7 +180,6 @@ void kernel_main() {
                 Exp<>{},
                 PackTile<cb_p, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 
-            DEVICE_PRINT("C:E(exp P) j={} done\n", j);
             // F: row-sum over keys. j=0 -> running l (cb_sum); j>0 -> block sum (cb_lblock).
             if (j == 0) {
                 reduce<
@@ -236,7 +220,6 @@ void kernel_main() {
                     PackTile<cb_sum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
             }
 
-            DEVICE_PRINT("C:F(rowsum) j={} done\n", j);
             // H: PV = cb_p·Vⱼ. j=0 -> running O (cb_out_accum); j>0 -> block PV (cb_pv).
             if (j == 0) {
                 matmul_block<
@@ -305,12 +288,10 @@ void kernel_main() {
 
                 cb_pop_front(cb_alpha, 1);  // release α (kept WaitNoPop by G and I)
             }
-            DEVICE_PRINT("C:H(PV) j={} done\n", j);
         }
 
         // J: recip = 1/l.
         unary<Recip<>, cb_sum, cb_recip>(1);
-        DEVICE_PRINT("C:J(recip) done\n");
 
         // K: cb_out = O_accum·recip (bcast col → bf16).
         eltwise_chain(
@@ -331,7 +312,5 @@ void kernel_main() {
         cb_pop_front(cb_recip, 1);  // release recip (kept WaitNoPop by K)
         cb_pop_front(cb_q, Dt);     // L: release retained Q
         cb_pop_front(cb_max, 1);    // drain dead running-max m
-        DEVICE_PRINT("C:K(normalize) unit done\n");
     }
-    DEVICE_PRINT("C:ALL done\n");
 }

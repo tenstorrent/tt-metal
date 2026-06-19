@@ -1106,6 +1106,16 @@ ALWI void elem_apply_pack(
     uint32_t chain_lane_width,
     uint32_t n_tiles) {
     if constexpr (is_pack_tile_op_v<ElemT>) {
+        // D2 pack-side reconfig (pack_reconfig_data_format) for PackTile<...Output>. In the
+        // per-tile (non-hoist) path this is the ONLY emission site for the pack reconfig:
+        // elem_apply_compute no-ops pack-tile ops and hoisted_init_for_each only runs when
+        // the chain is hoist-safe (currently always false). Without this, a chain whose pack
+        // CB format differs from the previously-configured pack format leaves the packer
+        // mis-configured — packing the wrong tile size, which overruns the output L1 page and
+        // desyncs the math/pack DEST handshake (device hang on the next op). Compile-time
+        // elided when prev_pack_cb == curr_pack_cb; PackTile's srca/srcb reconfig fold to
+        // NO_PREV_CB so only the pack reconfig can fire here.
+        emit_pre_element_transitions<ElemT, I, Es...>();
         elem.reserve_per_tile(i_outer);
         elem.reserve_upfront(n_tiles);
         for (uint32_t j = 0; j < inner_count; ++j) {
