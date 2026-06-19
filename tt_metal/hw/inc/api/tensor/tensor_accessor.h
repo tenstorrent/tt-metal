@@ -384,19 +384,19 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
         aligned_page_size(page_size_in) {}
 
     // Construct TensorAccessor directly from a Metal 2.0 binding token.
-    // See the sharded specialization for the binding's CRTA section layout and the
-    // alignment rationale.
+    // (See the sharded specialization for the binding's CRTA section layout and the alignment rationale.)
     template <uint32_t CTA_OFFSET, uint32_t ADDR_CRTA_OFFSET>
     TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA_OFFSET>) :
         TensorAccessor(
-            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{},
+            // TensorAccessorArgs: Create the args object from the token's CTA offset and CRTA offset.
+            //   (But, add 1 to the token's CRTA offset to jump over the base address slot)
+            TensorAccessorArgs<CTA_OFFSET, 1 + (ADDR_CRTA_OFFSET / sizeof(uint32_t))>{},
+            // Bank base address: Get the base address from the front of the token's CRTA section.
             static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))),
-            // Page size: the AlignedPageSize CTA on the common path, or -- under the
-            // page-size relaxation (dynamic_tensor_shape on row-major) -- the per-binding CRTA word the host re-derives from the
-            // bound buffer each dispatch, so it stays fresh across program-cache hits. The args
-            // getter branches CTA-vs-CRTA internally; without the explicit 3rd arg the delegate
-            // would default to the (now zero) AlignedPageSize CTA under the relaxation.
-            TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>{}.get_aligned_page_size()) {
+            // Aligned page size: Create the args object again to grab the aligned_page_size from
+            //   the TensorAccessorArgs getter. The aligned page size may be housed either as a CTA
+            //   (static case) or as a CRTA (dynamic case) field. The getter handles resolution for us.
+            TensorAccessorArgs<CTA_OFFSET, 1 + (ADDR_CRTA_OFFSET / sizeof(uint32_t))>{}.get_aligned_page_size()) {
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
             "TensorAccessorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");

@@ -39,31 +39,31 @@ struct TensorAccessorArgs {
     static_assert(
         !is_sharded || !num_banks_is_crta || (num_banks_is_crta && bank_coords_is_crta),
         "If num_banks is runtime, bank_coords must also be runtime");
-    // A runtime (CRTA) page size is an interleaved-row-major-only relaxation: a sharded page size
-    // is fixed by the spec (the shard shape is held constant across binds), so it never goes
-    // runtime. Enforced here as device-side defense-in-depth; the host spec resolver is the
-    // primary gate (it also forbids tiled, where the page size is dtype-fixed).
+    // A runtime (CRTA) page size is required for an interleaved-row-major tensor with dynamic shape.
+    // (Because in that configuration, page size = last_dim_width * element_size)
+    // For a sharded tensor, or interleaved-tiled tensor, page size is static.
     static_assert(
         !is_sharded || !page_size_is_crta,
         "RuntimePageSize (the runtime page-size relaxation) is not supported on sharded tensors");
 
-    // aligned_page_size sits at CTA_OFFSET + 1, UNLESS the page size is a runtime field
-    // (RuntimePageSize): then the CTA slot is omitted (A-collapse) and the page size is read from
-    // a CRTA word at runtime by get_aligned_page_size(). The conditional lambda keeps the
-    // out-of-range CTA read from being instantiated when the slot doesn't exist.
+    // aligned_page_size comes from one of two places depending on the configuration:
+    //  - static case:  AlignedPageSize = CTA_OFFSET + 1
+    //  - dynamic case: AlignedPageSize is IGNORED (handled by the getter; see below)
+    // (The conditional lambda keeps the CTA read from being instantiated when the slot doesn't exist.)
     static constexpr uint32_t AlignedPageSizeCTAOffset = CTA_OFFSET + 1;
     static constexpr uint32_t AlignedPageSize = [] {
         if constexpr (page_size_is_crta) {
-            return uint32_t{0};
+            return 0;  // ignored, getter uses the CRTA value instead
         } else {
             return get_compile_time_arg_val(AlignedPageSizeCTAOffset);
         }
     }();
 
-    // Calculate offsets for compile-time arguments. When the page size is a runtime field its CTA
-    // slot is omitted, so the words after the config word shift down by one. (Sharded +
-    // RuntimePageSize is forbidden, so page_size_is_crta is always false for a sharded accessor and
-    // this stays CTA_OFFSET + 2; the term keeps the slot map self-consistent regardless.)
+    // Calculate offsets for compile-time arguments.
+    // When the page size is a runtime field, its CTA slot is omitted, so the words after the config
+    // word shift down by one.
+    // (RuntimePageSize + sharded tensor is a forbidden combo, so page_size_is_crta is always false
+    // for a sharded accessor. Then this stays CTA_OFFSET + 2.)
     static constexpr uint32_t RankCTAOffset = CTA_OFFSET + 2 - (page_size_is_crta ? 1 : 0);
     static constexpr uint32_t NumBanksCTAOffset = RankCTAOffset + (rank_is_crta ? 0 : 1);
 
@@ -114,14 +114,15 @@ public:
         }
     }
 
-    // The page size: the AlignedPageSize CTA on the common path, or -- under the RuntimePageSize
-    // relaxation -- a CRTA word read at runtime. For an interleaved accessor the page-size word is
-    // the first (and only) runtime accessor field, immediately after the base-address word, i.e. at
-    // crta_offset(). Mirrors get_rank()/get_num_banks()'s CTA-vs-CRTA branch.
+    // Getter for aligned page size
+    // The aligned page size can come from one of two places, depending on the configuration:
+    // - static case:  AlignedPageSize (previously retrieved CTA value)
+    // - dynamic case: Read the TensorAccessorArgs' first CRTA word (at runtime)
     constexpr uint32_t get_aligned_page_size() const {
         if constexpr (!page_size_is_crta) {
             return AlignedPageSize;
         } else {
+            // In the dynamic case, the aligned page size lives in the first args CRTA slot
             return get_common_arg_val<uint32_t>(crta_offset());
         }
     }

@@ -219,7 +219,7 @@ struct TensorParameterAdvancedOptions {
     // CAUTION:
     // These options are UNSAFE if set to true; most kernels will not function
     // correctly if the tensor argument's spec deviates from the declared spec.
-    // Use with caution. You must ensure that your kernel logic outside of the 
+    // Use with caution. You must ensure that your kernel logic outside of the
     // TensorAccessor itself is compatible with the chosen relaxation option(s)!
 
     // Permit tensor arguments whose logical_shape differs from the declared shape.
@@ -235,13 +235,13 @@ struct TensorParameterAdvancedOptions {
     //
     // Effects:
     //  - Validation checks are relaxed.
-    //  - For a sharded tensor: 
+    //  - For a sharded tensor:
     //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's actual shape.
     //    Shape, expressed in pages-per-dim, becomes implicit common runtime arguments.
-    //  - For an interleaved TILED tensor: 
-    //    TensorAccessor configuration is unchanged 
+    //  - For an interleaved TILED tensor:
+    //    TensorAccessor configuration is unchanged
     //    (The page size is fixed by dtype/tile dims, so it cannot vary with shape).
-    //  - For an interleaved ROW-MAJOR tensor: 
+    //  - For an interleaved ROW-MAJOR tensor:
     //    The TensorAccessor configuration DYNAMICALLY reflects the tensor argument's page size.
     //    NOTE: page_size = last_dim_width * element_size is part of the varying shape!
     //    The aligned_page_size becomes an implicit common runtime argument.
