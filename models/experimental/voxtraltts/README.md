@@ -12,6 +12,47 @@ This directory contains the Tenstorrent TTNN bring-up of Voxtral TTS. The main n
 
 The host handles tokenization, voice-embedding preparation, and lightweight generation control/staging. The autoregressive decode path uses TTNN execution, with trace and 2-CQ async dispatch available for the text/acoustic loop.
 
+### 1.1 Architecture
+
+Voxtral TTS is a three-stage pipeline: a **text backbone** autoregressively predicts discrete acoustic codes frame-by-frame; an **acoustic flow-matching head** refines each frame; an **audio tokenizer decoder** turns the full code sequence into a 24 kHz waveform. On Tenstorrent hardware the text backbone, acoustic head, and audio decoder all run on-device via TTNN; only tokenization and voice-preset setup stay on the host.
+
+```mermaid
+flowchart TB
+    subgraph Host["Host (CPU)"]
+        TOK["Tokenize + voice preset<br/>(mistral-common / tekken)"]
+    end
+
+    subgraph TT["Tenstorrent device (TTNN)"]
+        PF["Text prefill<br/>26-layer GQA LLM · 3072-d<br/>voice-injected prompt → KV cache"]
+
+        subgraph AR["Autoregressive loop · 12.5 frames/s"]
+            direction TB
+            TD["Text decode · 1 step / frame<br/>trace replay · optional 2CQ"]
+            FM["Acoustic FM head<br/>3-layer transformer · Euler flow matching · CFG"]
+            COD["RVQ frame<br/>1 semantic + 36 acoustic codes"]
+            TD --> FM --> COD
+            COD -->|"multimodal embed"| TD
+        end
+
+        AUD["Audio tokenizer decoder<br/>codes → latent → mel → waveform"]
+    end
+
+    WAV["24 kHz WAV output"]
+
+    TOK -->|"prompt token IDs + embeds"| PF
+    PF --> AR
+    AR -->|"END_AUDIO"| AUD
+    AUD --> WAV
+```
+
+| Stage | Model | Role |
+|-------|-------|------|
+| **Text backbone** | 26-layer Ministral-style LLM (GQA 32/8, vocab 131072) | Prefills the speech prompt, then decodes one multimodal token per acoustic frame; hidden states drive the acoustic head |
+| **Acoustic FM head** | 3-layer flow-matching transformer (3072-d) | Maps text hidden + noise → continuous latent; quantizes to 37 RVQ codes per frame (1 semantic + 36 acoustic) |
+| **Audio tokenizer decoder** | 1024-d transformer + conv pretransform | Decodes the full `[1, 37, T]` code tensor to 24 kHz audio after generation completes |
+
+Entry point: `tt/voxtral_tts.py` (`VoxtralTTSPipeline`). Demo CLI: `demo/demo.py`.
+
 ---
 
 ## 2. Installation
@@ -186,43 +227,96 @@ pytest models/experimental/voxtraltts/tests/ \
 
 These tests compare TT hardware output against a float32 CPU reference and assert that Pearson Correlation Coefficient (PCC) is above a threshold. PCC of 1.0 means perfect numerical match; ≥ 0.99 is the standard pass threshold.
 
-#### Text model decode PCC
+#### Prerequisites
+
+From the repo root, after [Section 2](#2-installation):
 
 ```bash
-# Single decode step vs float32 CPU reference
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_decode_reference_pcc -sv
-
-# Multi-step decode (26 steps) vs float32 CPU reference
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_decode_multistep_reference_pcc -sv
-
-# Prefill logits PCC
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_prefill_pcc -sv
+export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
+export ARCH_NAME=blackhole_140_arch_eth_dispatch.yaml
 ```
-#### Acoustic model PCC
+
+Optional mesh override (default is **1×1** on all hosts; set **1×4** on BH QB2 for tensor-parallel text):
 
 ```bash
-# Euler step sampled state + final pre-round scaled values PCC vs CPU
-pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_decode_euler_stepwise_pcc -sv
-
-# Attention + MLP PCC for every FM layer
-pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_all_layers_attention_mlp_pcc -sv
+export VOXTRAL_COMPUTE_MESH_SHAPE=1,1   # P150 or QB2 single-device compute (default)
+export VOXTRAL_COMPUTE_MESH_SHAPE=1,4   # QB2 only — TP text on full chassis mesh
 ```
 
-#### E2E waveform PCC (teacher-forced + free-run)
+Trace is **on by default** for PCC and demo (`VOXTRAL_DECODE_TRACE=1`). On 1×1, 2CQ stays off unless you set `VOXTRAL_DECODE_TRACE_2CQ=1`.
 
-Run all four tests in one invocation:
+#### E2E waveform PCC (recommended)
+
+Run all four end-to-end tests (~1–2 h cold cache):
 
 ```bash
 pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py -sv --timeout=0
 ```
 
-**Teacher-forced tests** , in `tests/pcc/test_voxtral_e2e_pcc.py`:
-- `test_ttnn_voxtral_tts_golden_codes_pcc`
-- `test_ttnn_voxtral_tts_acoustic_pcc`
-- `test_ttnn_voxtral_tts_golden_acoustic_pcc`
+Or run individually:
 
-**Free-run diagnostic** , in `tests/pcc/test_voxtral_e2e_pcc.py`:
-- `test_ttnn_voxtral_tts_staged_pcc`
+| Test | What it validates | Pass threshold | Measured (P150 1×1) |
+|------|-------------------|----------------|---------------------|
+| `test_ttnn_voxtral_tts_golden_codes_pcc` | Audio tokenizer only | PCC ≥ 0.99 | **0.9989** |
+| `test_ttnn_voxtral_tts_acoustic_pcc` | Acoustic FM only (isolated) | PCC ≥ 0.97 | **0.98** |
+| `test_ttnn_voxtral_tts_golden_acoustic_pcc` | Text + acoustic + tokenizer (teacher-forced) | PCC ≥ 0.97 | **0.979** |
+| `test_ttnn_voxtral_tts_staged_pcc` | Free-run diagnostic (full AR, no golden feedback) | informational | — |
+
+**`test_ttnn_voxtral_tts_golden_codes_pcc`** — Audio tokenizer in isolation. Same as a teacher-forced run, except the golden-truth acoustic codes are saved offline in `tests/reference_outputs/voxtral_golden_codes.refpt`. At test time those fixed `[1, 37, T]` codes are fed to both the CPU reference tokenizer and the TT audio tokenizer; the final waveforms are compared with PCC. No text model or acoustic model runs — this gates only the audio decoder path.
+
+**`test_ttnn_voxtral_tts_acoustic_pcc`** — Acoustic model in isolation. Precomputed golden text hidden states from the reference fixture are fed directly as input to both CPU and TT acoustic models each step, with the same FM noise seed and no text model or code feedback. Each side produces its own acoustic codes; both code streams are decoded through the **same reference tokenizer** (held constant so only the acoustic implementation differs). The resulting waveforms are compared with PCC.
+
+**`test_ttnn_voxtral_tts_golden_acoustic_pcc`** — Full pipeline teacher-forced. Validates the text model, acoustic model, and tokenizer together. CPU and TT are both prefilled on the same prompt and run live each step (text decode → acoustic FM → codes). To prevent autoregressive divergence from accumulating, **golden codes are fed back into both text models at every step** instead of each side's own output. Each side still produces its own acoustic codes from its own hidden states; CPU codes go through the reference tokenizer and TT codes through the TT tokenizer. The two waveforms are compared with PCC.
+
+**`test_ttnn_voxtral_tts_staged_pcc`** — Free-run diagnostic. TT runs the full autoregressive loop without golden feedback and is compared against CPU; results are logged only and not gated in CI.
+
+```bash
+pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_golden_codes_pcc -sv --timeout=0
+pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_acoustic_pcc -sv --timeout=0
+pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_golden_acoustic_pcc -sv --timeout=0
+pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_staged_pcc -sv --timeout=0
+```
+
+E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `tests/common.py`) and `voxtral_text_hf_aligned_optimizations` for numerical fidelity.
+
+**PCC environment overrides**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VOXTRAL_GOLDEN_CODES_PT` | `tests/reference_outputs/voxtral_golden_codes.refpt` | Path to golden codes + text hiddens fixture |
+| `VOXTRAL_ACOUSTIC_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_acoustic_pcc` |
+| `VOXTRAL_PIPELINE_TF_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_golden_acoustic_pcc` |
+| `VOXTRAL_DECODE_TRACE` | `1` | Enable traced text-decode replay (set `0` to disable) |
+| `VOXTRAL_DECODE_TRACE_2CQ` | `0` on 1×1, `1` on 1×4 | Second command queue for input staging overlap |
+| `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size (bytes) passed to device open |
+
+Regenerate the golden fixture (one-time, then commit):
+
+```bash
+python models/experimental/voxtraltts/tests/generate_voxtral_golden_codes.py
+```
+
+#### Component / module PCC
+
+```bash
+# Text model — single decode step vs float32 CPU reference
+pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_decode_reference_pcc -sv
+
+# Text model — multi-step decode (26 steps) vs float32 CPU reference
+pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_decode_multistep_reference_pcc -sv
+
+# Text model — prefill logits PCC
+pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_prefill_pcc -sv
+
+# Acoustic FM — Euler step sampled state + final pre-round scaled values PCC vs CPU
+pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_decode_euler_stepwise_pcc -sv
+
+# Acoustic FM — attention + MLP PCC for every FM layer
+pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_all_layers_attention_mlp_pcc -sv
+
+# Pipeline component — prefill hidden + decode step (no full AR)
+pytest models/experimental/voxtraltts/tests/test_voxtral_tts_pipeline_component_pcc.py -sv
+```
 
 #### E2E quality metrics (UTMOS, WER, speaker similarity)
 
@@ -275,23 +369,119 @@ pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_device_perf.py
 
 ### 5.4 Demo
 
+Full TT inference demo: text (or pre-computed codes/latents) → `.wav` on device. Trace replay is **on by default** on P150 and BH QB2; compute mesh defaults to **1×1** (`VOXTRAL_COMPUTE_MESH_SHAPE=1,1`).
+
+#### Prerequisites
+
+Same as [Section 2](#2-installation). Minimal session setup:
+
 ```bash
-# Full TT demo — text in, WAV file out
+source python_env/bin/activate
+export TT_METAL_HOME=$(pwd)
+export PYTHONPATH=$(pwd)
+export ARCH_NAME=blackhole_140_arch_eth_dispatch.yaml
+export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
+python_env/bin/python -m pip install -r models/experimental/voxtraltts/requirements.txt
+```
+
+#### P150 (1×1) — recommended starting point
+
+```bash
 python models/experimental/voxtraltts/demo/demo.py \
     --text "Paris is a beautiful city in the heart of Europe." \
-    --output-dir /tmp/voxtral_out
+    --voice casual_male \
+    --output-dir /tmp/voxtral_out \
+    --text-max-seq-len 4096 \
+    --max-speech-tokens 5000 \
+    --warmup-iters 1
+```
 
-# Using a JSON prompts file
+Output: `/tmp/voxtral_out/run_item0.wav` (and `.codes.pt` debug sidecar when generated).
+
+#### BH QB2 (1×4 tensor-parallel text)
+
+```bash
+export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
+
 python models/experimental/voxtraltts/demo/demo.py \
-    --prompts models/experimental/voxtraltts/demo/data/sample_prompts.json \
-    --output-dir /tmp/voxtral_out
+    --text "Voxtral is a four billion parameter open weight text to speech model released by Mistral AI." \
+    --voice casual_male \
+    --output-dir /tmp/voxtral_out \
+    --text-max-seq-len 4096 \
+    --max-speech-tokens 5000
+```
 
-# CPU reference demo (no TT hardware required — runs on host CPU only)
+Long prompts on 1×4 may use sentence-aligned chunking automatically when the word count exceeds the trace chunk threshold.
+
+#### Demo CLI parameters
+
+Run `python models/experimental/voxtraltts/demo/demo.py --help` for the live list. All flags below are defined in `demo/demo.py`.
+
+**Text generation (`--mode text`)**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--default-voice NAME` | `casual_male` | Voice used when `--voice` is omitted |
+| `--text-max-seq-len` | `4096` | Maximum text tokens for prefill / KV cache length. For contexts **> 4096** on P150, also pass `--use-paged-kv-cache` |
+| `--max-speech-tokens` | `5000` | Upper bound on autoregressive acoustic frames. The demo **auto-raises** this from word count (~8 tokens/word). Set `64` for smoke tests; set `0` to use the auto-estimate only |
+| `--seed` | `0` | RNG seed for flow-matching noise (reproducible acoustic sampling) |
+| `--warmup-iters` | `1` | Number of untimed warmup passes before the measured run (skipped when trace is disabled via `--no-decode-trace`) |
+
+**KV cache / long prompts (`--mode text`)**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--use-paged-kv-cache` | off (flag) | Enable paged KV cache — required to exceed the ~4096-token L1 limit on Blackhole P150 without OOM |
+| `--paged-block-size` | `32` | KV block size for paged attention (must be a multiple of 32). Only used with `--use-paged-kv-cache` |
+
+**Audio decode quality (`--mode text`, `codes`, `latents`)**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| *(default)* | dense ALiBi SDPA | Production default — full causal + sliding-window ALiBi mask; cleanest waveform |
+| `--native-sdpa` | off (flag) | Use native sliding-window SDPA for the audio tokenizer decode path (faster; may add audible hiss) |
+
+**Text backbone fidelity (`--mode text`)**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| *(default)* | production opts | BFP8 weights + HiFi2 decode matmuls + fused paths (best RTF) |
+| `--hf-aligned-text` | off (flag) | HF-aligned text decode: BF16/HiFi4 settings (slower; higher PCC — use for accuracy debugging) |
+
+**Trace and chunking (`--mode text`)**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| *(default)* | trace **on** | `VOXTRAL_DECODE_TRACE=1` — traced AR text-decode replay (best RTF). On 1×1, 2CQ stays off unless env sets it |
+| `--no-decode-trace` | off (flag) | Disable trace replay and 2CQ; switches to the short-chunk + crossfade path (slower; for debugging) |
+
+#### CPU reference demo (no TT hardware)
+
+Host-only PyTorch reference — useful for golden outputs and PCC baselines without a Tenstorrent device:
+
+```bash
 python -m models.experimental.voxtraltts.reference.demo_reference \
     --model mistralai/Voxtral-4B-TTS-2603 \
-    --text "Paris is a beautiful city!" \
-    --voice casual_male --write-audio
+    --text "Paris is a beautiful city in the heart of Europe." \
+    --voice casual_male \
+    --write-audio \
+    --output-dir output_audio
 ```
+
+#### Demo environment variables
+
+These are read by `demo.py` / the pipeline in addition to the CLI flags above. Session variables from [Section 2](#2-installation) (`TT_METAL_HOME`, `PYTHONPATH`, `ARCH_NAME`) are also required.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `VOXTRAL_TTS_MODEL` | — | Model weights path or HF repo ID (used when `--model` is omitted) |
+| `HF_MODEL` | — | Fallback for `--model` if `VOXTRAL_TTS_MODEL` is unset |
+| `VOXTRAL_COMPUTE_MESH_SHAPE` | `1,1` | Compute mesh: `1,1` (P150 / QB2 1×1 submesh) or `1,4` (QB2 tensor-parallel text) |
+| `VOXTRAL_DECODE_TRACE` | `1` | Traced AR text-decode replay. Set `0` or pass `--no-decode-trace` to disable |
+| `VOXTRAL_DECODE_TRACE_2CQ` | `0` on 1×1, `1` on 1×4 | Second command queue for overlapped input staging during trace replay |
+| `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size in bytes (passed to device open) |
+| `VOXTRAL_TP_CHUNK_MAX_WORDS` | `50` on 1×4 | Sentence-chunk word limit on multi-device trace path (override for chunking experiments) |
+| `VOXTRAL_OUTPUT_HPF_HZ` | `80` | High-pass filter cutoff (Hz) applied to saved `.wav` to remove sub-speech rumble. Set `0` to disable |
 
 ---
 
@@ -304,10 +494,11 @@ python -m models.experimental.voxtraltts.reference.demo_reference \
 | Text prefill logits | ≥ 0.99 | | BF16 weights + HiFi4 |
 | Text decode (1 step) | ≥ 0.99 | | prompt_len clamped to ≤ 384 (L1 limit) |
 | Text decode (26 steps) | ≥ 0.98 | | ~1–2% BF16 drift accumulates at step 19+ |
-| Audio tokenizer decoder | ≥ 0.99 | | Dense ALiBi SDPA path |
+| `test_ttnn_voxtral_tts_golden_codes_pcc` (audio tokenizer) | ≥ 0.99 | **0.9989** | Fixed golden `[1,37,T]` codes → CPU ref vs TT tokenizer waveform |
+| `test_ttnn_voxtral_tts_acoustic_pcc` (acoustic FM isolation) | ≥ 0.97 | **0.98** | Same golden text hiddens + noise; ref tokenizer held constant |
+| `test_ttnn_voxtral_tts_golden_acoustic_pcc` (pipeline teacher-forced) | ≥ 0.97 | **0.979** | Live text + acoustic; golden codes fed to both text models each step |
 | Pipeline component (prefill hidden) | ≥ 0.99 | | |
 | Pipeline component (decode step) | ≥ 0.99 | | |
-| E2E waveform (teacher-forced) | ≥ 0.99 | | Shared codes; gated in CI |
 | E2E waveform (free-run) | ~0.957 | | North-star metric; logged only, not gated |
 
 ### 6.2 Quality metrics
@@ -340,17 +531,26 @@ python -m models.experimental.voxtraltts.reference.demo_reference \
 |:----------------------------------|-------------:|----:|--------------------:|
 | | | | |
 
-### 6.5 Demo Verification
+#### Sizing `--text-max-seq-len` (why too small produces no output)
 
-#### Configurable parameters
+`--text-max-seq-len` sizes the whole text KV cache. That cache must hold the full prompt **and** every token generated during decode, so it sets a hard ceiling: `decode budget = text-max-seq-len − prompt_seq_len`.
 
-| Parameter | Default | Description |
-|---|---|---|
-| `--text TEXT` | — | Inline text prompt; repeat for multiple prompts.|
-| `--voice NAME` | — | Override voice for all prompts in this run. If unset, per-item voice from the JSON is used, falling back to `--default-voice`. |
-| `--default-voice NAME` | `casual_male` | Fallback voice applied to any prompt that does not specify one. |
-| `--output-dir DIR` | `/tmp/voxtral_out` | Directory where output `.wav` files are written. |
+The prompt is more than your `--text`. The tokenized speech request also prepends the voice-preset audio placeholder tokens and the protocol/special tokens, and these dominate the count. Example with `casual_male` and the text `"Voxtral is a "`:
 
+| Prompt part | Tokens |
+|---|---:|
+| Voice preset slots (`casual_male`) | ~147 |
+| Protocol / special tokens | ~8 |
+| Text (`"Voxtral is a "`) | ~3 |
+| **Total `prompt_seq_len`** | **~158** |
+
+Here `prompt_seq_len ≈ 158 > 128`, so with `--text-max-seq-len 128` the prompt does not even fit. `_max_decode_tokens()` raises *"Prompt token length (158) exceeds text KV cache (text_max_seq_len=128)"* before any acoustic frame is decoded, and **no `.wav` is written**.
+
+The 128 limit is not special — any value at or below `prompt_seq_len` fails the same way, and `prompt_seq_len` grows with longer text and varies by voice. Set `--text-max-seq-len` above `prompt_seq_len` plus the frames you expect (~8 tokens/word). The default `4096` is safe for normal prompts; only raise it past ~4096 (with `--use-paged-kv-cache`) for very long ones.
+
+### 6.5 Demo verification
+
+See [Section 5.4](#54-demo) for full CLI and environment-variable reference.
 
 #### Default voice
 

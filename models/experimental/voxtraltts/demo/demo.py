@@ -13,15 +13,14 @@ Tenstorrent device via ``VoxtralTTSPipeline.forward_device_resident()``.  The on
 Modes
 -----
 ``text`` (default)
-    ``text`` + ``voice`` in JSON → ``pipe.forward_device_resident()`` → ``.wav``.
-    Alternatively use ``text_paragraphs``: a JSON array of short strings; the demo
-    joins them with spaces into one prompt for the tokenizer (readable in the file).
+    ``--text`` + ``--voice`` → ``pipe.forward_device_resident()`` → ``.wav``.
+    Repeat ``--text`` for multiple outputs in one run.
 
 ``codes``
-    Pre-computed ``[1,37,T]`` codes tensor → ``pipe.decode_waveform_from_codes_tt()``
+    ``--codes-path PATH`` — pre-computed ``[1,37,T]`` tensor file → waveform decode.
 
 ``latents``
-    Pre-computed ``[1,1,T,C]`` latent tensor → TT mel decode + pretransform
+    ``--latent-path PATH`` — pre-computed ``[1,1,T,C]`` tensor file → mel + waveform decode.
 
 Audio tokenizer decode uses **dense ALiBi SDPA** by default (production-quality waveform).
 Pass ``--native-sdpa`` for the faster native sliding-window path (perf-oriented; audible hiss).
@@ -29,24 +28,22 @@ Pass ``--native-sdpa`` for the faster native sliding-window path (perf-oriented;
 Run (from tt-metal repo root)::
 
     export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
-    ./python_env/bin/python models/experimental/voxtraltts/demo/demo.py \\
-        --prompts models/experimental/voxtraltts/demo/data/sample_prompts.json \\
-        --output-dir models/experimental/voxtraltts/demo/data
-    python models/experimental/voxtraltts/demo/demo.py --text "this is a test message for VoxtralTTS. What is the architecture of the voxtral tts and how does it work?"
+    python models/experimental/voxtraltts/demo/demo.py \\
+        --text "Paris is a beautiful city in the heart of Europe." \\
+        --voice casual_male \\
+        --output-dir /tmp/voxtral_out
 
 """
 
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
-from typing import Any
 
 import numpy as np
 import torch
@@ -93,7 +90,6 @@ class TTArgs:
 
 @dataclass
 class DataArgs:
-    prompts_file: str = "models/experimental/voxtraltts/demo/data/sample_prompts.json"
     output_dir: str = "generated/voxtraltts_demo"
     mode: str = "text"
     # Upper bound on AR acoustic steps. The demo auto-raises this per-prompt when the
@@ -105,6 +101,8 @@ class DataArgs:
     warmup_iters: int = 1
     inline_texts: list[str] | None = None
     voice: str | None = None
+    codes_path: str | None = None
+    latent_path: str | None = None
 
 
 @dataclass
@@ -125,14 +123,13 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         type=str,
         default=os.environ.get("VOXTRAL_TTS_MODEL") or os.environ.get("HF_MODEL") or DEFAULT_VOXTRAL_MODEL,
     )
-    p.add_argument("--prompts", type=str, default=DataArgs.prompts_file)
     p.add_argument(
         "--text",
         type=str,
         nargs="+",
         action="append",
         default=None,
-        help="Inline text prompt (text mode). Quotes are optional; repeat --text for multiple prompts. Bypasses --prompts JSON.",
+        help="Inline text prompt (text mode). Quotes are optional; repeat --text for multiple prompts.",
     )
     p.add_argument("--output-dir", type=str, default=DataArgs.output_dir)
     p.add_argument("--mode", type=str, choices=("text", "codes", "latents"), default="text")
@@ -150,6 +147,18 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     p.add_argument("--default-voice", type=str, default="casual_male")
     p.add_argument(
         "--voice", type=str, default=None, help="Voice for inline --text prompts (overrides --default-voice)."
+    )
+    p.add_argument(
+        "--codes-path",
+        type=str,
+        default=None,
+        help="Path to a .pt file with pre-computed [1,37,T] or [T,37] codes (required for --mode codes).",
+    )
+    p.add_argument(
+        "--latent-path",
+        type=str,
+        default=None,
+        help="Path to a .pt file with pre-computed latents (required for --mode latents).",
     )
     p.add_argument(
         "--use-paged-kv-cache",
@@ -187,8 +196,19 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     )
     ns = p.parse_args(argv)
     inline_texts = [" ".join(parts).strip() for parts in ns.text] if ns.text else None
-    if inline_texts and ns.mode != "text":
-        p.error("--text is only valid with --mode text")
+    if ns.mode == "text":
+        if not inline_texts:
+            p.error("--text is required when --mode text")
+    elif ns.mode == "codes":
+        if not ns.codes_path:
+            p.error("--codes-path is required when --mode codes")
+        if inline_texts:
+            p.error("--text is only valid with --mode text")
+    elif ns.mode == "latents":
+        if not ns.latent_path:
+            p.error("--latent-path is required when --mode latents")
+        if inline_texts:
+            p.error("--text is only valid with --mode text")
     if inline_texts and any(not text for text in inline_texts):
         p.error("--text requires a non-empty prompt")
     if ns.no_decode_trace:
@@ -209,7 +229,6 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             hf_aligned_text=ns.hf_aligned_text,
         ),
         data=DataArgs(
-            prompts_file=ns.prompts,
             output_dir=ns.output_dir,
             mode=ns.mode,
             max_speech_tokens=ns.max_speech_tokens,
@@ -218,6 +237,8 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             warmup_iters=ns.warmup_iters,
             inline_texts=inline_texts,
             voice=ns.voice,
+            codes_path=ns.codes_path,
+            latent_path=ns.latent_path,
         ),
     )
 
@@ -302,51 +323,6 @@ def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
         use_paged_kv_cache=args.tt.use_paged_kv_cache,
         paged_block_size=args.tt.paged_block_size,
     )
-
-
-# ---------------------------------------------------------------------------
-# C. JSON prompt loading
-# ---------------------------------------------------------------------------
-
-
-def load_prompt_items(path: str, default_voice: str) -> list[dict[str, Any]]:
-    # Plain-text support: entire .txt file is treated as ONE prompt item.
-    # All lines are joined with a space so paragraphs flow into a single string.
-    if str(path).endswith(".txt"):
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-        text = " ".join(line.strip() for line in content.splitlines() if line.strip())
-        if not text:
-            raise ValueError(f"No text found in {path}")
-        return [{"id": 0, "text": text, "voice": default_voice}]
-
-    with open(path, "r", encoding="utf-8") as f:
-        raw = json.load(f)
-    if isinstance(raw, dict) and "items" in raw:
-        raw = raw["items"]
-    if not isinstance(raw, list) or not raw:
-        raise ValueError(f"Expected non-empty JSON list in {path}")
-    out: list[dict[str, Any]] = []
-    for i, row in enumerate(raw):
-        if isinstance(row, str):
-            out.append({"id": i, "text": row, "voice": default_voice})
-        elif isinstance(row, dict):
-            row = dict(row)
-            row.setdefault("id", i)
-            row.setdefault("voice", default_voice)
-            # Readable multi-line prompts: optional ``text_paragraphs`` list → one ``text`` string (space-joined).
-            if not (row.get("text") or "").strip():
-                paras = row.get("text_paragraphs")
-                if isinstance(paras, list) and paras:
-                    row["text"] = " ".join(str(p).strip() for p in paras if str(p).strip())
-            if not (row.get("text") or "").strip():
-                raise ValueError(
-                    f"Prompt entry {i} needs non-empty ``text`` or ``text_paragraphs`` (got keys={list(row.keys())})"
-                )
-            out.append(row)
-        else:
-            raise ValueError(f"Bad prompt entry {i}: {type(row)}")
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1166,11 +1142,16 @@ def run_demo(args: DemoArgs) -> None:
     cfg = load_voxtral_config(args.model.model_name_or_path)
     sample_rate = int(cfg.audio_model_args.audio_encoding_args.sampling_rate)
 
-    if args.data.inline_texts:
+    if args.data.mode == "text":
         voice = args.data.voice or args.data.default_voice
-        items = [{"id": i, "text": t} for i, t in enumerate(args.data.inline_texts)]
+        assert args.data.inline_texts is not None
+        items = [{"id": i, "text": t, "voice": voice} for i, t in enumerate(args.data.inline_texts)]
+    elif args.data.mode == "codes":
+        assert args.data.codes_path is not None
+        items = [{"id": 0, "codes_path": args.data.codes_path}]
     else:
-        items = load_prompt_items(args.data.prompts_file, args.data.default_voice)
+        assert args.data.latent_path is not None
+        items = [{"id": 0, "latent_path": args.data.latent_path}]
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -1223,9 +1204,7 @@ def run_demo(args: DemoArgs) -> None:
                 pid = item.get("id", 0)
 
                 if args.data.mode == "text":
-                    text = item.get("text")
-                    if not text:
-                        raise ValueError("text mode requires a 'text' field in each JSON entry.")
+                    text = item["text"]
                     voice = str(item.get("voice", args.data.default_voice))
                     out_path = out_dir / f"{tag}_item{pid}.wav"
 
@@ -1266,15 +1245,13 @@ def run_demo(args: DemoArgs) -> None:
                 elif args.data.mode == "codes":
                     if is_warmup:
                         continue
-                    raw = item.get("codes")
-                    if raw is None:
-                        cp = item.get("codes_path")
-                        if not cp:
-                            raise ValueError("codes mode needs 'codes' or 'codes_path'.")
-                        try:
-                            raw = torch.load(cp, map_location="cpu", weights_only=False)
-                        except TypeError:
-                            raw = torch.load(cp, map_location="cpu")
+                    cp = item.get("codes_path")
+                    if not cp:
+                        raise ValueError("codes mode requires --codes-path.")
+                    try:
+                        raw = torch.load(cp, map_location="cpu", weights_only=False)
+                    except TypeError:
+                        raw = torch.load(cp, map_location="cpu")
                     codes = torch.as_tensor(raw, dtype=torch.long)
                     if codes.dim() == 2:
                         codes = codes.unsqueeze(0).transpose(1, 2)
@@ -1287,7 +1264,7 @@ def run_demo(args: DemoArgs) -> None:
                         continue
                     lp = item.get("latent_path")
                     if not lp:
-                        raise ValueError("latents mode needs 'latent_path'.")
+                        raise ValueError("latents mode requires --latent-path.")
                     try:
                         lat = torch.load(lp, map_location="cpu", weights_only=False)
                     except TypeError:
