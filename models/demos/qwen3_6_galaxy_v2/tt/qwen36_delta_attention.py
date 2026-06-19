@@ -953,16 +953,8 @@ class TtQwen36DeltaAttention(LightweightModule):
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             qkvz = qkvz_partial
         else:
-            # Cast to fp32 before all_reduce so the 4-way col-axis summation
-            # runs in fp32, not bf16. Summation of N bf16 values in bf16
-            # accumulates N×eps_bf16 rounding; fp32 accumulation keeps it at
-            # eps_bf16 (only the initial quantization, not the reduction).
-            qkvz_fp32 = ttnn.typecast(qkvz_partial, dtype=ttnn.float32)
+            qkvz = ttnn.all_reduce(qkvz_partial, cluster_axis=1, num_links=1, memory_config=mem)
             qkvz_partial.deallocate(True)
-            qkvz_reduced = ttnn.all_reduce(qkvz_fp32, cluster_axis=1, num_links=1, memory_config=mem)
-            qkvz_fp32.deallocate(True)
-            qkvz = ttnn.typecast(qkvz_reduced, dtype=ttnn.bfloat16)
-            qkvz_reduced.deallocate(True)
         out_rank = len(qkvz.shape)
         q_per_row = self.q_per_row  # 256
         v_per_row = self.v_per_row  # 768
@@ -1022,13 +1014,8 @@ class TtQwen36DeltaAttention(LightweightModule):
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             ba = ba_partial  # skip col-reduce (timing ablation)
         else:
-            # fp32 all_reduce — same precision fix as QKVZ above.
-            ba_fp32 = ttnn.typecast(ba_partial, dtype=ttnn.float32)
+            ba = ttnn.all_reduce(ba_partial, cluster_axis=1, num_links=1, memory_config=mem)
             ba_partial.deallocate(True)
-            ba_reduced = ttnn.all_reduce(ba_fp32, cluster_axis=1, num_links=1, memory_config=mem)
-            ba_fp32.deallocate(True)
-            ba = ttnn.typecast(ba_reduced, dtype=ttnn.bfloat16)
-            ba_reduced.deallocate(True)
         n_v_per_row = self.n_v_per_row
         if out_rank == 3:
             B_, T_, _ = list(ba.shape)
@@ -2709,18 +2696,16 @@ class TtQwen36DeltaAttention(LightweightModule):
                 _packed_tmp = None
             if _os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
                 return partial  # skip row-reduce (timing ablation; garbage values)
-            # fp32 all_reduce: cast before the 8-way row sum to avoid bf16
-            # accumulation rounding (8 × eps_bf16 vs eps_bf16 in fp32).
-            partial_fp32 = ttnn.typecast(partial, dtype=ttnn.float32)
-            partial.deallocate(True)
-            reduced_fp32 = ttnn.all_reduce(
-                partial_fp32,
+            # V2-11 (lever B): collapse `all_gather + fast_reduce_nc` (2 ops)
+            # into a single `ttnn.all_reduce` (1 op).
+            reduced = ttnn.all_reduce(
+                partial,
                 cluster_axis=0,
                 num_links=_do_num_links,
                 memory_config=mem,
             )
-            partial_fp32.deallocate(True)
-            return ttnn.typecast(reduced_fp32, dtype=ttnn.bfloat16)
+            partial.deallocate(True)
+            return reduced
 
         # V2-14 persistent-buffer path.  Linear writes directly into
         # width-sharded L1 (avoids inserted to_memory_config); the
