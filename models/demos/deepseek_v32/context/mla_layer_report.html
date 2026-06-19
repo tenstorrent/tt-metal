@@ -572,9 +572,18 @@
     zc.appendChild(mk('⤢', () => refit(box)));
     fig.appendChild(zc);
   }
-  function renderCy(box, graph){
+  function renderCy(box, graph, tries){
     if(CY[box]){ refit(box); return; }
-    try{ if(window.cytoscapeDagre) cytoscape.use(window.cytoscapeDagre); }catch(e){}
+    // Defensive bootstrap: hosts like htmlpreview.github.io re-inject <script src> asynchronously, so
+    // the CDN libs (cytoscape/dagre/cytoscape-dagre) may not be defined when this first fires — document
+    // order is not honoured there as it is on a direct file open. Retry until all three are present, then
+    // render; give up after ~6 s so an offline load degrades to a message instead of spinning forever.
+    if(typeof cytoscape === 'undefined' || typeof dagre === 'undefined' || !window.cytoscapeDagre){
+      if((tries||0) > 100){ const el=document.getElementById(box); if(el) el.textContent='diagram libraries failed to load (cytoscape/dagre)'; return; }
+      setTimeout(() => renderCy(box, graph, (tries||0)+1), 60);
+      return;
+    }
+    try{ cytoscape.use(window.cytoscapeDagre); }catch(e){}
     const els = [];
     graph.nodes.forEach(n => els.push({ data:{id:n.id, label:n.label}, classes:n.cls }));
     graph.edges.forEach((e,i) => els.push({ data:{id:box+'_e'+i, source:e.f, target:e.t, label:e.l||''}, classes: e.rm?'rm':'' }));
