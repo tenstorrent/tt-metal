@@ -92,7 +92,7 @@ def test_conv2d_inference(
     # 2. Permute to match Conv2D output: (N, C_out, H_out, W_out)
     tt_output_torch = tt_output_torch.permute(0, 2, 1).reshape(1, 1024, 110, 110)
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
