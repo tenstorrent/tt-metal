@@ -31,7 +31,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         formats.unpack_A_src,
         formats.unpack_B_src,
         formats.unpack_A_dst,
@@ -54,7 +54,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_A_<BROADCAST_TYPE, ACC_TO_DEST, REUSE_DEST_TYPE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
-    _llk_unpack_A_uninit_<BROADCAST_TYPE>(params.TEST_FACE_R_DIM);
+    _llk_unpack_A_uninit_<BROADCAST_TYPE>();
 }
 
 #endif

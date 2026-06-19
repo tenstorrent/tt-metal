@@ -17,6 +17,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
+#include "tt_metal/distributed/mesh_device_view_impl.hpp"
 #include <tt_stl/concepts.hpp>
 #include <tt_stl/small_vector.hpp>
 
@@ -91,7 +92,9 @@ MeshTensor enqueue_write_tensor(
         "non-uniform data movement APIs.");
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
-        tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
+        const auto& old_spec = host_tensor.tensor_spec();
+        tensor_spec_overriden_memory_config =
+            TensorSpec(old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(*memory_config));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -169,13 +172,25 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
 
     if (use_pinned) {
         auto* mesh_device = mesh_buffer->device();
+        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(distributed_host_buffer.shard_coords().size());
         bool any_pinned = false;
 
         for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            // get_shard yields a buffer only for shards owned by this host, so remote chips are
+            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
             auto buf = distributed_host_buffer.get_shard(coord);
             if (buf) {
+                // The host buffer's distribution must agree with the device's: host memory can only
+                // be pinned to MMIO devices local to this process, so a populated shard for a coord
+                // the device owns on another host must never reach try_pin (which would fault while
+                // resolving the remote device).
+                TT_FATAL(
+                    view.impl().is_local(coord),
+                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
+                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
+                    coord);
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
@@ -202,7 +217,9 @@ void enqueue_write_tensor(distributed::MeshCommandQueue& cq, const HostTensor& h
 
     device_tensor = MeshTensor(
         mesh_buffer,
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        TensorSpec(
+            host_tensor.tensor_spec().logical_shape(),
+            host_tensor.tensor_spec().tensor_layout().with_memory_config(device_tensor.memory_config())),
         host_tensor.tensor_topology());
 }
 
@@ -311,7 +328,9 @@ std::pair<MeshTensor, std::vector<distributed::MeshCoordinate>> enqueue_write_te
     ttsl::optional_reference<const MemoryConfig> memory_config) {
     std::optional<TensorSpec> tensor_spec_overriden_memory_config;
     if (memory_config) {
-        tensor_spec_overriden_memory_config = host_tensor.tensor_spec().with_memory_config(*memory_config);
+        const auto& old_spec = host_tensor.tensor_spec();
+        tensor_spec_overriden_memory_config =
+            TensorSpec(old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(*memory_config));
     }
 
     const auto* tensor_spec = tensor_spec_overriden_memory_config.has_value()
@@ -345,15 +364,28 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
         ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*mesh_device, data_to_write.size());
 
     if (use_pinned) {
-        auto full_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(mesh_device->shape()));
+        // Replication fans a single 1x1 host shard out to the whole mesh, but only the chips owned
+        // by this host can be pinned/written; restrict the pin and the transfers to those so the
+        // remote coordinates are a complete no-op here.
+        const auto& view = mesh_device->get_view();
+        std::vector<distributed::MeshCoordinate> local_coords;
+        distributed::MeshCoordinateRangeSet local_range;
+        for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            if (view.impl().is_local(coord)) {
+                local_coords.push_back(coord);
+                local_range.merge(distributed::MeshCoordinateRange(coord, coord));
+            }
+        }
+
         HostBuffer pinned_buffer(*host_buffer);
-        auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
-            *mesh_device, full_range, pinned_buffer, /*map_to_noc=*/true);
+        auto pinned_memory = local_coords.empty() ? nullptr
+                                                  : experimental::PinnedMemoryCache::instance().try_pin(
+                                                        *mesh_device, local_range, pinned_buffer, /*map_to_noc=*/true);
 
         if (pinned_memory) {
             std::vector<distributed::ShardDataTransfer> transfers;
-            transfers.reserve(mesh_device->shape().mesh_size());
-            for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
+            transfers.reserve(local_coords.size());
+            for (const auto& coord : local_coords) {
                 auto xfer = distributed::ShardDataTransfer{coord}
                                 .host_data(const_cast<void*>(static_cast<const void*>(data_to_write.data())))
                                 .region(BufferRegion(0, data_to_write.size()));
@@ -370,8 +402,12 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
 
     const auto& mesh_device_shape = mesh_buffer->device()->shape();
     auto topology = TensorTopology::create_fully_replicated_tensor_topology(mesh_device_shape);
-    device_tensor =
-        MeshTensor(mesh_buffer, host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()), topology);
+    const auto& old_spec = host_tensor.tensor_spec();
+    device_tensor = MeshTensor(
+        mesh_buffer,
+        TensorSpec(
+            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
+        topology);
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -414,13 +450,25 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
 
     if (use_pinned) {
         auto* mesh_device = mesh_buffer->device();
+        const auto& view = mesh_device->get_view();
         std::vector<distributed::ShardDataTransfer> transfers;
         transfers.reserve(distributed_host_buffer.shard_coords().size());
         bool any_pinned = false;
 
         for (const auto& coord : distributed_host_buffer.shard_coords()) {
+            // get_shard yields a buffer only for shards owned by this host, so remote chips are
+            // never pinned or added to the transfer list -- the transfer is a no-op for them here.
             auto buf = distributed_host_buffer.get_shard(coord);
             if (buf) {
+                // The host buffer's distribution must agree with the device's: host memory can only
+                // be pinned to MMIO devices local to this process, so a populated shard for a coord
+                // the device owns on another host must never reach try_pin (which would fault while
+                // resolving the remote device).
+                TT_FATAL(
+                    view.impl().is_local(coord),
+                    "Host buffer holds a shard for device coordinate {}, but that device is not local "
+                    "to this host; host memory can only be pinned to MMIO devices owned by this process.",
+                    coord);
                 auto coord_range = distributed::MeshCoordinateRangeSet(distributed::MeshCoordinateRange(coord, coord));
                 HostBuffer pinned_buf(*buf);
                 auto pinned_memory = experimental::PinnedMemoryCache::instance().try_pin(
@@ -453,9 +501,11 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     coords.reserve(shard_coords.size());
     std::copy(shard_coords.begin(), shard_coords.end(), std::back_inserter(coords));
 
+    const auto& old_spec = host_tensor.tensor_spec();
     device_tensor = MeshTensor(
         mesh_buffer,
-        host_tensor.tensor_spec().with_memory_config(device_tensor.memory_config()),
+        TensorSpec(
+            old_spec.logical_shape(), old_spec.tensor_layout().with_memory_config(device_tensor.memory_config())),
         host_tensor.tensor_topology());
 
     return coords;
@@ -477,7 +527,10 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
     }
 
     auto source_layout = tensor.layout();
-    auto tile = tensor.tensor_spec().tile();
+    auto tile = tt::tt_metal::Tile();
+    if (tensor.layout() == Layout::TILE) {
+        tile = tensor.tensor_spec().tile();
+    }
     auto physical_shape = tensor.tensor_spec().physical_shape();
     auto convert =
         [tile, &physical_shape, source_layout, target_layout](const HostBuffer& input_host_buffer) -> std::vector<T> {
@@ -503,7 +556,7 @@ HostTensor to_layout_impl(const HostTensor& tensor, Layout target_layout) {
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(target_layout, tensor.tensor_spec().tile()),
+                PageConfig(target_layout, tile),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 tensor.padded_shape())),
@@ -818,13 +871,19 @@ HostTensor pad_impl(
     auto transformed_buffer = tensor.buffer().transform(
         [&](const HostBuffer& buffer) { return HostBuffer(pad(buffer)); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+
+    auto tile = tt::tt_metal::Tile();
+    if (tensor.layout() == Layout::TILE) {
+        tile = tensor.tensor_spec().tile();
+    }
+
     return HostTensor(
         std::move(transformed_buffer),
         TensorSpec(
             tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
                 tensor.dtype(),
-                PageConfig(tensor.layout(), tensor.tensor_spec().tile()),
+                PageConfig(tensor.layout(), tile),
                 MemoryConfig{},
                 tensor.logical_shape(),
                 output_padded_shape)),
@@ -1160,11 +1219,16 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
     const auto layout =
         (dtype == DataType::BFLOAT4_B || dtype == DataType::BFLOAT8_B) ? Layout::TILE : input_tensor.layout();
 
+    tt::tt_metal::PageConfig page_config(layout);
+    if (input_tensor.layout() == Layout::TILE) {
+        page_config = tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile());
+    }
+
     auto output_spec = TensorSpec(
         input_tensor.logical_shape(),
         tt::tt_metal::TensorLayout::fromPaddedShape(
             dtype,
-            tt::tt_metal::PageConfig(layout, input_tensor.tensor_spec().tile()),
+            page_config,
             input_tensor.tensor_spec().memory_config(),
             input_tensor.logical_shape(),
             input_tensor.padded_shape()));

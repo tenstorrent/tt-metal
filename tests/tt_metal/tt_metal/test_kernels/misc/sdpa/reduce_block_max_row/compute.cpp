@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/reduce_custom.h"
 #include "api/compute/binary_max_min.h"
 
@@ -21,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t do_eltwise = get_compile_time_arg_val(6);
 
     // Init compute
-    mm_init(qk_im_cb, qk_im_cb, qk_im_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(qk_im_cb, qk_im_cb, qk_im_cb);
+    matmul_init(qk_im_cb, qk_im_cb);
 
     // Inputs: qk_im (rows * cols tiles), prev_max (rows tiles if used), scale (1 tile)
     cb_push_back(qk_im_cb, Sq_chunk_t * Sk_chunk_t);
@@ -45,8 +47,8 @@ void kernel_main() {
     constexpr uint32_t prev_max_dst_idx = 1;
 
     for (uint32_t i = 0; i < rows; i++) {
-        acquire_dst();
-        reduce_block_max_row_init<cols>();
+        tile_regs_acquire();
+        reduce_block_max_row_init<cols>(out_max_cb);
         reduce_block_max_row<cols>(qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
         reduce_block_max_row_uninit(qk_im_cb);
 
@@ -57,8 +59,10 @@ void kernel_main() {
             binary_max_tile(reduce_dst_idx, prev_max_dst_idx, reduce_dst_idx);
         }
 
+        tile_regs_commit();
+        tile_regs_wait();
         pack_tile(reduce_dst_idx, out_max_cb);
-        release_dst();
+        tile_regs_release();
     }
 
     cb_push_back(out_max_cb, rows);

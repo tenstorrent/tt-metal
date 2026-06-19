@@ -74,47 +74,37 @@ ALWI void matmul_block_math_dynamic_throttle(
 
 // clang-format off
 /**
- * Initialization for matmul_tiles operation. Must be called before matmul_tiles.
+ * Short init for matmul_tiles. Configures the unpacker and math engine to matmul mode.
+ *
+ * Must be called before matmul_tiles. The one-time HW configuration must already have been
+ * performed via compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) at the start of MAIN.
+ * Matmul maps in0 -> SrcB and in1 -> SrcA (the reverse of other ops), which is why
+ * compute_kernel_hw_startup must use SrcOrder::Reverse.
+ *
+ * NOTE (known gap, #46769): if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different
+ * data formats per source) and the following matmul uses the same formats, matmul_init cannot fix the
+ * per-source tile sizes on its own. It does not re-program the tile descriptor, and a reconfig_data_format
+ * is inappropriate when the data formats did not change. No current kernel hits this; tracked in #46769.
  *
  * Return value: None
  *
- * | Argument       | Description                                                   | Type     | Valid Range                                        | Required |
- * |----------------|---------------------------------------------------------------|----------|----------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                            | False    |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                            | False    |
- * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                            | False    |
- * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set  | False    |
+ * | Argument       | Description                                                   | Type     | Valid Range                                       | Required |
+ * |----------------|---------------------------------------------------------------|----------|---------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                           | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                           | True     |
+ * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
-ALWI void mm_init(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t out_cb_id,
-    const uint32_t transpose = 0,
-    uint32_t call_line = __builtin_LINE()) {
+ALWI void matmul_init(
+    uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
-    state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
-    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
-
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    state_configure(in1_cb_id, in0_cb_id, call_line);
     MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
-
-    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
-    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
-    PACK((llk_pack_init(out_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
 #else
     LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
-    UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
     UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
-
-    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
-
-    PACK((llk_pack_hw_configure(out_cb_id)));
-    PACK((llk_pack_init(out_cb_id)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
 #endif
 }
 
@@ -148,6 +138,170 @@ ALWI void matmul_tiles(
 
 // clang-format off
 /**
+ * Short init for matmul_block. Configures the unpacker and math engine to matmul mode.
+ *
+ * Must be called before matmul_block. The one-time HW configuration must already have been
+ * performed via compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) at the start of MAIN.
+ * Matmul maps in0 -> SrcB and in1 -> SrcA (the reverse of other ops), which is why
+ * compute_kernel_hw_startup must use SrcOrder::Reverse.
+ *
+ * NOTE (known gap, #46769): if a preceding op left SrcA/SrcB with asymmetric tile sizes (i.e. different
+ * data formats per source) and the following matmul uses the same formats, matmul_block_init cannot fix
+ * the per-source tile sizes on its own. It does not re-program the tile descriptor, and a
+ * reconfig_data_format is inappropriate when the data formats did not change. No current kernel hits this;
+ * tracked in #46769.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range                                         | Required |
+ * |----------------|---------------------------------------------------------------|----------|-----------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                             | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                             | True     |
+ * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set   | False    |
+ * | ct_dim         | The column dimension for the output block.                    | uint32_t | Must be equal to block B column dimension           | False    |
+ * | rt_dim         | The row dimension for the output block.                       | uint32_t | Must be equal to block A row dimension              | False    |
+ * | kt_dim         | The inner dimension.                                          | uint32_t | Must be equal to block A column dimension           | False    |
+ */
+// clang-format on
+ALWI void matmul_block_init(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t ct_dim = 1,
+    uint32_t rt_dim = 1,
+    uint32_t kt_dim = 1,
+    uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+#ifdef ARCH_BLACKHOLE
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((throttled_mop_status = 0));
+#endif
+#else
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
+#endif
+}
+
+// clang-format off
+/**
+ * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
+ * different input CBs and accumulates the result to DST (DST += C). The DST register buffer
+ * must be in acquired state via *acquire_dst* call. This call is blocking and
+ * is only available on the compute engine.
+ *
+ * A block is a rectangle of tiles: A is rt_dim x kt_dim tiles, B is kt_dim x ct_dim tiles, and the
+ * output C is rt_dim x ct_dim tiles. So a block is just ct_dim * rt_dim output tiles produced in one
+ * call (with kt_dim tiles along the shared inner dimension). The output must fit in DST, so the block
+ * size is limited by DST size and sync mode (see mm_block_init for the valid ct_dim/rt_dim ranges).
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
+ * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of the tile in block A from the first input CB                | uint32_t | Must be less than the size of the CB           | True     |
+ * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
+ * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | transpose      | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
+ * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
+ * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
+ * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
+ */
+// clang-format on
+ALWI void matmul_block(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t in0_tile_index,
+    uint32_t in1_tile_index,
+    uint32_t idst,
+    const uint32_t transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim,
+    uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    state_configure(in1_cb_id, in0_cb_id, call_line);
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+#ifdef ARCH_BLACKHOLE
+    // Dynamic throttling is only available on Blackhole architecture
+    MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
+#else
+    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
+#endif
+#else
+    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
+    MATH((llk_math_matmul_block(ct_dim, rt_dim)));
+#endif
+}
+
+// =====================================================================================================================
+// Deprecated API
+//
+// The functions below implement the old matmul programming model. The new model is:
+//   compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out);  // once at the start of MAIN
+//   matmul_init(in0, in1, transpose);                             // before matmul_tiles
+//   matmul_block_init(in0, in1, transpose, ct_dim, rt_dim, kt_dim); // before matmul_block
+// Generic data-format reconfiguration is done via reconfig_data_format_srca / reconfig_data_format
+// (from reconfig_data_format.h). Note in1 feeds SrcA and in0 feeds SrcB.
+// =====================================================================================================================
+
+// clang-format off
+/**
+ * Initialization for matmul_tiles operation. Must be called before matmul_tiles.
+ *
+ * Return value: None
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range                                        | Required |
+ * |----------------|---------------------------------------------------------------|----------|----------------------------------------------------|----------|
+ * | in0_cb_id      | The identifier of the first input circular buffer (CB)        | uint32_t | 0 to 31                                            | False    |
+ * | in1_cb_id      | The identifier of the second input circular buffer (CB)       | uint32_t | 0 to 31                                            | False    |
+ * | out_cb_id      | The identifier of the output circular buffer (CB)             | uint32_t | 0 to 31                                            | False    |
+ * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set  | False    |
+ */
+// clang-format on
+[[deprecated(
+    "Use compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) once at kernel start, then matmul_init(in0, in1, "
+    "transpose).")]] ALWI void
+mm_init(
+    uint32_t in0_cb_id,
+    uint32_t in1_cb_id,
+    uint32_t out_cb_id,
+    const uint32_t transpose = 0,
+    uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    state_configure(in1_cb_id, in0_cb_id, out_cb_id, call_line);
+    UNPACK((llk_unpack_hw_configure<DST_ACCUM_MODE>(in1_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
+
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
+
+    PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(out_cb_id)));
+    PACK((llk_pack_dest_init<DST_ACCUM_MODE, PackMode::Default>()));
+    PACK((llk_pack_init(out_cb_id)));
+#else
+    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
+    UNPACK((llk_unpack_hw_configure(in1_cb_id, in0_cb_id)));
+    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
+
+    MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
+    MATH((llk_math_pack_sync_init()));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id)));
+
+    PACK((llk_pack_hw_configure(out_cb_id)));
+    PACK((llk_pack_init(out_cb_id)));
+    PACK((llk_pack_dest_init()));
+#endif
+}
+
+// clang-format off
+/**
  * Performs tile-sized matrix multiplication *C=A\*B* between the tiles
  * located in SRCA and SRCB and accumulates the result to DST (DST += C). The DST register buffer
  * must be in acquired state via *acquire_dst* call. This call is blocking and
@@ -161,7 +315,7 @@ ALWI void matmul_tiles(
  */
 // clang-format on
 template <uint32_t num_faces = 4>
-ALWI void matmul_tiles_math(uint32_t idst) {
+[[deprecated("Unused; slated for removal. Use matmul_tiles() instead.")]] ALWI void matmul_tiles_math(uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE, num_faces>(idst)));
 #endif
@@ -181,17 +335,9 @@ ALWI void matmul_tiles_math(uint32_t idst) {
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
-ALWI void mm_init_short(
+[[deprecated("Renamed to matmul_init().")]] ALWI void mm_init_short(
     uint32_t in0_cb_id, uint32_t in1_cb_id, const uint32_t transpose = 0, uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
-    state_configure(in1_cb_id, in0_cb_id, call_line);
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose)));
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose)));
-#else
-    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>()));
-#endif
+    matmul_init(in0_cb_id, in1_cb_id, transpose, call_line);
 }
 
 // clang-format off
@@ -209,13 +355,11 @@ ALWI void mm_init_short(
  * | transpose      | The transpose flag for performing transpose operation on B    | uint32_t | Any positive value will indicate transpose is set | False    |
  */
 // clang-format on
-ALWI void mm_init_short_with_dt(
-    uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
+[[deprecated("Call reconfig_data_format_srca(old_srca, in1) then matmul_init(in0, in1, transpose).")]] ALWI void
+mm_init_short_with_dt(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
 #ifndef ARCH_QUASAR
-    UNPACK(
-        (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(c_in_old_srca, in1_cb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
-    mm_init_short(in0_cb_id, in1_cb_id, transpose);
+    reconfig_data_format_srca(c_in_old_srca, in1_cb_id);
+    matmul_init(in0_cb_id, in1_cb_id, transpose);
 #endif
 }
 
@@ -235,7 +379,10 @@ ALWI void mm_init_short_with_dt(
  * | kt_dim         | The inner dim of the input matrices in tiles                  | uint32_t | 1 to 2^32-1                                         | False    |
  */
 // clang-format on
-ALWI void mm_block_init(
+[[deprecated(
+    "Use compute_kernel_hw_startup<SrcOrder::Reverse>(in0, in1, out) once at kernel start, then matmul_block_init(in0, "
+    "in1, transpose, ct_dim, rt_dim, kt_dim).")]] ALWI void
+mm_block_init(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     uint32_t out_cb_id,
@@ -268,58 +415,11 @@ ALWI void mm_block_init(
 
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(in0_cb_id, in1_cb_id)));
     MATH((llk_math_pack_sync_init()));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
+    MATH((llk_math_matmul_init<MATH_FIDELITY>(in0_cb_id, in1_cb_id, ct_dim, rt_dim)));
 
     PACK((llk_pack_hw_configure(out_cb_id)));
     PACK((llk_pack_init(out_cb_id)));
-#endif
-}
-
-// clang-format off
-/**
- * Performs block-sized matrix multiplication *C=A\*B* between the blocks in two
- * different input CBs and accumulates the result to DST (DST += C). The DST register buffer
- * must be in acquired state via *acquire_dst* call. This call is blocking and
- * is only available on the compute engine.
- *
- * Return value: None
- *
- * | Argument       | Description                                                             | Type     | Valid Range                                    | Required |
- * |----------------|-------------------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the first input circular buffer (CB)                  | uint32_t | 0 to 31                                        | True     |
- * | in1_cb_id      | The identifier of the second input circular buffer (CB)                 | uint32_t | 0 to 31                                        | True     |
- * | in0_tile_index | The index of the tile in block A from the first input CB                | uint32_t | Must be less than the size of the CB           | True     |
- * | in1_tile_index | The index of the tile in block B from the second input CB               | uint32_t | Must be less than the size of the CB           | True     |
- * | idst           | The index of the tile in DST REG to which the result C will be written. | uint32_t | Must be less than the acquired size of DST REG | True     |
-* | transpose       | The transpose flag for performing transpose operation on tiles in B.    | bool     | Must be true or false                          | True     |
- * | ct_dim         | The column dimension for the output block.                              | uint32_t | Must be equal to block B column dimension      | True     |
- * | rt_dim         | The row dimension for the output block.                                 | uint32_t | Must be equal to block A row dimension         | True     |
- * | kt_dim         | The inner dimension.                                                    | uint32_t | Must be equal to block A column dimension      | True     |
- */
-// clang-format on
-ALWI void matmul_block(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_tile_index,
-    uint32_t in1_tile_index,
-    uint32_t idst,
-    const uint32_t transpose,
-    uint32_t ct_dim,
-    uint32_t rt_dim,
-    uint32_t kt_dim,
-    uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
-    state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-#ifdef ARCH_BLACKHOLE
-    // Dynamic throttling is only available on Blackhole architecture
-    MATH((matmul_block_math_dynamic_throttle(in0_cb_id, in1_cb_id, idst, transpose, ct_dim, rt_dim)));
-#else
-    MATH((llk_math_matmul<MATH_FIDELITY, MM_THROTTLE>(idst, ct_dim, rt_dim)));
-#endif
-#else
-    UNPACK((llk_unpack_AB_matmul(in0_cb_id, in1_cb_id, in0_tile_index, in1_tile_index, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_block(ct_dim, rt_dim)));
+    PACK((llk_pack_dest_init()));
 #endif
 }
 
@@ -340,7 +440,7 @@ ALWI void matmul_block(
  * | kt_dim         | The inner dimension.                                          | uint32_t | Must be equal to block A column dimension           | False    |
  */
 // clang-format on
-ALWI void mm_block_init_short(
+[[deprecated("Renamed to matmul_block_init().")]] ALWI void mm_block_init_short(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     const uint32_t transpose = 0,
@@ -348,19 +448,7 @@ ALWI void mm_block_init_short(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
-#ifndef ARCH_QUASAR
-    state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_AB_matmul_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY, MM_THROTTLE>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
-#ifdef ARCH_BLACKHOLE
-    // Dynamic throttling is only available on Blackhole architecture
-    MATH((throttled_mop_status = 0));
-#endif
-#else
-    LLK_ASSERT(transpose == 0, "Matmul transpose not yet implemented for Quasar");
-    UNPACK((llk_unpack_AB_matmul_init<false /*transpose*/>(in0_cb_id, in1_cb_id, ct_dim, rt_dim, kt_dim)));
-    MATH((llk_math_matmul_init<MATH_FIDELITY>(ct_dim, rt_dim)));
-#endif
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 }
 
 // clang-format off
@@ -380,7 +468,8 @@ ALWI void mm_block_init_short(
  * | kt_dim         | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension | False    |
  */
 // clang-format on
-ALWI void mm_block_init_short_with_dt(
+[[deprecated("Call reconfig_data_format_srca(old_in1, in1) then matmul_block_init(...).")]] ALWI void
+mm_block_init_short_with_dt(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     uint32_t old_in1_cb_id,
@@ -390,11 +479,8 @@ ALWI void mm_block_init_short_with_dt(
     uint32_t kt_dim = 1,
     uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
-    state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK(
-        (llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_in1_cb_id, in1_cb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
-    mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    reconfig_data_format_srca(old_in1_cb_id, in1_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 #endif
 }
 
@@ -416,7 +502,8 @@ ALWI void mm_block_init_short_with_dt(
  * | kt_dim         | The inner dimension.                                       | uint32_t | Must be equal to block A column dimension | False    |
  */
 // clang-format on
-ALWI void mm_block_init_short_with_both_dt(
+[[deprecated("Call reconfig_data_format(old_in1, in1, old_in0, in0) then matmul_block_init(...).")]] ALWI void
+mm_block_init_short_with_both_dt(
     uint32_t in0_cb_id,
     uint32_t in1_cb_id,
     uint32_t old_in0_cb_id,
@@ -426,10 +513,8 @@ ALWI void mm_block_init_short_with_both_dt(
     uint32_t rt_dim = 1,
     uint32_t kt_dim = 1) {
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_reconfig_data_format<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(
-        old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
-    MATH((llk_math_reconfig_data_format<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id)));
-    mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
+    reconfig_data_format(old_in1_cb_id, in1_cb_id, old_in0_cb_id, in0_cb_id);
+    matmul_block_init(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 #endif
 }
 

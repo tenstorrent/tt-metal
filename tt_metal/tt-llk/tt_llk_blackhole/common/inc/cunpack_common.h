@@ -220,6 +220,21 @@ inline constexpr bool is_32bit_input(const std::uint32_t unpack_src_format, cons
     return (input_df == DataFormat::Int32 || input_df == DataFormat::Float32) && (output_df == DataFormat::Int32 || output_df == DataFormat::Float32);
 }
 
+/*
+ * Single source of truth for whether _llk_unpack_A_ takes the "unpack to dest" (SrcA -> DEST) path.
+ * It is only taken for genuinely 32-bit input; otherwise the MOP falls through to the normal/broadcast
+ * path. Both _llk_unpack_A_init_ (which programs the X counter) and _llk_unpack_A_mop_config_ (which
+ * programs the MOP) gate on this, so they cannot diverge if the policy ever changes.
+ *
+ * \param unpack_to_dest    Whether the caller requested unpack-to-dest.
+ * \param unpack_src_format Unpacker input (L1) data format.
+ * \param unpack_dst_format Unpacker output (register) data format.
+ */
+inline constexpr bool should_unpack_to_dest(const bool unpack_to_dest, const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format)
+{
+    return unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format);
+}
+
 /**
  * \brief Checks if the unpacker conversion is supported w.r.t. the FP32 dest accumulation mode.
  *
@@ -706,7 +721,7 @@ __attribute__((noinline, optimize("no-jump-tables"))) bool is_unpacker_format_co
     }
 }
 
-template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false, bool disable_src_zero_flag = false>
+template <bool is_fp32_dest_acc_en, bool row_pool = false, bool fpu_srnd_en = false, bool pack_srnd_en = false>
 inline void configure_unpack_AB(
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
@@ -797,11 +812,6 @@ inline void configure_unpack_AB(
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, alu_mask>(alu_payload.val);
 
-    // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
-    bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<std::uint32_t>(unpA_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16)) ||
-                                     (static_cast<std::uint32_t>(unpB_dst_format) == static_cast<std::uint32_t>(DataFormat::UInt16));
-    cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
-
     // Set FP8 E4M3 mode, bit is accessible by unpacker/packer
     cfg_reg_rmw_tensix<THCON_SEC0_REG1_Unp_LF8_4b_exp_RMW>(((unpA_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
     cfg_reg_rmw_tensix<THCON_SEC1_REG1_Unp_LF8_4b_exp_RMW>(((unpB_src_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
@@ -862,10 +872,6 @@ inline void configure_unpack_AB(
     {
         cfg[THCON_SEC1_REG2_Out_data_format_ADDR32 + i] = config.val[i];
     }
-
-    std::uint32_t unpA_x_end = (unpA_face_r_dim == 0) ? 1 : (unpA_face_r_dim << 4) - 1;
-    TT_SETADCXX(p_setadc::UNP_A, unpA_x_end, 0x0);
-    TT_SETADCXX(p_setadc::UNP_B, (unpB_face_r_dim << 4) - 1, 0x0);
 
     // Program base address for all 2 sections (each section address is loaded to corresponding context)
     // Load dummy data to unused location if face height is 0

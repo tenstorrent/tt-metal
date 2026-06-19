@@ -62,6 +62,7 @@
 #include "api/compute/bcast.h"
 #include "api/compute/common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
@@ -143,8 +144,8 @@ inline void copy_scalar_tile_to_reg(const uint32_t cb_src, const uint32_t reg_ds
 }
 
 inline void row_reduce_sum_to_reg(const uint32_t cb_sum, const uint32_t reg_dst) {
-    reconfig_data_format(cb_sum, cb_matmul_reduce);
-    mm_init(cb_sum, cb_matmul_reduce, cb_sum, 0);
+    reconfig_data_format(cb_matmul_reduce, cb_sum);
+    matmul_init(cb_sum, cb_matmul_reduce, 0);
     matmul_tiles(cb_sum, cb_matmul_reduce, 0, 0, reg_dst);
 }
 

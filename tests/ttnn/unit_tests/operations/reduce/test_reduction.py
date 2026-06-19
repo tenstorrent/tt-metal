@@ -18,8 +18,7 @@ TEST_PADDING_VALUE = -42
 @pytest.mark.parametrize("dim", [-1, -2, 0, (-2, -1), None])
 @pytest.mark.parametrize("correction", [True, False])
 @pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
+def test_std(device, batch_size, h, w, dim, correction, keepdim):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
@@ -27,7 +26,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
+    output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
@@ -38,10 +37,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
     atol = 0.01
     frobenius = 0.005
     pcc = 0.9999
-    if use_legacy:
-        # Legacy implementation is even less accurate.
-        pcc = 0.975
-    elif dim == (-2, -1):
+    if dim == (-2, -1):
         # For 2D reduction, all output values are close to 1, and we're using bfloat16,
         # so a rounding error of even 1 ULP impacts PCC.
         # ATOL/RTOL/Frobenius should catch any significant errors.
@@ -68,8 +64,7 @@ def test_std(device, batch_size, h, w, dim, correction, keepdim, use_legacy):
 @pytest.mark.parametrize("dim", [None, [], -1, -2, (-2, -1)])
 @pytest.mark.parametrize("keepdim", [True])
 @pytest.mark.parametrize("correction", [True, False])
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
+def test_var(device, batch_size, h, w, dim, keepdim, correction):
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((batch_size, h, w), dtype=torch.bfloat16)
@@ -77,7 +72,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction, use_legacy=use_legacy)
+    output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=keepdim, correction=correction)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.TILE_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
 
@@ -90,11 +85,6 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction, use_legacy):
     atol = 0.01
     pcc = 0.99999
     frobenius = 0.007
-
-    if use_legacy:
-        # Legacy implementation is less accurate.
-        pcc = 0.993
-        frobenius = 0.0085
 
     assert_numeric_metrics(
         torch_output_tensor,
@@ -150,7 +140,7 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     torch_ref = torch.var((torch_input * scalar).to(torch.float64), dim=dim, keepdim=True, correction=correction)
 
     tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out = ttnn.var(tt_in, dim=dim, scalar=scalar, keepdim=True, correction=correction, use_legacy=False)
+    tt_out = ttnn.var(tt_in, dim=dim, scalar=scalar, keepdim=True, correction=correction)
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
     # Tolerances are tight: with the precision-preserving unpacker path the answer is
@@ -201,7 +191,7 @@ def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
     torch_ref = torch.var((torch_input * scalar).to(torch.float64), dim=-1, keepdim=True, correction=correction)
 
     tt_in = ttnn.from_torch(torch_input, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    tt_out = ttnn.var(tt_in, dim=-1, keepdim=True, correction=correction, scalar=scalar, use_legacy=False)
+    tt_out = ttnn.var(tt_in, dim=-1, keepdim=True, correction=correction, scalar=scalar)
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
     # Tolerances tighter than the BF16 floor: the FPU mul + cb_scaled UnpackToDest path
@@ -284,9 +274,12 @@ def test_prod(device, input_shape, dim, keepdim, force_implicit_pad, dtype):
 @pytest.mark.parametrize("dim_6", [6])
 @pytest.mark.parametrize("dim_7", [7])
 @pytest.mark.parametrize("dim_8", [8, 32, 63])
-@pytest.mark.parametrize("dim", [[3, 7]])
+@pytest.mark.parametrize("dim", [[3, 7], [6, 7]])
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_sum_8d_tensor_dims(device, dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8, dim, keepdim):
+    if dim == [6, 7]:
+        pytest.xfail("Sum op on HW reduction with BF16 input exceeds allclose threshold. Issue #46472")
+
     torch.manual_seed(0)
 
     torch_input_tensor = torch.randn((dim_1, dim_2, dim_3, dim_4, dim_5, dim_6, dim_7, dim_8), dtype=torch.bfloat16)
@@ -944,8 +937,7 @@ def test_run_reduce_sum_h_after_max_pool(device, input_shape, kernel_size):
         ([32, 32, 32, 0], False, 3, "var"),
     ],
 )
-@pytest.mark.parametrize("use_legacy", [True, False])
-def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy):
+def test_torch_compatibility(device, tensor_shape, keepdim, dim, op):
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes, keepdim, and dim values.
@@ -954,8 +946,6 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
     Note: We do not enforce the same exception type or message.
     """
     torch.manual_seed(42)
-    if op not in ("std", "var") and use_legacy:
-        pytest.skip("use_legacy only applies to std and var")
 
     rank = len(tensor_shape)
 
@@ -964,10 +954,6 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
     ttnn_tensor = ttnn.fill_implicit_tile_padding(ttnn_tensor, TEST_PADDING_VALUE)
 
     torch_op, ttnn_op = getattr(torch, op), getattr(ttnn, op)
-
-    ttnn_extra_kwargs = {}
-    if op in ("std", "var"):
-        ttnn_extra_kwargs["use_legacy"] = use_legacy
 
     # Run on both and flag exceptions
     torch_errored = False
@@ -978,7 +964,7 @@ def test_torch_compatibility(device, tensor_shape, keepdim, dim, op, use_legacy)
 
     ttnn_errored = False
     try:
-        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, **ttnn_extra_kwargs)
+        ttnn_result = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim)
     except RuntimeError:
         ttnn_errored = True
 

@@ -147,15 +147,26 @@ void kernel_main() {
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
     uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
 
-    auto mux_backward =
-        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
-            argidx, in0_core_order_index, backward_in0_core_order_index);
-    auto mux_forward =
-        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
-            argidx, in0_core_order_index, forward_in0_core_order_index);
-
-    auto* mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
-    auto* mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
+    // Each fabric-sender core only parses + connects the SINGLE direction it actually uses.
+    // The program factory pushes RT args for exactly one direction per core, so argidx alignment
+    // stays correct. The unused-direction mux/handle is default-initialized (connection_valid=false)
+    // so close_mux below skips it.
+    MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> mux_backward{};
+    MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> mux_forward{};
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle_backward =
+        nullptr;
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle_forward = nullptr;
+    if (in0_core_order_index == backward_in0_core_order_index) {
+        mux_backward =
+            parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+                argidx, in0_core_order_index, backward_in0_core_order_index);
+        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
+    } else if (in0_core_order_index == forward_in0_core_order_index) {
+        mux_forward =
+            parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+                argidx, in0_core_order_index, forward_in0_core_order_index);
+        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
+    }
 #endif
 
 #ifdef FUSE_BIAS
@@ -377,7 +388,7 @@ void kernel_main() {
                     read_in0_block_sync<M_block_tiles, K_block_tiles>(
                         in0_reader,
                         in0_shape,
-                        in0_start_address,
+                        cb_id_in0,
                         in0_tile_size,
 #ifdef READ_FROM_LOCAL_INPUT
                         in3_reader,
@@ -424,17 +435,25 @@ void kernel_main() {
 #ifdef USE_MUX
                 if (n_block_iter == 0) {
                     if constexpr (is_linear) {
-                        // Linear uni-ring: every iter, every device sends ONE full K-block to its
-                        // predecessor in the virtual ring. Dev 0 (num_targets_backward_direction == 0)
-                        // long-sends to Dev N-1 via mux_backward (forward direction, N-1 hops; the
-                        // routing was overridden in the program factory to set distance_in_hops = N-1).
-                        // Other devices short-send to my_rank-1 via mux_forward (backward direction,
-                        // 1 hop). All sends signal out_ready_semaphore_forward at the receiver.
+                        // Linear uni-ring: every (non-skipped) iter, every device sends ONE full
+                        // K-block to its predecessor in the virtual ring. Dev 0
+                        // (num_targets_backward_direction == 0) long-sends to Dev N-1 via
+                        // mux_backward (forward direction, N-1 hops; the routing was overridden in
+                        // the program factory to set distance_in_hops = N-1). Other devices
+                        // short-send to my_rank-1 via mux_forward (backward direction, 1 hop). All
+                        // sends signal out_ready_semaphore_forward at the receiver.
+                        //
+                        // Skip the last K_blocks_per_device iters: by then every block has already
+                        // reached every device, so this final relay lap is redundant -- it would
+                        // re-deliver each device's own data back to it and fire sem increments the
+                        // receiver never waits on (which is why the receiver no longer needs to
+                        // compensate sem_target; see compute_actual_k_block). Mirrors the Ring skip.
                         if constexpr (num_targets_backward_direction == 0) {
                             // Dev 0 (chain head): long send via mux_backward + pkt_hdrs_forward
                             if constexpr (num_targets_forward_direction > 0) {
                                 if (in0_core_order_index >= backward_in0_core_order_index &&
-                                    in0_core_order_index < forward_in0_core_order_index) {
+                                    in0_core_order_index < forward_in0_core_order_index &&
+                                    k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                     forward_half_block_to_fabric_neighbor(
                                         m_tile,
                                         k_block_left_tile,
@@ -456,7 +475,8 @@ void kernel_main() {
                             }
                         } else {
                             // Dev k > 0: short send via mux_forward + pkt_hdrs_backward
-                            if (in0_core_order_index >= forward_in0_core_order_index) {
+                            if (in0_core_order_index >= forward_in0_core_order_index &&
+                                k_block_iter < (K_num_blocks - K_blocks_per_device)) {
                                 forward_half_block_to_fabric_neighbor(
                                     m_tile,
                                     k_block_left_tile,
@@ -622,7 +642,7 @@ void kernel_main() {
             mux_connection_handle_backward,
             mux_backward.is_termination_master,
             mux_backward.termination_sync_address,
-            num_mux_clients,
+            mux_backward.num_mux_clients,
             mux_backward.fabric_mux_x,
             mux_backward.fabric_mux_y,
             fabric_mux_termination_signal_address,
@@ -634,7 +654,7 @@ void kernel_main() {
             mux_connection_handle_forward,
             mux_forward.is_termination_master,
             mux_forward.termination_sync_address,
-            num_mux_clients,
+            mux_forward.num_mux_clients,
             mux_forward.fabric_mux_x,
             mux_forward.fabric_mux_y,
             fabric_mux_termination_signal_address,

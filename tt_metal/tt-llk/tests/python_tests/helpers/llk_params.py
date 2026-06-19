@@ -9,6 +9,7 @@ import torch
 from .format_config import DataFormat
 
 format_dict = {
+    DataFormat.Tf32: torch.float32,
     DataFormat.Float32: torch.float32,
     DataFormat.Float16: torch.float16,
     DataFormat.Float16_b: torch.bfloat16,
@@ -24,6 +25,9 @@ format_dict = {
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
     DataFormat.MxFp4: torch.bfloat16,
+    DataFormat.MxInt8: torch.bfloat16,
+    DataFormat.MxInt4: torch.bfloat16,
+    DataFormat.MxInt2: torch.bfloat16,
     DataFormat.Fp8_e4m3: torch.bfloat16,
 }
 
@@ -98,6 +102,10 @@ class MathOperation(Enum):
     # three offsets directly.
     SfpuSwiGLU = OpSpec("swiglu", MathOpType.SFPU_UNARY)
     Tanh = OpSpec("tanh", MathOpType.SFPU_UNARY)
+    # Typecast is dispatched by the (input, output) DataFormat pair rather than a
+    # single op, but it maps to SfpuType::typecast and runs through the shared
+    # unary-SFPU dispatch (see call_unary_sfpu_operation in sfpu_operations.h).
+    Typecast = OpSpec("typecast", MathOpType.SFPU_UNARY)
     Threshold = OpSpec("threshold", MathOpType.SFPU_UNARY)
     ReluMax = OpSpec(
         "relu_max", MathOpType.SFPU_UNARY
@@ -470,6 +478,15 @@ format_tile_sizes = {
     # MXFp4 half byte per element + 1 scale (8 bits) per 32 elements
     # 1024 elements = 32 blocks × (1 scale + 16 bytes of FP4 data) = 544 bytes
     DataFormat.MxFp4: 544,
+    # MxInt8: 1 byte per element + 1 scale (8 bits) per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 32 bytes of INT8 data) = 1056 bytes
+    DataFormat.MxInt8: 1056,
+    # MxInt4: half byte per element (2 packed per byte) + 1 scale per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 16 bytes of INT4 data) = 544 bytes
+    DataFormat.MxInt4: 544,
+    # MxInt2: quarter byte per element (4 packed per byte) + 1 scale per 32 elements
+    # 1024 elements = 32 blocks × (1 scale + 8 bytes of INT2 data) = 288 bytes
+    DataFormat.MxInt2: 288,
     DataFormat.Fp8_e4m3: 1024,  # 1 byte per element, no exponent section
 }
 
@@ -545,6 +562,16 @@ class UnpackerEngine(Enum):
     UnpB = "UNP_B"
     UnpS = "UNP_S"
     UnpDest = "UNP_DEST"
+
+
+class TilizeUnpackerSel(Enum):
+    """
+    Enum for selecting which unpacker(s) perform tilization.
+    """
+
+    UnpA = "UnpA"
+    UnpB = "UnpB"
+    UnpAB = "UnpAB"
 
 
 class ReluConfig(Enum):

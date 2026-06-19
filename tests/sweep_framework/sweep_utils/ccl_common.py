@@ -59,6 +59,16 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
             # Closing the parent (full) mesh tears down its submeshes; only close the
             # standalone mesh directly when no parent was opened.
             if parent_device is not None:
+                # The carved submesh shares the parent's command queue. Closing the
+                # parent while that CQ is still flagged in-use throws
+                # "cq ID 0 is in use by child submesh" (mesh_device.cpp). quiesce_devices()
+                # drains the parent's and all submeshes' CQs and resets their in-use state
+                # (the only path that does so), so the close is clean. Guard it: a drain
+                # failure must never mask the real test result.
+                try:
+                    parent_device.quiesce_devices()
+                except Exception:
+                    logger.opt(exception=True).warning("quiesce_devices during teardown failed")
                 ttnn.close_mesh_device(parent_device)
             elif mesh_device:
                 ttnn.close_mesh_device(mesh_device)

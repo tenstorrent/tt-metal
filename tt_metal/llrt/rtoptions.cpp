@@ -101,6 +101,7 @@ enum class EnvVarID {
     TT_METAL_FABRIC_TRIMMING_PROFILE,                   // Path to channel trimming profile YAML for import
     TT_METAL_FABRIC_TRIMMING_OVERRIDE,                  // Path to channel trimming global override YAML
     TT_METAL_ENABLE_FABRIC_VC2,                         // Enable fabric VC2 (neighbour exchange)
+    TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH,           // Enable experimental VC1 inter-mesh pass-through
     TT_METAL_FORCE_REINIT,                              // Force context reinitialization
     TT_METAL_DISABLE_FABRIC_TWO_ERISC,                  // Disable fabric 2-ERISC mode
     TT_METAL_LOG_KERNELS_COMPILE_COMMANDS,              // Log kernel compilation commands
@@ -665,6 +666,16 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Usage: export TT_METAL_ENABLE_FABRIC_VC2=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
 
+        // TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH
+        // EXPERIMENTAL: Enables VC1 inter-mesh pass-through routing (e.g. A->B->C), where inter-mesh
+        // (VC1) traffic is forwarded across intermediate meshes instead of sinking at the first mesh
+        // boundary. Selects IntermeshVCConfig::full_mesh_with_pass_through() when intermesh VC is active.
+        // WARNING: This reuses VC1 for both in-mesh delivery and cross-mesh pass-through and is NOT
+        // guaranteed deadlock-free; a fully deadlock-free implementation requires a dedicated VC.
+        // Default: false
+        // Usage: export TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1
+        case EnvVarID::TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH: this->enable_fabric_mesh_pass_through = true; break;
+
         // RELIABILITY_MODE
         // Sets the fabric reliability mode (STRICT, RELAXED, or DYNAMIC).
         // Default: nullopt (uses system default)
@@ -984,9 +995,18 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // the profiler infrastructure will be used to continuously dump NOC debug packets to a file. Default: false
         // (debug dump mode disabled) Usage: export TT_METAL_NOC_DEBUG_DUMP=1
         case EnvVarID::TT_METAL_NOC_DEBUG_DUMP: {
+#if !defined(TRACY_ENABLE)
+            if (is_env_enabled(value)) {
+                log_warning(
+                    tt::LogMetal,
+                    "TT_METAL_NOC_DEBUG_DUMP=1 requires a Tracy-enabled build (build with ENABLE_TRACY=ON). "
+                    "Ignoring; NOC debug events will not be collected.");
+            }
+#else
             if (is_env_enabled(value)) {
                 this->set_experimental_noc_debug_dump_enabled(true);
             }
+#endif
             break;
         }
 

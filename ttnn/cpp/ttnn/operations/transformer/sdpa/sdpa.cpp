@@ -19,6 +19,19 @@
 
 namespace ttnn::transformer {
 
+namespace {
+// Empty joint (0 elements) == "no joint". Normalize to nullopt so self-attention callers passing
+// zero-length dummy joints don't create duplicate input Buffer*s -> resolve_bindings() bails and the
+// WorkloadDescriptor cache-hit path freezes stale addresses (#45452 / #45391). L=0 either way, so
+// numerically identical.
+std::optional<ttnn::Tensor> drop_if_empty(const std::optional<ttnn::Tensor>& t) {
+    if (t.has_value() && t->logical_shape().volume() == 0) {
+        return std::nullopt;
+    }
+    return t;
+}
+}  // namespace
+
 ttnn::Tensor scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -196,19 +209,25 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const CoreCoord ccl_core_grid_offset,
     bool is_causal,
     bool is_balanced,
+    bool is_cross,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     std::optional<uint32_t> kv_cache_batch_idx,
     std::optional<uint32_t> kv_actual_isl) {
+    // Normalize empty joints to nullopt (see drop_if_empty).
+    const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
+    const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
+    const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
+
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
         input_tensor_v,  // AllGather input
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
+        joint_q,
+        joint_k,
+        joint_v,
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
         joint_strategy,
@@ -224,6 +243,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         subdevice_id,
         is_causal,
         is_balanced,
+        is_cross,
         scale,
         compute_kernel_config,
         core_allocation_strategy,
@@ -278,6 +298,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         subdevice_id,
         /*is_causal=*/true,
         is_balanced,
+        /*is_cross=*/false,
         scale,
         compute_kernel_config,
         core_allocation_strategy,
@@ -291,9 +312,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,
@@ -310,13 +331,18 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel) {
+    // Normalize empty joints to nullopt (see drop_if_empty).
+    const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
+    const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
+    const std::optional<ttnn::Tensor> joint_v = drop_if_empty(joint_tensor_v);
+
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
         input_tensor_v,  // AllGather input
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
+        joint_q,
+        joint_k,
+        joint_v,
         persistent_output_buffer_k,  // AllGather output / RingAttention input
         persistent_output_buffer_v,  // AllGather output / RingAttention input
         joint_strategy,

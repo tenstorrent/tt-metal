@@ -70,7 +70,8 @@ Fold::spec_return_value_t Fold::compute_output_specs(
         auto shard_spec = input_tensor.shard_spec().value();
         shard_spec.shape[0] /= op_attr.stride_h * op_attr.stride_w;
         shard_spec.shape[1] *= op_attr.stride_h * op_attr.stride_w;
-        auto mem_config = input_tensor.memory_config().with_shard_spec(shard_spec);
+        auto mem_config = MemoryConfig(
+            input_tensor.memory_config().memory_layout(), input_tensor.memory_config().buffer_type(), shard_spec);
 
         return {TensorSpec(
             output_shape,

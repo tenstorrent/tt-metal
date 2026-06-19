@@ -55,6 +55,7 @@
 
 #include <cstdint>
 
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
@@ -86,19 +87,29 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
     PACK((llk_pack_reconfig_l1_acc(0)));  // block 0 must overwrite, not accumulate
 #endif
 
-    // Reserve the FULL per-core output block in partials once. Then use
-    // pack_tile's output_tile_index parameter to write each subblock to an
-    // absolute slot WITHIN this reserved region. WrPtr does NOT advance until
-    // the final cb_push_back at the end of the K-loop — so on K-blocks
-    // 1..N-1 the L1_ACC packs land at the SAME L1 addresses as K-block 0's
-    // packs, accumulating physically. Saves the per-K-block pop+repush dance.
-    cb_reserve_back(partials_cb_id, out_block_num_tiles);
+    // Cross-K-block accumulation via PACKER_L1_ACC, using the proven production
+    // matmul packing discipline (see bmm_large_block_zm_fused_bias_activation.cpp):
+    // each subblock is reserved → packed in-order (pack_tile_block) → pushed, and
+    // the full block is drained (wait_front + pop_front) BETWEEN K-blocks.
+    //
+    // The drain is load-bearing for correctness, not just ring hygiene. wait_front
+    // blocks until the packer has committed the tiles it just wrote, so block N+1's
+    // L1_ACC read-modify-write cannot race ahead of block N's write landing in the
+    // same L1 slot; the matching pop_front wraps the CB write pointer back so the
+    // next block accumulates physically into block 0's slots. A previous
+    // whole-block-reserve / out-of-order-pack variant skipped this drain — it
+    // nondeterministically lost a subblock's first-tile (column 0) contribution
+    // when out_subblock_w > 1 (PCC ~0.83-0.98 run-to-run on the small-token
+    // routed-expert test). It "worked" only at out_subblock_w == 1, where the
+    // extra tile_regs barrier per pack incidentally serialised the writes — at the
+    // cost of down-matmul efficiency. The fused gate/up phase escapes the race
+    // because its two interleaved matmuls already separate consecutive same-slot
+    // packs. Keeping the perf-optimal wide subblock here is now safe.
     for (uint32_t block = 0; block < num_blocks; ++block) {
         cb_wait_front(in0_cb_id, in0_block_num_tiles);
         cb_wait_front(in1_cb_id, in1_block_num_tiles);
 
         int in0_index_subblock_offset = 0;
-        uint32_t partials_slot_idx = 0;  // absolute slot within partials_cb's reserved region
         for (uint32_t sb_m = 0; sb_m < in0_num_subblocks; ++sb_m) {
             int in1_index_subblock_offset = 0;
             for (uint32_t sb_n = 0; sb_n < in1_num_subblocks; ++sb_n) {
@@ -123,14 +134,12 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
                 }
 
                 tile_regs_commit();
+                cb_reserve_back(partials_cb_id, out_subblock_num_tiles);
                 tile_regs_wait();
-
-                for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
-                    pack_tile<true>(i, partials_cb_id, partials_slot_idx + i);
-                }
-                partials_slot_idx += out_subblock_num_tiles;
-
+                pack_tile_block(0, partials_cb_id, out_subblock_num_tiles);
                 tile_regs_release();
+                cb_push_back(partials_cb_id, out_subblock_num_tiles);
+
                 in1_index_subblock_offset += out_subblock_w;
             }
             in0_index_subblock_offset += in0_subblock_num_tiles;
@@ -145,9 +154,18 @@ FORCE_INLINE void matmul_phase(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t 
 
         cb_pop_front(in0_cb_id, in0_block_num_tiles);
         cb_pop_front(in1_cb_id, in1_block_num_tiles);
+
+        // Drain all but the last K-block (see header comment): forces the
+        // packer's writes visible before the next block's L1_ACC RMW and wraps
+        // the write pointer back to block 0's slots. The last block's output is
+        // left pushed for the second-pass copy below.
+        if (block + 1 < num_blocks) {
+            for (uint32_t s = 0; s < out_block_num_tiles; s += out_subblock_num_tiles) {
+                cb_wait_front(partials_cb_id, out_subblock_num_tiles);
+                cb_pop_front(partials_cb_id, out_subblock_num_tiles);
+            }
+        }
     }
-    // Make the accumulated partials visible to the second-pass loop below.
-    cb_push_back(partials_cb_id, out_block_num_tiles);
 
     // After the K-loop: partials_cb_id has out_block_num_tiles tiles holding
     // the final accumulated sum. Move them through dst into final_cb_id,
@@ -500,11 +518,16 @@ void kernel_main() {
     // thread). Same total compute, better pipelining.
     silu_tile_init();
 
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
+
     for (uint32_t chunk = 0; chunk < effective_chunks; ++chunk) {
-        mm_block_init(
+        // matmul_block_init only re-programs addressing, not SrcA/SrcB formats. On
+        // chunk >= 1 the unpacker is left on multiply_phase's operands, so reset it
+        // to the gate/up inputs here (in1 -> SrcA, in0 -> SrcB).
+        reconfig_data_format(cb_in1_gate, cb_in0_x);
+        matmul_block_init(
             cb_in0_x,
             cb_in1_gate,
-            cb_partials_gu,
             /*transpose=*/0,
             gu_out_subblock_w,
             gu_out_subblock_h,
@@ -541,10 +564,13 @@ void kernel_main() {
         (void)cb_up_intermed;
 
         // Phase 4: down matmul, output to cb_out.
-        mm_block_init(
+        // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);
+        // matmul_block_init does not re-program data formats, so reset the down
+        // operands here (in1 -> SrcA, in0 -> SrcB) before the matmul.
+        reconfig_data_format(cb_in1_down, cb_in0_down_full);
+        matmul_block_init(
             cb_in0_down_full,
             cb_in1_down,
-            cb_partials_d,
             /*transpose=*/0,
             d_out_subblock_w,
             d_out_subblock_h,

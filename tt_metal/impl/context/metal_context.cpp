@@ -214,11 +214,13 @@ void MetalContext::initialize(
     // Initialize inspector
     if (this->get_cluster().get_target_device_type() != tt::TargetDevice::Mock) {
         std::optional<int> rank;
-        auto world_context = distributed::multihost::DistributedContext::get_world_context();
-        if (*(world_context->size()) > 1) {
-            rank = *world_context->rank();
+        if (distributed::multihost::DistributedContext::is_initialized()) {
+            auto world_context = distributed::multihost::DistributedContext::get_world_context();
+            if (*(world_context->size()) > 1) {
+                rank = *world_context->rank();
+            }
         }
-        inspector_data_ = Inspector::initialize(rank);
+        inspector_data_ = Inspector::initialize(rank, get_context_id());
         // Set fw_compile_hash for Inspector RPC build environment info
         Inspector::set_build_env_fw_compile_hash(fw_compile_hash);
     }
@@ -428,10 +430,10 @@ ContextId MetalContext::create_default_instance_implicit_locked() {
     instance->env_owned_ = true;
 
     g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
-    // Seed the process-wide BuildEnvManager singleton with this context's HAL on first call,
+    // Seed the per-context BuildEnvManager slot with this context's HAL on first call,
     // no-op thereafter. Using the by-HAL form (rather than get_instance(ContextId)) avoids
     // re-entering MetalContext::instance() while we hold g_instance_mutex.
-    BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
+    BuildEnvManager::seed_if_unseeded_with_hal(DEFAULT_CONTEXT_ID, instance->hal());
     return DEFAULT_CONTEXT_ID;
 }
 
@@ -446,16 +448,16 @@ ContextId MetalContext::create_instance(MetalEnv& env_to_use) {
         }
         MetalContext* instance = new MetalContext(DEFAULT_CONTEXT_ID, env_to_use);
         g_instances[DEFAULT_CONTEXT_ID.get()].store(instance, std::memory_order_release);
-        // Seed the process-wide BuildEnvManager with this context's HAL on first call.
+        // Seed the per-context BuildEnvManager slot with this context's HAL on first call.
         // By-HAL form avoids re-entering MetalContext::instance() while holding g_instance_mutex.
-        BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
+        BuildEnvManager::seed_if_unseeded_with_hal(DEFAULT_CONTEXT_ID, instance->hal());
         return DEFAULT_CONTEXT_ID;
     }
 
     ContextId context_id = find_free_context_id_locked();
     MetalContext* instance = new MetalContext(context_id, env_to_use);
     g_instances[context_id.get()].store(instance, std::memory_order_release);
-    BuildEnvManager::seed_if_unseeded_with_hal(instance->hal());
+    BuildEnvManager::seed_if_unseeded_with_hal(context_id, instance->hal());
     return context_id;
 }
 
@@ -476,6 +478,8 @@ void MetalContext::destroy_instance(bool check_device_count, ContextId context_i
     // Only store to g_instance after the instance is deleted to allow MetalContext::instance() calls during teardown to
     // return the old instance.
     g_instances[index].store(nullptr, std::memory_order_release);
+    // Free the slot so a recycled context_id reseeds fresh.
+    BuildEnvManager::destroy_for_context(context_id);
 }
 
 void MetalContext::destroy_all_instances(bool check_device_count) {

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 
@@ -146,7 +147,14 @@ Alignment TilePageConfig::get_required_shard_shape_alignment() const {
     return Alignment({tile_.get_height(), tile_.get_width()});
 }
 
-RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {}
+RowMajorPageConfig::RowMajorPageConfig(const Tile& tile) : tile_(tile) {
+    if (tile != Tile{}) {
+        log_warning(
+            LogMetal,
+            "Configuring a ROW MAJOR page config with a tile configuration, this will be rejected in the future. See "
+            "#18536");
+    }
+}
 
 Alignment RowMajorPageConfig::create_default_alignment(DataType /*dtype*/, const MemoryConfig& memory_config) const {
     if (memory_config.shard_spec().has_value()) {
@@ -210,7 +218,16 @@ size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataTy
     return size;
 }
 
-const Tile& RowMajorPageConfig::get_tile() const { return tile_; }
+const Tile& RowMajorPageConfig::get_tile() const {
+    if (tile_ != Tile{}) {
+        log_warning(
+            LogMetal,
+            "Attempting to extract tile information out of a ROW MAJOR layout, this will be rejected in the future. "
+            "See "
+            "#18536.");
+    }
+    return tile_;
+}
 
 Alignment RowMajorPageConfig::get_required_shard_shape_alignment() const { return Alignment({1}); }
 

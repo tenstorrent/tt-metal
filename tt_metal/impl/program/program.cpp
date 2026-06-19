@@ -161,7 +161,8 @@ namespace {
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    const auto& env = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env;
+    const auto& env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
     jit_build_genfiles_descriptors(env, build_options);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
@@ -176,7 +177,8 @@ KernelCompileDescriptor build_kernel_descriptor(
     const std::shared_ptr<Kernel>& kernel,
     const JitBuildOptions& build_options,
     std::size_t kernel_hash) {
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
     uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
@@ -192,8 +194,10 @@ KernelCompileDescriptor build_kernel_descriptor(
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs =
+            BuildEnvManager::get_instance(extract_context_id(device))
+                .get_kernel_build_state(
+                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }
@@ -469,7 +473,7 @@ std::shared_ptr<Kernel> detail::ProgramImpl::get_kernel(KernelHandle kernel_id) 
 // Metal 2.0 Name Registry Methods
 // ============================================================================
 
-void ProgramImpl::register_kernel_spec_name(const KernelSpecName& name, KernelHandle handle) {
+void ProgramImpl::register_kernel_spec_name(const std::string& name, KernelHandle handle) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -490,7 +494,9 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         "Both DFBs must be created via add_dataflow_buffer before aliasing.",
         secondary_id,
         dataflow_buffers_.size());
-    TT_FATAL(primary_id != secondary_id, "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+    TT_FATAL(
+        primary_id != secondary_id,
+        "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
 
     auto& primary_dfb = dataflow_buffers_[primary_id];
     auto& secondary_dfb = dataflow_buffers_[secondary_id];
@@ -506,12 +512,11 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         secondary_id,
         secondary_dfb->alias_primary_id.value());
 
-
     dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
     dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
 }
 
-void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_id) {
+void ProgramImpl::register_dfb_spec_name(const std::string& name, uint32_t dfb_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -519,7 +524,7 @@ void ProgramImpl::register_dfb_spec_name(const DFBSpecName& name, uint32_t dfb_i
     TT_FATAL(inserted, "Duplicate DFB spec name: {}", name);
 }
 
-void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, uint32_t sem_id) {
+void ProgramImpl::register_semaphore_spec_name(const std::string& name, uint32_t sem_id) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -527,28 +532,28 @@ void ProgramImpl::register_semaphore_spec_name(const SemaphoreSpecName& name, ui
     TT_FATAL(inserted, "Duplicate semaphore spec name: {}", name);
 }
 
-KernelHandle ProgramImpl::get_kernel_handle(const KernelSpecName& name) const {
+KernelHandle ProgramImpl::get_kernel_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->kernel_handles.find(name);
     TT_FATAL(it != metal2_registry_->kernel_handles.end(), "Unknown kernel spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_dfb_handle(const DFBSpecName& name) const {
+uint32_t ProgramImpl::get_dfb_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->dfb_handles.find(name);
     TT_FATAL(it != metal2_registry_->dfb_handles.end(), "Unknown DFB spec name: {}", name);
     return it->second;
 }
 
-uint32_t ProgramImpl::get_semaphore_handle(const SemaphoreSpecName& name) const {
+uint32_t ProgramImpl::get_semaphore_handle(const std::string& name) const {
     TT_FATAL(metal2_registry_, "Metal 2.0 registry not initialized (program was not created from ProgramSpec)");
     auto it = metal2_registry_->semaphore_handles.find(name);
     TT_FATAL(it != metal2_registry_->semaphore_handles.end(), "Unknown semaphore spec name: {}", name);
     return it->second;
 }
 
-void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const KernelRTASchema& schema) {
+void ProgramImpl::register_kernel_rta_schema(const std::string& name, const KernelRTASchema& schema) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
@@ -556,7 +561,7 @@ void ProgramImpl::register_kernel_rta_schema(const KernelSpecName& name, const K
     TT_FATAL(inserted, "Duplicate kernel RTA schema for: {}", name);
 }
 
-const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const KernelSpecName& name) const {
+const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const std::string& name) const {
     if (!metal2_registry_) {
         return nullptr;
     }
@@ -567,8 +572,8 @@ const ProgramImpl::KernelRTASchema* ProgramImpl::get_kernel_rta_schema(const Ker
     return &it->second;
 }
 
-std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
-    std::vector<KernelSpecName> names;
+std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
+    std::vector<std::string> names;
     if (metal2_registry_) {
         names.reserve(metal2_registry_->kernel_handles.size());
         for (const auto& [name, handle] : metal2_registry_->kernel_handles) {
@@ -579,12 +584,18 @@ std::vector<KernelSpecName> ProgramImpl::get_registered_kernel_names() const {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
+    const std::string& name,
+    const TensorSpec& spec,
+    bool dynamic_tensor_shape,
+    bool match_padded_shape_only,
+    bool enqueue_invariant) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
-        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
+        name,
+        Metal2NameRegistry::RegisteredTensorParameter{
+            spec, dynamic_tensor_shape, match_padded_shape_only, enqueue_invariant});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -619,6 +630,17 @@ bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string
         return false;
     }
     return it->second.match_padded_shape_only;
+}
+
+bool ProgramImpl::get_tensor_parameter_enqueue_invariant(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.enqueue_invariant;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
@@ -1774,8 +1796,9 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries =
-                kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
+                                                        .get_device_build_env(device->build_id())
+                                                        .build_key());
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1993,7 +2016,8 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -2035,7 +2059,8 @@ void ProgramImpl::generate_dispatch_commands(IDevice* device, bool use_prefetche
 void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_prefetcher_cache) {
     uint64_t command_hash = *device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    uint64_t device_hash =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_key();
     if (not MetalContext::instance().hal().is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the device hash, to always assert on programs being reused across devices.
@@ -2074,7 +2099,8 @@ void ProgramImpl::generate_trace_dispatch_commands(IDevice* device, bool use_pre
 
 void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // ZoneScoped;
-    const auto& build_env = BuildEnvManager::get_instance().get_device_build_env(device->build_id());
+    const auto& build_env =
+        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -2143,7 +2169,8 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             !endpoints.empty(),
             "TT_METAL_JIT_SERVER_ENABLE is set but no compile-server endpoints are configured. "
             "Set TT_METAL_JIT_SERVER_ENDPOINTS or TT_METAL_JIT_SERVER_ENDPOINT.");
-        RemoteCompileCoordinator coordinator(std::move(endpoints), device->build_id(), build_env.build_key());
+        RemoteCompileCoordinator coordinator(
+            std::move(endpoints), extract_context_id(device), device->build_id(), build_env.build_key());
 
         std::vector<std::pair<std::shared_ptr<Kernel>, JitBuildOptions>> submitted_kernels;
 
@@ -2165,7 +2192,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (const auto& [kernel, build_options] : submitted_kernels) {
             kernel->read_binaries(device, binary_root);
             kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
         }
     } else {
         // Local path: parallel build via thread pool.
@@ -2179,7 +2206,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
                     },
                     events);
             }
@@ -2369,11 +2396,12 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         return this->get_kernels(index);
     };
 
-    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return this->get_kernel_groups(index);
-    };
+    detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
 
-    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
@@ -2424,12 +2452,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
-            index,
-            kernel_groups_getter(index),
-            dataflow_buffers,
-            state.offset,
-            state.dfb_offset,
-            state.dfb_size);
+            index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
         // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
         // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.

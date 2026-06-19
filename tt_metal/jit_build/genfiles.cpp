@@ -124,7 +124,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
-    //  - TensorBindings are emitted into the ta namespace
+    //  - TensorBindings are emitted into the tensor namespace
     //
     // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
@@ -178,13 +178,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
-            content << "namespace ta {\n";
+            content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
                         << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
-            content << "}  // namespace ta\n";
+            content << "}  // namespace tensor\n";
         }
     }
     write_file(path, content.str());
@@ -366,20 +366,33 @@ void emit_formats_array(
         fmt::join(arr, ","));
 }
 
+// Quasar HW DataFormat codes (mirror of the relevant entries in
+// tensix_types.h. A few host DataFormat
+// enumerators use a value that differs from the HW encoding to keep host enum
+// values unique / avoid collisions, so device compilation needs the real HW
+// code. Keep these in sync with tensix_types.h.
+using hw_format_t = std::underlying_type_t<DataFormat>;
+constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
+constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
+constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
+constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
+constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
+
 void emit_formats_array(
     std::ostream& out,
     std::string_view array_type,
     std::string_view array_name,
     int array_size,
     const std::vector<DataFormat>& formats) {
-    // Remap host-only enum values to HW values for device compilation.
-    // Int16 has a unique host value (13) to avoid colliding with UInt16 (9),
-    // but the Quasar HW expects Int16 = 9 in tensix_types.h.
-    auto as_int = [](DataFormat f) -> std::underlying_type_t<DataFormat> {
-        if (f == DataFormat::Int16) {
-            return 9;  // HW value from tensix_types.h
+    auto as_int = [](DataFormat f) -> hw_format_t {
+        switch (f) {
+            case DataFormat::Int16: return kHwInt16;
+            case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+            case DataFormat::MxInt8: return kHwMxInt8;
+            case DataFormat::MxInt4: return kHwMxInt4;
+            case DataFormat::MxInt2: return kHwMxInt2;
+            default: return static_cast<hw_format_t>(f);
         }
-        return static_cast<std::underlying_type_t<DataFormat>>(f);
     };
     emit_formats_array(out, array_type, array_name, array_size, formats | std::views::transform(as_int));
 }
@@ -389,11 +402,17 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     DataFormat unpack_conditional_dst_format,
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
+    bool enable_2x_src_format,
     uint32_t max_cbs) {
     vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
     vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
-        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
+        desc.buf_dataformat_arr,
+        unpack_conditional_dst_format,
+        fp32_dest_acc_en,
+        std::move(unpack_to_dest_mode),
+        /*int_fpu_en=*/false,
+        enable_2x_src_format);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -406,9 +425,11 @@ void emit_unpack_data_formats(
     const std::vector<DataFormat>& src_formats_all_cbs,
     const std::vector<DataFormat>& dst_formats_all_cbs,
     uint32_t max_cbs) {
-    // TODO: we should be emitting "unsigned char", no reason to use up 4B per data format
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
+    // DataFormat values fit in a byte (Invalid==255); emit as uint8_t to save 3B/entry of LDM (the
+    // .data region shares the TRISC's 2KB local memory with the stack). Matches pack_src/dst_format
+    // and the unpack tile-dim arrays, which are already uint8_t. All consumers read+promote to uint32.
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, src_formats_all_cbs);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_dst_format", max_cbs, dst_formats_all_cbs);
 }
 
 std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_formats(
@@ -521,7 +542,12 @@ ComputedDataFormats compute_data_formats(const JitBuildOptions& options, tt::ARC
 
     tt::check_valid_formats_in_out_data_formats(desc.buf_dataformat_arr);
     auto [unpack_src_formats_all_cbs, unpack_dst_formats_all_cbs] = generate_unpack_data_formats(
-        desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.unpack_to_dest_mode, max_cbs);
+        desc,
+        unpack_conditional_dst_format,
+        options.fp32_dest_acc_en,
+        options.unpack_to_dest_mode,
+        options.enable_2x_src_format,
+        max_cbs);
 
     auto [pack_src_formats_all_cbs, pack_dst_formats_all_cbs] = generate_pack_data_formats(
         desc, unpack_conditional_dst_format, options.fp32_dest_acc_en, options.bfp8_pack_precise, arch, max_cbs);
@@ -689,7 +715,7 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     // if the original input format is 8-bit (Int8, UInt8, Fp8_e4m3, Lf8) since those formats
     // do not require the tilize workaround. This is needed to determine whether to skip the workaround in llk_pack_init.
     out << "#if defined(UCK_CHLKC_PACK)\n";
-    emit_formats_array(out, "constexpr std::int32_t", "unpack_src_format", max_cbs, fmts.unpack_src);
+    emit_formats_array(out, "constexpr uint8_t", "unpack_src_format", max_cbs, fmts.unpack_src);
     out << "#endif\n";   // if pack
     out << "#endif\n\n"; // if not math and not unpack
 

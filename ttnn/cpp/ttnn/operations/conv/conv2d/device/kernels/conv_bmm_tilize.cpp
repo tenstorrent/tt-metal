@@ -8,10 +8,10 @@
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
@@ -290,7 +290,8 @@ void kernel_main() {
     experimental::CB cb_bias(bias_cb_id);
     experimental::CB cb_untilize_mode_out(untilize_mode_out_cb_id);
 
-    mm_block_init(mm_in0_cb_id, in1_cb_id, out_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(mm_in0_cb_id, in1_cb_id, out_cb_id);
+    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
 #ifdef SFPU_OP_INIT_ACTIVATION
     SFPU_OP_INIT_ACTIVATION
 #endif
@@ -335,15 +336,8 @@ void kernel_main() {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
                                 in0_num_subblocks_read_last);
                         }
-                        mm_block_init_short_with_both_dt(
-                            in0_cb_id,
-                            in1_cb_id,
-                            in0_pretilize_cb_id,
-                            in0_pretilize_cb_id,
-                            false,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in0_block_w);
+                        reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
+                        matmul_block_init(in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                     }
                 } else {
                     if constexpr (pack_relu && !fuse_bias) {
@@ -388,15 +382,8 @@ void kernel_main() {
                         }
                     }
 
-                    mm_block_init_short_with_both_dt(
-                        mm_in0_cb_id,
-                        in1_cb_id,
-                        in0_cb_id,
-                        in0_cb_id,
-                        false,
-                        out_subblock_w,
-                        out_subblock_h,
-                        in0_block_w);
+                    reconfig_data_format(in0_cb_id, in1_cb_id, in0_cb_id, mm_in0_cb_id);
+                    matmul_block_init(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                 }
 
                 cb_mm_in0.wait_front(in0_block_num_tiles);
@@ -440,14 +427,9 @@ void kernel_main() {
 
                             cb_matmul_partials.pop_front(out_subblock_num_tiles);
                             // Reconfigure srcA back
-                            mm_block_init_short_with_dt(
-                                mm_in0_cb_id,
-                                in1_cb_id,
-                                matmul_partials_cb,
-                                false,
-                                out_subblock_w,
-                                out_subblock_h,
-                                in0_block_w);
+                            reconfig_data_format_srca(matmul_partials_cb, in1_cb_id);
+                            matmul_block_init(
+                                mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
                         } else {
                             // just acquire
                             tile_regs_acquire();

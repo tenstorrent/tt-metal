@@ -177,11 +177,11 @@ void run_single_dfb_program(
         }
     }
 
-    constexpr const char* DFB_NAME = "dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const experimental::DFBSpecName DFB_NAME{"dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     // Only DM kernels bind to DRAM tensors; Tensix kernels operate purely on L1 DFB rings
     // (host pre-fills L1 for Tensix producers; verifies via L1 read for Tensix consumers).
@@ -248,7 +248,7 @@ void run_single_dfb_program(
             .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
             .tensor_bindings = {{
                 .tensor_parameter_name = IN_TENSOR,
-                .accessor_name = "src_tensor",  // kernel: ta::src_tensor
+                .accessor_name = "src_tensor",  // kernel: tensor::src_tensor
             }},
             .compile_time_args =
                 {
@@ -288,7 +288,7 @@ void run_single_dfb_program(
             }},
             .tensor_bindings = {{
                 .tensor_parameter_name = OUT_TENSOR,
-                .accessor_name = "dst_tensor",  // kernel: ta::dst_tensor
+                .accessor_name = "dst_tensor",  // kernel: tensor::dst_tensor
             }},
             .compile_time_args =
                 {
@@ -353,10 +353,10 @@ void run_single_dfb_program(
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    using RuntimeArgValues = decltype(experimental::ProgramRunArgs::KernelRunArgs::runtime_arg_values);
+    using NodeRuntimeArgs = RuntimeArgValues::value_type;
     auto build_dm_named_rtas = [&]() {
-        std::vector<NodeRuntimeArgs> result;
-        result.reserve(core_to_chunk_offset.size());
+        RuntimeArgValues result;
         for (const auto& [core, chunk_offset] : core_to_chunk_offset) {
             result.push_back(NodeRuntimeArgs{
                 experimental::NodeCoord{core.x, core.y},
@@ -366,20 +366,22 @@ void run_single_dfb_program(
     };
 
     experimental::ProgramRunArgs run_params;
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{.kernel_spec_name = PRODUCER};
+    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    producer_params.kernel = PRODUCER;
     if (producer_type == DFBPorCType::DM) {
         producer_params.runtime_arg_values = build_dm_named_rtas();
     }
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{.kernel_spec_name = CONSUMER};
+    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    consumer_params.kernel = CONSUMER;
     if (consumer_type == DFBPorCType::DM) {
         consumer_params.runtime_arg_values = build_dm_named_rtas();
     }
     run_params.kernel_run_args = {producer_params, consumer_params};
     if (need_in_tensor) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(*in_tensor)});
+        run_params.tensor_args.emplace(IN_TENSOR, experimental::TensorArgument{*in_tensor});
     }
     if (need_out_tensor) {
-        run_params.tensor_args.push_back({.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(*out_tensor)});
+        run_params.tensor_args.emplace(OUT_TENSOR, experimental::TensorArgument{*out_tensor});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -615,8 +617,8 @@ void run_concurrent_dfbs_program(
     auto in_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
     auto out_tensor = MeshTensor::allocate_on_device(*mesh_device, tensor_spec, TensorTopology{});
 
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     // Build N DataflowBufferSpec, 2N KernelSpec (1 producer + 1 consumer per DFB).
     // Each kernel instance binds to exactly its own DFB; this matches num_producers=1
@@ -624,16 +626,16 @@ void run_concurrent_dfbs_program(
     // erroneously register all N threads as producers for every DFB.
     std::vector<experimental::DataflowBufferSpec> dfb_specs;
     std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<std::string> kernel_names;
+    std::vector<experimental::KernelSpecName> kernel_names;
     dfb_specs.reserve(num_dfbs);
     kernel_specs.reserve(2 * num_dfbs);
     kernel_names.reserve(2 * num_dfbs);
 
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const uint32_t chunk_offset = i * entries_per_dfb;
-        const std::string dfb_name = "dfb_" + std::to_string(i);
-        const std::string producer_name = "producer_" + std::to_string(i);
-        const std::string consumer_name = "consumer_" + std::to_string(i);
+        const experimental::DFBSpecName dfb_name{"dfb_" + std::to_string(i)};
+        const experimental::KernelSpecName producer_name{"producer_" + std::to_string(i)};
+        const experimental::KernelSpecName consumer_name{"consumer_" + std::to_string(i)};
 
         dfb_specs.push_back(experimental::DataflowBufferSpec{
             .unique_id = dfb_name,
@@ -721,13 +723,12 @@ void run_concurrent_dfbs_program(
 
     // No per-instance runtime args needed (chunk_offset is a CTA).
     experimental::ProgramRunArgs run_params;
-    run_params.kernel_run_args.reserve(kernel_names.size());
     for (const auto& name : kernel_names) {
-        run_params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = name});
+        run_params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = name});
     }
     run_params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, experimental::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -780,7 +781,7 @@ void run_concurrent_tensix_dm_dfbs_program(
     const uint32_t total_words = num_dfbs * entries_per_dfb * wpe;
     auto input = tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, total_words);
 
-    constexpr const char* PRODUCER = "producer";
+    const experimental::KernelSpecName PRODUCER{"producer"};
 
     // Tensix sequential producer: 1 Neo thread, loops through num_dfbs DFBs.
     // The kernel uses #if TEST_NUM_DFBS >= I to gate per-DFB unrolled blocks (each
@@ -800,7 +801,7 @@ void run_concurrent_tensix_dm_dfbs_program(
     };
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         producer_spec.dfb_bindings.push_back(experimental::DFBBinding{
-            .dfb_spec_name = "dfb_" + std::to_string(i),
+            .dfb_spec_name = experimental::DFBSpecName{"dfb_" + std::to_string(i)},
             .accessor_name = "dfb_" + std::to_string(i),
             .endpoint_type = experimental::DFBEndpointType::PRODUCER,
             .access_pattern = experimental::DFBAccessPattern::STRIDED,
@@ -810,7 +811,7 @@ void run_concurrent_tensix_dm_dfbs_program(
     // DM concurrent consumers: one 1-thread kernel instance per DFB, each binding
     // its own per-DFB OUT_TENSOR_<i>.
     std::vector<experimental::KernelSpec> kernel_specs;
-    std::vector<std::string> kernel_names;
+    std::vector<experimental::KernelSpecName> kernel_names;
     std::vector<experimental::DataflowBufferSpec> dfb_specs;
     std::vector<experimental::TensorParameter> tensor_parameters;
     kernel_specs.reserve(1 + num_dfbs);
@@ -823,9 +824,9 @@ void run_concurrent_tensix_dm_dfbs_program(
 
     const uint32_t num_entries_per_consumer = entries_per_dfb;  // 1Sx1S: sole consumer gets all
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        const std::string dfb_name = "dfb_" + std::to_string(i);
-        const std::string consumer_name = "consumer_" + std::to_string(i);
-        const std::string out_tensor_name = "out_tensor_" + std::to_string(i);
+        const experimental::DFBSpecName dfb_name{"dfb_" + std::to_string(i)};
+        const experimental::KernelSpecName consumer_name{"consumer_" + std::to_string(i)};
+        const experimental::TensorParamName out_tensor_name{"out_tensor_" + std::to_string(i)};
 
         dfb_specs.push_back(experimental::DataflowBufferSpec{
             .unique_id = dfb_name,
@@ -883,14 +884,13 @@ void run_concurrent_tensix_dm_dfbs_program(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs run_params;
-    run_params.kernel_run_args.reserve(kernel_names.size());
     for (const auto& name : kernel_names) {
-        run_params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = name});
+        run_params.kernel_run_args.push_back(experimental::ProgramRunArgs::KernelRunArgs{.kernel = name});
     }
-    run_params.tensor_args.reserve(num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
-        run_params.tensor_args.push_back(
-            {.tensor_parameter_name = "out_tensor_" + std::to_string(i), .tensor = std::cref(out_tensors[i])});
+        run_params.tensor_args.emplace(
+            experimental::TensorParamName{"out_tensor_" + std::to_string(i)},
+            experimental::TensorArgument{out_tensors[i]});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -961,7 +961,7 @@ void run_sequential_dfbs_program(
         num_producers + num_consumers <= 6,
         "num_producers + num_consumers must fit in 6 available Quasar DM threads (DM0 reserved for dispatch)");
     // dfb_seq_producer / dfb_seq_consumer kernels unroll up to TEST_NUM_DFBS bindings
-    // referencing dfb::dfb_<i> / ta::src_<i> / ta::dst_<i> for i in [0, TEST_NUM_DFBS).
+    // referencing dfb::dfb_<i> / tensor::src_<i> / tensor::dst_<i> for i in [0, TEST_NUM_DFBS).
     TT_FATAL(num_dfbs <= 6, "num_dfbs must be <= 6 (kernel binding-name limit dfb::dfb_0..5)");
 
     const CoreCoord core(0, 0);
@@ -999,10 +999,10 @@ void run_sequential_dfbs_program(
     const uint32_t num_entries_per_producer =
         (num_entries + num_producers - 1) / num_producers;  // ceiling; all configs share this
 
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* CONSUMER = "consumer";
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
 
-    // Producer kernel: N DFB bindings (dfb::dfb_0..N-1) + N tensor bindings (ta::src_0..N-1).
+    // Producer kernel: N DFB bindings (dfb::dfb_0..N-1) + N tensor bindings (tensor::src_0..N-1).
     // TEST_NUM_DFBS compiler define gates the per-DFB unrolled blocks; it must equal the
     // number of dfb_bindings / tensor_bindings registered here. Name is prefixed to avoid
     // colliding with dfb::NUM_DFBS in dataflow_buffer_config.h.
@@ -1052,9 +1052,9 @@ void run_sequential_dfbs_program(
 
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string idx = std::to_string(i);
-        const std::string dfb_name = "dfb_" + idx;
-        const std::string in_tensor_name = "in_tensor_" + idx;
-        const std::string out_tensor_name = "out_tensor_" + idx;
+        const experimental::DFBSpecName dfb_name{"dfb_" + idx};
+        const experimental::TensorParamName in_tensor_name{"in_tensor_" + idx};
+        const experimental::TensorParamName out_tensor_name{"out_tensor_" + idx};
         const bool is_all = (configs[i].cap == dfb::AccessPattern::ALL);
         const uint32_t epc = is_all ? num_entries : (num_entries + num_consumers - 1) / num_consumers;
 
@@ -1101,9 +1101,8 @@ void run_sequential_dfbs_program(
             .tensor_parameter_name = out_tensor_name,
             .accessor_name = "dst_" + idx,
         });
-        consumer_spec.compile_time_args.push_back({"entries_per_consumer_" + idx, epc});
-        consumer_spec.compile_time_args.push_back(
-            {"is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u)});
+        consumer_spec.compile_time_args.emplace("entries_per_consumer_" + idx, epc);
+        consumer_spec.compile_time_args.emplace("is_blocked_" + idx, static_cast<uint32_t>(is_all ? 1u : 0u));
     }
 
     experimental::WorkUnitSpec wu{
@@ -1124,16 +1123,15 @@ void run_sequential_dfbs_program(
 
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = PRODUCER},
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel_spec_name = CONSUMER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = PRODUCER},
+        experimental::ProgramRunArgs::KernelRunArgs{.kernel = CONSUMER},
     };
-    run_params.tensor_args.reserve(2 * num_dfbs);
     for (uint32_t i = 0; i < num_dfbs; ++i) {
         const std::string idx = std::to_string(i);
-        run_params.tensor_args.push_back(
-            {.tensor_parameter_name = "in_tensor_" + idx, .tensor = std::cref(in_tensors[i])});
-        run_params.tensor_args.push_back(
-            {.tensor_parameter_name = "out_tensor_" + idx, .tensor = std::cref(out_tensors[i])});
+        run_params.tensor_args.emplace(
+            experimental::TensorParamName{"in_tensor_" + idx}, experimental::TensorArgument{in_tensors[i]});
+        run_params.tensor_args.emplace(
+            experimental::TensorParamName{"out_tensor_" + idx}, experimental::TensorArgument{out_tensors[i]});
     }
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -1189,13 +1187,13 @@ void run_in_dfb_out_dfb_program(
         out_tensor.mesh_buffer().get_reference_buffer()->address(),
         out_tensor.mesh_buffer().get_reference_buffer()->size());
 
-    constexpr const char* IN_DFB = "in_dfb";
-    constexpr const char* OUT_DFB = "out_dfb";
-    constexpr const char* PRODUCER = "producer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* CONSUMER = "consumer";
-    constexpr const char* IN_TENSOR = "in_tensor";
-    constexpr const char* OUT_TENSOR = "out_tensor";
+    const experimental::DFBSpecName IN_DFB{"in_dfb"};
+    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
+    const experimental::KernelSpecName PRODUCER{"producer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::KernelSpecName CONSUMER{"consumer"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
+    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
 
     experimental::DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
@@ -1317,24 +1315,27 @@ void run_in_dfb_out_dfb_program(
 
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
-    using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
+    using RuntimeArgValues = decltype(experimental::ProgramRunArgs::KernelRunArgs::runtime_arg_values);
     auto build_named_rtas = [&]() {
-        return std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
-            experimental::NodeCoord{logical_core.x, logical_core.y},
-            {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
+        return RuntimeArgValues{
+            {experimental::NodeCoord{logical_core.x, logical_core.y},
+             {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
     };
 
-    experimental::ProgramRunArgs::KernelRunArgs producer_params{.kernel_spec_name = PRODUCER};
+    experimental::ProgramRunArgs::KernelRunArgs producer_params{};
+    producer_params.kernel = PRODUCER;
     producer_params.runtime_arg_values = build_named_rtas();
-    experimental::ProgramRunArgs::KernelRunArgs compute_params{.kernel_spec_name = COMPUTE};
-    experimental::ProgramRunArgs::KernelRunArgs consumer_params{.kernel_spec_name = CONSUMER};
+    experimental::ProgramRunArgs::KernelRunArgs compute_params{};
+    compute_params.kernel = COMPUTE;
+    experimental::ProgramRunArgs::KernelRunArgs consumer_params{};
+    consumer_params.kernel = CONSUMER;
     consumer_params.runtime_arg_values = build_named_rtas();
 
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {producer_params, compute_params, consumer_params};
     run_params.tensor_args = {
-        {.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)},
-        {.tensor_parameter_name = OUT_TENSOR, .tensor = std::cref(out_tensor)},
+        {IN_TENSOR, experimental::TensorArgument{in_tensor}},
+        {OUT_TENSOR, experimental::TensorArgument{out_tensor}},
     };
     experimental::SetProgramRunArgs(program, run_params);
 
@@ -1906,8 +1907,8 @@ static void run_intra_tensix_dfb_program(
         num_entries, num_threads);
     const uint32_t entries_per_neo = num_entries / num_threads;
 
-    constexpr const char* INTRA_DFB = "intra_dfb";
-    constexpr const char* COMPUTE = "compute";
+    const experimental::DFBSpecName INTRA_DFB{"intra_dfb"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
 
     experimental::DataflowBufferSpec intra_dfb_spec{
         .unique_id = INTRA_DFB,
@@ -1963,7 +1964,7 @@ static void run_intra_tensix_dfb_program(
     Program program = experimental::MakeProgramFromSpec(*mesh_device, spec);
 
     experimental::ProgramRunArgs run_params;
-    run_params.kernel_run_args = {{.kernel_spec_name = COMPUTE}};
+    run_params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE}};
     experimental::SetProgramRunArgs(program, run_params);
 
     const uint32_t total_size = num_entries * entry_size;
@@ -2044,11 +2045,11 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
     auto in_tensor = MeshTensor::allocate_on_device(
         *this->devices_.at(0), make_flat_dram_tensor_spec(entry_size, num_entries), TensorTopology{});
 
-    constexpr const char* REMAPPER_DFB = "remapper_dfb";
-    constexpr const char* INTRA_DFB = "intra_dfb";
-    constexpr const char* DM_PRODUCER = "dm_producer";
-    constexpr const char* COMPUTE = "compute";
-    constexpr const char* IN_TENSOR = "in_tensor";
+    const experimental::DFBSpecName REMAPPER_DFB{"remapper_dfb"};
+    const experimental::DFBSpecName INTRA_DFB{"intra_dfb"};
+    const experimental::KernelSpecName DM_PRODUCER{"dm_producer"};
+    const experimental::KernelSpecName COMPUTE{"compute"};
+    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
 
     experimental::DataflowBufferSpec remapper_dfb_spec{
         .unique_id = REMAPPER_DFB,
@@ -2145,16 +2146,18 @@ TEST_F(MeshDeviceFixture, TensixIntraAndRemapperTest_4Neo_DM1Sx4A) {
 
     Program program = experimental::MakeProgramFromSpec(*this->devices_.at(0), spec);
 
-    using NodeRuntimeArgs = experimental::ProgramRunArgs::KernelRunArgs::NodeRuntimeArgs;
-    experimental::ProgramRunArgs::KernelRunArgs dm_producer_params{.kernel_spec_name = DM_PRODUCER};
-    dm_producer_params.runtime_arg_values = std::vector<NodeRuntimeArgs>{NodeRuntimeArgs{
-        experimental::NodeCoord{logical_core.x, logical_core.y},
-        {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
-    experimental::ProgramRunArgs::KernelRunArgs compute_params{.kernel_spec_name = COMPUTE};
+    using RuntimeArgValues = decltype(experimental::ProgramRunArgs::KernelRunArgs::runtime_arg_values);
+    experimental::ProgramRunArgs::KernelRunArgs dm_producer_params{};
+    dm_producer_params.kernel = DM_PRODUCER;
+    dm_producer_params.runtime_arg_values = RuntimeArgValues{
+        {experimental::NodeCoord{logical_core.x, logical_core.y},
+         {{"chunk_offset", 0u}, {"entries_per_core", num_entries}}}};
+    experimental::ProgramRunArgs::KernelRunArgs compute_params{};
+    compute_params.kernel = COMPUTE;
 
     experimental::ProgramRunArgs run_params;
     run_params.kernel_run_args = {dm_producer_params, compute_params};
-    run_params.tensor_args = {{.tensor_parameter_name = IN_TENSOR, .tensor = std::cref(in_tensor)}};
+    run_params.tensor_args = {{IN_TENSOR, experimental::TensorArgument{in_tensor}}};
     experimental::SetProgramRunArgs(program, run_params);
 
     // L1 layout follows DFB creation order:
