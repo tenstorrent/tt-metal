@@ -37,7 +37,12 @@ void kernel_main() {
         bool has_rows = (num_rows) > 0;
 
         cb_out0.wait_front(single_block_size * has_rows);
-        uint32_t l1_read_addr = cb_out0.get_write_ptr();
+        // Read from the front of the waited entries. The legacy kernel used get_write_ptr() here,
+        // which only coincides with the front when the CB is sized EXACTLY to one block (full ->
+        // write ptr wraps to read ptr). The Metal 2.0 port shares one DFB sized to the max region
+        // block count across sub-regions, so smaller regions never fill it; get_read_ptr() is the
+        // size-independent address of the block's data.
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint32_t total_size = start_column_id + width_size;

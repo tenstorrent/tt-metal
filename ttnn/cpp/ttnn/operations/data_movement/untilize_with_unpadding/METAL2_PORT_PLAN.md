@@ -51,8 +51,31 @@ Atomic unit = one ProgramFactory. Factories are ported one at a time; each is a 
 - Work split: `split_blocks_for_tilize` (full + cliff compute KernelSpecs).
 - **Hazard:** same `->address()`-in-RTA as block.
 
-**MultiCoreSharded** / **MultiCoreNDSharded** — inventoried below; ported in a later pass (more
-complex: borrowed-memory DFBs, producer-only output edge / fake-CB, multiple writer variants).
+**MultiCoreSharded** / **MultiCoreNDSharded** — ported in this pass (see Delivered below).
+
+**MultiCoreSharded**
+| unique_id | source | CTAs | RTAs |
+|---|---|---|---|
+| reader | eltwise/unary `reader_unary_sharded.cpp` → fork `_metal2` | DFB(in) | num_tiles_per_core |
+| writer (out-sharded) | own `writer_unary_unpad_batch_rows_sharded.cpp` (in-place) | DFB(out), DFB(out_sharded ×self-loop), aligned_page_size | num_unpadded_output_rows, num_padded_tiles_per_batch, num_unpadded_rows_per_batch, padded/unpadded_block_row_size_bytes, batch |
+| writer (W=16) | own `writer_unary_unpad_width_16_sharded.cpp` (in-place) | DFB(out), DFB(out_sharded ×self-loop), tile_size_in_bytes | num_unpadded_output_rows, num_padded_tiles_per_core |
+| writer (interleaved-out) | shared `kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp` → fork `_metal2` | DFB(out), TA(output), float32_dtype | num_rows_block, block_row_size, batch, num_blocks_h/w, last_block_row_size_unpadded, num_output_rows_unpadded, block_start_row_id/offset |
+| compute (general) | untilize `compute/untilize.cpp` → reuse `untilize_compute_metal2.cpp` | per_core_block_cnt, per_core_block_tile_cnt | — |
+| compute (W=16) | shared `kernel/compute/eltwise_copy.cpp` → fork `_metal2` | per_core_tile_cnt | — |
+- DFBs: IN c_0 (**borrowed from input**), OUT c_16 (regular), OUT_SHARDED c_17 (**borrowed from output**, out-sharded only).
+- The c_17 edge is **producer-only** (writer pushes the resident output); bound as a writer
+  producer+consumer **self-loop** (same accessor name) to satisfy the one-producer/one-consumer
+  DFB invariant. (No fake scratch-CB needed — the DM self-loop is accepted by the validator.)
+
+**MultiCoreNDSharded**
+| unique_id | source | CTAs | RTAs |
+|---|---|---|---|
+| reader | sharded `reader_unary_nd_sharded_blocks.cpp` → fork `_metal2` | DFB(in), TA(input), num_tiles_per_input_block, num_shards, num_cores | start_shard_id |
+| writer | own `writer_unary_stick_layout_split_rows_multicore_nd_sharded.cpp` (in-place) | DFB(out), TA(output), TA(input), 14 named CTAs (slots 1/8 dead-dropped) | start_shard_id + common varargs (out/in padded shapes) |
+| compute | untilize `compute/untilize_variable_num_blocks.cpp` → reuse `_metal2` | per_core_block_tile_cnt | per_core_block_cnt |
+- DFBs: IN c_0 (regular — ND input staged through L1, **not** borrowed), OUT c_16 (regular).
+- Writer per-block tensor shapes (positional `get_common_arg_val` loop) → **common runtime varargs**
+  (`num_common_runtime_varargs`, read via `get_common_vararg`).
 
 ### Cross-op / shared kernels (fork on port)
 - `reader_unary_interleaved_start_id.cpp` (eltwise/unary) — SingleCore reader. The interleaved
@@ -116,21 +139,21 @@ complex: borrowed-memory DFBs, producer-only output edge / fake-CB, multiple wri
 
 ## Delivered this pass / Deferred
 
-**Ported this pass (both reachable from `select_program_factory`, both clean):**
+**Ported (all reachable from `select_program_factory`):**
 - **SingleCore** — `use_multicore = false`.
 - **MultiCoreBlockInterleaved** — `!enough_space_height`, and the WH block-decision path.
+- **MultiCoreInterleaved** — the height-split interleaved path.
+- **MultiCoreSharded** — sharded in/out (out-sharded, W=16, and interleaved-out writer variants).
+- **MultiCoreNDSharded** — ND-sharded (`buffer_distribution_spec`) path.
 
-**Capitulated / deferred (left on legacy `ProgramDescriptorFactoryConcept`; variant supports mixed
-concepts, so the op still builds and runs):**
+**Capitulated (left on legacy `ProgramDescriptorFactoryConcept`; variant supports mixed concepts, so
+the op still builds and runs):**
 - **ColInterleaved — CAPITULATED.** Two blockers: (1) `select_program_factory` never returns this
   factory — it is **unreachable** dead code; (2) a **pre-existing host/kernel RTA index mismatch** in
   `writer_unary_stick_layout_col_multicore.cpp`: the kernel reads RTA slots `0,1,3,4,5` (skips slot
   2, reads out-of-bounds slot 5) while the host supplies only slots `0..4`. A faithful positional→
   named conversion cannot reproduce an out-of-bounds read, and the recipe forbids "fixing" the legacy
   kernel during a port. Routed to the report (Handoff points / Open items) for the op owner.
-- **Sharded + NDSharded — DEFERRED.** Borrowed-memory DFBs (`borrowed_from`), producer-only output
-  edge (fake-CB self-loop if validator rejects), multiple runtime-selected writer variants. A larger
-  sub-port; deferred to a fresh pass with full inventory. See `METAL2_PORT_REPORT.md` Open items.
 
 **Convenience binding factories:** the reference port uses `ProducerOf`/`ConsumerOf`; the recipe
 prefers full `DFBBinding{}` designated-initializers. This port matches the in-repo reference (per the

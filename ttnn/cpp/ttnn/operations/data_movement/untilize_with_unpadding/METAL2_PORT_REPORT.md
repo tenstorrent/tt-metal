@@ -6,23 +6,45 @@ Post-port report for the Metal 2.0 port of `untilize_with_unpadding`. Companion 
 ## Scope delivered this pass
 
 The device-op holds six factories in `program_factory_t`. `MultiCoreInterleaved` was already on Metal
-2.0 (the in-repo reference). This pass ported the two **clean, reachable** legacy factories:
+2.0 (the in-repo reference). Prior passes ported **SingleCore** and **MultiCoreBlockInterleaved**.
+This pass ported the two sharded factories:
 
-- **SingleCore** → `create_program_artifacts` (`MetalV2FactoryConcept`). ✓
-- **MultiCoreBlockInterleaved** → `create_program_artifacts`. ✓
+- **MultiCoreSharded** → `create_program_artifacts` (`MetalV2FactoryConcept`). ✓
+- **MultiCoreNDSharded** → `create_program_artifacts`. ✓
 
-The remaining three stay on the legacy `ProgramDescriptorFactoryConcept` (`create_descriptor`). The
-variant supports mixed concepts and the framework dispatches per-factory, so the op continues to
-build and run with a mix of ported and legacy factories.
-
-- **ColInterleaved** — capitulated (see Handoff points).
-- **MultiCoreSharded**, **MultiCoreNDSharded** — deferred (see Open items).
+Only **ColInterleaved** stays on the legacy `ProgramDescriptorFactoryConcept` (`create_descriptor`) —
+capitulated (see Handoff points). The variant supports mixed concepts and the framework dispatches
+per-factory, so the op continues to build and run with the one remaining legacy factory.
 
 ## TTNN ProgramFactory
 
 ### Concept realized
-`MetalV2FactoryConcept` for SingleCore and MultiCoreBlockInterleaved, matching the audit decision.
-No deviation; no re-decision needed.
+`MetalV2FactoryConcept` for MultiCoreSharded and MultiCoreNDSharded (this pass), matching the audit
+decision. No deviation; no re-decision needed.
+
+### Borrowed-memory DFBs and the producer-only output edge (this pass)
+- **MultiCoreSharded** input `c_0` (`.buffer = a.buffer()`) → `DataflowBufferSpec::borrowed_from =
+  INPUT`; out-sharded `c_17` (`.buffer = output.buffer()`) → `borrowed_from = OUTPUT`. Validator
+  requires both borrowing tensors be L1-resident (they are — sharded). DFB `entry_size × num_entries`
+  kept ≤ the tensor size.
+- The `c_17` out-sharded edge is **producer-only** (the writer pushes directly into the resident
+  output shard; nothing downstream consumes it). Bound as a **writer producer+consumer self-loop**
+  (same accessor name on both bindings). `program_spec.cpp` validation accepts a self-loop and does
+  **not** restrict it to compute kernels, so **no fake scratch-CB was needed** — the audit's fake-CB
+  FYI turned out to be avoidable.
+- **MultiCoreNDSharded** input `c_0` is **not** borrowed — ND input is staged through an L1 DFB
+  (regular producer/consumer pair reader→compute), matching the legacy CB (no `.buffer`).
+
+### Kernel-arg deviations worth noting (this pass)
+- **W=16 writer `get_tile_size`.** The legacy `writer_unary_unpad_width_16_sharded.cpp` derived its
+  copy stride from `get_tile_size(cb_id_out)` used in a `constexpr` context. The Metal 2.0
+  `DataflowBuffer::get_tile_size()` is a runtime call, which cannot feed a `constexpr`. Passed the
+  tile size as a **CTA** (`tile_size_in_bytes` = `output_single_tile_size`) instead, preserving the
+  static-assert and the legacy value.
+- **ND writer per-block shapes.** Legacy read output/input padded shapes via positional
+  `get_common_arg_val(N)` loops. Mapped to **common runtime varargs**
+  (`advanced_options.{num_common_runtime_varargs, common_runtime_varargs}`, kernel-side
+  `get_common_vararg(i)`), since the count is rank-dependent (≤ 2×rank) and positional.
 
 ### Device-op-class edits
 - Custom `compute_program_hash` deleted: **none** (op already used the default reflection-based hash).
@@ -102,6 +124,21 @@ forked kernel's named-arg→legacy-slot mapping). No discrepancies found.
   sizes" legacy shape — a doc note on consolidating per-region same-index CBs into one max-sized DFB
   would help the next porter.
 
+  **Latent bug this max-sizing exposed (FIXED).** The legacy WH writer
+  (`writer_unary_stick_layout_wh_multicore.cpp`) reads its output block via `cb.get_write_ptr()`
+  instead of `get_read_ptr()`. That only returns the front-of-data address when the CB is sized
+  **exactly** to one block (full → the write pointer wraps to the read pointer). With per-region CBs
+  on `main` this held; with the single max-sized DFB, any sub-region whose block count is smaller
+  than the max never fills the buffer, so `get_write_ptr()` pointed past the valid data and those
+  cores emitted garbage. Symptom: the wide interleaved case `[1,1,128,7328] → [...,119,7299]`
+  (sweep test `input_shapes3`) failed with max ATOL ≈ 190 but PCC ≈ 0.9997 (a localized cliff-region
+  error), passing on `main`. **Fix:** the fork
+  `writer_unary_stick_layout_wh_multicore_metal2.cpp` now reads via `get_read_ptr()`, the
+  size-independent front-of-data address (identical to legacy in the exactly-full case). Takeaway
+  for future ports: when consolidating per-region CBs into one max-sized DFB, audit consumer kernels
+  for `get_write_ptr()`-as-read-pointer (or any other exact-fit assumption) and convert to
+  `get_read_ptr()`.
+
 ### Confusion
 - The reference port (`..._multi_core_interleaved_program_factory.cpp`) uses the
   `ProducerOf`/`ConsumerOf` convenience binding factories, which the port recipe explicitly
@@ -112,10 +149,25 @@ forked kernel's named-arg→legacy-slot mapping). No discrepancies found.
 
 ## Open items for downstream
 
-- **Fake-CB self-loop bindings:** none in the ported factories (SingleCore / Block use real
-  producer/consumer DFB pairs). The audit's one fake-CB FYI (`c_17`, out-sharded path) is in the
-  deferred Sharded factory.
+- **Fake-CB self-loop bindings:** the out-sharded `c_17` edge (MultiCoreSharded) is a **producer-only
+  borrowed-output DFB** bound as a writer producer+consumer self-loop. No fake scratch-CB required —
+  the validator accepts the DM self-loop directly (see "Borrowed-memory DFBs" above).
 - **Cross-op kernel touches (forks created this pass):**
+  - `eltwise/unary/device/kernels/dataflow/reader_unary_sharded_metal2.cpp` — **fork** of
+    `reader_unary_sharded.cpp` (cross-op: eltwise/unary family). Sunset legacy when co-borrowers port.
+  - `data_movement/untilize_with_unpadding/device/kernels/dataflow/writer_unary_stick_layout_interleaved_blocks_metal2.cpp`
+    — **fork** of `kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp` (shared).
+  - `data_movement/.../kernels/compute/eltwise_copy_metal2.cpp` — **fork** of
+    `kernel/compute/eltwise_copy.cpp` (shared, W=16 dtype-convert path).
+  - `data_movement/sharded/device/kernels/dataflow/reader_unary_nd_sharded_blocks_metal2.cpp` —
+    **fork** of `reader_unary_nd_sharded_blocks.cpp` (cross-op: sharded family).
+  - Reused existing fork (no new file): `untilize/.../compute/untilize_variable_num_blocks_metal2.cpp`
+    (ND compute) and `untilize/.../compute/untilize_compute_metal2.cpp` (sharded general compute).
+  - In-place conversions (single consumer = this op, no fork):
+    `writer_unary_unpad_batch_rows_sharded.cpp`, `writer_unary_unpad_width_16_sharded.cpp`,
+    `writer_unary_stick_layout_split_rows_multicore_nd_sharded.cpp`. The stale
+    `ccl/kernel_common/sharding_addrgen.hpp` include in the ND kernels is unused — left as-is.
+- **Prior-pass cross-op forks (still live):**
   - `eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore_metal2.cpp` — **fork**
     of `reader_unary_interleaved_wh_multicore.cpp`. Remaining legacy consumers: eltwise/unary family,
     `untilize/.../untilize_multi_core_block_program_factory.cpp`. Sunset the legacy copy when they
@@ -129,22 +181,8 @@ forked kernel's named-arg→legacy-slot mapping). No discrepancies found.
   - Reused existing forks (no new file): `untilize/.../dataflow/reader_unary_start_id.cpp` and
     `untilize/.../compute/untilize_compute_metal2.cpp` (created by the interleaved port).
   - In-place conversion (single consumer, no fork): `writer_unary_unpad_dims_split_rows.cpp`.
-- **Deferred factories — remaining work for the next pass:**
-  - **MultiCoreSharded:** borrowed-memory DFBs — input CB `c_0` (`...sharded...:97`,
-    `.buffer = a.buffer()`) → `DataflowBufferSpec::borrowed_from = INPUT`; out-sharded CB `c_17`
-    (`...sharded...:126`, `.buffer = output.buffer()`) → `borrowed_from = OUTPUT`, **producer-only**
-    edge → apply the fake-CB self-loop workaround if the validator rejects it. Three runtime-selected
-    writer variants (out-sharded `writer_unary_unpad_batch_rows_sharded.cpp`, W=16
-    `writer_unary_unpad_width_16_sharded.cpp`, interleaved-out shared
-    `kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp`) all convert together with the
-    factory. Reader `reader_unary_sharded.cpp`, compute `untilize.cpp` / shared `eltwise_copy.cpp`.
-  - **MultiCoreNDSharded:** Case-1 input bound on **both** reader and writer (writer uses
-    `accessor_src.shard_pages`); reader `reader_unary_nd_sharded_blocks.cpp`, writer
-    `writer_unary_stick_layout_split_rows_multicore_nd_sharded.cpp`, compute
-    `untilize_variable_num_blocks.cpp` (a `_metal2` fork already exists — reuse it). The stale
-    `ccl/kernel_common/sharding_addrgen.hpp` include in both ND kernels is unused — leave it.
 - **ColInterleaved:** see Handoff points — resolve the latent RTA mismatch + reachability in a
-  dedicated PR before it can be ported.
+  dedicated PR before it can be ported. This is now the **only** remaining legacy factory in the op.
 
 ## Successful failure (capitulation)
 
