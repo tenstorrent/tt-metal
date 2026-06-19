@@ -15,8 +15,9 @@ Owner:
 """
 
 from dataclasses import dataclass
-from triage import ScriptConfig, triage_field, hex_serializer, log_check_device, run_script
+from triage import ScriptConfig, ScriptPriority, triage_field, hex_serializer, log_check_device, run_script
 from run_checks import run as get_run_checks
+from heartbeat_samples import run as get_heartbeat_samples, HeartbeatSample
 from datetime import timedelta
 import time
 from ttexalens.coordinate import OnChipCoordinate
@@ -27,14 +28,11 @@ from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
 import utils
 
 script_config = ScriptConfig(
-    depends=["run_checks"],
+    depends=["run_checks", "heartbeat_samples"],
+    priority=ScriptPriority.LOW,
 )
 
-
-@dataclass
-class HeartbeatSample:
-    heartbeat: int
-    timestamp: float
+MINIMAL_WAIT_SECONDS = 2
 
 
 @dataclass
@@ -93,13 +91,6 @@ def check_arc_block(arc: NocBlock, postcode: int | None, heartbeat_sample: Heart
     )
 
 
-def get_heartbeat_sample(device: Device) -> HeartbeatSample:
-    return HeartbeatSample(
-        heartbeat=read_arc_telemetry_entry(device.arc_block.location.device_id, "TIMER_HEARTBEAT"),
-        timestamp=time.monotonic(),
-    )
-
-
 def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
     arc = device.arc_block
     # We skip postcode check for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/535
@@ -120,12 +111,14 @@ def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
+    heartbeat_samples = get_heartbeat_samples(args, context)
 
-    heartbeat_samples = {
-        sample.device_description.device: sample.result
-        for sample in run_checks.run_per_device_check(lambda device: get_heartbeat_sample(device))
-    }
-    time.sleep(2)
+    # Ensuring that we wait at least MINIMAL_WAIT_SECONDS to ensure hb/s prediction is precise.
+    latest_timestamp = max(sample.timestamp for sample in heartbeat_samples.values())
+    smallest_interval = time.monotonic() - latest_timestamp
+    if smallest_interval < MINIMAL_WAIT_SECONDS:
+        time.sleep(MINIMAL_WAIT_SECONDS - smallest_interval)
+
     return run_checks.run_per_device_check(lambda device: check_arc(device, heartbeat_samples[device]))
 
 
