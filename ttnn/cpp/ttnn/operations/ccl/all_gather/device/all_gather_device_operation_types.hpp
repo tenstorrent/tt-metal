@@ -14,7 +14,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::ccl {
 
 struct AllGatherParams {
     int32_t dim = 0;
@@ -74,4 +74,4 @@ struct AllGatherInputs {
     std::optional<Tensor> persistent_output_tensor;
 };
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::ccl

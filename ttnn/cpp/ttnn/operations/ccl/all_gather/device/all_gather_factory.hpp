@@ -10,7 +10,7 @@
 
 #include <tt-metalium/global_semaphore.hpp>
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::ccl {
 
 struct AllGatherFactory {
     struct shared_variables_t {
@@ -46,4 +46,4 @@ private:
         const tt::tt_metal::GlobalSemaphore& barrier_sem);
 };
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::ccl

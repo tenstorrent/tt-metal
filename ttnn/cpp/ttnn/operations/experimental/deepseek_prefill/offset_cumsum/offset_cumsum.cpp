@@ -25,10 +25,11 @@ std::array<ttnn::Tensor, 3> offset_cumsum(
     auto gathered = ttnn::all_gather(
         reshaped,
         /*dim=*/0,
+        /*memory_config=*/memory_config,
+        /*persistent_output_tensor=*/std::nullopt,
         /*cluster_axis=*/cluster_axis,
         /*subdevice_id=*/std::nullopt,
-        /*memory_config=*/memory_config,
-        /*optional_output_tensor=*/std::nullopt,
+        /*sub_core_grid=*/std::nullopt,
         /*num_links=*/num_links);
 
     auto row_major = ttnn::to_layout(gathered, tt::tt_metal::Layout::ROW_MAJOR, std::nullopt, std::nullopt);

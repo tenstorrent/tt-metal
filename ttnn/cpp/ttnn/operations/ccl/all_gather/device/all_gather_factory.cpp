@@ -9,7 +9,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
-namespace ttnn::experimental::prim {
+namespace ttnn::operations::ccl {
 
 using namespace ::ttnn::ccl;
 
@@ -339,14 +339,14 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather/device/kernels/reader.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/reader.cpp",
         sender_worker_core_range,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_args));
 
     // Writer
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather/device/kernels/writer.cpp",
+        "ttnn/cpp/ttnn/operations/ccl/all_gather/device/kernels/writer.cpp",
         sender_worker_core_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_args));
 
@@ -515,4 +515,4 @@ void AllGatherFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttnn::experimental::prim
+}  // namespace ttnn::operations::ccl
