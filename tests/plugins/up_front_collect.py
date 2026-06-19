@@ -243,7 +243,11 @@ def _reference_op_patches():
 def _verifier_patches():
     """Host numeric verifiers -> no-ops: a verifier failing on the addr-0 readback would abort the
     rest of a multi-op body and lose its ops (results are meaningless under NO_DISPATCH anyway).
-    comp_pcc has two possible home modules; both are covered."""
+    Covers BOTH verifier families: the legacy model/ttnn `comp_pcc`/`assert_numeric_metrics` (two
+    home modules) AND the registry-model golden harness `eval.metrics.check_output` — the latter is
+    the dominant collect cost (it does `ttnn.to_torch` on the garbage output then ULP-p99/PCC/median
+    on full shape-sized tensors, ~10ms/body, scaling with shape). The op is already stashed before
+    check_output runs, so no-op'ing it is safe and skips the readback + metrics entirely."""
 
     def _pcc(*a, **k):
         return (True, 0.999999)
@@ -251,10 +255,14 @@ def _verifier_patches():
     def _assert_numeric_metrics(*a, **k):
         return (True, "collect-stub")
 
+    def _noop_check(*a, **k):
+        return None  # collect discards the verdict; output is addr-0 garbage under NO_DISPATCH
+
     return [
         _RebindPatch("tests.ttnn.utils_for_testing", "comp_pcc", lambda _orig: _pcc),
         _RebindPatch("models.common.utility_functions", "comp_pcc", lambda _orig: _pcc),
         _RebindPatch("tests.ttnn.utils_for_testing", "assert_numeric_metrics", lambda _orig: _assert_numeric_metrics),
+        _RebindPatch("eval.metrics", "check_output", lambda _orig: _noop_check),
     ]
 
 
