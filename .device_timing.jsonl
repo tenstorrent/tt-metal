@@ -65,3 +65,5 @@
 {"source":"run_safe_pytest","pid":2946104,"started_at_ms":1781889139425,"wait_ms":2,"run_ms":120025,"test_path":"eval/golden_tests/rms_norm/","exit_code":143}
 {"source":"run_safe_pytest","pid":2948868,"started_at_ms":1781889284203,"wait_ms":2,"run_ms":104210,"test_path":"eval/golden_tests/rms_norm/","exit_code":1}
 {"source":"tt-probe","pid":2953215,"started_at_ms":1781889513330,"wait_ms":284,"run_ms":22858,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":2954881,"started_at_ms":1781889565754,"wait_ms":2,"run_ms":95705,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
+{"source":"run_safe_pytest","pid":2956708,"started_at_ms":1781889727239,"wait_ms":3,"run_ms":391424,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_matrix.py","exit_code":0}

@@ -130,7 +130,7 @@ A/B heuristic can mis-select. The design's sanctioned pass-2 optimization
 case sound. **Done when** every Regime B cell in the `supported_fail` bucket
 (incl. all three LOOSE cross-core cases) passes at the bf16 tolerance band.
 
-### [ ] Refinement 2 — Numerical configurability expansion
+### [x] Refinement 2 — Numerical configurability expansion
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, add
 `False` to `SUPPORTED["fp32_dest_acc_en"]`, and extend gamma precision

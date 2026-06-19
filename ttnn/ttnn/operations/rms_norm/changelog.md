@@ -89,3 +89,48 @@
     all-ones exact (==1.0), per-shard-distinguishable ramp (verifies the all-gather
     delivers all K distinct partials), random vs torch (±gamma), and the LOOSE wide-W
     cases. All pass in production timing.
+
+## Refinement 2 — Numerical configurability expansion
+- **Date**: 2026-06-19
+- **What was done**:
+  - **SUPPORTED grown**: `dtype += [float32, bfloat8_b]`; `fp32_dest_acc_en += [False]`;
+    `gamma_dtype += [bfloat8_b]`. EXCLUSIONS: removed the old gamma-float32 entry
+    (gamma-present float32 now works) and added `{dtype: float32, fp32_dest_acc_en: False}`
+    (fp32 input mandates fp32 accumulation — the prompt's documented EXCLUSION).
+  - **Per-CB format derivation in the program descriptor** (both regimes): input/output
+    CBs follow the tensor dtype; the gamma CB follows `gamma.dtype` (this is what unblocks
+    mixed-precision gamma — bf16 activations + fp32/bf8b gamma); accumulator intermediates
+    (Σx², scaler, recip-rms, normalized block, Regime-B gathered partials) follow
+    `_intermediate_dtype`: promoted to `Float32` when `fp32_dest_acc_en`, else bf16 — and
+    **never bf8b** (a block-float accumulator is wrong). bf16 input keeps bf16 intermediates,
+    byte-identical to Phase 0 / Refinement 1 (no regression). Per-CB tile bytes via
+    `ttnn.tile_size(format)` (was a single shared `buffer_page_size`).
+  - **No compute-kernel changes** — the eltwise/reduce helpers reconfig unpack (BinaryFpu
+    `Input`, CopyTile `Input`) and pack (PackTile `Output`) data formats automatically, so
+    mixed input/intermediate/gamma/output formats just work (numeric-formats skill pass
+    condition held).
+  - **Regime-B mcast reader fix (the one real bug uncovered)**: the all-gather strided its
+    slots and sized the cross-core transfer with `get_tile_size(cb_input_resident)`, a latent
+    assumption that input format == partials format. True for bf16 (both 2048 B), false for
+    bf8b input (1088 B) with fp32 partials (4096 B) → the gather copied/strode the wrong byte
+    count → `Inf` in a subset of outputs (72 golden cells). Now uses
+    `get_tile_size(cb_partials_gathered)` for the gather slot stride / local copy / `sender.send`
+    size, and the input tile bytes only for the input read.
+- **Accuracy achieved** (precision matrix, fp32_dest_acc_en=True, HiFi4, 128x512):
+  float32 PCC ≥ 0.99999, relRMS ≤ 0.0015; bfloat16 PCC ≥ 0.99999, relRMS ≤ 0.004;
+  bfloat8_b PCC ≥ 0.9999, relRMS ≤ 0.015. fp32_dest_acc_en=False (bf16/bf8b) and the full
+  LoFi→HiFi4 sweep all stay above the asserted floors (bf16/fp32 ≥ 0.99, bf8b ≥ 0.98);
+  no Inf/NaN in any cell.
+- **Golden test progress**: 418/418 supported passing (was 346/346 before this refinement;
+  the +72 are the bf8b Regime-B cells the mcast fix unblocked), 2940 skipped, 1784 xfailed,
+  0 failed, 0 xpass-drift. The 15 float32 `test_regression.py` `no_axes_found` cases are
+  cleared (float32 is now in SUPPORTED).
+- **Issues encountered**: the bf8b Regime-B `Inf` bug (root-caused + fixed, above). No other
+  blockers — fp32, bf8b, the False precision corner, and mixed-precision gamma all landed.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_matrix.py` — the
+    authoritative precision matrix: 8 shapes (Regime A + B) × {bf16, fp32, bf8b} ×
+    {HiFi4..LoFi} × {fp32_acc, bf16_acc} × {uniform, normal} × {gamma, no_gamma} = 641 cases
+    (+128 skipped EXCLUSION cells), plus `test_rms_norm_precision_matrix_fp32_no_acc_refused`
+    asserting the EXCLUSION raises a support refusal.
+  - `tests/ttnn/unit_tests/operations/rms_norm/precision_matrix_results.md` — results table.
