@@ -1182,20 +1182,29 @@ MatmulProgramConfig create_simple_matmul_program_config(
             }
         }
 
+        // When A has batch=1 and B has batch>1, in0_reuse keeps A in L1 and iterates over B
+        // batches without re-reading A from DRAM. This requires mcast_in0=false (B broadcasts
+        // spatially, A is locally owned per core). We must prevent mcast_in0=true from being
+        // selected even for wide shapes (N>M) or single-row grids, where it would normally be
+        // the spatial optimum. Forcing mcast_in0=false here trades spatial broadcast efficiency
+        // (B is larger to multicast when N>M) for correctness — mcast_in0=true has no batch
+        // reuse mechanism and would FATAL in the validator.
+        const bool a_batch_broadcast =
+            all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1;
+
         bool use_mcast_1d_in0_config =
-            is_wide or
+            (is_wide and not a_batch_broadcast) or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or block_sharded_on_1d_row_grid));
         bool use_mcast_1d_in1_config =
-            is_tall or
-            (all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1) or
+            is_tall or a_batch_broadcast or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
             all_dram_interleaved or (core_range.y == 0 and mem_config.is_sharded() and
                                      mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED and
                                      not block_sharded_on_1d_column_grid and not block_sharded_on_1d_row_grid);
-        if (core_range.y == 1 or use_mcast_1d_in0_config) {
+        if ((core_range.y == 1 and not a_batch_broadcast) or use_mcast_1d_in0_config) {
             // Pass user's shard_spec when BLOCK_SHARDED on 1D row grid
             std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
                 (block_sharded_on_1d_row_grid && mem_config.shard_spec().has_value())
