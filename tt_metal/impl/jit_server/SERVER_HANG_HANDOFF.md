@@ -318,3 +318,92 @@ filing: the server-side fd accumulation (~900 fds) under repeated @128 load.
 `repro_warmpass.sh` (focused warm-pass repro), `repro_server_hang.sh` (full run_safe_pytest
 repro), `collect_ids.py`, `all_golden_nodeids.txt` / `first500_nodeids.txt`, `gdb_wedge_*.txt`
 (wedged-client backtraces), and the `verify_*`/`run_all_*` logs.
+
+---
+
+## 10. KEEPALIVE VALIDATION + CLEAN E2E (2026-06-19)
+
+Follow-up after the §9 client-timeout fix: added **TCP keepalive** as a *second, latency-independent*
+dead-connection detector and validated it; then captured clean end-to-end compile times.
+
+### Why keepalive (vs the app-level timeout from §9)
+The app timeout (`TT_METAL_JIT_SERVER_TIMEOUT_S`) has an unavoidable tension: it must exceed the
+**whole-batch** latency or it false-positives on slow-but-alive responses. Measured directly —
+`repro/server_push_t20_results.csv`: a **20 s** app timeout caused **25 / 42 spurious fallbacks** at
+q150 / q200 (queued, still-alive responses misclassified as dead), while a 240 s timeout avoided that
+but re-opens a long wedge window on a *real* drop. TCP keepalive sidesteps this: it probes the
+**connection** (idle 5 s + 3×2 s = ~11 s, plus `TCP_USER_TIMEOUT=15 s`), so a genuinely-dead
+half-open is killed in ~11–15 s **regardless** of how long a legitimate compile takes — a
+slow-but-alive connection keeps ACKing probes and is never touched.
+
+Implementation (`jit_compile_rpc_client.cpp`, client-only — server unchanged): replaced
+`capnp::EzRpcClient` with a manual `TwoPartyClient` over a `kj::AsyncIoStream` so we can arm
+`SO_KEEPALIVE` + `TCP_KEEPIDLE/INTVL/CNT` + `TCP_USER_TIMEOUT` on the socket before wrapping it.
+Knobs: `TT_METAL_JIT_SERVER_KEEPALIVE` (default 1), `..._KEEPALIVE_IDLE_S` (5), `..._INTVL_S` (2),
+`..._CNT` (3), `..._USER_TIMEOUT_MS` (15000). A dead connection surfaces as
+`::read(...): Connection timed out` → typed `RemoteCompileTransportError` → local-compile fallback
+(same path as the app timeout).
+
+### A/B result (airtight) — `repro/ka_validate_*.log`, `repro/keepalive_validation_results.csv`
+Full reconstructed rms_norm suite @128, **server `.elf` dewarmed each run**, **`TIMEOUT_S=0`** (app
+timeout OFF, so *only* keepalive can break a dead connection):
+
+| run | keepalive | drops | outcome |
+|-----|-----------|-------|---------|
+| kaON r1 | ON | 0 | **COMPLETED** `compiled 1392 programs in 179.2s` — no false positives across ~4000 kernels |
+| kaON r2 | ON | 3 | **COMPLETED** `... in 184.9s`; 3 dead conns detected as `Connection timed out` → local fallback |
+| kaOFF r1 | OFF | ≥1 | **WEDGE** — killed at 440 s wall, never printed `compiled N programs` (legacy unbounded wait) |
+
+Server side during these runs (`jit_compile_server.log`): `peak_inflight=128`, **no errors /
+disconnects logged, drains to 0 sockets** — i.e. the server delivered every request; the loss is
+purely the Docker userland port-proxy under 128-way concurrency (confirms §9 root cause with fresh
+evidence). **Verdict: the dead-connection check is useful** — it converts a permanent wedge into a
+~11–15 s detection + local fallback, *without* the app timeout's false-positive problem. Recommend
+keepalive ON as the primary mechanism and the app timeout as a coarse backstop (or 0/off).
+
+### Clean E2E (full suite: 1680 pass / 2941 skip / 420 xfail; 1392 programs / ~4000 kernels)
+| config | warm-pass compile | warm run | note |
+|--------|-------------------|----------|------|
+| cold-inline (no precompile) | — | **2088 s** | kernels compile on-demand during the run |
+| precompile-server @128 (keepalive on) | **182.5 s** (221 s phase incl. device open) | **50.85 s** | 0 errors, 0 fallbacks; run reuses warm on-disk cache |
+
+⇒ server-precompile e2e **~272 s vs ~2120 s cold = ~7.7×**.
+
+### Farm-vs-inline crossover sweep (`repro/repro_farm_vs_inline.sh`, `farm_vs_inline_results.csv`)
+N distinct programs, **fully cold both sides** (fresh `TT_METAL_CACHE` each iter; **ccache disabled
+via `CCACHE_DISABLE=1`** — see caveat). local-inline = compile-on-demand during the run (this box is
+cpuset-pinned to **8 cores**); remote-farm = server precompile @128 + warm run. 0 fallbacks across
+the whole sweep.
+
+| N (prog) | kernels | inline (cold) | farm warm+run = total | farm speedup |
+|----------|---------|---------------|-----------------------|--------------|
+| 5   | 18  | 13.9 s | 12.6+5.2 = **17.8 s** | 0.78× |
+| 10  | 33  | 21.5 s | 14.1+5.3 = **19.4 s** | 1.11× |
+| 20  | 63  | 37.5 s | 15.3+5.8 = **21.1 s** | 1.78× |
+| 30  | 90  | 49.1 s | 16.0+5.9 = **21.9 s** | 2.24× |
+| 50  | 150 | 78.8 s | 19.1+6.6 = **25.7 s** | 3.07× |
+| 70  | 189 | 100.3 s | 22.3+6.9 = **29.2 s** | 3.43× |
+| 100 | 234 | 126.4 s | 25.1+9.2 = **34.3 s** | 3.69× |
+
+Crossover ≈ **10 programs**: below it the farm's fixed cost (warm-pass device-open + collect + a
+second device-open for the run, ~17 s floor) loses to just compiling ~30 kernels locally; above it
+the farm wins and the gap widens (inline scales ~linearly with kernel count on 8 cores; farm compile
+is near-flat on 128 cores). Extrapolates to the 7.7× full-suite number above (1392 programs).
+
+**CCACHE CAVEAT (important, cost me a redo).** The login profile sets
+`TT_METAL_CCACHE_KERNEL_SUPPORT=1` and the JIT build wraps `ccache g++` **unconditionally** —
+`TT_METAL_CCACHE_KERNEL_SUPPORT=0` does **not** turn ccache off. A first pass left ccache on: with
+the firmware prime + **nested** sets (p5⊂p10⊂…), the local-inline runs got ccache hits from earlier
+iterations and ran ~1.5–2× too fast (e.g. N=70 inline 49.8 s ccache-warm vs **100.3 s** truly cold),
+collapsing the apparent farm advantage. The farm path can't use local ccache (preprocess-shipped
+`.ii` is uncacheable), so only inline was understated. Fix = ccache's own switch **`CCACHE_DISABLE=1`**
+(pure passthrough); verified cold via an isolated `CCACHE_DIR` probe that stayed empty (0 objects).
+Always disable ccache with `CCACHE_DISABLE=1` for cold-compile A/Bs on this box.
+
+NOTE: `run_safe_pytest --precompile`
+still logs `✗ warmup FAILED (pytest exit 1) -> warmed NOTHING; running COLD` — this is a
+**misclassification**: the warm pass's NO_DISPATCH test bodies legitimately exit 1, but the JIT
+cache *was* warmed (proven by the 2088 s → 51 s run drop). `precompile_warm()` in
+`scripts/run_safe_pytest.sh:275` should treat exit 1 (body failures) as success when the collect
+log shows `compiled N programs ... errors=0`; today the headline `total_s`/`warmup_s` in
+`e2e_results.csv` come out `NA` because of this. Open cleanup, not a correctness bug.

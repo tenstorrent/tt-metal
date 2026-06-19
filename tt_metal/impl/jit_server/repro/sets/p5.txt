@@ -1,0 +1,5 @@
+tt_metal/third_party/tt_ops_code_gen/eval/golden_tests/rms_norm/test_golden.py::test_op[1x1x32x64-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]
+tt_metal/third_party/tt_ops_code_gen/eval/golden_tests/rms_norm/test_golden.py::test_op[1x1x32x64-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]
+tt_metal/third_party/tt_ops_code_gen/eval/golden_tests/rms_norm/test_golden.py::test_op[1x1x32x64-alignment=tile_aligned-dtype=BFLOAT8_B-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]
+tt_metal/third_party/tt_ops_code_gen/eval/golden_tests/rms_norm/test_golden.py::test_op[1x1x64x128-alignment=tile_aligned-dtype=FLOAT32-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]
+tt_metal/third_party/tt_ops_code_gen/eval/golden_tests/rms_norm/test_golden.py::test_op[1x1x64x128-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=FLOAT32-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]
