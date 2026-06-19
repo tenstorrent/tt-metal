@@ -460,7 +460,7 @@ is therefore NOT met on Regime A. See changelog.md for the table. Follow-up belo
 redirects row-blocking to the place it can actually pay off (Regime B mcast
 coalescing), per op_design.md:229-232 ("bigger coalesced mcasts").
 
-### [ ] Refinement 8 — Row-blocking for **Regime B** (coalesced mcast all-gather), not Regime A
+### [x] Refinement 8 — Row-blocking for **Regime B** (coalesced mcast all-gather), not Regime A
 
 **Goal**: realize the design's OTHER row-blocking benefit — **bigger (coalesced)
 mcasts** (op_design.md:229-232) — in **Regime B**, where the cross-core all-gather has
@@ -495,3 +495,99 @@ design names, and it is structurally distinct from R7's compute-init amortizatio
    Regime-B device time improves over the R6/R7 baseline on wide-W shapes (or, if it
    too proves net-negative, document that row-blocking is fully exhausted as a lever and
    close it). Golden stays 1683/1683.
+
+> **QUEUE-CLOSED DIRECTIVE (applies to every implementer from here on):**
+> **Refinement 9 below is the FINAL refinement.** No implementer — including the
+> one running Refinement 8 or 9 — may append a `### [ ] Refinement N` section to
+> this file. The pattern of each phase spawning its own follow-up (R6→R7→R8) stops
+> here. If you discover further worthwhile work, record it in `changelog.md` under a
+> "Future ideas (not queued)" note ONLY; do not add it to `op_requirements.md`.
+
+### [ ] Refinement 9 — All-reduce algorithm + combine compute (and conditional K re-tune)
+
+**THIS IS THE LAST REFINEMENT. It has NO authority to add new refinements/follow-ups**
+(see the queue-closed directive above). Any leftover idea goes to `changelog.md` as a
+note, never as a new `Refinement N` section.
+
+**Goal**: the cross-core Σx² all-reduce is currently *every core mcasting its partial
+to every other core* (an all-to-all all-gather), and the combine that sums the gathered
+partials is an eltwise `add` loop that round-trips L1 on every step. Both are likely
+suboptimal. Explore better all-reduce **transports** and a better combine **compute**,
+measure them with R6's perf harness, and keep whatever is fastest. **No SUPPORTED axis**
+(non-registry, perf + structure). Golden stays **1683/1683** throughout.
+
+**Part A — all-reduce transport (the topology is the lever).**
+Current: `rms_norm_reader.cpp` (`num_partials > 1` path, ~lines 203-230) runs a K-round
+rotating-sender **mcast all-gather** — `SenderPipe`/`ReceiverPipe`, `Staging::Counter`,
+`EXCLUDE_SRC` — so all K cores mcast. That is O(K) mcasts per row-group and contends the
+NoC. Prototype and measure at least these alternatives, per regime and across K:
+1. **Ring all-reduce (unicast ring).** Each core unicasts its running partial to its ring
+   neighbor; after K-1 unicast hops the full Σx² has circulated (reduce-scatter +
+   all-gather, or a simple running-sum ring since the payload is a single tile). No
+   all-to-all mcast, minimal NoC contention; latency grows with K but each step is tiny
+   (1 tile). Likely best at large K.
+2. **Gather-then-broadcast (one root).** One designated core reads (or receives) all K
+   partials, sums them locally, then does a **single** mcast of the final Σx² to the
+   group. Trades K mcasts-of-partials for 1 gather + 1 mcast-of-result. Likely best at
+   small/medium K.
+3. (Keep the current all-mcast as the baseline to beat.)
+Check `ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp` for an existing unicast/ring primitive
+before hand-rolling `noc_async_*`; `references/cross_core_reduction_design.md` for the
+topology trade-offs; honor the op_design.md §9 silent-hang checklist (virtual coords,
+barrier-before-signal, `num_dests`, semaphores on the union, never-mcast-to-self) for
+any new transport. Pick the winner per (regime, K) — it may be a small switch in the
+descriptor/heuristic, not one global choice.
+
+**Part B — the combine compute (stop the L1 round-trips).**
+Current combine, `rms_norm_compute.cpp` ~lines 264-273:
+```cpp
+ckl::copy<cb_partials_gathered, cb_partial_sumsq>(EltwiseShape::tiles(1));   // slot 0
+for (uint32_t k = 1; k < num_partials; ++k)
+    ckl::add<cb_partials_gathered, cb_partial_sumsq, cb_partial_sumsq>(EltwiseShape::tiles(1)); // K-1 adds
+```
+Each `add` is an `eltwise_chain` that reads two operands from L1 and packs the result
+back to L1 — **K-1 unnecessary L1 round-trips** to sum K single tiles. Replace with one
+of (measure both if cheap):
+- **DEST accumulation / FPU dest-reuse**: accumulate all K gathered tiles into a DEST
+  register (FPU/SFPU accumulate, e.g. `add_tiles` with DST reuse, no intermediate pack),
+  and **pack exactly once** at the end. Investigate `dest_helpers.hpp` and the
+  reduce/eltwise helpers for a dest-accumulate path that does not pack per step.
+- **L1 pack-accumulate**: use the pack stage's L1 accumulate to sum into a single L1
+  destination without re-reading the running sum each step.
+The combine is summing K column-tiles into one — a reduction. If the all-gather lays the
+K partials out contiguously, a single `ckl::reduce<SUM>` over the K-tile block may express
+the whole combine in one helper call (no copy + add loop at all). Prefer that if it
+measures faster and stays correct (Refinement 1's correctness invariant: the reader must
+hand over only the FULLY-accumulated local Σx² — preserve `cb_local_sumsq`).
+
+**Part C — conditional heuristic re-tune (ONLY if Part A/B measured a win).**
+R6 set the A↔B crossover (Wt ≥ 16) and a proxy-min-K under the *current* expensive
+all-mcast cost. If the new transport/combine makes the all-reduce **cheaper**, that
+changes the economics: bigger K (more cores, narrower shards) becomes more attractive
+because the per-K mcast/combine cost you were paying to avoid is now smaller. So **if and
+only if** Part A or B shows a measured improvement, re-tune R6's `_select_k` /
+crossover / proxy-min-K against the new cost and record the new numbers. If no transport
+beats the baseline, leave the heuristic untouched and say so.
+
+**Where to look**: `rms_norm_reader.cpp:203-230` (all-gather), `rms_norm_compute.cpp:264-273`
+(combine), `rms_norm_program_descriptor.py` (`_select_k`, crossover, the regime
+descriptors), `mcast_pipe.hpp`, `dest_helpers.hpp`, `reduce_helpers_compute.hpp`,
+`references/cross_core_reduction_design.md`, `op_design.md:229-232`. R6's
+`test_rms_norm_perf.py` is the measurement harness — extend it with the transport/combine
+variants on Regime B wide-W shapes ((1,1,32,{8192,16384,32768}), (1,1,64,12288)).
+
+**Implementation skill**: none directly (cross-core all-reduce + DEST/L1 accumulate are
+outside every skill's scope). Pull on /memory-budget-metal for the DEST/L1 budget
+arithmetic and the L1-accumulate reduction pattern.
+
+**Verifier notes**: terminal, non-registry perf+structure refinement — golden stays
+**1683/1683**, precision matrix within tolerance (the combine is a numerical change:
+re-check Regime B PCC, especially bf8b). Build on whatever R8 leaves (R8's coalesced
+`bh*K` mcast and R9's transport choice interact — a ring/gather-bcast must still carry
+the coalesced payload if R8 landed it). **Done when**: (a) at least the ring and
+gather-then-broadcast transports are prototyped and measured against the all-mcast
+baseline, with a per-(regime,K) winner selected (or a documented "baseline wins");
+(b) the combine no longer does K-1 L1 round-trips (DEST-accumulate, L1-accumulate, or a
+single reduce), measured; (c) Part C done iff a win was measured; (d) before/after
+device-time numbers in `changelog.md`; (e) golden non-regressed; (f) **no new refinement
+appended** — leftover ideas live in changelog.md only.

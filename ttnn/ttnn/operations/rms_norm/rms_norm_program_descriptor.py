@@ -300,6 +300,34 @@ def _regime_a_block_height(Ht_total, num_cores, has_gamma, gamma_is_rm, Wt, inpu
     return bh
 
 
+# --- Refinement 8: row-blocking / coalesced-mcast for Regime B — NOT IMPLEMENTED ---
+# R8 asked whether grouping `bh` tile-row-groups onto one K-core band and issuing ONE
+# coalesced mcast of `bh` partials (vs `bh` separate K-round gathers) could amortize the
+# all-gather fixed cost, while keeping active-core count unchanged. It cannot — closed as
+# net-negative (mirrors R7's Regime-A row-blocking gate). Measured + structurally proven:
+#   1. Keeping core count constant while grouping `bh` row-groups forces K up by factor
+#      `bh` (fewer, wider bands). The all-gather cost grows with K, so this is strictly
+#      net-negative. Measured on (1,1,32,8192) Wt=256 via _FORCE_K: K=16=34.0us,
+#      K=32=50.5us, K=64=110.0us. bh>1 buys exactly this K increase; the per-core reduce
+#      work it would save is already FLAT (bh*(Wt/K) = Wt/K_old, invariant).
+#   2. There is NO serialized per-gather fixed cost to amortize: row-groups already run
+#      in PARALLEL on disjoint K-core rectangles. Measured: 1 row-group K=16 = 34.0us vs
+#      2 row-groups K=16 = 37.7us (ratio 1.11, not ~2x) — the per-gather handshake is
+#      already hidden by spatial parallelism.
+#   3. The only theoretical Regime-B win is a COVERAGE extension (oversubscribed grids:
+#      shapes with num_row_groups*K_min > total_cores that today fall back to slow
+#      Regime A, e.g. (512,8192)=234us). That is a *different* mechanism than coalesced
+#      mcast, and the coalescing on top of it saves only O(bh) mcast setups (invisible
+#      vs DRAM-bound compute). It also applies to NO shape in the golden/LOOSE suite —
+#      every wide-W golden shape is 1-2 tile-rows (num_row_groups <= 2), so each already
+#      gets an optimal one-row-group-per-core Regime B partition with nothing to block.
+# Net: Regime B keeps bh==1 (compute_rt=[1]); the mcast all-gather is UNCHANGED. R9 (the
+# combine/transport refinement) therefore inherits the plain per-row-group all-gather —
+# there is no coalesced `bh*K` payload to preserve.
+# See tests/.../test_rms_norm_perf.py::test_rms_norm_regime_b_rowblocking_exhausted and
+# changelog.md (Refinement 8) for the full evidence.
+
+
 def _even_split(total, num_cores):
     """Return a list of (start, count) contiguous chunks summing to `total`."""
     base = total // num_cores

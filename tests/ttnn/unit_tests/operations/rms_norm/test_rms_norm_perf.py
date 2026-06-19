@@ -172,3 +172,67 @@ def test_rms_norm_ab_crossover(device, layout, W):
     # (2) Wide rows: K-tuned Regime B must decisively beat single-core Regime A.
     if W >= 8192:
         assert b < a, f"W={W} {layout}: expected B<A, got A={a/1000:.1f}us B={b/1000:.1f}us"
+
+
+def _measure_forced_k(device, x, K, **kw):
+    try:
+        desc._FORCE_K = K
+        return measure_device_kernel_ns(device, x, **kw)
+    finally:
+        desc._FORCE_K = None
+
+
+def test_rms_norm_regime_b_rowblocking_exhausted(device):
+    """Refinement 8 — measured evidence that row-blocking / coalesced-mcast for
+    Regime B cannot produce a net device-time win, so it is intentionally NOT
+    implemented (closed, mirroring R7's Regime-A row-blocking gate).
+
+    R8's premise was: group ``bh`` tile-row-groups onto one K-core band and issue ONE
+    coalesced mcast of ``bh`` partials (instead of ``bh`` separate K-round gathers) to
+    amortize the all-gather fixed cost — keeping active-core count unchanged. Keeping
+    the core count constant while grouping ``bh`` row-groups forces K up by a factor of
+    ``bh`` (fewer bands, each wider). This test measures the two structural facts that
+    make that a guaranteed regression:
+
+      (1) PARALLEL-GROUP FLATNESS — there is no serialized per-gather fixed cost for
+          coalescing to amortize. Regime B runs each row-group on a disjoint K-core
+          rectangle, all in parallel. Adding a second row-group at the SAME K barely
+          moves device time (measured ~34us -> ~38us for 1 -> 2 groups at K=16). If a
+          per-gather fixed cost were serialized, 2 groups would cost ~2x; it does not.
+
+      (2) K-MONOTONICITY — the all-gather cost grows with K, so the K-doubling that
+          ``bh>1`` requires is strictly net-negative. Forcing K up on a single-row-group
+          shape (where every K fits the grid) shows device time rising monotonically
+          with K (measured K=16 ~34us < K=32 < K=64 ~110us). bh>1 buys exactly this
+          K increase, while the per-core reduce work it would save is already flat.
+
+    Conclusion (see changelog.md R8): the only theoretical Regime-B win is a *coverage*
+    extension (oversubscribed grids — shapes with num_row_groups*K_min > total_cores
+    that currently fall back to slow Regime A), which is a different mechanism than
+    coalesced mcast AND applies to NO shape in the golden/LOOSE suite (every wide-W
+    golden shape is 1-2 tile-rows). Row-blocking is therefore fully exhausted as a
+    lever for this op.
+    """
+    # (1) Parallel-group flatness: 1 vs 2 row-groups, both at K=16 (each fits the grid:
+    #     1*16 and 2*16 <= 64). No serialized fixed cost -> ~flat (well under 2x).
+    x1 = torch.randn(1, 1, 32, 8192)  # nrg=1, K=16
+    x2 = torch.randn(1, 1, 64, 8192)  # nrg=2, K=16
+    t1 = measure_device_kernel_ns(device, x1)
+    t2 = measure_device_kernel_ns(device, x2)
+    assert t1 is not None and t2 is not None, (t1, t2)
+    assert t2 < t1 * 1.6, (
+        f"parallel-group flatness violated: 1 group={t1/1000:.1f}us, 2 groups={t2/1000:.1f}us "
+        f"(ratio {t2/t1:.2f}); a serialized per-gather fixed cost would push this toward 2x"
+    )
+
+    # (2) K-monotonicity: forcing K up (what bh>1 requires) is net-negative. Single
+    #     row-group so every K in {16,32,64} qualifies (1*K <= 64, K|256, K%8==0).
+    k16 = _measure_forced_k(device, x1, 16)
+    k32 = _measure_forced_k(device, x1, 32)
+    k64 = _measure_forced_k(device, x1, 64)
+    assert k16 is not None and k32 is not None and k64 is not None, (k16, k32, k64)
+    # K=64 must be clearly worse than K=16 (the all-gather cost dominates the growth).
+    assert k64 > k16 * 1.5, (
+        f"expected raising K (the bh>1 lever) to be net-negative: K=16={k16/1000:.1f}us, "
+        f"K=32={k32/1000:.1f}us, K=64={k64/1000:.1f}us"
+    )

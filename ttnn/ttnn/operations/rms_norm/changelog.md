@@ -436,3 +436,73 @@
     correctness (all-ones exact, random-vs-torch PCC, per-row-distinguishable magnitudes to
     catch recip `TileOffset` bugs), and the bh=1 anchor. Device tests force the gate on via
     a fixture; numerical correctness independent of the gate via `_FORCE_BH`.
+
+## Refinement 8 — Row-blocking for **Regime B** (coalesced mcast all-gather), not Regime A
+- **Date**: 2026-06-19
+- **Status**: COMPLETE (`[x]`) via the explicitly-sanctioned "if it too proves
+  net-negative, document that row-blocking is fully exhausted as a lever and close it"
+  branch of the Done-when. Row-blocking / coalesced-mcast for Regime B was investigated
+  at depth (real measurements + ttnn-static-analyzer structural analysis + golden-shape
+  audit) and proven to be a guaranteed regression on every shape this op targets, so it
+  is intentionally NOT implemented (mirroring R7's Regime-A row-blocking gate-OFF). The
+  Regime-B mcast all-gather is left UNCHANGED.
+- **What was done**:
+  - **Cheap-first probe (real device measurements, 8x8 Wormhole, bf16, no-gamma, TILE)**
+    of the candidate multi-row-group Regime B shapes and their routing:
+    - `(1,1,32,8192)` nrg=1 -> Regime B K=16, 16 cores, **34.0us** (already optimal).
+    - `(1,1,64,8192)` nrg=2 -> Regime B K=16, 32 cores, **37.7us**.
+    - `(256,8192)`    nrg=8 -> Regime B K=8, **full grid (64 cores)**, 62.4us.
+    - `(512,8192)`    nrg=16 -> `_select_k`=None (16*8>64) -> falls back to **slow
+      Regime A (single core per row), 234.5us**.
+  - **Two structural facts measured (the closure evidence)** — both reproduced by the
+    committed test `test_rms_norm_regime_b_rowblocking_exhausted`:
+    1. **Parallel-group flatness** — row-groups run in PARALLEL on disjoint K-core
+       rectangles, so the per-gather fixed cost is already hidden; there is NOTHING for
+       coalescing to amortize. 1 row-group K=16 = 34.0us vs 2 row-groups K=16 = 37.7us
+       (**ratio 1.11**, not ~2x). A serialized per-gather fixed cost would push 2 groups
+       toward 2x; it does not.
+    2. **K-monotonicity** — keeping active-core count constant while grouping `bh`
+       row-groups forces K up by factor `bh`, and the all-gather cost grows with K.
+       Measured via `_FORCE_K` on `(1,1,32,8192)`: **K=16=34.0us, K=32=50.5us,
+       K=64=110.0us**. `bh>1` buys exactly this K increase; the per-core reduce work it
+       would save is already FLAT (`bh*(Wt/K)` = `Wt/K_old`, invariant).
+  - **ttnn-static-analyzer** independently confirmed (0 correctness findings): at full
+    grid bh=2 leaves reduce work flat, DOUBLES all-gather rounds + combine adds (net per-
+    core work UP); no idle-core fixed cost to reclaim; the only theoretical win is an
+    "oversubscribed Regime B coverage" extension — a *different* mechanism than coalesced
+    mcast, on which coalescing adds only O(bh) mcast setups (invisible vs DRAM-bound
+    compute).
+  - **Golden-shape audit** (Explore over `eval/golden_tests/rms_norm/feature_spec.py`):
+    the golden + LOOSE suites contain **NO many-row wide-W shapes**. Every wide-W case is
+    1-2 tile-rows (`num_row_groups <= 2`), each of which already gets an optimal
+    one-row-group-per-core Regime B partition — there is nothing to row-block. The
+    coverage corner (`(512,8192)`-type, nrg*K_min > grid) is not exercised anywhere.
+  - **Documented the decision in code**: a comment block above `_even_split` in
+    `rms_norm_program_descriptor.py` records why Regime B keeps `bh==1` and that R9
+    inherits the plain (non-coalesced) per-row-group all-gather.
+- **Why NOT implemented** (engineering call): the lever is a guaranteed regression where
+  Regime B already applies (K-monotonicity), provides nothing at full grid (parallel-group
+  flatness), and the only non-regressing use (oversubscribed-grid coverage) applies to no
+  targeted/golden shape AND is independent of the "coalesced mcast" R8 named. Shipping a
+  hang-risky, never-beneficial kernel feature (as a permanently-gated-OFF knob like R7)
+  would add maintenance burden and complicate R9 for zero value. Closed instead.
+- **Accuracy achieved**: N/A — no kernel/behavior change. Golden numerics unchanged.
+- **Golden test progress**: **1683/1683 supported passing** (2940 skipped, 420 xfailed,
+  0 failed, 0 xpass-drift) — byte-identical to the R7 baseline. Non-registry refinement:
+  SUPPORTED unchanged. Acceptance (20) + regime_b suites re-run green.
+- **Issues encountered**: None. The conclusion is triply supported (measurement +
+  static-analyzer + golden-shape audit) and consistent with R7's finding that this
+  memory/transport-bound kernel does not benefit from row-blocking.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_perf.py` —
+    `test_rms_norm_regime_b_rowblocking_exhausted` (profiler-gated): reproduces the
+    parallel-group-flatness and K-monotonicity measurements that close R8.
+
+### Future ideas (not queued — per the QUEUE-CLOSED directive)
+- **Oversubscribed Regime B coverage** (NOT row-blocking/coalescing): allow each Regime-B
+  core to own multiple row-groups (`num_units > 1`, sequential per-row-group gathers) so
+  shapes with `num_row_groups*K_min > total_cores` (e.g. `(512,8192)`=234us today) can use
+  the distributed reduction instead of the slow single-core-per-row Regime A fallback.
+  This is a *coverage/correctness-of-routing* extension, distinct from the coalesced-mcast
+  lever R8 closed; it would only matter if many-row wide-W shapes (absent from the current
+  golden suite) become targets. Recorded here only — deliberately NOT added as a refinement.
