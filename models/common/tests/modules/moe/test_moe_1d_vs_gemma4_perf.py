@@ -47,23 +47,26 @@ except ImportError:  # tracy not always importable outside the profiler build
         pass
 
 
-# Representative dims — match test_moe_1d_perf.py so the MoE1D side reproduces the established
-# self-baseline numbers and the reference is measured at the exact same point.
-H = 256
-I = 128
-E = 8
-TOP_K = 2
+# Shape families. "tiny" matches test_moe_1d_perf.py so the MoE1D side reproduces the established
+# self-baseline parity numbers; "realish" is a gpt-oss-scale point so the *absolute* µs are
+# representative (not just the comparative ratio). Each: (H, I, E, top_k).
+SHAPES = {
+    "tiny": dict(H=256, I=128, E=8, top_k=2),
+    "realish": dict(H=2048, I=1024, E=32, top_k=4),
+}
+EXPERT_DTYPES = {"bf8": ttnn.bfloat8_b, "bf4": ttnn.bfloat4_b}
 NUM_ITERS = 30
 ROUTER_PRENORM_EPS = 1e-6
 
 
-def _make_weights(tp):
+def _make_weights(tp, shape):
     """One canonical draw of torch weights, shared by both modules (re-shaped per their layouts).
 
     On TP > 1, pre-pad the intermediate dim so the per-device slice is tile(32)-aligned (MoE1D requires
     the caller to do this; the Gemma4 ref pads internally, so feeding it the same padded weights is a
     no-op pad on its side). E.g. I=128 / tp=8 = 16 -> pad to 32/device -> padded I = 256.
     """
+    H, I, E = shape["H"], shape["I"], shape["E"]
     torch.manual_seed(0)
     gate_w = torch.randn(E, H, I) * 0.1  # [E, H, I]
     up_w = torch.randn(E, H, I) * 0.1  # [E, H, I]
@@ -84,10 +87,11 @@ def _make_weights(tp):
     return gate_w, up_w, down_w, router_he, scale_h, per_expert_scale
 
 
-def _build_moe1d(mesh_device, gate_w, up_w, down_w, router_he, scale_h, per_expert_scale):
+def _build_moe1d(mesh_device, shape, expert_dtype, gate_w, up_w, down_w, router_he, scale_h, per_expert_scale):
     """Generic MoE1D, Gemma4-matched config. On >1 device, mesh_device drives col/row-parallel + all-reduce."""
+    H, E = shape["H"], shape["E"]
 
-    def lz(src, dt=ttnn.bfloat8_b):
+    def lz(src, dt=expert_dtype):
         return LazyWeight(source=src, dtype=dt)
 
     cfg = MoE1DConfig(
@@ -95,24 +99,26 @@ def _build_moe1d(mesh_device, gate_w, up_w, down_w, router_he, scale_h, per_expe
         up_proj=lz(up_w.unsqueeze(0)),  # [1, E, H, I]
         down_proj=lz(down_w.unsqueeze(0)),  # [1, E, I, H]
         router_weight=lz(router_he.reshape(1, 1, H, E), ttnn.bfloat16),
-        top_k=TOP_K,
+        top_k=shape["top_k"],
         routing_strategy=RoutingStrategy.SOFTMAX_TOPK_SUMNORM,
         activation_strategy=ExpertActivation.GEGLU,
         router_prenorm_eps=ROUTER_PRENORM_EPS,
         router_input_scalar=H**-0.5,
         router_scale=lz(scale_h.reshape(1, 1, 1, H), ttnn.bfloat16),
         per_expert_scale=lz(per_expert_scale.reshape(1, 1, 1, E), ttnn.bfloat16),
+        expert_weight_dtype=expert_dtype,
         mesh_device=mesh_device,
     )
     return MoE1D.from_config(cfg)
 
 
-def _build_gemma4(mesh_device, tp, gate_w, up_w, down_w, router_he, scale_h, per_expert_scale):
+def _build_gemma4(mesh_device, tp, shape, expert_dtype, gate_w, up_w, down_w, router_he, scale_h, per_expert_scale):
     """Gemma4 reference MoEBlock from the same weights. Lazy-imported so collection never touches demos."""
     from models.demos.gemma4.config import MeshConfig, ModeConfig
     from models.demos.gemma4.tt.ccl import CCLManager
     from models.demos.gemma4.tt.moe import MoEBlock
 
+    H, E = shape["H"], shape["E"]
     # Feed the ref the SAME (already tile-aligned) intermediate width we feed MoE1D. weights.py then
     # slices the fused gate/up at this width and its own per-device pad is a no-op — so both modules
     # run byte-identical weights (zeros in any padded tail produce zero contributions on both sides).
@@ -120,7 +126,7 @@ def _build_gemma4(mesh_device, tp, gate_w, up_w, down_w, router_he, scale_h, per
     hf_config = SimpleNamespace(
         hidden_size=H,
         num_experts=E,
-        top_k_experts=TOP_K,
+        top_k_experts=shape["top_k"],
         moe_intermediate_size=intermediate_size,
         rms_norm_eps=ROUTER_PRENORM_EPS,
     )
@@ -146,7 +152,7 @@ def _build_gemma4(mesh_device, tp, gate_w, up_w, down_w, router_he, scale_h, per
         state_dict=state_dict,
         ccl_manager=ccl_manager,
         mesh_config=mesh_config,
-        dtype=ttnn.bfloat8_b,  # matched: bf8 expert weights
+        dtype=expert_dtype,  # matched expert-weight dtype (bf8 / bf4)
         router_dtype=ttnn.bfloat16,
     )
 
@@ -193,15 +199,35 @@ def _trace_measure(mesh_device, run_fn, start_msg, stop_msg):
 
 
 @pytest.mark.parametrize("ttnn_mesh_device", [(1, 1), (1, 8)], ids=["1x1", "1x8"], indirect=True)
-@pytest.mark.parametrize("mode,seq_len", [("decode", 1), ("prefill", 128)], ids=["decode", "prefill-128"])
-def test_moe_1d_vs_gemma4_perf(ttnn_mesh_device: ttnn.MeshDevice, mode, seq_len):
+@pytest.mark.parametrize("shape_id", ["tiny", "realish"])
+@pytest.mark.parametrize("expert_dtype_id", ["bf8", "bf4"])
+@pytest.mark.parametrize(
+    "mode,seq_len",
+    [
+        ("decode", 1),
+        ("prefill", 128),
+        ("prefill", 512),
+        ("prefill", 1024),
+        ("prefill", 2048),
+    ],
+    ids=["decode", "prefill-128", "prefill-512", "prefill-1024", "prefill-2048"],
+)
+def test_moe_1d_vs_gemma4_perf(ttnn_mesh_device: ttnn.MeshDevice, expert_dtype_id, shape_id, mode, seq_len):
     mesh_device = ttnn_mesh_device
     ttnn.SetDefaultDevice(mesh_device)
     tp = mesh_device.get_num_devices()  # 1D mesh (1, N) -> TP = N
+    shape = SHAPES[shape_id]
+    H = shape["H"]
+    expert_dtype = EXPERT_DTYPES[expert_dtype_id]
 
-    weights = _make_weights(tp)
-    moe1d = _build_moe1d(mesh_device, *weights)
-    ref = _build_gemma4(mesh_device, tp, *weights)
+    # The Gemma4 reference's precision/cache layer only maps bf16/bf8/fp32 (gemma4/tt/precision.py),
+    # so it cannot be built with bf4 expert weights. bf4 is therefore measured MoE1D-only (no ref to
+    # compare against); the bf8 cases carry the head-to-head ratio.
+    ref_supported = expert_dtype != ttnn.bfloat4_b
+
+    weights = _make_weights(tp, shape)
+    moe1d = _build_moe1d(mesh_device, shape, expert_dtype, *weights)
+    ref = _build_gemma4(mesh_device, tp, shape, expert_dtype, *weights) if ref_supported else None
 
     # Same inputs to both; separate device tensors so neither module's trace aliases the other's.
     torch.manual_seed(1)
@@ -217,7 +243,7 @@ def test_moe_1d_vs_gemma4_perf(ttnn_mesh_device: ttnn.MeshDevice, mode, seq_len)
     if which in ("both", "moe1d"):
         logger.info(f"[{mode} (1,{tp})] measuring MoE1D ...")
         m_res = _trace_measure(mesh_device, lambda: moe1d.forward(m_ri, m_ei, mode), "moe1d-start", "moe1d-stop")
-    if which in ("both", "gemma4"):
+    if which in ("both", "gemma4") and ref is not None:
         logger.info(f"[{mode} (1,{tp})] measuring Gemma4 reference ...")
         r_res = _trace_measure(mesh_device, lambda: ref(r_ri, r_ei), "gemma4-start", "gemma4-stop")
 
@@ -227,7 +253,8 @@ def test_moe_1d_vs_gemma4_perf(ttnn_mesh_device: ttnn.MeshDevice, mode, seq_len)
     # devices while the Gemma4 ref hardcodes Topology.Linear — a real implementation difference the
     # collective half of any tp>1 delta reflects (not a workload mismatch).
     collectives = "compute-only; no collectives" if tp == 1 else f"compute + TP={tp} all-reduce"
-    lines = [f"MoE1D-vs-Gemma4 PERF [{mode} seq={seq_len} (1,{tp})] ({collectives}):"]
+    tag = f"{mode} seq={seq_len} (1,{tp}) shape={shape_id} experts={expert_dtype_id}"
+    lines = [f"MoE1D-vs-Gemma4 PERF [{tag}] ({collectives}):"]
     if m_res:
         lines.append(f"    MoE1D   median={m_res[0]:7.1f}us range=[{m_res[1]:.1f},{m_res[2]:.1f}]us")
     if r_res:

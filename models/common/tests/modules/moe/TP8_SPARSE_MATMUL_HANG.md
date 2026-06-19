@@ -1,6 +1,56 @@
 # MoE1D TP=8 (T3K) blocker: column-sharded `ttnn.sparse_matmul` hangs
 
-**Status:** confirmed repro on one T3K box; needs confirmation on a clean/independent box.
+**Status:** ✅ **RESOLVED (2026-06-19).** Root cause found and fixed in the `sparse_matmul` program
+factory. All three probe cases now PASS in ~1.7s (was: `shard-perdevn`/`shard-fulln` hung forever), and
+the end-to-end Gemma4 MoE block at `(1,8)` passes (`decode-1x8` + `prefill-128-1x8`, 2/2).
+
+## Root cause & fix
+
+The hang was **not** about sharding per se — it was about the **core-grid geometry the shard produces**.
+With a column-sharded weight, per-device `N = I/num_devices = 256/8 = 32`, i.e. a single output tile, so
+`_build_sparse_matmul_config` selects a **1×1 (single-core) grid**. (The replicated `N=256` case selects
+an 8×1 grid, which is why it passed.)
+
+On a single-core grid there are **no in0 mcast receivers**, so `in0_mcast_num_dests == 0` and
+`in0_mcast_num_cores == 0`. The in0 sender kernel
+(`reader_bmm_tile_layout_in0_sender_padding.cpp`) nonetheless ran the full mcast handshake: it issued a
+`noc_async_write_multicast` to a degenerate (self-only) rectangle with 0 destinations and a semaphore
+handshake against receivers that were never launched → permanent NOC/semaphore deadlock.
+
+The **dense** `matmul_multicore_reuse_mcast_1d` factory already guards this exact case
+(`if (in0_mcast_receiver_num_cores == 1) defines["SKIP_MCAST"] = "1";`). The **sparse** factory set
+`SKIP_MCAST` only for the in1 sender, never for the in0 sender. The fix mirrors the dense guard:
+
+```cpp
+// ttnn/cpp/ttnn/operations/matmul/device/sparse/factory/
+//   sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
+if (in0_mcast_receiver_num_cores == 1) {
+    mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
+}
+```
+
+With `SKIP_MCAST` the single-core sender reads in0 into its local CB and `push_back`s it for the
+co-located compute kernel without any multicast/semaphore handshake — the correct single-core behavior.
+
+> This affects **any** TP=N sparse_matmul whose per-device `N` collapses to one output tile (≤32 wide),
+> not just TP=8. Rebuild `ttnncpp` after applying. (On this box the freshly-built
+> `build_Release/ttnn/_ttnncpp.so` had to be copied over `build_Release/lib/_ttnncpp.so`, which is what
+> the python module RPATHs to — a local build-layout quirk, not part of the fix.)
+
+---
+
+## (Original investigation notes below — kept for history)
+
+**Status:** CONFIRMED on two independent T3K boxes (2026-06-19). The "a clean box should PASS all
+three" hypothesis is **disproven** — a second box, freshly `tt-smi -r` reset with healthy fabric init,
+still hangs `shard-perdevn` while `replicate-fulln` passes and the bare `all_reduce` control passes
+(6/6, 21.7s). The bug is in `ttnn.sparse_matmul`'s multi-device (sharded-weight) path and is
+reproducible/universal.
+
+> Repro hygiene: the box may start in the flaky ETH state (conftest *skips* all 3 with
+> `ETH core ... heartbeat check failed`); `tt-smi -r` clears it. A timed-out hang leaves dispatch
+> kernels running, which contaminates the next run (`dispatch kernels still running ... following a
+> reset`) — **always `tt-smi -r` between hang repros.**
 **Owner context:** came out of benchmarking `MoE1D` (`models/common/modules/moe/moe_1d.py`) against the
 Gemma4 reference `MoEBlock` (`models/demos/gemma4/tt/moe.py`).
 
@@ -52,6 +102,20 @@ A clean box should make all three cases PASS. If `shard-perdevn` hangs there too
    `idle_erisc.elf: segment ... overflows region limit of 0x54c0 bytes` (watcher instrumentation
    overflows the ETH `cq_dispatch` kernel) before the hang. Disable watcher, or use a build with a
    larger erisc region, when chasing this.
+
+## Related upstream issue (#45943) — same deadlock shape, different trigger
+
+`sparse_matmul` has a known mcast deadlock — [#45943](https://github.com/tenstorrent/tt-metal/issues/45943)
+(CLOSED, P0) — *"deadlocks when declared `nnz` > actual `count_nonzero(sparsity)`."* The in0 sender loops
+over `batchB` and multicasts only for non-zero entries while receiver/compute loop a fixed `nnz`, so an
+overcounted `nnz` leaves receivers waiting on a semaphore the sender never re-sets. **It is not the cause
+of this hang**, for two reasons: (1) the probe passes `nnz=None` (`get_batch_from_reader=true`, the
+runtime-count path — not the baked-`nnz` path #45943 needs); (2) sparsity is replicated and identical
+between the passing replicated-weight case and the hanging sharded case, so any `count_nonzero`/`nnz` bug
+would fail both. What #45943 *does* tell us: the failure shape is a sender↔receiver mcast-handshake count
+mismatch — so look at whether the runtime batch-count broadcast is wired correctly on the smaller N=32
+sharded core grid. Its fix was validation-only ("fail loudly instead of hang") and does not touch the
+sharded path. See `.claude/sparse_matmul_tp8_hang_handoff.md` §5.2 for the device-side detail.
 
 ## Files in this change
 

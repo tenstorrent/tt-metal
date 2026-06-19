@@ -418,6 +418,16 @@ SparseMatmulMultiCoreReuseMcast1DProgramFactory::create(
         mm_kernel_defines,
         ttnn::get_throttle_level(operation_attributes.compute_kernel_config));
 
+    // When the per-device output tiles fit on a single core (e.g. a column-sharded weight whose
+    // per-device N collapses the grid to 1x1), there are no in0 mcast receivers. The in0 sender must
+    // skip the mcast handshake entirely: issuing a multicast with in0_mcast_num_cores == 0 (and waiting
+    // on a receiver semaphore no receiver kernel ever sets) deadlocks. This mirrors the dense
+    // matmul_multicore_reuse_mcast_1d factory's single-core guard. Without it, every TP=N MoE
+    // sparse_matmul whose sharded weight lands on one core hangs.
+    if (in0_mcast_receiver_num_cores == 1) {
+        mm_kernel_in0_sender_writer_defines["SKIP_MCAST"] = "1";
+    }
+
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
