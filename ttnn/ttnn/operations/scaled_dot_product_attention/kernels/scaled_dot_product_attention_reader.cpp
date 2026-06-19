@@ -24,6 +24,61 @@
 #include "api/tensor/noc_traits.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
+// R3 (non-tile-aligned S_kv): fill one KV-block worth of additive key-padding
+// mask tiles into cb_pad_mask. Layout = kv_chunk_t bf16 tiles, all zero except
+// the LAST tile, whose columns [valid_cols, 32) are bf16 −inf (0xFF80). Added to
+// the last KV block's scores so the padded keys become −inf BEFORE the softmax
+// row-max / row-sum (else the denominator over-counts the padded keys). Mirrors
+// the production SDPA `fill_vertical_tile_bf16` byte layout (4 faces of 16×16,
+// two bf16 per uint32 word: low half = even col, high half = odd col).
+template <uint32_t kv_chunk_t, uint32_t valid_cols>
+inline void fill_kv_pad_mask(uint32_t cb_pad_mask) {
+    constexpr uint32_t WORDS_PER_TILE = (32 * 32 * 2) / 4;  // 2048 B / 4 = 512
+    constexpr uint32_t NEGINF_PAIR = 0xFF80FF80;            // two bf16 −inf
+    constexpr uint32_t FACE_W = 16;
+    constexpr uint32_t WORDS_PER_FACE_ROW = FACE_W / 2;         // 8
+    constexpr uint32_t WORDS_PER_FACE = (FACE_W * FACE_W) / 2;  // 128
+    constexpr uint32_t face_offsets[4] = {0, WORDS_PER_FACE, 2 * WORDS_PER_FACE, 3 * WORDS_PER_FACE};
+    constexpr uint32_t face_col_starts[4] = {0, 16, 0, 16};
+
+    volatile tt_l1_ptr uint32_t* base = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_pad_mask));
+
+    // Zero the whole block (all kv_chunk_t tiles).
+    for (uint32_t w = 0; w < kv_chunk_t * WORDS_PER_TILE; ++w) {
+        base[w] = 0;
+    }
+
+    // Overlay the vertical −inf pattern on the LAST tile of the block.
+    volatile tt_l1_ptr uint32_t* ptr = base + (kv_chunk_t - 1) * WORDS_PER_TILE;
+    for (uint32_t f = 0; f < 4; ++f) {
+        const uint32_t col_start = face_col_starts[f];
+        if (valid_cols <= col_start) {
+            // entire face is padded → −inf
+            for (uint32_t i = 0; i < WORDS_PER_FACE; ++i) {
+                ptr[face_offsets[f] + i] = NEGINF_PAIR;
+            }
+        } else if (valid_cols >= col_start + FACE_W) {
+            // entire face is valid → leave zeros
+        } else {
+            // boundary falls inside this face
+            const uint32_t local_col = valid_cols - col_start;  // 1..15
+            const uint32_t boundary_word = local_col / 2;
+            const uint32_t boundary_pos = local_col % 2;
+            for (uint32_t row = 0; row < FACE_W; ++row) {
+                const uint32_t row_base = face_offsets[f] + row * WORDS_PER_FACE_ROW;
+                if (boundary_pos != 0) {
+                    // low 16 bits = even col (valid, 0), high 16 bits = odd col (−inf)
+                    ptr[row_base + boundary_word] = 0xFF800000;
+                }
+                const uint32_t start_word = boundary_word + (boundary_pos != 0 ? 1 : 0);
+                for (uint32_t w = start_word; w < WORDS_PER_FACE_ROW; ++w) {
+                    ptr[row_base + w] = NEGINF_PAIR;
+                }
+            }
+        }
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(0);
     constexpr uint32_t H_kv = get_compile_time_arg_val(1);
@@ -40,8 +95,11 @@ void kernel_main() {
     constexpr uint32_t cb_mask = get_compile_time_arg_val(12);
     constexpr uint32_t cb_scaler_max = get_compile_time_arg_val(13);
     constexpr uint32_t cb_scaler_sum = get_compile_time_arg_val(14);
+    constexpr uint32_t kv_partial_cols = get_compile_time_arg_val(15);  // R3: 0 ⇒ S_kv aligned
+    constexpr uint32_t cb_pad_mask = get_compile_time_arg_val(16);
+    constexpr uint32_t has_kv_pad = (kv_partial_cols != 0) ? 1 : 0;
 
-    constexpr auto q_args = TensorAccessorArgs<15>();
+    constexpr auto q_args = TensorAccessorArgs<17>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -94,6 +152,16 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         q_cb.push_back(Dt);
+
+        // ---- R3: key-padding mask block (one per unit; consumed by compute on the
+        // last KV block when S_kv is non-tile-aligned). Generated on-device (no NoC
+        // read) — identical content every unit, but cheap to refill. ----
+        if constexpr (has_kv_pad) {
+            CircularBuffer pad_cb(cb_pad_mask);
+            pad_cb.reserve_back(kv_chunk_t);
+            fill_kv_pad_mask<kv_chunk_t, kv_partial_cols>(cb_pad_mask);
+            pad_cb.push_back(kv_chunk_t);
+        }
 
         for (uint32_t j = 0; j < num_kv_chunks; ++j) {
             const uint32_t kv_row0 = j * kv_chunk_t;  // first kv tile-row of this block

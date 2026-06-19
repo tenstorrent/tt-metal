@@ -85,6 +85,8 @@ void kernel_main() {
     constexpr uint32_t cb_sum = get_compile_time_arg_val(23);
     constexpr uint32_t cb_alpha = get_compile_time_arg_val(24);
     constexpr uint32_t cb_recip = get_compile_time_arg_val(25);
+    constexpr uint32_t has_kv_pad = get_compile_time_arg_val(26);  // R3: S_kv non-aligned
+    constexpr uint32_t cb_pad_mask = get_compile_time_arg_val(27);
 
     const uint32_t num_units = get_arg_val<uint32_t>(0);
     const uint32_t scale_u32 = get_arg_val<uint32_t>(1);
@@ -128,6 +130,18 @@ void kernel_main() {
             // B: cb_scores += maskⱼ (element-wise).
             if constexpr (use_mask) {
                 binary_add<cb_scores, cb_mask, cb_scores, BroadcastDim::None>(kv_chunk_t);
+            }
+
+            // B.5 (R3): cb_scores += key-padding mask on the LAST KV block only.
+            // The padded keys of the final KV tile become −inf, so they are excluded
+            // from the row-max / row-sum (softmax denominator) below. cb_pad_mask is
+            // zero for every non-final tile of the block, so this is a no-op there.
+            // Same helper / broadcast as the user-mask add (streaming WaitAndPop walks
+            // all kv_chunk_t tiles). cb_pad_mask is pushed once per unit by the reader.
+            if constexpr (has_kv_pad) {
+                if (j == num_kv_chunks - 1) {
+                    binary_add<cb_scores, cb_pad_mask, cb_scores, BroadcastDim::None>(kv_chunk_t);
+                }
             }
 
             // C: row-max over keys. j=0 -> running m (cb_max); j>0 -> block max (cb_mblock).

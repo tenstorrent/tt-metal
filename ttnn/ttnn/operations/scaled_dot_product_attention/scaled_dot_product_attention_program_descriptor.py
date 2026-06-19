@@ -110,6 +110,7 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
     CB_MBLOCK = 10
     CB_MNEW = 11
     CB_LBLOCK = 12
+    CB_PAD_MASK = 13  # R3: additive −inf key-padding mask (only when S_kv non-aligned)
     CB_OUT = 16
     CB_SCORES = 24
     CB_P = 25
@@ -161,6 +162,13 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
     ]
     if use_mask:
         cbs.append(cb(CB_MASK, in_dtype, tile_in, 2 * kv_chunk_t))
+    # R3: additive key-padding mask block (one KV block: kv_chunk_t bf16 tiles,
+    # zeros except the last tile which carries the −inf vertical column pattern).
+    # Only allocated when S_kv is non-tile-aligned. Double-buffered so the reader
+    # can refill the next unit's copy while compute consumes the current one.
+    has_kv_pad = 1 if kv_partial_cols != 0 else 0
+    if has_kv_pad:
+        cbs.append(cb(CB_PAD_MASK, bf16, tile_bf16, 2 * kv_chunk_t))
 
     # ---------------- 4. Kernels ----------------
     # ---- Reader ----
@@ -180,6 +188,8 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
         CB_MASK,
         CB_SCALER_MAX,
         CB_SCALER_SUM,
+        kv_partial_cols,  # R3: valid cols in the last KV tile (0 ⇒ S_kv aligned)
+        CB_PAD_MASK,
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(Q).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(K).get_compile_time_args())
@@ -217,6 +227,8 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
         CB_SUM,
         CB_ALPHA,
         CB_RECIP,
+        has_kv_pad,  # R3: 1 ⇒ add cb_pad_mask to the last KV block before softmax
+        CB_PAD_MASK,
     ]
 
     # ---- Writer ----
