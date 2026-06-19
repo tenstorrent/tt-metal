@@ -25,6 +25,51 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
+// Generate a persistent additive KV-column pad-mask block into cb_pad_mask.
+// The block is [B_q, B_kv] tiles (tile-row-major, matching cb_qk). Every element
+// is 0 except columns [valid_cols, 32) of each row's LAST tile-column (within-
+// block column B_kv-1), which are set to -inf. This is the partial-S_kv tile
+// (global KV tile Sk_t-1) whose padded columns would otherwise contribute
+// exp(0 - rowmax) to the softmax denominator. Generated ONCE at startup
+// (work-item-invariant) and never popped; the compute adds it held on the last
+// kv block. Tile element layout is face-major: a 32x32 tile is 4 16x16 faces
+// ordered (top-left, top-right, bottom-left, bottom-right), each row-major, so
+// element (row, col) lives at face*256 + (row%16)*16 + (col%16).
+template <uint32_t cb, uint32_t Bq, uint32_t Bkv, uint32_t valid_cols, bool is_fp32>
+inline void generate_kv_pad_mask() {
+    cb_reserve_back(cb, Bq * Bkv);
+    const uint32_t base = get_write_ptr(cb);
+    const uint32_t tile_bytes = get_tile_size(cb);
+
+    // 1) Zero the whole block (tile_bytes is a multiple of 4 for bf16 and fp32).
+    volatile tt_l1_ptr uint32_t* zero_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
+    const uint32_t total_words = (Bq * Bkv * tile_bytes) >> 2;
+    for (uint32_t i = 0; i < total_words; ++i) {
+        zero_ptr[i] = 0;
+    }
+
+    // 2) Write -inf into the padded columns of each row's last-column tile.
+    for (uint32_t r = 0; r < Bq; ++r) {
+        const uint32_t tile_idx = r * Bkv + (Bkv - 1);
+        const uint32_t tile_base = base + tile_idx * tile_bytes;
+        for (uint32_t row = 0; row < 32; ++row) {
+            for (uint32_t col = valid_cols; col < 32; ++col) {
+                const uint32_t face = (row / 16) * 2 + (col / 16);
+                const uint32_t in_face = (row % 16) * 16 + (col % 16);
+                const uint32_t elem = face * 256 + in_face;
+                if constexpr (is_fp32) {
+                    volatile tt_l1_ptr uint32_t* e = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_base);
+                    e[elem] = 0xFF800000u;  // -inf, fp32
+                } else {
+                    volatile tt_l1_ptr uint16_t* e = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(tile_base);
+                    e[elem] = 0xFF80u;  // -inf, bf16
+                }
+            }
+        }
+    }
+    cb_push_back(cb, Bq * Bkv);
+}
+
 void kernel_main() {
     uint32_t start_work = get_arg_val<uint32_t>(0);
     uint32_t num_work = get_arg_val<uint32_t>(1);
@@ -46,16 +91,19 @@ void kernel_main() {
     constexpr uint32_t n_kv = get_compile_time_arg_val(10);
     constexpr uint32_t has_mask = get_compile_time_arg_val(11);
     constexpr uint32_t mask_H = get_compile_time_arg_val(12);
+    constexpr uint32_t kv_partial = get_compile_time_arg_val(13);  // S_kv % 32 (0 => aligned)
+    constexpr uint32_t pad_mask_is_fp32 = get_compile_time_arg_val(14);
 
     constexpr uint32_t cb_q_in = 0;
     constexpr uint32_t cb_k_in = 1;
     constexpr uint32_t cb_v_in = 2;
     constexpr uint32_t cb_mask_in = 3;
+    constexpr uint32_t cb_pad_mask = 4;
     constexpr uint32_t cb_max_scaler = 8;
     constexpr uint32_t cb_sum_scaler = 9;
 
-    // Chained TensorAccessorArgs: scalar CT args occupy 0..12.
-    constexpr auto q_args = TensorAccessorArgs<13>();
+    // Chained TensorAccessorArgs: scalar CT args occupy 0..14.
+    constexpr auto q_args = TensorAccessorArgs<15>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto mask_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -70,6 +118,12 @@ void kernel_main() {
         1.0f);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
         1.0f);
+
+    // KV-column pad mask (only when S_kv is non-tile-aligned). Generated once;
+    // never popped. The compute adds it on the last kv block before the rowmax.
+    if constexpr (kv_partial != 0) {
+        generate_kv_pad_mask<cb_pad_mask, B_q, B_kv, kv_partial, pad_mask_is_fp32 != 0>();
+    }
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);

@@ -56,6 +56,7 @@ constexpr uint32_t cb_q_in = 0;
 constexpr uint32_t cb_k_in = 1;
 constexpr uint32_t cb_v_in = 2;
 constexpr uint32_t cb_mask_in = 3;
+constexpr uint32_t cb_pad_mask = 4;
 constexpr uint32_t cb_max_scaler = 8;
 constexpr uint32_t cb_sum_scaler = 9;
 constexpr uint32_t cb_alpha = 10;
@@ -80,6 +81,7 @@ void kernel_main() {
     constexpr uint32_t n_kv = get_compile_time_arg_val(4);
     constexpr bool has_mask = get_compile_time_arg_val(5) != 0;
     constexpr uint32_t scale_bits = get_compile_time_arg_val(6);
+    constexpr uint32_t kv_partial = get_compile_time_arg_val(7);  // S_kv % 32 (0 => aligned)
 
     const uint32_t num_work = get_arg_val<uint32_t>(0);
 
@@ -150,6 +152,33 @@ void kernel_main() {
                     ckl::PackTileReconfig::Output,
                     ckl::OperandKind::Scalar,
                     ckl::OperandKind::Scalar>(qk_tiles);
+            }
+
+            // ---------- Phase 2c: S += pad_mask (KV column padding -> -inf) ----------
+            // Only on the LAST kv block, only when S_kv is non-tile-aligned. K's
+            // padded rows are zero, so the padded KV columns of the last score
+            // tile-column score 0; without this the row-max would pick up 0 (if
+            // all valid scores are negative) and the row-sum would gain
+            // exp(0 - m) per padded column, both corrupting the softmax. The
+            // additive -inf mask is generated once by the reader (persistent,
+            // never popped) — add it held (Block-indexed), in place on cb_qk.
+            // Mirrors Phase 5's operand structure (A = in-place Streaming/Scalar,
+            // B = persistent HeldBulk/Block).
+            if constexpr (kv_partial != 0) {
+                if (j == n_kv - 1) {
+                    ckl::add<
+                        cb_qk,
+                        cb_pad_mask,
+                        cb_qk,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::Streaming,  // scores: in-place pop+repush
+                        ckl::InputLifecycle::HeldBulk,   // pad mask: persistent, never popped
+                        ckl::OutputLifecycle::Streaming,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::PackTileReconfig::Output,
+                        ckl::OperandKind::Scalar,            // scores index = front
+                        ckl::OperandKind::Block>(qk_tiles);  // mask index = tile i
+                }
             }
 
             // ---------- Phase 3a: m_blk = rowmax(S) ----------

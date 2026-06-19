@@ -83,7 +83,13 @@ SUPPORTED = {
     # the program descriptor; the caller can override via compute_kernel_config.
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    # Refinement 2 — non-tile-aligned shape support. The kernel processes full
+    # (ceil-counted) tiles: a non-aligned D contracts over zero-padded lanes
+    # (from_torch zero-pads the inputs, so 0*x = 0 in the QK / PV matmuls), and a
+    # non-aligned S_kv has its padded score columns masked to -inf before the
+    # softmax row-max / row-sum (reader-generated persistent additive mask). A
+    # non-aligned S_q simply produces padding output rows that ttnn slices off.
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "attention_kind": ["self", "cross"],
     "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "causal"],

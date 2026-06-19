@@ -48,6 +48,10 @@ def _largest_divisor_leq(n: int, cap: int) -> int:
     return 1
 
 
+def _ceil_div(a: int, b: int) -> int:
+    return (a + b - 1) // b
+
+
 def _f32_bits(x: float) -> int:
     return struct.unpack("I", struct.pack("f", x))[0]
 
@@ -124,10 +128,22 @@ def create_program_descriptor(
     B, H_q, S_q, D = q_shape
     H_kv, S_kv = k_shape[1], k_shape[2]
 
-    DHt = D // TILE_DIM
+    # Tile counts use CEIL division: a non-tile-aligned dim (D, S_q, or S_kv not
+    # a multiple of 32) still occupies a full last tile physically (TILE_LAYOUT
+    # pads up to the tile boundary). Floor division would silently drop the
+    # partial last tile and only process the aligned prefix. For aligned dims
+    # ceil == floor, so this is a no-op for tile_aligned inputs.
+    DHt = _ceil_div(D, TILE_DIM)
     vDHt = DHt  # V head dim == D
-    Sq_t = S_q // TILE_DIM
-    Sk_t = S_kv // TILE_DIM
+    Sq_t = _ceil_div(S_q, TILE_DIM)
+    Sk_t = _ceil_div(S_kv, TILE_DIM)
+
+    # Number of valid (logical) columns in the partial LAST tile of each dim.
+    # 0 means the dim is tile-aligned (no partial tile). kv_partial is the one
+    # that the softmax-denominator masking cares about: the padded KV columns of
+    # the last score tile-column must be set to -inf before the row-max / row-sum
+    # (otherwise their score-0 contributes exp(0 - m) to the denominator).
+    kv_partial = S_kv % TILE_DIM
 
     # Intermediate / scratch CB working format. With fp32 dest accumulation the
     # online-softmax running stats (m, l, O) and the score CBs must be parked in
@@ -148,6 +164,16 @@ def create_program_descriptor(
     use_bf16_intermediate = (not fp32_dest_acc_en) and input_is_bf16
     acc_dtype = ttnn.bfloat16 if use_bf16_intermediate else ttnn.float32
     acc_tile = ttnn.tile_size(acc_dtype)
+
+    # KV-column padding mask: needed only when S_kv is not tile-aligned. The
+    # padded KV columns of the last score tile-column score 0 (K's padded rows
+    # are zero), and exp(0 - rowmax) would pollute the softmax denominator. The
+    # reader generates a persistent additive -inf mask block (in acc_dtype, to
+    # match the score CB so the binary add is same-format) and the compute adds
+    # it on the LAST kv block before the row-max. kv_partial==0 (tile-aligned
+    # S_kv) compiles the whole path out — zero impact on aligned inputs.
+    need_pad_mask = kv_partial != 0
+    pad_mask_is_fp32 = 1 if acc_dtype == ttnn.float32 else 0
 
     # L1-aware block cap: keep the per-core input-block footprint bounded in
     # BYTES (MAX_INPUT_BLOCK_BYTES). The input-block CBs (cb_q/k/v_in) carry the
@@ -195,6 +221,7 @@ def create_program_descriptor(
     CB_K = 1
     CB_V = 2
     CB_MASK = 3
+    CB_PAD_MASK = 4
     CB_MAX_SCALER = 8
     CB_SUM_SCALER = 9
     CB_ALPHA = 10
@@ -250,6 +277,11 @@ def create_program_descriptor(
     ]
     if has_mask:
         cbs.append(cb(CB_MASK, mask_page, 2 * qk_tiles, attention_mask.dtype))
+    if need_pad_mask:
+        # Persistent additive KV-column pad mask, one B_q x B_kv block in
+        # acc_dtype. Generated once by the reader at startup, held (never popped)
+        # by the compute. Single-buffered — it is constant across all work items.
+        cbs.append(cb(CB_PAD_MASK, acc_tile, qk_tiles, acc_dtype))
 
     # ----------------------------------------------------------------------
     # Reader kernel
@@ -268,6 +300,8 @@ def create_program_descriptor(
         n_kv,  # 10
         1 if has_mask else 0,  # 11
         mask_H,  # 12
+        kv_partial,  # 13 (S_kv % 32; 0 => tile-aligned, no pad mask)
+        pad_mask_is_fp32,  # 14 (acc_dtype fp32 => fp32 -inf fill, else bf16)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(Q).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(K).get_compile_time_args())
@@ -289,6 +323,7 @@ def create_program_descriptor(
         n_kv,  # 4
         1 if has_mask else 0,  # 5
         scale_bits,  # 6
+        kv_partial,  # 7 (S_kv % 32; 0 => no pad mask add)
     ]
 
     # ----------------------------------------------------------------------
