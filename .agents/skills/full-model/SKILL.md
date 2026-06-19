@@ -18,8 +18,8 @@ Implement the model-specific pieces around the working block stack:
 - block or decoder stack, including multiple layer kinds when present;
 - KV-cache allocation, reset, page-table or position handling, and repeated decode reuse;
 - final norm and LM head, including tied embeddings when the HF config uses them;
-- logits and a canonical split-sampling token-out path using `models.common.sampling`;
-- full on-device traced decode from token in to sampled token out, implemented as model decode trace plus sampling internal trace.
+- logits and a canonical split-sampling token-out path using the common sampling implementation that best fits the model;
+- full on-device traced decode from token in to sampled token out, implemented as model decode trace plus a traced sampling path.
 - a generator that owns high-level token-in/token-out generation and exposes a clean low-level prefill/decode API for external callers.
 
 Use the strongest correct implementation available as your block stack. If there are several candidates, choose the one with the best evidence for the target mesh and explain the choice.
@@ -40,8 +40,9 @@ Avoid hidden host fallback in a single prefill or decode pass. The final decode 
 
 The full-model stage owns sampling. A full model is complete only when token-out decode uses the canonical split-sampling contract:
 
+- Before designing the token-out path, read both common sampling implementations: `models/common/sampling/` and `models/common/modules/sampling/sampling_1d.py`. Compare their contracts against this model: state ownership, trace behavior, mesh/topology support, sampling-param/seed/logprob/penalty handling, `tt_out_tok` support, top-k/layout/padding expectations, and fit with the generator. Choose the implementation that best fits the model. Record the choice and the rejected alternative in the full-model docs. If neither common implementation fits, explain the exact missing contract before writing custom sampler code;
 - the model decode trace produces sampler-ready logits without host logits readback;
-- `SamplingGenerator` uses its internal trace for sampling;
+- the chosen sampling implementation is traced, or the generator owns a correct trace wrapper around it;
 - sampling receives `tt_out_tok` pointing at the persistent decode token input tensor, so the sampled token becomes the next decode input on device;
 - current-position/RoPE position state advances coherently with token feedback on device inside the trace for fixed-step decode loops; do not refresh positions from host every token;
 - page-table trace inputs are refreshed only when the page table changes, with no per-token page-table copy in the unchanged-page-table case;
