@@ -51,14 +51,19 @@ def _parse_c4(lines: list[str]) -> dict[str, tuple[int, int]]:
 
 
 @parametrize(
-    # `same=True` so the inferred SrcA dst register format is well-defined; the
-    # three formats span all canonical x-stride cases (Float16_b->1, Float16->2,
-    # Float32->4). dest_acc auto-upgrades for the Float32 outlier.
+    # `same=True` so the inferred SrcA dst register format is well-defined. The
+    # formats span all canonical x-stride buckets: Float16->2, Float32->4, and
+    # the "else->1" bucket (Float16_b and Bfp8_b). Bfp8_b is applicable here even
+    # though the tilize unpacker can't read Bfp8_b input: this test only
+    # `configure_unpack_AB`s the unpacker and reads the descriptor/stride
+    # registers back (no actual tilize), so it directly checks the helper buckets
+    # the Bfp8_b dst-format code into the 1-byte x-stride like configure does.
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
             DataFormat.Float32,
+            DataFormat.Bfp8_b,
         ],
         same=True,
     ),
