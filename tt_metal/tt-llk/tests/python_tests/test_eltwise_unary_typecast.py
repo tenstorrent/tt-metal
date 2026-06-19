@@ -112,35 +112,33 @@ def _whole_number_float_spec(high: int) -> StimuliSpec:
     return StimuliSpec(distribution=dist, seed=0)
 
 
-def _valid_dest_acc_options(formats: InputOutputFormat) -> list[DestAccumulation]:
-    """Dest-accumulation modes worth exercising for a given format pair.
+def _production_dest_acc(formats: InputOutputFormat) -> list[DestAccumulation]:
+    """Pick dest_acc the way ttnn.typecast does."""
 
-    32-bit Dest is mandatory whenever the SFPU integer datapath is used: the
-    SFPU typecast computes the result into Dest before the packer reads it, and
-    the integer datapath always operates on 32-bit Dest data. So any integer
-    input or output (not just the 32-bit ones) requires ``dest_acc=Yes`` —
-    otherwise pack_src stays 16-bit and ``is_packer_to_L1_conversion_supported``
-    rejects the pack (LLK assert in configure_pack). 32-bit float formats also
-    require 32-bit Dest.
-
-    For the remaining (16-bit float / block-float) pairs both modes are valid,
-    so we sweep both to widen coverage.
-    """
     in_fmt = formats.input_format
     out_fmt = formats.output_format
-    if (
-        in_fmt.is_integer()
-        or out_fmt.is_integer()
-        or in_fmt.is_32_bit()
-        or out_fmt.is_32_bit()
-    ):
-        return [DestAccumulation.Yes]
-    return [DestAccumulation.No, DestAccumulation.Yes]
+
+    # bf16 / block-float inputs that promote to 32-bit Dest when packed to UInt8.
+    _bf_family = (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    preserve_fp32_precision = (
+        in_fmt == DataFormat.Float32
+        or (out_fmt == DataFormat.UInt8 and in_fmt in _bf_family)
+        or (in_fmt == DataFormat.UInt16 and out_fmt == DataFormat.UInt8)
+        or (in_fmt == DataFormat.UInt8 and out_fmt != DataFormat.Float16_b)
+    )
+    fp32_dest_acc_en = (
+        preserve_fp32_precision
+        or out_fmt in (DataFormat.UInt32, DataFormat.Int32, DataFormat.Float32)
+        or in_fmt in (DataFormat.UInt32, DataFormat.Int32)
+        or out_fmt == DataFormat.Fp8_e4m3
+        or in_fmt == DataFormat.Fp8_e4m3
+    )
+    return [DestAccumulation.Yes if fp32_dest_acc_en else DestAccumulation.No]
 
 
 @parametrize(
     formats=TYPECAST_PAIRS,
-    dest_acc=_valid_dest_acc_options,
+    dest_acc=_production_dest_acc,
     approx_mode=[ApproximationMode.No],
     input_dimensions=[
         [32, 32]
@@ -228,6 +226,28 @@ def test_eltwise_unary_typecast(
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
     )
+
+    # pack_src fix for the SFPU typecast.
+    #
+    # The generic format inference models pack_src from the *input* (what the
+    # unpacker writes to Dest). For a typecast the SFPU overwrites Dest with the
+    # *output* value, so the packer must read the output's register
+    # representation, not the input's. In 16-bit Dest mode (dest_acc=No) the
+    # inferred pack_src would stay equal to the input format and the pack would
+    # be rejected (e.g. UInt16 -> Float16_b is not a supported packer
+    # conversion). Patch pack_src to the format the SFPU actually leaves in Dest:
+    # block-float outputs are produced as Float16_b and compressed by the packer;
+    # every other output is already in its packable register form. (For
+    # dest_acc=Yes the 32-bit gasket converts from Dest, and the inference
+    # already yields the output format, so no patch is needed there.)
+    if dest_acc == DestAccumulation.No:
+        pack_src = (
+            DataFormat.Float16_b
+            if _is_block_float(formats.output_format)
+            else formats.output_format
+        )
+        for fmt_config in configuration.formats_config:
+            fmt_config.pack_src = pack_src
 
     res_from_L1 = configuration.run().result
 
