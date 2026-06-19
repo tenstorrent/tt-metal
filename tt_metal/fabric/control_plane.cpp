@@ -592,7 +592,7 @@ void ControlPlane::init_control_plane_auto_discovery() {
 
     auto topology_mapping_timeout = rtoptions.get_timeout_duration_for_operations();
     if (topology_mapping_timeout.count() <= 0.0f) {
-        topology_mapping_timeout = std::chrono::duration<float>(60.0f);
+        topology_mapping_timeout = std::chrono::duration<float>(120.0f);
     }
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
     // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
