@@ -21,7 +21,7 @@ void kernel_main() {
 
     DataflowBuffer dfb(dfb::out);
     Noc noc;
-    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
     const uint32_t entry_size = dfb.get_entry_size();
 
     for (uint32_t i = 0; i < num_entries_per_producer; ++i) {

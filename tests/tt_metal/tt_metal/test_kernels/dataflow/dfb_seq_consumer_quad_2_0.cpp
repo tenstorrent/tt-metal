@@ -80,10 +80,10 @@ void kernel_main() {
     DataflowBuffer dfb_1(dfb::buf_1);
     DataflowBuffer dfb_2(dfb::buf_2);
     DataflowBuffer dfb_3(dfb::buf_3);
-    const auto dst_0 = TensorAccessor(ta::dst_0);
-    const auto dst_1 = TensorAccessor(ta::dst_1);
-    const auto dst_2 = TensorAccessor(ta::dst_2);
-    const auto dst_3 = TensorAccessor(ta::dst_3);
+    const auto dst_0 = TensorAccessor(tensor::dst_0);
+    const auto dst_1 = TensorAccessor(tensor::dst_1);
+    const auto dst_2 = TensorAccessor(tensor::dst_2);
+    const auto dst_3 = TensorAccessor(tensor::dst_3);
 
     if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR
