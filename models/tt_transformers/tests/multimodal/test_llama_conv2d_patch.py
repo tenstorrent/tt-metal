@@ -107,7 +107,7 @@ def test_conv2d_inference(
     # Only select output from one device
     tt_output_torch = tt_output_torch[0, ..., :out_channels]
 
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")

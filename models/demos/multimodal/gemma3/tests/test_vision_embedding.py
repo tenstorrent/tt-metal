@@ -73,7 +73,7 @@ def test_vision_embedding_integration(
 
     # Only select output from one device
     tt_output_torch = tt_output_torch[..., :dim]
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
 
     # To get RTOL values
     non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)

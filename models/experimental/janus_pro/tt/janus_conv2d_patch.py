@@ -22,8 +22,8 @@ class TtJanusConv2dPatch(LightweightModule):
         in_channels: Input channels.
         out_channels: Output channels.
         kernel_size: Size of convolution kernel.
-        stride (default 1): Stride for convolution.
-        bias (default False): Use bias in Conv2d.
+        stride: Stride for convolution.
+        bias: Use bias in Conv2d.
     Input: (bsz, in_channels, width, height)
     Output: (bsz, num_tokens, out_channels)
     """

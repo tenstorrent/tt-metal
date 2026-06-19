@@ -10,6 +10,7 @@ import ttnn
 from models.experimental.janus_pro.tt.load_checkpoints import convert_vision_hf_to_meta
 from models.tt_transformers.tt.model_config import ModelArgs as TTModelArgs
 
+
 class ModelArgs(TTModelArgs):
     def __init__(
         self,
