@@ -1036,7 +1036,7 @@ def run_text_mode(
 
     Chunking (demo layer only — ``voxtral_tts`` trace replay is unchanged):
 
-      Trace enabled (``VOXTRAL_DECODE_TRACE=1``, default — incl. multi-device 1×4):
+      Trace enabled (``VOXTRAL_DECODE_TRACE=1``, default on P150 1×1 and BH QB2 1×4):
         - Single pass for prompts up to ~one sentence (≤ ``_TRACE_CHUNK_MAX_WORDS``)
         - Otherwise sentence-aligned chunks, one single-pass each, hard-concat. A single long
           pass drifts off-text on the TP backbone and emits END_AUDIO early (drops trailing
@@ -1174,23 +1174,20 @@ def run_demo(args: DemoArgs) -> None:
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Trace/chunking gated by compute mesh. ``VOXTRAL_DECODE_TRACE`` selects the demo chunking
-    # strategy: 0 → short 8-word chunks (crossfade), 1 → single-pass / large-chunk.
-    #   • 1×1 BH: short-chunk default (clean audio).
-    #   • Multi-device (e.g. 1×4 TP): single-pass trace is the validated path — full prompt,
-    #     RTF ≈ 0.7. Short chunking here is ~7× slower (RTF ≈ 4.8) and collapses some chunks to a
-    #     few frames (dropped words / "missing prompt"), so it is NOT used unless the user opts in
-    #     with --no-decode-trace. We therefore set the default authoritatively (overriding any stale
-    #     VOXTRAL_DECODE_TRACE left in the environment) rather than via setdefault().
+    # Trace/chunking: ``VOXTRAL_DECODE_TRACE`` selects the demo chunking strategy — 0 → short
+    # 8-word chunks (crossfade), 1 → single-pass / large-chunk (default on P150 and BH QB2).
+    # Default compute mesh remains 1×1 (``VOXTRAL_COMPUTE_MESH_SHAPE``); set ``1,4`` for QB2 TP.
+    # Multi-device: override stale env so trace stays on unless the user passed --no-decode-trace.
     from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
 
     _trace_explicit = os.environ.get("VOXTRAL_DEMO_TRACE_EXPLICIT") == "1"
-    if voxtral_requested_compute_mesh_shape() == (1, 1):
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "0")
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "0")
-    elif not _trace_explicit:
-        os.environ["VOXTRAL_DECODE_TRACE"] = "1"
-        os.environ["VOXTRAL_DECODE_TRACE_2CQ"] = "1"
+    if not _trace_explicit:
+        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
+        if voxtral_requested_compute_mesh_shape() == (1, 1):
+            os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "0")
+        else:
+            os.environ["VOXTRAL_DECODE_TRACE"] = "1"
+            os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
     from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, decode_trace_enabled
 
     if voxtral_requested_compute_mesh_shape() != (1, 1) and not decode_trace_enabled():
