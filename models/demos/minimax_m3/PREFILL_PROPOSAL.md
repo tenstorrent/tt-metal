@@ -17,7 +17,7 @@
 
 ---
 
-## 0. Status (living) — last updated 2026-06-18
+## 0. Status (living) — last updated 2026-06-19
 
 ### 0.1 What we inherit (validated MiniMax-M2.7 base — the foundation we convert)
 Everything below was validated on a real Blackhole Galaxy (32 chips) for **M2.7** and
@@ -42,25 +42,57 @@ progress) — DSA == MSA's NSA family, so M3 attention is largely **integration,
   60 layers, 1M pos, bf16 (no quant), + new fields (`moe_layer_freq`, `sparse_attention_config`,
   `n_shared_experts`, `dense_intermediate_size`, `swiglu_alpha/limit`, `qk_norm_type=per_head`,
   `use_gemma_norm`, `routed_scaling_factor`) and the dense-vs-MSA layer schedule.
-- ⏳ **`ModelArgs` + consumers** — NOT done. Key gotcha: `ModelArgs` reads dims from `self.hf_config`
-  (loaded HF AutoConfig); **M3's HF config is NESTED** (`text_config.*`) under the VL wrapper, so the
-  real-weights path must read `hf_config.text_config` (the dummy/dims path uses our flat config.json).
-  Plus: consume the layer schedule, shared expert, sparse_attention_config, swiglu clamp, gemma norm,
-  bf16 load + strip `language_model.` prefix.
-- ⏳ **Test-rewiring** — HF-ref class strings (`MiniMaxM2DecoderLayer`→M3 `…Sparse…`), add a
-  `minimax_m3` mesh-config to the deepseek hub, doc/README prose. Deferred (need semantic decisions).
+- ✅ **Layer schedule + per-layer arch deltas consumed** (Phase 1/2 below).
+- ⏳ **`ModelArgs` model-level config plumbing** — still the Phase 0 tail. Key gotcha: `ModelArgs`
+  reads dims from `self.hf_config` (loaded HF AutoConfig); **M3's HF config is NESTED** (`text_config.*`)
+  under the VL wrapper, so the real-weights path must read `hf_config.text_config` (the dummy/dims path
+  uses our flat config.json). Plus `load_state_dict` real path: bf16 load + strip `language_model.`
+  prefix + **skip `mtp`/`nextn`** keys (the checkpoint carries 7 MTP modules). Needed for full-model
+  assembly + real weights, NOT for the per-module PCC track (which runs on random weights).
+
+### 0.2b Phase 1 (dense path) + Phase 2 (functional MoE) — VALIDATED 2026-06-19
+All on a real Blackhole card, **TP=1, random weights**, each vs a **self-authored torch reference**
+anchored to the upstream `transformers` `minimax_m3_vl` arch (NEW finding §0.4). PCC 0.97–0.99.
+Each module has a `tests/unit/test_*_vs_ref.py`. **Conditions:** TP=1 single-card only (TP>1/CCL
+paths unvalidated); random weights (not real); composite/non-fused expert FFN (no fused kernel).
+- ✅ Gemma `(1+w)` RMSNorm (`tt/rms_norm.py`).
+- ✅ Clamped `swigluoai` SwiGLU (`tt/experts/operations.py` + the routed-expert inline path).
+- ✅ Per-head QK-norm (`tt/attention/{operations,prefill,weights}.py`); swizzle/qk-norm interaction
+  confirmed correct end-to-end by the full-attention test.
+- ✅ Dense MLP, layers 0-2 (`tt/dense_mlp.py`).
+- ✅ Full GQA attention block (QKV→split→per-head QK-norm→partial RoPE→GQA causal SDPA→o-proj).
+- ✅ Dense decoder layer + **hybrid dense/MoE schedule** (`tt/layer.py`, branch on `moe_layer_freq`).
+- ✅ Functional MoE block: `routed_scaling_factor` (after normalize) + always-on **shared expert**
+  (reuses `DenseMLP`) + clamped-swigluoai routed experts. **Non-fused FFN** (reused single-device AND
+  EP=32; the fused MoE kernel's baked-in activation ≠ M3's, so a clamped-swigluoai fused kernel is a
+  later perf task — copy+modify).
+- ✅ MoE (sparse) decoder layer.
+
+### 0.4 ⓘ HF oracle — it EXISTS upstream (correction)
+Earlier drafts said "no HF modeling code." **Correction:** native `transformers` **main** has
+`minimax_m3_vl` (full modeling; `MiniMaxM3VLRMSNorm`/attention/MLP), and **vLLM** has
+`models/minimax_m3`. It's only absent from (a) the checkpoint's `trust_remote_code` files and (b) our
+pinned `transformers` (rebuilt env has 4.53.0). Decision: keep self-authored torch refs for leaf ops;
+bring a **branch-local** transformers (git main) at full-model assembly to PCC against the real impl
+(the fused-kernel-free path). We confirmed M3's gemma-norm / per-head-qk-norm-before-RoPE / clamped
+swigluoai against this source.
 
 ### 0.3 ⚠️ GAPS — what is NOT done (read before assuming "it works")
-- **Phase 0 partial:** folder rename + M3 `config.json` re-dim DONE (§0.2); `ModelArgs` + consumers
-  (nested `text_config`, `language_model.` prefix, layer schedule, gemma/per-head norms, clamped
-  SwiGLU, shared expert) NOT done. No M3 weights/modeling code on the box yet.
+- **Per-module arch deltas DONE (§0.2b)** but only at **TP=1, random weights, vs self-authored ref**.
+  NOT yet: real weights, multi-card (TP>1/CCL), full-model assembly.
+- **`ModelArgs` model-level config plumbing** — Phase 0 tail (§0.2): nested `text_config` unwrap +
+  dummy-config path + `load_state_dict` real path (strip `language_model.`, skip `mtp`/`nextn`).
+  Blocks full-model assembly + real weights.
+- **Full 60-layer model** — not assembled/run. Plan: full-GQA-everywhere placeholder (exact for
+  prompts ≤~2K tokens, since MSA selects all blocks then), reduced-config smoke test first
+  (real 60L×128E won't fit on one card with random weights).
+- **Real weights** — 869 GB bf16 not downloaded; first-token vs reference not run.
 - **MSA sparse attention:** GQA torch golden delivered (`reference/sparse_gqa_prefill.py`, verified);
-  the on-device GQA `sparse_sdpa` kernel + indexer/topk wiring are NOT done (external dep).
-- **KV cache:** current M2.7 code runs **full non-cached SDPA on fresh Q/K/V** (the
-  `kv_cache`/`page_table` args are dead). Target is **chunked KV** (DeepSeek-style, §5),
-  NOT vLLM paged attention. Chunked KV is not wired here yet.
-- **MSA:** not wired. Depends on the DSA ops (§4) + a **GQA variant of `sparse_sdpa`** (we own).
-- **MoE deltas** (128 experts / top-4 / +1 shared / first-3-dense / routed_scaling) not done.
+  the on-device GQA `sparse_sdpa` kernel + indexer/topk wiring are NOT done (external dep). Parallel
+  track; only matters for >~2K context.
+- **KV cache:** current code runs **full non-cached SDPA on fresh Q/K/V**. Target is **chunked KV**
+  (DeepSeek-style, §5), NOT vLLM paged. Chunked KV not wired yet.
+- **Fused MoE expert kernel** for clamped swigluoai — perf task (copy+modify; activation ≠ M2/DS).
 - **Parallelism** for M3 (TP=4 + SP) not decided/implemented (§6).
 - **Runner / pipeline / scheduler / KV migration** — still scaffold (inherited from M2.7).
 - **Multimodal** — out of scope for now.
@@ -318,11 +350,13 @@ from-scratch kernel.
   `minimax_m3`: rename folder + all identifiers, wire M3 `text_config` (6144 / 64-4 / 60
   layers), bf16 weight path (no fp8 dequant), drop `minimax_m3_config.py` into the DeepSeek
   reference hub next to `minimax_m2_7_config.py`. Resolve §6 layout. Goal: model instantiates.
-- **Phase 1 — Dense layers (0–2), PCC vs HF.** No sparse needed (existing full GQA SDPA).
-  Validates per-head QK-norm, Gemma norm, clamped SwiGLU, dense MLP, new dims.
-  **Split tests: a dense-layer suite (full attn) vs an MSA-layer suite (sparse).**
-- **Phase 2 — MoE block (layers 3+ MLP), full-attention placeholder.** Hybrid dispatch +
-  shared expert + 128/top-4 + routed_scaling. Reuse EP. PCC vs HF with full attention.
+- ✅ **Phase 1 — Dense layers (0–2). DONE 2026-06-19** (TP=1, random weights, vs self-authored ref;
+  §0.2b). Validated per-head QK-norm, Gemma norm, clamped SwiGLU, dense MLP, full GQA attention
+  block, dense decoder layer + hybrid schedule, new dims. PCC 0.97–0.99.
+- ✅ **Phase 2 — MoE block (layers 3+), full-attention placeholder. DONE 2026-06-19** (§0.2b):
+  hybrid dispatch + shared expert + 128/top-4 + routed_scaling + clamped-swigluoai routed experts,
+  on the non-fused FFN (EP-reusable). MoE decoder layer PCC-validated. (EP=32 multi-card, real
+  weights, and the fused kernel remain.)
 - **Phase 3 — MSA (parallel track). FIRST GOAL: a composite, UNOPTIMIZED but FUNCTIONAL path
   from already-merged ops to UNBLOCK TESTING.** Then optimize.
   - 3a. consume `topk_large_indices` (merged) — top-16 select.
