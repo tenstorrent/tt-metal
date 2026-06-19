@@ -217,6 +217,8 @@ struct MinimalMatmulOpReceiver {
                 if (wait_for_op_signal && !(read_local_slice_from_input && (curr_k_block_dir == 2))) {
                     volatile tt_l1_ptr uint32_t* semaphore = signal_op_semaphore_addr_ptrs[curr_k_block_dir];
                     uint32_t sem_target = sem_targets[curr_k_block_dir];
+                    // Device 2.0 migration: legacy primitive retained: raw L1 semaphore pointer loaded from
+                    // signal_op_semaphore_addr_ptrs[]; Semaphore<> wraps program-local ids only
                     noc_semaphore_wait_min(semaphore, sem_target + 1);
                     sem_targets[curr_k_block_dir]++;
                 }

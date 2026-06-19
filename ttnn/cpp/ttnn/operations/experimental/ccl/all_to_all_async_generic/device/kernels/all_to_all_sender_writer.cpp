@@ -52,6 +52,8 @@ void write_data(
             // than a semaphore id, so Semaphore<> does not apply.
             noc_semaphore_inc(output_semaphore_noc_addr_in_pkt, 1);
         }
+        // Device 2.0 migration: legacy primitive retained: dest_addrs are precomposed uint64_t NoC addresses, not
+        // tensor accessors; Noc::async_write requires a typed endpoint.
         for (uint32_t part = 0; part < parts_count; ++part) {
             noc_async_write(l1_read_addr, dest_addrs[part], payload_sizes[part]);
             l1_read_addr += payload_sizes[part];
@@ -243,6 +245,8 @@ void kernel_main() {
         }
     }
 
+    // Device 2.0 migration: legacy primitives retained: global_init_semaphore_addr is a GlobalSemaphore address
+    // (no id()), so Semaphore<>::wait / set cannot wrap it.
     noc_semaphore_wait(global_init_semaphore_addr_ptr, num_devices - 1);
     noc_semaphore_set(global_init_semaphore_addr_ptr, 0);
 

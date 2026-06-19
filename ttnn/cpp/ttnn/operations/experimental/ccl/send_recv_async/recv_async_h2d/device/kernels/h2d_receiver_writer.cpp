@@ -5,8 +5,11 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
 #include "api/socket_api.h"
+#include "api/core_local_mem.h"
 #include "api/tensor/tensor_accessor.h"
+#include "api/tensor/noc_traits.h"
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -44,6 +47,7 @@ void kernel_main() {
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);
 
+    // Device 2.0 migration: legacy primitive retained: PCIe write command buffer state setup has no typed D2 endpoint.
     // socket_notify_sender for H2D sockets posts the local bytes_acked counter back to the
     // host via a PCIe NOC write, which itself uses noc_wwrite_with_state. Initialize the
     // write command buffer state up front so the in-loop notifications hit a hot path.
@@ -60,6 +64,8 @@ void kernel_main() {
     auto output_addr_gen_args = TensorAccessorArgs<output_args_cta_idx, output_args_crta_idx>();
     auto output_addr_gen = TensorAccessor(output_addr_gen_args, output_base_addr);
 
+    Noc noc_obj;
+
     for (uint32_t page_index = 0; page_index < num_pages; ++page_index) {
         // Block until the host has signaled (via bytes_sent) that a page of data is ready
         // in the FIFO (HOST_PUSH) or that a page worth of bytes has been reserved in the
@@ -72,13 +78,13 @@ void kernel_main() {
                 pcie_data_addr_base + receiver_socket.read_ptr - receiver_socket.fifo_addr,
                 receiver_socket.read_ptr,
                 page_size);
-            noc_async_read_barrier();
+            noc_obj.async_read_barrier();
         }
 
-        auto noc_write_addr = output_addr_gen.get_noc_addr(page_index);
-        noc_async_write<page_size>(receiver_socket.read_ptr, noc_write_addr, page_size);
+        noc_obj.async_write(
+            CoreLocalMem<uint8_t>(receiver_socket.read_ptr), output_addr_gen, page_size, {}, {.page_id = page_index});
         // Flush so the FIFO slot can be released and reused before the write retires globally.
-        noc_async_writes_flushed();
+        noc_obj.async_writes_flushed();
 
         socket_pop_pages(receiver_socket, 1);
         socket_notify_sender(receiver_socket);
@@ -86,5 +92,5 @@ void kernel_main() {
     }
 
     update_socket_config(receiver_socket);
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }

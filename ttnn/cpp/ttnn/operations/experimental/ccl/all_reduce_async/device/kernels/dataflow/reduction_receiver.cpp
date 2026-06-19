@@ -33,5 +33,6 @@ void kernel_main() {
 
     // 2. Signal compute kernel to start processing
     cb.push_back(total_num_reduction_tiles);
+    // Device 2.0 migration: legacy primitive retained: same absolute-L1-address sem as above; Semaphore<> binds ids.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
 }
