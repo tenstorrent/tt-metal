@@ -115,9 +115,9 @@ def run(args, context: Context):
 
     # Ensuring that we wait at least MINIMAL_WAIT_SECONDS to ensure hb/s prediction is precise.
     latest_timestamp = max(sample.timestamp for sample in heartbeat_samples.values())
-    smallest_interval = time.monotonic() - latest_timestamp
-    if smallest_interval < MINIMAL_WAIT_SECONDS:
-        time.sleep(MINIMAL_WAIT_SECONDS - smallest_interval)
+    smallest_wait = time.monotonic() - latest_timestamp
+    if smallest_wait < MINIMAL_WAIT_SECONDS:
+        time.sleep(MINIMAL_WAIT_SECONDS - smallest_wait)
 
     return run_checks.run_per_device_check(lambda device: check_arc(device, heartbeat_samples[device]))
 
