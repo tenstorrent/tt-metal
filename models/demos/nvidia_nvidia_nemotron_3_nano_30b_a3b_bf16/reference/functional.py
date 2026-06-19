@@ -507,16 +507,16 @@ def moe_gate(
 ) -> tuple:
     """Pure-PyTorch MoE gate replicating NemotronHTopkRouter.forward().
 
-    All computation is done in float32.  hidden_states may be bfloat16;
-    it is cast to float32 internally as the HuggingFace reference does.
+    Computation is done in float32 to match the TT on-device gate which casts
+    the BF16 input to float32 before the linear+sigmoid+bias pipeline.
 
     Args:
         hidden_states:           Input tensor of shape [..., hidden_size].
                                  Leading dimensions are flattened to tokens.
-        weight:                  Gate projection weight [n_routed_experts, hidden_size],
-                                 float32.  Loaded from
+        weight:                  Gate projection weight [n_routed_experts, hidden_size].
+                                 Loaded from
                                  ``backbone.layers.{i}.mixer.gate.weight``.
-        e_score_correction_bias: Correction bias [n_routed_experts], float32.
+        e_score_correction_bias: Correction bias [n_routed_experts].
                                  Loaded from
                                  ``backbone.layers.{i}.mixer.gate.e_score_correction_bias``.
         n_routed_experts:        Total number of experts (128 for NemotronH-30B).
@@ -529,20 +529,19 @@ def moe_gate(
     Returns:
         Tuple (topk_indices, topk_weights) each of shape [tokens, num_experts_per_tok].
         topk_indices: torch.int64
-        topk_weights: torch.float32
+        topk_weights: float32
     """
-    # Flatten batch/sequence dimensions -> [tokens, hidden_size]
-    tokens = hidden_states.view(-1, hidden_states.shape[-1])
-    tokens_f32 = tokens.to(torch.float32)
+    # Flatten batch/sequence dimensions -> [tokens, hidden_size]; cast to float32
+    tokens = hidden_states.view(-1, hidden_states.shape[-1]).float()
 
     # 1. Router logits: [tokens, n_routed_experts]
-    router_logits = F.linear(tokens_f32, weight.to(torch.float32))
+    router_logits = F.linear(tokens, weight.float())
 
     # 2. Sigmoid scores
     scores = router_logits.sigmoid()  # [tokens, n_routed_experts]
 
     # 3. get_topk_indices — implements the grouped top-k selection
-    scores_for_choice = scores + e_score_correction_bias.to(torch.float32).unsqueeze(0)
+    scores_for_choice = scores + e_score_correction_bias.float().unsqueeze(0)
     # [tokens, n_group, experts_per_group]
     scores_3d = scores_for_choice.view(-1, n_group, n_routed_experts // n_group)
     group_scores = scores_3d.topk(2, dim=-1)[0].sum(dim=-1)  # [tokens, n_group]
@@ -1022,18 +1021,17 @@ def _mamba_rms_norm_gated(
     input_dtype = x.dtype
     B, S, D = x.shape
 
-    # Gate first (norm_before_gate=False)
-    gate = F.silu(z.float())
-    xg = x.float() * gate  # [B, S, D]
+    # Gate first (norm_before_gate=False) — match TT which uses ttnn.silu/mul in bfloat16
+    gate = F.silu(z.to(input_dtype))
+    xg = x * gate  # [B, S, D]
 
-    # Per-group RMSNorm
+    # Per-group RMSNorm — match TT: ttnn.pow, ttnn.mean, ttnn.rsqrt in bfloat16
     xg_grouped = xg.view(B, S, -1, group_size)
     var = xg_grouped.pow(2).mean(-1, keepdim=True)
     xg_normed = xg_grouped * torch.rsqrt(var + eps)
     xg_normed = xg_normed.view(B, S, D)
 
-    out = weight.float() * xg_normed
-    return out.to(input_dtype)
+    return (weight.to(input_dtype) * xg_normed).to(input_dtype)
 
 
 def mamba2_layer(
@@ -1137,15 +1135,15 @@ def mamba2_layer(
     # 4. SSM transformation -- chunked SSD naive (no cache)
     #    Mirrors modeling_nemotron_h.py torch_forward lines 619-692.
     # -------------------------------------------------------------------------
-    A = -torch.exp(A_log.float())  # [num_heads]
+    A = -torch.exp(A_log.to(hidden_states.dtype))  # [num_heads]
 
     # dt: softplus(dt + dt_bias), clamp(0, inf) is identity for this model
     dt_f = F.softplus(dt + dt_bias)  # [B, S, 64]
 
-    # Reshape and cast to float32
-    x_f = x.reshape(batch_size, seq_len, num_heads, head_dim).float()  # [B, S, 64, 64]
-    B_f = B_vec.reshape(batch_size, seq_len, n_groups, ssm_state_size).float()  # [B, S, 8, 128]
-    C_f = C_vec.reshape(batch_size, seq_len, n_groups, ssm_state_size).float()  # [B, S, 8, 128]
+    # Reshape into compute dtype (match TT's bfloat16 hardware)
+    x_f = x.reshape(batch_size, seq_len, num_heads, head_dim).to(hidden_states.dtype)  # [B, S, 64, 64]
+    B_f = B_vec.reshape(batch_size, seq_len, n_groups, ssm_state_size).to(hidden_states.dtype)  # [B, S, 8, 128]
+    C_f = C_vec.reshape(batch_size, seq_len, n_groups, ssm_state_size).to(hidden_states.dtype)  # [B, S, 8, 128]
 
     # Repeat B and C groups to match num_heads: [B, S, 8, 128] -> [B, S, 64, 128]
     reps = num_heads // n_groups  # 8
@@ -1155,7 +1153,7 @@ def mamba2_layer(
     pad_size = (chunk_size - seq_len % chunk_size) % chunk_size
 
     # D_residual: skip connection using padded x (zeros for pad positions)
-    D_residual = D[..., None].float() * _pad_tensor_by_size(x_f, pad_size)  # [B, S+pad, 64, 64]
+    D_residual = D[..., None].to(hidden_states.dtype) * _pad_tensor_by_size(x_f, pad_size)  # [B, S+pad, 64, 64]
 
     # Discretize x and A
     x_f = x_f * dt_f[..., None]  # [B, S, 64, 64]  x <- x * dt

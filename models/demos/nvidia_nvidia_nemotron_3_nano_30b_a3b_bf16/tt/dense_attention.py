@@ -21,25 +21,29 @@ import torch
 import ttnn
 from ttnn import MeshDevice
 
-from .tp import _col, _rep, _rep_keyed, _row, all_reduce
+from .tp import _col, _kv_gqa, _rep_keyed, _row, all_reduce
 
 NUM_HEADS = 32
-NUM_KV_HEADS = 2
+NUM_KV_HEADS = 2  # global KV heads across the full model
+NUM_KV_HEADS_PER_DEVICE = 1  # each device owns exactly 1 KV head (GQA: 2 < TP=4)
 HEAD_DIM = 128
 TP = 4
 HIDDEN_SIZE = 2688
 NORM_EPS = 1e-5
 
-# Blackhole QB grid: 8×8 = 64 cores.  Chunk sizes follow tt_transformers precedent:
-# 256 tiles for S≥2048 (each tile = 32 tokens, so 8192-token blocks), 64 tiles for S<2048.
-# Multicore flash-attention avoids materialising the full S×S attention matrix in DRAM.
-_SDPA_GRID = (8, 8)
+# Blackhole QB grid: 11×8 = 88 cores (11×10 available; keep 8 rows for headroom).
+_SDPA_GRID = (11, 8)
 
 
 def _sdpa_cfg(S: int):
-    if S < 64:
-        return None  # too small to chunk; single-core SDPA is fine
-    chunk = 256 if S >= 2048 else 64
+    if S < 32:
+        return None
+    # L1 budget: scores CB = chunk² × 2 bytes.
+    # chunk=128 → 32KB scores + ~100KB Q/K/V/out ≈ 530KB total (< 1.5MB L1).
+    # chunk=512 overflows (~1.9MB). Cap at 128.
+    chunk = min(128, S)
+    while chunk > 32 and S % chunk != 0:
+        chunk -= 32
     return ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=_SDPA_GRID,
         q_chunk_size=chunk,
@@ -81,13 +85,14 @@ def dense_attention_forward(
     wq_tt = _col(wq, mesh_device)
     q_tt = ttnn.linear(normed_tt, wq_tt, transpose_b=True)  # [B, S, 1024]/device
 
-    # 3. K: replicated (2 KV heads < TP=4)
-    wk_tt = _rep(wk, mesh_device)
-    k_tt = ttnn.linear(normed_tt, wk_tt, transpose_b=True)  # [B, S, 256]/device
+    # 3. K: GQA-aware shard — device i gets the 1 KV head its Q heads map to.
+    #    (2 global KV heads < TP=4; devices 0,1 → head 0; devices 2,3 → head 1)
+    wk_tt = _kv_gqa(wk, mesh_device)
+    k_tt = ttnn.linear(normed_tt, wk_tt, transpose_b=True)  # [B, S, 128]/device
 
-    # 4. V: replicated
-    wv_tt = _rep(wv, mesh_device)
-    v_tt = ttnn.linear(normed_tt, wv_tt, transpose_b=True)  # [B, S, 256]/device
+    # 4. V: same GQA assignment
+    wv_tt = _kv_gqa(wv, mesh_device)
+    v_tt = ttnn.linear(normed_tt, wv_tt, transpose_b=True)  # [B, S, 128]/device
 
     # 5. Reshape to [B, heads, S, head_dim] for SDPA.
     # Prefill path (has_cache and S > 1): the tiled reshape kernel allocates a DRAM
@@ -106,14 +111,14 @@ def dense_attention_forward(
         q_4d = ttnn.permute(q_4d, [0, 2, 1, 3])
         # K: [B, S, 256] TILE → RM(DRAM) → [B, S, 2, 128] RM(DRAM) → TILE(DRAM)
         _k_rm = ttnn.to_layout(k_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
-        _k_rm4 = ttnn.reshape(_k_rm, [B, S, NUM_KV_HEADS, HEAD_DIM], memory_config=_DRAM)
+        _k_rm4 = ttnn.reshape(_k_rm, [B, S, NUM_KV_HEADS_PER_DEVICE, HEAD_DIM], memory_config=_DRAM)
         del _k_rm
         k_4d = ttnn.to_layout(_k_rm4, ttnn.TILE_LAYOUT)
         del _k_rm4
         k_4d = ttnn.permute(k_4d, [0, 2, 1, 3])
         # V: same pattern as K
         _v_rm = ttnn.to_layout(v_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=_DRAM)
-        _v_rm4 = ttnn.reshape(_v_rm, [B, S, NUM_KV_HEADS, HEAD_DIM], memory_config=_DRAM)
+        _v_rm4 = ttnn.reshape(_v_rm, [B, S, NUM_KV_HEADS_PER_DEVICE, HEAD_DIM], memory_config=_DRAM)
         del _v_rm
         v_4d = ttnn.to_layout(_v_rm4, ttnn.TILE_LAYOUT)
         del _v_rm4
@@ -122,9 +127,9 @@ def dense_attention_forward(
         # Decode (S=1) or no-cache: standard tiled reshape is safe.
         q_4d = ttnn.reshape(q_tt, [B, S, NUM_HEADS // TP, HEAD_DIM])
         q_4d = ttnn.permute(q_4d, [0, 2, 1, 3])
-        k_4d = ttnn.reshape(k_tt, [B, S, NUM_KV_HEADS, HEAD_DIM])
+        k_4d = ttnn.reshape(k_tt, [B, S, NUM_KV_HEADS_PER_DEVICE, HEAD_DIM])
         k_4d = ttnn.permute(k_4d, [0, 2, 1, 3])
-        v_4d = ttnn.reshape(v_tt, [B, S, NUM_KV_HEADS, HEAD_DIM])
+        v_4d = ttnn.reshape(v_tt, [B, S, NUM_KV_HEADS_PER_DEVICE, HEAD_DIM])
         v_4d = ttnn.permute(v_4d, [0, 2, 1, 3])
 
     # 6. Attention: select path based on S and whether a KV cache is present.
@@ -134,7 +139,7 @@ def dense_attention_forward(
         k_upd = ttnn.permute(k_4d, [2, 0, 1, 3])  # [1, B, 2, 128]
         v_upd = ttnn.permute(v_4d, [2, 0, 1, 3])
         _TILE = 32
-        upd_shard_h = ((-(-NUM_KV_HEADS // _TILE)) * _TILE) // B  # ceil-div then per-core
+        upd_shard_h = ((-(-NUM_KV_HEADS_PER_DEVICE // _TILE)) * _TILE) // B  # ceil-div then per-core
         upd_mem = ttnn.create_sharded_memory_config(
             [upd_shard_h, HEAD_DIM],
             ttnn.CoreGrid(x=1, y=B),

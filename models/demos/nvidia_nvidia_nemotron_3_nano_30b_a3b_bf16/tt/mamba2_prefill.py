@@ -201,7 +201,7 @@ def _causal_conv1d_prefill(
 
 
 def _mamba2_ssd_chunk(
-    decay_chunk: ttnn.Tensor,  # [B, C, H]  — per-step decay for this chunk
+    log_decay_chunk: ttnn.Tensor,  # [B, C, H]  — per-step log-decay (= -exp(A_log)*dt_eff)
     x_dt_chunk: ttnn.Tensor,  # [B, C, H, D]
     B_chunk: ttnn.Tensor,  # [B, C, H, N]
     C_chunk: ttnn.Tensor,  # [B, C, H, N]
@@ -213,13 +213,15 @@ def _mamba2_ssd_chunk(
     """Process one chunk of C tokens.
 
     Returns (y_chunk [B, C, H, D], h_next [B, H, D, N]).
+    log_decay_chunk is log(decay) = -exp(A_log)*dt_eff, passed in directly to avoid
+    the BF16 exp→log roundtrip that was present when decay=exp(log_decay) was computed
+    first and then log taken here.
     """
-    B = decay_chunk.shape[0]
-    C = decay_chunk.shape[1]
+    B = log_decay_chunk.shape[0]
+    C = log_decay_chunk.shape[1]
 
     # --- Log-decay cumsum → γ[t] = exp(Σ_{u=0}^{t} log_decay[u]) -------
-    log_decay = ttnn.log(ttnn.clamp(decay_chunk, min=1e-6))  # [B, C, H]
-    log_decay_cum = ttnn.cumsum(log_decay, dim=1)  # [B, C, H]
+    log_decay_cum = ttnn.cumsum(log_decay_chunk, dim=1)  # [B, C, H]
 
     # --- Build lower-triangular decay matrix L[i, s] = exp(Σ_{s+1}^{i} log_decay) ----
     # Compute directly in log space: L[i, s] = exp(log_cum[i] - log_cum[s]).
@@ -504,15 +506,16 @@ def mamba2_prefill_layer_forward(
     C_4d = _rr(c_flat, [B, S, N_GROUPS, SSM_STATE_SIZE])  # [B, S, G, N]
     c_flat.deallocate(True)
 
-    # ---- 8. Pre-compute dt_eff, decay, x_dt (fused via tt-lang) -----
+    # ---- 8. Pre-compute log_decay, x_dt (fused via tt-lang) -----
     dt_bias_tt = _rep_keyed(("pf_dtb", id(dt_bias)), dt_bias.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
     A_log_tt = _rep_keyed(("pf_alog", id(A_log)), A_log.float().bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
 
     # Import tt-lang fused kernel (falls back to TTNN ops if ttl unavailable)
     from .kernels.mamba2_ssm_inputs_ttlang import compute_ssm_inputs
 
-    decay, x_dt = compute_ssm_inputs(dt_slice, dt_bias_tt, A_log_tt, x_4d, mesh_device)
-    # decay: [B, S, H],  x_dt: [B, S, H, D]
+    log_decay, x_dt = compute_ssm_inputs(dt_slice, dt_bias_tt, A_log_tt, x_4d, mesh_device)
+    # log_decay: [B, S, H] = -exp(A_log)*dt_eff (log of per-step decay, no exp roundtrip)
+    # x_dt: [B, S, H, D]
     dt_slice.deallocate(True)
 
     # ---- 9. D skip scalar -------------------------------------------
@@ -550,8 +553,8 @@ def mamba2_prefill_layer_forward(
             layout=_TL,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        decay_pad = ttnn.concat([decay, _z_h], dim=1)
-        decay.deallocate(True)
+        log_decay_pad = ttnn.concat([log_decay, _z_h], dim=1)
+        log_decay.deallocate(True)
         _z_h.deallocate(True)
 
         x_dt_pad = ttnn.concat([x_dt, _z_hd], dim=1)
@@ -568,7 +571,7 @@ def mamba2_prefill_layer_forward(
         x_4d.deallocate(True)
         _z_hd.deallocate(True)
     else:
-        decay_pad = decay
+        log_decay_pad = log_decay
         x_dt_pad = x_dt
         B_pad = B_4d  # [B, S, N_GROUPS, N] — no full-sequence expand needed
         C_pad = C_4d
@@ -589,7 +592,7 @@ def mamba2_prefill_layer_forward(
         if pad_S > 0 and c == num_chunks - 1:
             h_before_last_chunk = h_prev
 
-        decay_c = ttnn.slice(decay_pad, [0, t0, 0], [B, t1, NUM_HEADS])
+        log_decay_c = ttnn.slice(log_decay_pad, [0, t0, 0], [B, t1, NUM_HEADS])
         x_dt_c = ttnn.slice(x_dt_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, HEAD_DIM])
         _B_g_c = ttnn.slice(B_pad, [0, t0, 0, 0], [B, t1, N_GROUPS, SSM_STATE_SIZE])
         B_c = _expand_groups(_B_g_c)  # [B, C, NUM_HEADS, N] — 64-token expand, ~1 MB
@@ -597,7 +600,7 @@ def mamba2_prefill_layer_forward(
         C_c = _expand_groups(_C_g_c)  # [B, C, NUM_HEADS, N]
         x_c = ttnn.slice(x_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, HEAD_DIM])
 
-        y_c, h_prev = _mamba2_ssd_chunk(decay_c, x_dt_c, B_c, C_c, D_tt, x_c, h_prev, mesh_device)
+        y_c, h_prev = _mamba2_ssd_chunk(log_decay_c, x_dt_c, B_c, C_c, D_tt, x_c, h_prev, mesh_device)
         y_chunks.append(y_c)
 
     ssm_state_new = h_prev  # [B, H, D, N] — contaminated by pad_S zero tokens if pad_S > 0
@@ -614,7 +617,7 @@ def mamba2_prefill_layer_forward(
         n_real_last = CHUNK_SIZE - pad_S
         last_t0 = S - n_real_last  # == (num_chunks - 1) * CHUNK_SIZE
         # Slice SSM inputs for the n_real real tokens (before freeing *_pad arrays).
-        _dc = ttnn.slice(decay_pad, [0, last_t0, 0], [B, S, NUM_HEADS])
+        _dc = ttnn.slice(log_decay_pad, [0, last_t0, 0], [B, S, NUM_HEADS])  # log_decay for real tokens
         _xdc = ttnn.slice(x_dt_pad, [0, last_t0, 0, 0], [B, S, NUM_HEADS, HEAD_DIM])
         _Bgc = ttnn.slice(B_pad, [0, last_t0, 0, 0], [B, S, N_GROUPS, SSM_STATE_SIZE])
         _Bc = _expand_groups(_Bgc)  # [B, n_real, H, N]
@@ -624,7 +627,7 @@ def mamba2_prefill_layer_forward(
     # B_pad/C_pad are now [B, S_pad, N_GROUPS, N] (8x smaller than the old B_exp/C_exp).
     # When pad_S==0 they alias B_4d/C_4d directly; when pad_S>0 originals were freed
     # during pad creation above — only the _pad tensors remain here.
-    for _t in [B_pad, C_pad, x_dt_pad, x_pad, decay_pad]:
+    for _t in [B_pad, C_pad, x_dt_pad, x_pad, log_decay_pad]:
         _t.deallocate(True)
 
     if pad_S > 0:
@@ -643,8 +646,8 @@ def mamba2_prefill_layer_forward(
             _c_is_new = False  # external tensor, don't free on first iteration
 
         for _i in range(n_real_last):
-            _d = ttnn.slice(_dc, [0, _i, 0], [B, _i + 1, NUM_HEADS])
-            _d4 = _rr(_d, [B, NUM_HEADS, 1, 1])  # [B, H, 1, 1]
+            _log_d = ttnn.slice(_dc, [0, _i, 0], [B, _i + 1, NUM_HEADS])
+            _d4 = ttnn.exp(_rr(_log_d, [B, NUM_HEADS, 1, 1]))  # exp(log_decay) → per-step decay [B, H, 1, 1]
             _xd = ttnn.slice(_xdc, [0, _i, 0, 0], [B, _i + 1, NUM_HEADS, HEAD_DIM])
             _xd4 = _rr(ttnn.permute(_xd, [0, 2, 3, 1]), [B, NUM_HEADS, HEAD_DIM, 1])  # [B, H, D, 1]
             _Bi = ttnn.slice(_Bc, [0, _i, 0, 0], [B, _i + 1, NUM_HEADS, SSM_STATE_SIZE])
@@ -656,7 +659,7 @@ def mamba2_prefill_layer_forward(
                 _h_c.deallocate(True)
             _c_is_new = True  # every subsequent _h_c is a newly allocated intermediate
             _h_c = _h_n
-            for _t in [_d, _d4, _xd, _xd4, _Bi, _Bi4, _out]:
+            for _t in [_log_d, _d4, _xd, _xd4, _Bi, _Bi4, _out]:
                 _t.deallocate(True)
 
         ssm_state_new.deallocate(True)  # free contaminated state

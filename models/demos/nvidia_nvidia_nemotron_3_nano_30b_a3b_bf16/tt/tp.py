@@ -157,6 +157,38 @@ def _row(t, mesh, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     return _upload(t, mesh, 1, layout, dtype)
 
 
+def _kv_gqa(t, mesh, n_q=32, n_kv=2, tp=TP, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
+    """GQA-aware KV weight shard for n_kv < TP.
+
+    Each device i receives the single KV head its Q heads map to:
+        kv_idx = (i * q_per_device * n_kv) // n_q
+    Devices 0,1 → head 0; devices 2,3 → head 1 (for n_q=32, n_kv=2, TP=4).
+    Result per device: [head_dim, hidden] (n_kv_per_device = 1).
+    Cached in _DEVICE_CACHE with a weakref to the source so stale entries
+    are evicted when the caller's weight tensor goes out of scope (e.g. in tests).
+    """
+    key = (id(t), "kv_gqa", layout, dtype, id(mesh))
+    if key in _DEVICE_CACHE:
+        weak_src, dev_tensor = _DEVICE_CACHE[key]
+        if weak_src() is not None:
+            return dev_tensor
+        del _DEVICE_CACHE[key]
+
+    head_dim = t.shape[0] // n_kv  # e.g. 256//2 = 128
+    q_per_dev = n_q // tp
+    chunks = [
+        t[(i * q_per_dev * n_kv // n_q) * head_dim : ((i * q_per_dev * n_kv // n_q) + 1) * head_dim] for i in range(tp)
+    ]
+    t_sharded = torch.cat(chunks, dim=0)  # [tp * head_dim, hidden]: [head0, head0, head1, head1]
+    cpu_data = t_sharded.bfloat16() if dtype == ttnn.bfloat16 else t_sharded
+    dev = ttnn.from_torch(cpu_data, dtype=dtype, layout=layout, device=mesh, mesh_mapper=_S(mesh, dim=0))
+    try:
+        _DEVICE_CACHE[key] = (weakref.ref(t), dev)
+    except TypeError:
+        pass
+    return dev
+
+
 def _shard_act(t, mesh, dim, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16):
     """Shard an activation tensor along `dim` — NOT cached (activations change)."""
     return ttnn.from_torch(

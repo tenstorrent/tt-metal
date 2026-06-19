@@ -31,7 +31,7 @@ SNAP = (
 )
 
 # Dense-attention constants (from dense_attention.py)
-N_KV_HEADS = 2
+N_KV_HEADS = 1  # per-device KV heads after GQA shard (global=2, TP=4 → 1 head/device)
 HEAD_DIM = 128
 
 # Mamba2 constants (from mamba2_layer.py)

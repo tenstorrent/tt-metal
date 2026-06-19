@@ -258,7 +258,7 @@ def test_per_layer_pcc(mesh_device, weight_cache):
                 wc[f"{p}.mixer.shared_experts.down_proj.weight"],
             )
             ref_h = (residual + ex_out + sh_out).bfloat16()
-            h = _moe_layer_forward(mesh_device, h, li, wc)
+            h = _moe_layer_forward(mesh_device, h, li, wc, cpu_gate=True)
         else:
             ref_h = dense_attention(
                 ref_h,
@@ -284,6 +284,317 @@ def test_per_layer_pcc(mesh_device, weight_cache):
         flag = "  <-- DROP" if delta < -0.01 else ""
         print(f"{li:>5}  {lt:>4}  {score:>9.6f}  {delta:>+9.6f}{flag}")
         prev_score = score
+
+
+@pytest.mark.parametrize("S", [64, 128, 256, 512, 1024, 2048, 4096])
+def test_dense_attention_prefill_pcc_sweep(mesh_device, S):
+    """Sweep DenseAttention prefill PCC vs S to isolate SDPA kernel accuracy.
+
+    Compares TT dense_attention_forward (TP=4, BH) to the pure-PyTorch reference.
+    Tests both the current 8×8 grid and the full BH 11×8 grid to check whether
+    the under-sized grid causes the PCC drop observed at S=4096 in the 52-layer test.
+    """
+    import models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.dense_attention as da_mod
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.reference.functional import dense_attention
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.dense_attention import dense_attention_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _host_rep, clear_device_weight_cache
+
+    # Clear weight caches so stale entries from prior S-values can't cause id-reuse hits.
+    clear_device_weight_cache()
+
+    HIDDEN = 2688
+    torch.manual_seed(42)
+    hidden = torch.randn(1, S, HIDDEN, dtype=torch.bfloat16) * 0.1
+    norm_w = torch.randn(HIDDEN, dtype=torch.bfloat16)
+    wq = torch.randn(4096, HIDDEN, dtype=torch.bfloat16) * 0.02
+    wk = torch.randn(256, HIDDEN, dtype=torch.bfloat16) * 0.02
+    wv = torch.randn(256, HIDDEN, dtype=torch.bfloat16) * 0.02
+    wo = torch.randn(HIDDEN, 4096, dtype=torch.bfloat16) * 0.02
+
+    ref_out = dense_attention(hidden, norm_weight=norm_w, wq=wq, wk=wk, wv=wv, wo=wo)
+
+    # Put input on device (replicated across TP=4)
+    hidden_tt = ttnn.from_torch(
+        hidden,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    results = {}
+    for grid_tag, grid in [("8x8", (8, 8)), ("11x8", (11, 8))]:
+        orig_grid = da_mod._SDPA_GRID
+        da_mod._SDPA_GRID = grid
+        try:
+            tt_out_tt = dense_attention_forward(mesh_device, hidden_tt, norm_weight=norm_w, wq=wq, wk=wk, wv=wv, wo=wo)
+            tt_out = _host_rep(tt_out_tt, mesh_device, 1)
+            results[grid_tag] = pcc(tt_out, ref_out)
+        finally:
+            da_mod._SDPA_GRID = orig_grid
+
+    print(f"\n  S={S:>5}  PCC 8x8={results['8x8']:.6f}  11x8={results['11x8']:.6f}")
+    assert results["8x8"] >= PCC_THRESHOLD, f"S={S} grid=8x8 PCC {results['8x8']:.6f} < {PCC_THRESHOLD}"
+    assert results["11x8"] >= PCC_THRESHOLD, f"S={S} grid=11x8 PCC {results['11x8']:.6f} < {PCC_THRESHOLD}"
+
+
+@pytest.mark.timeout(0)
+def test_isl4k_per_layer_pcc_prefill_decode(mesh_device, weight_cache):
+    """Per-layer PCC for all 52 layers at ISL=4K prefill, then 100 greedy decode steps.
+
+    Prefill: tile-aligned S=4096 tokens from Frankenstein. Reports per-layer PCC of the
+    last-token hidden state (TT vs pure-PyTorch reference). Fills decoder_state KV/SSM/conv.
+
+    Decode: 100 greedy tokens from the accumulated prefill state. Prints each token for
+    coherency inspection. Asserts final 52-layer PCC >= PCC_THRESHOLD.
+    """
+    import pathlib
+    import urllib.request
+
+    from transformers import AutoTokenizer
+
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.reference.functional import (
+        dense_attention,
+        layer_norm,
+        mamba2_layer,
+        moe_experts,
+        moe_gate,
+        shared_expert,
+    )
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.dense_attention import dense_attention_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.embedding import embedding_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import SNAP as _SNAP
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import _update_ids, _update_pos
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.kv_cache import (
+        DEFAULT_BLOCK_SIZE,
+        allocate_decoder_state,
+    )
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.lm_head import lm_head_forward_device
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_layer import mamba2_layer_forward_dispatch
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.model import (
+        _moe_layer_forward,
+        nemotron_h_forward_stateful,
+        prewarm_mamba2_weights,
+    )
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import _host_rep
+
+    wc = weight_cache
+    tokenizer = AutoTokenizer.from_pretrained(_SNAP)
+
+    # --- Build ~32K token context from Frankenstein (cached) ---
+    _GUTENBERG_URL = "https://www.gutenberg.org/cache/epub/84/pg84.txt"
+    _cache_dir = pathlib.Path("/tmp/nemotron_context_cache")
+    _cache_dir.mkdir(exist_ok=True)
+    _book_cache = _cache_dir / "frankenstein_pg84.txt"
+    if _book_cache.exists():
+        _book_text = _book_cache.read_text(encoding="utf-8", errors="replace")
+    else:
+        print(f"[context] Downloading Frankenstein from {_GUTENBERG_URL}...", flush=True)
+        with urllib.request.urlopen(_GUTENBERG_URL, timeout=30) as _resp:
+            _book_text = _resp.read().decode("utf-8", errors="replace")
+        _book_cache.write_text(_book_text, encoding="utf-8")
+        print(f"[context] Cached ({len(_book_text):,} chars).", flush=True)
+
+    book_ids = tokenizer.encode(_book_text, add_special_tokens=False)
+    ISL = 4_096
+    N_DECODE = 100
+    # Round S up to tile boundary (TTNN TILE_LAYOUT requires last dim % 32 == 0)
+    S_raw = min(ISL, len(book_ids))
+    S = ((S_raw + 31) // 32) * 32
+    if len(book_ids) < S:
+        book_ids = book_ids * 2
+    input_ids = torch.tensor(book_ids[:S], dtype=torch.long).unsqueeze(0)  # [1, S]
+    B = 1
+    print(f"\n[isl4k_pcc] S={S} (ISL=4096), N_DECODE={N_DECODE}", flush=True)
+
+    # Allocate decoder state sized for S + N_DECODE positions
+    max_seq_len = ((S + N_DECODE + DEFAULT_BLOCK_SIZE - 1) // DEFAULT_BLOCK_SIZE) * DEFAULT_BLOCK_SIZE
+    decoder_state = allocate_decoder_state(mesh_device, B=B, max_seq_len=max_seq_len)
+    print(f"[isl4k_pcc] Decoder state allocated (max_seq_len={max_seq_len}).", flush=True)
+
+    prewarm_mamba2_weights(wc, mesh_device)
+
+    # =========================================================================
+    # PREFILL: per-layer PCC — last-token hidden state (TT vs pure-PyTorch ref)
+    # =========================================================================
+    print("[isl4k_pcc] Computing reference embedding...", flush=True)
+    ref_h = torch.nn.functional.embedding(input_ids, wc["backbone.embeddings.weight"])
+    print("[isl4k_pcc] Reference embedding done. Running TT embedding...", flush=True)
+    h_tt = embedding_forward(mesh_device, input_ids, wc["backbone.embeddings.weight"])
+    print("[isl4k_pcc] TT embedding done. Starting per-layer loop.", flush=True)
+
+    print(f"\n{'L':>3}  {'T':>1}  {'PCC (last tok)':>15}")
+    print("-" * 24)
+    min_pcc = 1.0
+    min_d_pcc = 1.0  # D-layer (dense-attention) min PCC — the GQA correctness target
+    m_idx = 0
+    d_idx = 0
+
+    for li in range(N_LAYERS):
+        lt = PATTERN[li]
+        p = f"backbone.layers.{li}"
+        print(f"[isl4k_pcc] layer {li} ({lt}): ref start...", flush=True)
+
+        if lt == "M":
+            ref_h = mamba2_layer(
+                hidden_states=ref_h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
+                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
+                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
+                dt_bias=wc[f"{p}.mixer.dt_bias"],
+                A_log=wc[f"{p}.mixer.A_log"],
+                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
+                D=wc[f"{p}.mixer.D"],
+                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+            )
+            print(f"[isl4k_pcc] layer {li} ({lt}): ref done, TT start...", flush=True)
+            h_tt, state_new, conv_new = mamba2_layer_forward_dispatch(
+                mesh_device,
+                h_tt,
+                norm_weight=wc[f"{p}.norm.weight"],
+                in_proj_weight=wc[f"{p}.mixer.in_proj.weight"],
+                conv1d_weight=wc[f"{p}.mixer.conv1d.weight"],
+                conv1d_bias=wc[f"{p}.mixer.conv1d.bias"],
+                dt_bias=wc[f"{p}.mixer.dt_bias"],
+                A_log=wc[f"{p}.mixer.A_log"],
+                norm_mixer_weight=wc[f"{p}.mixer.norm.weight"],
+                D=wc[f"{p}.mixer.D"],
+                out_proj_weight=wc[f"{p}.mixer.out_proj.weight"],
+                ssm_state=None,
+                conv_state=None,
+            )
+            # Save final SSM/conv state into decoder_state for decode phase
+            ttnn.assign(state_new, decoder_state.ssm_state_outs[m_idx])
+            state_new.deallocate(True)
+            if conv_new is not None:
+                h2, h1, hbc = conv_new
+                ttnn.assign(h2, decoder_state.conv_state_outs[m_idx][0])
+                ttnn.assign(h1, decoder_state.conv_state_outs[m_idx][1])
+                ttnn.assign(hbc, decoder_state.conv_state_outs[m_idx][2])
+                hbc.deallocate(True)
+            m_idx += 1
+
+        elif lt == "E":
+            residual = ref_h
+            normed = layer_norm(ref_h, wc[f"{p}.norm.weight"])
+            flat = normed.reshape(B * S, -1)
+            topk_idx, topk_wts = moe_gate(
+                flat,
+                wc[f"{p}.mixer.gate.weight"],
+                wc[f"{p}.mixer.gate.e_score_correction_bias"],
+            )
+            eu = [wc[f"{p}.mixer.experts.{e}.up_proj.weight"] for e in range(128)]
+            ed = [wc[f"{p}.mixer.experts.{e}.down_proj.weight"] for e in range(128)]
+            ex_out = moe_experts(flat, topk_idx, topk_wts, eu, ed).reshape(B, S, -1)
+            sh_out = shared_expert(
+                normed,
+                wc[f"{p}.mixer.shared_experts.up_proj.weight"],
+                wc[f"{p}.mixer.shared_experts.down_proj.weight"],
+            )
+            ref_h = (residual + ex_out + sh_out).bfloat16()
+            h_tt = _moe_layer_forward(mesh_device, h_tt, li, wc, cpu_gate=True)
+
+        else:  # '*' Dense attention — use KV cache so paged_fill_cache fills it for decode
+            ref_h = dense_attention(
+                ref_h,
+                norm_weight=wc[f"{p}.norm.weight"],
+                wq=wc[f"{p}.mixer.q_proj.weight"],
+                wk=wc[f"{p}.mixer.k_proj.weight"],
+                wv=wc[f"{p}.mixer.v_proj.weight"],
+                wo=wc[f"{p}.mixer.o_proj.weight"],
+            )
+            h_tt = dense_attention_forward(
+                mesh_device,
+                h_tt,
+                norm_weight=wc[f"{p}.norm.weight"],
+                wq=wc[f"{p}.mixer.q_proj.weight"],
+                wk=wc[f"{p}.mixer.k_proj.weight"],
+                wv=wc[f"{p}.mixer.v_proj.weight"],
+                wo=wc[f"{p}.mixer.o_proj.weight"],
+                kv_cache=decoder_state.kv_caches[d_idx],
+                page_table=decoder_state.page_tables[d_idx],
+                # current_pos=None → prefill SDPA path; paged_fill_cache fills positions 0..S-1
+            )
+            d_idx += 1
+
+        # PCC: compare last-token hidden state (TT vs reference for this layer).
+        # ref_h was built from TT's output at the PREVIOUS layer, so each layer is
+        # tested independently — prevents MoE routing divergence from compounding.
+        B_d, S_d, H_d = h_tt.shape[0], h_tt.shape[1], h_tt.shape[2]
+        last_tt = ttnn.slice(h_tt, [0, S_d - 1, 0], [B_d, S_d, H_d])
+        h_last_cpu = _host_rep(last_tt, mesh_device, B)
+        score = pcc(h_last_cpu, ref_h[:, -1:, :].float())
+        flag = "  <-- DROP" if score < PCC_THRESHOLD else ""
+        print(f"{li:>3}  {lt:>1}  {score:>15.6f}{flag}", flush=True)
+        min_pcc = min(min_pcc, score)
+        if lt == "*":
+            min_d_pcc = min(min_d_pcc, score)
+
+        # Feed TT output into reference so next layer sees the same hidden state.
+        ref_h = _host_rep(h_tt, mesh_device, B)  # [B, S, H] BF16; ~22 MB D2H
+
+    prefill_pcc = min_pcc
+    print(f"\n[prefill] 52-layer min per-layer PCC (last token): {prefill_pcc:.6f}")
+    print(f"[prefill] Dense-attention (D-layer) min PCC:        {min_d_pcc:.6f}")
+
+    # =========================================================================
+    # DECODE: 100 greedy steps using accumulated SSM/KV state from prefill
+    # =========================================================================
+    # Commit prefill state: ssm_state_outs → ssm_states, conv_state_outs → conv_states
+    decoder_state.advance()
+
+    # Predict first decode token from last prefill hidden state
+    B_d, S_d, H_d = h_tt.shape[0], h_tt.shape[1], h_tt.shape[2]
+    last_h_tt = ttnn.slice(h_tt, [0, S_d - 1, 0], [B_d, S_d, H_d])  # [1, 1, 2688]
+    logits_last_tt = lm_head_forward_device(
+        mesh_device,
+        last_h_tt,
+        norm_f_weight=wc["backbone.norm_f.weight"],
+        lm_head_weight=wc["lm_head.weight"],
+    )
+    logits_last_cpu = _host_rep(logits_last_tt, mesh_device, B)
+    first_tok = int(logits_last_cpu[0, 0].argmax())
+
+    # Pre-allocate persistent device token tensor (updated between steps via copy_host_to_device_tensor)
+    ids_tt = ttnn.from_torch(
+        torch.tensor([[first_tok]], dtype=torch.int32),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    print(f"\n[decode] Greedy decode from position {S}..{S + N_DECODE - 1}")
+    first_tok_str = tokenizer.decode([first_tok], skip_special_tokens=False)
+    print(f"  tok[{S}] = {first_tok}  {repr(first_tok_str)}", flush=True)
+
+    generated_ids = [first_tok]
+    decode_pos = S
+
+    for step in range(N_DECODE - 1):
+        decode_pos += 1
+        _update_pos(decoder_state.current_pos, decode_pos - 1)
+        logits_tt = nemotron_h_forward_stateful(mesh_device, ids_tt, wc, decoder_state, cpu_gate=False)
+        decoder_state.advance()
+        logits_cpu = _host_rep(logits_tt, mesh_device, B)
+        next_tok = int(logits_cpu[0, 0].argmax())
+        generated_ids.append(next_tok)
+
+        if step < 9 or step >= N_DECODE - 11:
+            tok_str = tokenizer.decode([next_tok], skip_special_tokens=False)
+            print(f"  tok[{decode_pos}] = {next_tok}  {repr(tok_str)}", flush=True)
+        elif step == 9:
+            print(f"  ... ({N_DECODE - 20} middle steps omitted) ...", flush=True)
+
+        _update_ids(ids_tt, next_tok)
+
+    gen_text = tokenizer.decode(generated_ids, skip_special_tokens=False)
+    print(f"\n[decode] {N_DECODE} tokens generated:")
+    print(gen_text[:600])
+
+    decoder_state.free()
+    assert prefill_pcc >= PCC_THRESHOLD, f"Min per-layer prefill PCC {prefill_pcc:.6f} < {PCC_THRESHOLD}"
 
 
 def test_decode_latency(mesh_device, weight_cache):

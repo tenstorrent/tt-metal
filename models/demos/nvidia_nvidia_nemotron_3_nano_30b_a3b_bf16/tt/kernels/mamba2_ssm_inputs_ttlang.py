@@ -72,15 +72,17 @@ def compute_ssm_inputs(
     x: ttnn.Tensor,  # [B, S, H, D]
     device,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Return (decay [B,S,H], x_dt [B,S,H,D]).
+    """Return (log_decay [B,S,H], x_dt [B,S,H,D]).
 
-    Uses fused tt-lang kernel for decay when available; always uses TTNN
-    for x_dt (broadcast mul over D is straightforward TTNN).
+    log_decay = -exp(A_log) * softplus(dt + dt_bias) = log of the per-step decay.
+    Returning log_decay directly (not exp(log_decay)) avoids a BF16 exp→log roundtrip
+    in _mamba2_ssd_chunk: the chunk kernel can cumsum log_decay and build the decay
+    matrix entirely in log space without the extra exp+log+clamp steps.
     """
-    # Fused: softplus + decay chain
+    # Fused: softplus + log-decay chain
     dt_eff = ttnn.softplus(ttnn.add(dt, dt_bias))  # [B, S, H]
-    a_neg = ttnn.neg(ttnn.exp(A_log))  # [1, 1, H]
-    decay = ttnn.exp(ttnn.mul(a_neg, dt_eff))  # [B, S, H]
+    a_neg = ttnn.neg(ttnn.exp(A_log))  # [1, 1, H] = -exp(A_log)
+    log_decay = ttnn.mul(a_neg, dt_eff)  # [B, S, H] = log(decay), no exp roundtrip
 
     # x_dt: broadcast dt_eff over D dimension
     B, S, H = dt_eff.shape[0], dt_eff.shape[1], dt_eff.shape[2]
@@ -93,7 +95,7 @@ def compute_ssm_inputs(
     )
     x_dt = ttnn.mul(x, dt_eff_4d)  # [B, S, H, D]
 
-    return decay, x_dt
+    return log_decay, x_dt
 
 
 # ---------------------------------------------------------------------------
