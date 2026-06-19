@@ -35,7 +35,7 @@ Persistent buffers bound by the decode trace (batch = 1 for TTS):
   - ``pos_dev``      [1]             int32  attention / KV-cache position
   - ``rot_idxs_dev`` [1, 1]          int32  rope cos/sin gather index (= position)
 
-Enable/disable with ``VOXTRAL_DECODE_TRACE_2CQ`` (default on). With 2CQ off, a single CQ is used
+Enable/disable with ``VOXTRAL_DECODE_TRACE_2CQ`` (default on for 1×4 TP; off on 1×1). With 2CQ off, a single CQ is used
 and staging falls back to plain ``copy_host_to_device_tensor`` on CQ0 (still trace-replayed).
 """
 
@@ -61,14 +61,10 @@ def _env_flag_enabled(name: str, *, default: str = "1") -> bool:
 def decode_trace_enabled() -> bool:
     """True when ``VOXTRAL_DECODE_TRACE`` is truthy.
 
-    Default ON for multi-device compute (1×4 TP). Default OFF on 1×1 BH submesh — text-decode
-    trace replay diverges there (noisy codes); direct decode matches P150-quality audio. Set
-    ``VOXTRAL_DECODE_TRACE=1`` to force trace on 1×1 for experiments.
+    Default ON on P150 (1×1) and BH QB2 (1×1 submesh or 1×4 TP). Disable with
+    ``VOXTRAL_DECODE_TRACE=0`` or ``demo.py --no-decode-trace``.
     """
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
-
-    default = "0" if voxtral_requested_compute_mesh_shape() == (1, 1) else "1"
-    return _env_flag_enabled("VOXTRAL_DECODE_TRACE", default=default)
+    return _env_flag_enabled("VOXTRAL_DECODE_TRACE", default="1")
 
 
 def decode_trace_2cq_enabled() -> bool:
