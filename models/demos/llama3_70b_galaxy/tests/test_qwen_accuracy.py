@@ -409,14 +409,10 @@ def test_qwen_model_acc(
                 mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(3, 1), mesh_shape=model_args.cluster_shape),
             )[0, 0, 0, : model_args.vocab_size]
 
-        tt_argmax_token = ttnn.to_torch(
-            tt_out_tok[0],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                mesh_device,
-                dims=(3, 1),
-                mesh_shape=model_args.cluster_shape,
-            ),
-        )[0, 0, 0, 0]
+        # The argmax token is replicated across the mesh, so read device 0's shard and flatten.
+        # This is rank-agnostic: the regular sampling kernel returns [1,1,1,32] while the
+        # force-argmax (Blackhole) path returns [1,1,32]; reshape(-1) handles both.
+        tt_argmax_token = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok[0])[0]).reshape(-1)[0]
 
         # Modify the accuracy checking section when using reference text
         if not use_reference_file:

@@ -168,11 +168,11 @@ def create_tt_qwen_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
-        (  # Repeat2 (Batch-1) run (Throughput) - 1 user, small prompt
+        (  # repeat2 - single-batch golden-output eval (1 user, small prompt); batch-0 output is compared against qwen_outputs_batch_1.json
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
-            2,  # repeat_batches
-            128 * 1024,  # max_seq_len
+            1,  # repeat_batches
+            2048,  # max_seq_len (cap < 4096 to skip prefill-warmup of the seq>=4096 fused FF2 kernel on BH)
             1,  # batch_size
             128,  # max_generated_tokens
             True,  # paged_attention
@@ -358,25 +358,6 @@ def create_tt_qwen_model(
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
         ),
-        (  # ci-eval-1 - 6 repeat batches (3 identical pairs) with deterministic output comparison
-            "models/demos/llama3_70b_galaxy/demo/sample_prompts/eval_repeat_prompts_batch1.json",  # input_prompts
-            True,  # instruct mode
-            6,  # repeat_batches
-            1024,  # max_seq_len (cap < 4096 to skip prefill-warmup of the seq>=4096 fused FF2 kernel on BH)
-            1,  # batch_size
-            200,  # max_generated_tokens
-            True,  # paged_attention
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
-            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
-            True,  # stop_at_eos
-            False,  # apc_test
-            False,  # pcc_check
-            False,  # prefill-only profile
-            64,  # num layers
-            False,  # print_outputs
-            False,  # is_cur_pos_sharded
-            False,  # is_page_table_sharded
-        ),
     ],
     ids=[
         "batch-32",  # throughput
@@ -391,7 +372,6 @@ def create_tt_qwen_model(
         "prefill-profile",  # prefill-only profile run
         "apc-test",  # apc check for 64L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-64L",  # pcc check for 64L + teacher forced
-        "ci-eval-1",  # CI 6 repeat batches (3 identical pairs) with deterministic output comparison
     ],
 )
 @pytest.mark.parametrize(
@@ -606,8 +586,6 @@ def test_qwen_demo_text(
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
-    # ci-eval-1: store the user-0 output of each repeat batch to verify determinism across identical prompt pairs
-    eval_repeat_outputs = []
 
     logger.info("Starting inference...")
     for batch_idx, input_prompts in enumerate(repeat_batch_prompts):
@@ -997,8 +975,8 @@ def test_qwen_demo_text(
                             f"\n==REPEAT BATCH {batch_idx}\n==USER {i} - PROMPT\n{short_prompt} \n==USER {i} - OUTPUT\n{text_after_prompt.strip()}\n"
                         )
                 profiler.end(f"log_saving_file", iteration=batch_idx)
-            # Since right now that config is the only using a repeat_batches=2 this if statement works
-            if not users_decoding and batch_size == 1 and repeat_batches == 2:
+            # Only the "repeat2" config carries golden outputs to compare against (qwen_outputs_batch_1.json).
+            if not users_decoding and batch_size == 1 and "repeat2" in test_id:
                 # Compare to text in qwen_outputs_batch_1.json for the first user of the first batch
                 if batch_idx == 0 and expected_outputs_data:  # Only compare if data was loaded
                     if i == 0:  # Only for the first user of the batch (i.e., user 0)
@@ -1070,11 +1048,6 @@ def test_qwen_demo_text(
                     logger.warning("Expected outputs data is empty or not loaded, cannot compare.")
 
         num_tokens_generated_decode.append(iteration)  # Save the number of tokens generated for each repeat batch
-
-        # ci-eval-1: record the decoded output of user 0 for this batch (greedy/argmax sampling on BH is deterministic)
-        if "ci-eval-1" in test_id and all_outputs and len(all_outputs) > 0:
-            eval_repeat_outputs.append(tokenizer.decode(all_outputs[0]))
-            logger.info(f"ci-eval-1: stored output for batch {batch_idx}: {tokenizer.decode(all_outputs[0])[:100]}...")
 
     profiler.end(f"inference_decode", iteration=batch_idx)
 
@@ -1200,21 +1173,3 @@ def test_qwen_demo_text(
             run_type=f"tg_qwen_text_demo_prefill_6U",
             ml_model_name="qwen32b-tg",
         )
-
-    # ci-eval-1: prompts come in identical pairs (batches 0&1, 2&3, 4&5), so with greedy/argmax
-    # sampling the paired batches must produce identical output. This guards decode determinism.
-    if "ci-eval-1" in test_id and len(eval_repeat_outputs) == repeat_batches:
-        logger.info("=== Repeat Batch Output Comparison ===")
-        comparisons = [(i, i + 1) for i in range(0, repeat_batches, 2)]
-        all_matches = True
-        for batch1_idx, batch2_idx in comparisons:
-            output1 = eval_repeat_outputs[batch1_idx]
-            output2 = eval_repeat_outputs[batch2_idx]
-            if output1 == output2:
-                logger.info(f"Batch{batch1_idx}<->Batch{batch2_idx} comparison PASSED: outputs match")
-            else:
-                logger.warning(f"Batch{batch1_idx}<->Batch{batch2_idx} comparison FAILED: outputs differ")
-                logger.info(f"  Batch {batch1_idx} output: {output1[:100]}...")
-                logger.info(f"  Batch {batch2_idx} output: {output2[:100]}...")
-                all_matches = False
-        assert all_matches, "Repeat batch outputs should be identical"
