@@ -1,54 +1,103 @@
-name: "LLK perf"
+name: LLK PR Review (TEST via llk-perf)
+
+# ⚠️ TEMPORARY TEST SHIM — DO NOT MERGE TO main.
+# This file's real content (the nightly LLK perf workflow) has been replaced on
+# this branch with the LLK PR review workflow. You pass the PR number to review
+# at dispatch time.
+#
+# Why: a brand-new workflow can't be dispatched from a feature branch — GitHub
+# only registers workflow_dispatch from the DEFAULT branch. llk-perf.yaml already
+# exists on main with a workflow_dispatch trigger, so it IS registered; dispatching
+# it with --ref <this-branch> runs THIS version. That's how we test before merging.
+#
+# Run it:  gh workflow run llk-perf.yaml --ref nstamatovic/llk_pr_reviewer_workflow -f pr_number=<PR>
+# Revert before merge:  git checkout main -- .github/workflows/llk-perf.yaml
+# The canonical workflow lives in llk-pr-review.yaml.
 
 on:
-  schedule:
-    # Run every night at 3AM UTC
-    - cron: '0 3 * * *'
   workflow_dispatch:
-
-permissions:
-  checks: write
-  contents: read
-  packages: write
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+        type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref_protected && github.run_id ||
-    github.ref }}
-  cancel-in-progress: true
+  group: llk-pr-review-test-${{ github.event.inputs.pr_number }}
+  cancel-in-progress: false
 
 jobs:
-  llk-perf-tests:
-    name: "LLK perf tests"
-    uses: ./.github/workflows/llk-perf-impl.yaml
-    secrets: inherit
-
-  llk-perf-summary:
-    name: "LLK perf summary"
-    if: always()
-    needs:
-      - llk-perf-tests
+  review:
     runs-on: ubuntu-latest
+    timeout-minutes: 45          # /code-review max fans out subagents; this bounds it
+    permissions:
+      contents: read             # read the checkout
+      pull-requests: write       # post inline review comments
+      issues: write              # post acknowledgement / summary
+      id-token: write            # OIDC, if the key path requires it
+    env:
+      PR_NUMBER: ${{ github.event.inputs.pr_number }}
     steps:
-      - name: Check perf test results
-        uses: re-actors/alls-green@release/v1
-        with:
-          jobs: ${{ toJSON(needs) }}
-
-  report-status:
-    name: "Report status"
-    runs-on: ubuntu-latest
-    if: always()
-    needs: llk-perf-summary
-    steps:
+      # 1. Full checkout so /code-review can compute the merge-base diff vs main.
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        timeout-minutes: 20
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 1
-      - name: Report status
-        uses: ./.github/actions/report-failure
+          fetch-depth: 0
+          token: ${{ secrets.AI_GH_TOKEN }}
+
+      # 2. Switch to the PR's head branch.
+      - name: Check out the PR branch
+        env:
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+        run: |
+          gh pr checkout "${PR_NUMBER}"
+
+      # 3. Fetch the private LLK review knowledge (rubric, conventions, golden,
+      #    learnings) from llk_code_gen. Kept OUT of the public tt-metal tree;
+      #    pulled at runtime into a scratch dir via a sparse checkout.
+      - name: Fetch private LLK review knowledge
+        uses: actions/checkout@v4
         with:
-          test_name: "LLK perf tests"
-          slack_bot_token: ${{ secrets.LLK_SLACK_REPORTING_BOT_TOKEN }}
-          slack_channel_id: ${{ secrets.LLK_CI_STATUS_CHANNEL_ID }}
-          status: ${{ needs.llk-perf-summary.result }}
+          repository: tenstorrent/llk_code_gen
+          # llk_code_gen is INTERNAL, so the existing AI_GH_TOKEN (an org-scoped
+          # token) can usually read it — no dedicated secret needed. If that token
+          # is scoped to tt-metal only and this step 404s/403s, set a dedicated
+          # LLK_KNOWLEDGE_TOKEN secret and swap the line below to use it.
+          token: ${{ secrets.AI_GH_TOKEN }}
+          path: .llk-review-knowledge-src
+          sparse-checkout: dashboard/pr_review/knowledge
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # 4. Assemble the knowledge into a single append-system-prompt file. Mirrors
+      #    reviewer.py's _write_system_prompt: a framing line, then each .md file.
+      - name: Assemble review system prompt
+        run: |
+          set -euo pipefail
+          src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
+          out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
+          {
+            echo "You are the LLK PR review bot. Apply the knowledge below as authoritative."
+            echo
+            for f in "$src"/*.md; do
+              [ -e "$f" ] || continue
+              echo "# === $(basename "$f") ==="
+              cat "$f"
+              echo
+            done
+          } > "$out"
+          echo "Assembled $(wc -l < "$out") lines into $out"
+
+      # 5. Run the review: /code-review at max effort, with the LLK MCP servers
+      #    and the assembled knowledge, posting findings inline via --comment.
+      - name: Run /code-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.AY_KEY }}
+          github_token: ${{ secrets.AI_GH_TOKEN }}
+          prompt: "/code-review max --comment"
+          claude_args: |
+            --model opus
+            --max-turns 60
+            --mcp-config tt_metal/tt-llk/.mcp.json
+            --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
