@@ -25,7 +25,7 @@ MATH_FIDELITY = {
 _FUSED_GELU_VARIANTS = {
     "gelu": (ttnn.UnaryOpType.GELU, False),
     "gelu_fast": (ttnn.UnaryOpType.GELU, True),
-    "gelu_tanh": (ttnn.UnaryOpType.GELU_TANH, 0.0),
+    "gelu_tanh": ttnn.UnaryOpType.GELU_TANH,
 }
 
 
