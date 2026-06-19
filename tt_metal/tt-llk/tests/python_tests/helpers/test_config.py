@@ -188,6 +188,16 @@ class TestConfig:
     STIMULI_ADDRESS_MAP: ClassVar[dict[str, int]] = {}
     SIMULATOR_TIMEOUT: ClassVar[int] = 600
 
+    # Inner compile parallelism toggle. Disabled by default: each pytest-xdist
+    # worker compiles its kernel components serially (one g++ at a time), so total
+    # concurrent compilers is just (xdist -n) and RSS scales linearly with -n
+    # (avoids OOM / exit 137). Enable (LLK_BUILD_PARALLELISM=1) to compile a
+    # variant's components concurrently — total g++ becomes (xdist -n) ×
+    # len(KERNEL_COMPONENTS), so lower -n accordingly.
+    BUILD_PARALLELISM: ClassVar[bool] = (
+        os.environ.get("LLK_BUILD_PARALLELISM", "0") == "1"
+    )
+
     # When the infrastructure itself needs to be tested, some functionality like compiling the artefacts and writing them
     # to tmpfs can be skipped (eg. object, elf and coverage data files etc.). This flag is used to skip such code to enable fast execution of infra tests.
     INFRA_TESTING: ClassVar[bool] = False
@@ -1299,9 +1309,10 @@ class TestConfig:
                     (f"#include  <{self.test_name}>\n" "#include  <trisc.cpp>\n"),
                 )
 
-            with ThreadPoolExecutor(
-                max_workers=len(TestConfig.KERNEL_COMPONENTS)
-            ) as executor:
+            max_workers = (
+                len(TestConfig.KERNEL_COMPONENTS) if TestConfig.BUILD_PARALLELISM else 1
+            )
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [
                     executor.submit(build_kernel_part, name)
                     for name in TestConfig.KERNEL_COMPONENTS
