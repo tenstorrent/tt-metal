@@ -217,6 +217,30 @@ TEST(CanonicalKeyTest, DistinguishesScalarsEnumsOptionals) {
     EXPECT_NE(canonical_key(std::string{"ab"}), canonical_key(std::string{"ba"}));
 }
 
+// std::vector<bool> is bit-packed: its iterator yields a proxy reference, not bool&, so it needs a
+// dedicated encoding branch (the generic vector branch fails to compile).
+TEST(CanonicalKeyTest, DistinguishesVectorBool) {
+    EXPECT_EQ(
+        canonical_key(std::vector<bool>{true, false, false}), canonical_key(std::vector<bool>{true, false, false}));
+    EXPECT_NE(
+        canonical_key(std::vector<bool>{true, false, false}), canonical_key(std::vector<bool>{false, true, false}));
+    EXPECT_NE(canonical_key(std::vector<bool>{true}), canonical_key(std::vector<bool>{true, false}));
+
+    // For each length 1..10, an all-true vector and an all-false vector (opposite at every index)
+    // must encode differently.
+    std::vector<bool> mixed_left;
+    std::vector<bool> mixed_right;
+    for (std::size_t len = 1; len <= 10; ++len) {
+        const std::vector<bool> all_true(len, true);
+        const std::vector<bool> all_false(len, false);
+        EXPECT_NE(canonical_key(all_true), canonical_key(all_false)) << "opposite booleans. length=" << len;
+        const bool vb = (0 == (len % 2));
+        mixed_left.push_back(vb);
+        mixed_right.push_back(!vb);
+        EXPECT_NE(canonical_key(mixed_left), canonical_key(mixed_right)) << "mixed opposite booleans. length=" << len;
+    }
+}
+
 // Coverage over the same adversarial set used for the hash: the exact key must be injective here
 // (it is by construction, but pin it so a future encoding change can't silently regress).
 TEST(CanonicalKeyTest, NoCollisionsOverSmall4DShapes) {

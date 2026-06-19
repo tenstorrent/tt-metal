@@ -1514,6 +1514,16 @@ inline void append_canonical(std::string& out, const T& object) {
         std::visit([&out](const auto& value) { append_canonical(out, value); }, object);
     } else if constexpr (is_specialization_v<T, std::reference_wrapper>) {
         append_canonical(out, object.get());
+    } else if constexpr (std::is_same_v<T, std::vector<bool>>) {
+        // std::vector<bool> is a bit-packed specialization: iterating yields a proxy reference
+        // (not bool&), so it can't go through the generic vector branch.
+        // (hash_object never reaches its own vector branch for this type because
+        // std::hash<std::vector<bool>> exists and the is_std_hashable_v branch wins first.)
+        const std::uint64_t n = object.size();
+        append_bytes(out, &n, sizeof(n));
+        for (bool element : object) {
+            append_canonical(out, element);
+        }
     } else if constexpr (is_specialization_v<T, std::vector> || is_specialization_v<T, std::set> || is_span_v<T>) {
         const std::uint64_t n = object.size();
         append_bytes(out, &n, sizeof(n));
