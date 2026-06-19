@@ -255,7 +255,7 @@ TopologyMappingResult run_topology_mapping(
 
     // Apply the same galaxy corner pinnings as the control plane (Phase 2) so Phase 1 and Phase 2 place
     // the galaxy pins identically. Full galaxies (per-host slice >= 32) pin all four corners; sub-galaxy
-    // slices pin only the NW corner (a single-position pin the solver can satisfy on a small slice).
+    // slices pin only the NW corner to any tray-corner ASIC (asic_location==1 on trays 1..4).
     if (cluster.is_ubb_galaxy()) {
         const int world_size =
             static_cast<int>(*tt::tt_metal::distributed::multihost::DistributedContext::get_current_world()->size());
