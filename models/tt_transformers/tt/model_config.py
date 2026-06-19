@@ -605,9 +605,9 @@ class ModelArgs:
         # test_non_uniform_seeding). Forcing per-user batch-1 prefill removes the
         # variance. Workaround until the prefill kernels are batch-invariant.
         # Disabled for Qwen3-32B (P150x4) and Llama-3.1-8B (P300/P150x4/P150x8).
-        self.disable_batched_prefill = (
-            self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4"
-        ) or (self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P300", "P150x4", "P150x8"))
+        self.disable_batched_prefill = (self.base_model_name == "Qwen3-32B" and self.device_name == "P150x4") or (
+            self.base_model_name == "Llama-3.1-8B" and self.device_name in ("P300", "P150x4", "P150x8")
+        )
 
         if (
             self.base_model_name
