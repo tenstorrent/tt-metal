@@ -6,6 +6,7 @@
 
 #include <cstdint>
 
+#include "api/debug/waypoint.h"
 #include "cmath_common.h"
 #include "llk_defs.h"
 using namespace ckernel;
