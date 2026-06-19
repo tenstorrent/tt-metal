@@ -192,8 +192,12 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     if inline_texts and any(not text for text in inline_texts):
         p.error("--text requires a non-empty prompt")
     if ns.no_decode_trace:
+        # Explicit user opt-out: short-chunk path. Mark it so the mesh-based default in
+        # run_demo() does not re-enable trace (otherwise a stale env var is indistinguishable
+        # from an explicit choice).
         os.environ["VOXTRAL_DECODE_TRACE"] = "0"
         os.environ["VOXTRAL_DECODE_TRACE_2CQ"] = "0"
+        os.environ["VOXTRAL_DEMO_TRACE_EXPLICIT"] = "1"
     use_dense_alibi = (not ns.native_sdpa) or ns.dense_alibi_sdpa
     return DemoArgs(
         model=ModelArgs(model_name_or_path=ns.model),
@@ -360,7 +364,7 @@ def _output_highpass_hz() -> float:
     (male fundamental ≳85 Hz) and all device/trace numerics untouched.
     """
     try:
-        return max(0.0, float(os.environ.get("VOXTRAL_OUTPUT_HPF_HZ", "60")))
+        return max(0.0, float(os.environ.get("VOXTRAL_OUTPUT_HPF_HZ", "80")))
     except ValueError:
         return 60.0
 
@@ -515,13 +519,29 @@ _CHUNK_MAX_WORDS = 8
 _CHUNK_CROSSFADE_MS = 40.0
 _CHUNK_TAIL_RELEASE_MS = 40.0
 _CHUNK_LEAD_TRIM_MS = 0.0
+_CHUNK_END_FADE_MS = 30.0
+# Trailing frames quieter than this fraction of the chunk's 90th-percentile frame RMS are treated
+# as the post-speech hiss release and trimmed. ~0.15 sits well below soft speech (~0.25× ref) yet
+# above the hiss floor (~0.10× ref) measured on the acoustic decoder output.
+_CHUNK_TAIL_RMS_FRACTION = 0.15
 _DEGENERACY_WINDOW_FRAMES = 20
 _DEGENERACY_MIN_UNIQUE = 6
 
-# Trace-enabled path: original large-chunk thresholds (single pass for typical demo prompts).
+# Single-device (1×1) trace path: original large-chunk thresholds — typical demo prompts run as a
+# single pass (the proven P150 behavior). MUST stay this way; 1×1 trace replay is bit-stable over a
+# long pass, so chunking it only hurts quality/RTF.
 _TRACE_CHUNK_THRESHOLD_WORDS = 100
 _TRACE_CHUNK_THRESHOLD_WORDS_SHORT = 200
 _TRACE_CHUNK_MAX_WORDS = 200
+
+# Multi-device (TP / 1×4) trace path ONLY: sentence-aligned chunks. A single long pass drifts
+# off-text on the tensor-parallel backbone and emits END_AUDIO early — the model drops whole
+# trailing sentences (1×4 stops mid-prompt) while each sentence generated on its own completes
+# correctly. Capping a pass at ~one sentence keeps the full prompt spoken at low RTF.
+# ``_split_into_chunks`` groups whole sentences up to the cap, so single-sentence prompts still
+# run as one pass. These thresholds never apply to 1×1 (see ``_is_multi_device_mesh``).
+_TP_TRACE_CHUNK_THRESHOLD_WORDS = 50
+_TP_TRACE_CHUNK_MAX_WORDS = 50
 
 
 def _estimate_acoustic_frames(n_words: int) -> int:
@@ -534,14 +554,38 @@ def _chunk_token_budget(n_words: int) -> int:
     return _CHUNK_MAX_ACOUSTIC_FRAMES
 
 
+def _is_multi_device_mesh() -> bool:
+    """True only for multi-device compute meshes (e.g. 1×4 TP). 1×1 returns False so the
+    sentence-chunking workaround for TP autoregressive drift never touches the single-device path."""
+    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+
+    return tuple(voxtral_requested_compute_mesh_shape()) != (1, 1)
+
+
+def _tp_trace_chunk_max_words() -> int:
+    """Multi-device (TP) sentence-chunk cap, overridable via ``VOXTRAL_TP_CHUNK_MAX_WORDS``.
+    Set it very high (e.g. 10000) to force a single pass on 1×4 (no inter-chunk modulation), at
+    the risk of the TP backbone dropping trailing sentences on long prompts."""
+    try:
+        v = int(os.environ.get("VOXTRAL_TP_CHUNK_MAX_WORDS", str(_TP_TRACE_CHUNK_MAX_WORDS)))
+        return v if v > 0 else _TP_TRACE_CHUNK_MAX_WORDS
+    except ValueError:
+        return _TP_TRACE_CHUNK_MAX_WORDS
+
+
 def _chunking_threshold_words(text_max_seq_len: int) -> int:
     if _short_chunking_enabled():
         return _CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _CHUNK_THRESHOLD_WORDS_SHORT
+    # Trace path: only multi-device (TP) gets sentence chunking; 1×1 keeps the single-pass thresholds.
+    if _is_multi_device_mesh():
+        return _tp_trace_chunk_max_words()
     return _TRACE_CHUNK_THRESHOLD_WORDS if text_max_seq_len > 4096 else _TRACE_CHUNK_THRESHOLD_WORDS_SHORT
 
 
 def _chunk_max_words() -> int:
-    return _CHUNK_MAX_WORDS if _short_chunking_enabled() else _TRACE_CHUNK_MAX_WORDS
+    if _short_chunking_enabled():
+        return _CHUNK_MAX_WORDS
+    return _tp_trace_chunk_max_words() if _is_multi_device_mesh() else _TRACE_CHUNK_MAX_WORDS
 
 
 def _needs_chunking(text: str, text_max_seq_len: int) -> bool:
@@ -581,6 +625,42 @@ def _speech_activity_bounds(wav: torch.Tensor, *, peak_ratio: float = 0.02) -> t
     return int(idx[0]), int(idx[-1]) + 1
 
 
+def _trim_trailing_hiss_frames(x: torch.Tensor, *, frame_samples: int) -> torch.Tensor:
+    """Drop the contiguous run of low-energy trailing frames the model emits after the last
+    phoneme (the post-speech / END_AUDIO release). These frames sit just above the 2%-peak
+    speech-activity bound, so they survive normal trimming but render as background hiss when a
+    chunk is concatenated mid-stream."""
+    n = int(x.numel())
+    if frame_samples <= 0 or n < frame_samples * 2:
+        return x
+    nf = n // frame_samples
+    fr = x[: nf * frame_samples].reshape(nf, frame_samples).float()
+    rms = torch.sqrt((fr**2).mean(dim=1))
+    ref = float(torch.quantile(rms, 0.9))
+    if ref <= 0.0:
+        return x
+    thr = ref * _CHUNK_TAIL_RMS_FRACTION
+    last = nf - 1
+    while last >= 0 and float(rms[last]) < thr:
+        last -= 1
+    if last < 0:
+        return x
+    keep = (last + 1) * frame_samples
+    return x[:keep] if keep < n else x
+
+
+def _fade_out(x: torch.Tensor, sample_rate: int, fade_ms: float = _CHUNK_END_FADE_MS) -> torch.Tensor:
+    """Equal-power cosine fade over the last *fade_ms* so a chunk tail never clicks at the join."""
+    n = int(x.numel())
+    fn = min(n, int(sample_rate * fade_ms / 1000.0))
+    if fn < 2:
+        return x
+    ramp = torch.cos(torch.linspace(0.0, float(np.pi) / 2.0, fn, dtype=torch.float32))
+    y = x.clone()
+    y[-fn:] = y[-fn:] * ramp
+    return y
+
+
 def _prepare_chunk_waveform(
     wav: torch.Tensor,
     sample_rate: int,
@@ -616,10 +696,86 @@ def _prepare_chunk_waveform(
             x = x[: x.numel() - tail_samples]
     start, end = _speech_activity_bounds(x)
     if not is_first:
-        start = min(start + int(sample_rate * _CHUNK_LEAD_TRIM_MS / 1000.0), end)
-    release_ms = _CHUNK_TAIL_RELEASE_MS if hit_end_audio else 10.0
-    end = min(int(x.numel()), end + int(sample_rate * release_ms / 1000.0))
-    return x[start:end] if end > start else x
+        start = min(start + int(sample_rate * _CHUNK_LEAD_TRIM_MS / 1000.0), int(x.numel()))
+    x = x[start:] if start < int(x.numel()) else x
+    # Drop the low-energy hiss tail the model renders after the last phoneme (around END_AUDIO):
+    # ~0.3-0.5 s of frames whose RMS sits just above the 2%-peak speech bound, so they survive
+    # _speech_activity_bounds and — spliced at every chunk join — read as "noise at the end of
+    # each chunk". Then fade the (now speech-terminated) tail so the join never clicks.
+    if downsample_factor is not None and downsample_factor > 0:
+        x = _trim_trailing_hiss_frames(x, frame_samples=int(downsample_factor))
+    else:
+        x = x[: max(0, end - start)]
+    return _fade_out(x, sample_rate)
+
+
+def _level_chunks(parts: list[torch.Tensor], *, gain_clamp: float = 3.0) -> list[torch.Tensor]:
+    """Scale each chunk toward the median speech RMS so independently-generated chunks share a
+    consistent loudness. Cold-started chunks (especially a short trailing fragment) often render
+    several dB louder/softer than the body; hard-concatenating them makes that level jump read as
+    a burst of "background noise". Gain is clamped to ``[1/gain_clamp, gain_clamp]`` so we never
+    amplify a quiet chunk's hiss aggressively."""
+    rms = []
+    for w in parts:
+        if w.numel() == 0:
+            rms.append(0.0)
+            continue
+        rms.append(float(torch.sqrt(torch.mean(w.float() ** 2)).item()))
+    active = [r for r in rms if r > 1e-5]
+    if len(active) < 2:
+        return parts
+    target = float(np.median(active))
+    leveled: list[torch.Tensor] = []
+    for w, r in zip(parts, rms):
+        if r <= 1e-5:
+            leveled.append(w)
+            continue
+        g = max(1.0 / gain_clamp, min(gain_clamp, target / r))
+        leveled.append(w * g)
+    return leveled
+
+
+def _match_chunk_brightness(
+    parts: list[torch.Tensor], sample_rate: int, *, tol: float = 0.10, max_blend: float = 0.5
+) -> list[torch.Tensor]:
+    """Nudge each chunk's spectral brightness toward the median so independently-generated chunks
+    don't step in timbre at the joins (the residual "modulation" left after RMS leveling). A gentle
+    one-pole low-pass is blended in proportion to how far a chunk's spectral centroid sits above the
+    median, bounded by ``max_blend``. Chunks within ``tol`` of the median — and any chunk darker than
+    the median — are left untouched (we never add brightness, which would amplify hiss)."""
+    if len(parts) < 2:
+        return parts
+    try:
+        from scipy.signal import lfilter
+    except Exception:
+        return parts
+
+    def _centroid(w: torch.Tensor) -> float:
+        if w.numel() < 8:
+            return 0.0
+        x = w.detach().float().numpy()
+        mag = np.abs(np.fft.rfft(x))
+        freq = np.fft.rfftfreq(x.size, 1.0 / sample_rate)
+        return float((freq * mag).sum() / (mag.sum() + 1e-9))
+
+    cents = [_centroid(w) for w in parts]
+    valid = [c for c in cents if c > 0]
+    if len(valid) < 2:
+        return parts
+    target = float(np.median(valid))
+    if target <= 0:
+        return parts
+    out: list[torch.Tensor] = []
+    for w, c in zip(parts, cents):
+        if c <= target * (1.0 + tol) or w.numel() < 8:
+            out.append(w)
+            continue
+        blend = min(max_blend, c / target - 1.0)
+        a = float(np.exp(-2.0 * np.pi * target / sample_rate))  # one-pole LP at ~median centroid
+        x = w.detach().float()
+        lp = torch.from_numpy(lfilter([1.0 - a], [1.0, -a], x.numpy()).astype(np.float32))
+        out.append((1.0 - blend) * x + blend * lp)
+    return out
 
 
 def _crossfade_concat(parts: list[torch.Tensor], sample_rate: int) -> torch.Tensor:
@@ -718,14 +874,13 @@ def _run_chunked_text_mode(
     out_path: Path,
     text_max_seq_len: int = 4096,
 ) -> None:
-    """Generate audio chunk-by-chunk (trace: hard concat; non-trace: trim + crossfade)."""
+    """Generate audio chunk-by-chunk: trim each chunk to speech + crossfade joins (both paths)."""
     short = _short_chunking_enabled()
     max_w = _chunk_max_words()
     chunks = _split_into_chunks(text)
     mode = "short-chunk" if short else "trace"
     logger.info(f"[chunked/{mode}] {len(text.split())} words → {len(chunks)} chunks (max {max_w} words)")
     prepared: list[torch.Tensor] = []
-    all_wavs: list[torch.Tensor] = []
     n_frames_total = 0
     first_frame_s: float | None = None
     t_start = perf_counter()
@@ -758,39 +913,37 @@ def _run_chunked_text_mode(
         n_frames_total += n_frames
         if out.waveform.numel() > 0:
             wav = out.waveform.reshape(-1)
-            if short:
-                shifted = out.shifted_codes_t37.cpu() if out.shifted_codes_t37.numel() > 0 else None
-                if shifted is not None and shifted.numel() > 0:
-                    sem = shifted[:, 0]
-                    logger.info(
-                        f"[chunked] chunk {i + 1}/{len(chunks)} codes: frames={n_frames} "
-                        f"unique={int(sem.unique().numel())} hit_end={out.hit_end_audio}"
-                    )
-                trimmed = _prepare_chunk_waveform(
-                    wav,
-                    sample_rate,
-                    is_first=(i == 0),
-                    hit_end_audio=bool(out.hit_end_audio),
-                    n_acoustic_frames=n_frames,
-                    downsample_factor=int(pipe._downsample_factor),
-                    shifted_codes_t37=shifted,
+            # Both short- and trace-chunk paths trim each chunk to its speech-active region and
+            # crossfade the joins. Hard-concatenating raw chunk waveforms (the old trace path)
+            # splices each chunk's trailing breath/hiss and level mismatches mid-stream → audible
+            # background noise at the sentence boundaries; trimming + crossfade removes it.
+            shifted = out.shifted_codes_t37.cpu() if out.shifted_codes_t37.numel() > 0 else None
+            if shifted is not None and shifted.numel() > 0:
+                sem = shifted[:, 0]
+                logger.info(
+                    f"[chunked] chunk {i + 1}/{len(chunks)} codes: frames={n_frames} "
+                    f"unique={int(sem.unique().numel())} hit_end={out.hit_end_audio}"
                 )
-                if trimmed.numel() > 0:
-                    prepared.append(trimmed)
-            else:
-                all_wavs.append(wav)
+            trimmed = _prepare_chunk_waveform(
+                wav,
+                sample_rate,
+                is_first=(i == 0),
+                hit_end_audio=bool(out.hit_end_audio),
+                n_acoustic_frames=n_frames,
+                downsample_factor=int(pipe._downsample_factor),
+                shifted_codes_t37=shifted,
+            )
+            if trimmed.numel() > 0:
+                prepared.append(trimmed)
         if not out.hit_end_audio:
             logger.warning(f"[chunked] chunk {i + 1}: no END_AUDIO at max_tokens={chunk_max_tokens}")
 
     total_s = perf_counter() - t_start
-    if short:
-        n_samples = sum(int(w.numel()) for w in prepared)
-        combined = _crossfade_concat(prepared, sample_rate) if prepared else torch.tensor([], dtype=torch.float32)
-        join_note = f"crossfade={_CHUNK_CROSSFADE_MS:.0f} ms"
-    else:
-        n_samples = sum(int(w.numel()) for w in all_wavs)
-        combined = torch.cat(all_wavs, dim=0) if all_wavs else torch.tensor([], dtype=torch.float32)
-        join_note = "hard concat"
+    prepared = _match_chunk_brightness(prepared, sample_rate)
+    prepared = _level_chunks(prepared)
+    n_samples = sum(int(w.numel()) for w in prepared)
+    combined = _crossfade_concat(prepared, sample_rate) if prepared else torch.tensor([], dtype=torch.float32)
+    join_note = f"crossfade={_CHUNK_CROSSFADE_MS:.0f} ms, leveled+timbre-matched"
 
     audio_s = n_samples / sample_rate if sample_rate > 0 else None
     _log_perf(
@@ -883,9 +1036,11 @@ def run_text_mode(
 
     Chunking (demo layer only — ``voxtral_tts`` trace replay is unchanged):
 
-      Trace enabled (``VOXTRAL_DECODE_TRACE=1``, default):
-        - Single pass for prompts under ~200 words (``text_max_seq_len`` ≤ 4096)
-        - Large-chunk split only for very long texts; hard-concat waveforms
+      Trace enabled (``VOXTRAL_DECODE_TRACE=1``, default — incl. multi-device 1×4):
+        - Single pass for prompts up to ~one sentence (≤ ``_TRACE_CHUNK_MAX_WORDS``)
+        - Otherwise sentence-aligned chunks, one single-pass each, hard-concat. A single long
+          pass drifts off-text on the TP backbone and emits END_AUDIO early (drops trailing
+          sentences); per-sentence passes keep the full prompt at low RTF.
 
       Non-trace (``VOXTRAL_DECODE_TRACE=0`` / ``--no-decode-trace``):
         - Short 8-word chunks, 100-frame cap, crossfade + edge trim (clarity fix)
@@ -1019,18 +1174,31 @@ def run_demo(args: DemoArgs) -> None:
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Trace defaults gated by compute mesh: OFF on 1×1 BH (clean audio), ON on 1×4 TP. Override
-    # with env vars. 1×4 chunking follows decode_trace_enabled() via _short_chunking_enabled().
+    # Trace/chunking gated by compute mesh. ``VOXTRAL_DECODE_TRACE`` selects the demo chunking
+    # strategy: 0 → short 8-word chunks (crossfade), 1 → single-pass / large-chunk.
+    #   • 1×1 BH: short-chunk default (clean audio).
+    #   • Multi-device (e.g. 1×4 TP): single-pass trace is the validated path — full prompt,
+    #     RTF ≈ 0.7. Short chunking here is ~7× slower (RTF ≈ 4.8) and collapses some chunks to a
+    #     few frames (dropped words / "missing prompt"), so it is NOT used unless the user opts in
+    #     with --no-decode-trace. We therefore set the default authoritatively (overriding any stale
+    #     VOXTRAL_DECODE_TRACE left in the environment) rather than via setdefault().
     from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
 
+    _trace_explicit = os.environ.get("VOXTRAL_DEMO_TRACE_EXPLICIT") == "1"
     if voxtral_requested_compute_mesh_shape() == (1, 1):
         os.environ.setdefault("VOXTRAL_DECODE_TRACE", "0")
         os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "0")
-    else:
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
+    elif not _trace_explicit:
+        os.environ["VOXTRAL_DECODE_TRACE"] = "1"
+        os.environ["VOXTRAL_DECODE_TRACE_2CQ"] = "1"
     from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, decode_trace_enabled
 
+    if voxtral_requested_compute_mesh_shape() != (1, 1) and not decode_trace_enabled():
+        logger.warning(
+            "[demo] Multi-device mesh with trace disabled → slow short-chunk path "
+            "(high RTF, may drop words on long prompts). Remove --no-decode-trace / "
+            "unset VOXTRAL_DECODE_TRACE for the single-pass trace path."
+        )
     logger.info(
         f"[demo] trace replay={'on' if decode_trace_enabled() else 'off'}, "
         f"2CQ={'on' if decode_trace_2cq_enabled() else 'off'}, "
