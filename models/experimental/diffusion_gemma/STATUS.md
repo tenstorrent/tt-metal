@@ -30,6 +30,7 @@ and marked `TODO(env)`. **HW + env are no longer blockers — QB2 is local and t
 | Causal backbone bring-up (gemma4 reuse) | #47461 | ⛔ blocked: ckpt + transformers 5.x + HW |
 | KV-cache phase state machine | #47474 | ⬜ not started |
 | Canvas mask geometry (reference, pure torch) | #47462 | ✅ done — `reference/attention_mask.py`, 8 tests pass |
+| Bidirectional canvas SDPA on QB2 (device) | #47462 | 🚧 test written (`tests/test_device_bidirectional_sdpa.py`, `DG_RUN_DEVICE=1`); **blocked: sfpi toolchain 7.58.0 installed vs 7.60.0 required** (`sfpi::ShiftMode` undeclared → dispatch-kernel compile fails at device open). Re-fetch sfpi 7.60.0 to unblock. |
 | Self-conditioning gated MLP (reference, pure torch) | #47461/#47463 | ✅ done — `reference/self_conditioning.py`, 6 tests pass |
 | Multi-canvas generation loop (reference, pure torch) | #47464 | ✅ done — `reference/generate.py`, 3 tests (commit-append, prefix-grows) |
 | Bidirectional canvas attention (device SDPA) | #47462 | ⬜ not started (mask reference done; non-causal SDPA path blocked on HW) |
