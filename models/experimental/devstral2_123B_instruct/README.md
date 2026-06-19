@@ -131,10 +131,10 @@ on-disk weight cache at **`seq_262144`** (`DEVSTRAL2_WEIGHT_CACHE_SEQ_LEN`).
 
 | Workflow | Command |
 |----------|---------|
-| ``(Blackhole) e2e tests`` → ``devstral2-123b-instruct`` | ``test_model_logit_pcc.py -k sanity`` then ``test_model_token_match.py -k sanity`` |
+| ``(Blackhole) e2e tests`` → ``devstral2-123b-instruct`` | ``test_model_logit_pcc.py -k sanity``, ``test_model_token_match.py -k sanity``, ``test_isl_sweep_perf.py -k sanity`` |
 | ``(Blackhole) Demo tests`` → ``devstral2-123b-instruct`` | ``demo/text_demo.py`` |
 
-Job: ``bh-lb-devstral2-123b-e2e-sanity`` (120 min timeout).
+Job: ``bh-lb-devstral2-123b-e2e-sanity`` (180 min timeout).
 
 ### Logit PCC
 

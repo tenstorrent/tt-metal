@@ -18,7 +18,7 @@
 
 # --- e2e ---
 - id: bh-lb-devstral2-123b-e2e-sanity
-  name: devstral2-123b e2e sanity (logit PCC + token match)
+  name: devstral2-123b e2e sanity (logit PCC + token match + ISL perf)
   model-name: devstral2-123b-instruct
   cmd: |
     set -e
@@ -31,9 +31,10 @@
     uv pip install "git+https://github.com/huggingface/transformers"
     pytest models/experimental/devstral2_123B_instruct/tests/test_model_logit_pcc.py -k sanity -v
     pytest models/experimental/devstral2_123B_instruct/tests/test_model_token_match.py -k sanity -v
+    pytest models/experimental/devstral2_123B_instruct/tests/perf/test_isl_sweep_perf.py -k sanity -m models_performance_bare_metal -v
   skus:
     bh_loudbox:
-      timeout: 120
+      timeout: 180
   owner_id: U09SQ3SP5HV # Moritz Thüning (@moritztng)
   team: models
 
