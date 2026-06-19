@@ -15,7 +15,7 @@ Description:
     estimate the ARC heartbeat rate and uptime.
 
 Owner:
-    ihamer-tt
+    adjordjevic-TT
 """
 
 from dataclasses import dataclass

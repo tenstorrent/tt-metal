@@ -11,7 +11,7 @@ Description:
     Checking that ARC heartbeat is running. Estimating ARC uptime.
 
 Owner:
-    ihamer-tt
+    adjordjevic-TT
 """
 
 from dataclasses import dataclass
