@@ -413,15 +413,8 @@ def main():
             logger.info(f"Test process started")
 
             def signal_handler(sig, frame):
-                try:
-                    if testProcess.poll() is None:
-                        os.killpg(os.getpgid(testProcess.pid), signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-                try:
-                    captureProcess.terminate()
-                except ProcessLookupError:
-                    pass
+                os.killpg(os.getpgid(testProcess.pid), signal.SIGTERM)
+                captureProcess.terminate()
                 captureProcess.communicate()
                 sys.exit(3)
 

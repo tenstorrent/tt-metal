@@ -441,60 +441,47 @@ def import_tracy_op_logs(
             if "TT_SIGNPOST" in opDataStr:
                 signpostsCount += 1
                 signposts[f"sp_{signpostsCount}"] = {"data": opDataStr, "tracy_time": opDataTime}
-    with contextlib.suppress(OSError):
-        os.remove(tracyOpDataLog)
     for opData in opsData:
         ops[opData["global_call_count"]] = opData
 
-    missing_host_time_ops = 0
-    child_call_totals = defaultdict(int)
-    read_csv_kwargs = {
-        "usecols": ["name", "zone_text", "special_parent_text", "exec_time_ns"],
-        "chunksize": 200000,
-        "low_memory": False,
-    }
     try:
-        chunk_iter = pd.read_csv(tracyOpTimesLog, engine="pyarrow", **read_csv_kwargs)
+        df = pd.read_csv(tracyOpTimesLog, engine="pyarrow")
     except (ImportError, ValueError):
-        chunk_iter = pd.read_csv(tracyOpTimesLog, **read_csv_kwargs)
+        df = pd.read_csv(tracyOpTimesLog)
 
-    for chunk in chunk_iter:
-        chunk["name"] = chunk["name"].astype(str)
-        tt_mask = chunk["name"].str.contains("TT_DNN|TT_METAL", regex=True, na=False)
-        if tt_mask.any():
-            for op in chunk.loc[tt_mask].to_dict(orient="records"):
-                opID = int(op["zone_text"].split(":")[-1])
-                if opID not in ops:
-                    missing_host_time_ops += 1
-                    continue
-                ops[opID]["host_time"] = op
+    # Filter and update host_time for TT_DNN/TT_METAL ops
+    # Ensure name is string type before using .str accessor
+    # (pandas may infer as numeric if all values are null)
+    df["name"] = df["name"].astype(str)
+    tt_mask = df["name"].str.contains("TT_DNN|TT_METAL", regex=True, na=False)
+    if tt_mask.any():
+        tt_df = df[tt_mask]
+        for op in tt_df.to_dict(orient="records"):
+            opID = int(op["zone_text"].split(":")[-1])
+            assert opID in ops, f"Op time for op {opID} must present. OpID: {opID}, Name: {op['name']}"
+            ops[opID]["host_time"] = op
 
-        chunk["special_parent_text"] = chunk["special_parent_text"].astype(str)
-        parent_mask = chunk["special_parent_text"].str.contains("id:", na=False)
-        if parent_mask.any():
-            child_df = chunk.loc[parent_mask, ["special_parent_text", "name", "exec_time_ns"]].copy()
-            child_df["parentOpID"] = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1].astype(int)
-            child_df = child_df[child_df["parentOpID"].isin(ops)]
+    # Similar to df["name"], ensure special_parent_text is string type before using .str accessor.
+    df["special_parent_text"] = df["special_parent_text"].astype(str)
+    parent_mask = df["special_parent_text"].str.contains("id:", na=False)
+    if parent_mask.any():
+        child_df = df[parent_mask].copy()
+        child_df["parentOpID"] = child_df["special_parent_text"].str.rsplit(":", n=1).str[-1].astype(int)
 
-            if not child_df.empty:
-                summary = child_df.groupby(["parentOpID", "name"])["exec_time_ns"].sum()
-                for (pID, name), total_ns in summary.items():
-                    child_call_totals[(pID, name)] += int(total_ns)
+        # Only process children of ops we know about
+        child_df = child_df[child_df["parentOpID"].isin(ops)]
 
-    if missing_host_time_ops:
-        logger.warning(
-            f"Skipped {missing_host_time_ops} Tracy host timing rows whose op IDs were not present in Tracy op metadata."
-        )
+        if not child_df.empty:
+            # Aggregate durations by (parentOpID, name)
+            summary = child_df.groupby(["parentOpID", "name"])["exec_time_ns"].sum()
+            for (pID, name), total_ns in summary.items():
+                opData = ops[pID]
+                if "child_calls" not in opData:
+                    opData["child_calls"] = {}
+                cc = opData["child_calls"]
+                # Use name as key, add up total execution time
+                cc[name] = cc.get(name, 0) + int(total_ns)
 
-    for (pID, name), total_ns in child_call_totals.items():
-        opData = ops[pID]
-        if "child_calls" not in opData:
-            opData["child_calls"] = {}
-        cc = opData["child_calls"]
-        cc[name] = cc.get(name, 0) + total_ns
-
-    with contextlib.suppress(OSError):
-        os.remove(tracyOpTimesLog)
     return ops, signposts, traceReplays
 
 
@@ -593,15 +580,10 @@ def _enrich_ops_from_perf_csv(
         # Build a lookup that matches the C++ ProgramExecutionUID structure:
         # (GLOBAL CALL COUNT, METAL TRACE ID) -> list of perf rows (one per replay session, or one for non-trace)
         perf_rows_by_key: Dict[Tuple[int, Optional[int]], List[Dict[str, Any]]] = {}
-        # Secondary index for the fallback: op_id -> all rows regardless of trace_id.
-        # Avoids the O(M) full-dict scan when the primary key misses due to trace_id mismatch.
-        perf_rows_by_op_id: Dict[int, List[Dict[str, Any]]] = {}
         for (op_id, trace_id, session_id), row in device_perf_by_device[device_id].items():
             perf_rows_by_key.setdefault((op_id, trace_id), []).append(row)
-            perf_rows_by_op_id.setdefault(op_id, []).append(row)
 
         enriched_ops = []
-        skipped_missing_device_data = 0
         for host_op in host_ops_by_device[device_id]:
             op_id = int(host_op["global_call_count"])
             host_trace_id = host_op.get("metal_trace_id")
@@ -615,23 +597,21 @@ def _enrich_ops_from_perf_csv(
 
             candidates = perf_rows_by_key.get((op_id, host_trace_id))
             if not candidates:
-                # Fallback: host may not have recorded trace_id while device did.
-                # Use the O(1) secondary index instead of the previous O(M) full scan.
-                candidates = perf_rows_by_op_id.get(op_id, [])
+                # Fallback: if host didn't record trace id but perf CSV did, allow lookup by op_id only.
+                candidates = []
+                for (cand_op_id, _cand_trace_id), rows in perf_rows_by_key.items():
+                    if cand_op_id == op_id:
+                        candidates.extend(rows)
 
-            if not candidates:
-                # Host Tracy logs every op, but device profiler data can be partial when the
-                # DRAM buffer overflows or when ReadDeviceProfiler() clears device state between regions.
-                skipped_missing_device_data += 1
-                continue
+            assert candidates, (
+                f"Device data missing: Op {op_id} not present in {PROFILER_CPP_DEVICE_PERF_REPORT} "
+                f"for device {device_id} (trace_id={host_trace_id})"
+            )
 
             # Create one enriched op per ProgramExecutionUID row in the C++ report.
             for perf_row in candidates:
                 perf_row = perf_row.copy()
-                # Shallow-copy the top-level dict only; nested structures (input_tensors,
-                # output_tensors, kernel_info, etc.) are read-only in generate_reports so
-                # sharing references is safe and avoids an expensive deepcopy per op.
-                enriched_op = host_op.copy()
+                enriched_op = copy.deepcopy(host_op)
 
                 core_count = perf_row.get("CORE COUNT")
                 if core_count is not None:
@@ -651,11 +631,6 @@ def _enrich_ops_from_perf_csv(
                 enriched_op["_device_perf_row"] = perf_row
                 enriched_ops.append(enriched_op)
 
-        if skipped_missing_device_data:
-            logger.warning(
-                f"Skipped {skipped_missing_device_data} host op(s) on device {device_id} with no matching row in "
-                f"{PROFILER_CPP_DEVICE_PERF_REPORT} (profiler DRAM overflow or partial device read)"
-            )
         host_ops_by_device[device_id] = enriched_ops
     return host_ops_by_device
 
@@ -1133,8 +1108,6 @@ def get_device_data_generate_report(
         os.system(f"rm -rf {outFolder}; mkdir -p {outFolder}")
         if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
             os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
-        if os.path.isfile(f"{logFolder / PROFILER_CPP_DEVICE_PERF_REPORT}"):
-            os.system(f"cp {logFolder / PROFILER_CPP_DEVICE_PERF_REPORT} {outFolder}")
 
     if os.path.isfile(deviceTimesLog):
         logger.info(f"Getting device only ops data")
@@ -1390,8 +1363,6 @@ def generate_reports(
         os.system(f"cp {logFolder / TRACY_FILE_NAME} {outFolder}")
     if os.path.isfile(f"{logFolder / PROFILER_DEVICE_SIDE_LOG}"):
         os.system(f"cp {logFolder / PROFILER_DEVICE_SIDE_LOG} {outFolder}")
-    if os.path.isfile(f"{logFolder / PROFILER_CPP_DEVICE_PERF_REPORT}"):
-        os.system(f"cp {logFolder / PROFILER_CPP_DEVICE_PERF_REPORT} {outFolder}")
     if os.path.isdir(f"{logFolder.parent / 'npe_viz'}"):
         os.system(f"cp -r {logFolder.parent / 'npe_viz'} {outFolder}")
 
@@ -1468,19 +1439,9 @@ def generate_reports(
                 ret = signposts[row]["tracy_time"]
             elif type(row) is int:
                 if row > ((1 << TRACE_OP_ID_BITSHIFT) - 1):
-                    ret = traceOps[row].get("tracy_time", 0)
+                    ret = traceOps[row]["tracy_time"]
                 else:
-                    op = ops[row]
-                    if "host_time" in op:
-                        ret = op["host_time"]["ns_since_start"]
-                    elif "tracy_time" in op:
-                        # Messages-only path: use Tracy message timestamp so device ops sort
-                        # chronologically relative to signposts in the output CSV.  Without
-                        # this, all device ops sort before signposts (global_call_count << tracy_time)
-                        # and the signpost filtering in tt-perf-report breaks.
-                        ret = op["tracy_time"]
-                    else:
-                        ret = op.get("global_call_count", row)
+                    ret = ops[row]["host_time"]["ns_since_start"]
             ret = int(ret)
             return ret
 
@@ -1532,16 +1493,12 @@ def generate_reports(
                     if matching_header:
                         csv_row[matching_header] = fieldData
 
-                if "host_time" in active_op_record:
-                    csv_row["HOST START TS"] = int(active_op_record["host_time"]["ns_since_start"])
-                    csv_row["HOST END TS"] = int(active_op_record["host_time"]["ns_since_start"]) + int(
-                        active_op_record["host_time"]["exec_time_ns"]
-                    )
-                    csv_row["HOST DURATION [ns]"] = int(active_op_record["host_time"]["exec_time_ns"])
-                elif "tracy_time" in active_op_record:
-                    # Messages-only path (no timing zones): use the Tracy message timestamp so
-                    # tt-perf-report can sort ops correctly relative to signposts.
-                    csv_row["HOST START TS"] = int(active_op_record["tracy_time"])
+                assert "host_time" in active_op_record, "Corrupted op data"
+                csv_row["HOST START TS"] = int(active_op_record["host_time"]["ns_since_start"])
+                csv_row["HOST END TS"] = int(active_op_record["host_time"]["ns_since_start"]) + int(
+                    active_op_record["host_time"]["exec_time_ns"]
+                )
+                csv_row["HOST DURATION [ns]"] = int(active_op_record["host_time"]["exec_time_ns"])
 
                 if "NOC UTIL (%)" in active_op_record:
                     csv_row["NOC UTIL (%)"] = active_op_record.get("NOC UTIL (%)")
@@ -1846,17 +1803,6 @@ def process_ops(
         output_folder = PROFILER_ARTIFACTS_DIR
     logFolder = generate_logs_folder(output_folder)
     reportFolder = generate_reports_folder(output_folder)
-
-    # Delete the raw per-RISC device log (profile_log_device.csv) as soon as the
-    # compact C++ report (cpp_device_perf_report.csv) is available.  The raw log
-    # can be 10–20 GB and triggers a 15-minute legacy import pass if left on disk.
-    # This deletion must happen before import_tracy_op_logs (and before both the
-    # `if ops` and `else` branches) so it covers every code path.
-    _cpp_report = logFolder / PROFILER_CPP_DEVICE_PERF_REPORT
-    _raw_log = logFolder / PROFILER_DEVICE_SIDE_LOG
-    if _cpp_report.is_file() and _raw_log.is_file():
-        _raw_log.unlink()
-        logger.info("Deleted raw device log (cpp_device_perf_report.csv present — skipping legacy 15-min analysis)")
 
     ops, signposts, traceReplays = import_tracy_op_logs(logFolder)
 

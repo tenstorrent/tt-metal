@@ -1,39 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Voxtral TTS demo — **fully on TT, zero reference model**.
-
-All neural-network forward passes (text, acoustic, audio tokenizer decode) run on the
-Tenstorrent device via ``VoxtralTTSPipeline.forward_device_resident()``.  The only CPU work is:
-
-- Mistral-common **tokenization** (equivalent to ``AutoTokenizer.encode()``)
-- Voice-embedding file load (a single ``torch.load`` of a small ``.pt`` file)
-- Per-step acoustic **code** accumulation for EOA / output (tiny host tensors)
-
-Modes
------
-``text`` (default)
-    ``--text`` + ``--voice`` → ``pipe.forward_device_resident()`` → ``.wav``.
-    Repeat ``--text`` for multiple outputs in one run.
-
-``codes``
-    ``--codes-path PATH`` — pre-computed ``[1,37,T]`` tensor file → waveform decode.
-
-``latents``
-    ``--latent-path PATH`` — pre-computed ``[1,1,T,C]`` tensor file → mel + waveform decode.
-
-Audio tokenizer decode uses **dense ALiBi SDPA** by default (production-quality waveform).
-Pass ``--native-sdpa`` for the faster native sliding-window path (perf-oriented; audible hiss).
-
-Run (from tt-metal repo root)::
-
-    export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
-    python models/experimental/voxtraltts/demo/demo.py \\
-        --text "Paris is a beautiful city in the heart of Europe." \\
-        --voice casual_male \\
-        --output-dir /tmp/voxtral_out
-
-"""
+"""Voxtral TTS demo CLI — text/codes/latents to WAV via ``VoxtralTTSPipeline`` on TTNN."""
 
 from __future__ import annotations
 
@@ -86,6 +54,8 @@ class TTArgs:
     paged_block_size: int = 32
     dense_alibi_sdpa: bool = True
     hf_aligned_text: bool = False
+    decode_trace: bool = True
+    decode_trace_2cq: bool | None = None
 
 
 @dataclass
@@ -186,7 +156,13 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         "--no-decode-trace",
         action="store_true",
         default=False,
-        help="Disable 2CQ input staging only (trace replay stays on for audio quality).",
+        help="Disable traced text-decode replay (uses short-chunk + crossfade path; slower).",
+    )
+    p.add_argument(
+        "--decode-trace-2cq",
+        action="store_true",
+        default=False,
+        help="Enable second command queue for overlapped decode input staging (default: off on 1×1, on on 1×4).",
     )
     p.add_argument(
         "--dense-alibi-sdpa",
@@ -211,13 +187,12 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             p.error("--text is only valid with --mode text")
     if inline_texts and any(not text for text in inline_texts):
         p.error("--text requires a non-empty prompt")
+    decode_trace = not ns.no_decode_trace
+    decode_trace_2cq = None
     if ns.no_decode_trace:
-        # Explicit user opt-out: short-chunk path. Mark it so the mesh-based default in
-        # run_demo() does not re-enable trace (otherwise a stale env var is indistinguishable
-        # from an explicit choice).
-        os.environ["VOXTRAL_DECODE_TRACE"] = "0"
-        os.environ["VOXTRAL_DECODE_TRACE_2CQ"] = "0"
-        os.environ["VOXTRAL_DEMO_TRACE_EXPLICIT"] = "1"
+        decode_trace_2cq = False
+    elif ns.decode_trace_2cq:
+        decode_trace_2cq = True
     use_dense_alibi = (not ns.native_sdpa) or ns.dense_alibi_sdpa
     return DemoArgs(
         model=ModelArgs(model_name_or_path=ns.model),
@@ -227,6 +202,8 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
             paged_block_size=ns.paged_block_size,
             dense_alibi_sdpa=use_dense_alibi,
             hf_aligned_text=ns.hf_aligned_text,
+            decode_trace=decode_trace,
+            decode_trace_2cq=decode_trace_2cq,
         ),
         data=DataArgs(
             output_dir=ns.output_dir,
@@ -251,8 +228,6 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
 def _open_device():
     from models.experimental.voxtraltts.demo.decode_trace_2cq import num_command_queues_for_decode
 
-    # Production decode always trace-replays; trace region is required regardless of
-    # VOXTRAL_DECODE_TRACE (that flag only toggles 2CQ overlap for perf experiments).
     params = {
         "trace_region_size": int(os.environ.get("VOXTRAL_TRACE_REGION_SIZE", str(200_000_000))),
         "num_command_queues": num_command_queues_for_decode(),
@@ -369,11 +344,7 @@ def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
 
 
 def _short_chunking_enabled() -> bool:
-    """Short-chunk + crossfade path is for ``VOXTRAL_DECODE_TRACE=0`` only.
-
-    Trace-enabled runs keep the original single-pass / large-chunk demo behavior (RTF + quality
-    validated with trace replay). Production compute in ``voxtral_tts`` is unchanged either way.
-    """
+    """Short-chunk + crossfade path when ``decode_trace_enabled()`` is false."""
     from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_enabled
 
     return not decode_trace_enabled()
@@ -485,7 +456,7 @@ def _text_generation_passes(
     return passes
 
 
-# Short-chunk path (VOXTRAL_DECODE_TRACE=0): small passes for AR stability + crossfade joins.
+# Short-chunk path (decode_trace disabled): small passes for AR stability + crossfade joins.
 _ACOUSTIC_FRAME_RATE_HZ = 12.5
 _CHUNK_MAX_ACOUSTIC_FRAMES = 100  # ~8 s per pass
 _TOKENS_PER_WORD_ESTIMATE = 8
@@ -1012,13 +983,13 @@ def run_text_mode(
 
     Chunking (demo layer only — ``voxtral_tts`` trace replay is unchanged):
 
-      Trace enabled (``VOXTRAL_DECODE_TRACE=1``, default on P150 1×1 and BH QB2 1×4):
+      Trace enabled (default on P150 1×1 and BH QB2 1×4):
         - Single pass for prompts up to ~one sentence (≤ ``_TRACE_CHUNK_MAX_WORDS``)
         - Otherwise sentence-aligned chunks, one single-pass each, hard-concat. A single long
           pass drifts off-text on the TP backbone and emits END_AUDIO early (drops trailing
           sentences); per-sentence passes keep the full prompt at low RTF.
 
-      Non-trace (``VOXTRAL_DECODE_TRACE=0`` / ``--no-decode-trace``):
+      Non-trace (``--no-decode-trace``):
         - Short 8-word chunks, 100-frame cap, crossfade + edge trim (clarity fix)
     """
     passes = _text_generation_passes(
@@ -1155,27 +1126,19 @@ def run_demo(args: DemoArgs) -> None:
     out_dir = Path(args.data.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Trace/chunking: ``VOXTRAL_DECODE_TRACE`` selects the demo chunking strategy — 0 → short
-    # 8-word chunks (crossfade), 1 → single-pass / large-chunk (default on P150 and BH QB2).
-    # Default compute mesh remains 1×1 (``VOXTRAL_COMPUTE_MESH_SHAPE``); set ``1,4`` for QB2 TP.
-    # Multi-device: override stale env so trace stays on unless the user passed --no-decode-trace.
+    from models.experimental.voxtraltts.demo.decode_trace_2cq import (
+        configure_decode_trace,
+        decode_trace_2cq_enabled,
+        decode_trace_enabled,
+    )
     from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
 
-    _trace_explicit = os.environ.get("VOXTRAL_DEMO_TRACE_EXPLICIT") == "1"
-    if not _trace_explicit:
-        os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
-        if voxtral_requested_compute_mesh_shape() == (1, 1):
-            os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "0")
-        else:
-            os.environ["VOXTRAL_DECODE_TRACE"] = "1"
-            os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
-    from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, decode_trace_enabled
+    configure_decode_trace(decode_trace=args.tt.decode_trace, decode_trace_2cq=args.tt.decode_trace_2cq)
 
     if voxtral_requested_compute_mesh_shape() != (1, 1) and not decode_trace_enabled():
         logger.warning(
             "[demo] Multi-device mesh with trace disabled → slow short-chunk path "
-            "(high RTF, may drop words on long prompts). Remove --no-decode-trace / "
-            "unset VOXTRAL_DECODE_TRACE for the single-pass trace path."
+            "(high RTF, may drop words on long prompts). Remove --no-decode-trace for the trace path."
         )
     logger.info(
         f"[demo] trace replay={'on' if decode_trace_enabled() else 'off'}, "

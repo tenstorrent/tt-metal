@@ -20,8 +20,7 @@ fixed short text + ``fixed_step_count`` make it a throughput regression benchmar
   2. Warm-up generation (compile + trace capture; untimed).
   3. Timed generation: full traced AR loop -> per-frame decode time + frames/s.
 
-Decode trace is on by default; 2CQ is opt-in because this loop is faster with one CQ
-(``VOXTRAL_DECODE_TRACE=1`` / ``VOXTRAL_DECODE_TRACE_2CQ=0``; set 2CQ to ``1`` for comparison).
+Decode trace is on by default; this perf test uses single CQ (`configure_decode_trace(decode_trace=True, decode_trace_2cq=False)`).
 
 Run::
 
@@ -40,18 +39,14 @@ from loguru import logger
 
 import ttnn
 
-# Enable traced decode for the perf run BEFORE device_params is evaluated (collection time), so the
-# device opens with a trace region and the selected command queue count. Override with VOXTRAL_DECODE_TRACE=0.
-os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
-
-# The trace replay runs *inside* VoxtralTTSPipeline.forward_device_resident (the TTS AR loop
-# owns the loop), so this perf test only needs the two device-config helpers; the staging/replay
-# helpers (DecodeTrace2CQ, stage_decode_inputs, signal_decode_step_done, ...) are exercised through
-# forward_device_resident.
+# Enable traced decode (default) with single CQ for perf comparison.
 from models.experimental.voxtraltts.demo.decode_trace_2cq import (  # noqa: E402
+    configure_decode_trace,
     decode_trace_2cq_enabled,
     num_command_queues_for_decode,
 )
+
+configure_decode_trace(decode_trace=True, decode_trace_2cq=False)
 from models.experimental.voxtraltts.reference.voxtral_config import (  # noqa: E402
     DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
 )

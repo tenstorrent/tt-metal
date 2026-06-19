@@ -23,6 +23,7 @@ from models.experimental.voxtraltts.reference.voxtral_config import (
     DEFAULT_VOXTRAL_MODEL,
     load_voxtral_config,
     parse_csv_ints,
+    voxtral_num_codebooks,
 )
 from models.experimental.voxtraltts.reference.voxtral_request import (
     compose_speech_request,
@@ -103,15 +104,16 @@ class VoxtralTTSDeviceGenerateOutput:
             wav = ttnn.to_torch(self.waveform_tt).float()
             waveform = wav.reshape(-1)[: self.expected_samples].reshape(1, 1, -1)
 
+        n_cb = voxtral_num_codebooks()
         if self.codes_b37t_tt is None:
-            codes_b37t = torch.empty((1, 37, 0), dtype=torch.long)
+            codes_b37t = torch.empty((1, n_cb, 0), dtype=torch.long)
         else:
-            codes_b37t = ttnn.to_torch(self.codes_b37t_tt).long().reshape(1, 37, self.n_frames)
+            codes_b37t = ttnn.to_torch(self.codes_b37t_tt).long().reshape(1, n_cb, self.n_frames)
 
         if self.shifted_codes_t37_tt is None:
-            shifted_codes_t37 = torch.empty((0, 37), dtype=torch.long)
+            shifted_codes_t37 = torch.empty((0, n_cb), dtype=torch.long)
         else:
-            shifted_codes_t37 = ttnn.to_torch(self.shifted_codes_t37_tt).long().reshape(self.n_frames, 37)
+            shifted_codes_t37 = ttnn.to_torch(self.shifted_codes_t37_tt).long().reshape(self.n_frames, n_cb)
 
         return VoxtralTTSGenerateOutput(
             waveform=waveform,
@@ -151,6 +153,10 @@ class VoxtralTTSPipeline:
     def _downsample_factor(self) -> int:
         cfg = self.config.audio_tokenizer_args
         return cfg.pretransform_patch_size * math.prod(parse_csv_ints(cfg.decoder_convs_strides_str))
+
+    @property
+    def num_codebooks(self) -> int:
+        return voxtral_num_codebooks(self.config)
 
     @classmethod
     def from_model_name(
@@ -569,7 +575,7 @@ class VoxtralTTSPipeline:
             if chunk.is_allocated():
                 ttnn.deallocate(chunk)
             shifted_bt37_tt = merged
-        shifted_t37_tt = ttnn.reshape(shifted_bt37_tt, (n_frames, 37))
+        shifted_t37_tt = ttnn.reshape(shifted_bt37_tt, (n_frames, self.num_codebooks))
         if shifted_t37_tt is not shifted_bt37_tt and shifted_bt37_tt.is_allocated():
             ttnn.deallocate(shifted_bt37_tt)
         return ttnn.to_layout(shifted_t37_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -579,7 +585,7 @@ class VoxtralTTSPipeline:
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, bool]:
         """Device concat + one ROW_MAJOR readback → trimmed shifted/audio code tables."""
         shifted_rm = self._concat_generated_codes_tt(generated_codes_tt)
-        stacked = voxtral_to_torch_replicated(shifted_rm).long().reshape(-1, 37)
+        stacked = voxtral_to_torch_replicated(shifted_rm).long().reshape(-1, self.num_codebooks)
         if shifted_rm.is_allocated():
             ttnn.deallocate(shifted_rm)
 
@@ -1116,8 +1122,8 @@ class VoxtralTTSPipeline:
                 empty_wav = torch.tensor([], dtype=torch.float32)
                 return VoxtralTTSGenerateOutput(
                     waveform=empty_wav,
-                    codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
-                    shifted_codes_t37=torch.empty((0, 37), dtype=torch.long),
+                    codes_b37t=torch.empty((1, self.num_codebooks, 0), dtype=torch.long),
+                    shifted_codes_t37=torch.empty((0, self.num_codebooks), dtype=torch.long),
                     hit_end_audio=False,
                     debug=debug,
                 )
@@ -1145,7 +1151,7 @@ class VoxtralTTSPipeline:
                 codes_t_tt = ttnn.permute(audio_2d_tt, (1, 0))
                 if audio_2d_tt.is_allocated():
                     ttnn.deallocate(audio_2d_tt)
-                codes_b37t_tt = ttnn.reshape(codes_t_tt, (1, 37, n_frames))
+                codes_b37t_tt = ttnn.reshape(codes_t_tt, (1, self.num_codebooks, n_frames))
                 if codes_t_tt is not codes_b37t_tt and codes_t_tt.is_allocated():
                     ttnn.deallocate(codes_t_tt)
             else:
@@ -1156,7 +1162,7 @@ class VoxtralTTSPipeline:
                     ttnn.deallocate(shifted_bt37_tt)
                     ttnn.deallocate(chunk)
                     shifted_bt37_tt = merged
-                shifted_codes_t37_tt = ttnn.reshape(shifted_bt37_tt, (n_frames, 37))
+                shifted_codes_t37_tt = ttnn.reshape(shifted_bt37_tt, (n_frames, self.num_codebooks))
                 audio_bt37_tt = ttnn.subtract(shifted_bt37_tt, 2)
                 codes_b37t_tt = ttnn.permute(audio_bt37_tt, (0, 2, 1))
                 if audio_bt37_tt.is_allocated():
@@ -1202,8 +1208,10 @@ class VoxtralTTSPipeline:
                     debug=debug,
                 )
 
-            shifted_audio_tokens = voxtral_to_torch_replicated(shifted_codes_t37_tt).long().reshape(n_frames, 37)
-            codes_b37t = voxtral_to_torch_replicated(codes_b37t_tt).long().reshape(1, 37, n_frames)
+            shifted_audio_tokens = (
+                voxtral_to_torch_replicated(shifted_codes_t37_tt).long().reshape(n_frames, self.num_codebooks)
+            )
+            codes_b37t = voxtral_to_torch_replicated(codes_b37t_tt).long().reshape(1, self.num_codebooks, n_frames)
             if wav_tt is None:
                 waveform = self._waveform_from_tt_chunks_qb2(wav_chunks, expected_samples)
             else:
@@ -1249,8 +1257,8 @@ class VoxtralTTSPipeline:
             empty_wav = torch.tensor([], dtype=torch.float32)
             return VoxtralTTSGenerateOutput(
                 waveform=empty_wav,
-                codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
-                shifted_codes_t37=torch.empty((0, 37), dtype=torch.long),
+                codes_b37t=torch.empty((1, self.num_codebooks, 0), dtype=torch.long),
+                shifted_codes_t37=torch.empty((0, self.num_codebooks), dtype=torch.long),
                 hit_end_audio=False,
                 first_frame_s=first_frame_s,
                 debug=debug,
@@ -1260,7 +1268,7 @@ class VoxtralTTSPipeline:
             empty_wav = torch.tensor([], dtype=torch.float32)
             return VoxtralTTSGenerateOutput(
                 waveform=empty_wav,
-                codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
+                codes_b37t=torch.empty((1, self.num_codebooks, 0), dtype=torch.long),
                 shifted_codes_t37=shifted_audio_tokens.long(),
                 hit_end_audio=hit_end_audio,
                 first_frame_s=first_frame_s,
@@ -1279,7 +1287,7 @@ class VoxtralTTSPipeline:
             codes_t_tt = ttnn.permute(codes_2d_tt, (1, 0))
             if codes_2d_tt.is_allocated():
                 ttnn.deallocate(codes_2d_tt)
-            codes_b37t_tt = ttnn.reshape(codes_t_tt, (1, 37, int(audio_tokens.shape[0])))
+            codes_b37t_tt = ttnn.reshape(codes_t_tt, (1, self.num_codebooks, int(audio_tokens.shape[0])))
             if codes_t_tt is not codes_b37t_tt and codes_t_tt.is_allocated():
                 ttnn.deallocate(codes_t_tt)
 
@@ -1396,7 +1404,7 @@ class VoxtralTTSPipeline:
         request = compose_speech_request(text, self.model_name_or_path, voice=voice)
         prompt_token_ids: list[int] = request["prompt_token_ids"]
         S_prompt = len(prompt_token_ids)
-        # CPU prompt embeddings for staged prefill (same source regardless of VOXTRAL_DECODE_TRACE).
+        # CPU prompt embeddings for staged prefill (same source regardless of decode-trace mode).
         inputs_embeds_cpu, inputs_embeds_tt = self._build_voice_injected_embeds_tt(
             prompt_token_ids,
             voice,
@@ -1424,7 +1432,7 @@ class VoxtralTTSPipeline:
         acoustic_noise_scale = _env_float("VOXTRAL_ACOUSTIC_NOISE_SCALE", 1.0)
 
         # Production uses staged trace replay (execute_trace). Direct per-op forward diverges
-        # numerically on TT → hiss/clarity loss. VOXTRAL_DECODE_TRACE=0 only disables 2CQ overlap.
+        # numerically on TT → hiss/clarity loss. Disabling decode trace selects the short-chunk path.
         # Debug (return_debug) keeps the legacy prefill_from_embeds + forward path for host traces.
         from models.experimental.voxtraltts.demo.decode_trace_2cq import (
             AcousticFMBuffers,
@@ -1652,8 +1660,8 @@ class VoxtralTTSPipeline:
                 empty_wav = torch.tensor([], dtype=torch.float32)
                 return VoxtralTTSGenerateOutput(
                     waveform=empty_wav,
-                    codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
-                    shifted_codes_t37=torch.empty((0, 37), dtype=torch.long),
+                    codes_b37t=torch.empty((1, self.num_codebooks, 0), dtype=torch.long),
+                    shifted_codes_t37=torch.empty((0, self.num_codebooks), dtype=torch.long),
                     hit_end_audio=False,
                     debug=debug,
                 )
@@ -1665,7 +1673,7 @@ class VoxtralTTSPipeline:
                 ttnn.deallocate(shifted_bt37_tt)
                 ttnn.deallocate(chunk)
                 shifted_bt37_tt = merged
-            shifted_codes_t37_tt = ttnn.reshape(shifted_bt37_tt, (n_frames, 37))
+            shifted_codes_t37_tt = ttnn.reshape(shifted_bt37_tt, (n_frames, self.num_codebooks))
             audio_bt37_tt = ttnn.subtract(shifted_bt37_tt, 2)
             codes_b37t_tt = ttnn.permute(audio_bt37_tt, (0, 2, 1))
             if audio_bt37_tt.is_allocated():
@@ -1711,8 +1719,8 @@ class VoxtralTTSPipeline:
                     debug=debug,
                 )
 
-            shifted_audio_tokens = ttnn.to_torch(shifted_codes_t37_tt).long().reshape(n_frames, 37)
-            codes_b37t = ttnn.to_torch(codes_b37t_tt).long().reshape(1, 37, n_frames)
+            shifted_audio_tokens = ttnn.to_torch(shifted_codes_t37_tt).long().reshape(n_frames, self.num_codebooks)
+            codes_b37t = ttnn.to_torch(codes_b37t_tt).long().reshape(1, self.num_codebooks, n_frames)
             if wav_tt is None:
                 waveform = self._waveform_from_tt_chunks(wav_chunks, expected_samples)
             else:
@@ -1742,8 +1750,8 @@ class VoxtralTTSPipeline:
             empty_wav = torch.tensor([], dtype=torch.float32)
             return VoxtralTTSGenerateOutput(
                 waveform=empty_wav,
-                codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
-                shifted_codes_t37=torch.empty((0, 37), dtype=torch.long),
+                codes_b37t=torch.empty((1, self.num_codebooks, 0), dtype=torch.long),
+                shifted_codes_t37=torch.empty((0, self.num_codebooks), dtype=torch.long),
                 hit_end_audio=False,
                 first_frame_s=first_frame_s,
                 debug=debug,
@@ -1759,7 +1767,7 @@ class VoxtralTTSPipeline:
             empty_wav = torch.tensor([], dtype=torch.float32)
             return VoxtralTTSGenerateOutput(
                 waveform=empty_wav,
-                codes_b37t=torch.empty((1, 37, 0), dtype=torch.long),
+                codes_b37t=torch.empty((1, self.num_codebooks, 0), dtype=torch.long),
                 shifted_codes_t37=shifted_audio_tokens.long(),
                 hit_end_audio=hit_end_audio,
                 first_frame_s=first_frame_s,
@@ -1779,7 +1787,7 @@ class VoxtralTTSPipeline:
             codes_t_tt = ttnn.permute(codes_2d_tt, (1, 0))
             if codes_2d_tt.is_allocated():
                 ttnn.deallocate(codes_2d_tt)
-            codes_b37t_tt = ttnn.reshape(codes_t_tt, (1, 37, int(audio_tokens.shape[0])))
+            codes_b37t_tt = ttnn.reshape(codes_t_tt, (1, self.num_codebooks, int(audio_tokens.shape[0])))
             if codes_t_tt is not codes_b37t_tt and codes_t_tt.is_allocated():
                 ttnn.deallocate(codes_t_tt)
 

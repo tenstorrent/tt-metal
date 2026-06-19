@@ -160,6 +160,15 @@ def parse_csv_ints(s: str) -> tuple[int, ...]:
     return tuple(int(x.strip()) for x in s.split(",") if x.strip())
 
 
+def voxtral_num_codebooks(config: VoxtralConfig | VoxtralAudioModelConfig | None = None) -> int:
+    """Total RVQ codebooks (1 semantic + n_acoustic) from ``params.json``."""
+    if config is None:
+        return int(VoxtralAudioEncodingConfig().num_codebooks)
+    if isinstance(config, VoxtralConfig):
+        return int(config.audio_model_args.audio_encoding_args.num_codebooks)
+    return int(config.audio_model_args.audio_encoding_args.num_codebooks)
+
+
 def audio_tokenizer_latent_dim(cfg: VoxtralAudioTokenizerConfig) -> int:
     """Continuous latent width before tokenizer decoder (``semantic_dim + acoustic_dim``)."""
     return int(cfg.semantic_dim + cfg.acoustic_dim)

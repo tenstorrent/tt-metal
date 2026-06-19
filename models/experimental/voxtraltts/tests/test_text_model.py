@@ -4,6 +4,7 @@
 import pytest
 import torch
 import torch.nn.functional as F
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -15,7 +16,11 @@ from models.experimental.voxtraltts.reference.functional import (
     text_decoder_layer as reference_text_decoder_layer,
 )
 
-from models.experimental.voxtraltts.tests.common import create_real_voxtral_text_model_or_skip
+from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
+from models.experimental.voxtraltts.tests.common import (
+    create_real_voxtral_text_model_or_skip,
+    resolve_voxtral_model_name_or_skip,
+)
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
 
 
@@ -93,12 +98,13 @@ def _hf_text_reference_or_skip():
 @pytest.mark.timeout(3600)
 def test_text_model_inference(device, reset_seeds):
     model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat8_b)
+    cfg = load_voxtral_config(resolve_voxtral_model_name_or_skip())
 
     assert model.inner.vocab_size > 0
     assert model.inner.args.n_layers > 0
-    assert model.inner.args.n_layers == 26
-    assert model.inner.args.dim == 3072
-    assert model.inner.args.hidden_dim == 9216
+    assert model.inner.args.n_layers == cfg.n_layers
+    assert model.inner.args.dim == cfg.dim
+    assert model.inner.args.hidden_dim == cfg.hidden_dim
     assert model.inner.args.n_heads == 32
     assert model.inner.args.n_kv_heads == 8
     assert model.inner.args.head_dim == 128
@@ -163,7 +169,7 @@ def test_text_model_prefill_pcc(device, reset_seeds):
     ref_last_logits = _reference_last_logits(state_dict, args, tokens)
 
     passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
-    print(f"test_text_model_prefill_pcc PCC={float(pcc_value):.6f}")
+    logger.info(f"test_text_model_prefill_pcc PCC={float(pcc_value):.6f}")
     assert passing, f"Text model prefill logits mismatch vs reference: {pcc_value}"
 
 
@@ -212,7 +218,7 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
     ref_last_logits = hf_decode.logits[0, -1].float()
 
     passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
-    print(f"test_text_model_decode_reference_pcc PCC={float(pcc_value):.6f}")
+    logger.info(f"test_text_model_decode_reference_pcc PCC={float(pcc_value):.6f}")
     assert passing, f"Text model decode logits mismatch vs reference: {pcc_value}"
 
 
@@ -265,7 +271,7 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
         ref_last_logits = hf_step.logits[0, -1].float()
 
         passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
-        print(
+        logger.info(
             f"test_text_model_decode_multistep_reference_pcc[{decode_steps}_steps] "
             f"step={step} PCC={float(pcc_value):.6f}"
         )
@@ -396,7 +402,7 @@ def test_wo_matmul_l1_width_sharding(device, reset_seeds):
 
     # wo: A [32, K] × B [K, N];  K = n_heads * head_dim = 4096, N = dim = 3072
     M, K, N = 32, args.n_heads * args.head_dim, args.dim
-    print(f"\nwo matmul: [{M} × {K}] × [{K} × {N}]")
+    logger.info(f"wo matmul: [{M} × {K}] × [{K} × {N}]")
 
     wo_key = "layers.0.attention.wo.weight"
     assert wo_key in state_dict, f"Missing {wo_key} in state_dict"
@@ -420,7 +426,7 @@ def test_wo_matmul_l1_width_sharding(device, reset_seeds):
     ttnn.deallocate(B_tt)
 
     _, pcc_val = comp_pcc(C_ref, C_out, pcc=0.999)
-    print(f"  PCC (L1 activation) = {float(pcc_val):.6f}")
+    logger.info(f"  PCC (L1 activation) = {float(pcc_val):.6f}")
     assert float(pcc_val) >= 0.999, f"wo L1-activation PCC {float(pcc_val):.6f} < 0.999"
 
 
@@ -441,7 +447,7 @@ def test_ff2_matmul_l1_width_sharding(device, reset_seeds):
 
     # FF2: A [32, K] × B [K, N];  K = hidden_dim = 9216, N = dim = 3072
     M, K, N = 32, args.hidden_dim, args.dim
-    print(f"\nFF2 matmul: [{M} × {K}] × [{K} × {N}]")
+    logger.info(f"FF2 matmul: [{M} × {K}] × [{K} × {N}]")
 
     ff2_key = "layers.0.feed_forward.w2.weight"
     assert ff2_key in state_dict, f"Missing {ff2_key} in state_dict"
@@ -462,5 +468,5 @@ def test_ff2_matmul_l1_width_sharding(device, reset_seeds):
     ttnn.deallocate(B_tt)
 
     _, pcc_val = comp_pcc(C_ref, C_out, pcc=0.999)
-    print(f"  PCC (L1 activation) = {float(pcc_val):.6f}")
+    logger.info(f"  PCC (L1 activation) = {float(pcc_val):.6f}")
     assert float(pcc_val) >= 0.999, f"FF2 L1-activation PCC {float(pcc_val):.6f} < 0.999"
