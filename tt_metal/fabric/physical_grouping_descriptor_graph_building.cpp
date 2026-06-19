@@ -610,7 +610,7 @@ tt::tt_fabric::AdjacencyGraph<uint32_t> add_torus_wrap_edges(
     };
 
     if (mesh.node_grid_dims.size() >= 2) {
-        if (ring_dims.size() > 0 && ring_dims[0] && mesh.node_grid_dims[0] >= MIN_RING_DIM) {
+        if (!ring_dims.empty() && ring_dims[0] && mesh.node_grid_dims[0] >= MIN_RING_DIM) {
             connect_opposite_edges(CardinalDirection::North, CardinalDirection::South);
         }
         if (ring_dims.size() > 1 && ring_dims[1] && mesh.node_grid_dims[1] >= MIN_RING_DIM) {
