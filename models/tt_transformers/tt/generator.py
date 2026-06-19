@@ -547,6 +547,15 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
             # Only paged attention is supported for prefill
             enable_trace = False
 
+        # Track slots refreshed by this prefill so the next decode reset keeps
+        # device-fed tokens for all other slots (their host token is one step
+        # stale under vLLM async scheduling).
+        if not hasattr(self, "_slots_prefilled_since_decode"):
+            self._slots_prefilled_since_decode = set()
+        self._slots_prefilled_since_decode.update(
+            range(tokens.shape[0]) if empty_slots is None else [int(s) for s in empty_slots]
+        )
+
         on_device_sampling_requested = sampling_params is not None
 
         # we need this here because of tt-metal tests
@@ -1224,6 +1233,72 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         tokens = torch.chunk(tokens, self.data_parallel, 0)
         start_pos = torch.chunk(start_pos, self.data_parallel, 0)
         page_table = torch.chunk(page_table, self.data_parallel, 0) if page_table is not None else None
+
+        # vLLM under async scheduling supplies a one-step-stale last token at
+        # reset steps (its host state lags device sampling). The device token
+        # buffer holds the authoritative token sampled at the previous decode
+        # step, so on a reset keep it: permute per slot_remap (condense moves),
+        # only taking host tokens for slots freshly prefilled since the last
+        # decode submit (their last token came from prefill, not decode).
+        if (
+            on_device_sampling
+            and (reset_batch or mode_switched)
+            and enable_trace
+            and self.trace_inputs_decode[on_device_sampling]
+        ):
+            new_tokens = []
+            new_start_pos = []
+            # When we take the device's async-ahead token for a continuing slot,
+            # the token sits at position dev_pos; staging the lagging host position
+            # (=dev_pos-1) would re-process that token at the wrong position
+            # (overwriting KV / regenerating a position -> duplicate/flipped tokens
+            # under concurrency). Pair the device token with the device position.
+            for i, tok_chunk in enumerate(tokens):
+                trace_in = self.trace_inputs_decode[on_device_sampling][i]
+                dev_toks = (
+                    ttnn.to_torch(ttnn.get_device_tensors(trace_in[0])[0])
+                    .reshape(-1)[: tok_chunk.shape[0]]
+                    .to(tok_chunk.dtype)
+                )
+                dev_pos = (
+                    ttnn.to_torch(ttnn.get_device_tensors(trace_in[1])[0])
+                    .reshape(-1)[: tok_chunk.shape[0]]
+                    .to(torch.int64)
+                )
+                if slot_remap is not None:
+                    chunk = dev_toks.shape[0]
+                    remap = slot_remap[i * chunk : (i + 1) * chunk]
+                    remap_t = (remap if isinstance(remap, torch.Tensor) else torch.tensor(remap)).long()
+                    # slot_remap holds GLOBAL slot indices: the vLLM plugin offsets
+                    # each DP rank's local [0,B) remap by rank*B for the row-sharded
+                    # SeedManager. dev_toks/dev_pos are this rank's *local* size-B
+                    # tensors, so rebase the global indices back to [0,B) before
+                    # gathering -- otherwise rank i>=1 indexes past the end (e.g.
+                    # value 32 into a size-32 tensor).
+                    remap_t = remap_t - i * chunk
+                    dev_toks = dev_toks[remap_t]
+                    dev_pos = dev_pos[remap_t]
+                # The device token is authoritative only for slots whose device
+                # position chain is continuous with the host view; slots that
+                # were re-added, resumed, or freshly prefilled take host tokens.
+                # The host position itself may lag the device by one step under
+                # async scheduling, so accept both.
+                host_pos = start_pos[i].reshape(-1).to(torch.int64)
+                use_dev = (dev_pos == host_pos) | (dev_pos == host_pos + 1)
+                prefilled = getattr(self, "_slots_prefilled_since_decode", None)
+                if prefilled:
+                    bs = tok_chunk.shape[0]
+                    for slot in prefilled:
+                        if i * bs <= slot < (i + 1) * bs:
+                            use_dev[slot - i * bs] = False
+                merged = torch.where(use_dev, dev_toks.view(-1), tok_chunk.view(-1)).view(tok_chunk.shape)
+                new_tokens.append(merged.to(tok_chunk.dtype))
+                merged_pos = torch.where(use_dev, dev_pos, host_pos)
+                new_start_pos.append(merged_pos.view(start_pos[i].shape).to(start_pos[i].dtype))
+            tokens = new_tokens
+            start_pos = new_start_pos
+        self._slots_prefilled_since_decode = set()
+
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -1534,6 +1609,28 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
                 sm_bs = sampling_module.seed_manager.max_batch_size
                 rank_remap = slot_remap[i * sm_bs : (i + 1) * sm_bs]
                 sampling_module.seed_manager.apply_slot_remap(rank_remap)
+            # Register each request's explicit seed into the seed manager and
+            # tie its RNG counter to the absolute decode position before
+            # advancing. Without registration the per-request seed never reaches
+            # the device (the seed manager stays unseeded), so sampling falls
+            # back to per-slot boot RNG and two requests sharing a seed diverge
+            # (this regressed when #45166 dropped these calls from the decode
+            # flow). Position alignment then keeps the stream reproducible even
+            # when vLLM evicts a running request and re-admits it in a different
+            # slot under async scheduling. Mirrors the llama3_70b_galaxy decode path.
+            if active_seed_slots:
+                seed_bs = sampling_module.tt_sampling.max_batch_size
+                if len(model_chunks) == 1:
+                    seed_values = format_sampling_params(model_chunks[0], seed_bs).seed
+                else:
+                    seed_values = []
+                    for chunk in model_chunks:
+                        s = format_sampling_params(chunk, seed_bs).seed
+                        seed_values += s if isinstance(s, list) else [s] * seed_bs
+                sampling_module.seed_manager.reset_seed_from_slots_if_needed(seed_values, active_seed_slots)
+                sampling_module.seed_manager.align_seed_counters_to_positions(
+                    seed_values, active_seed_slots, start_values
+                )
             sampling_module.seed_manager.get_new_values(active_seed_slots)
 
         sampled_outputs = []
