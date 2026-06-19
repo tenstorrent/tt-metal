@@ -22,26 +22,15 @@
 namespace compute_kernel_lib {
 
 /**
- * Pack a (h × w) DST sub-block to absolute row-major positions in the output CB.
- * One pack_tile<true>(dst_idx, cb, abs_tile_idx) call per tile — the LLK takes
- * an absolute tile index into the caller's reserved region, so the helper does
- * not need to reach into the CB interface. Earlier versions of this helper
- * batched into h pack_tile_block calls with manual CB-pointer striding;
- * llk_matmul_pack expands to a per-tile _llk_pack_ loop internally so the
- * underlying packer call count was identical, and the per-call C++ savings
- * (one ASSERT/get_output_id per row instead of per tile) didn't justify the
- * dependency on LLK CB-interface internals. See PR #43676 review thread for
- * the discussion.
- *
- * dst_start_idx     Start position in DST. Tiles DST[dst_start_idx..+h*w-1] are
- *                   packed in row-major order (DST iterates row-first within the
- *                   subblock).
- * pack_target_id    Output CB id.
- * col_base          Column offset within the row group (in tiles).
- * row_stride        Row stride in tiles (= out_row_width).
- *
- * PRECONDITION: caller has reserved at least h * row_stride tiles in pack_target_id
- * (one M-row-group). Caller is responsible for cb_push_back.
+ * Pack a (h × w) DST sub-block to absolute row-major positions in the output CB —
+ * one pack_tile<true>(dst_idx, cb, abs_tile_idx) per tile, so the helper needs no
+ * access to CB-interface internals.
+ *   dst_start_idx   start in DST; DST[dst_start_idx .. +h*w-1] packed row-first.
+ *   pack_target_id  output CB id.
+ *   col_base        column offset within the row group (tiles).
+ *   row_stride      row stride in tiles (= out_row_width).
+ * PRECONDITION: caller reserved >= h * row_stride tiles in pack_target_id (one
+ * M-row-group) and is responsible for the matching cb_push_back.
  */
 ALWI void pack_subblock_row_strided(
     uint32_t dst_start_idx,
@@ -59,23 +48,14 @@ ALWI void pack_subblock_row_strided(
 }
 
 /**
- * Reload a (h × w) sub-block that was SPILLED row-strided (by pack_subblock_row_strided)
- * from the source CB into DST, packing it CONTIGUOUSLY in DST. The read mirror of
- * pack_subblock_row_strided: each row's w tiles live at source-CB offset
- * (r * row_stride + col_base) relative to the CB's current fifo_rd_ptr, but they land
- * at the contiguous DST slot dst_start_idx + r * w so the subsequent matmul/pack sees
- * the sub-block laid out row-major exactly as the contiguous (SubblockMajor) reload does.
+ * Read mirror of pack_subblock_row_strided: reload a row-strided-spilled (h × w) sub-block
+ * into CONTIGUOUS DST. Each row's w tiles sit at source offset (r * row_stride + col_base)
+ * from fifo_rd_ptr and land at DST[r * w], so the matmul/pack sees the same row-major
+ * layout the contiguous (SubblockMajor) reload produces.
  *
- * One copy_block_matmul_partials(src, src_base, dst_base, w) call per row — the LLK reads
- * w contiguous tiles at fifo_rd_ptr + src_base, so this does NOT advance fifo_rd_ptr.
- * The caller is responsible for cb_wait_front covering the whole fronted row group
- * (col_base + (h-1)*row_stride + w tiles) and for cb_pop_front when the region is done.
- *
- * src_cb_id    Source CB id (the interm spill buffer).
- * col_base     Column offset within the fronted row group (in tiles) — the in1 sub-block's
- *              start column, matching the col_base pack_subblock_row_strided wrote with.
- * row_stride   Row stride in tiles (= out_row_width), matching the spill.
- * h, w         Sub-block height / width in tiles.
+ * One copy_block_matmul_partials per row (reads at fifo_rd_ptr + src_base; does NOT advance
+ * it). Caller waits the whole fronted row group (col_base + (h-1)*row_stride + w tiles) and
+ * pops it when done. col_base / row_stride match the spill.
  */
 ALWI void copy_subblock_row_strided(
     uint32_t src_cb_id,
@@ -122,17 +102,13 @@ ALWI void matmul_block(
     In0SourceFn in0_source_fn,
     In1BaseOffsetFn in1_base_offset_fn) {
 
-    // OutWithUntilize requires the SubblockMajor pack path: pack_untilize_dest is
-    // initialized for a fixed block_ct_dim and packs from DST starting at offset 0,
-    // which doesn't compose with the row-major pack_subblock_row_strided that
-    // walks per-tile absolute offsets. The Interm + reblock_and_untilize path
-    // handles row-major untilize end-to-end via add_bias_bcast_rows /
-    // reblock_and_untilize, so callers needing row-major untilize go that route.
+    // OutWithUntilize needs SubblockMajor: pack_untilize_dest packs from DST offset 0 for a
+    // fixed block_ct_dim and can't compose with the per-tile absolute-offset row-major pack.
+    // Row-major untilize goes through Interm + reblock_and_untilize instead.
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || tile_order == OutputCBLayout::SubblockMajor,
         "OutWithUntilize requires tile_order == SubblockMajor; route row-major untilize via Interm + reblock_and_untilize");
-    // pack_untilize_dest_init's block_ct_dim is a compile-time template arg, so the
-    // caller must supply it explicitly when opting into OutWithUntilize.
+    // block_ct_dim is a compile-time arg, so the caller must supply it for OutWithUntilize.
     static_assert(
         last_block_target != LastBlockTarget::OutWithUntilize || untilize_block_ct_dim > 0,
         "OutWithUntilize requires untilize_block_ct_dim > 0 (= shape.out_subblock_h * shape.out_subblock_w)");
@@ -142,18 +118,13 @@ ALWI void matmul_block(
         in0_policy != InputPolicy::NoWaitNoPop,
         "InputPolicy::NoWaitNoPop is only valid for in1 — use WaitAndPopPerKBlock or "
         "WaitAndRetainOnLastBlock for in0.");
-    // last_block_target == Interm is overloaded between two distinct downstream phases:
-    // (1) FUSE_BIAS, where activation BELONGS on the bias helper (after bias add), and
-    // (2) untilize_out without FUSE_BIAS, where activation runs HERE (matmul pack)
-    //     because the untilize phase just reads the activated partials unchanged.
-    // The helper can't tell these apart from its template parameters, so the constraint
-    // is enforced at the call site: callers on path (1) pass Activation=NoneActivation
-    // here and route activation to the bias helper's Activation slot; callers on path
-    // (2) pass Activation=ActivationOp<activation_type, …> here.
+    // last_block_target == Interm feeds a downstream phase; whether activation belongs HERE
+    // (matmul pack) or in that phase is the caller's choice via the Activation parameter (the
+    // helper can't infer it). Set Activation here only when the downstream phase reads the
+    // partials unchanged; otherwise leave it NoneActivation and activate downstream.
 
-    // Decode the LastBlockTarget enum into the legacy bool pair the body branches on.
-    // The (Interm + Relu) combination is unrepresentable, so the previous static_assert
-    // on the bool pair is now structural.
+    // Decode LastBlockTarget into the bool pair the body branches on. (Interm + Relu) is
+    // unrepresentable by construction.
     constexpr bool pack_last_to_interm = (last_block_target == LastBlockTarget::Interm);
     constexpr bool pack_relu = (last_block_target == LastBlockTarget::OutWithRelu);
 
@@ -176,43 +147,24 @@ ALWI void matmul_block(
     ASSERT(in1_cb_id != out_cb_id);
     ASSERT(shape.out_subblock_h * shape.out_subblock_w <= compute_kernel_lib::DEST_AUTO_LIMIT);
 
-    // Data-format reconfig and init are two independent switches, mirroring the
-    // tilize_helpers / reduce_helpers / binary_op_helpers pattern. Each side fires
-    // on its own compile-time gate; callers that already issued an external reconfig
-    // pass reconfig=NONE; callers that already issued an external
-    // mm_block_init_short pass init_mode=None. The pack reconfig
-    // targets interm_cb_id to match the OLD mm_block_init's 3rd-arg behavior — the first
-    // non-last K-block spills there; the in-loop reconfig at the last block
-    // (gated on l1_acc / fp32 DEST) handles the final swap to out_cb_id. The init
-    // is always a short init (never a Full / hw_configure-bearing init — those
-    // are caller's boot-time responsibility at the very top of kernel_main).
-    // ActivationInitHelper::init() is the caller's boot-time responsibility
-    // regardless of either switch — the helper does not issue it.
-    //
-    // init_mode == ShortAfterPreKBlock relocates this entire reconfig+init block to
-    // INSIDE the K-loop, right after pre_k_block() returns (see below), so a
-    // state-dirtying PreKBlockFn (tilize / transpose) no longer has to restore matmul
-    // state itself. This pre-loop block is therefore skipped for that mode.
+    // Reconfig and init are independent compile-time gates (see the InitMode /
+    // DataFormatReconfig enums). The pack reconfig targets interm_cb_id (where non-last
+    // K-blocks spill); the last-block in-loop reconfig swaps to out_cb_id. The init is
+    // always short — the hw_configure-bearing boot init is the caller's.
+    // ShortAfterPreKBlock relocates this whole block into the K-loop (after pre_k_block),
+    // so it is skipped here for that mode.
     if constexpr (init_mode != matmul_config::InitMode::ShortAfterPreKBlock) {
         if constexpr (
             reconfig == matmul_config::DataFormatReconfig::INPUT ||
             reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
-            // Matmul convention: srca takes in1, srcb takes in0 (verified against
-            // mm_block_init_short_with_dt at matmul.h:383 and the existing reload-time
-            // call in the K-loop below).
+            // Matmul convention: srca takes in1, srcb takes in0.
             reconfig_data_format(in1_cb_id, in0_cb_id);
         }
-        // NOTE (deferred follow-up — intentionally not fixed in this pass): this pack
-        // reconfig targets interm_cb_id unconditionally, including when num_k_blocks == 1
-        // where interm is never used for spill/reload. At num_k_blocks == 1 the only block
-        // is the last block (packs to out_cb_id), but the swap-to-out reconfig later in the
-        // K-loop is gated on l1_acc / fp32 DEST and may not fire — so a caller passing a
-        // placeholder interm whose data format differs from out_buf leaves the packer
-        // configured to the wrong format (silent output corruption; e.g. an 8-bit
-        // placeholder vs a 16-bit output). The interm_buf doc in the .hpp now warns callers
-        // to pass a same-data-format placeholder; a robust fix would reconfig to the actual
-        // final pack target when num_k_blocks == 1. Left for a future session to avoid a
-        // core-behavior change here.
+        // NOTE: this pack reconfig targets interm_cb_id even when num_k_blocks == 1 (no
+        // spill). The last-block swap-to-out reconfig is gated on l1_acc / fp32 DEST and may
+        // not fire, so a placeholder interm whose format differs from out_buf can leave the
+        // packer mis-configured (silent corruption) — the .hpp interm_buf doc requires a
+        // same-format placeholder; pass out_buf.
         if constexpr (
             reconfig == matmul_config::DataFormatReconfig::OUTPUT ||
             reconfig == matmul_config::DataFormatReconfig::INPUT_AND_OUTPUT) {
@@ -227,16 +179,15 @@ ALWI void matmul_block(
     const uint32_t out_num_tiles = shape.out_subblock_h * shape.out_subblock_w;
     const uint32_t in0_subblock_num_tiles = shape.out_subblock_h * shape.in0_block_k;
     const uint32_t in0_block_num_tiles = in0_subblock_num_tiles * shape.in0_num_subblocks;
-    // in1_per_core_w: actual N-width of the in1 CB per K-block.
-    // Derived from subblocks by default; callers with padded per_core_N_compute must
-    // pass the real shard width (per_core_N_in1_sender) to avoid CB wait/pop mismatches.
+    // in1_per_core_w: actual N-width the producer pushes per K-block. Derived from subblocks
+    // by default; callers that pad the in1 width must pass the real value to avoid wait/pop
+    // mismatches.
     if (in1_per_core_w == 0) {
         in1_per_core_w = shape.out_subblock_w * shape.in1_num_subblocks;
     }
-    // out_row_width: N-tiles per row of the OUTPUT CB layout (row stride for row_major pack).
-    // For most factories the in1 CB width and output pack width coincide, so we default to
-    // in1_per_core_w. DRAM-sharded passes the larger padded per_core_N_compute here to keep
-    // row_group_tiles / row_pos aligned with what the compute actually packs.
+    // out_row_width: N-tiles per row of the OUTPUT CB (TileRowMajor row stride). Defaults to
+    // in1_per_core_w (read and pack widths usually coincide); callers that pad the output
+    // width above the in1 read width pass the larger value here.
     if (out_row_width == 0) {
         out_row_width = in1_per_core_w;
     }
@@ -258,33 +209,19 @@ ALWI void matmul_block(
 
             pre_k_block(block, shape.num_k_blocks, last_out);
 
-            // Per-K-block inner-dim step count. Default no-op returns shape.in0_block_k so the
-            // loop runs the full K-tile span; callers with per-block varying widths
-            // override this to shrink the FMA loop on K-blocks whose unpadded width is
-            // < shape.in0_block_k.
-            // The LLK call's kt_dim arg below stays shape.in0_block_k — that's the in1 row
-            // stride in L1, not the FMA step count.
+            // Per-K-block FMA step count (default = full shape.in0_block_k). The LLK kt_dim
+            // below stays shape.in0_block_k (in1 row stride), independent of this loop bound.
             const uint32_t inner_steps = k_block_inner_dim(block, shape.in0_block_k);
 
-            // Per-K-block in0 source. Default no-op returns the bound in0_cb_id, so
-            // active_in0_buf aliases in0_buf and behavior is unchanged. Callers swap
-            // to an alternate CB on chosen K-blocks; that alternate CB
-            // MUST share the same dataformat as in0_cb_id (the kernel-entry
-            // mm_block_init and the reload's mm_block_init_short_with_dt below keep
-            // using the bound in0_cb_id, so the unpacker config doesn't re-issue
-            // when the source flips).
+            // Per-K-block in0 source (default = bound in0_cb_id). Alternates MUST share
+            // in0_cb_id's dataformat — the unpacker config keys on the bound id (see NoIn0Source).
             const uint32_t active_in0_cb_id = in0_source_fn(block, in0_cb_id);
             Buf active_in0_buf(active_in0_cb_id);
 
-            // init_mode == ShortAfterPreKBlock: restore matmul srcA/srcB formats + matmul-mode
-            // init HERE, after pre_k_block() has run its (possibly state-dirtying) work — so the
-            // caller's PreKBlockFn only does its own op (tilize / transpose) plus any uninit it
-            // owes, and never the matmul restore. Same gated reconfig + mm_block_init_short the
-            // pre-loop path does, but per K-block and keyed on active_in0_cb_id so an In0SourceFn
-            // that swaps in0 per block restores the operand the matmul will actually read. The
-            // 2-arg reconfig_data_format is the unconditional form (the helper can't know the
-            // formats pre_k_block left, so it can't use the conditional old/new form); it reaches
-            // the same end state as the caller-side mm_block_init_short_with_both_dt it replaces.
+            // ShortAfterPreKBlock: restore matmul state HERE, after pre_k_block()'s (possibly
+            // state-dirtying) work, so the PreKBlockFn never does the matmul restore. Same gated
+            // reconfig + short init as the pre-loop path, but per K-block and keyed on
+            // active_in0_cb_id (so an In0SourceFn that swaps in0 restores the right operand).
             if constexpr (init_mode == matmul_config::InitMode::ShortAfterPreKBlock) {
                 if constexpr (
                     reconfig == matmul_config::DataFormatReconfig::INPUT ||
@@ -305,11 +242,8 @@ ALWI void matmul_block(
                     shape.in0_block_k);
             }
 
-            // Per-K-block in1 starting tile offset. Default no-op returns 0, matching
-            // the prior behavior of starting the in1 stride from the front of the
-            // CB's fronted region. Callers without rd_ptr rotation return
-            // a non-zero base (e.g. in1_block_num_tiles * position_idx) to read a
-            // different slice of the same fronted in1 buffer per K-block.
+            // Per-K-block in1 base tile offset (default 0). Nonzero reads a different slice
+            // of the same fronted in1 region (see NoIn1BaseOffset).
             const uint32_t in1_base_offset = in1_base_offset_fn(block);
 
             // Full-block wait for both modes. Every caller has the
@@ -327,29 +261,20 @@ ALWI void matmul_block(
             Buf& pack_target_buf = pack_last_to_interm ? interm_buf : out_buf;
             const uint32_t pack_target_id = pack_last_to_interm ? interm_cb_id : out_cb_id;
 
-            // Legacy/sequential path: reserve the full out_block on the first
-            // non-last K-block so interm spills don't overwrite output data
-            // when out_buf and interm_buf share the same L1 region (multicast
-            // factory layout). Single reserve here keeps all wait_front /
-            // reserve_back increments identical across the K-loop, as the
-            // CB-API contract requires. Skipped when caller owns pack lifecycle.
+            // SubblockMajor: reserve the full out_block on the first non-last K-block so
+            // interm spills don't clobber output when interm shares out's L1 region (the
+            // factory's share-buffer layout), and so reserve/wait increments stay uniform
+            // across the K-loop. Skipped when the caller owns the pack lifecycle.
             if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
                 if (block == 0 && !last_out) {
                     out_buf.reserve_back(out_block_num_tiles);
                 }
             }
 
-            // Non-last K-blocks spill into interm_buf. When FUSE_BIAS (pack_last_to_interm)
-            // also runs through interm_buf as pack_target, all blocks — non-last and last —
-            // write to the same buffer at overlapping positions, so L1_ACC only accumulates
-            // correctly if non-last and last share the same layout. In that case we must
-            // spill row-major too. Otherwise (software reload path, or !pack_last_to_interm
-            // where the last block writes to out_buf), keep non-last subblock-major so the
-            // per-subblock reload at the last K-block can read partials contiguously.
-            // TileRowMajor + L1_ACC spills must match the last block's row-strided layout for BOTH
-            // last-block targets: Interm accumulates into the same interm region; Out reloads from
-            // it row-strided, so per-address accumulation only works if the spills land row-strided
-            // as well.
+            // Non-last K-blocks spill into interm_buf. With TileRowMajor + L1_ACC the spill must
+            // match the last block's row-strided layout (Interm accumulates in the same region;
+            // Out reloads from it row-strided), so per-address accumulation is correct. Otherwise
+            // keep subblock-major so the last-block per-subblock reload reads partials contiguously.
             constexpr bool spill_row_grouped = (tile_order == OutputCBLayout::TileRowMajor) && packer_l1_acc;
 
             int in0_index_subblock_offset = 0;
@@ -368,11 +293,8 @@ ALWI void matmul_block(
                 for (uint32_t in1_subblock = 0; in1_subblock < shape.in1_num_subblocks; in1_subblock++) {
                     tile_regs_acquire();
 
-                    // shape.last_in1_subblock_w_valid narrowing: on the last in1 subblock, if the
-                    // caller set the override, narrow the matmul FMA's ct_dim so the unpacker
-                    // touches only the columns the reader actually pushed. The dst/pack region
-                    // stays full-width; the writer drops padded output columns. Inert (==0)
-                    // for non-DRAM-sharded callers.
+                    // last_in1_subblock_w_valid: narrow the last in1 subblock's FMA ct_dim to the
+                    // columns actually pushed. DST/pack stays full-width. Inert when 0.
                     const uint32_t effective_subblock_w =
                         (shape.last_in1_subblock_w_valid != 0 && in1_subblock == shape.in1_num_subblocks - 1)
                             ? shape.last_in1_subblock_w_valid
@@ -381,14 +303,10 @@ ALWI void matmul_block(
                     if (enable_reload) {
                         copy_tile_to_dst_init_short_with_dt(in1_cb_id, interm_cb_id);
                         if constexpr (spill_row_grouped) {
-                            // TileRowMajor + L1_ACC (Out / OutWithRelu target): the non-last
-                            // K-block spills landed ROW-STRIDED (pack_subblock_row_strided into interm,
-                            // pushed one M-row-group at a time). A contiguous reload would read the
-                            // wrong tiles and use the wrong FIFO increment. Front the whole row group on
-                            // the first in1 sub-block, gather THIS sub-block's row-strided slice into
-                            // contiguous DST (col_base = in1_subblock's start column), and pop the row
-                            // group once the last in1 sub-block has consumed it — matching the producer's
-                            // per-row-group reserve/push so the CB increments stay balanced.
+                            // Spills landed row-strided, pushed per M-row-group. Front the whole row
+                            // group on the first in1 sub-block, gather this sub-block's row-strided
+                            // slice into contiguous DST, and pop the group after the last in1 sub-block
+                            // — matching the producer's per-row-group reserve/push so increments balance.
                             if (in1_subblock == 0) {
                                 interm_buf.wait_front(row_group_tiles);
                             }
@@ -410,17 +328,13 @@ ALWI void matmul_block(
                             in0_cb_id, in1_cb_id, interm_cb_id, transpose, shape.out_subblock_w, shape.out_subblock_h, shape.in0_block_k);
                     }
 
-                    // Compute output sub-block via hardware block matmul.
-                    // SKIP_COMPUTE (microbench) keeps the surrounding pipeline intact but
-                    // omits the actual matmul LLK call.
+                    // Compute the output sub-block. SKIP_COMPUTE (microbench) omits only the LLK call.
                     uint32_t dst_index = 0;
                     uint32_t in0_index = in0_index_subblock_offset;
                     uint32_t in1_index = in1_index_subblock_offset;
                     for (uint32_t inner_dim = 0; inner_dim < inner_steps; inner_dim++) {
 #ifndef SKIP_COMPUTE
                         // ckernel:: disambiguates the LLK matmul_block from this helper.
-                        // active_in0_cb_id reflects the In0SourceFn callback's choice
-                        // for this K-block; defaults to in0_cb_id.
                         ckernel::matmul_block(
                             active_in0_cb_id,
                             in1_cb_id,
@@ -443,13 +357,9 @@ ALWI void matmul_block(
                     if (last_out) {
                         post_compute(out_num_tiles);
 
-                        // OutWithUntilize: bracket the per-subblock pack with the
-                        // pack_untilize init/uninit pair so other ops (or the next K-loop
-                        // iteration's reload) can resume their own packer config. Init
-                        // before commit, uninit after release — matches the original
-                        // gathered kernel pattern (one MMIO write per subblock; the host
-                        // factory caps the case to a single subblock per K-block via the
-                        // out_block_num_subblocks==1 || !untilize_out FATAL).
+                        // OutWithUntilize: bracket the per-subblock pack with pack_untilize
+                        // init/uninit so later ops can resume their own packer config (init
+                        // before commit, uninit after release).
                         if constexpr (last_block_target == LastBlockTarget::OutWithUntilize) {
                             pack_untilize_dest_init<untilize_block_ct_dim>(pack_target_id);
                         }
@@ -458,11 +368,9 @@ ALWI void matmul_block(
                         if constexpr (tile_order == OutputCBLayout::SubblockMajor && !caller_owns_pack_target) {
                             pack_target_buf.reserve_back(out_num_tiles);
                         }
-                        // Pack-side sync: apply_activation_from_pack runs SFPU on the
-                        // packer thread (TRISC2) and includes its own math/pack semaphore
-                        // wait + dest-offset flip + STALLWAIT, replacing (not augmenting)
-                        // tile_regs_wait. When Activation::activation == NONE the standard
-                        // 4-phase pack-side wait is used.
+                        // Pack-side sync: apply_activation_from_pack does SFPU on the packer
+                        // thread with its own math/pack wait + dest-offset flip + STALLWAIT,
+                        // REPLACING tile_regs_wait. With NONE, use the standard 4-phase wait.
                         if constexpr (Activation::activation != KernelActivation::NONE) {
                             apply_activation_from_pack<
                                 Activation::activation,
@@ -479,31 +387,25 @@ ALWI void matmul_block(
 
                         if constexpr (packer_l1_acc) {
                             if constexpr (pack_last_to_interm) {
-                                // Interm target (FUSE_BIAS / untilize): L1 accumulates across all
-                                // blocks in the same interm region.
+                                // Interm target: L1 accumulates across all blocks in the same region.
                                 PACK((llk_pack_reconfig_l1_acc(block == 0 ? 0 : 1)));
                             } else {
-                                // SubblockMajor Out: the last block's partial was reloaded into DST
-                                // (copy_block_matmul_partials), so the pack must NOT re-accumulate.
+                                // Out target: the last block's partial was reloaded into DST, so the
+                                // pack must NOT re-accumulate.
                                 PACK((llk_pack_reconfig_l1_acc(0)));
                             }
                         }
 
                         if constexpr (tile_order == OutputCBLayout::TileRowMajor) {
-                            // Absolute-offset per-tile pack into the caller's row-group
-                            // reserve. Row stride uses out_row_width (padded output-pack
-                            // width on DRAM-sharded; equal to in1_per_core_w on most
-                            // factories). The per-row-group reserve on the pack target supplies
-                            // the M-row-group base; only the in1 col offset remains.
+                            // Absolute-offset per-tile pack into the row-group reserve; row stride
+                            // = out_row_width. The per-row-group reserve supplies the M-row-group
+                            // base, leaving only the in1 col offset.
                             //
-                            // caller_owns_pack_target: the helper does NOT reserve_back per
-                            // M-row-group (the caller did ONE reserve over the whole output
-                            // block and the FIFO wr_ptr stays at the block base for all
-                            // in0_subblocks). The per-row-group base that the FIFO advance
-                            // would otherwise supply must therefore be added to the absolute
-                            // offset here: in0_subblock * row_group_tiles. Without this every
-                            // M-row-group packs on top of row 0 (the in0_num_subblocks==1
-                            // L4a control hides the bug; in0_num_subblocks>1 convs garble).
+                            // caller_owns_pack_target: there is no per-row-group reserve (the caller
+                            // did ONE reserve over the whole block, FIFO wr_ptr fixed at the base),
+                            // so the M-row-group base must be folded into the absolute offset here
+                            // (in0_subblock * row_group_tiles); otherwise every row group packs onto
+                            // row 0 (latent when in0_num_subblocks == 1, garbles when > 1).
                             const uint32_t row_base =
                                 caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
@@ -524,11 +426,9 @@ ALWI void matmul_block(
                         }
 
                     } else {
-                        // Non-last K-block: spill partial to interm_buf. spill_row_grouped (defined
-                        // at the top of the K-block loop body) decides whether to match the
-                        // last-block row-major layout (needed when pack_last_to_interm + L1_ACC
-                        // accumulate into the same interm_buf buffer) or keep legacy subblock-
-                        // major (compatible with software reload's per-subblock read).
+                        // Non-last K-block: spill partial to interm_buf. spill_row_grouped picks
+                        // row-major (to match the last block when accumulating in the same interm
+                        // region) or subblock-major (compatible with the software per-subblock reload).
                         tile_regs_commit();
                         if constexpr (!spill_row_grouped && !caller_owns_pack_target) {
                             interm_buf.reserve_back(out_num_tiles);
@@ -536,11 +436,8 @@ ALWI void matmul_block(
                         tile_regs_wait();
 
                         if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
-                            // Pack-DF must match interm_cb format for non-last spills. Without this,
-                            // pack DF stays at whatever the previous op (kernel-entry mm_block_init,
-                            // or a tilize/transpose pre_k_block) configured — typically the output
-                            // CB's format — and intermediate spills land in the wrong format. Mirrors
-                            // the per-K-block pack reconfig onto the spill target.
+                            // Pack-DF must match interm's format for non-last spills, else spills
+                            // land in whatever format the previous op left (typically out's).
                             PACK((pack_reconfig_data_format(interm_cb_id)));
                         }
                         if constexpr (packer_l1_acc) {
@@ -548,10 +445,8 @@ ALWI void matmul_block(
                         }
 
                         if constexpr (spill_row_grouped) {
-                            // caller_owns_pack_target: same per-row-group base fix as the
-                            // last-block pack above — the FIFO does not advance per
-                            // M-row-group under caller-owns, so the in0_subblock row base
-                            // must be folded into the absolute offset.
+                            // caller_owns_pack_target: fold the M-row-group base into the offset,
+                            // same as the last-block pack above.
                             const uint32_t row_base =
                                 caller_owns_pack_target ? in0_subblock * row_group_tiles : 0;
                             const uint32_t col_base = row_base + in1_subblock * shape.out_subblock_w;
@@ -581,15 +476,14 @@ ALWI void matmul_block(
             }
 
             if constexpr (packer_l1_acc) {
-                // Wait/pop the L1_ACC partials in increments that match the producer's push
-                // granularity: row_group_tiles when spill_row_grouped (FUSE_BIAS + L1_ACC path
-                // pushes per M-row-group), otherwise subblock-sized. The CB API requires
-                // identical increments across all waits. Skipped on the caller-owns-pack
-                // path because the helper isn't pushing per block — there's nothing to drain.
+                // Drain the L1_ACC partials in increments matching the producer's push
+                // granularity (row_group_tiles when spill_row_grouped, else subblock-sized);
+                // the CB API requires uniform increments. Skipped under caller-owns (the helper
+                // pushes nothing, so there is nothing to drain).
                 const uint32_t drain_step = spill_row_grouped ? row_group_tiles : out_num_tiles;
                 if constexpr (pack_last_to_interm) {
-                    // No software reload on this path: Interm accumulates in place. The reload's
-                    // SBM-contiguous read offsets wouldn't match the row-strided spill layout anyway.
+                    // No software reload: Interm accumulates in place (and SBM-contiguous reload
+                    // offsets wouldn't match the row-strided spill anyway).
                     if constexpr (!caller_owns_pack_target) {
                         if (block < shape.num_k_blocks - 1) {
                             for (uint32_t s = 0; s < out_block_num_tiles; s += drain_step) {
@@ -618,11 +512,8 @@ ALWI void matmul_block(
                 }
             }
 
-            // in0_policy=WaitAndRetainOnLastBlock: caller reuses in0 across K chunks, so
-            // caller keeps in0 front on the last iteration. Intermediate blocks always
-            // pop. Pop targets active_in0_buf (the In0SourceFn-selected CB for this
-            // iteration) so callers swapping CBs per K-block pop from the
-            // right one.
+            // WaitAndRetainOnLastBlock: skip the pop on the last K-block (caller reuses in0);
+            // intermediate blocks always pop. Pops target active_in0_buf (the In0SourceFn CB).
             if constexpr (in0_policy == InputPolicy::WaitAndPopPerKBlock) {
                 active_in0_buf.pop_front(in0_block_num_tiles);
             } else {
@@ -630,12 +521,8 @@ ALWI void matmul_block(
                     active_in0_buf.pop_front(in0_block_num_tiles);
                 }
             }
-            // in1_policy=WaitAndRetainOnLastBlock: caller reuses in1 weights across multiple
-            // matmul invocations (each invocation has shape.num_k_blocks=1, last_out is always
-            // true on its only K-block, so the helper never pops). Intermediate K-blocks
-            // within a multi-K-block invocation still pop.
-            // in1_policy=NoWaitNoPop elides the pop entirely; the helper isn't managing
-            // in1 rd_ptr at all on that path.
+            // WaitAndRetainOnLastBlock: skip the pop on the last K-block (caller reuses in1);
+            // intermediate blocks pop. NoWaitNoPop: no pop at all (caller manages in1's rd_ptr).
             if constexpr (in1_policy == InputPolicy::WaitAndPopPerKBlock) {
                 in1_buf.pop_front(in1_block_num_tiles);
             } else if constexpr (in1_policy == InputPolicy::WaitAndRetainOnLastBlock) {
@@ -644,10 +531,8 @@ ALWI void matmul_block(
                 }
             }
 
-            // PostKBlockFn: symmetric counterpart to PreKBlockFn. Fires after the
-            // L1_ACC partial drain and after both input pop_front calls, so callers
-            // can advance CB rd_ptrs (or other per-K-block bookkeeping) only
-            // once the consumer has finished reading.
+            // PostKBlockFn: after the L1_ACC drain and both input pops, so callers can advance
+            // CB rd_ptrs (or other bookkeeping) only once the consumer has read the block.
             post_k_block(block, shape.num_k_blocks, last_out);
         }
     }
