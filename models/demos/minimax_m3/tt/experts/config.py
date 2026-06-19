@@ -36,13 +36,19 @@ def _grid_dividing(nt: int, fallback: tuple[int, int], max_dim: int = 8) -> tupl
 class ExpertConfig:
     """Core expert configuration.
 
-    MiniMax-M2 uses plain SiLU SwiGLU (no clamp limit, no alpha scaling).
+    MiniMax-M3 uses the clamped "swigluoai" SwiGLU (gpt-oss variant):
+    out = (up_clamped + 1) * (gate_clamped * sigmoid(alpha * gate_clamped)),
+    with gate clamped to max=swiglu_limit and up clamped to [-swiglu_limit, swiglu_limit].
+    (M2 used plain SiLU SwiGLU: silu(gate) * up — no clamp, no alpha, no (up+1).)
+    Defaults match the M3 text_config (swiglu_alpha=1.702, swiglu_limit=7.0).
     """
 
     intermediate_size: int
     num_experts: int
     hidden_size: int
     num_experts_per_tok: int
+    swiglu_limit: float = 7.0
+    alpha: float = 1.702
 
 
 @dataclass

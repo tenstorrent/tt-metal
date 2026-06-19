@@ -201,6 +201,8 @@ class MLP:
                 num_experts=hf_config.num_local_experts,
                 hidden_size=hf_config.hidden_size,
                 num_experts_per_tok=hf_config.num_experts_per_tok,
+                swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
+                alpha=getattr(hf_config, "swiglu_alpha", 1.702),
             )
 
             # Use MiniMax-M2 specific program config
