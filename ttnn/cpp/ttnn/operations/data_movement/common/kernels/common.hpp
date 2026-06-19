@@ -296,8 +296,8 @@ FORCE_INLINE void noc_async_write_sharded(
     }
 }
 
+template <typename AddrGenType>
 [[deprecated("Use the overload with leading Noc parameter instead; this function will be removed ~2026-07")]]
-template <uint32_t max_transfer_size, typename AddrGenType>
 FORCE_INLINE void noc_async_write_sharded(
     const uint32_t l1_addr,
     const AddrGenType tensor,
@@ -305,7 +305,7 @@ FORCE_INLINE void noc_async_write_sharded(
     const uint32_t offset,
     const uint32_t size) {
     Noc noc;
-    return noc_async_write_sharded<max_transfer_size, AddrGenType>(noc, l1_addr, tensor, dest_id, offset, size);
+    return noc_async_write_sharded(noc, l1_addr, tensor, dest_id, offset, size);
 }
 
 template <typename AddrGenType>
