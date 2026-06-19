@@ -258,7 +258,7 @@ Prefill chunk progress logging is off by default; set ``DEVSTRAL2_ISL_PERF_CHUNK
 | Decode tok/s/u | Steady-state decode trace replay throughput |
 
 ``test_isl_sweep_perf.py -k sweep``, BH Loudbox 1×8, ``model_max_seq_len=263168``,
-``max_new_tokens=100``, decode replay cap 32 (Jun 2026):
+``max_new_tokens=100``:
 
 | ISL | TTFT (s) | Prefill tok/s | Decode tok/s/u |
 |----:|---------:|--------------:|---------------:|
