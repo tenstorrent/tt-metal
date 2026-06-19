@@ -119,11 +119,14 @@ void kernel_main() {
     metadata_ready_sem.wait_min(1);
 
     // Read per-expert token counts from dedicated semaphores
+    // Device 2.0 migration: legacy primitive retained: Semaphore<> has no accessor to read its
+    // current value; use the legacy pointer-based read.
     uint32_t NUM_TOKENS_PER_EXPERT[num_experts];
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
-        Semaphore<> count_sem(metadata_count_semaphore_base_id + e);
-        uint32_t num_tokens = count_sem.get();
+        volatile tt_l1_ptr uint32_t* count_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
+        uint32_t num_tokens = *count_sem_ptr;
         NUM_TOKENS_PER_EXPERT[e] = num_tokens;
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
@@ -135,8 +138,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* cb_w2c_md_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_w2c_md.get_write_ptr());
     for (uint32_t e = 0; e < num_experts; ++e) {
-        Semaphore<> count_sem(metadata_count_semaphore_base_id + e);
-        cb_w2c_md_write_ptr[e] = count_sem.get();
+        volatile tt_l1_ptr uint32_t* count_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
+        cb_w2c_md_write_ptr[e] = *count_sem_ptr;
     }
     cb_w2c_md_write_ptr[num_experts] = get_semaphore(matmul_chunk_ready_semaphore_id);
     cb_w2c_md.push_back(2);
@@ -253,7 +257,7 @@ void kernel_main() {
                     // noc_inline_dw_write_set_state above
                     noc_inline_dw_write_with_state<false, true, true, false, true>(++semaphore_value);
 
-                    noc1_obj.async_posted_writes_flushed(1);
+                    noc1_obj.async_writes_flushed<NocOptions::POSTED>();
                 }
             }
 
@@ -330,7 +334,7 @@ void kernel_main() {
                 }
             }
 
-            noc1_obj.async_posted_writes_flushed(1);
+            noc1_obj.async_writes_flushed<NocOptions::POSTED>();
             cb_c2s_out.pop_front(tokens_per_chunk_combine);
 
             // Signal tilize drain that this chunk has been consumed
@@ -351,5 +355,7 @@ void kernel_main() {
             get_noc_addr(output_shard_core_map[2 * idx], output_shard_core_map[2 * idx + 1], combine_semaphore_addr);
         noc_semaphore_inc(dest_sem_noc_addr, 1, 1, vchannel);
     }
-    noc_obj.async_atomic_barrier(1);
+    // The noc_semaphore_inc calls above issue on NoC 1 (matching the original
+    // noc_async_atomic_barrier(/*noc=*/1) call), so barrier on noc1_obj.
+    noc1_obj.async_atomic_barrier();
 }

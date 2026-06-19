@@ -594,7 +594,7 @@ void kernel_main() {
         // ========== Step 5: Drain receives counts from non-drain cores and consolidates ==========
         if (num_tilize_cores > 1) {
             // Wait for all non-drain cores to send their counts
-            partial_metadata_ready_sem.wait_min(num_tilize_cores - 1);
+            partial_metadata_ready_sem.wait(num_tilize_cores - 1);
 
             // Read counts from each non-drain core and consolidate their buffers
             // tilize_noc_x and tilize_noc_y arrays were populated from runtime args earlier

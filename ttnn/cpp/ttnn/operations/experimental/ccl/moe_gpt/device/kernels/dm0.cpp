@@ -169,10 +169,13 @@ void kernel_main() {
     metadata_ready_sem.wait_min(1);
 
     // Read per-expert token counts from dedicated semaphores
+    // Device 2.0 migration: legacy primitive retained: Semaphore<> has no accessor to read its
+    // current value; use the legacy pointer-based read.
     uint32_t NUM_CHUNKS_PER_EXPERT[num_experts];
     for (uint32_t e = 0; e < num_experts; ++e) {
-        Semaphore<> count_sem(metadata_count_semaphore_base_id + e);
-        uint32_t num_tokens = count_sem.get();
+        volatile tt_l1_ptr uint32_t* count_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(metadata_count_semaphore_base_id + e));
+        uint32_t num_tokens = *count_sem_ptr;
         NUM_CHUNKS_PER_EXPERT[e] = (num_tokens + tokens_per_chunk - 1) / tokens_per_chunk;
     }
 

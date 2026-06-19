@@ -225,7 +225,7 @@ void kernel_main() {
                 /*noc_id=*/1);
             noc_semaphore_inc</*posted=*/true>(dest_sem_noc_addr, inc, /*noc_id=*/1, vchannel);
         };
-        noc1_obj.async_writes_flushed<Noc::ResponseMode::POSTED>();
+        noc1_obj.async_writes_flushed<NocOptions::POSTED>();
     };
 
     //-------------------------------------------------------------------------
@@ -348,7 +348,7 @@ void kernel_main() {
 #endif
 
                     // Ensure writes have left the core before continuing
-                    noc1_obj.async_writes_flushed<Noc::ResponseMode::POSTED>();
+                    noc1_obj.async_writes_flushed<NocOptions::POSTED>();
                 }
             }
 
@@ -439,7 +439,7 @@ void kernel_main() {
             if constexpr (compute_only) {
                 noc1_obj.async_writes_flushed();  // non-posted: flush issuer queue for non-posted writes
             } else {
-                noc1_obj.async_writes_flushed<Noc::ResponseMode::POSTED>();  // production: original posted flush
+                noc1_obj.async_writes_flushed<NocOptions::POSTED>();  // production: original posted flush
             }
             cb_c2s_out.pop_front(num_w0_w1_tiles_h);
 
@@ -467,6 +467,6 @@ void kernel_main() {
         // wait for combine to do its final semaphore increment before resetting. Otherwise, leads to hang.
         combine_sem.wait(combine_semaphore_val);
         combine_sem.set(0);
-        noc1_obj.async_writes_flushed<Noc::ResponseMode::POSTED>();
+        noc1_obj.async_writes_flushed<NocOptions::POSTED>();
     }
 }
