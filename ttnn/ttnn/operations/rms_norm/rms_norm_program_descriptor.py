@@ -38,6 +38,10 @@ CB_NORMALIZED = 27
 # compute (PASS-1) to the mcast reader. Decoupled from CB_PARTIAL_SUMSQ so the reader's
 # cb_wait_front observes only the final value (Refinement 1 correctness fix).
 CB_LOCAL_SUMSQ = 28
+# Refinement 3 (TILE input + ROW_MAJOR gamma): the reader stages row-major gamma
+# sticks here and compute tilizes them once into CB_GAMMA. Only allocated when
+# gamma is supplied ROW_MAJOR with a TILE input.
+CB_GAMMA_RM = 3
 
 # Resident budget in tiles (≈1.12 MB for bf16), per op_design.md P3.
 RESIDENT_BUDGET_TILES = 560
@@ -209,6 +213,17 @@ def _regime_a_descriptor(
     fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
     inter = _intermediate_dtype(dt, fp32_acc)
     gamma_dt = gamma.dtype if has_gamma else dt
+    # Refinement 3: TILE input may pair with ROW_MAJOR gamma. When so, the reader
+    # stages gamma sticks in CB_GAMMA_RM and compute tilizes them into CB_GAMMA,
+    # which must be padded to a whole number of reduce_block chunks.
+    gamma_is_rm = 1 if (has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT) else 0
+    num_chunks = (Wt + reduce_block - 1) // reduce_block
+    W = int(input_tensor.shape[-1])
+    # gamma_elem is only consumed by the reader's ROW_MAJOR-gamma path, where gamma
+    # is guaranteed non-bf8b ({bf8b, ROW_MAJOR} is INVALID). Never call
+    # element_size() on a block format (bf8b) — it raises "datum invalid".
+    gamma_elem = gamma.element_size() if gamma_is_rm else 0
+    cb_gamma_pages = (num_chunks * reduce_block) if gamma_is_rm else Wt
     cbs = [
         cb(CB_INPUT_RESIDENT, dt, Wt),
         cb(CB_SCALER, inter, 1),
@@ -218,14 +233,28 @@ def _regime_a_descriptor(
         cb(CB_RECIP_RMS, inter, 2),
     ]
     if has_gamma:
-        cbs.append(cb(CB_GAMMA, gamma_dt, Wt))
+        cbs.append(cb(CB_GAMMA, gamma_dt, cb_gamma_pages))
         # cb_normalized is the pass-2 Col->Row streaming intermediate, sized to one
         # REDUCE_BLOCK (constant) — NOT Wt — so the resident L1 footprint does not scale
         # with the row width (compute streams pass-2 per block).
         cbs.append(cb(CB_NORMALIZED, inter, reduce_block))
+        if gamma_is_rm:
+            cbs.append(cb(CB_GAMMA_RM, gamma_dt, 2 * reduce_block))
 
     # ---------- reader ----------
-    reader_ct = [CB_INPUT_RESIDENT, CB_GAMMA, CB_SCALER, Wt, int(has_gamma)]
+    reader_ct = [
+        CB_INPUT_RESIDENT,
+        CB_GAMMA,
+        CB_SCALER,
+        Wt,
+        int(has_gamma),
+        gamma_is_rm,
+        CB_GAMMA_RM,
+        reduce_block,
+        num_chunks,
+        W,
+        gamma_elem,
+    ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
@@ -280,6 +309,8 @@ def _regime_a_descriptor(
         eps_bits,
         1,  # num_partials = 1
         CB_PARTIAL_SUMSQ,  # cb_local_sumsq (unused in Regime A; num_partials==1 elides it)
+        gamma_is_rm,
+        CB_GAMMA_RM,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -340,6 +371,15 @@ def _regime_b_descriptor(
     inter = _intermediate_dtype(dt, fp32_acc)
     gamma_dt = gamma.dtype if has_gamma else dt
     device = input_tensor.device()
+    # Refinement 3: TILE input + ROW_MAJOR gamma. Reader stages gamma sticks in
+    # CB_GAMMA_RM; compute tilizes them into CB_GAMMA (padded to whole chunks).
+    gamma_is_rm = 1 if (has_gamma and gamma.layout == ttnn.ROW_MAJOR_LAYOUT) else 0
+    num_chunks = (Wt_s + reduce_block - 1) // reduce_block
+    W = int(input_tensor.shape[-1])
+    # See Regime A note: never call element_size() on bf8b. gamma_elem is only used
+    # by the reader's ROW_MAJOR-gamma path (gamma guaranteed non-bf8b there).
+    gamma_elem = gamma.element_size() if gamma_is_rm else 0
+    cb_gamma_pages = (num_chunks * reduce_block) if gamma_is_rm else Wt_s
 
     DATA_READY = 0
     CONSUMED = 1
@@ -371,9 +411,11 @@ def _regime_b_descriptor(
         cb(CB_LOCAL_SUMSQ, inter, 2),
     ]
     if has_gamma:
-        cbs.append(cb(CB_GAMMA, gamma_dt, Wt_s))
+        cbs.append(cb(CB_GAMMA, gamma_dt, cb_gamma_pages))
         # Constant-sized pass-2 streaming intermediate (one REDUCE_BLOCK), not Wt_s.
         cbs.append(cb(CB_NORMALIZED, inter, reduce_block))
+        if gamma_is_rm:
+            cbs.append(cb(CB_GAMMA_RM, gamma_dt, 2 * reduce_block))
 
     # Semaphores on the full union of used cores (disjoint groups reuse the same IDs).
     semaphores = [
@@ -434,6 +476,12 @@ def _regime_b_descriptor(
         K,
         DATA_READY,
         CONSUMED,
+        gamma_is_rm,
+        CB_GAMMA_RM,
+        reduce_block,
+        num_chunks,
+        W,
+        gamma_elem,
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -478,6 +526,8 @@ def _regime_b_descriptor(
         eps_bits,
         K,
         CB_LOCAL_SUMSQ,
+        gamma_is_rm,
+        CB_GAMMA_RM,
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -529,10 +579,12 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
     fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
     inter = _intermediate_dtype(dt, fp32_acc)
     gamma_dt = gamma.dtype if has_gamma else dt
-    in_elem = input_tensor.element_size()
-    gamma_elem = gamma.element_size() if has_gamma else in_elem
+    in_elem = input_tensor.element_size()  # RM input is never bf8b ({bf8b, RM} INVALID)
     out_elem = output_tensor.element_size()
     gamma_is_tile = 1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0
+    # gamma_elem only feeds the reader's ROW_MAJOR-gamma path (gamma non-bf8b there;
+    # bf8b gamma is always TILE). Avoid element_size() on a bf8b TILE gamma.
+    gamma_elem = gamma.element_size() if (has_gamma and not gamma_is_tile) else in_elem
 
     num_cores = min(num_blocks_total, total_cores)
     core_ranges = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)

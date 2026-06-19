@@ -16,6 +16,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
@@ -46,6 +47,13 @@ void kernel_main() {
     // (the PASS-1 accumulator, whose front transiently advances mid-accumulation) is the
     // Refinement-1 correctness fix — see the combine block below. Unused in Regime A.
     constexpr uint32_t cb_local_sumsq = get_compile_time_arg_val(15);
+    // Refinement 3: when gamma is supplied ROW_MAJOR (1,1,1,W) but the input is
+    // TILE, the reader fills cb_gamma_rm with row-major gamma sticks and this
+    // kernel tilizes them ONCE into cb_gamma (resident) before the row loop. For
+    // TILE gamma (gamma_is_rm == 0, the default) the reader fills cb_gamma
+    // directly and this block is elided — byte-identical to prior phases.
+    constexpr uint32_t gamma_is_rm = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_gamma_rm = get_compile_time_arg_val(17);
 
     // ---- runtime args ----
     const uint32_t num_rows = get_arg_val<uint32_t>(0);
@@ -70,6 +78,15 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_input_resident, cb_scaler, cb_output);
 
     constexpr uint32_t num_chunks = (Wt + reduce_block - 1) / reduce_block;
+
+    // ROW_MAJOR gamma (with TILE input): tilize the gamma sticks into cb_gamma
+    // once, resident for all rows. cb_gamma is sized to num_chunks*reduce_block
+    // tiles here (the descriptor pads it); PASS-2 only reads offsets [0, Wt).
+    if constexpr (has_gamma && gamma_is_rm) {
+        for (uint32_t c = 0; c < num_chunks; ++c) {
+            ckl::tilize<reduce_block, cb_gamma_rm, cb_gamma>(1);
+        }
+    }
 
     for (uint32_t row = 0; row < num_rows; ++row) {
         // ---------- PASS 1: sum of squares over the resident shard ----------

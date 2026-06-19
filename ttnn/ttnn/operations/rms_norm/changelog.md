@@ -134,3 +134,55 @@
     (+128 skipped EXCLUSION cells), plus `test_rms_norm_precision_matrix_fp32_no_acc_refused`
     asserting the EXCLUSION raises a support refusal.
   - `tests/ttnn/unit_tests/operations/rms_norm/precision_matrix_results.md` — results table.
+
+## Refinement 3 — ROW_MAJOR layout + non-tile-aligned shapes (native)
+- **Date**: 2026-06-19
+- **What was done**:
+  - **SUPPORTED grown**: `layout += [ROW_MAJOR_LAYOUT]`; `gamma_layout += [ROW_MAJOR_LAYOUT]`;
+    `alignment += [w_non_aligned, h_non_aligned]`. No new EXCLUSIONS — every newly-claimed
+    cell passes natively at the bf16/fp32/bf8b tolerance band. INVALID ({bf8b, ROW_MAJOR}
+    on either tensor) stays in feature_spec, never reaching validate().
+  - **TILE input + non-aligned: already native.** Verified that TILE-layout non-tile-aligned
+    shapes work unchanged — `ttnn.from_torch` zero-pads the tensor and the kernel's
+    `inv_W = 1/W` already carries the TRUE element count, so padding columns add 0 to the
+    per-stick Sum(x^2). Only required adding the alignment values to SUPPORTED.
+  - **ROW_MAJOR input: new dedicated tilize-wrapped, row-parallel path**
+    (`_regime_rm_descriptor` + `rms_norm_{reader,compute,writer}_rm.cpp`). Each stick (one
+    (b,c,h) row of W elements) is RMS-normalized independently; sticks are processed in
+    32-stick tile-blocks, W chunked by `reduce_block` tiles so the per-core L1 footprint is
+    bounded regardless of W (input held resident per block; gamma streamed). Reader reads
+    sticks → compute tilizes → TILE math (square→reduce→rsqrt→normalize) → compute untilizes
+    → writer writes sticks. **No host-side to_layout / tilize / untilize / pad / slice.**
+    Output layout matches input.
+  - **Native non-aligned handling in the RM dataflow kernels**: the reader ZEROES the W-padding
+    columns of the last real tile (and any synthetic padding tiles rounding Wt up to a
+    reduce_block multiple) so they contribute 0 to Sum(x^2); H non-alignment is a partial last
+    tile-block whose extra sticks are zeroed and never written by the writer. Per-stick
+    independence means H alignment needs no math change.
+  - **Mixed gamma layout (both input layouts)**: gamma may be TILE or ROW_MAJOR independent of
+    input. TILE gamma is read as column tiles directly into the gamma-tiled CB; ROW_MAJOR gamma
+    is read as a stick and tilized in compute. For the TILE-input path this added a constexpr
+    `gamma_is_rm` branch to both readers (Regime A + Regime B mcast) and a one-time gamma tilize
+    at compute boot — fully gated so the TILE-gamma path is byte-identical to prior phases.
+  - **Bug fixed (the one real blocker)**: adding non-aligned to SUPPORTED surfaced 350 golden
+    failures, all `ValueError: datum for bfp8 invalid` — a host-side crash from calling
+    `tensor.element_size()` on a bf8b (block) tensor, which has no single datum size. `gamma_elem`
+    is now computed only when gamma is ROW_MAJOR (guaranteed non-bf8b); bf8b + non-aligned then
+    works numerically (pcc >= 0.9999).
+- **Accuracy achieved** (measured on probes, fp32_dest_acc_en=True, HiFi4):
+  - RM bf16: PCC >= 0.99999, maxerr <= 0.09 on shapes incl. (1,1,32,50), (1,1,17,64),
+    (1,1,17,50), (4,8,32,47), (1,1,32,4096), (1,32,4096).
+  - RM fp32: PCC = 1.00000 incl. (1,1,32,8192) (fits L1: bounded streaming).
+  - TILE input + RM gamma (Regime A + B): PCC >= 0.99999.
+  - bf8b + non-aligned (TILE): PCC >= 0.9999.
+- **Golden test progress**: 1683/1683 supported passing, 2940 skipped, 420 xfailed, 0 failed,
+  0 xpass-drift (was 1333 passed / 350 failed before the element_size fix). test_regression.py
+  15/15.
+- **Issues encountered**: (1) TILE-layout gamma initially read as RM sticks in the RM path
+  (pcc ~0.2) — fixed with a `gamma_is_tile` branch reading tiles directly. (2) bf8b
+  element_size() host crash (above). Both root-caused and fixed; no deferrals.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_layout_matrix.py` — the
+    authoritative layout matrix: 10 shapes (aligned + W/H/both non-aligned, 2D/3D/4D) ×
+    {bf16, fp32} × {TILE->TILE, RM->RM} × {no_gamma, gamma_tile, gamma_rm} = 120 cases, all
+    asserting output-layout-matches-input + PCC/relRMS. All pass.

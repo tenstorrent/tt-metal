@@ -28,6 +28,16 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
+namespace {
+FORCE_INLINE void zero_l1(uint32_t addr, uint32_t nbytes) {
+    volatile tt_l1_ptr uint32_t* p = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(addr);
+    const uint32_t n = nbytes >> 2;
+    for (uint32_t i = 0; i < n; ++i) {
+        p[i] = 0;
+    }
+}
+}  // namespace
+
 void kernel_main() {
     // ---- runtime args ----
     const uint32_t my_rank = get_arg_val<uint32_t>(0);  // per-core: rank within the group
@@ -56,7 +66,13 @@ void kernel_main() {
     constexpr uint32_t num_partials = get_compile_time_arg_val(7);  // K
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(8);
     constexpr uint32_t consumed_sem_id = get_compile_time_arg_val(9);
-    constexpr auto input_args = TensorAccessorArgs<10>();
+    constexpr uint32_t gamma_is_rm = get_compile_time_arg_val(10);  // gamma.layout == ROW_MAJOR
+    constexpr uint32_t cb_gamma_rm = get_compile_time_arg_val(11);
+    constexpr uint32_t reduce_block = get_compile_time_arg_val(12);
+    constexpr uint32_t num_chunks = get_compile_time_arg_val(13);
+    constexpr uint32_t W = get_compile_time_arg_val(14);  // true element count along full W
+    constexpr uint32_t gamma_elem = get_compile_time_arg_val(15);
+    constexpr auto input_args = TensorAccessorArgs<16>();
     [[maybe_unused]] constexpr auto gamma_args =
         TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
@@ -75,16 +91,51 @@ void kernel_main() {
 
     // gamma shard, read once.
     if constexpr (has_gamma) {
-        const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
-        const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
-        cb_reserve_back(cb_gamma, Wt_s);
-        uint32_t l1 = get_write_ptr(cb_gamma);
-        for (uint32_t wt = 0; wt < Wt_s; ++wt) {
-            noc_async_read_tile(gamma_page_base + wt, gamma_accessor, l1);
-            l1 += gamma_tile_bytes;
+        if constexpr (gamma_is_rm) {
+            // ROW_MAJOR gamma (1,1,1,W): read this core's W-shard columns as
+            // row-major sticks into cb_gamma_rm (row 0 carries data); compute
+            // tilizes them into cb_gamma. The shard's first column inside the
+            // full gamma stick is gamma_page_base*32.
+            constexpr uint32_t TILE_W = 32;
+            constexpr uint32_t gamma_tile_row_bytes = TILE_W * gamma_elem;
+            constexpr uint32_t gamma_padded_chunk_bytes = reduce_block * gamma_tile_row_bytes;
+            constexpr uint32_t chunk_cols = reduce_block * TILE_W;
+            const uint32_t shard_col0 = gamma_page_base * TILE_W;
+            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
+            for (uint32_t c = 0; c < num_chunks; ++c) {
+                const uint32_t col0 = shard_col0 + c * chunk_cols;
+                uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
+                if (valid_cols > chunk_cols) {
+                    valid_cols = chunk_cols;
+                }
+                const uint32_t chunk_row_bytes = valid_cols * gamma_elem;
+                const uint32_t byte_off = col0 * gamma_elem;
+                cb_reserve_back(cb_gamma_rm, reduce_block);
+                uint32_t l1 = get_write_ptr(cb_gamma_rm);
+                if (chunk_row_bytes > 0) {
+                    const uint32_t zstart = chunk_row_bytes & ~3u;
+                    if (zstart < gamma_padded_chunk_bytes) {
+                        zero_l1(l1 + zstart, gamma_padded_chunk_bytes - zstart);
+                    }
+                    noc_async_read(gamma_accessor.get_noc_addr(0, byte_off), l1, chunk_row_bytes);
+                } else {
+                    zero_l1(l1, gamma_padded_chunk_bytes);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_gamma_rm, reduce_block);
+            }
+        } else {
+            const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
+            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
+            cb_reserve_back(cb_gamma, Wt_s);
+            uint32_t l1 = get_write_ptr(cb_gamma);
+            for (uint32_t wt = 0; wt < Wt_s; ++wt) {
+                noc_async_read_tile(gamma_page_base + wt, gamma_accessor, l1);
+                l1 += gamma_tile_bytes;
+            }
+            noc_async_read_barrier();
+            cb_push_back(cb_gamma, Wt_s);
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_gamma, Wt_s);
     }
 
     // input shard, read once (P1).

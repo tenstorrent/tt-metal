@@ -75,3 +75,14 @@
 {"source":"tt-probe","pid":2982463,"started_at_ms":1781891490932,"wait_ms":285,"run_ms":20230,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":2984615,"started_at_ms":1781891549019,"wait_ms":247,"run_ms":36534,"test_path":"rms_norm","exit_code":0}
 {"source":"tt-probe","pid":2986759,"started_at_ms":1781891707039,"wait_ms":284,"run_ms":29650,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2990235,"started_at_ms":1781891926033,"wait_ms":280,"run_ms":19827,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":2992952,"started_at_ms":1781892179727,"wait_ms":308,"run_ms":32090,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":2995057,"started_at_ms":1781892228748,"wait_ms":3,"run_ms":28226,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3000535,"started_at_ms":1781892405134,"wait_ms":3,"run_ms":172752,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":1}
+{"source":"tt-probe","pid":3004471,"started_at_ms":1781892644915,"wait_ms":291,"run_ms":17190,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3005889,"started_at_ms":1781892854926,"wait_ms":283,"run_ms":17037,"test_path":"rms_norm","exit_code":0}
+{"source":"tt-probe","pid":3006605,"started_at_ms":1781892972190,"wait_ms":279,"run_ms":26653,"test_path":"rms_norm","exit_code":0}
+{"source":"run_safe_pytest","pid":3008024,"started_at_ms":1781893013911,"wait_ms":3,"run_ms":138414,"test_path":"eval/golden_tests/rms_norm/test_golden.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3010812,"started_at_ms":1781893169294,"wait_ms":2,"run_ms":24744,"test_path":"eval/golden_tests/rms_norm/test_regression.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3011483,"started_at_ms":1781893199580,"wait_ms":2,"run_ms":412987,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_regime_b.py","exit_code":0}
+{"source":"run_safe_pytest","pid":3023482,"started_at_ms":1781893652325,"wait_ms":3,"run_ms":63877,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_layout_matrix.py","exit_code":0}

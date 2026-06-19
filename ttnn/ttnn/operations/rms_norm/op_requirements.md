@@ -150,7 +150,7 @@ derivation introduced here is reused by Refinement 3's ROW_MAJOR legs, and any
 fp32 Σx² intermediate it introduces should sit on a *correct* Regime B). Keep
 all float dtypes in one descriptor-level refinement — do not split bf8b out.
 
-### [ ] Refinement 3 — ROW_MAJOR layout + non-tile-aligned shapes (native)
+### [x] Refinement 3 — ROW_MAJOR layout + non-tile-aligned shapes (native)
 
 **Goal**: add `ttnn.ROW_MAJOR_LAYOUT` to `SUPPORTED["layout"]` and to
 `SUPPORTED["gamma_layout"]` (gamma is supplied ROW_MAJOR `(1,1,1,W)` per the

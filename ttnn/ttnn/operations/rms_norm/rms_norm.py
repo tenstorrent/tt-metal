@@ -74,8 +74,16 @@ SUPPORTED = {
     # intermediates are promoted to Float32 when fp32_dest_acc_en (see
     # rms_norm_program_descriptor._intermediate_dtype).
     "dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
-    "layout": [ttnn.TILE_LAYOUT],
-    "alignment": ["tile_aligned"],
+    # Refinement 3: ROW_MAJOR handled natively by a tilize-wrapped, row-parallel
+    # path (see rms_norm_program_descriptor._regime_rm_descriptor). TILE keeps the
+    # two-regime (A/B) path. {bf8b, ROW_MAJOR} is INVALID (block format has no RM
+    # representation) — absorbed in feature_spec.INVALID, never reaches validate().
+    "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
+    # Refinement 3: non-tile-aligned H and/or W handled natively. W-padding columns
+    # are zeroed (TILE: by from_torch; RM: by the reader) so the per-stick Sum(x^2)
+    # counts only valid elements, and inv_W carries the TRUE element count. H
+    # non-alignment is a partial last tile-block (extra sticks never written).
+    "alignment": ["tile_aligned", "w_non_aligned", "h_non_aligned"],
     "rank": [2, 3, 4],
     # Refinement 2: both precision corners. fp32 input requires fp32
     # accumulation (the {float32, fp32_dest_acc_en=False} cell is EXCLUDED
@@ -87,7 +95,11 @@ SUPPORTED = {
     # format follows gamma.dtype in the descriptor. float32 also covers the
     # no_gamma canonical cell (gamma_dtype=float32, gamma_layout=TILE).
     "gamma_dtype": [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b],
-    "gamma_layout": [ttnn.TILE_LAYOUT],
+    # Refinement 3: gamma may be TILE or ROW_MAJOR, independent of input layout.
+    # The reader reads TILE gamma as column tiles directly and ROW_MAJOR gamma as
+    # a stick (tilized in compute). {gamma_dtype bf8b, gamma_layout ROW_MAJOR} is
+    # INVALID (feature_spec), never reaching validate().
+    "gamma_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
 }
 
 
