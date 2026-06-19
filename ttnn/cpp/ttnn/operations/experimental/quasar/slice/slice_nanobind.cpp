@@ -71,7 +71,7 @@ void bind_slice(nb::module_& mod) {
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
     // than a vector with a fixed size default value
-    ttnn::bind_function<"slice">(
+    ttnn::bind_function<"slice", "ttnn.experimental.quasar.">(
         mod,
         doc,
         // Overload 1: Tensor args version (uint32_t template parameter)
