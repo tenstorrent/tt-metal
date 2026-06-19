@@ -10,10 +10,6 @@ Usage:
 Description:
     Data provider script that collects a baseline ARC heartbeat sample for each device.
 
-    A heartbeat sample pairs the current TIMER_HEARTBEAT telemetry value with a monotonic
-    timestamp. Taking two samples separated in time allows consumers (e.g. check_arc) to
-    estimate the ARC heartbeat rate and uptime.
-
 Owner:
     adjordjevic-TT
 """
