@@ -1016,11 +1016,6 @@ def is_single_chip():
     return ttnn.GetNumAvailableDevices() == 1
 
 
-def is_quasar():
-    ARCH_NAME = ttnn.get_arch_name()
-    return "quasar" in ARCH_NAME
-
-
 def is_blackhole():
     ARCH_NAME = ttnn.get_arch_name()
     return "blackhole" in ARCH_NAME
@@ -1068,10 +1063,6 @@ def skip_with_watcher(reason_str="Test is not passing with watcher enabled"):
 
 def skip_with_llk_assert(reason_str="Test is not passing with LLK asserts enabled"):
     return ti_skip(is_llk_assert_enabled(), reason=reason_str)
-
-
-def run_for_quasar(reason_str="only runs for Quasar"):
-    return ti_skip(not is_quasar(), reason=reason_str)
 
 
 def run_for_blackhole(reason_str="only runs for Blackhole"):

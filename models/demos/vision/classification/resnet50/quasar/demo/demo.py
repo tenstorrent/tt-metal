@@ -6,7 +6,6 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import run_for_quasar
 from models.demos.vision.classification.resnet50.quasar.demo.demo_runner import (
     run_resnet_imagenet_inference,
     run_resnet_inference,
@@ -36,7 +35,6 @@ def test_demo_sample(mesh_device, batch_size, input_loc, imagenet_label_dict, mo
     run_resnet_inference(batch_size, input_loc, imagenet_label_dict, mesh_device, model_location_generator)
 
 
-@run_for_quasar()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
 )

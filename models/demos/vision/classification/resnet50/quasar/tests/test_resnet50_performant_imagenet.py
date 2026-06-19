@@ -9,7 +9,7 @@ from tqdm import tqdm
 from transformers import AutoImageProcessor
 
 import ttnn
-from models.common.utility_functions import profiler, run_for_quasar
+from models.common.utility_functions import profiler
 from models.demos.vision.classification.resnet50.quasar.tests.common.demo_utils import get_batch, get_data_loader
 from models.demos.vision.classification.resnet50.quasar.tests.common.resnet50_test_infra import create_test_infra
 from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_config
@@ -17,7 +17,6 @@ from models.tt_cnn.tt.pipeline import PipelineConfig, create_pipeline_from_confi
 NUM_VALIDATION_IMAGES_IMAGENET = 49920
 
 
-@run_for_quasar()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
 )
@@ -142,7 +141,6 @@ def test_run_resnet50_trace_2cqs_inference(
     logger.info(f"ttnn_resnet50_trace_2cqs_batch_size{batch_size} compile time: {compile_time}")
 
 
-@run_for_quasar()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
 )

@@ -4,11 +4,9 @@
 
 import pytest
 
-from models.common.utility_functions import run_for_quasar
 from models.demos.vision.classification.resnet50.quasar.tests.common.perf_device_resnet50 import run_perf_device
 
 
-@run_for_quasar()
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
     "batch_size, test, expected_perf",

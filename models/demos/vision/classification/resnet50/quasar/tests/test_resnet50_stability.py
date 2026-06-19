@@ -8,13 +8,11 @@ import pytest
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_quasar
 from models.demos.vision.classification.resnet50.quasar.demo.demo import test_demo_trace_with_imagenet
 
 test_demo_trace_with_imagenet.__test__ = False
 
 
-@run_for_quasar()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 1605632, "num_command_queues": 2}], indirect=True
 )

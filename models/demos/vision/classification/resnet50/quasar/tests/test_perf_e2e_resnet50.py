@@ -4,11 +4,9 @@
 
 import pytest
 
-from models.common.utility_functions import run_for_quasar
 from models.demos.vision.classification.resnet50.quasar.tests.common.perf_e2e_resnet50 import run_perf_resnet
 
 
-@run_for_quasar()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
@@ -33,7 +31,6 @@ def test_perf(
     )
 
 
-@run_for_quasar()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 1500000}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, expected_inference_time, expected_compile_time",
