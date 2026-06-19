@@ -25,29 +25,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.cumprod" href="ttnn.cumprod.html" />
-    <link rel="prev" title="ttnn.mse_loss" href="ttnn.mse_loss.html" />
- 
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        // Add noindex to keep old versions out of search results
-        var noindex = document.createElement('meta');
-        noindex.name = 'robots';
-        noindex.content = 'noindex';
-        document.head.appendChild(noindex);
-        // Add canonical pointing to latest (clean URL, no query/fragment)
-        var canonical = document.createElement('link');
-        canonical.rel = 'canonical';
-        canonical.href = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        document.head.appendChild(canonical);
-    }
-})();
-</script>
+    <link rel="prev" title="ttnn.mse_loss" href="ttnn.mse_loss.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -106,7 +84,6 @@
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sampling.html">ttnn.sampling</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.std.html">ttnn.std</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.sum.html">ttnn.sum</a></li>
-<li class="toctree-l4"><a class="reference internal" href="ttnn.experimental.topk_large_indices.html">ttnn.experimental.topk_large_indices</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="ttnn.var.html">ttnn.var</a></li>
 </ul>
@@ -155,32 +132,6 @@
       </nav>
 
       <div class="wy-nav-content">
-<div id="tt-version-warning" style="display:none"></div>
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        var latestUrl = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        var banner = document.getElementById('tt-version-warning');
-        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
-        banner.textContent = 'You are viewing documentation for an older version (';
-        var versionEl = document.createElement('strong');
-        versionEl.textContent = version;
-        banner.appendChild(versionEl);
-        banner.appendChild(document.createTextNode('). '));
-        var link = document.createElement('a');
-        link.href = latestUrl;
-        link.textContent = 'Click here for the latest version.';
-        banner.appendChild(link);
-        banner.style.display = 'block';
-    }
-})();
-</script>
-
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -201,7 +152,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.argmax">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">argmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keepdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">CoreRangeSet</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.argmax" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">argmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keepdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">CoreRangeSet</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">use_multicore</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">None</span></span></span><a class="headerlink" href="#ttnn.argmax" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Argmax. Returns indices of maximum values.
@@ -219,6 +170,8 @@ Output is UINT32, ROW_MAJOR, INTERLEAVED (DRAM or L1).</p>
 <li><p><strong>dim</strong> (<em>int</em><em>, </em><em>optional</em>) – Dim to reduce. <code class="docutils literal notranslate"><span class="pre">None</span></code> reduces all elements (ROW_MAJOR input only). Default: <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
 <li><p><strong>keepdim</strong> (<em>bool</em><em>, </em><em>optional</em>) – Keep reduced dim. Default: <code class="docutils literal notranslate"><span class="pre">False</span></code>.</p></li>
 <li><p><strong>sub_core_grids</strong> (<em>CoreRangeSet</em><em>, </em><em>optional</em>) – Limits execution to a subset of cores. Supported on ROW_MAJOR last-dim reductions (&lt;= 2 ranges) and batch/channel dim reductions. Default: <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
+<li><p><strong>use_multicore</strong> (<em>bool</em><em>, </em><em>optional</em>) – Enables multi-core only on ROW_MAJOR last-dim reductions. Default: <code class="docutils literal notranslate"><span class="pre">False</span></code>.
+<strong>Deprecated</strong> — use <code class="docutils literal notranslate"><span class="pre">sub_core_grids</span></code> to control core assignment instead. Will be removed in a future release (tracked in #44838).</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output memory (INTERLEAVED DRAM/L1). Default: input’s memory_config.</p></li>
 <li><p><strong>output_tensor</strong> (<em>ttnn.Tensor</em><em>, </em><em>optional</em>) – Preallocated output (must be UINT32, ROW_MAJOR, INTERLEAVED, same device). Default: <code class="docutils literal notranslate"><span class="pre">None</span></code>.</p></li>
 </ul>
@@ -230,11 +183,11 @@ Output is UINT32, ROW_MAJOR, INTERLEAVED (DRAM or L1).</p>
 - input layout: ROW_MAJOR
 - dtypes: BFLOAT16/FLOAT32/INT32/UINT32/UINT16</p></li>
 <li><p><strong>dim = rank-1</strong> (last / width):
-- ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (multi-core by default)
+- ROW_MAJOR input: BFLOAT16/FLOAT32/INT32/UINT32/UINT16 (single- or multi-core)
 - TILE input: BFLOAT16/FLOAT32 (single-core)</p></li>
 <li><p><strong>dim = rank-2</strong> (height):
 - BFLOAT16/FLOAT32 only
-- ROW_MAJOR inputs are internally tilized; this path runs single-core</p></li>
+- ROW_MAJOR inputs are internally tilized; this path runs single-core (<code class="docutils literal notranslate"><span class="pre">use_multicore</span></code> is ignored)</p></li>
 <li><p><strong>0 &lt;= dim &lt; rank-2</strong> (batch/channel dims, rank &gt;= 3):
 - BFLOAT16/FLOAT32 only (integer dtypes not supported)
 - input may be ROW_MAJOR or TILE (ROW_MAJOR is converted to TILE internally)
@@ -247,6 +200,7 @@ Output is UINT32, ROW_MAJOR, INTERLEAVED (DRAM or L1).</p>
 <li><p>TILE input with <code class="docutils literal notranslate"><span class="pre">dim=None</span></code></p></li>
 <li><p>Batch/channel dim reductions with INT/UINT inputs</p></li>
 <li><p>Integer dtypes on batch/channel dim reductions</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">use_multicore=True</span></code> with TILE inputs (multi-core requires ROW_MAJOR input)</p></li>
 </ul>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
@@ -316,9 +270,7 @@ async function loadVersions() {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const pathParts = location.pathname.split('/');
-        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
-        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
+        const projectCode = location.pathname.split('/')[3];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -336,9 +288,7 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    const parts = window.location.pathname.split('/');
-    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
-    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
+    return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 

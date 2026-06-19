@@ -25,29 +25,7 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="ttnn.open_device" href="api/ttnn.open_device.html" />
-    <link rel="prev" title="Tensor" href="tensor.html" />
- 
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        // Add noindex to keep old versions out of search results
-        var noindex = document.createElement('meta');
-        noindex.name = 'robots';
-        noindex.content = 'noindex';
-        document.head.appendChild(noindex);
-        // Add canonical pointing to latest (clean URL, no query/fragment)
-        var canonical = document.createElement('link');
-        canonical.rel = 'canonical';
-        canonical.href = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        document.head.appendChild(canonical);
-    }
-})();
-</script>
+    <link rel="prev" title="Tensor" href="tensor.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -369,7 +347,6 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sampling.html">ttnn.sampling</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.std.html">ttnn.std</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.sum.html">ttnn.sum</a></li>
-<li class="toctree-l4"><a class="reference internal" href="api/ttnn.experimental.topk_large_indices.html">ttnn.experimental.topk_large_indices</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.topk.html">ttnn.topk</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.var.html">ttnn.var</a></li>
 </ul>
@@ -672,32 +649,6 @@
       </nav>
 
       <div class="wy-nav-content">
-<div id="tt-version-warning" style="display:none"></div>
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        var latestUrl = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        var banner = document.getElementById('tt-version-warning');
-        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
-        banner.textContent = 'You are viewing documentation for an older version (';
-        var versionEl = document.createElement('strong');
-        versionEl.textContent = version;
-        banner.appendChild(versionEl);
-        banner.appendChild(document.createTextNode('). '));
-        var link = document.createElement('a');
-        link.href = latestUrl;
-        link.textContent = 'Click here for the latest version.';
-        banner.appendChild(link);
-        banner.style.display = 'block';
-    }
-})();
-</script>
-
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -1257,7 +1208,7 @@
 </tr>
 <tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.logit.html#ttnn.logit" title="ttnn.logit"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.logit</span></code></a></p></td>
-<td><p>Performs the logit function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> after clamping its elements to the interval [<code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>, 1 - <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>].</p></td>
+<td><p>Performs logit function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>.</p></td>
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.ltz.html#ttnn.ltz" title="ttnn.ltz"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.ltz</span></code></a></p></td>
@@ -1832,14 +1783,10 @@
 <td><p>Computes the sum of the input tensor <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along the specified dimension(s) <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
 <tr class="row-even">
-<td><p><a class="reference internal" href="api/ttnn.experimental.topk_large_indices.html#ttnn.experimental.topk_large_indices" title="ttnn.experimental.topk_large_indices"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.experimental.topk_large_indices</span></code></a></p></td>
-<td><p>Experimental Top-K over the last dimension of a row-major BFLOAT16 tensor.</p></td>
-</tr>
-<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.topk.html#ttnn.topk" title="ttnn.topk"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.topk</span></code></a></p></td>
 <td><p>Returns the <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> largest or <code class="xref py py-attr docutils literal notranslate"><span class="pre">k</span></code> smallest elements of the <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along a given dimension <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
-<tr class="row-even">
+<tr class="row-odd">
 <td><p><a class="reference internal" href="api/ttnn.var.html#ttnn.var" title="ttnn.var"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.var</span></code></a></p></td>
 <td><p>Computes the var of the input tensor <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> along the specified dimension(s) <code class="xref py py-attr docutils literal notranslate"><span class="pre">dim</span></code>.</p></td>
 </tr>
@@ -2925,9 +2872,7 @@ async function loadVersions() {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const pathParts = location.pathname.split('/');
-        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
-        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
+        const projectCode = location.pathname.split('/')[3];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -2945,9 +2890,7 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    const parts = window.location.pathname.split('/');
-    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
-    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
+    return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 
