@@ -108,8 +108,8 @@ ttnn:
     bh_p100a_civ2_viommu: 60
     bh_p150b_civ2_viommu: 60
   # Sweep budgets: per-SKU caps for the ttnn-run-sweeps and sweep-validation
-  # workflows. Each parallel sweep job has a 60-min timeout; the budget is
-  # num_jobs * 60 rounded up with headroom.
+  # workflows. Budget planning uses a 30-min figure per job (the verify step
+  # passes --timeout-minutes 30); actual job timeout is 60 min.
   sweep:
     wh_n150: 900        # ~30 jobs × 30 min
     wh_n300: 900

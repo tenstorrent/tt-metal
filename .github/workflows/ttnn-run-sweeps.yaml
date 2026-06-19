@@ -985,11 +985,14 @@ jobs:
         shell: bash
         run: |
           pip3 install PyYAML > /dev/null 2>&1
-          # Count jobs per HW group from the matrix outputs
+          # Count jobs per HW group from the per-hardware matrix outputs.
+          # compute_sweep_matrix.py writes per-HW matrices as "${hw}-matrix=..."
+          # lines to stdout (captured in sweep_matrix.outputs.txt), NOT into the
+          # pretty JSON file (which only has module/batches/include).
           for hw in n150 n300 p150b t3k galaxy; do
-            matrix_key="${hw}-matrix"
-            matrix_json=$(cat /tmp/sweep_matrix.pretty.json | jq -r ".\"${hw}\"" 2>/dev/null || echo "null")
-            if [[ "$matrix_json" != "null" && "$matrix_json" != "" ]]; then
+            matrix_line=$(grep "^${hw}-matrix=" /tmp/sweep_matrix.outputs.txt 2>/dev/null || true)
+            if [[ -n "$matrix_line" ]]; then
+              matrix_json="${matrix_line#*=}"
               job_count=$(echo "$matrix_json" | jq '.include | length' 2>/dev/null || echo 0)
               if [[ "$job_count" -gt 0 ]]; then
                 # Map hw group to budget SKU name

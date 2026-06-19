@@ -175,9 +175,14 @@ jobs:
       - name: Check budget
         run: |
           pip3 install PyYAML > /dev/null 2>&1
-          # Validation runs a fixed set of jobs per model; estimate from selected models
+          # Validation runs a fixed set of jobs per model; estimate from selected models.
+          # selected-models is a comma-separated string (e.g. "gpt_oss, tt_dit"), not JSON.
           MODELS='${{ needs.inspect-trace-selection-registry.outputs.selected-models }}'
-          JOB_COUNT=$(echo "$MODELS" | jq -r 'length' 2>/dev/null || echo 1)
+          if [[ -z "$MODELS" || "$MODELS" == "none" ]]; then
+            JOB_COUNT=0
+          else
+            JOB_COUNT=$(echo "$MODELS" | tr ',' '\n' | sed 's/^ *//' | grep -c '.')
+          fi
           echo "Estimated validation jobs: $JOB_COUNT"
           for sku in wh_n150 wh_n300 bh_p150b wh_galaxy; do
             python3 .github/scripts/utils/verify_sweep_budget.py \
