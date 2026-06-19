@@ -68,6 +68,7 @@ class TtDispatchModule(LightweightModule):
         fp8_output: bool = False,
         subdevice_id=None,
         num_untilizers_per_sender: int = 2,
+        fp8_per_token_scale: bool = False,
     ):
         """
         Initialize dispatch module with configuration parameters.
@@ -106,6 +107,7 @@ class TtDispatchModule(LightweightModule):
         self.num_links = num_links
         self.topology = topology
         self.fp8_output = fp8_output
+        self.fp8_per_token_scale = fp8_per_token_scale
         self.subdevice_id = subdevice_id
         # num_untilizers_per_sender >= 1 is validated on the device op side
         # (DispatchDeviceOperation::validate_on_program_cache_miss).
@@ -274,6 +276,7 @@ class TtDispatchModule(LightweightModule):
             use_fp8_dispatch=self.fp8_output,
             subdevice_id=self.subdevice_id,
             num_untilizers_per_sender=self.num_untilizers_per_sender,
+            fp8_per_token_scale=self.fp8_per_token_scale,
         )
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape

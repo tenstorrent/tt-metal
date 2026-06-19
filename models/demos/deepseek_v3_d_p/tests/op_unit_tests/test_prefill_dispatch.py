@@ -109,7 +109,10 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
-@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+# Output mode is a single mutually-exclusive axis: bf16, plain fp8 cast, or fp8 with DeepEP-style
+# per-token scaling. fp8_scale_out is the fp8 path plus scaling (not a separate path), so encoding it
+# here avoids the invalid (scale without fp8) combinations a second boolean axis would create.
+@pytest.mark.parametrize("output_mode", ["bf16_out", "fp8_out", "fp8_scale_out"])
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
@@ -122,11 +125,13 @@ def test_ttnn_dispatch(
     topology,
     use_predictable_data,
     input_layout,
-    use_fp8_output,
+    output_mode,
     verbose,
     run_pcc_check,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
+    use_fp8_output = output_mode in ("fp8_out", "fp8_scale_out")
+    use_fp8_per_token_scale = output_mode == "fp8_scale_out"
     num_devices = mesh_device.get_num_devices()
     if num_devices >= 8 and not run_pcc_check and use_predictable_data:
         pytest.skip("8-chip perf only runs with random data")
@@ -142,6 +147,10 @@ def test_ttnn_dispatch(
 
     if use_fp8_output and input_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("fp8 output not supported with row_major input layout")
+
+    # Per-token FP8 scale (DeepEP-style) requires whole 128-element scale blocks.
+    if use_fp8_per_token_scale and emb_dim % 128 != 0:
+        pytest.skip("fp8_per_token_scale requires emb_dim % 128 == 0")
 
     torch.manual_seed(42)
 
@@ -273,6 +282,7 @@ def test_ttnn_dispatch(
         num_links=num_links,
         topology=topology,
         fp8_output=use_fp8_output,
+        fp8_per_token_scale=use_fp8_per_token_scale,
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
@@ -305,21 +315,32 @@ def test_ttnn_dispatch(
     # Convert TTNN outputs to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
     if use_fp8_output:
-        # Quantize the torch reference to fp8_e4m3fn so it carries the same precision as the TT
-        # dispatch output (which packs BF16->FP8 at the untilize stage), isolating routing
-        # correctness from fp8 quantization noise. Round-trip to float32 since
-        # validate_dispatch_buffer_pcc expects a real float dtype — matching the TT side below.
-        torch_dispatched = torch_dispatched.to(torch.float8_e4m3fn).to(torch.float32)
-
         # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors; widen to fp32 for PCC.
         tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer)
         assert (
             tt_out_dispatched.dtype == torch.float8_e4m3fn
         ), f"expected float8_e4m3fn fp8 output, got {tt_out_dispatched.dtype}"
         tt_out_dispatched = tt_out_dispatched.to(torch.float32)
+        if not use_fp8_per_token_scale:
+            # Plain fp8 cast: quantize the torch reference to fp8 so it carries the same precision
+            # as the TT output, isolating routing correctness from fp8 quantization noise.
+            torch_dispatched = torch_dispatched.to(torch.float8_e4m3fn).to(torch.float32)
     else:
         tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
+    if use_fp8_per_token_scale:
+        # Metadata is widened by hidden/128 trailing slots holding the per-token FP32 scales
+        # (bit-stored in INT32). Reinterpret them as fp32, DEQUANTIZE the scaled fp8 buffer
+        # (buffer * scale) back to ~bf16, and compare that against the (unquantized) torch
+        # reference via PCC. This validates the fp8 values AND the scales together. The remaining
+        # routing words are validated as usual.
+        assert (
+            tt_out_metadata.shape[-1] == metadata_len + emb_dim // 128
+        ), f"metadata last dim {tt_out_metadata.shape[-1]} != {metadata_len} + {emb_dim // 128}"
+        tt_scales = tt_out_metadata[..., metadata_len:].contiguous().view(torch.float32)  # [..., emb//128]
+        tt_out_metadata = tt_out_metadata[..., :metadata_len]
+        scales_expanded = tt_scales.repeat_interleave(128, dim=-1)  # [..., emb]
+        tt_out_dispatched = tt_out_dispatched * scales_expanded
 
     assert_output_shape(tt_out_dispatched, num_dispatch_groups, dispatch_group_size, "dispatched buffer")
 

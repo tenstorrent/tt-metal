@@ -60,6 +60,15 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
             "FP8 output is not supported with ROW_MAJOR input layout; use TILE layout when fp8_output=True");
     }
 
+    // Per-token (DeepEP-style) FP8 scaling: only valid layered on top of the fp8 tile path, and the
+    // hidden dim must be a whole number of 128-element scale blocks.
+    if (operation_attributes.fp8_per_token_scale) {
+        TT_FATAL(operation_attributes.use_fp8_dispatch, "fp8_per_token_scale requires use_fp8_dispatch=True");
+        const uint32_t hidden_dim = static_cast<uint32_t>(tensor_args.input_tensor.tensor_spec().logical_shape()[-1]);
+        TT_FATAL(
+            hidden_dim % 128 == 0, "fp8_per_token_scale requires hidden_dim ({}) to be a multiple of 128", hidden_dim);
+    }
+
     // Validate output memory config is DRAM interleaved (not sharded)
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(),
@@ -91,7 +100,12 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     // dispatch buffer is a single flat region shared across all local experts; its
     // total token capacity is max_dispatch_buffer_token_size.
     auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
-    auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
+    // When fp8_per_token_scale is set, the metadata page is widened by hidden_dim/128 trailing
+    // slots that hold the per-token FP32 scales (bit-stored in the INT32 metadata storage),
+    // appended after the metadata_len routing words. Receiver bit-casts the tail back to fp32.
+    const uint32_t metadata_cols =
+        operation_attributes.fp8_per_token_scale ? metadata_len + (hidden_dim / 128) : metadata_len;
+    auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_cols});
 
     // FP8 dispatch emits Fp8_e4m3 (1 byte/element); DataType::FP8_E4M3 maps directly to
     // tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter, so downstream CBs created
@@ -157,7 +171,8 @@ prefill_dispatch(
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores,
     bool use_fp8_dispatch,
-    uint32_t num_untilizers_per_sender) {
+    uint32_t num_untilizers_per_sender,
+    bool fp8_per_token_scale) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
@@ -174,7 +189,8 @@ prefill_dispatch(
             .worker_core_range_set = worker_core_range_set,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
             .use_fp8_dispatch = use_fp8_dispatch,
-            .num_untilizers_per_sender = num_untilizers_per_sender},
+            .num_untilizers_per_sender = num_untilizers_per_sender,
+            .fp8_per_token_scale = fp8_per_token_scale},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,
             .weights_tensor = weights_tensor,

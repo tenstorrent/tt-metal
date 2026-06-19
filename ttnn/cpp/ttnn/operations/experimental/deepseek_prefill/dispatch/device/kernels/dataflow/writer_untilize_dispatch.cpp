@@ -55,6 +55,27 @@
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 constexpr uint32_t TRID_NON_LOCAL_WRITE = 1;
 
+#ifdef FP8_PER_TOKEN_SCALE
+// FP32 tile is 32x32 (4 faces of 16x16) -> 4096 bytes.
+constexpr uint32_t FP32_TILE_BYTES = 32u * 32u * 4u;
+// Extract column 0 of one fp32 tile into out[0..tile_h) (one value per row); face-aware walk.
+// Copied from writer_per_token_cast_to_fp8.cpp; specialized below for the 32x32 / 16x16 tile.
+template <uint32_t face_h, uint32_t face_w, uint32_t FACE_ROWS, uint32_t FACE_ROW_STRIDE>
+static inline void extract_first_column(volatile tt_l1_ptr uint32_t* tile, uint32_t* out) {
+    uint32_t s = 0;
+    uint32_t face_base = 0;  // = face_row * FACE_ROW_STRIDE
+    for (uint32_t fr = 0; fr < FACE_ROWS; ++fr) {
+        uint32_t col0_idx = face_base;  // in-face row 0, col 0
+        for (uint32_t r = 0; r < face_h; ++r) {
+            out[s] = tile[col0_idx];
+            col0_idx += face_w;
+            ++s;
+        }
+        face_base += FACE_ROW_STRIDE;
+    }
+}
+#endif
+
 void kernel_main() {
     // ===== Compile-time args =====
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
@@ -75,7 +96,18 @@ void kernel_main() {
     constexpr uint32_t cb_route_info_scratch_id = get_compile_time_arg_val(12);  // 16B local scratch
     constexpr uint32_t meta_scratch_slots = get_compile_time_arg_val(13);
 
+#ifdef FP8_PER_TOKEN_SCALE
+    // Scale path: the compute pushes scale_blocks_per_row scale tiles per batch (col0 = the 32 tokens'
+    // scales for that 128-element block); we transpose them into a [read_batch_size][scale_blocks_per_row]
+    // fp32 scratch and append each token's row to its metadata slot at offset metadata_len.
+    constexpr uint32_t cb_scale_id = get_compile_time_arg_val(14);
+    constexpr uint32_t cb_scale_scratch_id = get_compile_time_arg_val(15);
+    constexpr uint32_t scale_blocks_per_row = get_compile_time_arg_val(16);
+    constexpr uint32_t metadata_len = get_compile_time_arg_val(17);
+    constexpr auto output_args = TensorAccessorArgs<18>();
+#else
     constexpr auto output_args = TensorAccessorArgs<14>();
+#endif
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     // ===== Runtime args =====
@@ -139,6 +171,12 @@ void kernel_main() {
     uint32_t produced_count = 0;
     uint32_t local_count = 0;
 
+#ifdef FP8_PER_TOKEN_SCALE
+    // Persistent [read_batch_size][scale_blocks_per_row] fp32 transpose buffer (filled per batch).
+    volatile tt_l1_ptr uint32_t* scale_scratch =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scale_scratch_id));
+#endif
+
     DPRINT_DISPATCH(
         "Writer untilize: handshake done c4={} c5={} c6={}\n", sender_c4_l1_addr, sender_c5_l1_addr, sender_c6_l1_addr);
 
@@ -156,6 +194,27 @@ void kernel_main() {
         volatile tt_l1_ptr PlanEntry* entries =
             reinterpret_cast<volatile tt_l1_ptr PlanEntry*>(plan_addr + sizeof(PlanHeader));
         uint32_t entry_count = plan->entry_count;
+
+#ifdef FP8_PER_TOKEN_SCALE
+        // Transpose this batch's block-major scale tiles (col0 = 32 tokens) into the row-major
+        // [token][block] scratch, then free the scale CB for the next batch. By the time the untilize
+        // batch is ready, all scale_blocks_per_row tiles have been pushed by the compute.
+        cb_wait_front(cb_scale_id, scale_blocks_per_row);
+        {
+            uint32_t scale_read_ptr = get_read_ptr(cb_scale_id);
+            uint32_t col0[read_batch_size];  // read_batch_size (=32) is compile-time constant
+            for (uint32_t b = 0; b < scale_blocks_per_row; ++b) {
+                volatile tt_l1_ptr uint32_t* tile =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_read_ptr + b * FP32_TILE_BYTES);
+                // 32x32 fp32 tile, 16x16 faces: FACE_ROWS=2, FACE_ROW_STRIDE=2*256=512.
+                extract_first_column<16u, 16u, 2u, 512u>(tile, col0);
+                for (uint32_t t = 0; t < read_batch_size; ++t) {
+                    scale_scratch[t * scale_blocks_per_row + b] = col0[t];
+                }
+            }
+        }
+        cb_pop_front(cb_scale_id, scale_blocks_per_row);
+#endif
         DPRINT_DISPATCH(
             "[W c={}] b={} draining plan entries={} produced_so_far={}\n",
             (uint32_t)core_id,
@@ -199,6 +258,15 @@ void kernel_main() {
                     meta[2] = (int32_t)k;
                     meta[3] = (int32_t)routed_expert;
                     meta[4] = (int32_t)weight;
+#ifdef FP8_PER_TOKEN_SCALE
+                    // Append this token's per-128-block fp32 scales (bit-stored) after metadata_len.
+                    {
+                        volatile tt_l1_ptr uint32_t* meta_u = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_addr);
+                        for (uint32_t b = 0; b < scale_blocks_per_row; ++b) {
+                            meta_u[metadata_len + b] = scale_scratch[token_t * scale_blocks_per_row + b];
+                        }
+                    }
+#endif
                     noc_async_write_page(page_idx, metadata_addr_gen, meta_addr);
                     local_count++;
                 } else {
@@ -255,6 +323,16 @@ void kernel_main() {
                     meta[2] = (int32_t)k;
                     meta[3] = (int32_t)routed_expert;
                     meta[4] = (int32_t)weight;
+#ifdef FP8_PER_TOKEN_SCALE
+                    // Append this token's per-128-block fp32 scales (bit-stored) after metadata_len.
+                    {
+                        volatile tt_l1_ptr uint32_t* meta_u =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xdev_metadata_scratch_addr);
+                        for (uint32_t b = 0; b < scale_blocks_per_row; ++b) {
+                            meta_u[metadata_len + b] = scale_scratch[token_t * scale_blocks_per_row + b];
+                        }
+                    }
+#endif
                     uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
                     noc_async_write_one_packet_with_trid(
                         xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);

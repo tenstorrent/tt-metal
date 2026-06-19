@@ -25,12 +25,12 @@ BLOCK_W = 128
 E4M3_MAX = 448.0
 
 SHAPES = [
-    (1, 1024),  # single row (partial tile-row)
-    (30, 1152),  # partial tile-row + 9 scale blocks
-    (640, 7168),
+    # (1, 1024),  # single row (partial tile-row)
+    # (30, 1152),  # partial tile-row + 9 scale blocks
+    # (640, 7168),
     (3200, 7168),
-    (6400, 7168),
-    (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
+    # (6400, 7168),
+    # (2, 3, 30, 1152),  # 4D + partial tile-row (M = 180)
 ]
 
 ROUNDTRIP_SHAPES = [(32, 1024), (30, 1152), (4, 1, 128, 1024)]

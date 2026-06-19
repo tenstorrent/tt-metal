@@ -30,6 +30,11 @@ struct DispatchParams {
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_dispatch = false;
     uint32_t num_untilizers_per_sender = 2;
+    // When set (tile path, requires use_fp8_dispatch), the FP8 dispatch performs DeepEP-style
+    // per-token / per-128-element-block scaling on the untilize/compute cores, and appends the
+    // per-token FP32 scales (bit-stored in the INT32 metadata slots) after the routing words —
+    // the metadata last dim widens from metadata_len to metadata_len + hidden/128.
+    bool fp8_per_token_scale = false;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dispatch_group_size",
@@ -45,7 +50,8 @@ struct DispatchParams {
         "worker_core_range_set",
         "use_l1_small_for_semaphores",
         "use_fp8_dispatch",
-        "num_untilizers_per_sender");
+        "num_untilizers_per_sender",
+        "fp8_per_token_scale");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -62,7 +68,8 @@ struct DispatchParams {
             worker_core_range_set,
             use_l1_small_for_semaphores,
             use_fp8_dispatch,
-            num_untilizers_per_sender);
+            num_untilizers_per_sender,
+            fp8_per_token_scale);
     };
 };
 

@@ -30,6 +30,7 @@
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/clamp.h"
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_in = get_compile_time_arg_val(0);
@@ -62,18 +63,21 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_abs, cb_output_e4m3);
     cb_wait_front(cb_scaler, 1);  // reader-filled 1.0 scaler, reused for every reduce
 
-    for (uint32_t blk = 0; blk < num_blocks; ++blk) {
+    for (uint32_t blk = 0; blk < num_blocks; ++blk) {  // num_blocks = 32 * 128
         {
             // ----- 1. tilize input row-major -> tile -----
-            reconfig_data_format_srca(cb_in);
-            pack_reconfig_data_format(cb_tile);
-            tilize_init(cb_in, tiles_per_block, cb_tile);
-            cb_wait_front(cb_in, tiles_per_block);
-            cb_reserve_back(cb_tile, tiles_per_block);
-            tilize_block(cb_in, tiles_per_block, cb_tile);
-            cb_push_back(cb_tile, tiles_per_block);
-            cb_pop_front(cb_in, tiles_per_block);
-            tilize_uninit(cb_in, cb_tile);
+            {
+                DeviceZoneScopedN("row-major -> tile");
+                reconfig_data_format_srca(cb_in);
+                pack_reconfig_data_format(cb_tile);
+                tilize_init(cb_in, tiles_per_block, cb_tile);  // tiles_per_block = 4
+                cb_wait_front(cb_in, tiles_per_block);
+                cb_reserve_back(cb_tile, tiles_per_block);
+                tilize_block(cb_in, tiles_per_block, cb_tile);
+                cb_push_back(cb_tile, tiles_per_block);
+                cb_pop_front(cb_in, tiles_per_block);
+                tilize_uninit(cb_in, cb_tile);
+            }
 
             // ----- 2. block amax -> scale (col 0) and 1/scale (col 0) -----
             cb_wait_front(cb_tile, tiles_per_block);  // read by index; popped after the divide

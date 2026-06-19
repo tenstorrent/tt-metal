@@ -76,14 +76,23 @@ void bind_dispatch(nb::module_& mod) {
                 Wormhole_B0. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
                 sender on the tile-layout path.
+            fp8_per_token_scale (bool, optional): When True (requires use_fp8_dispatch=True and
+                TILE input, Blackhole only), the dispatched FP8 buffer is quantized DeepEP-style
+                with per-token / per-128-element-block scales (scale = clamp(max|x|,1e-4)/448).
+                The per-token FP32 scales are appended to the metadata tensor: its last dim widens
+                from metadata_len to metadata_len + hidden_dim/128, and the trailing hidden_dim/128
+                slots hold the scales bit-stored in the INT32 metadata storage (bit-cast back to
+                fp32 on read). Requires hidden_dim % 128 == 0. Defaults to False.
 
         Returns:
             Tuple[ttnn.Tensor, ttnn.Tensor]:
                 dispatched_buffer: Flat expert-centric token buffer on each destination device.
                     Shape per device: (1, 1, max_dispatch_buffer_token_size, hidden_dim).
                 metadata: Per-token metadata written alongside dispatched_buffer.
-                    Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5).
-                    Fields: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight].
+                    Shape per device: (1, 1, max_dispatch_buffer_token_size, metadata_len=5),
+                    or (..., metadata_len + hidden_dim/128) when fp8_per_token_scale=True.
+                    Fields: [linearized_mesh_coord, token_idx, topk_idx, routed_expert, weight]
+                    followed by the per-token FP32 scales (bit-stored in INT32) when enabled.
                     Used by the combine op to route processed tokens back to their origin.
         )doc",
         &dispatch,
@@ -106,7 +115,8 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
         nb::arg("use_fp8_dispatch") = false,
-        nb::arg("num_untilizers_per_sender") = 2);
+        nb::arg("num_untilizers_per_sender") = 2,
+        nb::arg("fp8_per_token_scale") = false);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

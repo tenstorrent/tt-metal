@@ -63,5 +63,6 @@ prefill_dispatch(
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores = false,
     bool use_fp8_dispatch = false,
-    uint32_t num_untilizers_per_sender = 2);
+    uint32_t num_untilizers_per_sender = 2,
+    bool fp8_per_token_scale = false);
 }  // namespace ttnn::prim

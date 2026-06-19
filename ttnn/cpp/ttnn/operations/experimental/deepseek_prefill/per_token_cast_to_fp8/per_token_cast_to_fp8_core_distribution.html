@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>per_token_cast_to_fp8 — raspodela po core-ovima</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --g1: #f0883e;   /* group 1: 30 redova (x=0) */
+    --g2: #3fb950;   /* group 2: 29 redova */
+    --hl: #ffd33d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px;
+    background: var(--bg); color: var(--text);
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-size: 14px; line-height: 1.5;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 0 0 12px; color: var(--accent); }
+  .sub { color: var(--muted); margin-bottom: 20px; }
+  code { background: #21262d; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+
+  .controls {
+    display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-end;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 18px; margin-bottom: 20px;
+  }
+  .controls label { display: flex; flex-direction: column; font-size: 12px; color: var(--muted); gap: 4px; }
+  .controls input {
+    background: #0d1117; border: 1px solid var(--border); color: var(--text);
+    border-radius: 6px; padding: 6px 8px; width: 110px; font-size: 14px;
+  }
+  .controls button {
+    background: var(--accent); color: #0d1117; border: none; border-radius: 6px;
+    padding: 8px 16px; font-weight: 600; cursor: pointer; font-size: 14px;
+  }
+
+  .stats { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 22px; }
+  .stat {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 16px; min-width: 120px;
+  }
+  .stat .v { font-size: 20px; font-weight: 700; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+
+  .layout { display: flex; gap: 28px; flex-wrap: wrap; align-items: flex-start; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px;
+  }
+
+  /* GRID */
+  #grid { display: grid; gap: 4px; }
+  .core {
+    border-radius: 6px; padding: 5px 4px; cursor: pointer;
+    border: 2px solid transparent; transition: transform .05s, border-color .05s;
+    text-align: center; color: #0d1117; font-size: 10px; line-height: 1.25;
+    min-width: 64px;
+  }
+  .core .xy { font-weight: 700; font-size: 11px; }
+  .core .rng { font-size: 9px; opacity: .85; }
+  .core .cnt { font-weight: 700; font-size: 12px; }
+  .core.g1 { background: var(--g1); }
+  .core.g2 { background: var(--g2); }
+  .core:hover, .core.active { border-color: var(--hl); transform: scale(1.06); z-index: 2; }
+
+  /* TENSOR */
+  #tensor-wrap { display: flex; gap: 10px; }
+  #axisY { display: flex; flex-direction: column; justify-content: space-between;
+           color: var(--muted); font-size: 11px; text-align: right; }
+  #tensor {
+    position: relative; width: 320px; background: #0d1117;
+    border: 1px solid var(--border); border-radius: 4px; overflow: hidden;
+  }
+  .band { position: absolute; left: 0; width: 100%; cursor: pointer; }
+  .band.g1 { background: var(--g1); }
+  .band.g2 { background: var(--g2); }
+  .band:hover, .band.active { outline: 2px solid var(--hl); outline-offset: -2px; z-index: 3; }
+  .tensor-label { text-align: center; color: var(--muted); font-size: 12px; margin-top: 8px; }
+
+  .legend { display: flex; gap: 18px; margin-top: 16px; font-size: 13px; flex-wrap: wrap; }
+  .legend .item { display: flex; align-items: center; gap: 6px; }
+  .swatch { width: 16px; height: 16px; border-radius: 4px; display: inline-block; }
+
+  #tooltip {
+    position: fixed; pointer-events: none; background: #1c2128; border: 1px solid var(--hl);
+    border-radius: 6px; padding: 8px 12px; font-size: 12px; z-index: 100;
+    display: none; max-width: 320px; box-shadow: 0 4px 20px rgba(0,0,0,.5);
+  }
+  #tooltip .t { font-weight: 700; color: var(--hl); margin-bottom: 4px; }
+  #tooltip .row { color: var(--muted); }
+  #tooltip .row b { color: var(--text); }
+
+  .note { font-size: 12px; color: var(--muted); margin-top: 14px; max-width: 380px; }
+  .note b { color: var(--text); }
+</style>
+</head>
+<body>
+  <h1>per_token_cast_to_fp8 — raspodela ulaznog tenzora po core-ovima</h1>
+  <div class="sub">
+    Posao se deli <b>po redovima (tokenima)</b> preko cele širine H. Svaki core dobija kontinualan
+    opseg redova. Algoritam: <code>split_work_to_cores(grid, M)</code> + row-major dodela offseta
+    (<code>corerange_to_cores(..., row_wise=true)</code>).
+  </div>
+
+  <div class="controls">
+    <label>M (tokeni / redovi)<input id="inM" type="number" value="3200"/></label>
+    <label>H (širina)<input id="inH" type="number" value="7168"/></label>
+    <label>Grid X (kolone)<input id="inGX" type="number" value="11"/></label>
+    <label>Grid Y (redovi)<input id="inGY" type="number" value="10"/></label>
+    <button id="recalc">Preračunaj</button>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="layout">
+    <div class="panel">
+      <h2>Grid core-ova (X × Y)</h2>
+      <div id="grid"></div>
+      <div class="legend">
+        <div class="item"><span class="swatch" style="background:var(--g1)"></span> Group 1 — više redova (+1)</div>
+        <div class="item"><span class="swatch" style="background:var(--g2)"></span> Group 2 — bazni broj redova</div>
+        <div class="item"><span class="swatch" style="background:var(--hl)"></span> selektovan</div>
+      </div>
+      <div class="note" id="gridNote"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Ulazni tenzor [M × H]</h2>
+      <div id="tensor-wrap">
+        <div id="axisY"></div>
+        <div id="tensor"></div>
+      </div>
+      <div class="tensor-label" id="tensorXlabel"></div>
+      <div class="note">
+        Visina svake trake ∝ broju tokena koje core obrađuje. Svaka traka pokriva
+        <b>celu širinu H</b> (ceo token). Boja prati grupu; svetli okvir = upareni core u gridu.
+      </div>
+    </div>
+  </div>
+
+  <div id="tooltip"></div>
+
+<script>
+const BLOCK_W = 128;   // fp8::BLOCK_W
+const TILE_H  = 32;    // tile height
+
+function divUp(a,b){ return Math.floor((a+b-1)/b); }
+
+// Replicira split_work_to_cores(grid, M) sa default row_wise=false za grupe,
+// pa row-major (row_wise=true) dodelu offseta — tačno kao u program factory-ju.
+function computeDistribution(M, H, GX, GY){
+  const maxCores = GX*GY;
+  const target = Math.min(M, maxCores);          // ako M < maxCores koristi se samo M cores
+  const base = Math.floor(M / target);
+  const rem  = M % target;                        // broj cores sa +1 redom (group 1)
+
+  // Group 1 izbor: column-major (row_wise=false) — prvih `rem` cores
+  const colMajor = [];
+  for (let x=0; x<GX; x++)
+    for (let y=0; y<GY; y++)
+      colMajor.push(x+","+y);
+  // ali samo prvih `target` cores uopšte učestvuje; za M>=maxCores to je ceo grid
+  const activeSet = new Set(colMajor.slice(0, target));
+  const g1Set = new Set(colMajor.slice(0, rem));
+
+  // Offset dodela: row-major (row_wise=true) — y spolja, x unutra
+  const cores = {};
+  let offset = 0;
+  for (let y=0; y<GY; y++){
+    for (let x=0; x<GX; x++){
+      const key = x+","+y;
+      if (!activeSet.has(key)) { cores[key] = null; continue; }
+      const rows = g1Set.has(key) ? base+1 : base;
+      const scaleBlocks = rows * (H/BLOCK_W);
+      cores[key] = {
+        x, y,
+        rows,
+        start: offset,
+        end: offset + rows,            // exclusive
+        group: g1Set.has(key) ? 1 : 2,
+        scaleBlocksPerRow: H/BLOCK_W,
+        totalScaleBlocks: scaleBlocks,
+        numBlocks: divUp(scaleBlocks, TILE_H)
+      };
+      offset += rows;
+    }
+  }
+  return { cores, base, rem, target, maxCores, totalAssigned: offset };
+}
+
+let STATE = {};
+
+function render(){
+  const M  = parseInt(document.getElementById('inM').value);
+  const H  = parseInt(document.getElementById('inH').value);
+  const GX = parseInt(document.getElementById('inGX').value);
+  const GY = parseInt(document.getElementById('inGY').value);
+
+  const dist = computeDistribution(M,H,GX,GY);
+  STATE = { M,H,GX,GY, dist };
+
+  // STATS
+  const scaleBlocksRow = H/BLOCK_W;
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="v">${M}×${H}</div><div class="k">M × H (ulaz)</div></div>
+    <div class="stat"><div class="v">${GX*GY}</div><div class="k">core-ova (${GX}×${GY})</div></div>
+    <div class="stat"><div class="v">${dist.base} / ${dist.base+1}</div><div class="k">redova po core (29/30)</div></div>
+    <div class="stat"><div class="v">${dist.rem}</div><div class="k">cores sa +1 redom (group 1)</div></div>
+    <div class="stat"><div class="v">${GX*GY-dist.rem}</div><div class="k">cores sa baznim (group 2)</div></div>
+    <div class="stat"><div class="v">${scaleBlocksRow}</div><div class="k">scale blokova po redu (H/128)</div></div>
+    <div class="stat"><div class="v">${dist.totalAssigned}</div><div class="k">ukupno dodeljeno redova</div></div>
+  `;
+
+  document.getElementById('gridNote').innerHTML =
+    `Group 1 (column-major prvih ${dist.rem} cores) ⇒ kolona x=0 dobija po <b>${dist.base+1}</b> reda. ` +
+    `Ostalih ${GX*GY-dist.rem} dobija <b>${dist.base}</b>. ` +
+    `Svaki <b>red grida</b> (${GX} cores) obrađuje ${dist.base+1 + (GX-1)*dist.base} uzastopnih tokena.`;
+
+  // GRID
+  const grid = document.getElementById('grid');
+  grid.style.gridTemplateColumns = `repeat(${GX}, 1fr)`;
+  grid.innerHTML = '';
+  for (let y=0; y<GY; y++){
+    for (let x=0; x<GX; x++){
+      const c = dist.cores[x+","+y];
+      const div = document.createElement('div');
+      if (!c){ div.className='core'; div.style.background='#21262d'; div.innerHTML='—'; grid.appendChild(div); continue; }
+      div.className = 'core g'+c.group;
+      div.dataset.key = x+","+y;
+      div.innerHTML = `<div class="xy">${x},${y}</div>`+
+                      `<div class="cnt">${c.rows}</div>`+
+                      `<div class="rng">${c.start}–${c.end-1}</div>`;
+      attachHover(div, c);
+      grid.appendChild(div);
+    }
+  }
+
+  // TENSOR
+  const TH = 760; // px
+  const tensor = document.getElementById('tensor');
+  tensor.style.height = TH+'px';
+  tensor.innerHTML = '';
+  const ordered = Object.values(dist.cores).filter(Boolean).sort((a,b)=>a.start-b.start);
+  for (const c of ordered){
+    const band = document.createElement('div');
+    band.className = 'band g'+c.group;
+    band.dataset.key = c.x+","+c.y;
+    band.style.top    = (c.start / M * TH) + 'px';
+    band.style.height = Math.max(0.5, c.rows / M * TH) + 'px';
+    band.style.borderTop = '1px solid rgba(0,0,0,.35)';
+    attachHover(band, c);
+    tensor.appendChild(band);
+  }
+
+  // Y axis
+  const ax = document.getElementById('axisY');
+  ax.style.height = TH+'px';
+  ax.innerHTML = '';
+  const ticks = 9;
+  for (let i=0;i<=ticks;i++){
+    const d = document.createElement('div');
+    d.textContent = Math.round(M*i/ticks);
+    ax.appendChild(d);
+  }
+  document.getElementById('tensorXlabel').textContent = `← H = ${H} (cela širina svakom core-u) →`;
+}
+
+function attachHover(el, c){
+  el.addEventListener('mouseenter', e=>{
+    document.querySelectorAll('[data-key="'+el.dataset.key+'"]').forEach(n=>n.classList.add('active'));
+    showTip(e, c);
+  });
+  el.addEventListener('mousemove', e=> moveTip(e));
+  el.addEventListener('mouseleave', ()=>{
+    document.querySelectorAll('.active').forEach(n=>n.classList.remove('active'));
+    document.getElementById('tooltip').style.display='none';
+  });
+}
+
+function showTip(e, c){
+  const t = document.getElementById('tooltip');
+  const H = STATE.H;
+  t.innerHTML =
+    `<div class="t">Core (${c.x}, ${c.y}) — group ${c.group}</div>`+
+    `<div class="row">redovi (tokeni): <b>${c.start} … ${c.end-1}</b> (${c.rows} redova)</div>`+
+    `<div class="row">deo tenzora: <b>[${c.start}:${c.end}, 0:${H}]</b></div>`+
+    `<div class="row">elemenata: <b>${(c.rows*H).toLocaleString()}</b> = ${c.rows} × ${H}</div>`+
+    `<div class="row">scale blokova/red: <b>${c.scaleBlocksPerRow}</b> (H/128)</div>`+
+    `<div class="row">ukupno scale blokova: <b>${c.totalScaleBlocks}</b></div>`+
+    `<div class="row">num_blocks (compute): <b>${c.numBlocks}</b> = ⌈${c.totalScaleBlocks}/${TILE_H}⌉</div>`;
+  t.style.display='block';
+  moveTip(e);
+}
+function moveTip(e){
+  const t = document.getElementById('tooltip');
+  let x = e.clientX+16, y = e.clientY+16;
+  if (x + t.offsetWidth > window.innerWidth) x = e.clientX - t.offsetWidth - 16;
+  if (y + t.offsetHeight > window.innerHeight) y = e.clientY - t.offsetHeight - 16;
+  t.style.left=x+'px'; t.style.top=y+'px';
+}
+
+document.getElementById('recalc').addEventListener('click', render);
+render();
+</script>
+</body>
+</html>

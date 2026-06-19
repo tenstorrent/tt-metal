@@ -97,7 +97,14 @@ void kernel_main() {
 
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(29);
 
+#ifdef FP8_PER_TOKEN_SCALE
+    // Reduce scaler CB (1.0) for the per-token amax reduce on the compute core; shifts the tensor
+    // accessor args by one slot.
+    constexpr uint32_t cb_scaler_id = get_compile_time_arg_val(30);
+    constexpr auto input_args = TensorAccessorArgs<31>();
+#else
     constexpr auto input_args = TensorAccessorArgs<30>();
+#endif
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -164,6 +171,29 @@ void kernel_main() {
     noc_async_read_barrier();
     tt_l1_ptr uint32_t* offsets = reinterpret_cast<tt_l1_ptr uint32_t*>(offsets_base_addr);
     tt_l1_ptr int32_t* expert_dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_base_addr);
+
+#ifdef FP8_PER_TOKEN_SCALE
+    // Fill the reduce scaler tile once: all zeros, then 1.0f in row 0 of each face (the layout the
+    // MAX row-reduce expects). 32x32 fp32 tile, 4 faces of 16x16. Reused for every block's reduce.
+    {
+        constexpr uint32_t TILE_ELEMS = 32u * 32u;  // fp32 elements per tile
+        constexpr uint32_t NUM_FACES = 4u;
+        constexpr uint32_t FACE_ELEMS = 16u * 16u;
+        constexpr uint32_t FACE_W = 16u;
+        constexpr uint32_t ONE_F32_BITS = 0x3f800000u;
+        cb_reserve_back(cb_scaler_id, 1);
+        volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler_id));
+        for (uint32_t i = 0; i < TILE_ELEMS; i++) {
+            sc[i] = 0;
+        }
+        for (uint32_t f = 0; f < NUM_FACES; f++) {
+            for (uint32_t j = 0; j < FACE_W; j++) {
+                sc[f * FACE_ELEMS + j] = ONE_F32_BITS;
+            }
+        }
+        cb_push_back(cb_scaler_id, 1);
+    }
+#endif
 
     // ===== Baton-ring setup =====
     // Each core waits on its own turn semaphore (local poll) and signals the next core's
