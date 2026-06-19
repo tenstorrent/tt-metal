@@ -1,0 +1,1 @@
+{"event":"invoked","details":"Investigating device hang in SDPA Flash Attention compute kernel, case 1x1x32x32, stall at/after phase E (first BroadcastDim::Col op in eltwise_chain)","ts":"2026-06-19T19:41:32+00:00"}
