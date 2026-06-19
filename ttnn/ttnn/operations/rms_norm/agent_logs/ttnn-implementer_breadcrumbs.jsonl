@@ -50,3 +50,4 @@
 {"event":"refinement_complete","phase":"Refinement 5","outcome":"full [x]","detail":"PASS-1 single square+reduce; cb_squared=shard width; golden 1683/1683, all aux suites green","ts":"2026-06-19T20:45:51+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find device timing measurement infra","ts":"2026-06-19T21:00:10+00:00"}
 {"event":"test_run","status":"pass","test":"probes/probe_020.py","params":"profiler smoke test","detail":"RegimeA(1,1,2048,256)=18486ns, RegimeB(1,1,32,8192)=110031ns; profiler API works via ReadDeviceProfiler+get_latest_programs_perf_data","ts":"2026-06-19T21:01:54+00:00"}
+{"event":"device_print_observation","detail":"A-vs-B crossover sweep (1,1,32,W) bf16 no_gamma: A scales linearly with Wt (27.7us@Wt32 -> 196us@Wt256, single core); B ~flat 71-110us (K-way parallel, fixed mcast cost). A wins Wt<=64 (1.5-2x), B wins Wt>=192 (1.4-1.8x), wash 96-128. Crossover ~Wt160.","ts":"2026-06-19T21:06:30+00:00"}

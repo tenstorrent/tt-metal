@@ -46,6 +46,39 @@ CB_GAMMA_RM = 3
 # Resident budget in tiles (≈1.12 MB for bf16), per op_design.md P3.
 RESIDENT_BUDGET_TILES = 560
 
+# --- Refinement 6: A-vs-B crossover (measured, not assumed) ---------------------
+# The old heuristic chose Regime B "whenever a rectangular partition adds cores"
+# (Ht_total*K > regime_a_cores) with NO cost model for the mcast all-gather. But
+# the all-gather has a large fixed cost (semaphores + mcast rounds + the K-partial
+# combine): for a row that FITS one core's L1 and is only moderately wide, paying
+# that overhead to gain cores is *slower* than staying in single/few-core Regime A.
+#
+# Two-tier decision (encoded in create_program_descriptor):
+#   1. OOM floor (hard): when a full row does NOT fit one core's resident L1 budget,
+#      the W-split is mandatory — Regime B is the only option (correctness, never a
+#      perf tradeoff).
+#   2. Perf crossover: when the row DOES fit L1, only go B if the W-split adds cores
+#      AND Wt >= REGIME_B_MIN_WT. Below the crossover, Regime A's single/few-core
+#      run beats B's mcast setup cost.
+#
+# REGIME_B_MIN_WT was measured on an 8x8 Wormhole grid (see changelog Refinement 6
+# and tests/.../test_rms_norm_perf.py): A-forced vs B-forced device-kernel-ns for
+# single-tile-row shapes (1,1,32,W) that all fit L1. Regime A device time scales
+# linearly with Wt (one core does the whole row): ~27.7us @ Wt=32 -> 196us @ Wt=256.
+# Regime B is roughly flat (~71-110us) — it splits W across K cores but pays a fixed
+# mcast all-gather cost. The two cross near Wt ~= 96-128 (a wash), with A decisively
+# faster below (1.5-2x @ Wt<=64) and B decisively faster above (1.4-1.8x @ Wt>=192).
+# 160 sits just past the wash: it keeps the clear A wins (Wt<=128) in A and routes
+# the clear B wins (Wt>=160) to B.
+REGIME_B_MIN_WT = 160
+
+# Measurement-only hook (perf tests). None -> use the heuristic. "A"/"B" -> force
+# that regime for an apples-to-apples A-vs-B crossover measurement on one shape.
+# NEVER set in production; the public entry point does not touch it. When forcing a
+# regime that is infeasible for the shape (e.g. "A" on an OOM row, or "B" with no
+# rectangular partition) the descriptor falls back to the heuristic choice.
+_FORCE_REGIME = None
+
 # ---- ROW_MAJOR (tilize-wrapped) regime CB indices ----
 # Refinement 3: ROW_MAJOR input/output handled natively via a tilize-wrapped,
 # row-parallel path. The math is identical to Regime A but reads/writes
@@ -155,12 +188,32 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         resident_tiles = Wt_padded + (Wt_padded if has_gamma else 0)
         row_fits = resident_tiles <= RESIDENT_BUDGET_TILES
 
-        if not (num_blocks_total >= total_cores and row_fits):
-            K = _select_k(Wt, num_blocks_total, grid, total_cores, has_gamma)
-            regime_a_cores = min(num_blocks_total, total_cores)
-            if K is not None and num_blocks_total * K > regime_a_cores:
-                return _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, epsilon, grid)
-        return _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, epsilon)
+        K = _select_k(Wt, num_blocks_total, grid, total_cores, has_gamma)
+        regime_a_cores = min(num_blocks_total, total_cores)
+        adds_cores = K is not None and num_blocks_total * K > regime_a_cores
+
+        def _rm_a():
+            return _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, epsilon)
+
+        def _rm_b():
+            return _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, epsilon, grid)
+
+        # Refinement 6: same force hook + two-tier (OOM floor / Wt crossover) policy
+        # as the TILE path. Wt here is the full-row tile count (RM Regime A holds the
+        # whole tilized row resident, so the OOM floor is identical).
+        if _FORCE_REGIME == "A" and row_fits:
+            return _rm_a()
+        if _FORCE_REGIME == "B" and adds_cores:
+            return _rm_b()
+        if num_blocks_total >= total_cores and row_fits:
+            return _rm_a()
+        if not row_fits:
+            if adds_cores:
+                return _rm_b()
+            return _rm_a()  # bounded-streaming fallback (matches prior behavior)
+        if adds_cores and Wt >= REGIME_B_MIN_WT:
+            return _rm_b()
+        return _rm_a()
 
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
@@ -178,32 +231,47 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     resident_tiles = Wt + (Wt if has_gamma else 0)
     row_fits = resident_tiles <= RESIDENT_BUDGET_TILES
 
-    # Grid-aware heuristic (op_design.md "Grid-aware host heuristic"):
-    #   - Regime A only when it already saturates the grid (Ht_total >= total_cores)
-    #     AND a full row fits L1.
-    #   - Otherwise prefer Regime B (W-split) when a rectangular partition exists that
-    #     ADDS cores over what Regime A would use; else fall back to Regime A.
-    if Ht_total >= total_cores and row_fits:
+    def _make_a():
         return _regime_a_descriptor(
             input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, total_cores, inv_W_bits, eps_bits
         )
 
-    K = _select_k(Wt, Ht_total, grid, total_cores, has_gamma)
-    regime_a_cores = min(Ht_total, total_cores)
-    if K is not None and Ht_total * K > regime_a_cores:
+    def _make_b():
         return _regime_b_descriptor(
             input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, grid, total_cores, inv_W_bits, eps_bits
         )
 
-    # Documented clean fallback: row-parallel on min(Ht_total, total_cores) cores.
+    K = _select_k(Wt, Ht_total, grid, total_cores, has_gamma)
+    regime_a_cores = min(Ht_total, total_cores)
+    adds_cores = K is not None and Ht_total * K > regime_a_cores
+
+    # Refinement 6: measurement-only force hook (perf tests). Falls back to the
+    # heuristic when the forced regime is infeasible for this shape.
+    if _FORCE_REGIME == "A" and row_fits:
+        return _make_a()
+    if _FORCE_REGIME == "B" and adds_cores:
+        return _make_b()
+
+    # Regime A whenever it already saturates the grid and a full row fits L1 — no
+    # cross-core split can add cores, so never pay the mcast cost.
+    if Ht_total >= total_cores and row_fits:
+        return _make_a()
+
+    # Refinement 6 two-tier decision:
+    #   - OOM floor (hard): a row that does NOT fit L1 *must* W-split (Regime B).
+    #   - Perf crossover: a row that fits L1 goes B only if the split adds cores AND
+    #     Wt >= REGIME_B_MIN_WT (below the crossover, single/few-core A beats B's
+    #     mcast setup cost). Replaces the old "B whenever it adds any cores."
     if not row_fits:
+        if adds_cores:
+            return _make_b()
         raise NotImplementedError(
             f"rms_norm: row (Wt={Wt}, gamma={has_gamma}) exceeds L1 budget and no rectangular "
             f"Regime B partition exists for row_groups={Ht_total}, grid=({grid.x},{grid.y})."
         )
-    return _regime_a_descriptor(
-        input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, total_cores, inv_W_bits, eps_bits
-    )
+    if adds_cores and Wt >= REGIME_B_MIN_WT:
+        return _make_b()
+    return _make_a()
 
 
 def _regime_a_descriptor(
