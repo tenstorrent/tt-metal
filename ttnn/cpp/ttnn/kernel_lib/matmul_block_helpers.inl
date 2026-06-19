@@ -291,6 +291,18 @@ ALWI void matmul_block(
 
                 int in1_index_subblock_offset = in1_base_offset;
                 for (uint32_t in1_subblock = 0; in1_subblock < shape.in1_num_subblocks; in1_subblock++) {
+                    // Pack-side output reconfig (fp32 DEST / L1-acc): issue it HERE, while the
+                    // packer is idle (before MATH acquires DEST and tile_regs_wait sets up the
+                    // DEST read). On Blackhole pack_reconfig_data_format ends in
+                    // TTI_STALLWAIT(STALL_CFG, PACK|THCON); after a preceding eltwise_chain pack,
+                    // issuing it post-tile_regs_wait deadlocks the packer (the STALLWAIT never
+                    // drains). Issuing it pre-acquire (packer truly idle) is safe. last_out only
+                    // — non-last spills keep their own interm reconfig below.
+                    if (last_out) {
+                        if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
+                            PACK((pack_reconfig_data_format(pack_target_id)));
+                        }
+                    }
                     tile_regs_acquire();
 
                     // last_in1_subblock_w_valid: narrow the last in1 subblock's FMA ct_dim to the
@@ -381,9 +393,11 @@ ALWI void matmul_block(
                             tile_regs_wait();
                         }
 
-                        if constexpr (packer_l1_acc || get_fp32_dest_acc_enabled()) {
-                            PACK((pack_reconfig_data_format(pack_target_id)));
-                        }
+                        // NOTE: the pack-side output reconfig (pack_reconfig_data_format) is
+                        // issued BEFORE tile_regs_acquire (top of the in1_subblock loop), while
+                        // the packer is idle. Issuing it here (post-tile_regs_wait) deadlocks the
+                        // Blackhole packer when the matmul follows an eltwise_chain — the
+                        // pack_reconfig STALLWAIT(PACK|THCON) never drains. Do not move it back.
 
                         if constexpr (packer_l1_acc) {
                             if constexpr (pack_last_to_interm) {
