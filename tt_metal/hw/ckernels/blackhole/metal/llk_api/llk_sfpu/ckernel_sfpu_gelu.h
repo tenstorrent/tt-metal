@@ -349,78 +349,41 @@ inline void calculate_gelu() {
 }
 
 // =============================================================================
-// GELU tanh approximation in FP32 — bit-identical to the Python decomposition:
+// GELU tanh approximation in FP32:
 //   0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
-//
-// Reproduces the per-op FP32 rounding of the ttnn op sequence in
-// gelu_tanh(): each multiply/add is materialized to a vFloat before being
-// consumed, so no SFPMAD fusion changes the last-bit result. The tanh call is
-// the same _sfpu_tanh_fp32_accurate_ that ttnn.tanh dispatches to under FP32
-// accumulator, so its output is bit-identical to ttnn.tanh.
-//
-// Matches ttnn.pow(x, 3) for *integer* exponent 3 (POWER_ITERATIVE = x*x*x).
-// If a caller routes float exponent 3.0 through UnaryOpType::POWER (exp-log),
-// that path is NOT bit-equivalent to this kernel — by design, this op fuses
-// the integer-power variant which is what models actually want.
 // =============================================================================
 
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
     constexpr float GELU_TANH_K = 0.044715f;
-    // Saturation threshold for tanh -> +/- 1. Empirically calibrated to
-    // torch's vectorized CPU tanh (Sleef / VML) saturation point. The exact
-    // value 8.6643 is tuned tight to the gap between the lowest |scaled|
-    // where torch FP32 saturates (~8.664, from FP32 input x = -5.06142) and
-    // the highest |scaled| where it does not (~8.56, from BF16 input
-    // x = -5.03125). Same threshold for BF16 and FP32 dest-acc modes — we
-    // use torch FP32 as the reference in both. If torch ever changes its
-    // vectorized tanh implementation this may need a retune.
+    // Saturation threshold for tanh -> +/- 1.
+    // Empirically calibrated to torch's CPU tanh saturation point.
     constexpr float TANH_SAT_THRESHOLD = 8.6643f;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat x = sfpi::dst_reg[0];
 
-        // x^3 via two FP32 multiplies (matches POWER_ITERATIVE, two roundings).
+        // x^3.
         sfpi::vFloat x2 = x * x;
         sfpi::vFloat x3 = x2 * x;
 
-        // 0.044715 * x^3, then x + that. Kept on separate lines so each step
-        // round-trips through a vFloat — prevents SFPMAD fusion.
+        // x + (0.044715 * x^3).
         sfpi::vFloat kx3 = x3 * GELU_TANH_K;
         sfpi::vFloat inner = x + kx3;
 
         sfpi::vFloat scaled = inner * SQRT_2_OVER_PI;
 
-        // Default: ±0 with the sign of x (saturated negative tail, scaled <=
-        // -TANH_SAT_THRESHOLD). Sign-of-zero matters here: torch computes
-        // 0.5 * x * (1 + tanh) = 0.5 * (negative_x) * 0 and IEEE 754 propagates
-        // the sign of the non-zero factor through the multiplication, giving -0.
-        // Hard-coding vConst0 (= +0) would land 1 BF16 ULP off (the monotonic-int
-        // ULP mapping treats +0 and -0 as adjacent).
-        // (Note: vConst0 is type vCReg<vFloat>, not vFloat itself, so we assign
-        // it to a vFloat first to satisfy copysgn's template constraint.)
+        // Handle +-0 by using the sign of x to prevent 1 ULP difference.
         sfpi::vFloat zero = sfpi::vConst0;
         sfpi::vFloat result = sfpi::copysgn(zero, x);
 
         v_if(scaled >= TANH_SAT_THRESHOLD) {
-            // Saturated positive tail: gelu_tanh(x) = 0.5 * x * 2 = x.
-            // Explicit saturation matches torch's vectorized tanh which
-            // collapses to exactly +1 here; without the guard, the sigmoid
-            // identity below would produce x*(1 - tiny) which differs from
-            // torch by a few BF16 ULPs in the saturation band.
+            // Saturated positive tail: gelu_tanh(x) = x.
             result = x;
         }
         v_elseif(scaled > -TANH_SAT_THRESHOLD) {
-            // Active region: cancellation chain `0.5 * x * (1 + tanh(scaled))`,
-            // computing tanh as `2*sigmoid(2*scaled) - 1`. This matches
-            // PyTorch's CPU implementation exactly (same formula, same
-            // algorithmic precision floor). The `2*sig - 1` subtraction
-            // loses ~9-10 bits of FP32 precision at small `(1+tanh)`, which
-            // shows up as ~hundreds of FP32 ULPs at the small result
-            // magnitude — that's the algorithmic floor of this formula,
-            // not a kernel deficiency. (BF16 hides it via 7-bit truncation.)
             sfpi::vFloat t = _sfpu_tanh_fp32_accurate_<true>(scaled);
             sfpi::vFloat one_plus = 1.0f + t;
             sfpi::vFloat half_x = 0.5f * x;
@@ -443,7 +406,7 @@ inline void gelu_tanh_init() {
     // Calling tanh_init<false, is_fp32_dest_acc_en>() does NOT work when
     // is_fp32_dest_acc_en=false: it loads polynomial constants for the
     // BF16 polynomial tanh path that this kernel doesn't take, and skips
-    // reciprocal init — sigmoid then returns garbage.
+    // reciprocal init.
     sigmoid_init<false>();
 }
 

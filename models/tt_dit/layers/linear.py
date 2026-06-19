@@ -18,8 +18,7 @@ MATH_FIDELITY = {
 }
 
 # Activation strings accepted by Linear / ColParallelLinear `activation_fn`,
-# mapped to the (UnaryOpType, param0_float) tuples the matmul fused-activation
-# path expects. Centralised here so the variants live in one place.
+# mapped to the (UnaryOpType, param0_float) tuples the matmul fused-activation path expects.
 #
 # "gelu":      exact GELU (piecewise CDF / FP32 erf), matches F.gelu().
 # "gelu_fast": 6-segment piecewise-linear LUT, ~1% absolute error vs exact GELU.

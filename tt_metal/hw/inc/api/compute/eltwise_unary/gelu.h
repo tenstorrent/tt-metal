@@ -66,11 +66,8 @@ ALWI void gelu_tanh_tile_init_pack() { PACK(SFPU_UNARY_INIT_FN(gelu_tanh, sfpu::
  * Element-wise GELU using the tanh approximation, computed in FP32:
  *   GELU(x) = 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
  *
- * Bit-identical to the unfused ttnn op sequence
- *   ttnn.typecast(x, fp32); ttnn.pow(x, 3); ttnn.multiply; ttnn.add; ...; ttnn.tanh(...); ...
- * when ttnn.pow's exponent is a Python int (POWER_ITERATIVE / x*x*x) and ttnn.tanh
- * is dispatched to its FP32-accurate kernel. Intended as a fused-activation drop-in
- * for matmuls that need the tanh-flavored GELU (e.g. F.gelu(approximate="tanh")).
+ * Intended as a fused-activation drop-in for matmuls that need the
+ * tanh-GELU (e.g. F.gelu(approximate="tanh")).
  *
  * Return value: None
  *

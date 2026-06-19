@@ -2,19 +2,20 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Strict per-element ULP tests for the GELU SFPU variants, BF16 and FP32 inputs.
+"""Per-element ULP tests for the GELU SFPU variants with BF16 and FP32 inputs.
 
 For each ttnn.GeluVariant the test runs the kernel on a representative input
 set (BF16: exhaustive over every finite 16-bit pattern; FP32: sample-based
 over [-10, 10] plus targeted edge cases) and compares per-element to the
-matching torch.nn.functional.gelu reference. Output is a cumulative ULP
-histogram (>= 1 ULP, >= 2 ULP, ...) plus the top-N worst offenders, with a
-strict ULP-bound assertion where the kernel is expected to match precisely.
+matching torch.nn.functional.gelu reference with a ULP-based assertion.
 """
 
+import math
 import pytest
 import torch
 import ttnn
+from loguru import logger
+from tests.ttnn.utils_for_testing import ulp_distance
 
 pytestmark = pytest.mark.use_module_device
 
@@ -26,41 +27,23 @@ _VARIANTS = {
 }
 
 # Per-(variant, dtype) ULP bound + tolerated-inputs list.
-#   tolerated_inputs = specific input values where +1 ULP above the bound is
-#   allowed; documents known FP32-precision-floor residues.
+#   tolerated_inputs = specific input values where +1 ULP above the bound is allowed.
 #
-# The FP32 bounds below look very loose. They aren't slop — each one is the
-# *algorithmic* precision floor of the kernel's formula against PyTorch's FP32
-# reference. Detailed rationale per variant:
-#
-# Tanh FP32 (500):
-#   The kernel uses `0.5 * x * (1 + tanh(scaled))`, which is exactly torch's
+# Tanh FP32 (400):
+#   The kernel uses `0.5 * x * (1 + tanh(scaled))`, which is torch's
 #   CPU FP32 implementation. The `(1 + tanh)` step is a `1 - tiny` cancellation
 #   that loses ~9-10 bits of FP32 precision: the result inherits the absolute
 #   precision of tanh at magnitude 1.0 (~1 FP32 ULP = 6e-8) regardless of how
 #   small `(1 + tanh)` actually is. For inputs like x = -3.117 the
 #   `(1 + tanh) ~ 1.6e-3`, where the ULP is 1.9e-10, so 6e-8 absolute = ~300
-#   FP32 ULPs. The bound here covers that. Breaking below 300-400 would require
-#   either (a) bit-emulating libm's tanh inside our SFPU (heroic, brittle to
-#   glibc changes), (b) computing via the sigmoid identity
-#   `x * sigmoid(2*scaled)` (avoids cancellation but diverges from torch by
-#   a similar magnitude), or (c) swapping the reference to mpmath. We accept
-#   the floor and bound it.
-#
-# Accurate FP32 (1e9):
-#   The accurate kernel uses a piecewise CDF that hits a similar
-#   cancellation-vs-saturation gap against torch FP64 in the deep negative
-#   tail. Not algorithmically tuned for FP32 reference; bound is observed-max.
-#
-# FastLut FP32 (2e9) and BF16 (30_000):
-#   6-segment piecewise-linear LUT is ~1% inaccurate by design. Bounds are
-#   the observed worst-case ULPs, intentionally not tightened.
+#   FP32 ULPs. Computing via the sigmoid identity `x * sigmoid(2*scaled)`
+#   avoids cancellation but diverges from torch by a similar magnitude.
 #
 # Tanh BF16 (0 + 2 tolerated):
 #   BF16's 7-bit mantissa hides the cancellation precision loss, so the kernel
 #   matches torch FP32 -> BF16 exactly except at two specific inputs
 #   (-4.625, -4.8125) where the FP32 rounding direction in tanh's
-#   `2*sigmoid(2x) - 1` flips vs torch's libm. Those get +1 ULP grace.
+#   `2*sigmoid(2x) - 1` flips vs torch's. Those get +1 ULP grace.
 _THRESHOLDS = {
     ("accurate", "bf16"): (128, []),
     ("accurate", "fp32"): (1_000_000_000, []),
@@ -80,8 +63,7 @@ def _all_inputs(dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
     BF16: exhaustively enumerate every finite 16-bit pattern.
     FP32: sample-based — uniform [-10, 10] padded with targeted edge cases.
 
-    Returns (input_tensor, finite_mask). The finite_mask flags NaN/Inf slots
-    so they can be excluded from ULP comparison.
+    Returns (input_tensor, finite_mask). The finite_mask flags NaN/Inf slots.
     """
     if dtype == torch.bfloat16:
         bits = torch.arange(0, 65536, dtype=torch.int32)
@@ -91,8 +73,7 @@ def _all_inputs(dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
         x = bits_safe.to(torch.int16).contiguous().view(torch.bfloat16).reshape(_GRID)
         return x, finite.reshape(_GRID)
 
-    # FP32: too many values (2^32) to enumerate, so sample. Front-load edge
-    # cases (saturation boundary, polynomial-threshold transition, the BF16
+    # FP32: Front-load edge cases (saturation boundary, polynomial-threshold transition, BF16
     # 1-ULP offenders, denormal boundary, ±0, ±1) so they're always covered.
     torch.manual_seed(0)
     edges = torch.tensor(
@@ -130,94 +111,6 @@ def _all_inputs(dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
     return x, torch.ones(_GRID, dtype=torch.bool)
 
 
-def _ulp_diff(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-    """Per-element ULP distance for BF16 or FP32 tensors.
-
-    Maps the sign-magnitude bit pattern to a monotonic int (negatives ->
-    all_ones - bits, positives -> bits + sign_bit) so float ordering is
-    preserved by int subtraction; ULP = |mono(a) - mono(b)|.
-
-    Treats +0 and -0 as identical (0 ULP apart): they're numerically equal
-    per IEEE 754, and the SFPU's pack/convert pipeline canonicalises -0 to
-    +0 anyway, so the 1-ULP gap the monotonic-int mapping would otherwise
-    report is an artefact, not a real numerical difference.
-    """
-    assert a.dtype == b.dtype, f"dtype mismatch: {a.dtype} vs {b.dtype}"
-    if a.dtype == torch.bfloat16:
-        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int16, torch.int32, 0x8000, 0xFFFF
-    elif a.dtype == torch.float32:
-        bits_dtype, wider_dtype, sign_mask, all_mask = torch.int32, torch.int64, 0x80000000, 0xFFFFFFFF
-    else:
-        raise ValueError(f"Unsupported dtype: {a.dtype}")
-
-    a_bits = a.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
-    b_bits = b.contiguous().view(bits_dtype).to(wider_dtype) & all_mask
-    a_mono = torch.where((a_bits & sign_mask) != 0, all_mask - a_bits, a_bits + sign_mask)
-    b_mono = torch.where((b_bits & sign_mask) != 0, all_mask - b_bits, b_bits + sign_mask)
-    diff = (a_mono - b_mono).abs()
-    magnitude_mask = all_mask ^ sign_mask
-    both_zero = ((a_bits & magnitude_mask) == 0) & ((b_bits & magnitude_mask) == 0)
-    return torch.where(both_zero, torch.zeros_like(diff), diff)
-
-
-def _cumulative_histogram(ulps_flat: torch.Tensor) -> list[tuple[int, int, float]]:
-    buckets = [1, 2, 4, 8, 16, 32, 64, 128, 256, 1024, 8192, 65536, 1 << 20]
-    total = ulps_flat.numel()
-    rows = []
-    for b in buckets:
-        n = int((ulps_flat >= b).sum().item())
-        rows.append((b, n, (100.0 * n / total) if total else 0.0))
-    return rows
-
-
-def _format_report(
-    variant_name: str,
-    dtype_name: str,
-    torch_approximate: str,
-    input_tensor: torch.Tensor,
-    expected: torch.Tensor,
-    actual: torch.Tensor,
-    ulps: torch.Tensor,
-    mask: torch.Tensor,
-) -> tuple[str, int, float]:
-    """Format the per-variant report. Histogram and worst-offenders are scoped
-    to `mask` (typically `assertable`). FTZ-excluded inputs are surfaced
-    separately by the `[note]` line outside this helper."""
-    mask_ulps = ulps[mask]
-    max_ulp = int(mask_ulps.max().item()) if mask.any() else 0
-    mean_ulp = float(mask_ulps.float().mean().item()) if mask.any() else 0.0
-
-    lines = [
-        f"\n=== gelu variant={variant_name} dtype={dtype_name} (torch approximate={torch_approximate!r}) ===",
-        f"  inputs evaluated: {int(mask.sum().item())}",
-        f"  max ULP: {max_ulp}   mean ULP: {mean_ulp:.4f}",
-        f"  cumulative histogram ({dtype_name} ULP distance from torch reference):",
-    ]
-    for thr, count, pct in _cumulative_histogram(mask_ulps):
-        lines.append(f"    >= {thr:8d} ULP : {count:6d}  ({pct:7.4f}%)")
-
-    if mask.any() and mask_ulps.max().item() > 0:
-        flat_in = input_tensor.flatten()
-        flat_exp = expected.flatten()
-        flat_act = actual.flatten()
-        flat_ulp = ulps.flatten()
-        flat_mask = mask.flatten()
-        mask_idx = torch.nonzero(flat_mask, as_tuple=False).flatten()
-        sub_ulp = flat_ulp[mask_idx]
-        k = min(10, mask_idx.numel())
-        top_vals, top_local = torch.topk(sub_ulp, k)
-        lines.append("  top-10 worst offenders:")
-        lines.append(f"    {'input':>14}  {'expected':>14}  {'actual':>14}  {'ulp':>10}")
-        for ul, li in zip(top_vals.tolist(), top_local.tolist()):
-            i = int(mask_idx[li].item())
-            lines.append(
-                f"    {flat_in[i].item():>14.6g}  {flat_exp[i].item():>14.6g}  "
-                f"{flat_act[i].item():>14.6g}  {int(ul):>10d}"
-            )
-
-    return "\n".join(lines), max_ulp, mean_ulp
-
-
 @pytest.mark.parametrize("variant_name", list(_VARIANTS.keys()))
 @pytest.mark.parametrize(
     "dtype_name,torch_dtype,tt_dtype",
@@ -226,63 +119,61 @@ def _format_report(
         ("fp32", torch.float32, ttnn.float32),
     ],
 )
-def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt_dtype, capsys):
+def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt_dtype):
     """Per-element ULP comparison vs PyTorch CPU reference, BF16 or FP32 inputs."""
     variant_enum, torch_approximate = _VARIANTS[variant_name]
     ulp_threshold, tolerated_inputs = _THRESHOLDS[(variant_name, dtype_name)]
 
     input_tensor, finite_mask = _all_inputs(torch_dtype)
 
-    # Reference: compute in FP32 from the dtype-quantised input, then round
-    # to the input dtype. For both BF16 and FP32 we use torch's FP32 path as
-    # the reference because that's the algorithm the kernel matches end-to-end
-    # (`0.5 * x * (1 + tanh(scaled))` with the same cancellation rounding).
-    # An FP64 reference would be "more accurate than torch FP32" but would
-    # diverge from our kernel by hundreds of millions of ULPs at the FP64-vs
-    # -FP32 quantization boundary — see _THRESHOLDS comment below.
+    # Reference: compute in FP32 from the dtype-quantised input, then round to the
+    # input dtype. For both BF16 and FP32 we use torch's FP32 path as the reference.
     expected = torch.nn.functional.gelu(input_tensor.float(), approximate=torch_approximate).to(torch_dtype)
 
     tt_input = ttnn.from_torch(input_tensor, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.gelu(tt_input, variant=variant_enum)
     actual = ttnn.to_torch(tt_output)
 
-    # Drop NaN/Inf slots: ULP distance between two NaNs is meaningless.
+    # Drop NaN/Inf slots (tested separately).
     valid = finite_mask & ~expected.isnan() & ~expected.isinf() & ~actual.isnan() & ~actual.isinf()
-    ulps = _ulp_diff(expected, actual)
+    ulps = ulp_distance(expected, actual)
 
     # Inputs where |x| < 2^-125 cause the kernel's `0.5 * x` intermediate to
     # land below FP32's smallest normal (2^-126), where Tenstorrent's SFPU
     # FTZs the result to 0. Torch's FP32 path retains the denormal and rounds
-    # it back up on the final cast. Excluded from the strict assertion; still
-    # visible in the histogram so any regression beyond the known band shows up.
+    # it back up on the final cast. Excluded from the assertion.
     FTZ_INPUT_THRESHOLD = 2.0**-125  # ~2.35e-38
     ftz_safe = input_tensor.abs() >= FTZ_INPUT_THRESHOLD
     assertable = valid & ftz_safe
 
-    report, max_ulp, _mean_ulp = _format_report(
-        variant_name,
-        dtype_name,
-        torch_approximate,
-        input_tensor,
-        expected,
-        actual,
-        ulps,
-        mask=assertable,
+    # Log max/mean ULP and the single worst offender for the assertable set.
+    assertable_ulps = ulps[assertable]
+    max_ulp = int(assertable_ulps.max().item()) if assertable.any() else 0
+    mean_ulp = float(assertable_ulps.float().mean().item()) if assertable.any() else 0.0
+    logger.info(
+        f"gelu variant={variant_name} dtype={dtype_name} approximate={torch_approximate!r}: "
+        f"inputs={int(assertable.sum().item())}  max ULP={max_ulp}  mean ULP={mean_ulp:.4f}"
     )
+    if max_ulp > 0:
+        flat_assertable = assertable.flatten()
+        flat_ulps = ulps.flatten()
+        worst_i = int((flat_ulps * flat_assertable).argmax().item())
+        logger.info(
+            f"  worst offender: input={input_tensor.flatten()[worst_i].item():.6g}  "
+            f"expected={expected.flatten()[worst_i].item():.6g}  "
+            f"actual={actual.flatten()[worst_i].item():.6g}  ulp={int(flat_ulps[worst_i].item())}"
+        )
 
-    with capsys.disabled():
-        print(report)
-        excluded_count = int((valid & ~ftz_safe).sum().item())
-        if excluded_count > 0:
-            excluded_max = int(ulps[valid & ~ftz_safe].max().item())
-            print(
-                f"  [note] {excluded_count} inputs with |x| < 2^-125 excluded from the strict ULP "
-                f"assertion (SFPU FTZ on the 0.5*x intermediate). Their max ULP was {excluded_max}."
-            )
+    excluded_count = int((valid & ~ftz_safe).sum().item())
+    if excluded_count > 0:
+        excluded_max = int(ulps[valid & ~ftz_safe].max().item())
+        logger.info(
+            f"  [note] {excluded_count} inputs with |x| < 2^-125 excluded from the strict ULP "
+            f"assertion (SFPU FTZ on the 0.5*x intermediate). Their max ULP was {excluded_max}."
+        )
 
     if ulp_threshold is not None:
-        # Strict assertion: every assertable input that isn't tolerated must
-        # be within `ulp_threshold`. Tolerated inputs get +1 ULP grace.
+        # Tolerated inputs get +1 ULP grace.
         is_tolerated = torch.zeros_like(input_tensor, dtype=torch.bool)
         for v in tolerated_inputs:
             is_tolerated = is_tolerated | (input_tensor == torch.tensor(v, dtype=torch_dtype))
@@ -349,11 +240,8 @@ def test_tanh_differs_from_accurate(device):
     ids=["bf16", "fp32"],
 )
 def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
-    """Sanity-check the kernel produces sensible outputs for +inf, -inf, NaN
-    (not a torch comparison — these are excluded from the strict ULP test, but
-    the kernel still has to handle them without producing garbage)."""
+    """Sanity-check the kernel produces sensible outputs for +inf, -inf, NaN."""
     variant_enum, _ = _VARIANTS[variant_name]
-    # Tile-aligned tensor; only positions [0, 0..2] carry the test values.
     inputs = torch.zeros((32, 32), dtype=torch_dtype)
     inputs[0, 0] = float("inf")
     inputs[0, 1] = float("-inf")
@@ -367,6 +255,4 @@ def test_gelu_inf_nan_handling(device, variant_name, torch_dtype, tt_dtype):
     # gelu_tanh(-inf) -> 0 (negative saturation). Accept ±0.
     assert neg_inf == 0.0, f"{variant_name}: gelu(-inf) -> {neg_inf!r}, expected 0 / -0"
     # NaN propagation. SFPU may not propagate NaN bit-perfectly — accept NaN or any non-finite.
-    import math
-
     assert math.isnan(nan_out), f"{variant_name}: gelu(NaN) -> {nan_out!r}, expected NaN"
