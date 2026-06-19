@@ -118,8 +118,22 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return torch.corrcoef(torch.stack([a, b]))[0, 1].item()
 
 
-def _cpu_reference_per_layer(state_dict_hf, x):
-    """Returns list of per-layer hidden states (64 tensors), each [1, T, H]."""
+def _cpu_reference_per_layer(state_dict_hf, x, capture_intermediates: bool = False):
+    """Returns list of per-layer hidden states (64 tensors), each [1, T, H].
+
+    When ``capture_intermediates=True``, also returns a parallel list of dicts
+    (one per layer) with intermediate hidden states at each sub-block boundary:
+
+        "post_attn_norm"  — hidden state after attention RMSNorm (input_layernorm)
+        "post_attn"       — attention output (before post-attention residual add)
+        "post_attn_res"   — hidden state after post-attention residual add
+        "post_mlp_norm"   — hidden state after MLP RMSNorm (post_attention_layernorm)
+        "post_mlp"        — MLP output (before post-MLP residual add)
+        "post_mlp_res"    — final layer output (post-MLP residual add, same as per_layer_hidden[i])
+
+    The intermediates are captured by monkey-patching each HybridDecoderLayer's
+    forward method in-place (no production code is modified).
+    """
     from models.demos.qwen3_6_galaxy.reference.qwen36 import HybridDecoderLayer, Qwen36Config, build_mrope_cos_sin
 
     with open(_SNAPSHOT / "config.json") as f:
@@ -141,6 +155,7 @@ def _cpu_reference_per_layer(state_dict_hf, x):
 
     hidden = x.float()
     per_layer_hidden: list[torch.Tensor] = []
+    per_layer_intermediates: list[dict[str, torch.Tensor]] = []
     for layer_idx in range(_N_LAYERS):
         layer = HybridDecoderLayer(config, layer_idx).eval()
         pfx = f"model.language_model.layers.{layer_idx}."
@@ -155,11 +170,80 @@ def _cpu_reference_per_layer(state_dict_hf, x):
                 else:
                     layer_sd[short] = v.float()
         layer.load_state_dict(layer_sd, strict=False)
+
+        if capture_intermediates:
+            # Monkey-patch the layer's forward to capture sub-block states without
+            # modifying any production code.  We wrap the method on the *instance*
+            # so it is automatically discarded with the layer object after this loop.
+            _captured: dict[str, torch.Tensor] = {}
+
+            _orig_forward = layer.forward
+
+            def _instrumented_forward(
+                _x,
+                _cos=None,
+                _sin=None,
+                _attention_mask=None,
+                _kv_cache=None,
+                _conv_state=None,
+                _recurrent_state=None,
+                *,
+                _layer=layer,
+                _cap=_captured,
+                _orig=_orig_forward,
+            ):
+                """Instrumented forward: capture intermediates at each sub-step.
+
+                Replicates the HybridDecoderLayer.forward logic step-by-step so we
+                can snapshot hidden states at each boundary without modifying the
+                production reference module.
+                """
+
+                residual = _x
+                # Step 1: pre-attention norm
+                x_normed = _layer.input_layernorm(_x)
+                _cap["post_attn_norm"] = x_normed.clone()
+
+                # Step 2: attention
+                if _layer.layer_type == "full_attention":
+                    attn_out, kv_cache_new = _layer.attention(x_normed, _cos, _sin, _kv_cache, _attention_mask)
+                    conv_state_new = _conv_state
+                    recurrent_state_new = _recurrent_state
+                else:
+                    attn_out, conv_state_new, recurrent_state_new = _layer.attention(
+                        x_normed, _conv_state, _recurrent_state
+                    )
+                    kv_cache_new = None
+                _cap["post_attn"] = attn_out.clone()
+
+                # Step 3: post-attention residual add
+                x_post_attn = residual + attn_out
+                _cap["post_attn_res"] = x_post_attn.clone()
+
+                # Step 4: pre-MLP norm
+                residual2 = x_post_attn
+                x_mlp_normed = _layer.post_attention_layernorm(x_post_attn)
+                _cap["post_mlp_norm"] = x_mlp_normed.clone()
+
+                # Step 5: MLP
+                mlp_out = _layer.mlp(x_mlp_normed)
+                _cap["post_mlp"] = mlp_out.clone()
+
+                # Step 6: post-MLP residual add (= layer output)
+                x_out = residual2 + mlp_out
+                _cap["post_mlp_res"] = x_out.clone()
+
+                return x_out, kv_cache_new, conv_state_new, recurrent_state_new
+
+            layer.forward = _instrumented_forward  # type: ignore[method-assign]
+
         with torch.no_grad():
             hidden, _, _, _ = layer(hidden, cos, sin, attention_mask=causal_mask)
         per_layer_hidden.append(hidden.clone())
+        if capture_intermediates:
+            per_layer_intermediates.append(dict(_captured))
         del layer
-    return per_layer_hidden, config
+    return per_layer_hidden, config, per_layer_intermediates
 
 
 def _build_tt_model(mesh, state_dict, pattern, n_layers):
@@ -272,10 +356,17 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
     input_ids_padded[0, :T_prompt] = input_ids[0]
     print(f"[per-layer] T_prompt={T_prompt} T_PREFILL={_T_PREFILL}")
 
+    # Sub-block instrumentation flag: set QWEN36_PCC_SUBBLOCK=1 to enable capture
+    # of intermediates at each sub-step within every decoder layer.
+    # Default OFF — existing layer-level PCC table is unchanged.
+    _subblock_mode = os.environ.get("QWEN36_PCC_SUBBLOCK", "0") == "1"
+
     embed_w = state_dict["model.language_model.embed_tokens.weight"].float()
     x_cpu_torch = embed_w[input_ids_padded[0]].unsqueeze(0)
-    print(f"[per-layer] CPU reference: 64 layers ...")
-    per_layer_ref, _ = _cpu_reference_per_layer(state_dict, x_cpu_torch)
+    print(f"[per-layer] CPU reference: 64 layers (capture_intermediates={_subblock_mode}) ...")
+    per_layer_ref, _, per_layer_ref_intermediates = _cpu_reference_per_layer(
+        state_dict, x_cpu_torch, capture_intermediates=_subblock_mode
+    )
     print(f"[per-layer] CPU ref done, captured {len(per_layer_ref)} layers")
 
     x_tt = _send_col_sharded_hidden(x_cpu_torch.to(torch.bfloat16), bh_glx_mesh, args)
@@ -287,6 +378,141 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
     )
+
+    # -----------------------------------------------------------------------
+    # Sub-block TT instrumentation (QWEN36_PCC_SUBBLOCK=1 only)
+    #
+    # Monkey-patch each TtTransformerBlock.forward to yield intermediate TT
+    # tensors at the same sub-step boundaries captured by the CPU reference.
+    # The patch is applied on *instances* (not the class) so it is fully local
+    # to this test run and does not touch any production code.
+    #
+    # Captured sub-steps (qwen36 prefill path in llama_decoder.py):
+    #   post_attn_norm  — output of self.attention_norm (DistributedNorm)
+    #   post_attn       — output of self.attention.forward (col-sharded)
+    #   post_attn_res   — h_new = x + attn_out (after first residual add)
+    #   post_mlp_norm   — output of self.ff_norm (DistributedNorm)
+    #   post_mlp        — output of MLP forward_prefill
+    #   post_mlp_res    — final layer output (after second residual add)
+    #
+    # NOTE: the patch only instruments the ``is_qwen36_path`` (prefill) branch.
+    # The non-qwen36 decode path is not affected and falls through unchanged.
+    # -----------------------------------------------------------------------
+    _tt_subblock_store: list[dict[str, torch.Tensor]] = []  # per-layer, populated when flag is on
+
+    if _subblock_mode:
+
+        def _make_patched_forward(orig_layer, store_list, layer_idx):
+            """Return a replacement forward() that records sub-block outputs."""
+            orig_forward = orig_layer.forward
+
+            def _patched_forward(
+                x,
+                h,
+                current_pos,
+                rot_mats=None,
+                user_id=0,
+                mode="decode",
+                page_table=None,
+                chunk_page_table=None,
+                chunk_start_idx=None,
+                chunk_start_idx_tensor=None,
+                kv_cache=None,
+                batch_size=1,
+            ):
+                # ---- replicate the is_qwen36_path == True / prefill branch ----
+                # (mirrors llama_decoder.TtTransformerBlock.forward exactly for
+                # the prefill path; any mismatch would show up as a PCC anomaly)
+                pass
+
+                is_qwen36_path = orig_layer.is_qwen36 and mode in ("prefill", "decode")
+                if not is_qwen36_path or mode != "prefill":
+                    # Non-qwen36 or decode: fall through to original forward, no capture.
+                    return orig_forward(
+                        x,
+                        h,
+                        current_pos,
+                        rot_mats,
+                        user_id,
+                        mode,
+                        page_table,
+                        chunk_page_table=chunk_page_table,
+                        chunk_start_idx=chunk_start_idx,
+                        chunk_start_idx_tensor=chunk_start_idx_tensor,
+                        kv_cache=kv_cache,
+                        batch_size=batch_size,
+                    )
+
+                # --- prefill qwen36 path: instrument each sub-step ---
+                mc = orig_layer.model_config
+                mesh = orig_layer.mesh_device
+                # Determine cluster_shape from args (needed by _gather_col_sharded_to_full).
+                # We close over the outer 'args' variable set up before this loop.
+                _cap: dict[str, torch.Tensor] = {}
+
+                def _snap(name, tt_t):
+                    """Gather tt_t to CPU and store in _cap (non-destructive)."""
+                    try:
+                        cpu_t = _gather_col_sharded_to_full(tt_t, mesh, args, T=_T_PREFILL)
+                        _cap[name] = cpu_t.reshape(1, _T_PREFILL, -1).float()
+                    except Exception as _e:  # noqa: BLE001
+                        # Gathering may fail if the tensor shape differs (e.g. the
+                        # attn_out before the layer output which is not full-T).
+                        # Store None so the downstream PCC prints "N/A".
+                        _cap[name] = None
+
+                # Step 1: attention norm (col-sharded in → col-sharded out)
+                attn_in_sharded, _ = orig_layer.attention_norm(x, None, "prefill")
+                _snap("post_attn_norm", attn_in_sharded)
+
+                # Step 2: attention forward
+                attn_out = orig_layer.attention.forward(
+                    attn_in_sharded,
+                    current_pos,
+                    rot_mats,
+                    user_id,
+                    mode,
+                    page_table=page_table,
+                    chunk_page_table=chunk_page_table,
+                    chunk_start_idx=chunk_start_idx,
+                    chunk_start_idx_tensor=chunk_start_idx_tensor,
+                    kv_cache=kv_cache,
+                    batch_size=batch_size,
+                )
+                attn_in_sharded.deallocate(True)
+                if len(list(attn_out.shape)) == 3:
+                    _B_a, _T_a, _H_a = list(attn_out.shape)
+                    attn_out = ttnn.reshape(attn_out, ttnn.Shape([_B_a, 1, _T_a, _H_a]))
+                _snap("post_attn", attn_out)
+
+                # Step 3: post-attention residual add
+                h_new = ttnn.add(x, attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                x.deallocate(True)
+                attn_out.deallocate(True)
+                _snap("post_attn_res", h_new)
+
+                # Step 4: MLP norm (col-sharded in → col-sharded out)
+                ff_in_sharded, _ = orig_layer.ff_norm(h_new, None, "prefill")
+                _snap("post_mlp_norm", ff_in_sharded)
+
+                # Step 5: MLP forward
+                ff_out_sharded = orig_layer.feed_forward.forward(ff_in_sharded, "prefill", batch_size=batch_size)
+                ff_in_sharded.deallocate(True)
+                _snap("post_mlp", ff_out_sharded)
+
+                # Step 6: post-MLP residual add (= layer output)
+                out_sharded = ttnn.add(ff_out_sharded, h_new, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                ff_out_sharded.deallocate(True)
+                h_new.deallocate(True)
+                _snap("post_mlp_res", out_sharded)
+
+                store_list.append(_cap)
+                return out_sharded, None
+
+            return _patched_forward
+
+        for _li, _blk in enumerate(model.layers):
+            _blk.forward = _make_patched_forward(_blk, _tt_subblock_store, _li)  # type: ignore[method-assign]
 
     # Instrument: replace TtTransformer.forward layer loop to capture per-layer outputs.
     print("[per-layer] running TT 64-layer prefill (instrumented) ...")
@@ -324,16 +550,125 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
         pcc_last = _pcc(tt_hidden_cpu[:, T_prompt - 1 : T_prompt, :], ref_hidden[:, T_prompt - 1 : T_prompt, :])
         per_layer_pcc.append(pcc_last)
         per_layer_dtype.append(str(x.dtype))
-        print(
-            f"[per-layer] L{i:02d} ({pattern[i][:3]}): "
-            f"PCC_full={pcc_full:.4f} PCC_prompt={pcc_prompt:.4f} PCC_last={pcc_last:.4f} | "
-            f"tt_std={tt_hidden_cpu.std().item():.3f} ref_std={ref_hidden.std().item():.3f} | "
-            f"x.dtype={str(x.dtype).split('.')[-1]}"
-        )
+
+        if _subblock_mode and i < len(_tt_subblock_store) and i < len(per_layer_ref_intermediates):
+            # Print sub-block PCC for this layer.
+            _tt_caps = _tt_subblock_store[i]
+            _ref_caps = per_layer_ref_intermediates[i]
+            _sub_steps = [
+                "post_attn_norm",
+                "post_attn",
+                "post_attn_res",
+                "post_mlp_norm",
+                "post_mlp",
+                "post_mlp_res",
+            ]
+            _step_labels = {
+                "post_attn_norm": "attn_norm",
+                "post_attn": "post_attn",
+                "post_attn_res": "post_attn_res",
+                "post_mlp_norm": "mlp_norm",
+                "post_mlp": "post_mlp",
+                "post_mlp_res": "full",
+            }
+            _pcc_parts = []
+            for _step in _sub_steps:
+                _tt_t = _tt_caps.get(_step)
+                _ref_t = _ref_caps.get(_step)
+                if _tt_t is None or _ref_t is None:
+                    _pcc_parts.append(f"{_step_labels[_step]}=N/A")
+                else:
+                    # Compare at the last real prompt position (same as pcc_last).
+                    _tt_slice = _tt_t[:, T_prompt - 1 : T_prompt, :].float()
+                    _ref_slice = _ref_t[:, T_prompt - 1 : T_prompt, :].float()
+                    _p = _pcc(_tt_slice, _ref_slice)
+                    _pcc_parts.append(f"{_step_labels[_step]}={_p:.4f}")
+            print(f"[per-layer] L{i:02d} ({pattern[i][:3]}): " + " ".join(_pcc_parts))
+        else:
+            print(
+                f"[per-layer] L{i:02d} ({pattern[i][:3]}): "
+                f"PCC_full={pcc_full:.4f} PCC_prompt={pcc_prompt:.4f} PCC_last={pcc_last:.4f} | "
+                f"tt_std={tt_hidden_cpu.std().item():.3f} ref_std={ref_hidden.std().item():.3f} | "
+                f"x.dtype={str(x.dtype).split('.')[-1]}"
+            )
 
     print("\n[per-layer] SUMMARY")
     print(f"  First layer with PCC<0.99: ", end="")
     fail_idx = next((i for i, p in enumerate(per_layer_pcc) if p < 0.99), None)
     print(fail_idx)
     print(f"  Final layer PCC: {per_layer_pcc[-1]:.6f}")
+
+    # -----------------------------------------------------------------------
+    # Sub-block summary (QWEN36_PCC_SUBBLOCK=1 only)
+    # For each sub-step, compute the per-layer PCC drop vs the previous step
+    # and print the average drop + the step with the LARGEST average drop.
+    # -----------------------------------------------------------------------
+    if _subblock_mode and _tt_subblock_store and per_layer_ref_intermediates:
+        _sub_steps = [
+            "post_attn_norm",
+            "post_attn",
+            "post_attn_res",
+            "post_mlp_norm",
+            "post_mlp",
+            "post_mlp_res",
+        ]
+        _step_labels = {
+            "post_attn_norm": "attn_norm",
+            "post_attn": "post_attn",
+            "post_attn_res": "post_attn_res",
+            "post_mlp_norm": "mlp_norm",
+            "post_mlp": "post_mlp",
+            "post_mlp_res": "full",
+        }
+        # Build per-layer, per-step PCC table (indexed [layer][step]).
+        _pcc_table: list[dict[str, float | None]] = []
+        for _i in range(len(_tt_subblock_store)):
+            _tt_caps = _tt_subblock_store[_i]
+            _ref_caps = per_layer_ref_intermediates[_i]
+            _row: dict[str, float | None] = {}
+            for _step in _sub_steps:
+                _tt_t = _tt_caps.get(_step)
+                _ref_t = _ref_caps.get(_step)
+                if _tt_t is None or _ref_t is None:
+                    _row[_step] = None
+                else:
+                    _tt_s = _tt_t[:, T_prompt - 1 : T_prompt, :].float()
+                    _ref_s = _ref_t[:, T_prompt - 1 : T_prompt, :].float()
+                    _row[_step] = _pcc(_tt_s, _ref_s)
+            _pcc_table.append(_row)
+
+        # Compute per-step average PCC drop vs the immediately preceding step.
+        # "drop" = PCC[prev_step] − PCC[this_step] (positive = degradation).
+        # For the first step (post_attn_norm) the reference is 1.0 (input = CPU fp32).
+        print("\n[per-layer] SUB-BLOCK PCC DROP SUMMARY (avg across all layers):")
+        _prev_step_label = "input (1.0)"
+        _step_avg_drop: dict[str, float] = {}
+        for _si, _step in enumerate(_sub_steps):
+            _drops = []
+            for _i, _row in enumerate(_pcc_table):
+                _cur = _row.get(_step)
+                if _cur is None:
+                    continue
+                if _si == 0:
+                    _prev = 1.0
+                else:
+                    _prev_step = _sub_steps[_si - 1]
+                    _prev = _row.get(_prev_step)
+                    if _prev is None:
+                        continue
+                _drops.append(_prev - _cur)
+            if _drops:
+                _avg_drop = sum(_drops) / len(_drops)
+                _step_avg_drop[_step] = _avg_drop
+                print(f"  {_step_labels[_step]:18s}: avg_drop={_avg_drop:+.6f}  " f"(over {len(_drops)} layers)")
+            else:
+                print(f"  {_step_labels[_step]:18s}: no data")
+
+        if _step_avg_drop:
+            _worst_step = max(_step_avg_drop, key=_step_avg_drop.__getitem__)
+            print(
+                f"\n  LARGEST per-layer PCC drop: {_step_labels[_worst_step]!r}  "
+                f"(avg {_step_avg_drop[_worst_step]:+.6f}/layer)"
+            )
+
     # Don't assert — this is diagnostic.
