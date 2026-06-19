@@ -16,7 +16,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"

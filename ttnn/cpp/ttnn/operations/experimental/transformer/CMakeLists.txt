@@ -35,7 +35,6 @@ file(
     rotary_embedding_llama/device/kernels/*
     rotary_embedding_llama_fused_qk/device/kernels/*
     rotate_half/device/kernels/*
-    split_query_key_value_and_split_heads/device/kernels/*
     dit_layernorm_pre_all_gather/device/kernels/*
     dit_layernorm_post_all_gather/device/kernels/*
 )

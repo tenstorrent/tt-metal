@@ -37,8 +37,6 @@ file(
     scatter/device/kernels/*
     sharded/device/kernels/*
     sort/device/kernels/*
-    split/device/kernels/*
-    slice/device/kernels/*
     tilize/device/kernels/*
     tilize_with_val_padding/device/kernels/*
     transpose/device/kernels/*
@@ -80,9 +78,6 @@ target_sources(
             bcast/device/bcast_multi_core_w_program_factory.hpp
             bcast/device/bcast_sharded_h_optimised_program_factory.hpp
             bcast/device/bcast_sharded_h_program_factory.hpp
-            # chunk/
-            chunk/chunk.hpp
-            chunk/chunk_nanobind.hpp
             # clone/
             clone/clone.hpp
             clone/clone_nanobind.hpp
@@ -206,27 +201,12 @@ target_sources(
             scatter/device/scatter_reduce_bfloat16_program_factory.hpp
             # sharded/
             sharded/sharded_common.hpp
-            # slice/
-            slice/slice_nanobind.hpp
-            slice/device/slice_device_operation.hpp
-            slice/device/slice_device_operation_types.hpp
-            slice/device/slice_program_factory_rm.hpp
-            slice/device/slice_program_factory_rm_sharded.hpp
-            slice/device/slice_program_factory_rm_stride.hpp
-            slice/device/slice_program_factory_tile.hpp
-            slice/device/slice_program_factory_tile_tensor_args.hpp
             # sort/
             sort/sort.hpp
             sort/sort_nanobind.hpp
             sort/device/sort_device_operation.hpp
             sort/device/sort_device_operation_types.hpp
             sort/device/sort_program_factory.hpp
-            # split/
-            split/split.hpp
-            split/split_nanobind.hpp
-            split/device/split_device_operation.hpp
-            split/device/split_device_operation_types.hpp
-            split/device/split_program_factory.hpp
             # squeeze/
             squeeze/squeeze.hpp
             squeeze/squeeze_nanobind.hpp

@@ -10,7 +10,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     bcast/device/bcast_sharded_h_optimised_program_factory.cpp
     bcast/device/bcast_multi_core_w_program_factory.cpp
     bcast/device/bcast_multi_core_hw_program_factory.cpp
-    chunk/chunk.cpp
     clone/clone.cpp
     clone/device/clone_device_operation.cpp
     clone/device/clone_program_factory.cpp
@@ -53,7 +52,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     move/device/move_overlap_program_factory.cpp
     move/device/move_sharded_program_factory.cpp
     move/move.cpp
-    narrow/narrow.cpp
     non_zero_indices/device/non_zero_indices_device_operation.cpp
     non_zero_indices/device/non_zero_indices_program_factory.cpp
     non_zero_indices/non_zero_indices.cpp
@@ -90,16 +88,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     scatter/device/scatter_reduce_bfloat16_program_factory.cpp
     scatter/device/scatter_program_factory.cpp
     sharded/sharded_common.cpp
-    slice/device/slice_device_operation.cpp
-    slice/device/slice_program_factory_rm.cpp
-    slice/device/slice_program_factory_rm_sharded.cpp
-    slice/device/slice_program_factory_rm_stride.cpp
-    slice/device/slice_program_factory_tile.cpp
-    slice/device/slice_program_factory_tile_tensor_args.cpp
-    slice/slice.cpp
-    split/device/split_device_operation.cpp
-    split/device/split_program_factory.cpp
-    split/split.cpp
     squeeze/squeeze.cpp
     stack/stack.cpp
     tilize/device/tilize_device_operation.cpp
@@ -174,7 +162,6 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     repeat/repeat.hpp
     reshape_view/reshape.hpp
     reshape_view/reshape_common.hpp
-    slice/slice.hpp
     tilize_with_val_padding/tilize_with_val_padding.hpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp
     transpose/transpose.hpp

@@ -12,7 +12,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -182,7 +182,7 @@ Tensor prod_impl(
         const auto& input_shape = input_tensor_4d.logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
-        result = ttnn::squeeze_from_4D(ttnn::slice(required, start_index, end_index, step, std::nullopt), old_rank);
+        result = ttnn::squeeze_from_4D(/*nuked-op*/ required, old_rank);
     } else {  // dim 3
         // permute
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
@@ -191,7 +191,7 @@ Tensor prod_impl(
         const auto& input_shape = input_tensor_4d.logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
-        Tensor new_unpad_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
+        Tensor new_unpad_tensor = /*nuked-op*/ required;
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);

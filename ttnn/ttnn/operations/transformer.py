@@ -52,15 +52,7 @@ def _golden_function(
     return query, key, value
 
 
-ttnn.attach_golden_function(
-    ttnn.transformer.split_query_key_value_and_split_heads,
-    golden_function=_golden_function,
-)
-
-ttnn.attach_golden_function(
-    ttnn.experimental.split_query_key_value_and_split_heads,
-    golden_function=_golden_function,
-)
+# TODO(nuked-op split_query_key_value_and_split_heads): golden attaches removed (op nuked).
 
 
 # NOTE: attention_softmax golden + attaches removed with the nuked

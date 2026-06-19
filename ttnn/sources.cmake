@@ -90,17 +90,14 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/data_movement_nanobind.cpp
     cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
     cpp/ttnn/operations/data_movement/bcast/bcast_nanobind.cpp
-    cpp/ttnn/operations/data_movement/chunk/chunk_nanobind.cpp
     cpp/ttnn/operations/data_movement/clone/clone_nanobind.cpp
     cpp/ttnn/operations/data_movement/concat/concat_nanobind.cpp
     cpp/ttnn/operations/data_movement/copy/copy_nanobind.cpp
-    cpp/ttnn/operations/data_movement/chunk/chunk_nanobind.cpp
     cpp/ttnn/operations/data_movement/expand/expand_nanobind.cpp
     cpp/ttnn/operations/data_movement/fill_pad/fill_pad_nanobind.cpp
     cpp/ttnn/operations/data_movement/fill_rm/fill_rm_nanobind.cpp
     cpp/ttnn/operations/data_movement/fold/fold_nanobind.cpp
     cpp/ttnn/operations/data_movement/indexed_fill/indexed_fill_nanobind.cpp
-    cpp/ttnn/operations/data_movement/narrow/narrow_nanobind.cpp
     cpp/ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.cpp
     cpp/ttnn/operations/data_movement/moe_routing_remap/moe_routing_remap_nanobind.cpp
     cpp/ttnn/operations/data_movement/move/move_nanobind.cpp
@@ -117,8 +114,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/data_movement/stack/stack_nanobind.cpp
     cpp/ttnn/operations/data_movement/scatter/scatter_nanobind.cpp
     cpp/ttnn/operations/data_movement/scatter/tosa_scatter_nanobind.cpp
-    cpp/ttnn/operations/data_movement/slice/slice_nanobind.cpp
-    cpp/ttnn/operations/data_movement/split/split_nanobind.cpp
     cpp/ttnn/operations/data_movement/squeeze/squeeze_nanobind.cpp
     cpp/ttnn/operations/data_movement/stack/stack_nanobind.cpp
     cpp/ttnn/operations/data_movement/tilize/tilize_nanobind.cpp
@@ -179,8 +174,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.cpp
     cpp/ttnn/operations/experimental/reshape/view_nanobind.cpp
-    cpp/ttnn/operations/experimental/slice_write/slice_write_nanobind.cpp
-    cpp/ttnn/operations/experimental/padded_slice/padded_slice_nanobind.cpp
     cpp/ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.cpp
     cpp/ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.cpp
@@ -207,7 +200,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.cpp
-    cpp/ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     cpp/ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.cpp
     cpp/ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.cpp
     cpp/ttnn/operations/full/full_nanobind.cpp
@@ -267,7 +259,6 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.cpp
     cpp/ttnn/operations/sliding_window/sliding_window_nanobind.cpp
     cpp/ttnn/operations/transformer/concatenate_heads/concatenate_heads_nanobind.cpp
-    cpp/ttnn/operations/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
     cpp/ttnn/operations/transformer/transformer_nanobind.cpp
     cpp/ttnn/operations/uniform/uniform_nanobind.cpp
     cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp

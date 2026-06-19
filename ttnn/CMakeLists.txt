@@ -249,7 +249,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::Dropout
         TTNN::Ops::Experimental::IsIn
         TTNN::Ops::Experimental::Matmul
-        TTNN::Ops::Experimental::PaddedSlice
         TTNN::Ops::Experimental::MinimalMatmul
         TTNN::Ops::Experimental::DeepseekMoEPostCombineTilize
         TTNN::Ops::Experimental::DeepSeekPrefill::PostCombineReduce
@@ -269,7 +268,6 @@ target_link_libraries(
         TTNN::Ops::Experimental::PlusOne
         TTNN::Ops::Experimental::Reduction
         TTNN::Ops::Experimental::Reshape
-        TTNN::Ops::Experimental::SliceWrite
         TTNN::Ops::Experimental::SSM
         TTNN::Ops::Experimental::Transformer
         TTNN::Ops::Experimental::UnaryBackward
@@ -520,12 +518,10 @@ add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/extract)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/insert)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk)
-add_subdirectory(cpp/ttnn/operations/experimental/padded_slice)
 add_subdirectory(cpp/ttnn/operations/experimental/paged_cache)
 add_subdirectory(cpp/ttnn/operations/experimental/plusone)
 add_subdirectory(cpp/ttnn/operations/experimental/reduction)
 add_subdirectory(cpp/ttnn/operations/experimental/reshape)
-add_subdirectory(cpp/ttnn/operations/experimental/slice_write)
 add_subdirectory(cpp/ttnn/operations/experimental/ssm)
 add_subdirectory(cpp/ttnn/operations/experimental/test)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)

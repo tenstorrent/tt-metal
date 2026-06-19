@@ -533,12 +533,8 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
-from ttnn._ttnn.operations.data_movement import (
-    SliceParams,
-    SliceInputs,
-    SliceDeviceOperation,
-    SliceTileProgramFactory,
-)
+
+# TODO(nuked-op slice): removed SliceParams/SliceInputs/SliceDeviceOperation/SliceTileProgramFactory imports (slice op nuked).
 
 import pathlib
 import importlib.util

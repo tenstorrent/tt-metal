@@ -15,7 +15,7 @@
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 
 namespace ttnn::operations::ccl {
 
@@ -43,17 +43,11 @@ struct MeshPartitionDeviceOperation {
             const std::vector<tt::tt_metal::Tensor>&)>;
 
         // -- shared variables --------------------------------------------
-        using SliceSharedVariables = std::variant<
-            prim::SliceRmProgramFactory::shared_variables_t,
-            prim::SliceRmShardedProgramFactory::shared_variables_t,
-            prim::SliceRmStrideProgramFactory::shared_variables_t,
-            prim::SliceTileProgramFactory::shared_variables_t,
-            prim::SliceTileTensorArgsProgramFactory::shared_variables_t>;
-
-        struct shared_variables_t {
-            prim::SliceDeviceOperation::program_factory_t slice_program_factory;
-            SliceSharedVariables slice_shared_variables;
-        };
+        // TODO(nuked-op slice): mesh_partition delegated its program creation to
+        // the nuked slice device-op primitive. Stubbed to an empty struct so the
+        // op compiles; create_at/override_runtime_arguments are no-ops until the
+        // slice primitive is restored.
+        struct shared_variables_t {};
         using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 
         static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
