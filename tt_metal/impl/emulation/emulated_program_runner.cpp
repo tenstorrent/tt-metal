@@ -1128,29 +1128,52 @@ static std::map<std::string, std::string> build_kernel_defines(
         // format dispatch falls back to a page-size heuristic that misclassifies
         // thin bf16 tiles (e.g. a [1,32] reduce scaler, page=64) as Bfp8_b.
         uint8_t data_formats[EMULE_NUM_CBS];
+        // Per-CB tile shape (height/width). Ground truth for thin tiles (e.g.
+        // Tile([1,16])): the compute side bounds its pack/unpack/reduce iteration
+        // by it instead of assuming a full 32x32 tile (reading uninitialized lanes
+        // otherwise). Default 32x32 when a CB has no Tile spec. The compute-side
+        // cb_api.h populates unpack_tile_r_dim[]/unpack_tile_c_dim[] from these.
+        // (Port of pin d9993aa "emit per-CB tile height/width for thin-tile reduce".)
+        uint32_t tile_r_dim[EMULE_NUM_CBS];
+        uint32_t tile_c_dim[EMULE_NUM_CBS];
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             data_formats[i] = static_cast<uint8_t>(tt::DataFormat::Invalid);
+            tile_r_dim[i] = 32u;  // == tt::constants::TILE_HEIGHT (Tile() default)
+            tile_c_dim[i] = 32u;  // == tt::constants::TILE_WIDTH
         }
         for (auto& cb_impl : cb_impls) {
+            const auto& tiles = cb_impl->config().tiles();
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
                     tile_sizes[idx] = cb_impl->page_size(idx);
                     data_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
+                    if (tiles[idx].has_value()) {
+                        tile_r_dim[idx] = tiles[idx]->get_height();
+                        tile_c_dim[idx] = tiles[idx]->get_width();
+                    }
                 }
             }
         }
         std::ostringstream ts;
         std::ostringstream df;
+        std::ostringstream tr;
+        std::ostringstream tc;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
                 df << ',';
+                tr << ',';
+                tc << ',';
             }
             ts << tile_sizes[i];
             df << static_cast<uint32_t>(data_formats[i]);
+            tr << tile_r_dim[i];
+            tc << tile_c_dim[i];
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
         defines["EMULE_CB_DATA_FORMATS"] = df.str();
+        defines["EMULE_TILE_R_DIM"] = tr.str();
+        defines["EMULE_TILE_C_DIM"] = tc.str();
     }
 
     // Thread the compute kernel's resolved fp32_dest_acc_en / dst_full_sync_en
