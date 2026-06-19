@@ -868,7 +868,7 @@ jobs:
         GITHUB_ACTIONS: true
         TRACY_NO_INVARIANT_CHECK: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -887,9 +887,8 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -901,7 +900,7 @@ jobs:
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ttnn-operations-master-json
-          path: docker-job/model_tracer/traced_operations/
+          path: model_tracer/traced_operations/
       - name: Run ttnn sweeps generation (single sweep)
         if: >-
           needs.resolve-inputs.outputs.sweep-name != 'ALL SWEEPS (Nightly)' &&
@@ -1011,7 +1010,7 @@ jobs:
         TRACY_NO_INVARIANT_CHECK: 1
         TTNN_OPS_DATABASE_URL: ${{ (needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Model Traced)' || needs.resolve-inputs.outputs.sweep-name == 'ALL SWEEPS (Lead Models)') && secrets.TTNN_OPS_LEAD_MODELS_DATABASE_URL || '' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >-
@@ -1034,9 +1033,8 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -1264,7 +1262,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
     defaults:
       run:
         shell: bash
@@ -1276,9 +1274,8 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

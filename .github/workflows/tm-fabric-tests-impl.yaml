@@ -220,7 +220,7 @@ jobs:
       - name: Run Multi-Process tests
         if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
         timeout-minutes: 10
-        uses: ./docker-job/.github/actions/run-multi-process-tests
+        uses: ./.github/actions/run-multi-process-tests
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         if: ${{ !cancelled() }}

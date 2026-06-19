@@ -202,7 +202,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GITHUB_ACTIONS: true
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
     defaults:
       run:
         shell: bash
@@ -215,10 +215,9 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
 
       - name: Setup job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
@@ -419,7 +418,7 @@ jobs:
         TRACY_NO_INVARIANT_CHECK: 1
         LEAD_MODELS_RUN: ${{ matrix.validation_scope == 'lead_models' && '1' || '0' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
@@ -435,10 +434,9 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
 
       - name: Setup job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

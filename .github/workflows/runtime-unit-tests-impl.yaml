@@ -80,7 +80,7 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent"
     defaults:
@@ -93,9 +93,8 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
-          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -132,7 +131,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: profdata-metal-runtime-${{ matrix.test-group.name }}
-          path: ${{ github.workspace }}/docker-job/coverage/job.profdata
+          path: ${{ github.workspace }}/coverage/job.profdata
           if-no-files-found: ignore
           retention-days: 1
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main

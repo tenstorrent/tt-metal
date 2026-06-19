@@ -112,7 +112,7 @@ jobs:
         ENABLE_CI_ONLY_TT_TRAIN_TESTS: 1
         TT_LOGGER_LEVEL: warn
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -126,10 +126,9 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
-          path: docker-job
 
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -174,7 +173,7 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-${{ matrix.test-group.name }}-${{ matrix.test-group.sku }}
-          path: ${{ github.workspace }}/docker-job/power_report.json
+          path: ${{ github.workspace }}/power_report.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -197,14 +196,14 @@ jobs:
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: always() && hashFiles('docker-job/generated/tt-train-metrics/**') != ''
+        if: always() && hashFiles('generated/tt-train-metrics/**') != ''
         with:
           path: /work/generated/tt-train-metrics
           prefix: "metrics_"
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: always() && hashFiles('docker-job/generated/test_reports/**') != ''
+        if: always() && hashFiles('generated/test_reports/**') != ''
         with:
           path: /work/generated/test_reports
           prefix: "test_reports_"
