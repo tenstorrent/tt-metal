@@ -25,7 +25,29 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Device Program Profiler" href="device_program_profiler.html" />
-    <link rel="prev" title="Watcher" href="watcher.html" /> 
+    <link rel="prev" title="Watcher" href="watcher.html" />
+ 
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        // Add noindex to keep old versions out of search results
+        var noindex = document.createElement('meta');
+        noindex.name = 'robots';
+        noindex.content = 'noindex';
+        document.head.appendChild(noindex);
+        // Add canonical pointing to latest (clean URL, no query/fragment)
+        var canonical = document.createElement('link');
+        canonical.rel = 'canonical';
+        canonical.href = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        document.head.appendChild(canonical);
+    }
+})();
+</script>
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -72,6 +94,8 @@
 <li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#enabling-tracy">Enabling Tracy</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#gui">GUI</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#web-gui-wasm">Web GUI (WASM)</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#remote-host-ssh">Remote host (SSH)</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#installing-for-mac-users">Installing for Mac users</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#building-for-linux-users">Building for Linux users</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#starting-the-gui">Starting the GUI</a></li>
@@ -114,6 +138,32 @@
       </nav>
 
       <div class="wy-nav-content">
+<div id="tt-version-warning" style="display:none"></div>
+<script>
+(function() {
+    var parts = window.location.pathname.split('/');
+    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
+    // Skips local builds (make html/server) where this prefix is absent.
+    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
+    if (version && version !== 'latest') {
+        var latestUrl = (window.location.origin + window.location.pathname)
+            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
+        var banner = document.getElementById('tt-version-warning');
+        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
+        banner.textContent = 'You are viewing documentation for an older version (';
+        var versionEl = document.createElement('strong');
+        versionEl.textContent = version;
+        banner.appendChild(versionEl);
+        banner.appendChild(document.createTextNode('). '));
+        var link = document.createElement('a');
+        link.href = latestUrl;
+        link.textContent = 'Click here for the latest version.';
+        banner.appendChild(link);
+        banner.style.display = 'block';
+    }
+})();
+</script>
+
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -163,17 +213,42 @@ ninja<span class="w"> </span>install
 <h2>GUI<a class="headerlink" href="#gui" title="Permalink to this heading"></a>
 </h2>
 <p>Tracy provides a GUI application for viewing profiling results. You can open saved profiling sessions or connect to a remote machine to view real-time profiling data, as long as network access to the remote system is available.</p>
+<section id="web-gui-wasm">
+<h3>Web GUI (WASM)<a class="headerlink" href="#web-gui-wasm" title="Permalink to this heading"></a>
+</h3>
+<p>After a successful <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">tracy</span></code> profiling run with the default Tracy capture flow , Metalium automatically starts the <strong>Tracy WASM web viewer</strong> in the background.</p>
+<p>When the server starts, the <strong>console logs</strong> print the suggested <strong>HTTP URL</strong> (open in a browser).</p>
+<p>By default the HTTP server listens on <strong>8080</strong>. To use a different HTTP port, pass <code class="docutils literal notranslate"><span class="pre">--web-app-port</span> <span class="pre">&lt;port&gt;</span></code>.</p>
+<p>In addition to the HTTP port, a <strong>WebSocket</strong> is used for live refresh on port <em>P</em>+1 (one above the chosen HTTP port <em>P</em>).</p>
+</section>
+<section id="remote-host-ssh">
+<h3>Remote host (SSH)<a class="headerlink" href="#remote-host-ssh" title="Permalink to this heading"></a>
+</h3>
+<p>If the WASM server runs on a <strong>remote</strong> machine (for example after <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">-m</span> <span class="pre">tracy</span></code> on a lab host) but you open the viewer in a browser on your <strong>local</strong> machine, you must forward <strong>both</strong> the HTTP port and the WebSocket port. With the defaults <strong>8080</strong> and <strong>8081</strong>, SSH must tunnel local ports to the same ports on the remote loopback interface where the server is listening.</p>
+<p>Add matching <code class="docutils literal notranslate"><span class="pre">LocalForward</span></code> lines to your <code class="docutils literal notranslate"><span class="pre">~/.ssh/config</span></code> (or pass equivalent <code class="docutils literal notranslate"><span class="pre">-L</span></code> flags on the command line). Example for default ports:</p>
+<div class="highlight-text notranslate">
+<div class="highlight"><pre><span></span>Host my-tt-metal-host
+    HostName lab.example.com
+    User you
+
+    # Tracy WASM: HTTP and WebSocket (live refresh)
+    LocalForward 8080 127.0.0.1:8080
+    LocalForward 8081 127.0.0.1:8081
+</pre></div>
+</div>
+<p>Connect with <code class="docutils literal notranslate"><span class="pre">ssh</span> <span class="pre">my-tt-metal-host</span></code>, then open <code class="docutils literal notranslate"><span class="pre">http://127.0.0.1:8080/</span></code> in a local browser. If you change the HTTP port with <code class="docutils literal notranslate"><span class="pre">--web-app-port</span></code>, forward that port and <strong>P</strong>+1 the same way.</p>
+</section>
 <section id="installing-for-mac-users">
 <h3>Installing for Mac users<a class="headerlink" href="#installing-for-mac-users" title="Permalink to this heading"></a>
 </h3>
 <p>Mac users can install Tracy using Homebrew. Open a terminal and run:</p>
 <div class="highlight-bash notranslate">
-<div class="highlight"><pre><span></span>brew<span class="w"> </span>uninstall<span class="w"> </span>tracy<span class="w"> </span><span class="c1"># Remove any old version of Tracy</span>
-brew<span class="w"> </span>tap-new<span class="w"> </span><span class="nv">$USER</span>/tracy<span class="w"> </span><span class="c1"># Create a tap</span>
-wget<span class="w"> </span>-P<span class="w"> </span><span class="k">$(</span>brew<span class="w"> </span>--repository<span class="k">)</span>/Library/Taps/<span class="nv">$USER</span>/homebrew-tracy/Formula/<span class="w"> </span>--no-check-certificate<span class="w"> </span>--no-cache<span class="w"> </span>--no-cookies<span class="w"> </span>https://raw.githubusercontent.com/tenstorrent-metal/tracy/master/tracy.rb
-brew<span class="w"> </span>install<span class="w"> </span><span class="nv">$USER</span>/tracy/tracy<span class="w"> </span><span class="c1"># Install from the tap</span>
+<div class="highlight"><pre><span></span>brew<span class="w"> </span>tap<span class="w"> </span>tenstorrent/tools
+brew<span class="w"> </span>update
+brew<span class="w"> </span>install<span class="w"> </span>tenstorrent/tools/tracy
 </pre></div>
 </div>
+<p>For further installation options, refer to <a class="reference external" href="https://github.com/tenstorrent/homebrew-tools">https://github.com/tenstorrent/homebrew-tools</a>.</p>
 <p>After installation, start the Tracy GUI with:</p>
 <div class="highlight-bash notranslate">
 <div class="highlight"><pre><span></span>tracy
@@ -218,14 +293,14 @@ make<span class="w"> </span>-j8
 <section id="capturing-via-command-line">
 <h3>Capturing via Command Line<a class="headerlink" href="#capturing-via-command-line" title="Permalink to this heading"></a>
 </h3>
-<p>Alternatively, use the <code class="docutils literal notranslate"><span class="pre">capture-release</span></code> CLI tool built under <strong>tt-metal</strong> when Tracy is enabled, under <code class="docutils literal notranslate"><span class="pre">tt-metal/build/tools/profiler/bin</span></code> when Tracy is enabled. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:</p>
+<p>Alternatively, use the <code class="docutils literal notranslate"><span class="pre">tracy-capture</span></code> CLI tool built under <strong>tt-metal</strong> when Tracy is enabled, at <code class="docutils literal notranslate"><span class="pre">tt-metal/build/tools/profiler/bin/tracy-capture</span></code>. This tool acts as a client that saves the profile to disk, which can then be copied and loaded into the GUI later. To use it, run the following command before starting the application:</p>
 <div class="highlight-bash notranslate">
-<div class="highlight"><pre><span></span>./capture-release<span class="w"> </span>-o<span class="w"> </span>output_file_name.tracy
+<div class="highlight"><pre><span></span>./build/tools/profiler/bin/tracy-capture<span class="w"> </span>-o<span class="w"> </span>output_file_name.tracy
 </pre></div>
 </div>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
-<p>The output of <code class="docutils literal notranslate"><span class="pre">capture-release</span></code> is quite compressible. For large profile files, it is recommended to compress them before transferring over the network. You can use the <code class="docutils literal notranslate"><span class="pre">-z</span></code> option with rsync, <code class="docutils literal notranslate"><span class="pre">-C</span></code> with scp, or standalone tools like gzip or zstd.</p>
+<p>The output of <code class="docutils literal notranslate"><span class="pre">tracy-capture</span></code> is quite compressible. For large profile files, it is recommended to compress them before transferring over the network. You can use the <code class="docutils literal notranslate"><span class="pre">-z</span></code> option with rsync, <code class="docutils literal notranslate"><span class="pre">-C</span></code> with scp, or standalone tools like gzip or zstd.</p>
 </div>
 </section>
 </section>
@@ -386,7 +461,9 @@ async function loadVersions() {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const projectCode = location.pathname.split('/')[3];
+        const pathParts = location.pathname.split('/');
+        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
+        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -404,7 +481,9 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    return window.location.pathname.split('/')[2];
+    const parts = window.location.pathname.split('/');
+    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
+    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 

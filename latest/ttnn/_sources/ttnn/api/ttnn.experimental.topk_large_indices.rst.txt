@@ -1,0 +1,8 @@
+﻿ttnn.experimental.topk\_large\_indices
+======================================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.topk_large_indices:
+
+.. autooperation:: ttnn.experimental.topk_large_indices
