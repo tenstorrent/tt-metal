@@ -789,7 +789,9 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         allocate_decoder_state,
     )
 
-    ISL_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262112]
+    # Prompt sizes are exact powers of 2 (or as close as MODEL_MAX_SEQ_LEN allows for 262K).
+    # These are the actual token counts fed as prompt — not target ISLs with headroom trimmed.
+    ISL_LIST = [128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262016]
     N_DECODE = 50
 
     tokenizer = AutoTokenizer.from_pretrained(_SNAP)
@@ -801,9 +803,7 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
     # Instruction-following prompts ("find 3 quotes...") only work with instruct
     # fine-tunes and cause base models to hallucinate or echo the template.
     # For ISLs longer than the book (~105K tokens) the book is repeated.
-    # Leave _HEADROOM tokens so the prompt never exactly fills max_seq_len.
     _GUTENBERG_URL = "https://www.gutenberg.org/cache/epub/84/pg84.txt"
-    _HEADROOM = 64  # tokens reserved for decode within the max_seq_len window
     _cache_dir = pathlib.Path("/tmp/nemotron_context_cache")
     _cache_dir.mkdir(exist_ok=True)
     _book_cache = _cache_dir / "frankenstein_pg84.txt"
@@ -820,17 +820,15 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
     print(f"[context] Book: {len(_book_ids):,} tokens", flush=True)
 
     def _build_prompt_ids(isl: int) -> list:
-        """Return ~(isl - _HEADROOM) tokens of book text (repeated if needed)."""
-        n = max(1, isl - _HEADROOM)
-        reps = (n + len(_book_ids) - 1) // len(_book_ids)
-        return (_book_ids * reps)[:n]
+        """Return exactly isl tokens of book text (repeated if needed)."""
+        reps = (isl + len(_book_ids) - 1) // len(_book_ids)
+        return (_book_ids * reps)[:isl]
 
     # KV-cache budget strategy:
-    # ISLs ≤ 32K share one persistent state (96 MB KV per device); ISLs > 32K get a
-    # per-ISL state sized for that context window.  At ISL=65536, pre-allocating
-    # MODEL_MAX_SEQ_LEN (262K) costs 1.57 GB/device and leaves no DRAM for MoE
-    # intermediates; a per-ISL state costs only 393 MB/device, giving ~1.2 GB back.
-    _SMALL_ISL_MAX = 32_768
+    # ISLs ≤ 32K share one persistent state; ISLs > 32K get a per-ISL state.
+    # _SMALL_ISL_MAX must cover the largest small-ISL prompt (32768) + N_DECODE headroom,
+    # rounded up to DEFAULT_BLOCK_SIZE.
+    _SMALL_ISL_MAX = ((32768 + N_DECODE + DEFAULT_BLOCK_SIZE - 1) // DEFAULT_BLOCK_SIZE) * DEFAULT_BLOCK_SIZE
     print(f"[state] Pre-allocating decoder state (max_seq_len={_SMALL_ISL_MAX})...", flush=True)
     _persistent_state = allocate_decoder_state(
         mesh_device, B=1, max_seq_len=_SMALL_ISL_MAX, block_size=DEFAULT_BLOCK_SIZE
@@ -860,7 +858,7 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
         prompt_ids = _build_prompt_ids(isl)
         prompt = tokenizer.decode(prompt_ids, skip_special_tokens=False)
 
-        # Clamp decode count: tokenizer round-trip may shift token count by ±few.
+        # Clamp decode count so prompt + decode fits within MODEL_MAX_SEQ_LEN.
         n_decode = max(1, min(N_DECODE, MODEL_MAX_SEQ_LEN - isl - 10))
 
         # Select / allocate decoder state for this ISL.
@@ -868,10 +866,9 @@ def test_isl_sweep_ttft_coherency(mesh_device, weight_cache):
             _state = _persistent_state
             _state_max = _SMALL_ISL_MAX
         else:
-            # Allocate just enough KV cache for this ISL (rounded to block boundary).
-            # actual_tokens < isl always (BPE compression); actual + N_DECODE << isl.
+            # Allocate just enough KV cache for this ISL + decode headroom (rounded to block boundary).
             _isl_max = min(
-                ((isl + DEFAULT_BLOCK_SIZE - 1) // DEFAULT_BLOCK_SIZE) * DEFAULT_BLOCK_SIZE,
+                ((isl + N_DECODE + DEFAULT_BLOCK_SIZE - 1) // DEFAULT_BLOCK_SIZE) * DEFAULT_BLOCK_SIZE,
                 MODEL_MAX_SEQ_LEN,
             )
             print(f"[state] Allocating per-ISL decoder state (max_seq_len={_isl_max})...", flush=True)
