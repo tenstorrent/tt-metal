@@ -138,12 +138,12 @@ def test_all_to_all_dispatch_8x4(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
         },
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         },
     ],

@@ -149,7 +149,7 @@ def test_reduce_scatter_async(
         (
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
                 "trace_region_size": 90112,
             },
             ttnn.Topology.Linear,

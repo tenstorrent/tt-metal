@@ -23,7 +23,7 @@ from tests.nightly.t3000.ccl.test_all_to_all_combine import (
         },
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "reliability_mode": ttnn.FabricReliabilityMode.STRICT_INIT,
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
         },
         {

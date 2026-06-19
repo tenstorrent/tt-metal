@@ -2,7 +2,7 @@ Tests:
   - name: "SimpleUnicastWriteLinear"
     fabric_setup:
       topology: Mesh
-      fabric_reliability_mode: RELAXED_SYSTEM_HEALTH_SETUP_MODE
+      fabric_reliability_mode: STRICT_SYSTEM_HEALTH_SETUP_MODE
 
     senders:
       # Cross Galaxy row
