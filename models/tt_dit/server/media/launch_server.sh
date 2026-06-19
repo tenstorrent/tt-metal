@@ -1,0 +1,256 @@
+#!/bin/bash
+
+# SPDX-License-Identifier: Apache-2.0
+#
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
+# Exit on error
+set -e
+
+echo "=== Unified Media Generation Server Launcher ==="
+
+# ---------------------------------------------------------------------------
+# Parse --model flag (must be done before any environment setup)
+# ---------------------------------------------------------------------------
+MODEL="sdxl"
+for arg in "$@"; do
+    if [ "$arg" = "--model" ]; then
+        # Next argument will be the model name — handled by the loop below
+        NEXT_IS_MODEL=true
+    elif [ "${NEXT_IS_MODEL:-false}" = "true" ]; then
+        MODEL="$arg"
+        NEXT_IS_MODEL=false
+    fi
+done
+
+if [ "$MODEL" != "sdxl" ] && [ "$MODEL" != "wan22" ]; then
+    echo "Error: --model must be 'sdxl' or 'wan22' (got: '$MODEL')"
+    exit 1
+fi
+
+echo "Model: $MODEL"
+
+# ---------------------------------------------------------------------------
+# Setup logging
+# ---------------------------------------------------------------------------
+LOG_FILE="${MODEL}_server_$(date +%Y%m%d_%H%M%S).log"
+exec 1> >(tee -a "$LOG_FILE")
+exec 2>&1
+echo "Logging to: $LOG_FILE"
+
+# ---------------------------------------------------------------------------
+# Resolve script directory
+# ---------------------------------------------------------------------------
+# This script lives at models/tt_dit/server/media/ — the repo root (TT_METAL_HOME)
+# is four levels up. server.py and its sibling modules live alongside this script.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export TT_METAL_HOME="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+# Run from the repo root so the worker's TT_METAL_HOME=os.getcwd() resolves correctly.
+cd "${TT_METAL_HOME}"
+
+# ---------------------------------------------------------------------------
+# Activate Python environment
+# ---------------------------------------------------------------------------
+echo "Activating Python environment..."
+if [ ! -f "${TT_METAL_HOME}/python_env/bin/activate" ]; then
+    echo "Error: Python environment not found at ${TT_METAL_HOME}/python_env"
+    echo "Please run: ./create_venv.sh"
+    exit 1
+fi
+
+source "${TT_METAL_HOME}/python_env/bin/activate"
+
+# ---------------------------------------------------------------------------
+# Install server-only dependencies (kept out of tt-metal's requirements-dev.txt
+# so this server is a zero-edit overlay on the upstream environment)
+# ---------------------------------------------------------------------------
+if ! python -c "import fastapi, uvicorn" 2>/dev/null; then
+    echo "Installing server dependencies from requirements-server.txt..."
+    pip install -q -r "${SCRIPT_DIR}/requirements-server.txt"
+fi
+
+# ---------------------------------------------------------------------------
+# Common environment variables (both models)
+# ---------------------------------------------------------------------------
+export PYTHONPATH="${TT_METAL_HOME}:${SCRIPT_DIR}"
+export LD_LIBRARY_PATH="${TT_METAL_HOME}/build/lib:${LD_LIBRARY_PATH}"
+export HF_HOME="${HOME}/.cache/huggingface"
+export TTNN_CONFIG_OVERRIDES='{"enable_model_cache": true, "model_cache_path": "'${HOME}'/.cache/ttnn/models"}'
+export LOG_LEVEL="${LOG_LEVEL:-INFO}"
+
+# ---------------------------------------------------------------------------
+# Detect available TT devices via tt-smi, set TT_VISIBLE_DEVICES, and validate
+# ---------------------------------------------------------------------------
+echo ""
+echo "Detecting TT devices..."
+TT_SMI_VENV="/home/tt-admin/tt-smi/venv"
+DETECTED_DEVICE_COUNT=0
+DETECTED_DEVICE_IDS=""
+
+if [ ! -f "${TT_SMI_VENV}/bin/activate" ]; then
+    echo "Warning: tt-smi venv not found at ${TT_SMI_VENV}, skipping device detection"
+else
+    source "${TT_SMI_VENV}/bin/activate"
+
+    DEVICE_INFO=$(tt-smi -s --snapshot_no_tty 2>/dev/null | python3 -c '
+import sys, json
+try:
+    data = json.load(sys.stdin)
+    # Count ALL devices: PCIe-attached (n300 L) and remote (n300 R).
+    # On a LoudBox, 4 n300 boards each have L (PCIe) + R (ethernet) chip = 8 total.
+    # The R chips have bus_id="N/A" but are still valid TT devices.
+    devices = data.get("device_info", [])
+    pcie_ids = [str(i) for i, dev in enumerate(devices)
+                if dev.get("board_info", {}).get("bus_id", "N/A") != "N/A"]
+    ids = ",".join(pcie_ids)
+    print(f"{len(devices)}:{ids}")
+    for i, dev in enumerate(devices):
+        board_info = dev.get("board_info", {})
+        bus = board_info.get("bus_id", "N/A")
+        btype = board_info.get("board_type", "Unknown")
+        loc = "(PCIe)" if bus != "N/A" else "(remote)"
+        print(f"  Device {i}: {btype} {loc} bus={bus}", file=sys.stderr)
+except Exception as e:
+    print(f"0:", file=sys.stdout)
+    print(f"  Error: {e}", file=sys.stderr)
+' 2>/tmp/tt_device_info_$$.txt)
+
+    cat /tmp/tt_device_info_$$.txt  # Print device list to stdout
+    rm -f /tmp/tt_device_info_$$.txt
+
+    DETECTED_DEVICE_COUNT=$(echo "$DEVICE_INFO" | cut -d: -f1)
+    DETECTED_DEVICE_IDS=$(echo "$DEVICE_INFO" | cut -d: -f2)
+
+    echo "Detected ${DETECTED_DEVICE_COUNT} TT device(s) (PCIe + remote)"
+
+    deactivate
+fi
+
+# ---------------------------------------------------------------------------
+# Set TT_VISIBLE_DEVICES based on detected devices (not hardcoded)
+# SDXL requires at least 1 device. Wan2.2 topology is board-derived.
+# ---------------------------------------------------------------------------
+if [ "$MODEL" = "sdxl" ]; then
+    if [ "${DETECTED_DEVICE_COUNT}" -gt 0 ] 2>/dev/null && [ -n "$DETECTED_DEVICE_IDS" ]; then
+        # Use detected IDs, capped at 4 for SDXL (T3K: 4 devices)
+        SDXL_IDS=$(echo "$DETECTED_DEVICE_IDS" | python3 -c "
+import sys
+ids = sys.stdin.read().strip().split(',')
+print(','.join(ids[:4]))
+")
+        export TT_VISIBLE_DEVICES="$SDXL_IDS"
+        export TT_METAL_VISIBLE_DEVICES="$SDXL_IDS"
+    else
+        # Fall back to assuming 4 devices (T3K default)
+        export TT_VISIBLE_DEVICES="0,1,2,3"
+        export TT_METAL_VISIBLE_DEVICES="0,1,2,3"
+    fi
+    export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7"
+    export TT_MM_THROTTLE_PERF=5
+
+elif [ "$MODEL" = "wan22" ]; then
+    # Wan2.2 T2V is board-aware: a single worker owns the full mesh and the
+    # worker process (setup_wan_worker_environment in worker.py) derives
+    # TT_VISIBLE_DEVICES, TT_MESH_GRAPH_DESC_PATH, and per-board env vars from
+    # --board via device_specs. No shell-level device pinning is needed here;
+    # --board is required and is passed through to server.py.
+    echo "Wan2.2: topology is board-derived (--board). No shell-level device pinning."
+fi
+
+# ---------------------------------------------------------------------------
+# Handle --clear-cache flag
+# ---------------------------------------------------------------------------
+for arg in "$@"; do
+    if [ "$arg" = "--clear-cache" ]; then
+        echo ""
+        echo "Clearing caches..."
+        rm -rf "${HOME}/.cache/tt-metal-cache"
+        rm -rf "${HOME}/.cache/ttnn/models"
+        echo "Caches cleared (this will trigger recompilation on next startup)"
+        break
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Handle --dev flag
+# ---------------------------------------------------------------------------
+DEV_MODE=false
+for arg in "$@"; do
+    if [ "$arg" = "--dev" ]; then
+        DEV_MODE=true
+        if [ "$MODEL" = "sdxl" ]; then
+            # SDXL dev mode: single device only
+            export SDXL_DEV_MODE=true
+            export TT_VISIBLE_DEVICES="0"
+            export TT_METAL_VISIBLE_DEVICES="0"
+            echo ""
+            echo "*** SDXL DEV MODE: Single worker, fast startup ***"
+        elif [ "$MODEL" = "wan22" ]; then
+            # Wan2.2 dev mode (WAN_DEV_MODE) is set by server.py from --dev;
+            # it reduces steps/frames and disables trace. Nothing to set here.
+            echo ""
+            echo "*** Wan2.2 DEV MODE: Reduced steps/frames, no trace capture ***"
+        fi
+        break
+    fi
+done
+
+# ---------------------------------------------------------------------------
+# Print effective environment
+# ---------------------------------------------------------------------------
+echo ""
+echo "Environment configured:"
+echo "  MODEL:           $MODEL"
+echo "  TT_METAL_HOME:   $TT_METAL_HOME"
+echo "  PYTHONPATH:      $PYTHONPATH"
+echo "  TT_VISIBLE_DEVICES: $TT_VISIBLE_DEVICES"
+echo "  HF_HOME:         $HF_HOME"
+echo "  LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
+
+# ---------------------------------------------------------------------------
+# Build Python argument list (strip script-only flags)
+# ---------------------------------------------------------------------------
+PYTHON_ARGS=()
+SKIP_NEXT=false
+for arg in "$@"; do
+    if [ "${SKIP_NEXT}" = "true" ]; then
+        SKIP_NEXT=false
+        continue
+    fi
+    if [ "$arg" = "--clear-cache" ]; then
+        # Handled above, not passed to Python
+        continue
+    fi
+    if [ "$arg" = "--model" ]; then
+        # --model is consumed here; pass it along to server.py too
+        PYTHON_ARGS+=("$arg")
+        SKIP_NEXT=false  # Next value will be appended naturally
+        continue
+    fi
+    PYTHON_ARGS+=("$arg")
+done
+
+# ---------------------------------------------------------------------------
+# Start server
+# ---------------------------------------------------------------------------
+echo ""
+if [ "$DEV_MODE" = "true" ]; then
+    echo "Starting ${MODEL} server in DEV MODE..."
+    if [ "$MODEL" = "wan22" ]; then
+        echo "This will take 2-5 minutes (no trace capture in dev mode)."
+    else
+        echo "This will take 5-8 minutes for initial warmup."
+    fi
+else
+    echo "Starting ${MODEL} server..."
+    if [ "$MODEL" = "wan22" ]; then
+        echo "This will take 15-25 minutes for first-run trace capture."
+    else
+        echo "This will take 5-10 minutes for initial warmup."
+    fi
+fi
+echo "Server will be ready when you see: 'All workers ready. ${MODEL} server is accepting requests.'"
+echo "Press Ctrl+C to stop the server."
+echo ""
+
+"${TT_METAL_HOME}/python_env/bin/python" "${SCRIPT_DIR}/server.py" "${PYTHON_ARGS[@]}"
