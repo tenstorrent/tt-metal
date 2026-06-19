@@ -54,7 +54,7 @@ from test_eltwise_unary_sfpu_quasar import (
     prepare_inputs_for_operation,
 )
 
-# (exp_dims, matmul_a_dims, matmul_b_dims)
+# (exp_dims, input_A_dims, input_B_dims)
 DIMENSION_PROFILES = (
     ([32, 32], [32, 32], [32, 32]),
     ([32, 256], [64, 64], [64, 128]),
@@ -62,12 +62,12 @@ DIMENSION_PROFILES = (
 
 
 def _matmul_output_fits_dest(
-    matmul_a_dimensions: list[int],
-    matmul_b_dimensions: list[int],
+    input_A_dimensions: list[int],
+    input_B_dimensions: list[int],
     dest_acc: DestAccumulation,
     dest_sync: DestSync,
 ) -> bool:
-    matmul_dims = generate_tile_dims((matmul_a_dimensions, matmul_b_dimensions))
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
     capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
     max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
     return matmul_dims.output_tile_cnt <= max_tiles
@@ -85,12 +85,12 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
             ):
                 for (
                     exp_input_dimensions,
-                    matmul_a_dimensions,
-                    matmul_b_dimensions,
+                    input_A_dimensions,
+                    input_B_dimensions,
                 ) in DIMENSION_PROFILES:
                     if not _matmul_output_fits_dest(
-                        matmul_a_dimensions,
-                        matmul_b_dimensions,
+                        input_A_dimensions,
+                        input_B_dimensions,
                         dest_acc,
                         dest_sync,
                     ):
@@ -102,8 +102,8 @@ def generate_parallel_matmul_exp_combinations(formats_list: list[FormatConfig]):
                             dest_sync,
                             implied_math_format,
                             exp_input_dimensions,
-                            matmul_a_dimensions,
-                            matmul_b_dimensions,
+                            input_A_dimensions,
+                            input_B_dimensions,
                         )
                     )
     return combinations
@@ -125,16 +125,16 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         dest_sync,
         implied_math_format,
         exp_input_dimensions,
-        matmul_a_dimensions,
-        matmul_b_dimensions,
+        input_A_dimensions,
+        input_B_dimensions,
     ) = format_dest_acc_sync_implied_math[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
-        input_dimensions_A=matmul_a_dimensions,
+        input_dimensions_A=input_A_dimensions,
         stimuli_format_B=formats.input_format,
-        input_dimensions_B=matmul_b_dimensions,
+        input_dimensions_B=input_B_dimensions,
         spec_A=matmul_spec,
         spec_B=matmul_spec,
         output_format=formats.output_format,
@@ -155,13 +155,13 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     )
 
     tilized_A = tilize_block(
-        src_A, dimensions=matmul_a_dimensions, stimuli_format=formats.input_format
+        src_A, dimensions=input_A_dimensions, stimuli_format=formats.input_format
     )
     tilized_B = tilize_block(
-        src_B, dimensions=matmul_b_dimensions, stimuli_format=formats.input_format
+        src_B, dimensions=input_B_dimensions, stimuli_format=formats.input_format
     )
 
-    matmul_dims = generate_tile_dims((matmul_a_dimensions, matmul_b_dimensions))
+    matmul_dims = generate_tile_dims((input_A_dimensions, input_B_dimensions))
 
     formats_config = data_formats(
         input_format=formats.input_format,
@@ -180,8 +180,8 @@ def test_sfpu_exp_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
         src_B,
         formats.output_format,
         MathFidelity.LoFi,
-        input_A_dimensions=matmul_a_dimensions,
-        input_B_dimensions=matmul_b_dimensions,
+        input_A_dimensions=input_A_dimensions,
+        input_B_dimensions=input_B_dimensions,
         tilize=True,
         input_A_format=formats.input_format,
         input_B_format=formats.input_format,
