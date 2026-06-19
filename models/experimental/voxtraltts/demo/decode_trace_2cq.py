@@ -2,46 +2,10 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Two-command-queue (2CQ) + trace staging for the Voxtral TTS text-decode step (Blackhole).
-
-Why this exists
----------------
-Voxtral decode is **host-dispatch-gap bound**: each of the ~hundreds of tiny ttnn ops per
-token finishes on-device in microseconds, then waits ~100us for the host to enqueue the next
-op. Capturing the 26-layer text-decode step (+ on-device RoPE gather) into a **trace** and
-replaying it with ``execute_trace`` removes those gaps (host leaves the loop). A **second
-command queue (CQ1)** stages the next step's inputs (embedding / position / rope-index) into
-persistent device buffers while CQ0 replays the trace — events keep the ordering.
-
-What is traced
---------------
-The text-decode step only — ``HfRotarySetup.get_rot_mats(rot_idxs_dev)`` (device-side cos/sin
-gather) followed by ``VoxtralTTTextModel.decode_step_from_embeds_tt``. The acoustic flow-matching
-forward and the CPU code→embedding lookup stay outside the trace (they have per-step host data),
-so each AR step is:
-
-    execute_trace(text-decode)            # CQ0, bound to persistent (x_embed, pos, rot_idxs)
-      -> hidden (device)
-    acoustic.forward(hidden, noise)       # CQ0 (untraced; own per-step noise)
-      -> codes -> host
-    end-audio check + F.embedding(codes)  # host
-    stage next (x_embed, pos, rot_idxs)   # CQ1, overlapped with the next execute_trace
-
-Trace binds to the persistent buffer *objects*; we only ever rewrite their *contents*
-(``copy_host_to_device_tensor``), never reallocate — that is what makes replay valid.
-
-Persistent buffers bound by the decode trace (batch = 1 for TTS):
-  - ``x_embed_dev``  [1, 1, 1, dim]  bf16   MM embedding (audio-codes → embedding, host F.embedding)
-  - ``pos_dev``      [1]             int32  attention / KV-cache position
-  - ``rot_idxs_dev`` [1, 1]          int32  rope cos/sin gather index (= position)
-
-Enable/disable with ``VOXTRAL_DECODE_TRACE_2CQ`` (default on for 1×4 TP; off on 1×1). With 2CQ off, a single CQ is used
-and staging falls back to plain ``copy_host_to_device_tensor`` on CQ0 (still trace-replayed).
-"""
+"""Trace + 2-CQ staging for Voxtral text-decode on Blackhole."""
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -51,30 +15,53 @@ import ttnn
 
 
 # ---------------------------------------------------------------------------
-# Feature flags
+# Decode trace settings (default on; configure via code, not environment)
 # ---------------------------------------------------------------------------
-def _env_flag_enabled(name: str, *, default: str = "1") -> bool:
-    """True unless the env var is explicitly 0 / false / no."""
-    return os.environ.get(name, default).strip().lower() not in ("0", "false", "no")
+@dataclass
+class DecodeTraceConfig:
+    """Runtime flags for traced text-decode replay and optional 2-CQ input staging."""
+
+    decode_trace: bool = True
+    decode_trace_2cq: bool | None = None  # None → off on 1×1, on on multi-device mesh
+
+
+_decode_trace_config = DecodeTraceConfig()
+
+
+def get_decode_trace_config() -> DecodeTraceConfig:
+    return _decode_trace_config
+
+
+def configure_decode_trace(
+    *,
+    decode_trace: bool | None = None,
+    decode_trace_2cq: bool | None = None,
+) -> DecodeTraceConfig:
+    """Set decode-trace flags before opening the device or running the pipeline."""
+    if decode_trace is not None:
+        _decode_trace_config.decode_trace = decode_trace
+    if decode_trace_2cq is not None:
+        _decode_trace_config.decode_trace_2cq = decode_trace_2cq
+    return _decode_trace_config
+
+
+def reset_decode_trace_config() -> None:
+    global _decode_trace_config
+    _decode_trace_config = DecodeTraceConfig()
 
 
 def decode_trace_enabled() -> bool:
-    """True when ``VOXTRAL_DECODE_TRACE`` is truthy.
-
-    Default ON on P150 (1×1) and BH QB2 (1×1 submesh or 1×4 TP). Disable with
-    ``VOXTRAL_DECODE_TRACE=0`` or ``demo.py --no-decode-trace``.
-    """
-    return _env_flag_enabled("VOXTRAL_DECODE_TRACE", default="1")
+    """True when traced text-decode replay is enabled (default on)."""
+    return _decode_trace_config.decode_trace
 
 
 def decode_trace_2cq_enabled() -> bool:
-    """True when 2CQ input staging is on. Independent of ``VOXTRAL_DECODE_TRACE`` — production
-    decode always trace-replays; this flag only toggles CQ1 overlap vs single-CQ staging."""
+    """True when 2CQ input staging is on (auto: off on 1×1, on on multi-device unless overridden)."""
+    if _decode_trace_config.decode_trace_2cq is not None:
+        return _decode_trace_config.decode_trace_2cq
     from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
 
-    # 1×1 submesh: single CQ avoids CQ1/CQ0 handoff races seen on BH QB2 (noise / early END).
-    default_2cq = "0" if voxtral_requested_compute_mesh_shape() == (1, 1) else "1"
-    return _env_flag_enabled("VOXTRAL_DECODE_TRACE_2CQ", default=default_2cq)
+    return voxtral_requested_compute_mesh_shape() != (1, 1)
 
 
 def num_command_queues_for_decode() -> int:

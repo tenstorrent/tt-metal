@@ -6,12 +6,20 @@ from __future__ import annotations
 
 import pytest
 
+from models.experimental.voxtraltts.demo.decode_trace_2cq import reset_decode_trace_config
 from models.experimental.voxtraltts.tests.common import (
     close_voxtral_runtime_mesh,
     open_voxtral_runtime_mesh,
     voxtral_resolve_physical_device_id,
 )
 from tests.tests_common.cache_entries_counter import CacheEntriesCounter
+
+
+@pytest.fixture(autouse=True)
+def _reset_voxtral_decode_trace_config():
+    reset_decode_trace_config()
+    yield
+    reset_decode_trace_config()
 
 
 @pytest.fixture(scope="function")

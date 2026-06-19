@@ -1,15 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""On-device PCC tests for a single text decoder layer (layer 0).
+"""On-device PCC for text decoder layers (local ``text_attention`` / ``text_mlp``).
 
-Compares the TT decoder layer hidden-state output against the pure-PyTorch
-reference, in both PREFILL (full causal sequence) and DECODE (one new token
-reading a populated KV cache) modes.
+Uses ``inner.layers[i]`` from ``VoxtralTTTextModel`` — the same production blocks
+with local attention/MLP swapped in at construction.
 """
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
@@ -41,8 +41,8 @@ def _ref_config(args) -> VoxtralTextConfig:
     )
 
 
-def _reference_layer0_output(state_dict, args, hidden_in: torch.Tensor) -> torch.Tensor:
-    """Run reference layer 0 over a full causal sequence -> [1, S, dim]."""
+def _reference_layer_output(state_dict, args, hidden_in: torch.Tensor, layer_idx: int) -> torch.Tensor:
+    """Run reference layer ``layer_idx`` over a full causal sequence -> [1, S, dim]."""
     seq_len = hidden_in.shape[1]
     cfg = _ref_config(args)
     cos, sin = reference_compute_rope_frequencies(
@@ -53,7 +53,7 @@ def _reference_layer0_output(state_dict, args, hidden_in: torch.Tensor) -> torch
     )
     mask = torch.full((1, 1, seq_len, seq_len), float("-inf"), dtype=torch.float32)
     mask = torch.triu(mask, diagonal=1)
-    weights = extract_layer_weights(state_dict, 0, prefix="layers.")
+    weights = extract_layer_weights(state_dict, layer_idx, prefix="layers.")
     return reference_text_decoder_layer(
         hidden_states=hidden_in,
         layer_weights=weights,
@@ -65,40 +65,24 @@ def _reference_layer0_output(state_dict, args, hidden_in: torch.Tensor) -> torch
 
 
 def _hidden_4d_to_torch(inner, tt_x: ttnn.Tensor, last_token_idx: int | None = None) -> torch.Tensor:
-    """Gather a TT hidden [1,1,S,dim] (or [1,1,1,dim]) to a torch [dim] last-token row."""
     host = inner.concat_host_output(tt_x)
     dim = inner.args.dim
     idx = last_token_idx if last_token_idx is not None else host.shape[2] - 1
     return host[0, 0, idx, :dim].to(dtype=torch.float32)
 
 
-@torch.no_grad()
-@pytest.mark.timeout(3600)
-def test_text_decoder_layer_prefill_pcc(device, reset_seeds):
-    model = create_real_voxtral_text_model_or_skip(
-        device,
-        max_seq_len=256,
-        dtype=ttnn.bfloat16,
-        optimizations=voxtral_text_logits_pcc_optimizations,
-    )
+def _run_layer_prefill_pcc(model, layer_idx: int, *, seq_len: int = 128) -> float:
     inner = model.inner
     args = inner.args
     state_dict = args.load_state_dict()
-    layer = inner.layers[0]
-
-    seq_len = 128  # prefill attention requires seq_len % 128 == 0
+    layer = inner.layers[layer_idx]
     dim = args.dim
-    # bf16 hidden so the reference matmuls match the bf16 checkpoint weight dtype.
+
     hidden_in = (torch.randn(1, seq_len, dim, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+    ref_out = _reference_layer_output(state_dict, args, hidden_in, layer_idx)
 
-    # Reference: full causal sequence through layer 0.
-    ref_out = _reference_layer0_output(state_dict, args, hidden_in)
-
-    # Prefill rope mats (token-independent slices) from the inner helper.
     dummy_tokens = torch.zeros(1, seq_len, dtype=torch.int64)
     _, rot_global, rot_local, _, _, _ = model.prepare_inputs_prefill(dummy_tokens, start_pos=0)
-
-    # Upload the SAME hidden as the reference, in the prefill residual mem config.
     prefill_cfg = args.get_residual_mem_config(Mode.PREFILL, inner.prefetcher)
     x_tt = ttnn.from_torch(
         hidden_in.reshape(1, 1, seq_len, dim).to(torch.bfloat16),
@@ -108,7 +92,6 @@ def test_text_decoder_layer_prefill_pcc(device, reset_seeds):
         memory_config=prefill_cfg,
         mesh_mapper=ttnn.ReplicateTensorToMesh(inner.mesh_device),
     )
-
     tt_out = layer(
         x_tt,
         None,
@@ -119,40 +102,24 @@ def test_text_decoder_layer_prefill_pcc(device, reset_seeds):
         page_table=None,
         kv_cache=None,
     )
-
     tt_last = _hidden_4d_to_torch(inner, tt_out, last_token_idx=seq_len - 1)
     ref_last = ref_out[0, -1, :].to(torch.float32)
-
     passing, pcc = comp_pcc(ref_last, tt_last, pcc=PCC_TARGET)
-    print(f"test_text_decoder_layer_prefill_pcc PCC={float(pcc):.6f}")
-    assert passing, f"Prefill layer-0 hidden mismatch vs reference: {pcc}"
+    assert passing, f"Prefill layer-{layer_idx} hidden mismatch vs reference: {pcc}"
+    return float(pcc)
 
 
-@torch.no_grad()
-@pytest.mark.timeout(3600)
-def test_text_decoder_layer_decode_pcc(device, reset_seeds):
-    model = create_real_voxtral_text_model_or_skip(
-        device,
-        max_seq_len=256,
-        dtype=ttnn.bfloat16,
-        optimizations=voxtral_text_logits_pcc_optimizations,
-    )
+def _run_layer_decode_pcc(model, layer_idx: int, *, prompt_len: int = 128) -> float:
     inner = model.inner
     args = inner.args
     state_dict = args.load_state_dict()
-    layer = inner.layers[0]
-
-    prompt_len = 128  # prefill attention requires prompt_len % 128 == 0
+    layer = inner.layers[layer_idx]
     dim = args.dim
-    # Full S+1 sequence: positions 0..prompt_len-1 prefilled, position prompt_len decoded.
-    # bf16 to match the bf16 checkpoint weight dtype in the reference matmuls.
-    hidden_full = (torch.randn(1, prompt_len + 1, dim, dtype=torch.float32) * 0.1).to(torch.bfloat16)
 
-    # Reference over the full causal sequence; take the last-token output.
-    ref_out = _reference_layer0_output(state_dict, args, hidden_full)
+    hidden_full = (torch.randn(1, prompt_len + 1, dim, dtype=torch.float32) * 0.1).to(torch.bfloat16)
+    ref_out = _reference_layer_output(state_dict, args, hidden_full, layer_idx)
     ref_last = ref_out[0, -1, :].to(torch.float32)
 
-    # 1) Prefill positions 0..prompt_len-1 to populate the layer's KV cache.
     prompt_hidden = hidden_full[:, :prompt_len, :]
     dummy_tokens = torch.zeros(1, prompt_len, dtype=torch.int64)
     _, rot_global_p, rot_local_p, _, _, _ = model.prepare_inputs_prefill(dummy_tokens, start_pos=0)
@@ -176,7 +143,6 @@ def test_text_decoder_layer_decode_pcc(device, reset_seeds):
         kv_cache=None,
     )
 
-    # 2) Decode one new token at position prompt_len, reading the KV cache.
     pos_idx = prompt_len
     current_pos_t = torch.tensor([pos_idx], dtype=torch.int64)
     rot_global_d = inner.rope_setup.get_rot_mats(current_pos_t)
@@ -187,9 +153,8 @@ def test_text_decoder_layer_decode_pcc(device, reset_seeds):
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(inner.mesh_device, dims=(None, None), mesh_shape=args.cluster_shape),
     )
-
     decode_cfg = args.get_residual_mem_config(Mode.DECODE, inner.prefetcher)
-    new_hidden = hidden_full[:, prompt_len, :]  # [1, dim]
+    new_hidden = hidden_full[:, prompt_len, :]
     x_decode = ttnn.from_torch(
         new_hidden.reshape(1, 1, 1, dim).to(torch.bfloat16),
         device=inner.mesh_device,
@@ -208,9 +173,55 @@ def test_text_decoder_layer_decode_pcc(device, reset_seeds):
         page_table=None,
         kv_cache=None,
     )
-
     tt_last = _hidden_4d_to_torch(inner, tt_out, last_token_idx=0)
-
     passing, pcc = comp_pcc(ref_last, tt_last, pcc=PCC_TARGET)
-    print(f"test_text_decoder_layer_decode_pcc PCC={float(pcc):.6f}")
-    assert passing, f"Decode layer-0 hidden mismatch vs reference: {pcc}"
+    assert passing, f"Decode layer-{layer_idx} hidden mismatch vs reference: {pcc}"
+    return float(pcc)
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+def test_text_decoder_layer_prefill_pcc(device, reset_seeds):
+    """Layer 0 prefill PCC (fast smoke)."""
+    model = create_real_voxtral_text_model_or_skip(
+        device, max_seq_len=256, dtype=ttnn.bfloat16, optimizations=voxtral_text_logits_pcc_optimizations
+    )
+    pcc = _run_layer_prefill_pcc(model, 0)
+    logger.info(f"test_text_decoder_layer_prefill_pcc layer=0 PCC={pcc:.6f}")
+
+
+@torch.no_grad()
+@pytest.mark.timeout(3600)
+def test_text_decoder_layer_decode_pcc(device, reset_seeds):
+    """Layer 0 decode PCC with populated KV cache (fast smoke)."""
+    model = create_real_voxtral_text_model_or_skip(
+        device, max_seq_len=256, dtype=ttnn.bfloat16, optimizations=voxtral_text_logits_pcc_optimizations
+    )
+    pcc = _run_layer_decode_pcc(model, 0)
+    logger.info(f"test_text_decoder_layer_decode_pcc layer=0 PCC={pcc:.6f}")
+
+
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+def test_text_decoder_layer_prefill_pcc_all_layers(device, reset_seeds):
+    """Prefill PCC for every text decoder layer (``args.n_layers``, 26 for Voxtral-4B-TTS)."""
+    model = create_real_voxtral_text_model_or_skip(
+        device, max_seq_len=256, dtype=ttnn.bfloat16, optimizations=voxtral_text_logits_pcc_optimizations
+    )
+    n_layers = int(model.inner.args.n_layers)
+    for layer_idx in range(n_layers):
+        pcc = _run_layer_prefill_pcc(model, layer_idx)
+        logger.info(f"prefill layer={layer_idx}/{n_layers - 1} PCC={pcc:.6f}")
+
+
+@torch.no_grad()
+@pytest.mark.timeout(7200)
+def test_text_decoder_layer_decode_pcc_all_layers(device, reset_seeds):
+    """Decode PCC for every text decoder layer (``args.n_layers``, 26 for Voxtral-4B-TTS)."""
+    model = create_real_voxtral_text_model_or_skip(
+        device, max_seq_len=256, dtype=ttnn.bfloat16, optimizations=voxtral_text_logits_pcc_optimizations
+    )
+    n_layers = int(model.inner.args.n_layers)
+    for layer_idx in range(n_layers):
+        pcc = _run_layer_decode_pcc(model, layer_idx)
+        logger.info(f"decode layer={layer_idx}/{n_layers - 1} PCC={pcc:.6f}")
