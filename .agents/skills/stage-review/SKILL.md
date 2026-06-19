@@ -271,3 +271,10 @@ After the reviewer returns:
    `$stage-review`.
 3. If the verdict is `clean-pass`, record the review artifact or subagent final
    answer path in the stage work log.
+4. After `clean-pass`, create local checkpoint commits for stage-owned changes
+   in each touched repo, including `tt-metal` and `vllm` when applicable. Never
+   push these commits from autonomous bringup.
+5. Record each repo, branch, and commit SHA in the stage work log. Do not
+   include unrelated dirty files in a checkpoint commit. If stage-owned changes
+   cannot be isolated from unrelated dirty state, treat that as more required
+   work and do not mark the stage complete.

@@ -24,6 +24,6 @@ Goal completion requirements:
 - model serves through the shared vLLM path with evidence.
 - Primary single-user vLLM TTFT and decode t/s/u are reported at the top of README.md, with CI serving-burst metrics secondary and workload shapes next to every number.
 - Any host-sampling mode needed by shared tests is explicit and optional; it must not replace the on-device traced sampling path used for performance.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

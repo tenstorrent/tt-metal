@@ -16,6 +16,6 @@ Goal completion requirements:
 - Determinism/repeated-input evidence and a watcher-clean run exist.
 - models/autoports/<model>/doc/functional_decoder/README.md and work_log.md record commands, PCC, perf, limitations, and exact artifacts.
 - The functional-decoder skill's final objectives are satisfied.
-- A fresh xhigh subagent used $stage-review and returned `clean-pass`; `more-work-needed` findings are fixed and rereviewed.
+- $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.
