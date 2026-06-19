@@ -209,6 +209,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/paged_cache/paged_cache_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/masked_bincount/masked_bincount_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek_prefill/d2d_socket_sync/d2d_socket_sync_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/extract/extract_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/insert/insert_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/update_padded_kv_cache/update_padded_kv_cache_nanobind.cpp
