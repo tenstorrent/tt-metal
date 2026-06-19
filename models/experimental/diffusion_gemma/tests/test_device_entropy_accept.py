@@ -37,15 +37,16 @@ def _device_entropy_accept(device, entropy: torch.Tensor, budget: float) -> torc
     """Run the acceptance chain on device; return the bool accept mask [B, L]."""
     ent = ttnn.from_torch(entropy.float(), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
 
+    # entropy / cumsum / threshold stay fp32 for precision near the budget boundary
     sorted_vals, sorted_idx = ttnn.sort(ent, dim=-1)  # ascending: most-confident first; idx uint16
     cum = ttnn.cumsum(sorted_vals, dim=-1)
-    accept_sorted = ttnn.le(cum, float(budget))  # cum <= budget -> 1.0 / 0.0
-    accept_sorted = ttnn.typecast(accept_sorted, ttnn.float32)  # match scatter input/src dtype
+    accept_sorted = ttnn.le(cum, float(budget))  # cum <= budget -> 1 / 0
 
-    # Positional form per the proven unit test (data_movement/test_scatter.py): fp32
-    # input/src + uint16 index + TILE. uint16 index is accepted
-    # (scatter_device_operation.cpp:40). L=128 (<256) dodges the tiled-integer issue #23407.
-    zeros = ttnn.zeros_like(ent)
+    # ttnn.scatter rejects fp32+TILE (scatter.cpp:109); the supported combo is
+    # bf16 input/src + uint16 index + TILE (test_scatter.py:92). The accept mask
+    # is 0/1 -> exact in bf16. L=128 (<256) also dodges the tiled-integer issue #23407.
+    accept_sorted = ttnn.typecast(accept_sorted, ttnn.bfloat16)
+    zeros = ttnn.typecast(ttnn.zeros_like(ent), ttnn.bfloat16)
     accept = ttnn.scatter(zeros, -1, sorted_idx, accept_sorted)  # scatter-back to original positions
 
     return ttnn.to_torch(accept) > 0.5
