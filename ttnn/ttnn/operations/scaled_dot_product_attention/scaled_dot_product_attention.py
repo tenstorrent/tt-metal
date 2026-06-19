@@ -124,6 +124,8 @@ def _check_structural(Q, K, V, attention_mask):
         raise ValueError(f"scaled_dot_product_attention: K/V S_kv mismatch — K.S={k_shape[-2]}, V.S={v_shape[-2]}")
     if k_shape[1] != v_shape[1]:
         raise ValueError(f"scaled_dot_product_attention: K/V head mismatch — K.H={k_shape[1]}, V.H={v_shape[1]}")
+    if k_shape[0] != v_shape[0]:
+        raise ValueError(f"scaled_dot_product_attention: K/V batch mismatch — K.B={k_shape[0]}, V.B={v_shape[0]}")
     if q_shape[0] != k_shape[0]:
         raise ValueError(f"scaled_dot_product_attention: batch mismatch — Q.B={q_shape[0]}, K.B={k_shape[0]}")
     if k_shape[1] == 0 or q_shape[1] % k_shape[1] != 0:
