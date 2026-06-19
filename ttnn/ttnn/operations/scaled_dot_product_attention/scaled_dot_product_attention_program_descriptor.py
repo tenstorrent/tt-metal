@@ -104,24 +104,30 @@ def create_program_descriptor(Q, K, V, output_tensor, *, attention_mask=None, sc
             ],
         )
 
+    # All intermediate CBs are bf16 (Float16_b); accumulation precision is kept in
+    # the fp32 DEST register (fp32_dest_acc_en=True). fp32 CB storage is intentionally
+    # avoided: on Blackhole a post-matmul `pack_reconfig_data_format` to/around an fp32
+    # pack format hits a TTI_STALLWAIT(PACK|THCON) that never drains (Issue #13364) →
+    # device hang. Production SDPA (sdpa_program_factory.cpp "need to disable fp32 cbs")
+    # uses the same bf16-CB / fp32-DEST split.
     cbs = [
         cb(CB_Q, bf16, tile_bf16, Dt),  # resident scaled Q
         cb(CB_K, bf16, tile_bf16, 2 * kv_chunk_t * Dt),  # streaming, double-buffered
         cb(CB_V, bf16, tile_bf16, 2 * kv_chunk_t * Dt),
         cb(CB_SCALER_MAX, bf16, tile_bf16, 1),
         cb(CB_SCALER_SUM, bf16, tile_bf16, 1),
-        cb(CB_MBLOCK, fp32, tile_fp32, 1),
-        cb(CB_MNEW, fp32, tile_fp32, 1),
-        cb(CB_LBLOCK, fp32, tile_fp32, 1),
+        cb(CB_MBLOCK, bf16, tile_bf16, 1),
+        cb(CB_MNEW, bf16, tile_bf16, 1),
+        cb(CB_LBLOCK, bf16, tile_bf16, 1),
         cb(CB_OUT, bf16, tile_bf16, 2 * Dt),  # streaming output, double-buffered
-        cb(CB_SCORES, fp32, tile_fp32, kv_chunk_t),  # one QK block, held across max+exp
+        cb(CB_SCORES, bf16, tile_bf16, kv_chunk_t),  # one QK block, held across max+exp
         cb(CB_P, bf16, tile_bf16, kv_chunk_t),  # exp-probabilities (≤1.0), bf16 for PV
-        cb(CB_PV, fp32, tile_fp32, Dt),
-        cb(CB_OUT_ACCUM, fp32, tile_fp32, Dt),  # running O, persists across KV loop
-        cb(CB_MAX, fp32, tile_fp32, 1),  # running m
-        cb(CB_SUM, fp32, tile_fp32, 1),  # running l
-        cb(CB_ALPHA, fp32, tile_fp32, 1),
-        cb(CB_RECIP, fp32, tile_fp32, 1),
+        cb(CB_PV, bf16, tile_bf16, Dt),
+        cb(CB_OUT_ACCUM, bf16, tile_bf16, Dt),  # running O, persists across KV loop
+        cb(CB_MAX, bf16, tile_bf16, 1),  # running m
+        cb(CB_SUM, bf16, tile_bf16, 1),  # running l
+        cb(CB_ALPHA, bf16, tile_bf16, 1),
+        cb(CB_RECIP, bf16, tile_bf16, 1),
     ]
     if use_mask:
         cbs.append(cb(CB_MASK, bf16, tile_bf16, 2 * kv_chunk_t))
