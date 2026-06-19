@@ -5,7 +5,7 @@
 // Metal 2.0 (declarative API) sequential cooperative DM producer for 4-DFB
 // TC-exhaustion tests. Parallel to ../dfb_seq_producer.cpp; M2 uses 4 distinct
 // named DFB bindings (dfb::buf_0..buf_3) and 4 named tensor bindings
-// (ta::src_0..src_3) instead of the legacy runtime-determined DFB count.
+// (tensor::src_0..src_3) instead of the legacy runtime-determined DFB count.
 //
 // All threads cooperate on dfb::buf_0 first (each handling its own strided
 // slice), then on dfb::buf_1, then buf_2, then buf_3. dfb.finish() at the end
@@ -68,10 +68,10 @@ void kernel_main() {
     DataflowBuffer dfb_1(dfb::buf_1);
     DataflowBuffer dfb_2(dfb::buf_2);
     DataflowBuffer dfb_3(dfb::buf_3);
-    const auto src_0 = TensorAccessor(ta::src_0);
-    const auto src_1 = TensorAccessor(ta::src_1);
-    const auto src_2 = TensorAccessor(ta::src_2);
-    const auto src_3 = TensorAccessor(ta::src_3);
+    const auto src_0 = TensorAccessor(tensor::src_0);
+    const auto src_1 = TensorAccessor(tensor::src_1);
+    const auto src_2 = TensorAccessor(tensor::src_2);
+    const auto src_3 = TensorAccessor(tensor::src_3);
 
     if constexpr (implicit_sync) {
 #ifdef ARCH_QUASAR

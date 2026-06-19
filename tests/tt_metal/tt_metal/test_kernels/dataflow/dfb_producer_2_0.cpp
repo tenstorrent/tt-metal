@@ -4,7 +4,7 @@
 //
 // Metal 2.0 (declarative API) DFB producer.
 // Parallel to ../dfb_producer.cpp (positional CTAs) — uses named CTAs/RTAs,
-// dfb::out for the buffer binding, ta::src_tensor for the input tensor, and
+// dfb::out for the buffer binding, tensor::src_tensor for the input tensor, and
 // get_my_thread_id() for per-thread striping.
 
 #include "api/dataflow/dataflow_buffer.h"
@@ -22,7 +22,7 @@ void kernel_main() {
 
     DataflowBuffer dfb(dfb::out);
     Noc noc;
-    const auto tensor_accessor = TensorAccessor(ta::src_tensor);
+    const auto tensor_accessor = TensorAccessor(tensor::src_tensor);
 
     const uint32_t producer_idx = get_my_thread_id();
     const uint32_t num_producers = get_num_threads();
