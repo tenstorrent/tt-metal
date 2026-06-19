@@ -1,0 +1,8 @@
+# Core inference dependencies for Voxtral TTS (tokenizer, weights, audio I/O).
+# Install from repo root:
+#   python_env/bin/python -m pip install -r models/experimental/voxtraltts/requirements.txt
+mistral-common==1.11.3
+safetensors==0.8.0
+huggingface-hub==0.36.2
+soundfile==0.14.0
+scipy==1.15.3
