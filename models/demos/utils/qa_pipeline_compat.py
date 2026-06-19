@@ -91,6 +91,19 @@ def select_starts_ends(
     max_answer_len=15,
 ):
     """Normalize raw QA logits and decode answer spans (see transformers 4.53)."""
+    # The tt BERT demos feed start/end logits as a 1-D tensor padded to max_seq_len (e.g. (384,)),
+    # while p_mask/attention_mask carry the tokenizer's per-feature shape (1, seq) — and `seq` may be
+    # shorter than the padded length (slow vs fast tokenizer / squadv2 path). Align start/end to
+    # p_mask's shape (slice to its seq length, restore the batch dim) so the np.where masking, the
+    # softmax (axis=-1), the CLS masking (start[0, 0]) and decode_spans all operate consistently.
+    # (The real QA pipeline's _forward returned model-shaped logits, so this never tripped there.)
+    p_mask = np.asarray(p_mask)
+    _seq = p_mask.shape[-1]
+    start = np.asarray(start).reshape(-1)[:_seq].reshape(p_mask.shape)
+    end = np.asarray(end).reshape(-1)[:_seq].reshape(p_mask.shape)
+    if attention_mask is not None:
+        attention_mask = np.asarray(attention_mask).reshape(-1)[:_seq].reshape(p_mask.shape)
+
     # Ensure padded tokens & question tokens cannot belong to the set of candidate answers.
     undesired_tokens = np.abs(np.array(p_mask) - 1)
 
