@@ -12,7 +12,6 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_tp_mesh_composer
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.tt_parallel_embedding import TtParallelEmbedding
 from tests.ttnn.utils_for_testing import comp_pcc
 
@@ -87,7 +86,9 @@ def test_h2d_socket_sync_8x4_galaxy(mesh_device):
 
         service.forward_to_tensor_bytes(flat_tokens, metadata=meta)
         pre = mesh_device.num_program_cache_entries()
-        tt_tokens, tt_meta = h2d_socket_sync(service, worker_cores, metadata_size_bytes=_METADATA_SIZE_BYTES)
+        tt_tokens, tt_meta = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+            service, metadata_size_bytes=_METADATA_SIZE_BYTES
+        )
         op_cache_delta.append(mesh_device.num_program_cache_entries() - pre)
 
         meta_host = ttnn.to_torch(tt_meta, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))

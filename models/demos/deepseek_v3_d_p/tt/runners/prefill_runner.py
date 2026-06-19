@@ -10,7 +10,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     build_h2d_service,
     get_variant,
@@ -208,10 +207,8 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         # core after a producer push lands), copy backing -> fresh output, ack
         # consumed_counter. Returns tensors independent of the backing. This call
         # blocks until the next push arrives, so the loop is naturally idle-waiting.
-        tt_tokens, tt_metadata = h2d_socket_sync(
-            h2d_service,
-            H2D_SYNC_WORKER_CORES,
-            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+        tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+            h2d_service, metadata_size_bytes=H2D_METADATA_SIZE_BYTES
         )
         # Decode per-iter PrefillMetadata (replicated across the mesh — first device view).
         meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()

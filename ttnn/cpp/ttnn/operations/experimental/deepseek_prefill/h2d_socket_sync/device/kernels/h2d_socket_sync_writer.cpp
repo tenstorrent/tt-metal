@@ -37,6 +37,26 @@ constexpr uint32_t scratch_cb_index = get_compile_time_arg_val(3);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(5);
 
+// Metadata snapshot, factored into a template so the metadata-disabled case
+// (MetadataSize == 0) is never instantiated. In a plain `if constexpr` inside
+// the non-template kernel_main, the discarded branch is still fully checked, so
+// TensorAccessorArgs<MetadataAccessorOffset> would static-assert "index out of
+// range" whenever the host omits the trailing metadata accessor block.
+template <uint32_t MetadataSize, uint32_t MetadataAccessorOffset>
+inline void snapshot_metadata(uint32_t start_page) {
+    if constexpr (MetadataSize > 0) {
+        if (start_page == 0) {
+            const uint32_t metadata_output_addr = get_arg_val<uint32_t>(7);
+            constexpr auto metadata_accessor_args = TensorAccessorArgs<MetadataAccessorOffset>();
+            auto metadata_out = TensorAccessor(metadata_accessor_args, metadata_output_addr);
+            // Single-page write: the metadata tensor is exactly one page of
+            // `MetadataSize` bytes (see the program factory).
+            noc_async_write(metadata_l1_addr, metadata_out.get_noc_addr(0), MetadataSize);
+            noc_async_write_barrier();
+        }
+    }
+}
+
 void kernel_main() {
     // RT args (per coord, per worker). Buffer base addresses come first so the
     // host can register them as BufferBindings at fixed positions 0/1 (and 7).
@@ -74,18 +94,7 @@ void kernel_main() {
     //    metadata output tensor on DRAM. Gated on `start_page == 0` so a
     //    multi-worker run only emits one write per coord — every worker's L1
     //    holds the same metadata (multicast), so picking one is fine.
-    if constexpr (metadata_size_bytes > 0) {
-        if (start_page == 0) {
-            const uint32_t metadata_output_addr = get_arg_val<uint32_t>(7);
-            constexpr auto metadata_accessor_args =
-                TensorAccessorArgs<output_accessor_args.next_compile_time_args_offset()>();
-            auto metadata_out = TensorAccessor(metadata_accessor_args, metadata_output_addr);
-            // Single-page write: the metadata tensor is sized to exactly one
-            // page of `metadata_size_bytes` bytes (see the program factory).
-            noc_async_write(metadata_l1_addr, metadata_out.get_noc_addr(0), metadata_size_bytes);
-            noc_async_write_barrier();
-        }
-    }
+    snapshot_metadata<metadata_size_bytes, output_accessor_args.next_compile_time_args_offset()>(start_page);
 
     // 3. Copy this worker's slice of the backing tensor into the output. Use
     //    the scratch CB as a per-page staging area. read_barrier before write
