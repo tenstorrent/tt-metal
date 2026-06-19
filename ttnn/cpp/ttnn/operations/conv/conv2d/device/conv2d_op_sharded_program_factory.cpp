@@ -923,9 +923,25 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     // (out_subblock_w == per_core_N) TileRowMajor is BYTE-IDENTICAL to SBM; for in1_num_subblocks > 1
     // TileRowMajor is a different-but-valid layout (the helper's row-strided pack + the consumer's
     // row-major read agree), proven correct by the step-(a) bias convs (SD per_core_N=10, in1=2) and the
-    // d7b9fb1ad1c absolute-offset fix for in0_num_subblocks > 1. So NO in1-subblock guard — every
-    // packer_l1_acc INTERM-target conv (fuse_bias OR untilize_out) routes to caller_owns.
-    const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out);
+    // d7b9fb1ad1c absolute-offset fix for in0_num_subblocks > 1. So NO in1-subblock guard.
+    //
+    // EXCEPTION (fp32-specific): fuse_bias + untilize_out + fp32_dest_acc_en must NOT route to
+    // caller_owns. With caller_owns the matmul pushes the full out_block to matmul_partials_cb, then the
+    // TileRowMajor bias-add reads from that CB and writes back to the SAME CB (untilize_mode_out_cb_id ==
+    // matmul_partials_cb when untilize_out). The TileRowMajor bias path issues reserve_back BEFORE
+    // pop_front, so the bias-add can only proceed if there is free CB space at the moment it reserves.
+    // With fp32_dest_acc_en the partials CB is sized in fp32 (4B/elem, 2x bf16) and has NO slack: the
+    // full out_block exactly fills it, so reserve_back blocks forever waiting for a pop that the same
+    // TRISC chain owes — a true reserve-before-pop deadlock. bf16 sizes the same CB at 2B/elem and the
+    // extra slack lets the reserve succeed, so bf16 fuse_bias+untilize is known-good on caller_owns
+    // (test_sd_conv_wh — the deep-K SD production convs run this combo and benefit from caller_owns).
+    // Therefore route ONLY the fp32+bias+untilize combination to the non-caller_owns SubblockMajor path:
+    // SBM bias-add pops before reserving (no reserve-before-pop on the aliased CB), the ptr rewind and
+    // untilize phase both work correctly, and there is no production fp32 trace for this combination so
+    // the caller_owns drain-skip win is zero. All other pin-class convs (incl. bf16 bias+untilize) keep
+    // caller_owns unchanged from the clean mm_help2 base.
+    const bool fp32_bias_untilize = has_bias && untilize_out && fp32_dest_acc_en;
+    const bool pin_class_caller_owns = packer_l1_acc_en && (has_bias || untilize_out) && !fp32_bias_untilize;
     if (!conv_tile_pack_row_major && pin_class_caller_owns) {
         conv_tile_pack_row_major = true;
         conv_caller_owns = true;

@@ -379,7 +379,13 @@ void kernel_main() {
     // reserve_back before the matmul and ONE push_back after, and the helper skips its own per-block
     // reserve/push/drain. Under this flag the TileRowMajor layout is also used WITH fuse_bias (see
     // conv_output_layout below): the bias-add reads the dedicated partials and writes a DISTINCT OUT
-    // buffer, so the TileRowMajor bias path balances the single caller reserve/push.
+    // buffer. With untilize_out the bias-add target (untilize_mode_out_cb_id) aliases matmul_partials_cb,
+    // so the TileRowMajor reserve-before-pop runs against the same CB; this is safe as long as the CB has
+    // free slack when the bias-add reserves. The factory therefore excludes ONLY the fp32+bias+untilize
+    // combination from CONV_CALLER_OWNS_PACK_TARGET: fp32 sizes the aliased partials CB with no slack
+    // (4B/elem, full out_block fills it → reserve_back deadlocks), while bf16 (2B/elem) has slack and is
+    // known-good (the deep-K SD production convs). All other pin-class combos — bf16 bias+untilize,
+    // fuse_bias TILE-output (bias→distinct out_cb), and untilize-only — keep caller_owns.
 #ifdef CONV_CALLER_OWNS_PACK_TARGET
     constexpr bool caller_owns_pack_target = true;
 #else
@@ -387,7 +393,8 @@ void kernel_main() {
 #endif
     // Production TRM degrades to SubblockMajor when fuse_bias (TRM+bias deadlocks the helper-owned shared
     // partials CB). The caller_owns path lifts that degrade: partials is dedicated and the caller owns the
-    // single reserve/push, so TileRowMajor + bias is safe.
+    // single reserve/push, so TileRowMajor + bias is safe. Only the fp32+bias+untilize combination is
+    // excluded from caller_owns (no CB slack for the aliased reserve-before-pop; see factory).
     constexpr auto conv_output_layout = (tile_pack_row_major && (caller_owns_pack_target || !fuse_bias))
                                             ? compute_kernel_lib::OutputCBLayout::TileRowMajor
                                             : compute_kernel_lib::OutputCBLayout::SubblockMajor;
