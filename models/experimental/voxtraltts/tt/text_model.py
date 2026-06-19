@@ -10,11 +10,41 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import TensorGroup
 
 from models.experimental.voxtraltts.tt.rmsnorm import VoxtralTextRMSNorm
+from models.experimental.voxtraltts.tt.text_attention import Attention as VoxtralTextAttention
 from models.experimental.voxtraltts.tt.text_decoder_layer import remap_voxtral_text_state_dict
+from models.experimental.voxtraltts.tt.text_mlp import MLP as VoxtralTextMLP
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     get_VoxtralTTArgs,
     voxtral_text_default_optimizations,
 )
+
+
+def _swap_text_mlps(inner, state_dict, weight_cache_path, dtype) -> None:
+    """Replace each decoder block's stock tt_transformers MLP with VoxtralTextMLP.
+
+    tt_transformers' decoder has no MLP injection hook (unlike ``attention_class``), so the
+    optimized MLP is swapped in here, after construction. The stock MLP's weights were already
+    loaded by ``TransformerBlock``; deallocate them after the swap to avoid leaking device DRAM.
+    Skipped for MoE blocks (Voxtral text is dense).
+    """
+    if getattr(inner.args, "is_mixture_of_experts", False):
+        return
+    for i, blk in enumerate(inner.layers):
+        old = blk.feed_forward
+        blk.feed_forward = VoxtralTextMLP(
+            mesh_device=blk.mesh_device,
+            tt_ccl=blk.tt_ccl,
+            args=blk.args,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            layer_num=i,
+            dtype=dtype,
+            model_config=blk.model_config,
+            prefetcher=blk.prefetcher,
+        )
+        for w in (getattr(old, "w1", None), getattr(old, "w2", None), getattr(old, "w3", None)):
+            if isinstance(w, ttnn.Tensor) and w.is_allocated():
+                ttnn.deallocate(w)
 
 
 def patch_text_model_fp32_rms_norms(
@@ -79,18 +109,23 @@ class VoxtralTTTextModel:
         rope_setup_class=None,
         prefetcher=None,
     ) -> "VoxtralTTTextModel":
+        # Voxtral text uses its own Attention/MLP subclasses (optimizations kept out of the
+        # shared tt_transformers files). Attention is injected via attention_class; MLP has no
+        # injection hook so it is swapped in post-construction (_swap_text_mlps).
+        remapped_state_dict = remap_voxtral_text_state_dict(state_dict)
         inner = Transformer(
             args=args,
             dtype=dtype,
             mesh_device=mesh_device,
-            state_dict=remap_voxtral_text_state_dict(state_dict),
+            state_dict=remapped_state_dict,
             weight_cache_path=weight_cache_path,
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
-            attention_class=attention_class,
+            attention_class=attention_class or VoxtralTextAttention,
             rope_setup_class=rope_setup_class,
             prefetcher=prefetcher,
         )
+        _swap_text_mlps(inner, remapped_state_dict, weight_cache_path, dtype)
         return cls(inner)
 
     @classmethod

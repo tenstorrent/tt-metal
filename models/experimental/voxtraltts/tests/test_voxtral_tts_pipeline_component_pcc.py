@@ -200,7 +200,6 @@ def _text_decode_multistep_compare_reference(
             rot_mat_idxs=tt_rope_idxs,
             page_table=tt_page_table,
             kv_cache=None,
-            sampling_on_device=False,
         )
         tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
 
