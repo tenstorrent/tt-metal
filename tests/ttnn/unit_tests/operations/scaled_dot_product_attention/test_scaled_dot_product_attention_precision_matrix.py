@@ -136,14 +136,12 @@ def _abs_ceiling(dtype):
 @pytest.mark.parametrize("shape", SHAPES)
 def test_sdpa_precision_matrix(device, shape, dtype, math_fidelity, fp32_acc, distribution):
     # bf8b requires fp32 dest accumulation: the block-float matmul datapath with
-    # bf16 dest (fp32_acc=False) yields uncorrelated output (PCC ~0.06, rel-RMS
-    # >5) — independent of the intermediate-CB format. The op DEFAULTS to
-    # fp32_dest_acc_en=True, so this only affects an explicit non-default
-    # override. Characterized as an R1 boundary (changelog), not silenced for the
-    # default path. (fp32 + fp32_acc=False works — fp32 intermediates carry it.)
-    if dtype == ttnn.bfloat8_b and not fp32_acc:
-        pytest.skip("bfloat8_b requires fp32_dest_acc_en=True (op default); bf16-dest path is broken for block-float")
-
+    # bf16 dest yields uncorrelated output (PCC ~0.06, rel-RMS >5). The op FORCES
+    # fp32_dest_acc_en=True for bf8b inputs regardless of the caller's flag (no
+    # valid bf16-dest mode for block-float), so passing fp32_acc=False here is a
+    # no-op for bf8b and the case still passes. fp32 + fp32_acc=False is a genuine
+    # config (fp32 intermediates carry it). Kept (not skipped) so the matrix
+    # documents that bf8b is correct under every caller config.
     torch_dtype = _TORCH_DTYPE[dtype]
     torch.manual_seed(0)
     gen = torch.randn if distribution == "randn" else torch.rand

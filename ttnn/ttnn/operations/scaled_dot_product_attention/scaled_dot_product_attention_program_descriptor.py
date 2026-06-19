@@ -110,6 +110,15 @@ def create_program_descriptor(
 
     math_fidelity, fp32_dest_acc_en, math_approx_mode, dst_full_sync_en = _resolve_compute_config(compute_kernel_config)
 
+    # bfloat8_b requires fp32 dest accumulation: the block-float matmul datapath
+    # produces uncorrelated output (PCC ~0.06, rel-RMS >5) with bf16 dest. There
+    # is no valid bf16-dest mode for bf8b, so force fp32_dest_acc_en on
+    # regardless of the caller's flag — preventing a silent-garbage footgun for a
+    # user who passes a throughput-oriented config (fp32_dest_acc_en=False) with
+    # bf8b inputs. fp32 and bf16 inputs honor the caller's flag.
+    if Q.dtype == ttnn.bfloat8_b:
+        fp32_dest_acc_en = True
+
     q_shape = list(Q.shape)
     k_shape = list(K.shape)
     B, H_q, S_q, D = q_shape
