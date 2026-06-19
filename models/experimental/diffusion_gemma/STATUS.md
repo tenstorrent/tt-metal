@@ -22,7 +22,7 @@ and marked `TODO(env)`.
 |---|---|---|
 | Module scaffolding | — | ✅ package + config |
 | `config.py` (verified hyperparams) | §2 | ✅ done |
-| **Diffusion sampling primitives (reference, pure torch)** | #47463 spike / #47468 oracle | 🚧 in progress |
+| **Diffusion sampling primitives (reference, pure torch)** | #47463 spike / #47468 oracle | ✅ done — `reference/sampling.py`, 11 tests pass |
 | Torch reference model (vendored HF) | #47468 | ⛔ blocked: transformers `diffusion_gemma` unavailable |
 | Causal backbone bring-up (gemma4 reuse) | #47461 | ⛔ blocked: ckpt + transformers 5.x + HW |
 | KV-cache phase state machine | #47474 | ⬜ not started |
@@ -36,10 +36,10 @@ Legend: ✅ done · 🚧 in progress · ⛔ blocked on environment · ⬜ not st
 ## Build order (env-independent first)
 
 1. ✅ Config + scaffolding.
-2. 🚧 **Reference sampling primitives** (`reference/sampling.py`) + tests — the
+2. ✅ **Reference sampling primitives** (`reference/sampling.py`) + tests — the
    `#47463` acceptance spike reference and the `#47468` oracle's sampling core.
    Pure torch, CPU-testable, no checkpoint.
-3. Reference denoise loop (assembling the primitives into the per-block
+3. 🚧 Reference denoise loop (assembling the primitives into the per-block
    trajectory) + tests.
 4. ⛔ Vendored HF reference + PCC harness — unblocks once `diffusion_gemma` is
    installable.
