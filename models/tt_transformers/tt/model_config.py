@@ -4116,7 +4116,15 @@ class HfAttentionWrapper:
             else "past_key_value"
         )
         if self.rotary_emb is not None:
-            position_embeddings = self.rotary_emb(x, position_ids)
+            # transformers 5.x Gemma3 uses per-layer-type RoPE: the rotary forward takes a
+            # `layer_type` and selects `{layer_type}_inv_freq` (layer_type=None -> AttributeError
+            # 'None_inv_freq'). Pass the wrapped attention's own layer_type when the rotary accepts
+            # it (the authoritative type for this layer); <5 / non-Gemma3 rotaries don't take it.
+            _layer_type = getattr(self.attention, "layer_type", None)
+            if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
+                position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
+            else:
+                position_embeddings = self.rotary_emb(x, position_ids)
             output, *_ = self.attention(
                 x,
                 position_embeddings=position_embeddings,
