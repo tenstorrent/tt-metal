@@ -3,6 +3,8 @@
 
 """Shared Gemma4 prefill trace policy for standalone and vLLM generators."""
 
+import os
+
 import torch
 from loguru import logger
 
@@ -13,7 +15,26 @@ from models.tt_transformers.tt.generator import (
 )
 
 # Kernel sequence lengths that may capture/replay prefill device traces (MoE only).
-GEMMA4_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
+#
+# Each bucket is captured as a *separate resident prefill trace* at warmup, and
+# the high buckets are large for big models (e.g. the 4096 bucket on
+# Gemma4-26B-A4B is ~0.5 GB on its own). ``GEMMA4_TRACE_PREFILL_SEQ_LENS`` lets a
+# deployment trim the set to the prompt lengths it actually serves — e.g. a
+# throughput benchmark with short prompts only needs the smallest bucket — which
+# directly shrinks the required ``trace_region_size``. The override drives both
+# warmup capture (``patch_gemma4_trace_model_args``) and runtime eligibility
+# (``can_gemma4_enable_prefill_trace``) so they stay consistent.
+_DEFAULT_TRACE_PREFILL_SEQ_LENS = [128, 512, 1024, 2048, 4096]
+
+
+def _resolve_trace_prefill_seq_lens() -> list[int]:
+    override = os.environ.get("GEMMA4_TRACE_PREFILL_SEQ_LENS")
+    if override is None:
+        return list(_DEFAULT_TRACE_PREFILL_SEQ_LENS)
+    return [int(x) for x in override.split(",") if x.strip()]
+
+
+GEMMA4_TRACE_PREFILL_SEQ_LENS = _resolve_trace_prefill_seq_lens()
 
 # Prefill trace is disabled above 4k ISL (no perf gain, OOM risk) and at or above 32k
 # batched virtual tokens (batch_size × padded prefill length).
