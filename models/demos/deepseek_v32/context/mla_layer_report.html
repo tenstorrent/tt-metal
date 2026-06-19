@@ -174,7 +174,9 @@
   <button data-tab="attention"><span class="n">3</span>Attention</button>
   <button data-tab="timing"><span class="n">4</span>Where time goes</button>
   <button data-tab="bottlenecks"><span class="n">5</span>Bottlenecks</button>
-  <button data-tab="tests"><span class="n">6</span>Tests</button>
+  <button data-tab="prof-indexer"><span class="n">6</span>Indexer profile</button>
+  <button data-tab="prof-attn"><span class="n">7</span>Attention profile</button>
+  <button data-tab="tests"><span class="n">8</span>Tests</button>
 </nav>
 
 <!-- ============================ 1 · OVERVIEW ============================ -->
@@ -486,8 +488,46 @@
 </section>
 
 <!-- ============================ 6 · TESTS ============================ -->
+<section class="tab" data-tab="prof-indexer">
+  <h2><span class="n">§6</span>Indexer profile <span style="font-size:.6em;color:var(--dim);font-weight:600">measured · sp4×tp2 · per-node heatmap</span></h2>
+  <p class="lede">The §2 indexer graph, with each node filled by its device-kernel time and labelled with absolute ms + % of the
+  <b>27.2 ms</b> layer critical path. Same topology as §2; timing is the device-collapsed sp4×tp2 perf run (per-call durations
+  mapped to nodes; collectives avg-across-chips, compute max). Heatmap is global across §6/§7 — the reddest node is the
+  layer's single longest op.</p>
+  <div class="legend" style="align-items:center">
+    <span>0 ms</span>
+    <span style="display:inline-block;height:13px;width:220px;background:linear-gradient(90deg,#ffffff,#e04545);border:1px solid #39405a;border-radius:4px"></span>
+    <span>8.38 ms (longest op, layer-wide)</span>
+  </div>
+  <div class="fig"><div class="cybox" id="cy-prof-indexer"></div></div>
+  <div class="callout warn"><span class="who">read-out</span>
+  Three ops carry the indexer: the <b>logits all-reduce block</b> (4.83 ms, 17.7% — tilize·RS·AG·untilize), <b>top-k</b>
+  (3.77 ms, 13.9%) and <b>indexer_score</b> (2.73 ms, 10.0%) — together ~42% of the whole layer. Every stem op (K/Q/W linears,
+  TP reduce, SP K-gather, on-device RoPE) is <b>&lt;1% each</b>. SP-sharding removed the Q/W SP all-gathers, and the per-chip
+  rope's <code>mesh_partition</code> (in QROPE) is ~0.001 ms — negligible. The indexer's cost is now almost entirely the
+  all-reduce + the two unmodeled ops (top-k, indexer_score).</div>
+</section>
+
+<section class="tab" data-tab="prof-attn">
+  <h2><span class="n">§7</span>Attention profile <span style="font-size:.6em;color:var(--dim);font-weight:600">measured · sp4×tp2 · per-node heatmap</span></h2>
+  <p class="lede">The §3 attention graph, each node filled by its device-kernel time (white = 0 ms → red = the layer's longest
+  op) and labelled with ms + % of the <b>27.2 ms</b> critical path. Same topology as §3; sp4×tp2 timing.</p>
+  <div class="legend" style="align-items:center">
+    <span>0 ms</span>
+    <span style="display:inline-block;height:13px;width:220px;background:linear-gradient(90deg,#ffffff,#e04545);border:1px solid #39405a;border-radius:4px"></span>
+    <span>8.38 ms (longest op, layer-wide)</span>
+  </div>
+  <div class="fig"><div class="cybox" id="cy-prof-attn"></div></div>
+  <div class="callout warn"><span class="who">read-out</span>
+  <b><code>sparse_sdpa</code> dominates everything</b>: 8.38 ms = <b>30.8% of the layer</b> (incl. its RM↔TILE q/out
+  conversions) — the single reddest node in the report, and the gather-BW-bound op fp8 kv would roughly halve. Next is the
+  <b>KVPE-prefix gather</b> (2.02 ms, 7.4% — SP all-gather + block-cyclic un-rotate), then the <b>wkv_b1 absorb</b> matmul
+  (0.91 ms) and <b>o_proj</b> (0.72 ms). The KV stem + bf8 cache write are ~0.01 ms each. So attention's cost is
+  <b>~85% sparse_sdpa + gather</b>; the projections are a thin tail.</div>
+</section>
+
 <section class="tab" data-tab="tests">
-  <h2><span class="n">§6</span>How the tests exercise this</h2>
+  <h2><span class="n">§8</span>How the tests exercise this</h2>
   <p><code>tests/test_mla.py</code> drives three regimes against the CPU reference (<code>MLACPU</code>, with the indexer fp8
   path off for functional parity):</p>
   <table>
@@ -515,12 +555,14 @@
 
 <script>
   // ===================== tabbed nav + hash routing =====================
-  const TABS = ['overview','indexer','attention','timing','bottlenecks','tests'];
+  const TABS = ['overview','indexer','attention','timing','bottlenecks','prof-indexer','prof-attn','tests'];
   const TAB_GRAPH = {
     overview:  {box:'cy-router',  g:'router'},
     indexer:   {box:'cy-indexer', g:'indexer'},
     attention: {box:'cy-attn',    g:'attention'},
     timing:    {box:'cy-timing',  g:'timing'},
+    'prof-indexer': {box:'cy-prof-indexer', g:'prof_indexer'},
+    'prof-attn':    {box:'cy-prof-attn',    g:'prof_attn'},
   };
   function showTab(id){
     if(!TABS.includes(id)) id = 'overview';
@@ -547,6 +589,7 @@
     {selector:'node.sp',  style:{'background-color':CLR.sp,  'background-opacity':0.16,'border-color':CLR.sp}},
     {selector:'node.comm',style:{'background-color':CLR.comm,'background-opacity':0.16,'border-color':CLR.comm,'border-width':2}},
     {selector:'node.host',style:{'shape':'round-diamond','background-color':CLR.host,'background-opacity':0.16,'border-color':CLR.host,'text-max-width':210}},
+    {selector:'node.heat',style:{'background-color':'data(bg)','background-opacity':1,'color':'#15151c','border-color':'#39405a','border-width':1,'text-max-width':152,'font-size':9.5}},
     {selector:'edge', style:{'width':1.3,'line-color':'#4a5570','target-arrow-color':'#4a5570','target-arrow-shape':'triangle',
       'curve-style':'straight',
       'arrow-scale':0.85,'label':'data(label)','text-wrap':'wrap','text-max-width':220,'font-size':8,'color':'#aab4c6',
@@ -584,7 +627,7 @@
     }
     try{ cytoscape.use(window.cytoscapeDagre); }catch(e){}
     const els = [];
-    graph.nodes.forEach(n => els.push({ data:{id:n.id, label:n.label}, classes:n.cls }));
+    graph.nodes.forEach(n => els.push({ data:{id:n.id, label:n.label, bg:n.bg||null}, classes:n.cls }));
     graph.edges.forEach((e,i) => els.push({ data:{id:box+'_e'+i, source:e.f, target:e.t, label:e.l||''}, classes: e.rm?'rm':'' }));
     try{
       const cy = cytoscape({ container:document.getElementById(box), elements:els, style:CY_STYLE,
@@ -710,6 +753,61 @@
         {f:'SDPA',t:'EPI',l:'attn_out [1,H/tp,S/sp,512]\n↳ [1,64,1280,512]'}, {f:'EPI',t:'OUT',l:'[1,1,S/sp,dim/tp]\n↳ [1,1,1280,3584]'},
       ],
     },
+    prof_indexer: { nodes:[
+      {id:'H',cls:'heat',bg:'#ffffff',label:'hidden_states'},
+      {id:'WK',cls:'heat',bg:'#fefdfd',label:'K · linear _idx_wk\n0.07 ms · 0.3%'},
+      {id:'KRS',cls:'heat',bg:'#fefefe',label:'K · TP all-reduce\n0.03 ms · 0.1%'},
+      {id:'KLN',cls:'heat',bg:'#fefefe',label:'K · layer_norm\n0.01 ms · 0.0%'},
+      {id:'KAG',cls:'heat',bg:'#fefefe',label:'K · SP all-gather\n0.04 ms · 0.2%'},
+      {id:'KROPE',cls:'heat',bg:'#fefefe',label:'K · device rope\n0.04 ms · 0.2%'},
+      {id:'KCAT',cls:'heat',bg:'#fefdfd',label:'K · concat → kbuf\n0.09 ms · 0.3%'},
+      {id:'QA',cls:'heat',bg:'#fefbfb',label:'Q · linear q_a\n0.14 ms · 0.5%'},
+      {id:'QRS',cls:'heat',bg:'#fefcfc',label:'Q · TP all-reduce\n0.12 ms · 0.4%'},
+      {id:'QN',cls:'heat',bg:'#fefefe',label:'Q · rms_norm\n0.03 ms · 0.1%'},
+      {id:'QB',cls:'heat',bg:'#fefcfc',label:'Q · linear wq_b\n0.12 ms · 0.4%'},
+      {id:'QH',cls:'heat',bg:'#fefdfd',label:'Q · create_heads\n0.06 ms · 0.2%'},
+      {id:'QROPE',cls:'heat',bg:'#fef9f9',label:'Q · device rope (per-chip)\n0.23 ms · 0.8%'},
+      {id:'WP',cls:'heat',bg:'#fefdfd',label:'W · linear wproj\n0.06 ms · 0.2%'},
+      {id:'WRS',cls:'heat',bg:'#fefefe',label:'W · TP reduce-scatter\n0.01 ms · 0.0%'},
+      {id:'WMUL',cls:'heat',bg:'#fefefe',label:'W · multiply·scale\n0.00 ms · 0.0%'},
+      {id:'OFF',cls:'heat',bg:'#ffffff',label:'chunk_offset (host)'},
+      {id:'LOG',cls:'heat',bg:'#f4c2c2',label:'indexer_score (+permute)\n2.73 ms · 10.0%'},
+      {id:'ALLRED',cls:'heat',bg:'#ed9393',label:'logits all-reduce\ntilize·RS·AG·untilize\n4.83 ms · 17.7%'},
+      {id:'TK',cls:'heat',bg:'#f1abab',label:'topk_large_indices\n3.77 ms · 13.9%'},
+      {id:'IDX',cls:'heat',bg:'#ffffff',label:'indices [S/sp,k]'},
+    ], edges:[
+      {f:'H',t:'WK'}, {f:'H',t:'QA'}, {f:'H',t:'WP'}, {f:'WK',t:'KRS'}, {f:'KRS',t:'KLN'}, {f:'KLN',t:'KAG'}, {f:'KAG',t:'KROPE'}, {f:'KROPE',t:'KCAT'}, {f:'QA',t:'QRS'}, {f:'QRS',t:'QN'}, {f:'QN',t:'QB'}, {f:'QB',t:'QH'}, {f:'QH',t:'QROPE'}, {f:'WP',t:'WRS'}, {f:'WRS',t:'WMUL'}, {f:'KCAT',t:'LOG'}, {f:'QROPE',t:'LOG'}, {f:'WMUL',t:'LOG'}, {f:'OFF',t:'LOG'}, {f:'LOG',t:'ALLRED'}, {f:'ALLRED',t:'TK'}, {f:'TK',t:'IDX'},
+    ] },
+    prof_attn: { nodes:[
+      {id:'H',cls:'heat',bg:'#ffffff',label:'hidden_states'},
+      {id:'IDX',cls:'heat',bg:'#ffffff',label:'indices (from §2)'},
+      {id:'QA',cls:'heat',bg:'#fefbfb',label:'Q · linear q_a\n0.14 ms · 0.5%'},
+      {id:'QR',cls:'heat',bg:'#fefcfc',label:'Q · TP all-reduce\n0.11 ms · 0.4%'},
+      {id:'QLN',cls:'heat',bg:'#fefefe',label:'Q · rms_norm\n0.03 ms · 0.1%'},
+      {id:'QBP',cls:'heat',bg:'#fdf6f6',label:'Q · linear q_b\n0.40 ms · 1.5%'},
+      {id:'QHD',cls:'heat',bg:'#fefafa',label:'Q · create_heads\n0.18 ms · 0.7%'},
+      {id:'QSL',cls:'heat',bg:'#fefbfb',label:'Q · slice nope/rope\n0.17 ms · 0.6%'},
+      {id:'WB1',cls:'heat',bg:'#fbeaea',label:'Q · linear wkv_b1\n0.91 ms · 3.3%'},
+      {id:'QRP',cls:'heat',bg:'#fefcfc',label:'Q · apply_rope\n0.10 ms · 0.4%'},
+      {id:'QCC',cls:'heat',bg:'#fdf3f3',label:'Q · concat → tt_q\n0.50 ms · 1.8%'},
+      {id:'KVA',cls:'heat',bg:'#fefcfc',label:'KV · linear kv_a\n0.11 ms · 0.4%'},
+      {id:'KVR',cls:'heat',bg:'#fefdfd',label:'KV · TP ag+reduce\n0.06 ms · 0.2%'},
+      {id:'KVSL',cls:'heat',bg:'#fefefe',label:'KV · slice\n0.01 ms · 0.0%'},
+      {id:'KVN',cls:'heat',bg:'#fefefe',label:'KV · rms_norm\n0.01 ms · 0.1%'},
+      {id:'KRP',cls:'heat',bg:'#fefefe',label:'KV · apply_rope\n0.01 ms · 0.0%'},
+      {id:'KVCC',cls:'heat',bg:'#fefefe',label:'KV · concat → kvpe\n0.01 ms · 0.0%'},
+      {id:'KB8',cls:'heat',bg:'#fefefe',label:'KV · typecast bf8\n0.01 ms · 0.0%'},
+      {id:'CACHE',cls:'heat',bg:'#fefefe',label:'kv-cache write\n0.01 ms · 0.0%'},
+      {id:'GATHER',cls:'heat',bg:'#f7d2d2',label:'gather kvpe prefix\nSP AG · bf16 · un-rotate\n2.02 ms · 7.4%'},
+      {id:'SMLA',cls:'heat',bg:'#e04545',label:'sparse_sdpa (+RM↔TILE)\n8.38 ms · 30.8%'},
+      {id:'WB2',cls:'heat',bg:'#fcf1f1',label:'linear wkv_b2\n0.59 ms · 2.2%'},
+      {id:'CH',cls:'heat',bg:'#fefcfc',label:'nlp_concat_heads\n0.11 ms · 0.4%'},
+      {id:'OP',cls:'heat',bg:'#fcefef',label:'linear o_proj\n0.72 ms · 2.6%'},
+      {id:'ORS',cls:'heat',bg:'#fef9f9',label:'TP reduce-scatter\n0.25 ms · 0.9%'},
+      {id:'OUT',cls:'heat',bg:'#ffffff',label:'out'},
+    ], edges:[
+      {f:'H',t:'QA'}, {f:'H',t:'KVA'}, {f:'QA',t:'QR'}, {f:'QR',t:'QLN'}, {f:'QLN',t:'QBP'}, {f:'QBP',t:'QHD'}, {f:'QHD',t:'QSL'}, {f:'QSL',t:'WB1'}, {f:'WB1',t:'QCC'}, {f:'QSL',t:'QRP'}, {f:'QRP',t:'QCC'}, {f:'KVA',t:'KVR'}, {f:'KVR',t:'KVSL'}, {f:'KVSL',t:'KVN'}, {f:'KVN',t:'KVCC'}, {f:'KVSL',t:'KRP'}, {f:'KRP',t:'KVCC'}, {f:'KVCC',t:'KB8'}, {f:'KB8',t:'CACHE'}, {f:'CACHE',t:'GATHER'}, {f:'GATHER',t:'SMLA'}, {f:'QCC',t:'SMLA'}, {f:'IDX',t:'SMLA'}, {f:'SMLA',t:'WB2'}, {f:'WB2',t:'CH'}, {f:'CH',t:'OP'}, {f:'OP',t:'ORS'}, {f:'ORS',t:'OUT'},
+    ] },
   };
 
   // ===================== interactive timing chart (§4.2) =====================
