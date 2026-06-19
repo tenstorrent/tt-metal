@@ -142,6 +142,11 @@ void kernel_main() {
     // ---- input read ----
     if constexpr (layout_is_rm) {
         // ROW_MAJOR: read sticks per 32-stick block, chunked along W (with W/H zeroing).
+        // For Regime B RM, this core owns a W-column band starting at shard_col0
+        // (= input_page_base, repurposed for RM; 0 in Regime A). All column maths is
+        // clamped against the GLOBAL W, so padding columns contribute 0 and inv_W in
+        // compute carries the true full-row element count.
+        const uint32_t shard_col0 = input_page_base;
         const auto input_accessor = TensorAccessor(input_args, input_addr);
         for (uint32_t b = 0; b < num_units; ++b) {
             const uint32_t global_block = start_unit + b;
@@ -151,7 +156,7 @@ void kernel_main() {
                 rows_this_block = TILE_H;
             }
             for (uint32_t c = 0; c < num_chunks; ++c) {
-                const uint32_t col0 = c * chunk_cols;
+                const uint32_t col0 = shard_col0 + c * chunk_cols;
                 uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
                 if (valid_cols > chunk_cols) {
                     valid_cols = chunk_cols;

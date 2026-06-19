@@ -27,9 +27,10 @@ void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(0);
     const uint32_t arg1 = get_arg_val<uint32_t>(1);          // TILE: page_base; RM: start_block
     const uint32_t arg2 = get_arg_val<uint32_t>(2);          // TILE: num_tiles; RM: num_blocks
-    const uint32_t total_sticks = get_arg_val<uint32_t>(3);  // RM only
 
     if constexpr (layout_is_rm) {
+        const uint32_t total_sticks = get_arg_val<uint32_t>(3);
+        const uint32_t shard_col0 = get_arg_val<uint32_t>(4);  // W-column band offset (0 in Regime A)
         constexpr uint32_t TILE_H = 32;
         constexpr uint32_t TILE_W = 32;
         constexpr uint32_t out_tile_row_bytes = TILE_W * out_elem;
@@ -49,7 +50,7 @@ void kernel_main() {
                 rows_this_block = TILE_H;
             }
             for (uint32_t c = 0; c < num_chunks; ++c) {
-                const uint32_t col0 = c * chunk_cols;
+                const uint32_t col0 = shard_col0 + c * chunk_cols;
                 uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
                 if (valid_cols > chunk_cols) {
                     valid_cols = chunk_cols;

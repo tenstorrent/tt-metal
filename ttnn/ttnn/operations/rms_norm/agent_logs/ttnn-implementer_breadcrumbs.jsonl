@@ -36,3 +36,6 @@
 {"event":"test_run","status":"pass","tests":"test_rms_norm.py + test_rms_norm_layout_matrix.py","detail":"baseline green 140 passed before R4 refactor","ts":"2026-06-19T19:16:38+00:00"}
 {"event":"test_run","status":"pass","tests":"layout_matrix(120)+acceptance+regime_b","detail":"Phase 1: unified single compute kernel, RM resident-gamma model; TILE byte-identical, no regression","ts":"2026-06-19T19:24:45+00:00"}
 {"event":"test_run","status":"pass","tests":"acceptance+layout_matrix+regime_b (179)","detail":"Phase 2: unified to 3 kernels (reader/compute/writer); all 4 paths green","ts":"2026-06-19T19:31:40+00:00"}
+{"event":"test_run","status":"timeout","tests":"precision_matrix(641)+baseline","detail":"bash 120s timeout (SIGTERM 143) — matrix too large for 2min, not a device hang; re-running with longer timeout","ts":"2026-06-19T19:34:10+00:00"}
+{"event":"test_run","status":"pass","tests":"probe_019 RM Regime B (1,1,32,8192)","detail":"wide-W RM routes through mcast (2 semaphores), PCC=0.999989 relRMS=0.0083","ts":"2026-06-19T19:49:16+00:00"}
+{"event":"test_run","status":"pass","tests":"rm_regime_b(40)+acceptance+layout_matrix+regime_b","detail":"Phase 3: wide-W RM routes through mcast all-gather; correctness PCC>=0.999; no regression","ts":"2026-06-19T19:53:10+00:00"}
