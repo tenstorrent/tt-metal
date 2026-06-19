@@ -171,7 +171,6 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
         rot_mat_idxs=tt_rope_idxs,
         page_table=tt_page_table,
         kv_cache=None,
-        sampling_on_device=False,
     )
     tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
 
@@ -221,7 +220,6 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
             rot_mat_idxs=tt_rope_idxs,
             page_table=tt_page_table,
             kv_cache=None,
-            sampling_on_device=False,
         )
         tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
 
