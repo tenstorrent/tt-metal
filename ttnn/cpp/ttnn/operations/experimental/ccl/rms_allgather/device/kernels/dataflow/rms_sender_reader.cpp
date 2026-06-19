@@ -143,7 +143,7 @@ void kernel_main() {
 
         // num_dests counts the multicast bounding-box cells (loopback includes
         // self), not the worker count.
-        post_reduce_sender_sem.set_multicast<Noc::McastMode::INCLUDE_SRC>(
+        post_reduce_sender_sem.set_multicast<NocOptions::MCAST_INCL_SRC>(
             noc_obj,
             mcast_dest_noc_start_x,
             mcast_dest_noc_start_y,
@@ -159,7 +159,7 @@ void kernel_main() {
                                                     uint32_t l1_read_addr_ex_global = cb_ex_global_arg.get_read_ptr();
                                                     // num_dests counts the multicast bounding-box cells
                                                     // (loopback includes self), not the worker count.
-                                                    noc_obj.async_write_multicast<Noc::McastMode::INCLUDE_SRC>(
+                                                    noc_obj.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                                                         CoreLocalMem<uint8_t>(l1_read_addr_ex),
                                                         MulticastEndpoint{},
                                                         single_tile_size_bytes,
