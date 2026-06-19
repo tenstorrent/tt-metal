@@ -16,9 +16,6 @@ import ttnn
 from loguru import logger
 from scipy.io import wavfile
 
-os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
-# os.environ.setdefault("VOXTRAL_DECODE_TRACE_2CQ", "1")
-
 from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, num_command_queues_for_decode
 from models.experimental.voxtraltts.tests.common import VOXTRAL_STANDARD_CHAR_TEXT, resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_aligned_optimizations

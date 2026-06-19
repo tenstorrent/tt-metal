@@ -131,12 +131,12 @@ def _acoustic_debug_pcc_enabled() -> bool:
 
 def _forward_debug(msg: str) -> None:
     if os.environ.get("VOXTRAL_ACOUSTIC_FORWARD_E2E_DEBUG", "").lower() in ("1", "true", "yes", "on"):
-        print(f"[test_acoustic_forward_matches_cpu_reference] {msg}")
+        logger.debug(f"[test_acoustic_forward_matches_cpu_reference] {msg}")
 
 
 def _decode_e2e_debug(msg: str) -> None:
     if os.environ.get("VOXTRAL_ACOUSTIC_DECODE_E2E_DEBUG", "").lower() in ("1", "true", "yes", "on"):
-        print(f"[test_acoustic_decode] {msg}")
+        logger.debug(f"[test_acoustic_decode] {msg}")
 
 
 def _synced_fm_noise_cpu(
@@ -492,7 +492,7 @@ def test_acoustic_predict_velocity_pcc(mesh_device, reset_seeds):
         table = _per_op_pcc_report(ref, x_t, llm_h, t_emb)
         extra = "\n\nPer-op PCC (forward order; first LOW = diverging stage):\n" + table
         if _acoustic_debug_pcc_enabled():
-            print(extra)
+            logger.info(extra)
 
     assert passing, (
         f"Acoustic predict_velocity PCC failed: PCC={float(pcc_val):.6f} "
