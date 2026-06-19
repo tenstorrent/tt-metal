@@ -33,6 +33,12 @@
 # Run (script, choose layer count):
 #   HY_NUM_LAYERS=32 python_env/bin/python \
 #     models/experimental/hunyuan_image_3_0/tests/pcc/test_model_teacher_forced.py
+#
+# bf16-vs-bf8 mixed-precision boundary audit (which layers must stay bf16):
+#   python_env/bin/python -m pytest \
+#     models/experimental/hunyuan_image_3_0/tests/pcc/test_model_teacher_forced.py \
+#     -k bf8_mixed_precision_audit -v -s
+#   # or as a script:  HY_BF8_AUDIT=1 ... test_model_teacher_forced.py --audit
 
 import os, sys, json, glob, gc
 import torch
@@ -168,17 +174,24 @@ def _reference(c, input_ids):
     return golden, ref_final
 
 
-def _run(device):
-    """Teacher-forced per-layer PCC. Returns list of (layer_idx, pcc, max_abs_diff, rel)."""
+def _run(device, weight_dtype=ttnn.bfloat16, golden=None):
+    """Teacher-forced per-layer PCC at a given weight dtype.
+
+    Returns list of (layer_idx, pcc, max_abs_diff, rel). Pass `golden` (the fp32
+    reference states from `_reference`) to avoid recomputing it across a dtype
+    sweep; if None it is computed here.
+    """
     c = _cfg()
     print(
         f"config: H={c['H']} heads={c['HEADS']}/{c['KV_HEADS']} head_dim={c['HEAD_DIM']} "
-        f"experts={c['NUM_EXPERTS']} topk={c['MOE_TOPK']} eps={c['EPS']}  layers={NUM_LAYERS}  (teacher-forced)"
+        f"experts={c['NUM_EXPERTS']} topk={c['MOE_TOPK']} eps={c['EPS']}  layers={NUM_LAYERS}  "
+        f"dtype={weight_dtype}  (teacher-forced)"
     )
 
-    torch.manual_seed(0)
-    input_ids = torch.randint(0, 130000, (B, S), dtype=torch.long)
-    golden, _ = _reference(c, input_ids)
+    if golden is None:
+        torch.manual_seed(0)
+        input_ids = torch.randint(0, 130000, (B, S), dtype=torch.long)
+        golden, _ = _reference(c, input_ids)
 
     # ---- teacher-forced TT pass: one layer at a time ----
     # Build the shared 2D RoPE tables once from the first TT layer's rope and
@@ -202,6 +215,7 @@ def _run(device):
             norm_topk_prob=c["NORM_TOPK"],
             rms_norm_eps=c["EPS"],
             stream_experts=True,
+            weight_dtype=weight_dtype,
         )
         if cos_tt is None:
             cos_tt, sin_tt = tt_layer.self_attn.rope.prepare_cos_sin(S, image_infos=None)
@@ -227,6 +241,45 @@ def _run(device):
         ttnn.deallocate(sin_tt)
 
     return results
+
+
+def _run_dtype_audit(device):
+    """bf16-vs-bf8 per-layer drift audit — the mixed-precision boundary finder.
+
+    Runs the teacher-forced per-layer PCC at BOTH ttnn.bfloat16 and ttnn.bfloat8_b
+    against the SAME fp32 golden, isolating weight-quantization precision from
+    parallelism (single device, dense MoE). Recommends the set of layers that must
+    stay bf16 — those whose bf8 per-layer PCC drops below PCC_THR — which is exactly
+    the `bf16_layers=` argument HunyuanTtModel / demo.py take. See MEMORY_FIT_PLAN.md
+    step 1 ("de-risk bf8 backbone accuracy; decide mixed-precision boundaries").
+
+    Returns:
+        rows:      list of (layer_idx, pcc_bf16, pcc_bf8, drift=pcc_bf16-pcc_bf8).
+        need_bf16: sorted list of layer indices whose bf8 PCC < PCC_THR.
+    """
+    c = _cfg()
+    torch.manual_seed(0)
+    input_ids = torch.randint(0, 130000, (B, S), dtype=torch.long)
+    golden, _ = _reference(c, input_ids)  # computed once, reused for both dtypes
+
+    res16 = _run(device, weight_dtype=ttnn.bfloat16, golden=golden)
+    res8 = _run(device, weight_dtype=ttnn.bfloat8_b, golden=golden)
+
+    p16 = {i: p for (i, p, _, _) in res16}
+    p8 = {i: p for (i, p, _, _) in res8}
+    rows = [(i, p16[i], p8[i], p16[i] - p8[i]) for i in range(NUM_LAYERS)]
+    need_bf16 = sorted(i for (i, _, b, _) in rows if b < PCC_THR)
+    return rows, need_bf16
+
+
+def _print_audit(rows, need_bf16):
+    print("\nbf16-vs-bf8 per-layer drift audit (teacher-forced, fp32 golden):")
+    print(f"  {'layer':>5}  {'bf16 PCC':>10}  {'bf8 PCC':>10}  {'drift':>10}")
+    for i, a, b, d in rows:
+        flag = "   <-- bf8 below threshold (keep bf16)" if b < PCC_THR else ""
+        print(f"  {i:5d}  {a:10.6f}  {b:10.6f}  {d:10.6f}{flag}")
+    print(f"\nPCC_THR={PCC_THR}.  Recommended bf16_layers = {need_bf16}")
+    print(f"  ({len(need_bf16)}/{NUM_LAYERS} layers must stay bf16; the rest are bf8-safe per-layer.)")
 
 
 def _run_chained(device):
@@ -328,13 +381,33 @@ def test_model_final_output_pcc(device):
     assert final_pcc >= CHAIN_PCC_THR, f"final-output PCC {final_pcc:.6f} below {CHAIN_PCC_THR}"
 
 
+def test_bf8_mixed_precision_audit(device):
+    """Informational: report per-layer bf16-vs-bf8 drift and the recommended
+    bf16_layers set. Gates only the bf16 baseline (each layer must be >= PCC_THR
+    in bf16; a bf16 regression is a real bug, not a quantization choice). bf8
+    drops are expected and reported, not failed — the recommendation is the output.
+    """
+    rows, need_bf16 = _run_dtype_audit(device)
+    _print_audit(rows, need_bf16)
+    bf16_fail = [(i, a) for (i, a, _, _) in rows if a < PCC_THR]
+    assert not bf16_fail, "bf16 baseline regressed (not a bf8 issue): " + ", ".join(
+        f"L{i}={a:.6f}" for i, a in bf16_fail
+    )
+
+
 if __name__ == "__main__":
+    audit = "--audit" in sys.argv or os.environ.get("HY_BF8_AUDIT") == "1"
     dev = ttnn.open_device(device_id=0)
     try:
+        if audit:
+            rows, need_bf16 = _run_dtype_audit(dev)
         results = _run(dev)
         trace, final_pcc, fd, frel = _run_chained(dev)
     finally:
         ttnn.close_device(dev)
+
+    if audit:
+        _print_audit(rows, need_bf16)
 
     failing = [(i, p) for (i, p, _, _) in results if p < PCC_THR]
     worst = min(results, key=lambda r: r[1])
