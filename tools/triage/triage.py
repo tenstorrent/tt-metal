@@ -779,6 +779,8 @@ def _patch_risc_debug() -> None:
     More info at tt-exalens:#908
     """
 
+    from ttexalens.hardware.wormhole.baby_risc_debug import WormholeBabyRiscDebug
+    from ttexalens.hardware.blackhole.baby_risc_debug import BlackholeBabyRiscDebug
     from ttexalens.hardware.baby_risc_debug import BabyRiscDebugHardware
     from triage_session import get_triage_session
 
@@ -788,6 +790,9 @@ def _patch_risc_debug() -> None:
     original_hw_cont = BabyRiscDebugHardware.cont
     original_hw_continue_without_debug = BabyRiscDebugHardware.continue_without_debug
     original_hw_halt = BabyRiscDebugHardware.halt
+    original_hw_is_halted = BabyRiscDebugHardware.is_halted
+    original_wh_is_in_reset = WormholeBabyRiscDebug.is_in_reset
+    original_bh_is_in_reset = BlackholeBabyRiscDebug.is_in_reset
 
     BabyRiscDebugHardware.cont = (
         lambda self: None if is_affected_by_cont_bug(self.risc_info.noc_block.device) else original_hw_cont(self)
@@ -797,6 +802,37 @@ def _patch_risc_debug() -> None:
         if is_affected_by_cont_bug(self.risc_info.noc_block.device)
         else original_hw_continue_without_debug(self)
     )
+
+    def patched_is_in_reset(self):
+        session = get_triage_session()
+        location = self.risc_info.noc_block.location
+        risc_name = self.risc_info.risc_name
+        reset_state = session.is_core_reset_state(location, risc_name)
+        if reset_state is not None:
+            return reset_state
+        if self.risc_info.noc_block.device.is_wormhole():
+            in_reset = original_wh_is_in_reset(self)
+        else:
+            assert self.risc_info.noc_block.device.is_blackhole()
+            in_reset = original_bh_is_in_reset(self)
+        session.save_core_reset_state(location, risc_name, in_reset)
+        return in_reset
+
+    WormholeBabyRiscDebug.is_in_reset = patched_is_in_reset
+    BlackholeBabyRiscDebug.is_in_reset = patched_is_in_reset
+
+    def patched_is_halted(self):
+        session = get_triage_session()
+        location = self.risc_info.noc_block.location
+        risc_name = self.risc_info.risc_name
+        if session.is_halted_core(location, risc_name):
+            return True
+        if original_hw_is_halted(self):
+            session.add_halted_core(location, risc_name)
+            return True
+        return False
+
+    BabyRiscDebugHardware.is_halted = patched_is_halted
 
     def patched_halt(self):
         session = get_triage_session()
@@ -815,7 +851,7 @@ def _init_ttexalens(args: ScriptArguments) -> Context:
     if args["--remote-exalens"]:
         context = init_ttexalens_remote(ip_address=args["--remote-server"], port=args["--remote-port"])
     else:
-        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"])
+        context = init_ttexalens(use_noc1=args["--initialize-with-noc1"], use_4B_mode=False)
 
     _patch_risc_debug()
     return context
