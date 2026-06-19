@@ -2,7 +2,40 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Shared resolver for centralized trace region sizes."""
+"""Shared resolver for centralized trace region sizes.
+
+This module is the single entry point for answering "how many bytes of
+``trace_region_size`` should I reserve when opening a device for model X on
+this machine?". The values live in one source of truth,
+``models/model_trace_region_sizes.yaml``, keyed by model and SKU (the
+cluster/board type, e.g. ``wh_n150``, ``wh_llmbox_perf``, ``bh_p150``).
+This replaces the per-model/per-SKU literals that demos and tests used to
+hardcode.
+
+Resolution:
+    ``resolve_trace_region_size(model_name, sku)`` matches ``model_name``
+    against each YAML entry's key or ``aliases`` (case-insensitive) and the
+    ``sku`` against its ``skus`` block (via ``normalize_sku`` so aliases like
+    ``t3k`` -> ``wh_llmbox_perf`` work), returning the configured size in bytes.
+
+Two ways callers consume it:
+    * Eager -- call ``resolve_trace_region_size`` /
+      ``resolve_demo_trace_region_size`` / ``build_trace_device_params``
+      directly when opening a device or building a ``device_params`` dict
+      (the SKU is read from the current cluster via ``get_current_device_sku_name``).
+    * Deferred (pytest) -- put ``TRACE_MODEL_KEY_PARAM: "<model-key>"`` in a
+      parametrized ``device_params`` dict; the ``device_params`` fixture calls
+      ``apply_trace_model_key`` to resolve it to ``trace_region_size`` just
+      before the device opens.
+
+Fail-loud by design: if a (model, SKU) pair is not configured, resolution
+raises ``TraceRegionSizeNotConfiguredError`` rather than falling back to a
+default. There is no implicit default size -- a value is only ever returned
+when it is explicitly present in the YAML. The one special value is ``0``
+(``TRACE_REGION_SIZE_DYNAMIC``): when a YAML entry sets it explicitly (e.g.
+``deepseek-v3``), it tells the runtime to allocate trace buffers dynamically
+instead of reserving a fixed region up front.
+"""
 
 from __future__ import annotations
 
