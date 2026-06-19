@@ -1,0 +1,135 @@
+name: LLK PR Review
+
+# On-demand AI code review for LLK pull requests.
+#
+# Anyone with write access triggers it by commenting "@llk-ai review" on a PR.
+# The job runs the /code-review skill at max effort against the PR's diff, with:
+#   * the LLK MCP servers (tt_metal/tt-llk/.mcp.json — DeepWiki, Atlassian, Glean),
+#   * the repo's own guidance (tt_metal/tt-llk/.claude/CLAUDE.md, auto-discovered
+#     from the checkout), and
+#   * the team's private review knowledge (rubric / conventions / golden / learnings),
+#     fetched at runtime from the private llk_code_gen repo and injected as an
+#     appended system prompt,
+# then posts its findings as inline review comments on the PR.
+#
+# This is a CI port of the llk_code_gen dashboard reviewer (dashboard/pr_review/).
+# Intentional differences from that bot:
+#   * Trigger is a PR comment phrase, not the llk:* label auto-gate.
+#   * Findings are posted directly. The human gate is that a person must type the
+#     trigger phrase (the dashboard bot instead stages a draft for approval).
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  # Manual trigger — the only way to test from a non-default branch. Comment
+  # events always run the workflow as defined on the DEFAULT branch, so until
+  # this file is on main, `@llk-ai review` does nothing; workflow_dispatch lets
+  # you run THIS branch's version against any open PR.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+        type: string
+
+# One review at a time per PR; a newer trigger does not kill an in-flight review.
+concurrency:
+  group: llk-pr-review-${{ github.event.inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    # Run only when the trigger phrase appears in a comment on a PR (not a plain
+    # issue). claude-code-action also honours trigger_phrase, but gating here
+    # avoids spinning up a runner for every unrelated comment.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@llk-ai review')
+      ) || (
+        github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@llk-ai review')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45          # /code-review max fans out subagents; this bounds it
+    permissions:
+      contents: read             # read the checkout
+      pull-requests: write       # post inline review comments
+      issues: write              # post acknowledgement / summary
+      id-token: write            # OIDC, if the key path requires it
+    env:
+      # PR number from whichever trigger fired (dispatch input, issue comment,
+      # or review comment).
+      PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+    steps:
+      # 1. Full checkout so /code-review can compute the merge-base diff vs main.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AI_GH_TOKEN }}
+
+      # 2. Switch to the PR's head branch (the comment event checks out the
+      #    default branch by default).
+      - name: Check out the PR branch
+        env:
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+        run: |
+          gh pr checkout "${PR_NUMBER}"
+
+      # 3. Fetch the private LLK review knowledge (rubric, conventions, golden,
+      #    learnings) from llk_code_gen. Kept OUT of the public tt-metal tree;
+      #    pulled at runtime into a scratch dir via a sparse checkout.
+      - name: Fetch private LLK review knowledge
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/llk_code_gen
+          # llk_code_gen is INTERNAL, so the existing AI_GH_TOKEN (an org-scoped
+          # token) can usually read it — no dedicated secret needed. If that token
+          # is scoped to tt-metal only and this step 404s/403s, set a dedicated
+          # LLK_KNOWLEDGE_TOKEN secret and swap the line below to use it.
+          token: ${{ secrets.AI_GH_TOKEN }}
+          path: .llk-review-knowledge-src
+          sparse-checkout: dashboard/pr_review/knowledge
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # 4. Assemble the knowledge into a single append-system-prompt file. Mirrors
+      #    reviewer.py's _write_system_prompt: a framing line, then each .md file.
+      #    (The staged-output "OUTPUT CONTRACT" from the bot is deliberately
+      #    omitted — here the review posts directly instead of writing a sentinel.)
+      - name: Assemble review system prompt
+        run: |
+          set -euo pipefail
+          src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
+          out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
+          {
+            echo "You are the LLK PR review bot. Apply the knowledge below as authoritative."
+            echo
+            for f in "$src"/*.md; do
+              [ -e "$f" ] || continue
+              echo "# === $(basename "$f") ==="
+              cat "$f"
+              echo
+            done
+          } > "$out"
+          echo "Assembled $(wc -l < "$out") lines into $out"
+
+      # 5. Run the review: /code-review at max effort, with the LLK MCP servers
+      #    and the assembled knowledge, posting findings inline via --comment.
+      - name: Run /code-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.AY_KEY }}
+          github_token: ${{ secrets.AI_GH_TOKEN }}
+          trigger_phrase: "@llk-ai review"
+          prompt: "/code-review max --comment"
+          claude_args: |
+            --model opus
+            --max-turns 60
+            --mcp-config tt_metal/tt-llk/.mcp.json
+            --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
