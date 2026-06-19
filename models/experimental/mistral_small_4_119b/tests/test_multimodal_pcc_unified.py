@@ -20,15 +20,25 @@ Run::
     export MESH_DEVICE=P150x8
     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0
 
+Pass/fail:
+  The only assertion is the overall flattened-logits PCC ≥ 0.80 (``_PCC_FLOOR``). The
+  per-position PCC and greedy-token match are logged as diagnostics only — greedy-token
+  agreement is intentionally NOT enforced: bf4/bf8 quantization makes exact argmax brittle
+  over a long sequence, while logit correlation is the robust signal.
+
 Layer / long-context sweep:
   Parametrized over (num_text_layers, num_vision_layers, max_text_tokens) with ids like
   L1V1 (light smoke) and L36V24_16384 (full model, 16K text context). max_text_tokens pads
   the prompt with coherent English filler up to that many tokens (image tokens added on top;
-  0 = prompt unchanged). Context values stay within the HF CPU reference's reach (verified up
-  to 32000 on P150x8). Pick one with `-k`, e.g. `-k L36V24_16384`. The HF reference runs in
+  0 = prompt unchanged). Pick one with `-k`, e.g. `-k L36V24_16384`. The HF reference runs in
   chunks (MISTRAL4_MM_PREFILL_CHUNK, default 2048) backed by a DynamicCache and loads the model
-  in bf16, keeping attention memory at O(chunk × past) instead of O(seq²); a large-RAM host is
-  still recommended for the full 36+24-layer cases at 32K.
+  in bf16, keeping attention memory at O(chunk × past) instead of O(seq²).
+
+  16K is the highest context that completes PCC verification. L36V24_16384 / _65536 / _131072 /
+  _262144 are marked ``@pytest.mark.slow``; beyond ~16K the chunked HF CPU reference forward
+  takes prohibitively long (a 64K run was killed after > 1 h without finishing). Chunking
+  already bounds its memory, so the bottleneck is wall-clock time, not RAM — it is the
+  verification ceiling, not a device limit.
 
     pytest models/experimental/mistral_small_4_119b/tests/test_multimodal_pcc_unified.py -v -s --timeout=0 -k L36V24_16384
 """
@@ -90,8 +100,9 @@ _IMAGE_MAX_SIDE = int(os.environ.get("MISTRAL4_MM_IMAGE_MAX_SIDE", "224"))
 _IMG_PATCHES = int(os.environ.get("MISTRAL4_MM_IMG_PATCHES", "10"))
 # (num_text_layers, num_vision_layers, max_text_tokens) sweep. max_text_tokens pads the text
 # prompt with coherent English filler up to that many tokens (0 = prompt unchanged; image
-# tokens are added on top). Context values stay within the HF CPU reference's reach (verified
-# up to 32000 on P150x8); select one with `-k`, e.g. `-k L36V24_16384`.
+# tokens are added on top). 16K is the highest context that completes PCC verification; larger
+# points are marked @pytest.mark.slow (beyond ~16K the chunked HF CPU reference forward is the
+# wall-clock ceiling). Select one with `-k`, e.g. `-k L36V24_16384`.
 # Chunk size for the HF reference prefill. Chunking with a DynamicCache keeps attention
 # memory at O(chunk × past) instead of O(seq²), so long contexts fit on a CPU host.
 _PREFILL_CHUNK = int(os.environ.get("MISTRAL4_MM_PREFILL_CHUNK", "2048"))
@@ -387,6 +398,10 @@ def test_mistral_small_4_multimodal_pcc_unified(
     hf_model = _build_hf_mm_ref(cfg, state_dict, num_text_layers, num_vision_layers)
     _log_memory_usage("after HF build, before forward")
 
+    # Chunking bounds the HF reference's memory, so genuine OOM is rare. Beyond ~16K the real
+    # blocker is wall-clock time — the CPU forward runs for hours, which no `except` can catch
+    # (those points are gated @pytest.mark.slow). The handler below only adds guidance for the
+    # true-OOM case (smaller chunk / fewer layers / more RAM) before re-raising.
     logger.info(f"Running HF reference forward in chunks of {_PREFILL_CHUNK} tokens…")
     try:
         ref_logits = _chunked_hf_forward(hf_model, pixel_values, input_ids, image_sizes, _PREFILL_CHUNK)
@@ -463,6 +478,10 @@ def test_mistral_small_4_multimodal_pcc_unified(
     logger.info(f"  HF   tokens: {ref_tokens}")
     logger.info(f"  TTNN tokens: {tt_tokens}")
 
+    # Pass/fail gate: flattened-logits PCC ≥ _PCC_FLOOR is the ONLY assertion. The per-position
+    # PCC and greedy-token match logged above are diagnostics only — greedy agreement is
+    # intentionally not enforced (bf4/bf8 quant makes exact argmax brittle; logit correlation
+    # is the robust signal).
     passing, overall_msg = comp_pcc(ref_logits.flatten(), tt_logits.flatten(), _PCC_FLOOR)
     logger.info(f"Overall flattened logits PCC: {overall_msg}")
     assert passing, (

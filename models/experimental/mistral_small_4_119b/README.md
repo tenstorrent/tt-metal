@@ -48,6 +48,12 @@ export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ```
 
+**Dependencies:** Mistral-4 support is not in a released `transformers` yet — install from source (the `mistral4` / `mistral3` / `pixtral` modeling files the model imports come from this):
+
+```bash
+uv pip install git+https://github.com/huggingface/transformers.git
+```
+
 The model is gated on Hugging Face — request access on the model page, then authenticate so weights download on first run:
 
 ```bash
@@ -118,12 +124,14 @@ MISTRAL4_MM_PCC=1      pytest models/experimental/mistral_small_4_119b/tests/tes
 
 | Test | Layers | PCC | Notes |
 |------|-------:|----:|-------|
-| Text prefill (vs HF) | 36 | **0.944** | overall flattened; mean per-position 0.920; pos 0 = 0.758 (degenerate causal context), pos 1–4 ≥ 0.951; greedy token match 4/5 |
-| Text decode (vs HF) | 36 | **0.967** | decode logits vs HF reference at pos 4; greedy token matches |
-| Text decode (self-consistency) | 36 | **0.998** | decode-vs-prefill logits at pos 4 — validates the decode path reads/uses the KV cache that prefill wrote |
-| Unified multimodal (vs HF) | 36 + 24 | **~0.855** | full vision → projector → language path (consistent with aggressive `bfloat4_b`/`bfloat8_b` weight quantization); PCC ≈ 0.839 / 0.846 / 0.850 at 4K / 8K / 16K context |
+| Text prefill (vs HF) | 36 | **0.933** | overall flattened; mean per-position 0.911; pos 0 = 0.717 (degenerate causal context), pos 1–4 ≥ 0.949; greedy token match 4/5 (only pos 0 differs) |
+| Text decode (vs HF) | 36 | **0.961** | decode logits vs HF reference at pos 4; greedy token matches (HF = prefill = decode = `6993`) |
+| Text decode (self-consistency) | 36 | **0.992** | decode-vs-prefill logits at pos 4 — validates the decode path reads/uses the KV cache that prefill wrote |
+| Unified multimodal (vs HF) | 36 + 24 | **~0.855** | full vision → projector → language path (consistent with aggressive `bfloat4_b`/`bfloat8_b` weight quantization); PCC ≈ 0.839 / 0.842 at 4K / 16K context (**16K is the highest verified** — see below) |
 
-The decode test runs **two** checks: decode-vs-HF (ground truth, 0.967) and decode-vs-prefill self-consistency (0.998). The self-consistency check isolates the decode path itself — in bfloat16, TTNN matmul kernels are shape-specific, so a 1-token decode kernel produces slightly different K/V at a position than the seq-len prefill kernel; the self-consistency PCC is free of that effect, while the HF PCC (floor 0.90, measured 0.967) folds it in on top of quantization loss.
+The decode test runs **two** checks: decode-vs-HF (ground truth, 0.961) and decode-vs-prefill self-consistency (0.992). The self-consistency check isolates the decode path itself — in bfloat16, TTNN matmul kernels are shape-specific, so a 1-token decode kernel produces slightly different K/V at a position than the seq-len prefill kernel; the self-consistency PCC is free of that effect, while the HF PCC (floor 0.90, measured 0.961) folds it in on top of quantization loss.
+
+`test_multimodal_pcc_unified.py` loads vision (bf8) + text (bf16) co-resident on device, runs `encode_image` → `prefill_multimodal_full_logits`, and compares per-position + flattened logits against a chunked HF Torch reference (`MISTRAL4_MM_PREFILL_CHUNK`, default 2048; DynamicCache keeps attention memory at O(chunk × past)). It is parametrized over `(num_text_layers, num_vision_layers, max_text_tokens)` — ids `L1V1`, `L36V24`, `L36V24_4096`, `L36V24_16384`, `L36V24_65536`, `L36V24_131072`, `L36V24_262144` — selected with `-k` (e.g. `-k L36V24_16384`); `max_text_tokens` pads the prompt with coherent English filler up to that count (image tokens on top). The pass/fail gate is flattened-logits PCC ≥ 0.80; greedy token match is logged for diagnostics only. **16K context is the highest that completes verification** — `L36V24_65536` and larger are kept (marked `@pytest.mark.slow`) as a safeguard but in practice do not finish on a CPU host: a 64K run was killed after **> 1 h without completing**, bottlenecked on the chunked HF reference forward. On-device prefill/decode scale further (see the perf table) but are not PCC-verified past 16K.
 
 **Smoke / plumbing (no PCC, fast):**
 
@@ -169,19 +177,23 @@ tt-perf-report generated/profiler/mistral_small_4_119b_L1_prefill_decode/reports
     --start-signpost start --end-signpost stop
 ```
 
-**Measured end-to-end performance (BH Loudbox / P150×8, full 36 text + 24 vision layers, 2CQ traced decode, 32 decode iters):**
+**Measured end-to-end performance (BH Loudbox / P150×8, 1×8 mesh, full 36 text + 24 vision layers, 2CQ traced decode):**
 
-| Context | Prompt tokens | TTFT (ms) | Prefill tok/s | Steady-state tok/s/user | End-to-end tok/s/user |
-|---------|--------------:|----------:|--------------:|------------------------:|----------------------:|
-| 128 | 128 (25 image) | 614.5 | 230.1 | 17.62 | 6.30 |
-| 4K | 4000 (25 image) | 6078.0 | 663.9 | 13.74 | 2.36 |
-| 8K | 8092 (25 image) | 13168.9 | 616.8 | 11.21 | 1.68 |
-| 16K | 16384 (25 image) | 24339.7 | 674.6 | 8.04 | 0.95 |
+| ISL (tokens) | TTFT (ms) | Prefill tok/s | Decode tok/s/user |
+|-------------:|----------:|--------------:|------------------:|
+| 128 | 475.8 | 301.5 | 16.99 |
+| 4096 | 3,392.5 | 1,225.5 | 16.32 |
+| 16384 | 12,609.6 | 1,305.2 | 15.59 |
+| 65536 | 93,708.9 | 699.8 | 13.32 |
+| 131072 | 312,653.4 (5.2 min) | 419.3 | 11.27 |
+| 262144 | 1,218,595.8 (20.3 min) | 215.1 | 8.50 |
 
+All rows: L36V24, 25 image tokens in the prompt.
+
+- **ISL** — input sequence length (prompt tokens, including the 25 image tokens)
 - **TTFT** — vision replay + one prefill replay (time to first decode logits)
 - **Prefill tok/s** — `prompt_len / prefill_trace_replay_time` (compile pass excluded)
-- **Steady-state tok/s/user** — `decode_iters / decode_trace_replay_total` (compile + capture excluded)
-- **End-to-end tok/s/user** — `decode_iters / (vision + prefill + decode compile + capture + all replays)`
+- **Decode tok/s/user** — steady-state decode: `decode_iters / decode_trace_replay_total` (compile + capture excluded)
 
 ## Directory layout
 

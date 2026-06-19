@@ -671,7 +671,6 @@ class TtMistral4MoELayer(LightweightModule):
                        chunk size) — their routing is rebalanced round-robin so they don't all
                        hit one device's experts and starve the combine. Defaults to all rows real.
         """
-        md = self.mesh_device
         D = self.num_devices
         H = HIDDEN_SIZE
         I = EXPERT_INTERMEDIATE_SIZE
@@ -758,11 +757,6 @@ class TtMistral4MoELayer(LightweightModule):
         # and reused (moe_compute overwrites it). Reuse — rather than a per-call alloc —
         # is what makes the decode step trace-capturable.
         combine_out = self._combine_out_buffer(k, S, H)
-        if os.environ.get("MISTRAL4_MOE_DEBUG") == "1":
-            try:
-                ttnn.dump_device_memory_state(self.mesh_device, prefix="moedbg_")
-            except Exception as _e:
-                print(f"[MOEDBG] dump failed: {_e}", flush=True)
         outputs = ttnn.experimental.moe_compute(
             sparse_buf,
             idx_full,

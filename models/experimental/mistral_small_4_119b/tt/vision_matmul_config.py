@@ -40,55 +40,6 @@ class VisionMatmulPreset:
     out_memory_config: ttnn.MemoryConfig
 
 
-def _pick_in0_block_w(k: int, grid: tuple[int, int], width_sharded_in0: bool) -> int:
-    """Largest block_w dividing K tiles and (when width-sharded) per-shard K tiles."""
-    k_tiles = k // TILE
-    divisors = (8, 4, 2, 1)
-    if width_sharded_in0:
-        k_tiles_per_shard = max(1, k_tiles // (grid[0] * grid[1]))
-        for cand in divisors:
-            if k_tiles % cand == 0 and k_tiles_per_shard % cand == 0:
-                return cand
-        return 1
-    for cand in divisors:
-        if k_tiles % cand == 0:
-            return cand
-    return 1
-
-
-def choose_strategy(shape: MatmulShape) -> dict:
-    mt = shape.M // TILE
-    nt = shape.N // TILE
-
-    if mt <= 4:
-        if shape.K >= 4096:
-            return {
-                "family": "1D",
-                "layout": "ws/dram/ws",
-                "grid": (8, 4),
-                "in0_block_w": 8,  # refined in build_vision_matmul_preset for shard grid
-                "per_core_M": mt,
-                "per_core_N": max(1, nt // 32),
-            }
-        return {
-            "family": "1D",
-            "layout": "l1/dram/ws",
-            "grid": (8, 4),
-            "in0_block_w": 4,
-            "per_core_M": mt,
-            "per_core_N": max(1, nt // 32),
-        }
-
-    return {
-        "family": "2D",
-        "layout": "bs/dram/bs",
-        "grid": (8, 4),
-        "in0_block_w": 8,
-        "per_core_M": mt // 4,
-        "per_core_N": nt // 8,
-    }
-
-
 def create_memory_configs(
     shape: MatmulShape, cfg: dict
 ) -> tuple[ttnn.MemoryConfig, ttnn.MemoryConfig, ttnn.MemoryConfig]:
@@ -167,29 +118,6 @@ def create_program_config(cfg: dict, fused_activation=None):
         out_subblock_w=out_subblock_w,
         transpose_mcast=False,
         fused_activation=fused_activation,
-    )
-
-
-def _resolve_grid(mesh_device: ttnn.MeshDevice, cfg: dict) -> tuple[int, int]:
-    dev = mesh_device.compute_with_storage_grid_size()
-    return (min(dev.x, cfg["grid"][0]), min(dev.y, cfg["grid"][1]))
-
-
-def build_vision_matmul_preset(mesh_device: ttnn.MeshDevice, m: int, k: int, n: int) -> VisionMatmulPreset:
-    shape = MatmulShape(m, k, n)
-    cfg = choose_strategy(shape)
-    gx, gy = _resolve_grid(mesh_device, cfg)
-    grid = (gx, gy)
-    cfg = {**cfg, "grid": grid}
-    if cfg["layout"].startswith("ws"):
-        cfg["in0_block_w"] = _pick_in0_block_w(k, grid, is_ws_in0=True)
-    in0_mem, in1_mem, out_mem = create_memory_configs(shape, cfg)
-    return VisionMatmulPreset(
-        shape=shape,
-        program_config=create_program_config(cfg),
-        in0_memory_config=in0_mem,
-        in1_memory_config=in1_mem,
-        out_memory_config=out_mem,
     )
 
 
