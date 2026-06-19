@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import torch
 import tqdm
@@ -190,7 +190,12 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         ]
         self.synchronize_devices()
 
-        self._tracers = [Tracer(self._traced_step, device=submesh, prep_run=False) for submesh in self.submesh_devices]
+        # A single multi-device tracer executes the per-submesh transformer traces concurrently
+        # (non-blocking enqueue on every submesh, then one synchronize). With cfg_parallel.factor=2
+        # this runs the uncond/cond forward passes in parallel on their respective submeshes; using
+        # one single-device tracer per submesh would serialize them (each call blocks until its
+        # submesh finishes), roughly doubling the denoising time.
+        self._tracer = Tracer(self._traced_step, devices=self.submesh_devices, prep_run=False)
         self._scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(checkpoint_name, subfolder="scheduler")
         self._solvers = [EulerSolver() for _ in self.submesh_devices]
 
@@ -309,29 +314,35 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
         for i, t in enumerate(tqdm.tqdm(timesteps)):
             on_event(SectionStart(f"denoising_step_{i}"))
 
-            for idx, (device, tracer) in enumerate(zip(self.submesh_devices, self._tracers, strict=True)):
-                timestep = ttnn.full(
+            timesteps_tt = [
+                ttnn.full(
                     [1, 1, 1, 1],
                     fill_value=t,
                     layout=ttnn.TILE_LAYOUT,
                     dtype=ttnn.float32,
                     device=device,
                 )
+                for device in self.submesh_devices
+            ]
 
-                velocity_pred = tracer(
-                    cfg_enabled=self._cfg_enabled,
-                    submesh_idx=idx,
-                    latents=latents[idx],
-                    prompt_embed=context[idx] if i == 0 else tracer.inputs["prompt_embed"],
-                    pooled_projections=pooled[idx] if i == 0 else tracer.inputs["pooled_projections"],
-                    timestep=timestep,
-                    N=latents_sequence_length,
-                    traced=traced,
-                )
+            # One call runs the transformer on every submesh concurrently and returns one
+            # velocity prediction per submesh.
+            velocity_preds = self._tracer(
+                cfg_enabled=self._cfg_enabled,
+                latents=latents,
+                prompt_embed=context if i == 0 else self._tracer.inputs["prompt_embed"],
+                pooled_projections=pooled if i == 0 else self._tracer.inputs["pooled_projections"],
+                timestep=timesteps_tt,
+                N=latents_sequence_length,
+                traced=traced,
+            )
 
-                # latents can be overwritten by trace execution, use the captured input instead,
-                # which is safe.
-                latents[idx] = tracer.inputs["latents"]
+            # latents can be overwritten by trace execution, use the captured inputs instead,
+            # which are safe.
+            latents = list(self._tracer.inputs["latents"])
+
+            for idx in range(len(self.submesh_devices)):
+                velocity_pred = velocity_preds[idx]
 
                 if self._cfg_enabled:
                     velocity_pred = self._cfg_combiner.combine(velocity_pred, guidance_scale)
@@ -350,11 +361,35 @@ class StableDiffusion3Pipeline(PipelineAPIMixin):
 
         return output
 
-    def _traced_step(self, *, cfg_enabled: bool, submesh_idx: int, latents: ttnn.Tensor, **kwargs: Any) -> ttnn.Tensor:
-        if cfg_enabled and not self.dit_parallel_config.cfg_parallel.factor > 1:
-            latents = ttnn.concat([latents, latents])
+    def _traced_step(
+        self,
+        *,
+        cfg_enabled: bool,
+        latents: list[ttnn.Tensor],
+        prompt_embed: list[ttnn.Tensor],
+        pooled_projections: list[ttnn.Tensor],
+        timestep: list[ttnn.Tensor],
+        N: int,
+    ) -> list[ttnn.Tensor]:
+        # Issue the transformer forward on each submesh. The enclosing multi-device Tracer captures
+        # these into per-submesh traces and replays them concurrently.
+        velocity_preds = []
+        for idx in range(len(self.submesh_devices)):
+            spatial = latents[idx]
+            if cfg_enabled and not self.dit_parallel_config.cfg_parallel.factor > 1:
+                spatial = ttnn.concat([spatial, spatial])
 
-        return self.transformers[submesh_idx](spatial=latents, **kwargs)
+            velocity_preds.append(
+                self.transformers[idx](
+                    spatial=spatial,
+                    prompt_embed=prompt_embed[idx],
+                    pooled_projections=pooled_projections[idx],
+                    timestep=timestep[idx],
+                    N=N,
+                )
+            )
+
+        return velocity_preds
 
     def _random_latents(self, *, batch_size: int, dtype: torch.dtype, seed: int) -> list[ttnn.Tensor]:
         torch.manual_seed(seed)
