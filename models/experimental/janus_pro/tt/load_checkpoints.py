@@ -2,14 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""
-Checkpoint key conversion for Janus Pro (deepseek-community/Janus-Pro-7B).
-
-Mirrors the Gemma3 vision conversion, but Janus stores its vision tower under
-``model.vision_model.*`` (Gemma3 uses ``model.vision_tower.vision_model.*``), so
-the submodel split is keyed on the Janus prefixes.
-"""
-
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_qkv_to_meta_format,
     map_hf_to_meta_keys,
