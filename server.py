@@ -211,7 +211,13 @@ class DenoiseRequest(BaseModel):
     seed: Optional[int] = None
     # LoRA passthrough (mirrors tt-media-server image request fields)
     lora_path: Optional[str] = None
+    # Legacy single scale — kept as backward-compat fallback. Per-component fields
+    # below take precedence when present (split values always win).
     lora_scale: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    # Per-component scales mirroring ComfyUI LoraLoader (strength_model / strength_clip).
+    # lora_scale_clip=0.0 skips text-encoder fusion entirely.
+    lora_scale_unet: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    lora_scale_clip: Optional[float] = Field(default=None, ge=0.0, le=2.0)
 
 
 class TensorResponse(BaseModel):
@@ -254,6 +260,9 @@ class VideoDenoiseRequest(BaseModel):
     high_lora_path: Optional[str] = None
     low_lora_path: Optional[str] = None
     lora_scale: Optional[float] = Field(default=None, ge=0.0, le=2.0)
+    # No-op: accepted for API consistency with DenoiseRequest; WAN uses per-expert
+    # scale, not a UNet/CLIP split.
+    lora_scale_clip: Optional[float] = Field(default=None, ge=0.0, le=2.0)
 
 
 class VideoVaeDecodeRequest(BaseModel):

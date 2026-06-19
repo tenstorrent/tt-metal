@@ -128,10 +128,12 @@ class WanRunner:
         low = request.get("low_lora_path") or None
         scale = request.get("lora_scale")
         scale = float(scale) if scale is not None else 1.0
+        self.logger.info(f"_apply_request_lora: high={high!r}, low={low!r}, scale={scale}")
 
-        if not high and not low:
+        if (not high and not low) or scale == 0.0:
             if self._active_lora_key is not None:
-                self.logger.info("Clearing active LoRA (request has no adapter)")
+                reason = "lora_scale=0.0" if scale == 0.0 else "request has no adapter"
+                self.logger.info(f"Clearing active LoRA ({reason})")
                 self.pipeline.set_active_lora(None)
                 self._active_lora_key = None
             return

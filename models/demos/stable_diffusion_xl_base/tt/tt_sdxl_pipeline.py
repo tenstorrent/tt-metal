@@ -195,12 +195,20 @@ class TtSDXLPipeline(LightweightModule):
         )
         return shape
 
-    def fuse_lora(self, lora_scale=1.0):
+    def fuse_lora(self, lora_scale_unet=1.0, lora_scale_clip=None, lora_scale=None):
+        # Backward compat: a single lora_scale (positional or keyword) applies to both.
+        if lora_scale is not None:
+            lora_scale_unet = lora_scale
+            if lora_scale_clip is None:
+                lora_scale_clip = lora_scale
+        if lora_scale_clip is None:
+            lora_scale_clip = lora_scale_unet
+
         if self._lora_weights_manager.has_lora_adapter():
-            logger.info("Fusing LoRA weights on TT device...")
+            logger.info(f"Fusing UNet LoRA weights on TT device (scale={lora_scale_unet})...")
             with ttnn.distribute(ttnn.ReplicateTensorToMesh(self.ttnn_device)):
-                self._lora_weights_manager.fuse_lora(lora_scale=lora_scale)
-        self._fuse_text_encoder_lora(lora_scale)
+                self._lora_weights_manager.fuse_lora(lora_scale=lora_scale_unet)
+        self._fuse_text_encoder_lora(lora_scale_clip)
 
     def load_lora_weights(self, lora_path):
         # Snapshot clean text-encoder weights before the first adapter is loaded
@@ -247,6 +255,12 @@ class TtSDXLPipeline(LightweightModule):
     def _fuse_text_encoder_lora(self, lora_scale):
         components = self._lora_weights_manager.text_encoder_components()
         if not components:
+            return
+        # scale=0.0 means "do not apply to CLIP" — skip the host fuse + device
+        # reload entirely rather than fusing a zero delta (saves a full TE reload).
+        # _te_lora_fused stays False, so get_lora_status reports text_encoder: false.
+        if lora_scale == 0.0:
+            logger.info("CLIP LoRA scale is 0.0 — skipping text-encoder fusion.")
             return
         if not self.pipeline_config.encoders_on_device:
             logger.warning("Text-encoder LoRA present but encoders run on host; TE LoRA not applied.")

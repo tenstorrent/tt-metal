@@ -33,7 +33,7 @@ class SDXLRunner:
         self.ttnn_device = None
         self.pipeline = None
         self.tt_sdxl = None
-        # Currently fused LoRA, tracked as (lora_path, lora_scale). None = base
+        # Currently fused LoRA, tracked as (lora_path, scale_unet, scale_clip). None = base
         # weights. Lets repeated requests with the same adapter skip the
         # unload/reload/fuse cycle.
         self._current_lora = None
@@ -257,8 +257,16 @@ class SDXLRunner:
         ``lora_path`` restores base weights.
         """
         lora_path = (request.get("lora_path") or "").strip()
-        scale = request.get("lora_scale")
-        scale = float(scale) if scale is not None else 1.0
+
+        # Resolve per-component scales. Split values always win; each falls back
+        # to the legacy single lora_scale; absent everything defaults to 1.0.
+        # is not None checks are intentional — 0.0 is a valid "skip this component" value.
+        legacy_raw = request.get("lora_scale")
+        legacy = float(legacy_raw) if legacy_raw is not None else 1.0
+        su = request.get("lora_scale_unet")
+        sc = request.get("lora_scale_clip")
+        scale_unet = float(su) if su is not None else legacy
+        scale_clip = float(sc) if sc is not None else legacy
 
         if not lora_path:
             if self._current_lora is not None:
@@ -268,7 +276,7 @@ class SDXLRunner:
             self._last_lora_status = None
             return
 
-        key = (lora_path, scale)
+        key = (lora_path, scale_unet, scale_clip)
         if key == self._current_lora:
             return  # already fused on device; keep the existing status
 
@@ -278,15 +286,19 @@ class SDXLRunner:
             self.tt_sdxl.unload_lora_weights()
             self._current_lora = None
 
-        self.logger.info(f"Loading LoRA lora_path={lora_path!r}, lora_scale={scale}")
+        self.logger.info(
+            f"Loading LoRA lora_path={lora_path!r}, " f"lora_scale_unet={scale_unet}, lora_scale_clip={scale_clip}"
+        )
         self.tt_sdxl.load_lora_weights(lora_path)
-        self.tt_sdxl.fuse_lora(lora_scale=scale)
+        self.tt_sdxl.fuse_lora(lora_scale_unet=scale_unet, lora_scale_clip=scale_clip)
 
         status = self.tt_sdxl.get_lora_status()
         applied = bool(status.get("unet") or status.get("text_encoder"))
         self._last_lora_status = {
             "requested": lora_path,
-            "scale": scale,
+            "scale_unet": scale_unet,
+            "scale_clip": scale_clip,
+            "scale": scale_unet,  # deprecated alias — kept for one release
             "applied": applied,
             "unet": bool(status.get("unet")),
             "text_encoder": bool(status.get("text_encoder")),
