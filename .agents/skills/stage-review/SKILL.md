@@ -147,6 +147,18 @@ For optimization stages, also inspect:
 - evidence for rejected optimizations or "already optimal" claims;
 - whether performance claims compare like with like.
 
+For datatype-sweep stages, also inspect:
+
+- the candidate matrix, not only the selected config;
+- whether recorded dtype and compute-fidelity fields are actually consumed by
+  the measured runtime path, using model summaries, propagation checks, or
+  profiler/perf-report rows rather than JSON alone;
+- whether every material BFP4 matmul group considered or selected has a
+  BFP4+LoFi candidate, or an exact TTNN/runtime blocker plus `$autofix`
+  evidence;
+- whether a "fastest evaluated config" claim is only true because an obvious
+  legal precision/fidelity candidate was missing.
+
 ## Anomaly Rule
 
 Any anomaly the stage agent noticed or that the reviewer sees must be classified
