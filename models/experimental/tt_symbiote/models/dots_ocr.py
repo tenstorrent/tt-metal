@@ -101,21 +101,32 @@ def _deep_sync_profile_enabled() -> bool:
     return os.environ.get("DOTS_OCR_PROFILE_DECODE_GRAPH", "").lower() in {"1", "true", "yes", "on"}
 
 
-def _decode_tp_scheme_from_env() -> str:
+def _decode_tp_scheme_from_env(device=None) -> str:
     """Tensor-parallel decode scheme for full dots.ocr pipeline construction.
 
-    ``col_parallel`` is the default fast TP4 decode path. Set
-    ``DOTS_OCR_TP_DECODE_SCHEME=row`` explicitly to compare the older
-    row-parallel path.
+    Default is ``col_parallel`` (the proven TP4 / multimodal OCR path). The
+    Devstral-style ``head_parallel`` fast path (N-parallel head-local QKV, local
+    SDPA/cache, row-parallel reduce_scatter o_proj) remains available via
+    ``DOTS_OCR_TP_DECODE_SCHEME=head_parallel`` but corrupts multimodal OCR when
+    paired with the default ``symbiote`` prefill body; use ``tp4_prefill`` if
+    experimenting with head_parallel.
+    Set ``DOTS_OCR_TP_DECODE_SCHEME`` to one of {``row``, ``col_parallel``,
+    ``head_parallel``} to override.
     """
-    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME", "col_parallel").strip()
-    if scheme not in {"row", "col_parallel"}:
-        raise ValueError("DOTS_OCR_TP_DECODE_SCHEME must be one of {'row', 'col_parallel'}, " f"got {scheme!r}")
+    scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME")
+    if scheme is not None:
+        scheme = scheme.strip()
+    else:
+        scheme = "col_parallel"
+    if scheme not in {"row", "col_parallel", "head_parallel"}:
+        raise ValueError(
+            "DOTS_OCR_TP_DECODE_SCHEME must be one of {'row', 'col_parallel', 'head_parallel'}, " f"got {scheme!r}"
+        )
     return scheme
 
 
 def _default_text_body(device) -> str:
-    if is_wormhole_b0() and _tp_degree(device) == 4:
+    if is_wormhole_b0() and _tp_degree(device) in {2, 4}:
         return "tp4_prefill"
     return "symbiote"
 
@@ -685,8 +696,15 @@ class PipelineConfig:
 # ---------------------------------------------------------------------------
 
 
-def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
+def _create_paged_kv_cache(model_config, device, batch_size: int = 1, num_kv_heads: int = None):
     """Create a paged attention KV cache for dots.ocr.
+
+    ``num_kv_heads`` overrides ``model_config.num_key_value_heads`` -- the
+    head-parallel decode scheme stores only this device's LOCAL KV heads
+    (``num_key_value_heads // TP`` = 1 at TP=2), so the per-device cache buffer
+    is allocated for the local head count. ``ttnn.zeros`` replicates the buffer
+    shape across the mesh; each device then writes/reads its own KV head
+    independently (head 0 on device 0, head 1 on device 1).
 
     Cache dtype is left at default ``bfloat16``. ``bfloat8_b`` was tried
     twice in isolation -- both runs produced visibly corrupted text
@@ -712,7 +730,7 @@ def _create_paged_kv_cache(model_config, device, batch_size: int = 1):
     )
     return TTNNPagedAttentionKVCache(
         num_layers=model_config.num_hidden_layers,
-        num_kv_heads=model_config.num_key_value_heads,
+        num_kv_heads=num_kv_heads if num_kv_heads is not None else model_config.num_key_value_heads,
         head_dim=head_dim,
         config=config,
         device=None,
@@ -958,7 +976,17 @@ class TTNNDotsOCRPipeline(TTNNModule):
         vision_tower.override_children_module_names()
 
         text_body = _text_body_from_env(device)
-        tp_decode_scheme = _decode_tp_scheme_from_env()
+        tp_decode_scheme = _decode_tp_scheme_from_env(device)
+        if tp_decode_scheme == "head_parallel":
+            _tp = _tp_degree(device)
+            _n_q = hf_model.config.num_attention_heads
+            _n_kv = hf_model.config.num_key_value_heads
+            if _tp <= 1 or (_n_q % _tp) != 0 or (_n_kv % _tp) != 0:
+                raise ValueError(
+                    f"head_parallel decode needs num_attention_heads ({_n_q}) and num_key_value_heads "
+                    f"({_n_kv}) both divisible by TP degree ({_tp}); use "
+                    f"DOTS_OCR_TP_DECODE_SCHEME=col_parallel for this mesh"
+                )
 
         def _build_symbiote_stack(norm_name: str = "model.norm"):
             decoder_layers = []
@@ -977,7 +1005,11 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 decoder_layers.append(layer)
             stack = TTNNDotsOCRLayerStack(decoder_layers)
             stack._unique_name = "model.layer_stack"
-            norm_cls = TTNNDotsOCRLocalShardRMSNorm if tp_decode_scheme == "col_parallel" else TTNNDistributedRMSNorm
+            norm_cls = (
+                TTNNDotsOCRLocalShardRMSNorm
+                if tp_decode_scheme in {"col_parallel", "head_parallel"}
+                else TTNNDistributedRMSNorm
+            )
             norm = norm_cls.from_torch(hf_model.model.norm)
             norm._unique_name = norm_name
             return stack, norm
@@ -1081,7 +1113,12 @@ class TTNNDotsOCRPipeline(TTNNModule):
             decode_paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
             paged_cache = _TP4PrefillDecodeCacheAdapter(decode_paged_cache, device)
         else:
-            paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
+            # head_parallel stores only this device's LOCAL KV heads (1 at TP=2);
+            # col_parallel / row store the full replicated KV-head set.
+            cache_kv_heads = hf_model.config.num_key_value_heads
+            if tp_decode_scheme == "head_parallel":
+                cache_kv_heads = hf_model.config.num_key_value_heads // _tp_degree(device)
+            paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size, num_kv_heads=cache_kv_heads)
 
         # Pipeline config (before graphs)
         eos_token_ids = [151643, 151673]

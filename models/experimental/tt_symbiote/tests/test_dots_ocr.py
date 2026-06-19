@@ -47,6 +47,10 @@ DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP = {
     "T3K": (2, 4),
 }
 
+DOTS_OCR_DP2_TP2_MESH_DEVICE_MAP = {
+    "T3K": (2, 2),
+}
+
 DOTS_OCR_LAYOUT_PROMPT = "output all the text present in the image"
 
 
@@ -75,6 +79,14 @@ def _resolve_mesh_device_shape():
         shape = _mesh_device_map_get(DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP, mesh_device)
         if shape is None:
             raise ValueError("DOTS_OCR_PARALLELISM=DP2_TP4 is only supported for MESH_DEVICE=T3K")
+        return shape
+    if parallelism == "DP2_TP2":
+        # DP=2, TP=2 on T3K -> (2, 2) = 4 devices. TP axis (last dim) = 2 makes
+        # ``_tp_degree`` = 2; defaults match DP2_TP4 (``tp4_prefill`` prefill body
+        # + ``col_parallel`` decode) for multimodal OCR quality.
+        shape = _mesh_device_map_get(DOTS_OCR_DP2_TP2_MESH_DEVICE_MAP, mesh_device)
+        if shape is None:
+            raise ValueError("DOTS_OCR_PARALLELISM=DP2_TP2 is only supported for MESH_DEVICE=T3K")
         return shape
     if parallelism == "DP":
         return _mesh_device_map_get(
@@ -500,16 +512,25 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device, tp_decode_scheme):
     layer.move_weights_to_device()
 
     model_config.num_hidden_layers = max(target_layer_idx + 1, 28)
-    paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
+    # head_parallel stores only this device's LOCAL KV heads (num_key_value_heads
+    # // TP = 1 at TP=2); row / col_parallel store the full replicated KV-head set.
+    _tp_last = int(mesh_device.shape[-1]) if (hasattr(mesh_device, "shape") and list(mesh_device.shape)) else 1
+    cache_kv_heads = (
+        model_config.num_key_value_heads // _tp_last
+        if tp_decode_scheme == "head_parallel"
+        else model_config.num_key_value_heads
+    )
+    paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1, num_kv_heads=cache_kv_heads)
 
     hidden_states_torch = torch.randn(1, 1, model_config.hidden_size, dtype=torch.bfloat16)
     num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
     is_tp_mesh = num_devices > 1 and hasattr(mesh_device, "shape") and list(mesh_device.shape)[-1] > 1
-    # Both ``row`` and ``col_parallel`` keep the decode hidden/residual
-    # TP-sharded end to end. ``col_parallel`` uses the model's RMSNorm mode
-    # default (full_multicore unless explicitly overridden), so both shard the
-    # stack input along hidden on a TP mesh and concat (dim=-1) for PCC.
-    uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel")
+    # ``row``, ``col_parallel`` and ``head_parallel`` all keep the decode
+    # hidden/residual TP-sharded end to end (head_parallel's row-parallel
+    # reduce_scatter o_proj returns the same hidden/TP shard as col_parallel's
+    # N-sharded o_proj). So all three shard the stack input along hidden on a TP
+    # mesh and concat (dim=-1) for PCC.
+    uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel", "head_parallel")
     if uses_tp_shard:
         input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
     else:
@@ -1239,14 +1260,21 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device, tp_decode_schem
     decoder_stack.preprocess_weights()
     decoder_stack.move_weights_to_device()
 
-    paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1)
     num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
     is_tp_mesh = num_devices > 1 and hasattr(mesh_device, "shape") and list(mesh_device.shape)[-1] > 1
-    # Both ``row`` and ``col_parallel`` now keep the decode hidden/residual
-    # TP-sharded end to end (distributed TP4 RMSNorm + N-dim matmuls), so both
-    # shard the stack input along hidden on a TP mesh and concat (dim=-1) the
-    # sharded output back for PCC.
-    uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel")
+    # head_parallel stores only this device's LOCAL KV heads (= num_kv // TP);
+    # row / col_parallel store the full replicated KV-head set.
+    _tp_last = int(mesh_device.shape[-1]) if (hasattr(mesh_device, "shape") and list(mesh_device.shape)) else 1
+    cache_kv_heads = (
+        model_config.num_key_value_heads // _tp_last
+        if tp_decode_scheme == "head_parallel"
+        else model_config.num_key_value_heads
+    )
+    paged_cache = _create_paged_kv_cache(model_config, mesh_device, batch_size=1, num_kv_heads=cache_kv_heads)
+    # ``row``, ``col_parallel`` and ``head_parallel`` all keep the decode
+    # hidden/residual TP-sharded end to end, so all three shard the stack input
+    # along hidden on a TP mesh and concat (dim=-1) the sharded output for PCC.
+    uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel", "head_parallel")
     if uses_tp_shard:
         input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
     else:

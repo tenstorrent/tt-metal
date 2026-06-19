@@ -355,9 +355,25 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             )
             new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=False)
             new_layer.mlp_prefill = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
+        elif tp_decode_scheme == "head_parallel":
+            # Devstral-style HEAD-PARALLEL decode (TP=2, KV heads divide TP). The
+            # attention block runs N-parallel head-local QKV (no reassembly
+            # gather), head-local SDPA/cache, and a row-parallel reduce_scatter
+            # o_proj that returns the hidden/TP shard. That output contract is
+            # IDENTICAL to col_parallel (hidden-sharded residual), so the
+            # RMSNorm + MLP wiring is shared with col_parallel; the only deltas
+            # are head_parallel=True on the attention and that full hidden must be
+            # replicated into the attention QKV for PREFILL too (handled in
+            # forward via the n_parallel gather, which col_parallel only did for
+            # decode).
+            new_layer._col_parallel_use_n_parallel_attn = True
+            new_layer._head_parallel = True
+            new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, head_parallel=True)
+            new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=False)
+            new_layer.mlp_prefill = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         else:
             raise ValueError(f"Unsupported dots.ocr decoder TP decode scheme: {tp_decode_scheme}")
-        if tp_decode_scheme == "col_parallel" or _use_bfp8_decoder_weights(
+        if tp_decode_scheme in {"col_parallel", "head_parallel"} or _use_bfp8_decoder_weights(
             getattr(new_layer.self_attn, "layer_idx", None)
         ):
             new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
@@ -390,7 +406,11 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         **kwargs,
     ):
         hs = _take_local_dp_batch(hidden_states, self.device)
-        is_col_parallel = getattr(self, "tp_decode_scheme", "row") == "col_parallel"
+        scheme = getattr(self, "tp_decode_scheme", "row")
+        # head_parallel shares col_parallel's hidden/TP residual contract and
+        # RMSNorm/MLP wiring; the attention block differs (head-local).
+        is_col_parallel = scheme in {"col_parallel", "head_parallel"}
+        is_head_parallel = scheme == "head_parallel"
 
         if hs.layout != ttnn.TILE_LAYOUT:
             hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -428,6 +448,13 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             )
         else:
             hs = self.input_layernorm(hs)
+        # Replicate full hidden into the N-parallel DECODE QKV (col_parallel and
+        # head_parallel both consume full hidden in decode). Decode-only: for
+        # PREFILL, head_parallel dispatches to the attention's head-sharded
+        # ``_forward_prefill_head_sharded``, which takes the hidden/TP shard and
+        # all_gathers internally -- gathering here too would DOUBLE-gather
+        # (hidden/TP -> full hidden -> 2x full). col_parallel prefill is K-parallel
+        # and also consumes the hidden/TP shard. So neither scheme gathers in prefill.
         if is_col_parallel and is_decode and getattr(self, "_col_parallel_use_n_parallel_attn", False):
             hs = _gather_tp_hidden_if_needed(hs, self.device, hidden_dim)
         attn_out, _ = self.self_attn(

@@ -61,11 +61,28 @@ def _vision_tower_signpost(header: str) -> None:
 
 
 def _tp4_prefill_vision_enabled(device=None) -> bool:
-    """True when Wormhole TP4 prefill vision optimizations should be used."""
+    """True when Wormhole TP2/TP4 prefill vision optimizations should be used.
+
+    Enables BFP8 L1 o_proj / MLP-down outputs and hardware-swept matmul PCs on any
+    mesh whose TP axis (last dim) is 2 or 4. Does **not** imply the full L1 activation
+    stack (norm1/qkv L1) — that path is TP=4-only via
+    :func:`_tp4_prefill_vision_l1_activations_enabled` because TP=2 QKV (N=2304)
+    OOMs when norm1 and qkv outputs are both L1-resident.
+    """
     body_env = os.environ.get("DOTS_OCR_TEXT_BODY")
     if body_env is not None:
         return body_env.strip().lower() in {"tp4", "tp4_prefill"}
     if device is None or not is_wormhole_b0() or not hasattr(device, "shape"):
+        return False
+    shape = tuple(int(x) for x in device.shape)
+    return len(shape) == 2 and int(shape[-1]) in {2, 4}
+
+
+def _tp4_prefill_vision_l1_activations_enabled(device=None) -> bool:
+    """True when norm1/qkv may use L1 interleaved activations (TP=4 only on WH)."""
+    if not _tp4_prefill_vision_enabled(device):
+        return False
+    if device is None or not hasattr(device, "shape"):
         return False
     shape = tuple(int(x) for x in device.shape)
     return len(shape) == 2 and int(shape[-1]) == 4
@@ -171,9 +188,11 @@ def _vision_tp_gate_up_program_config(
     if _tp4_prefill_vision_enabled(device):
         from models.experimental.tt_symbiote.modules.vision_tp4 import tp4_mlp_gate_up_pc
 
-        pinned = tp4_mlp_gate_up_pc(device)
-        if int(l1_resident_bytes_per_core) <= 0:
-            return pinned
+        # Only pin the hand-swept TP4=1056 PC when N matches; TP=2 uses I/TP=2112.
+        if m_dim == 11264 and k_dim == 1536 and n_dim == 1056:
+            pinned = tp4_mlp_gate_up_pc(device)
+            if pinned is not None and int(l1_resident_bytes_per_core) <= 0:
+                return pinned
         pc = wh_tp4_matmul_pc(
             device,
             m_dim,
@@ -2162,7 +2181,8 @@ class TTNNDotsVisionAttention(TTNNModule):
         # deallocated right after this matmul, so both are freed before SDPA and
         # neither competes with SDPA's per-core scores CB.
         use_tp4_prefill_vision = ndev > 1 and _tp4_prefill_vision_enabled(self.device)
-        attn_mem = ttnn.L1_MEMORY_CONFIG if use_tp4_prefill_vision else mem
+        use_l1_activations = ndev > 1 and _tp4_prefill_vision_l1_activations_enabled(self.device)
+        attn_mem = ttnn.L1_MEMORY_CONFIG if use_l1_activations else mem
 
         # Output the fused QKV in BFP8 directly. At S=12288 this halves bandwidth on:
         #   1. the qkv matmul writeback ([1,1,S,4608]: 113 MB BF16 -> 56 MB BFP8)
@@ -2431,10 +2451,11 @@ class TTNNDotsVisionBlock(TTNNModule):
         # ``normed`` right after the qkv matmul, so it is gone before SDPA -- no
         # clash with SDPA's scores CB. (DRAM keeps the prior single-device path.)
         use_tp4 = _tp4_prefill_vision_enabled(self.device)
+        use_l1_activations = _tp4_prefill_vision_l1_activations_enabled(self.device)
         residual = hidden_states
         _vision_debug_mem("residual_pre_attn", residual)
         print("norm1 vision before attnhidden_states.shape:", hidden_states.shape)
-        normed = self.norm1(hidden_states, output_l1=use_tp4)
+        normed = self.norm1(hidden_states, output_l1=use_l1_activations)
         _vision_debug_mem("after norm1", normed)
         # attn() consumes and deallocates ``normed`` internally (after the qkv matmul).
         attn_out = self.attn(
@@ -2455,7 +2476,7 @@ class TTNNDotsVisionBlock(TTNNModule):
         residual = hidden_states
         _vision_debug_mem("residual_pre_mlp", residual)
         print("vision bloock after attnhidden_states.shape:", hidden_states.shape)
-        normed = self.norm2(hidden_states, output_l1=True)
+        normed = self.norm2(hidden_states, output_l1=use_l1_activations)
         _vision_debug_mem("after norm2", normed)
         mlp_out = self.mlp(normed)
         _vision_debug_mem("after mlp", mlp_out)
@@ -2680,6 +2701,12 @@ class TTNNDotsPatchMerger(TTNNModule):
         # o_proj fallback in the vision block. GELU is applied explicitly since
         # it can no longer be fused into the fc1 program config.
         use_bs = fast_fc1_pc is None and fc1_bs_pc is not None and fc2_bs_pc is not None and bs_mem is not None
+
+        # TP=2 prefill vision keeps BFP8 L1 in the block stack; merger fast/block-sharded
+        # fc1 PCs (large out_block_h) OOM their CBs against that residual L1 set.
+        if _tp4_prefill_vision_enabled(self.device) and not _tp4_prefill_vision_l1_activations_enabled(self.device):
+            fast_fc1_pc = None
+            use_bs = False
 
         if self._use_layer_norm:
             print("Using LayerNorm")

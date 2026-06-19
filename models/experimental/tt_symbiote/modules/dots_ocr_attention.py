@@ -30,6 +30,7 @@ from models.experimental.tt_symbiote.modules.linear import (
     _tp_num_shards,
     _tp_requires_ccl,
 )
+from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRRowShardedNoAllGather
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
 try:
@@ -382,8 +383,14 @@ class _TTNNDotsOCRQKVColParallel(TTNNLinearLLamaIReplicatedWColSharded):
         # concatenates the per-device N-shards in device order, which is exactly
         # the original [Q_g0|K_0|V_0|Q_g1|K_1|V_1] interleave the weight was
         # sharded from, so create_heads sees an identical tensor to the K-parallel
-        # path.
-        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
+        # path. Head-local subclasses set ``_gather_qkv_output=False`` to KEEP the
+        # per-device N-shard (one whole KV group at TP=2) and run head-local
+        # create_heads / SDPA / cache instead.
+        if (
+            getattr(self, "_gather_qkv_output", True)
+            and _linear_mesh_num_devices(self.device) > 1
+            and _tp_requires_ccl(self.device)
+        ):
             tt_output = ttnn.all_gather(
                 tt_output,
                 dim=len(tt_output.shape) - 1,
@@ -393,6 +400,22 @@ class _TTNNDotsOCRQKVColParallel(TTNNLinearLLamaIReplicatedWColSharded):
                 topology=ttnn.Topology.Linear,
             )
         return tt_output
+
+
+class _TTNNDotsOCRQKVColParallelHeadLocal(_TTNNDotsOCRQKVColParallel):
+    """Head-local N-parallel fused-QKV: same N-sharded matmul as the parent but
+    WITHOUT the trailing all_gather.
+
+    At a TP degree where the KV heads divide evenly (TP=2 for dots.ocr: 12 Q / 2
+    KV -> 6 Q / 1 KV per device), the KV-group-interleaved weight
+    ``[Q_g0|K_0|V_0 | Q_g1|K_1|V_1]`` N-sharded across the TP axis hands each
+    device exactly one complete ``[Q_local | K_local | V_local]`` KV group
+    (1024 cols at TP=2). That per-device shard is self-contained for
+    ``nlp_create_qkv_heads`` with LOCAL head counts, so the full-QKV reassembly
+    gather is unnecessary -- the TP collective moves to the row-parallel o_proj.
+    """
+
+    _gather_qkv_output = False
 
 
 @trace_enabled
@@ -428,7 +451,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         self._tt_o_proj_tp_bias = None
 
     @classmethod
-    def from_torch(cls, hf_attn, qkv_n_parallel: bool = False):
+    def from_torch(cls, hf_attn, qkv_n_parallel: bool = False, head_parallel: bool = False):
         new_attn = cls()
         new_attn._fallback_torch_layer = hf_attn
         # When True, the (decode) fused-QKV projection runs N-dim/column-parallel
@@ -436,6 +459,18 @@ class TTNNDotsOCRAttention(TTNNModule):
         # the default K-dim/row-parallel (hidden-K-sharded in -> reduce_scatter +
         # all_gather). Decode-only: prefill still uses qkv_proj_prefill.
         new_attn._qkv_n_parallel = bool(qkv_n_parallel)
+        # When True, run the full Devstral-style HEAD-PARALLEL attention (TP=2):
+        # N-parallel QKV WITHOUT the reassembly gather, head-local
+        # create_heads/SDPA/cache (num_heads/TP, num_kv_heads/TP), and a
+        # row-parallel reduce_scatter-only o_proj that returns the hidden/TP shard
+        # (so the col_parallel hidden-sharded residual contract is preserved).
+        # Both prefill and decode share the N-sharded KV-group-interleaved weight:
+        # at TP=2 each device's N-shard is one whole [Q_local|K_local|V_local] KV
+        # group, which is also conventional order for that group, so prefill's
+        # Interleaved create_heads factory parses it with local counts too.
+        new_attn._head_parallel = bool(head_parallel)
+        if head_parallel:
+            new_attn._qkv_n_parallel = True
 
         config = hf_attn.config
         new_attn.num_attention_heads = config.num_attention_heads
@@ -506,7 +541,11 @@ class TTNNDotsOCRAttention(TTNNModule):
         fused_linear.weight.data = fused_weight
         if has_any_bias:
             fused_linear.bias.data = new_attn._qkv_bias_torch
-        if new_attn._qkv_n_parallel:
+        if new_attn._head_parallel:
+            # Head-parallel: N-sharded weight, NO reassembly gather. Each device
+            # keeps its own [Q_local|K_local|V_local] KV group.
+            new_attn.qkv_proj = _TTNNDotsOCRQKVColParallelHeadLocal.from_torch(fused_linear)
+        elif new_attn._qkv_n_parallel:
             # N-dim/column-parallel QKV: replicated full-hidden in, weight
             # N-sharded, all_gather back to full QKV (decode). The fused weight
             # is the same KV-group-interleaved layout; sharding it on N and
@@ -533,10 +572,29 @@ class TTNNDotsOCRAttention(TTNNModule):
             kb_conv = k_bias if k_bias is not None else torch.zeros(kv_size, dtype=fused_weight_conv.dtype)
             vb_conv = v_bias if v_bias is not None else torch.zeros(kv_size, dtype=fused_weight_conv.dtype)
             fused_linear_conv.bias.data = torch.cat([qb_conv, kb_conv, vb_conv], dim=0)
-        new_attn.qkv_proj_prefill = _TTNNDotsOCRQKVPrefillLinear.from_torch(fused_linear_conv)
+        if new_attn._head_parallel:
+            # Head-parallel prefill reuses the head-local N-sharded weight: at TP=2
+            # each device's N-shard is one [Q_local|K_local|V_local] KV group, which
+            # IS conventional [Q|K|V] order for that group, so the Interleaved
+            # create_heads factory parses it with local counts. No separate
+            # conventional prefill weight (and so no extra device copy) is needed.
+            new_attn.qkv_proj_prefill = new_attn.qkv_proj
+        else:
+            new_attn.qkv_proj_prefill = _TTNNDotsOCRQKVPrefillLinear.from_torch(fused_linear_conv)
 
-        # O projection (block-sharded tuned prefill matmul + decode DRAM-sharded fast path)
-        new_attn.o_proj = _TTNNDotsOCROProjPrefillLinear.from_torch(hf_attn.o_proj)
+        # O projection.
+        if new_attn._head_parallel:
+            # Row-parallel reduce_scatter-only o_proj: the local-head attention
+            # output is the hidden/TP K-shard, so the matmul partial-sum is
+            # reduce_scattered (no all_gather) back to a hidden/TP shard that adds
+            # straight onto the hidden-sharded residual. bfloat8_b weight to keep
+            # residual-stream PCC (the N-parallel decode path is drift-sensitive).
+            new_attn.o_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(hf_attn.o_proj).set_weight_dtype(
+                ttnn.bfloat8_b
+            )
+        else:
+            # Block-sharded tuned prefill matmul + decode DRAM-sharded fast path.
+            new_attn.o_proj = _TTNNDotsOCROProjPrefillLinear.from_torch(hf_attn.o_proj)
 
         # Raw torch weights kept for the head-sharded TP prefill path (built in
         # move_weights_to_device_impl when the mesh is a CCL/TP mesh with heads
@@ -717,6 +775,21 @@ class TTNNDotsOCRAttention(TTNNModule):
             return self._decode_cur_pos
         return cp
 
+    def _head_counts(self):
+        """(num_heads, num_kv_heads) for ``nlp_create_qkv_heads`` / SDPA / cache.
+
+        Head-parallel decode/prefill keeps only this device's local heads, so the
+        counts are divided by the TP degree (12/2 -> 6/1 at TP=2). The KV-group
+        size ``num_heads // num_kv_heads`` (=6) is invariant under this split, so
+        GQA grouping is unchanged. Every other path keeps the full counts (the
+        QKV is reassembled before create_heads there).
+        """
+        if getattr(self, "_head_parallel", False):
+            tp = max(1, _tp_num_shards(self.device))
+            if self.num_attention_heads % tp == 0 and self.num_key_value_heads % tp == 0:
+                return self.num_attention_heads // tp, self.num_key_value_heads // tp
+        return self.num_attention_heads, self.num_key_value_heads
+
     def _project_qkv_fused(self, hidden_states, batch_size, seq_length, proj=None):
         """Project hidden states to fused QKV tensor, ready for nlp_create_qkv_heads.
 
@@ -756,11 +829,17 @@ class TTNNDotsOCRAttention(TTNNModule):
         # _undo_qkv_kv_group_permute used to do every prefill (Tracy: ~25 ms
         # / layer at S=2816). Decode keeps using self.qkv_proj (KV-group-
         # interleaved) to engage the Sharded create_heads factory.
+        # Head-parallel prefill uses the SAME head-local N-sharded QKV weight as
+        # decode (qkv_proj_prefill is aliased to qkv_proj in from_torch), so each
+        # device emits its own [Q_local|K_local|V_local] group and create_heads
+        # runs with LOCAL counts. Other schemes use the conventional prefill
+        # weight + full counts.
+        n_heads, n_kv_heads = self._head_counts()
         qkv_states = self._project_qkv_fused(hidden_states, batch_size, seq_length, proj=self.qkv_proj_prefill)
         query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
             qkv_states,
-            num_heads=self.num_attention_heads,
-            num_kv_heads=self.num_key_value_heads,
+            num_heads=n_heads,
+            num_kv_heads=n_kv_heads,
             transpose_k_heads=False,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
@@ -982,14 +1061,20 @@ class TTNNDotsOCRAttention(TTNNModule):
         # interleaved input the op falls back to its 1-core Interleaved
         # factory; sharding alone (without the matching weight layout)
         # silently corrupts Q/K/V.
+        # Head-parallel: local counts (6 Q / 1 KV at TP=2). qkv_states here is the
+        # per-device N-shard = one [Q_local|K_local|V_local] KV group (1024 wide),
+        # so the width-shard runs across ``num_kv_heads_local`` cores (1 core at
+        # TP=2) and create_heads parses the local group. Other schemes reassemble
+        # the full QKV first, so they keep the full counts.
+        n_heads, n_kv_heads = self._head_counts()
         if is_decode:
-            num_q_per_kv = self.num_attention_heads // self.num_key_value_heads
+            num_q_per_kv = n_heads // n_kv_heads
             qkv_input_shard_spec = ttnn.ShardSpec(
                 ttnn.CoreRangeSet(
                     [
                         ttnn.CoreRange(
                             ttnn.CoreCoord(0, 0),
-                            ttnn.CoreCoord(self.num_key_value_heads - 1, 0),
+                            ttnn.CoreCoord(n_kv_heads - 1, 0),
                         )
                     ]
                 ),
@@ -1014,8 +1099,8 @@ class TTNNDotsOCRAttention(TTNNModule):
 
         query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
             qkv_states,
-            num_heads=self.num_attention_heads,
-            num_kv_heads=self.num_key_value_heads,
+            num_heads=n_heads,
+            num_kv_heads=n_kv_heads,
             transpose_k_heads=False,
             memory_config=nlp_heads_mc,
         )
@@ -1067,7 +1152,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         # preserves bfloat16). Dropping the dead branch.
 
         tile_size = 32
-        shard_h = ((self.num_key_value_heads + tile_size - 1) // tile_size) * tile_size
+        shard_h = ((n_kv_heads + tile_size - 1) // tile_size) * tile_size
         shard_cfg = ttnn.create_sharded_memory_config(
             shape=(shard_h, self.head_dim),
             core_grid=ttnn.CoreGrid(y=1, x=batch_size),
@@ -1100,7 +1185,7 @@ class TTNNDotsOCRAttention(TTNNModule):
         attn_output = ttnn.to_memory_config(attn_output, sdpa_output_memcfg)
         attn_output = ttnn.experimental.nlp_concat_heads_decode(
             attn_output,
-            num_heads=self.num_attention_heads,
+            num_heads=n_heads,
         )
         if batch_size < 32:
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
