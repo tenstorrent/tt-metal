@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -16,6 +19,7 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+#include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using ttnn::ccl::Topology;
@@ -164,6 +168,10 @@ void kernel_main() {
     auto* fabric_direction_connection =
         direction ? &fabric_connection.get_forward_connection() : &fabric_connection.get_backward_connection();
 #endif
+
+    Noc noc_obj;
+    CircularBuffer cb_compute_output(cb_compute_output_id);
+    CircularBuffer cb_reader_output(cb_reader_output_id);
     fabric_multicast_noc_unicast_atomic_inc_set_state<
         UnicastAtomicIncUpdateMask::Val | UnicastAtomicIncUpdateMask::Flush>(
         pkt_hdr_mcastseminc,
@@ -188,6 +196,8 @@ void kernel_main() {
             pkt_hdr_mcastseminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{barrier_sem_noc_addr_in_pkt, 0});
 
+        // Device 2.0 migration: legacy primitive retained: barrier_sem is a precomposed L1 semaphore
+        // address passed via a runtime arg (not a per-program id Semaphore<> can wrap)
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 2 * (ring_size - 1));
         noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(barrier_sem), 0);
     }
@@ -332,13 +342,13 @@ void kernel_main() {
                     } else {
                         const bool reduce_interm =
                             (is_even_chunk && reduce_even_chunks) || (!is_even_chunk && reduce_odd_chunks);
-                        const uint32_t cb_out =
-                            reduce_interm ? cb_compute_output_id : cb_reader_output_id;  // from compute or reader
+                        CircularBuffer& cb_out =
+                            reduce_interm ? cb_compute_output : cb_reader_output;  // from compute or reader
 
                         if (write_to_remote) {
                             // Write tiles to remote tensor over Fabric
-                            cb_wait_front(cb_out, tile_granularity);
-                            size_t l1_read_addr = get_read_ptr(cb_out);
+                            cb_out.wait_front(tile_granularity);
+                            size_t l1_read_addr = cb_out.get_read_ptr();
                             for (uint32_t j = 0; j < tiles_to_read; j += num_tiles_to_write_per_packet) {
                                 uint32_t tiles_to_put_in_current_packet =
                                     std::min(tiles_to_read - j, num_tiles_to_write_per_packet);
@@ -373,11 +383,11 @@ void kernel_main() {
                                         l1_read_addr,
                                         NocUnicastCommandHeader{remote_noc_addrs[0]});
                                 }
-                                noc_async_writes_flushed();
+                                noc_obj.async_writes_flushed();
                                 l1_read_addr += page_size * tiles_to_put_in_current_packet;
                                 tiles_read += tiles_to_put_in_current_packet;
                             }
-                            cb_pop_front(cb_out, tile_granularity);
+                            cb_out.pop_front(tile_granularity);
 
                             // Send semaphore increment to remote worker core
                             ++chunk_count;
@@ -391,7 +401,7 @@ void kernel_main() {
                                         fabric_direction_connection,
                                         pkt_hdr_seminc,
                                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{even_core_sem_noc_addr, 0});
-                                    noc_async_writes_flushed();
+                                    noc_obj.async_writes_flushed();
                                 } else if (!is_even_chunk && odd_chunk_count == chunks_per_sync) {
                                     odd_chunk_count = 0;
                                     fabric_unicast_noc_unicast_atomic_inc_with_state<
@@ -399,7 +409,7 @@ void kernel_main() {
                                         fabric_direction_connection,
                                         pkt_hdr_seminc,
                                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{odd_core_sem_noc_addr, 0});
-                                    noc_async_writes_flushed();
+                                    noc_obj.async_writes_flushed();
                                 }
                             } else {
                                 if (chunk_count == chunks_per_sync) {
@@ -409,28 +419,36 @@ void kernel_main() {
                                         fabric_direction_connection,
                                         pkt_hdr_seminc,
                                         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{this_core_sem_noc_addr, 0});
-                                    noc_async_writes_flushed();
+                                    noc_obj.async_writes_flushed();
                                 }
                             }
                         } else {
                             // Write tiles to local tensor
-                            cb_wait_front(cb_out, tile_granularity);
-                            size_t l1_read_addr = get_read_ptr(cb_out);
+                            cb_out.wait_front(tile_granularity);
+                            size_t l1_read_offset = 0;
                             for (uint32_t j = 0; j < tiles_to_read; ++j) {
                                 auto interm_tile_id = get_next_interm_tile_id();
                                 auto output_tile_id = get_next_output_tile_id();
-                                uint64_t local_noc_addr;
                                 if (write_to_interm) {
-                                    local_noc_addr = interm_tensor_accessor.get_noc_addr(interm_tile_id);
+                                    noc_obj.async_write(
+                                        cb_out,
+                                        interm_tensor_accessor,
+                                        page_size,
+                                        {.offset_bytes = l1_read_offset},
+                                        {.page_id = interm_tile_id});
                                 } else {
-                                    local_noc_addr = output_tensor_accessor.get_noc_addr(output_tile_id);
+                                    noc_obj.async_write(
+                                        cb_out,
+                                        output_tensor_accessor,
+                                        page_size,
+                                        {.offset_bytes = l1_read_offset},
+                                        {.page_id = output_tile_id});
                                 }
-                                noc_async_write(l1_read_addr, local_noc_addr, page_size);
-                                l1_read_addr += page_size;
+                                l1_read_offset += page_size;
                                 tiles_read++;
                             }
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_out, tile_granularity);
+                            noc_obj.async_write_barrier();
+                            cb_out.pop_front(tile_granularity);
                         }  // if remote or local
                     }  // if skip or process
 
@@ -450,14 +468,14 @@ void kernel_main() {
                             fabric_direction_connection,
                             pkt_hdr_seminc,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{even_core_sem_noc_addr, 0});
-                        noc_async_writes_flushed();
+                        noc_obj.async_writes_flushed();
                     }
                     if (odd_chunks && odd_chunk_count != 0) {
                         fabric_unicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
                             fabric_direction_connection,
                             pkt_hdr_seminc,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{odd_core_sem_noc_addr, 0});
-                        noc_async_writes_flushed();
+                        noc_obj.async_writes_flushed();
                     }
                 } else {
                     if (chunk_count != 0) {
@@ -465,7 +483,7 @@ void kernel_main() {
                             fabric_direction_connection,
                             pkt_hdr_seminc,
                             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{this_core_sem_noc_addr, 0});
-                        noc_async_writes_flushed();
+                        noc_obj.async_writes_flushed();
                     }
                 }
             }
@@ -480,33 +498,39 @@ void kernel_main() {
             fabric_direction_connection,
             pkt_hdr_mcastseminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-        noc_async_writes_flushed();
+        noc_obj.async_writes_flushed();
 
         batch_ready_sem_noc_addr_in_pkt = safe_get_noc_addr(opposite_core_x, opposite_core_y, batch_ready_sem, 0);
         fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::DstAddr>(
             fabric_direction_connection,
             pkt_hdr_mcastseminc,
             tt::tt_fabric::NocUnicastAtomicIncCommandHeader{batch_ready_sem_noc_addr_in_pkt, 0});
-        noc_async_writes_flushed();
+        noc_obj.async_writes_flushed();
 
+        // Device 2.0 migration: legacy primitive retained: batch_ready_sem is a precomposed L1 semaphore
+        // address passed via a runtime arg (not a per-program id Semaphore<> can wrap)
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 2 * (ring_size - 1));
         noc_semaphore_set(
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(batch_ready_sem), 0);  // reset semaphore before next batch
     }
 
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc_obj.async_write_barrier();
+    noc_obj.async_atomic_barrier();
 #ifdef USE_WORKER_MUX
     tt::tt_fabric::fabric_client_disconnect(mux_connection_handle);
     if (is_termination_master) {
+        // Device 2.0 migration: legacy primitive retained: termination_sync_address is a precomposed L1
+        // semaphore address passed via a runtime arg (not a per-program id Semaphore<> can wrap).
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
+        // Device 2.0 migration: legacy primitive retained: dest_addr is a precomposed uint64_t NoC
+        // address; Semaphore<> wraps a Metal semaphore id, not a raw address
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
         noc_semaphore_inc(dest_addr, 1);
-        noc_async_atomic_barrier();
+        noc_obj.async_atomic_barrier();
     }
 #else
     if (fabric_connection.is_logically_connected()) {
@@ -514,5 +538,5 @@ void kernel_main() {
     }
 #endif
 
-    noc_async_write_barrier();
+    noc_obj.async_write_barrier();
 }
