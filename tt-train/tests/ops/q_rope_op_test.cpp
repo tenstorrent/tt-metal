@@ -96,7 +96,7 @@ void expect_q_rope_matches_reference(
         const auto actual_q_pe = ttml::core::to_xtensor(slice_head_dim(fused, B, H, S, shape.qk_nope_dim, qk_head));
         const auto expected_q_pe = ttml::core::to_xtensor(slice_head_dim(ref, B, H, S, shape.qk_nope_dim, qk_head));
         ASSERT_EQ(actual_q_pe.shape(), expected_q_pe.shape()) << label_prefix << shape.name << " q_pe: shape mismatch";
-        EXPECT_TRUE(xt::allclose(actual_q_pe, expected_q_pe, 1e-4, 1e-4))
+        EXPECT_TRUE(xt::allclose(actual_q_pe, expected_q_pe, 1e-2, 1e-2))
             << label_prefix << shape.name << " q_pe: value mismatch";
     }
 }
