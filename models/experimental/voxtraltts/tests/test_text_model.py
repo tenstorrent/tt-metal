@@ -60,6 +60,35 @@ def _reference_last_logits(state_dict, args, tokens: torch.Tensor) -> torch.Tens
     return F.linear(ref_hidden[:, -1, :], state_dict["output.weight"]).squeeze(0).float()
 
 
+def _hf_text_reference_or_skip():
+    """HF ``MistralForCausalLM`` text backbone with a real KV cache, from the checkpoint.
+
+    Mirrors ``VoxtralCPUReference``'s text model: prefill with ``use_cache=True``, then
+    incremental decode threading ``past_key_values`` — the same flow as the TT model under
+    test. Used by the decode PCC tests so the reference decodes with a cache (not a stateless
+    full recompute). bf16 to match the checkpoint / TT activation dtype.
+    """
+    from transformers import MistralForCausalLM
+
+    from models.experimental.voxtraltts.reference.cpu_reference import (
+        _build_text_config,
+        _load_text_state_dict,
+        _resolve_model_file,
+    )
+    from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
+    from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+
+    name = resolve_voxtral_model_name_or_skip()
+    try:
+        cfg = load_voxtral_config(name)
+        ckpt = _resolve_model_file(name, "consolidated.safetensors")
+        hf = MistralForCausalLM(_build_text_config(name))
+        hf.load_state_dict(_load_text_state_dict(ckpt, cfg), strict=False)
+    except Exception as exc:
+        pytest.skip(f"HF text reference unavailable: {exc}")
+    return hf.to(dtype=torch.bfloat16).eval()
+
+
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_text_model_inference(device, reset_seeds):
@@ -147,9 +176,6 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
         dtype=ttnn.bfloat16,
         optimizations=voxtral_text_logits_pcc_optimizations,
     )
-    args = model.inner.args
-    state_dict = args.load_state_dict()
-
     prompt_len = 128
     vocab_size = model.inner.vocab_size
     prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.int64)
@@ -174,8 +200,16 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
     )
     tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
 
-    ref_tokens = torch.cat([prompt_tokens, decode_input_token.view(1, 1)], dim=1)
-    ref_last_logits = _reference_last_logits(state_dict, args, ref_tokens)
+    # Cached HF reference (mirrors the TT KV-cache flow): prefill the prompt, then decode the
+    # single new token threading past_key_values; compare last-token logits.
+    hf_ref = _hf_text_reference_or_skip()
+    hf_prefill = hf_ref(input_ids=prompt_tokens, use_cache=True)
+    hf_decode = hf_ref(
+        input_ids=decode_input_token.view(1, 1),
+        past_key_values=hf_prefill.past_key_values,
+        use_cache=True,
+    )
+    ref_last_logits = hf_decode.logits[0, -1].float()
 
     passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
     print(f"test_text_model_decode_reference_pcc PCC={float(pcc_value):.6f}")
@@ -184,7 +218,7 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
 
 @torch.no_grad()
 @pytest.mark.timeout(3600)
-@pytest.mark.parametrize("decode_steps", [4, 26], ids=["4_steps", "26_steps"])
+@pytest.mark.parametrize("decode_steps", [32], ids=["32_steps"])
 def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_steps):
     model = create_real_voxtral_text_model_or_skip(
         device,
@@ -192,9 +226,6 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
         dtype=ttnn.bfloat16,
         optimizations=voxtral_text_logits_pcc_optimizations,
     )
-    args = model.inner.args
-    state_dict = args.load_state_dict()
-
     prompt_len = 128
     vocab_size = model.inner.vocab_size
     prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.int64)
@@ -207,6 +238,11 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
         rot_mats_local=prompt_rot_local,
         get_last_token=-1,
     )
+
+    # Cached HF reference: prefill once, then thread past_key_values across decode steps
+    # (mirrors the TT KV cache — each step decodes one token reading the growing cache).
+    hf_ref = _hf_text_reference_or_skip()
+    hf_past = hf_ref(input_ids=prompt_tokens, use_cache=True).past_key_values
 
     for step in range(decode_steps):
         current_pos = prompt_len + step
@@ -223,8 +259,10 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
         )
         tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
 
-        ref_tokens = torch.cat([prompt_tokens, decode_tokens[:, : step + 1]], dim=1)
-        ref_last_logits = _reference_last_logits(state_dict, args, ref_tokens)
+        # Cached HF reference: decode the same token threading past_key_values.
+        hf_step = hf_ref(input_ids=step_token.view(1, 1), past_key_values=hf_past, use_cache=True)
+        hf_past = hf_step.past_key_values
+        ref_last_logits = hf_step.logits[0, -1].float()
 
         passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
         print(
