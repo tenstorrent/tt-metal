@@ -38,8 +38,8 @@ public:
     bool operator==(const RowMajorPageConfig&) const = default;
     bool operator!=(const RowMajorPageConfig&) const = default;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("tile");
-    auto attribute_values() const { return std::forward_as_tuple(tile_); }
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
 };
 
 class TilePageConfig {
