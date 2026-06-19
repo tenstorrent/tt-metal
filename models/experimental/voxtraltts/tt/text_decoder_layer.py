@@ -1,11 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
+"""HF/Voxtral text checkpoint key remapping for tt_transformers."""
 
-from pathlib import Path
-
-import ttnn
 import torch
-from models.tt_transformers.tt.decoder import TransformerBlock
 
 
 def remap_voxtral_text_state_dict(state_dict: dict[str, object]) -> dict[str, object]:
@@ -55,46 +52,3 @@ def permute_voxtral_text_qk_for_hf_rope(
         else:
             permuted[key] = value
     return permuted
-
-
-class VoxtralTTTextDecoderLayer:
-    """Thin wrapper that directly reuses tt_transformers TransformerBlock."""
-
-    def __init__(self, inner_block: TransformerBlock) -> None:
-        self.inner = inner_block
-
-    @classmethod
-    def create(
-        cls,
-        *,
-        args,
-        mesh_device,
-        tt_ccl,
-        dtype: ttnn.DataType,
-        state_dict: dict[str, object],
-        layer_num: int,
-        weight_cache_path: Path | None,
-        transformation_mats,
-        paged_attention_config=None,
-        use_paged_kv_cache: bool = False,
-        attention_class=None,
-        prefetcher=None,
-    ) -> "VoxtralTTTextDecoderLayer":
-        inner = TransformerBlock(
-            args=args,
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            dtype=dtype,
-            state_dict=remap_voxtral_text_state_dict(state_dict),
-            layer_num=layer_num,
-            weight_cache_path=weight_cache_path,
-            transformation_mats=transformation_mats,
-            paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
-            attention_class=attention_class,
-            prefetcher=prefetcher,
-        )
-        return cls(inner)
-
-    def __call__(self, *args, **kwargs):
-        return self.inner(*args, **kwargs)

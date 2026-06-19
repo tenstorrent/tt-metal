@@ -17,7 +17,10 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import audio_tokenizer_decode_reference
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
-from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
+from models.experimental.voxtraltts.reference.voxtral_config import (
+    DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
+    voxtral_num_codebooks,
+)
 from models.experimental.voxtraltts.tests.common import (
     VOXTRAL_STANDARD_CHAR_TEXT,
     log_per_step_code_match,
@@ -27,8 +30,6 @@ from models.experimental.voxtraltts.demo.decode_trace_2cq import num_command_que
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_aligned_optimizations
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
-
-os.environ.setdefault("VOXTRAL_DECODE_TRACE", "1")
 
 WAVEFORM_PCC_TARGET = 0.99
 
@@ -55,7 +56,6 @@ def _trace_device_params() -> dict[str, int]:
     }
 
 
-# remove during code cleanup
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [_trace_device_params()], indirect=True)
@@ -159,7 +159,7 @@ def _load_golden_fixture() -> dict:
     if not (isinstance(raw, dict) and "codes_b37t" in raw):
         raw = {"codes_b37t": raw}
     raw["codes_b37t"] = torch.as_tensor(raw["codes_b37t"], dtype=torch.long)
-    assert raw["codes_b37t"].dim() == 3 and int(raw["codes_b37t"].shape[1]) == 37
+    assert raw["codes_b37t"].dim() == 3 and int(raw["codes_b37t"].shape[1]) == voxtral_num_codebooks()
     return raw
 
 
@@ -398,7 +398,7 @@ def test_ttnn_voxtral_tts_golden_acoustic_pcc(device, reset_seeds, request):
         tt_model_codes.append(tt_code_i)
 
         # Advance both text models on the golden code, not their own output.
-        golden_step = golden_model_codes[:, :, i].reshape(1, 37)
+        golden_step = golden_model_codes[:, :, i].reshape(1, voxtral_num_codebooks())
         cpu_hidden, cpu_pkv = _cpu_text_decode_step(cpu, audio_codes_b37=golden_step, past_key_values=cpu_pkv)
         mm_embed = pipe._audio_codes_to_mm_embed(golden_step)
         tt_hidden = pipe.text.decode_step_from_embeds(mm_embed, current_pos)

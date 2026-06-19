@@ -1,17 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Voxtral text-model attention: tt_transformers ``Attention`` + the interleaved-wo decode
-optimization, kept OUT of the shared tt_transformers file so it stays untouched.
-
-The class is intentionally named ``Attention`` (the base is imported as ``_BaseAttention``)
-so ``self.__class__.__name__`` still resolves the state-dict prefix in tt_transformers'
-``get_state_dict_prefix`` ("Attention" -> "attention"). It is wired in via the existing
-``attention_class`` injection point — no tt_transformers edit required.
-
-``forward_decode`` / ``forward_prefill`` are verbatim copies of the optimized tt_transformers
-methods (the only Voxtral-specific change is the L1 reshard before the 1D-mcast wo matmul in
-decode); they delegate all memory/program configs to ``self.args`` (overridden in VoxtralTTArgs).
-"""
+"""Voxtral text-model attention: tt_transformers fork with interleaved-wo decode optimization."""
 from __future__ import annotations
 
 import math

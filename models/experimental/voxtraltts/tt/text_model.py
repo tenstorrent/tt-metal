@@ -143,9 +143,7 @@ class VoxtralTTTextModel:
         rope_setup_class=None,
         prefetcher=None,
     ) -> "VoxtralTTTextModel":
-        # Voxtral text uses its own Attention/MLP subclasses (optimizations kept out of the
-        # shared tt_transformers files). Attention is injected via attention_class; MLP has no
-        # injection hook so it is swapped in post-construction (_swap_text_mlps).
+        # Voxtral text uses local Attention/MLP subclasses injected at construction.
         remapped_state_dict = remap_voxtral_text_state_dict(state_dict)
         inner = Transformer(
             args=args,
