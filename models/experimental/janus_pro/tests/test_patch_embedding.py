@@ -14,7 +14,6 @@ from models.experimental.janus_pro.tt.janus_pro_conv2d_patch import TtJanusProCo
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
 
-
 @pytest.mark.parametrize(
     "mesh_device",
     [
