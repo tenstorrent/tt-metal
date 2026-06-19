@@ -678,7 +678,7 @@ class VoxtralTTAcousticModel:
             ttnn.deallocate(llm_sem)
         masked_logits_rm = ttnn.to_layout(masked_logits, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(masked_logits)
-        sem_idx = ttnn.argmax(masked_logits_rm, dim=-1, use_multicore=True)
+        sem_idx = ttnn.argmax(masked_logits_rm, dim=-1)
         ttnn.deallocate(masked_logits_rm)
         semantic_code_tt = ttnn.reshape(sem_idx, (bsz, 1, 1))
         ttnn.deallocate(sem_idx)
