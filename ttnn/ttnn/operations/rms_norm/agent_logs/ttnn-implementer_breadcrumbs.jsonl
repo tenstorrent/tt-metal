@@ -2,3 +2,4 @@
 {"event":"tool_use","tool":"Agent","subagent":"Explore","description":"Find generic_op multicore + semaphore patterns","ts":"2026-06-19T15:28:10+00:00"}
 {"event":"hypothesis","note":"Regime A implemented: resident two-pass square->reduce(accumulate)->rsqrt->normalize(Col)[*gamma(Row)]. Testing single-tile first.","ts":"2026-06-19T15:41:26+00:00"}
 {"event":"test_run","result":"pass","classification":"regime_a_complete","detail":"18/20 pass; 2 regime-B gamma-wide shapes route to stubbed B (NotImplementedError)","ts":"2026-06-19T15:42:42+00:00"}
+{"event":"test_run","result":"pass","classification":"regime_b_complete","detail":"20/20 pass dev+non-dev, B stable over 3 repeats. mcast all-gather via Counter staging (avoids Flag self-set stale-flag on rotating sender), src==dst EXCLUDE_SRC trick + local-copy own slot.","ts":"2026-06-19T15:56:05+00:00"}

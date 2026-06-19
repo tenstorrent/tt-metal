@@ -100,7 +100,17 @@ void kernel_main() {
                 Accumulate(cb_partial_sumsq, c));
         }
 
-        // ---------- (Regime B) combine K gathered partials (wired in Stage 2) ----------
+        // ---------- (Regime B) combine K gathered partials ----------
+        // cb_partials_gathered holds K column-tiles (one local partial per W-shard, gathered
+        // over the mcast rectangle). Their plain elementwise sum is the global Sum(x^2) over
+        // the full W. Stream them: copy slot 0, then in-place add the remaining K-1 slots.
+        // The reader already popped this core's local cb_partial_sumsq, so it is free to reuse.
+        if constexpr (num_partials > 1) {
+            ckl::copy<cb_partials_gathered, cb_partial_sumsq>(EltwiseShape::tiles(1));
+            for (uint32_t k = 1; k < num_partials; ++k) {
+                ckl::add<cb_partials_gathered, cb_partial_sumsq, cb_partial_sumsq>(EltwiseShape::tiles(1));
+            }
+        }
 
         // ---------- FINALIZE: rsqrt(sum * inv_W + eps) ----------
         ckl::eltwise_chain(

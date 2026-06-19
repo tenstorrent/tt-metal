@@ -180,7 +180,7 @@ def _regime_a_descriptor(
 
     for core, (start, count) in zip(cores, splits):
         reader_rt[core.x][core.y] = [input_tensor.buffer_address(), gamma_addr, start, count]
-        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start, count]
+        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start * Wt, count * Wt]
         compute_rt[core.x][core.y] = [count]
 
     reader_kernel = ttnn.KernelDescriptor(
@@ -192,7 +192,7 @@ def _regime_a_descriptor(
     )
 
     # ---------- writer ----------
-    writer_ct = [CB_OUTPUT, Wt]
+    writer_ct = [CB_OUTPUT]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
@@ -237,5 +237,166 @@ def _regime_a_descriptor(
     return program, io
 
 
-def _regime_b_descriptor(*args, **kwargs):
-    raise NotImplementedError("rms_norm Regime B (cross-core W-split) is implemented in Stage 2.")
+def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma):
+    """Largest W-split factor K forming full-width rectangular bands that saturate the
+    grid: K divides Wt, K is a multiple of grid.x (full-width bands), num_row_groups*K
+    fits the grid, and Wt/K fits the resident budget. Returns None if none qualifies."""
+    gx = grid.x
+    budget = RESIDENT_BUDGET_TILES
+    best = None
+    for K in range(gx, total_cores + 1, gx):
+        if Wt % K != 0:
+            continue
+        if K % gx != 0:
+            continue
+        if num_row_groups * K > total_cores:
+            continue
+        Wt_s = Wt // K
+        if Wt_s + (Wt_s if has_gamma else 0) > budget:
+            continue
+        if best is None or K > best:
+            best = K
+    return best
+
+
+def _regime_b_descriptor(
+    input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, grid, total_cores, inv_W_bits, eps_bits
+):
+    num_row_groups = Ht_total  # Phase 0: bh = 1 tile-row per group
+    gx = grid.x
+    K = _select_k(Wt, num_row_groups, grid, total_cores, has_gamma)
+    if K is None:
+        raise NotImplementedError(
+            f"rms_norm: no rectangular Regime B partition for Wt={Wt}, "
+            f"row_groups={num_row_groups}, grid=({grid.x},{grid.y})"
+        )
+
+    gh = K // gx  # band height (rows) per group
+    Wt_s = Wt // K
+    reduce_block = min(Wt_s, _dest_limit(cfg))
+    tile_bytes = input_tensor.buffer_page_size()
+    dt = input_tensor.dtype
+    device = input_tensor.device()
+
+    DATA_READY = 0
+    CONSUMED = 1
+
+    # All cores used (num_row_groups bands of K cores each).
+    used_cores = num_row_groups * K
+    core_ranges = ttnn.num_cores_to_corerangeset(used_cores, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
+
+    def cb(index, num_pages):
+        return ttnn.CBDescriptor(
+            total_size=num_pages * tile_bytes,
+            core_ranges=core_ranges,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dt, page_size=tile_bytes)],
+        )
+
+    cbs = [
+        cb(CB_INPUT_RESIDENT, Wt_s),
+        cb(CB_SCALER, 1),
+        cb(CB_OUTPUT, 2),
+        cb(CB_SQUARED, reduce_block),
+        cb(CB_PARTIAL_SUMSQ, 2),
+        cb(CB_RECIP_RMS, 2),
+        cb(CB_PARTIALS_GATHERED, K),
+    ]
+    if has_gamma:
+        cbs.append(cb(CB_GAMMA, Wt_s))
+        cbs.append(cb(CB_NORMALIZED, Wt_s))
+
+    # Semaphores on the full union of used cores (disjoint groups reuse the same IDs).
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=DATA_READY, core_ranges=core_ranges, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=CONSUMED, core_ranges=core_ranges, initial_value=0),
+    ]
+
+    def vcoord(lx, ly):
+        v = device.worker_core_from_logical_core(ttnn.CoreCoord(lx, ly))
+        return v.x, v.y
+
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    gamma_addr = gamma.buffer_address() if has_gamma else 0
+
+    for g in range(num_row_groups):
+        # Group rectangle (logical): full grid width, rows [g*gh, g*gh+gh)
+        rx0, ry0 = 0, g * gh
+        rx1, ry1 = gx - 1, g * gh + gh - 1
+        vrx0, vry0 = vcoord(rx0, ry0)
+        vrx1, vry1 = vcoord(rx1, ry1)
+        # Sender virtual coords for each rank j within this group.
+        sender_coords = []
+        for j in range(K):
+            jx, jy = j % gx, g * gh + j // gx
+            vx, vy = vcoord(jx, jy)
+            sender_coords.extend([vx, vy])
+
+        for r in range(K):
+            lx, ly = r % gx, g * gh + r // gx
+            input_page_base = g * Wt + r * Wt_s
+            gamma_page_base = r * Wt_s
+
+            reader_rt[lx][ly] = [
+                r,
+                input_tensor.buffer_address(),
+                gamma_addr,
+                input_page_base,
+                gamma_page_base,
+                vrx0, vry0, vrx1, vry1,
+            ] + sender_coords
+            writer_rt[lx][ly] = [output_tensor.buffer_address(), input_page_base, Wt_s]
+            compute_rt[lx][ly] = [1]  # one tile-row group per core
+
+    # ---------- reader (mcast all-gather) ----------
+    reader_ct = [
+        CB_INPUT_RESIDENT, CB_GAMMA, CB_SCALER, CB_PARTIAL_SUMSQ, CB_PARTIALS_GATHERED,
+        Wt_s, int(has_gamma), K, DATA_READY, CONSUMED,
+    ]
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct.extend(
+        ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
+        if has_gamma
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_reader_mcast.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---------- writer ----------
+    writer_ct = [CB_OUTPUT]
+    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    # ---------- compute ----------
+    compute_ct = [
+        CB_INPUT_RESIDENT, CB_GAMMA, CB_SCALER, CB_PARTIALS_GATHERED, CB_OUTPUT,
+        CB_SQUARED, CB_PARTIAL_SUMSQ, CB_RECIP_RMS, CB_NORMALIZED,
+        Wt_s, reduce_block, int(has_gamma), inv_W_bits, eps_bits, K,
+    ]
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=cfg,
+    )
+
+    program = ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=semaphores,
+        cbs=cbs,
+    )
+    io = [input_tensor, gamma, output_tensor] if has_gamma else [input_tensor, output_tensor]
+    return program, io
