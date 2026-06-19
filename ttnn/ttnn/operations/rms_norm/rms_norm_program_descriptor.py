@@ -16,6 +16,7 @@ rectangular bands that saturate the grid.
 """
 
 from pathlib import Path
+import math
 import struct
 
 import ttnn
@@ -40,6 +41,21 @@ CB_LOCAL_SUMSQ = 28
 
 # Resident budget in tiles (≈1.12 MB for bf16), per op_design.md P3.
 RESIDENT_BUDGET_TILES = 560
+
+# ---- ROW_MAJOR (tilize-wrapped) regime CB indices ----
+# Refinement 3: ROW_MAJOR input/output handled natively via a tilize-wrapped,
+# row-parallel path. The math is identical to Regime A but reads/writes
+# row-major sticks. Distinct from the TILE-regime CB map above.
+CB_RM_IN = 0  # row-major input sticks (reader -> compute tilize)
+CB_RM_GAMMA = 1  # row-major gamma sticks (reader -> compute tilize)
+CB_RM_GAMMA_TILED = 2  # tilized gamma chunk (compute internal)
+CB_RM_INPUT_RESIDENT = 24  # tilized resident input block (compute internal)
+CB_RM_OUT = 16  # row-major output sticks (compute untilize -> writer)
+CB_RM_SQUARED = 25
+CB_RM_PARTIAL_SUMSQ = 26
+CB_RM_RECIP_RMS = 27
+CB_RM_NORMALIZED = 28
+CB_RM_OUT_TILED = 29
 
 
 def _f32_bits(value: float) -> int:
@@ -106,6 +122,12 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
     has_gamma = gamma is not None
 
     cfg = _resolve_compute_config(compute_kernel_config)
+
+    # Refinement 3: ROW_MAJOR input is handled by a dedicated tilize-wrapped,
+    # row-parallel path (math stays on tiles). TILE input keeps the two-regime
+    # (A / B) heuristic below, untouched.
+    if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT:
+        return _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, epsilon)
 
     device = input_tensor.device()
     grid = device.compute_with_storage_grid_size()
@@ -468,6 +490,158 @@ def _regime_b_descriptor(
     program = ttnn.ProgramDescriptor(
         kernels=[reader_kernel, writer_kernel, compute_kernel],
         semaphores=semaphores,
+        cbs=cbs,
+    )
+    io = [input_tensor, gamma, output_tensor] if has_gamma else [input_tensor, output_tensor]
+    return program, io
+
+
+def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, epsilon):
+    """ROW_MAJOR (tilize-wrapped) row-parallel descriptor.
+
+    Each stick (one (b,c,h) row of W elements) is RMS-normalized independently.
+    Sticks are processed in 32-stick tile-blocks; the W axis is chunked by
+    `reduce_block` tiles so the per-core L1 footprint is bounded regardless of W.
+    Non-tile-aligned W (zero-padded columns) and H (partial last block) are
+    handled natively in the dataflow kernels — no host-side pad/slice/to_layout.
+    """
+    device = input_tensor.device()
+    grid = device.compute_with_storage_grid_size()
+    total_cores = grid.x * grid.y
+
+    shape = list(input_tensor.shape)
+    W = int(shape[-1])
+    total_sticks = 1
+    for d in shape[:-1]:
+        total_sticks *= int(d)
+
+    Wt = (W + 31) // 32
+    num_blocks_total = (total_sticks + 31) // 32  # 32 sticks per tile-block
+
+    reduce_block = min(Wt, _dest_limit(cfg))
+    num_chunks = (Wt + reduce_block - 1) // reduce_block
+    Wt_padded = num_chunks * reduce_block
+
+    inv_W_bits = _f32_bits(1.0 / W)
+    eps_bits = _f32_bits(epsilon)
+
+    dt = input_tensor.dtype
+    fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
+    inter = _intermediate_dtype(dt, fp32_acc)
+    gamma_dt = gamma.dtype if has_gamma else dt
+    in_elem = input_tensor.element_size()
+    gamma_elem = gamma.element_size() if has_gamma else in_elem
+    out_elem = output_tensor.element_size()
+
+    num_cores = min(num_blocks_total, total_cores)
+    core_ranges = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(grid.x, grid.y), row_wise=True)
+    cores = ttnn.corerange_to_cores(core_ranges, num_cores, row_wise=True)
+    splits = _even_split(num_blocks_total, num_cores)
+
+    db = 2  # double-buffer for streamed chunk CBs
+
+    def cb(index, dtype, num_pages):
+        pb = _tile_bytes(dtype)
+        return ttnn.CBDescriptor(
+            total_size=num_pages * pb,
+            core_ranges=core_ranges,
+            format_descriptors=[ttnn.CBFormatDescriptor(buffer_index=index, data_format=dtype, page_size=pb)],
+        )
+
+    cbs = [
+        cb(CB_RM_IN, dt, db * reduce_block),
+        cb(CB_SCALER, inter, 1),
+        cb(CB_RM_OUT, dt, db * reduce_block),
+        cb(CB_RM_INPUT_RESIDENT, dt, Wt_padded),
+        cb(CB_RM_SQUARED, inter, reduce_block),
+        cb(CB_RM_PARTIAL_SUMSQ, inter, 2),
+        cb(CB_RM_RECIP_RMS, inter, 2),
+        cb(CB_RM_OUT_TILED, dt, db * reduce_block),
+    ]
+    if has_gamma:
+        cbs.append(cb(CB_RM_GAMMA, gamma_dt, db * reduce_block))
+        cbs.append(cb(CB_RM_GAMMA_TILED, gamma_dt, db * reduce_block))
+        cbs.append(cb(CB_RM_NORMALIZED, inter, reduce_block))
+
+    # ---------- reader ----------
+    reader_ct = [
+        CB_RM_IN,
+        CB_RM_GAMMA,
+        CB_SCALER,
+        int(has_gamma),
+        Wt,
+        reduce_block,
+        num_chunks,
+        W,
+        in_elem,
+        gamma_elem,
+    ]
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct.extend(
+        ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
+        if has_gamma
+        else ttnn.TensorAccessorArgs().get_compile_time_args()
+    )
+
+    reader_rt = ttnn.RuntimeArgs()
+    writer_rt = ttnn.RuntimeArgs()
+    compute_rt = ttnn.RuntimeArgs()
+    gamma_addr = gamma.buffer_address() if has_gamma else 0
+
+    for core, (start, count) in zip(cores, splits):
+        reader_rt[core.x][core.y] = [input_tensor.buffer_address(), gamma_addr, start, count, total_sticks]
+        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start, count, total_sticks]
+        compute_rt[core.x][core.y] = [count]
+
+    reader_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_reader_rm.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=reader_ct,
+        runtime_args=reader_rt,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+
+    # ---------- writer ----------
+    writer_ct = [CB_RM_OUT, Wt, reduce_block, num_chunks, W, out_elem]
+    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_writer_rm.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=writer_ct,
+        runtime_args=writer_rt,
+        config=ttnn.WriterConfigDescriptor(),
+    )
+
+    # ---------- compute ----------
+    compute_ct = [
+        CB_RM_IN,
+        CB_RM_GAMMA,
+        CB_RM_GAMMA_TILED,
+        CB_SCALER,
+        CB_RM_OUT,
+        CB_RM_INPUT_RESIDENT,
+        CB_RM_SQUARED,
+        CB_RM_PARTIAL_SUMSQ,
+        CB_RM_RECIP_RMS,
+        CB_RM_NORMALIZED,
+        CB_RM_OUT_TILED,
+        reduce_block,
+        num_chunks,
+        int(has_gamma),
+        inv_W_bits,
+        eps_bits,
+    ]
+    compute_kernel = ttnn.KernelDescriptor(
+        kernel_source=str(KERNEL_DIR / "rms_norm_compute_rm.cpp"),
+        core_ranges=core_ranges,
+        compile_time_args=compute_ct,
+        runtime_args=compute_rt,
+        config=cfg,
+    )
+
+    program = ttnn.ProgramDescriptor(
+        kernels=[reader_kernel, writer_kernel, compute_kernel],
+        semaphores=[],
         cbs=cbs,
     )
     io = [input_tensor, gamma, output_tensor] if has_gamma else [input_tensor, output_tensor]

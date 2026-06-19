@@ -22,3 +22,6 @@
 {"event":"test_run","status":"pass","test":"probe_009 bf8b Regime B","details":"all bf8b RegimeB #inf=0 PCC>=0.9998 relRMS<=0.016; bf16/fp32 RegimeB non-regression intact","ts":"2026-06-19T17:19:13+00:00"}
 {"event":"test_run","status":"pass","test":"golden suite full","details":"418 passed (was 346, +72 bf8b RegimeB), 2940 skipped, 1784 xfailed, 0 failed, 0 xpass-drift. float32 test_regression cleared.","ts":"2026-06-19T17:21:26+00:00"}
 {"event":"test_run","status":"pass","test":"test_rms_norm_precision_matrix.py","details":"641 passed, 128 skipped (fp32+False EXCLUSION), 0 failed; production timing","ts":"2026-06-19T17:29:53+00:00"}
+{"event":"tool_use","tool":"Skill","skill":"memory-layouts","args":"","ts":"2026-06-19T17:34:11+00:00"}
+{"event":"hypothesis","note":"TILE+non-aligned already works (zero-pad + true inv_W, verified pcc~1.0). RM needs dedicated tilize-wrapped path: resident tilized input + streamed gamma, chunked by reduce_block, reader zeros W-padding so only valid W feeds per-stick sumsq. Per-stick RMS => H non-align = last-block partial sticks handled by writer. Separate RM kernels to isolate TILE path.","ts":"2026-06-19T17:46:19+00:00"}
+{"event":"test_run","status":"pass","test":"probe_010 RM no-gamma aligned","params":"(1,1,32,64),(1,1,64,128) bf16 RM","detail":"pcc=1.0 out_layout=RM","ts":"2026-06-19T17:52:01+00:00"}

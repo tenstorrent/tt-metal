@@ -67,3 +67,9 @@
 {"source":"tt-probe","pid":2953215,"started_at_ms":1781889513330,"wait_ms":284,"run_ms":22858,"test_path":"rms_norm","exit_code":0}
 {"source":"run_safe_pytest","pid":2954881,"started_at_ms":1781889565754,"wait_ms":2,"run_ms":95705,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
 {"source":"run_safe_pytest","pid":2956708,"started_at_ms":1781889727239,"wait_ms":3,"run_ms":391424,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_precision_matrix.py","exit_code":0}
+{"event": "phase", "phase": "refinement_2", "state": "end", "at_ms": 1781890221808}
+{"event": "phase", "phase": "refinement_2_golden", "state": "start", "at_ms": 1781890222080}
+{"source":"eval_test_runner","pid":2971012,"started_at_ms":1781890222083,"wait_ms":3746,"run_ms":199291,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
+{"event": "phase", "phase": "refinement_2_golden", "state": "end", "at_ms": 1781890425123}
+{"event": "phase", "phase": "refinement_3", "state": "start", "at_ms": 1781890429082}
+{"source":"tt-probe","pid":2982463,"started_at_ms":1781891490932,"wait_ms":285,"run_ms":20230,"test_path":"rms_norm","exit_code":0}
