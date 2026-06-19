@@ -87,6 +87,51 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x2, x1), dim=-1)
 
 
+def rope_rotate_matrix(head_dim: int, padded_head_dim: int) -> torch.Tensor:
+    """Sign-permutation matrix R s.t. `x @ R == rotate_half(x[:rot]) padded with zeros`.
+
+    Lets the device apply RoPE as `x*cos + (x @ R)*sin` over the *natural*
+    padded head layout (real dims at [0:head_dim], pad after), avoiding any
+    tile-misaligned slicing. `rotate_half` over the rot_dim block (split
+    h/2 = 3*axis_dim/2) is encoded as:
+        R[d, d + h/2] = +1   for d in [0, h/2)
+        R[d, d - h/2] = -1   for d in [h/2, rot_dim)
+    Pass-through dims [rot_dim:head_dim] and pad [head_dim:padded] get no
+    entries -> `x @ R` is 0 there, so with cos=1/sin=0 padding they are
+    identity. Each output column has a single ±1 entry, so the matmul is
+    exact in bf16.
+    """
+    rot_dim = 3 * rope_axis_dim(head_dim)  # 78
+    half = rot_dim // 2  # 39
+    R = torch.zeros(padded_head_dim, padded_head_dim, dtype=torch.float32)
+    for d in range(half):
+        R[d, d + half] = 1.0
+    for d in range(half, rot_dim):
+        R[d, d - half] = -1.0
+    return R
+
+
+def rope_cos_sin_padded(
+    grid_thw: torch.Tensor,
+    head_dim: int = 80,
+    padded_head_dim: int = 96,
+    theta: float = 10000.0,
+    spatial_merge_size: int = 2,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """cos/sin padded to (L, padded_head_dim) for the `x*cos + (x@R)*sin` form.
+
+    Real rotary values fill [0:rot_dim]; the tail (pass-through + pad) is
+    cos=1, sin=0 (identity rotation).
+    """
+    cos, sin = rope_cos_sin(grid_thw, head_dim, theta, spatial_merge_size)  # (L, rot_dim)
+    L, rot_dim = cos.shape
+    cos_p = torch.ones(L, padded_head_dim, dtype=cos.dtype)
+    sin_p = torch.zeros(L, padded_head_dim, dtype=sin.dtype)
+    cos_p[:, :rot_dim] = cos
+    sin_p[:, :rot_dim] = sin
+    return cos_p, sin_p
+
+
 def apply_rope_ref(
     q: torch.Tensor,
     k: torch.Tensor,
