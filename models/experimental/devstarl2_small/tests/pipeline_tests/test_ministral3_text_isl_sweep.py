@@ -304,6 +304,7 @@ def _print_report(results: list[_SweepResult], prompt_file: Path) -> None:
     print("------------------------------------------------------------------------------")
 
 
+@pytest.mark.timeout(1200)
 @pytest.mark.models_performance_bare_metal
 def test_devstral_image_text_isl_sweep_perf(monkeypatch):
     prompt_file = Path(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_PROMPT_FILE", str(_DEFAULT_PROMPT_FILE)))
