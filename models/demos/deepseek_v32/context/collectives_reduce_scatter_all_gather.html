@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reduce-scatter & all-gather — walked through the DeepSeek V3.2 logits all-reduce</title>
+<style>
+  :root{
+    --bg:#0b0e15; --bg2:#10141f; --panel:#151a28; --panel2:#1b2236;
+    --ink:#e8edf6; --dim:#97a3ba; --line:#283150; --line2:#384566;
+    --accent:#5ad1c8; --accent2:#7aa2ff; --gold:#ffd86b; --red:#ff6b81; --purple:#c98bff; --green:#46d39a;
+    --mono:'SF Mono',ui-monospace,'Cascadia Code',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{ margin:0; background:var(--bg); color:var(--ink); font-size:15.5px; line-height:1.6;
+    font-family:Inter,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  .wrap{ max-width:1000px; margin:0 auto; padding:38px 26px 90px; }
+  a{ color:var(--accent2); }
+  code{ font-family:var(--mono); font-size:.88em; background:var(--panel2); padding:1px 6px; border-radius:5px; color:var(--accent); }
+  b.hl{ color:var(--gold); } i.b{ color:var(--accent2); font-style:normal; }
+  header{ text-align:center; margin-bottom:14px; }
+  .eyebrow{ font-family:var(--mono); text-transform:uppercase; letter-spacing:.14em; font-size:12px; color:var(--accent); }
+  h1{ font-size:30px; margin:8px 0 6px; }
+  h1 .grad{ background:linear-gradient(90deg,var(--accent),var(--accent2),var(--purple));
+    -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .tagline{ color:var(--dim); max-width:780px; margin:6px auto 0; }
+  .eq{ display:inline-block; font-family:var(--mono); font-size:14.5px; background:var(--panel2);
+    border:1px solid var(--line2); border-radius:10px; padding:9px 16px; margin-top:16px; }
+  .eq b{ color:var(--green); } .eq i{ color:var(--accent2); font-style:normal; } .eq u{ color:var(--gold); text-decoration:none; }
+  h2{ font-size:21px; margin:42px 0 12px; padding-bottom:7px; border-bottom:1px solid var(--line); }
+  h2 .n{ font-family:var(--mono); color:var(--accent); font-size:.66em; margin-right:10px; }
+  h3{ font-size:16px; margin:26px 0 8px; color:var(--ink); }
+  p{ margin:10px 0; }
+  .lede{ color:var(--dim); }
+  .card{ background:var(--panel); border:1px solid var(--line2); border-radius:13px; padding:16px 20px; margin:16px 0; }
+  .callout{ border-left:3px solid var(--accent); background:var(--panel2); border-radius:0 10px 10px 0;
+    padding:11px 16px; margin:16px 0; }
+  .callout.warn{ border-left-color:var(--gold); }
+  .callout.key{ border-left-color:var(--green); }
+  .who{ font-family:var(--mono); font-size:11px; text-transform:uppercase; letter-spacing:.08em; color:var(--accent);
+    display:block; margin-bottom:3px; }
+  .callout.warn .who{ color:var(--gold);} .callout.key .who{ color:var(--green); }
+  table{ border-collapse:collapse; width:100%; margin:14px 0; font-size:14px; }
+  th,td{ border:1px solid var(--line2); padding:7px 10px; text-align:left; }
+  th{ background:var(--panel2); color:var(--accent); font-family:var(--mono); font-size:12px; font-weight:700; }
+  td.mono,th.mono{ font-family:var(--mono); }
+  .num{ text-align:right; font-family:var(--mono); }
+
+  /* ---- ring / shard diagrams ---- */
+  .ring{ display:flex; gap:22px; flex-wrap:wrap; justify-content:center; margin:16px 0; }
+  .chip{ background:var(--panel); border:1.5px solid var(--accent2); border-radius:12px; padding:10px 12px; min-width:150px; }
+  .chip h4{ margin:0 0 8px; font-size:13px; font-family:var(--mono); color:var(--accent2); text-align:center; letter-spacing:.04em; }
+  .cells{ display:flex; flex-direction:column; gap:5px; }
+  .cell{ font-family:var(--mono); font-size:12px; padding:6px 9px; border-radius:7px; border:1px solid var(--line2);
+    background:var(--panel2); color:var(--dim); display:flex; justify-content:space-between; gap:12px; }
+  .cell .k{ color:#6b7794; }
+  .cell.p{ border-color:var(--gold); color:var(--gold); }          /* partial (per-chip, not yet summed) */
+  .cell.r{ border-color:var(--green); color:var(--green); background:rgba(70,211,154,.10); }  /* fully reduced */
+  .cell.x{ opacity:.32; border-style:dashed; }                     /* absent on this chip */
+  .move{ font-family:var(--mono); font-size:12.5px; color:var(--dim); margin:8px 0; }
+  .move b{ color:var(--red); } .move .g{ color:var(--green); }
+  .legend{ display:flex; gap:18px; flex-wrap:wrap; font-size:12.5px; color:var(--dim); margin:6px 0 2px; }
+  .sw{ display:inline-block; width:12px; height:12px; border-radius:3px; vertical-align:-1px; margin-right:5px; border:1px solid; }
+  .sw.p{ border-color:var(--gold); } .sw.r{ border-color:var(--green); background:rgba(70,211,154,.10);} .sw.x{ border-color:var(--line2); border-style:dashed; }
+  .foot{ margin-top:60px; padding-top:16px; border-top:1px solid var(--line); color:var(--dim); font-size:13px; text-align:center; }
+  .step{ font-family:var(--mono); font-size:12px; color:var(--accent); letter-spacing:.06em; text-transform:uppercase; margin-top:18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div class="eyebrow">DeepSeek V3.2 · MLA · collectives</div>
+  <h1>Reduce-scatter &amp; all-gather, <span class="grad">step by step</span></h1>
+  <p class="tagline">An all-reduce is built from two halves. Here is exactly how each one moves data, walked through the
+  <b class="hl">indexer-logits all-reduce</b> (ops 4 &amp; 5 in the MLA report) on the <code>sp4×tp2</code> run — with real bytes and times.</p>
+  <div class="eq">all-reduce&nbsp; = &nbsp;<b>reduce-scatter</b>&nbsp; then &nbsp;<b>all-gather</b>&nbsp;&nbsp;·&nbsp;&nbsp;wire bytes/chip = <u>2·(N−1)/N · T</u></div>
+</header>
+
+<!-- ============================================================ -->
+<h2><span class="n">§1</span>The example we are explaining</h2>
+<p>After change B, each <i class="b">TP</i> chip computes the indexer logits for only <b>half</b> the 64 indexer heads. The
+head-sum is separable, so every chip holds a <b class="hl">partial</b> logit tensor of the same shape, and we must add the two
+partials together so every chip ends up with the full head-summed logits before top-k. That "add across chips, result everywhere"
+is an <b>all-reduce</b>, and the code does it as <code>reduce_scatter_minimal_async</code> → <code>all_gather_async</code> over the tp-axis
+(<code>_tp_rs_ag</code> in <code>mla.py</code>).</p>
+
+<div class="card">
+<table>
+<tr><th>quantity</th><th class="mono">value</th><th>note</th></tr>
+<tr><td>collective axis</td><td class="mono">tp = 2 chips</td><td>so <b>N = 2</b> here — the simplest ring</td></tr>
+<tr><td>logits tensor <i class="b">T</i> (per chip)</td><td class="mono">[1, 1, 5120, 56320] bf16</td><td>5120 query rows × 56320 keys</td></tr>
+<tr><td>size of <i class="b">T</i></td><td class="num">≈ 577 MB</td><td>5120 × 56320 × 2 B = 576.7 MB</td></tr>
+<tr><td>scatter dimension</td><td class="mono">dim 3 (the 56320 keys)</td><td>split into N=2 shards of 28160 keys</td></tr>
+<tr><td>one shard</td><td class="num">≈ 288 MB</td><td>5120 × 28160 × 2 B = 288.4 MB</td></tr>
+</table>
+</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">§2</span>Why two phases instead of one</h2>
+<p>The goal of all-reduce is: <i class="b">every</i> chip ends holding the element-wise <b>sum</b> of all chips' tensors. The clever,
+bandwidth-optimal way (the <b>ring all-reduce</b>) never has one chip pull everything. Instead:</p>
+<ul>
+<li><b style="color:var(--gold)">reduce-scatter</b> — split <i class="b">T</i> into N shards; afterwards each chip owns <b>one fully-summed shard</b> (and nothing useful for the others). The <i>reduce</i> (the addition) happens here, spread across chips.</li>
+<li><b style="color:var(--green)">all-gather</b> — each chip now broadcasts the reduced shard it owns around the ring; afterwards <b>every chip has all N reduced shards</b> = the full summed tensor. No addition — pure copy.</li>
+</ul>
+<p>Each phase moves only <code>(N−1)/N · T</code> per chip on the wire, so the whole all-reduce is <code>2·(N−1)/N · T</code> — it stays ~2T
+no matter how many chips, instead of growing with N like a naive "everyone sends everyone the whole tensor."</p>
+
+<!-- ============================================================ -->
+<h2><span class="n">§3</span>Reduce-scatter, walked through (N = 2)</h2>
+<p>Call the two shards <b>A</b> (keys 0–28159) and <b>B</b> (keys 28160–56319). Each chip starts with its own
+<b class="hl">partial</b> of both shards: chip 0 has <code>A₀,B₀</code>; chip 1 has <code>A₁,B₁</code>. We want chip 0 to end owning the
+full <code>A = A₀+A₁</code> and chip 1 the full <code>B = B₀+B₁</code>.</p>
+
+<div class="legend">
+  <span><span class="sw p"></span> partial (this chip's contribution only)</span>
+  <span><span class="sw r"></span> fully reduced (summed across chips)</span>
+  <span><span class="sw x"></span> stale / not this chip's shard</span>
+</div>
+
+<div class="step">start</div>
+<div class="ring">
+  <div class="chip"><h4>chip 0</h4><div class="cells">
+    <div class="cell p"><span class="k">shard A</span><span>A₀</span></div>
+    <div class="cell p"><span class="k">shard B</span><span>B₀</span></div></div></div>
+  <div class="chip"><h4>chip 1</h4><div class="cells">
+    <div class="cell p"><span class="k">shard A</span><span>A₁</span></div>
+    <div class="cell p"><span class="k">shard B</span><span>B₁</span></div></div></div>
+</div>
+<div class="move">step 1 — each chip sends the shard the <i>other</i> chip will own, and adds what it receives:
+  <b>chip 0 → chip 1 : B₀ (288 MB)</b> &nbsp;·&nbsp; <b>chip 1 → chip 0 : A₁ (288 MB)</b>.
+  Then chip 0 computes <span class="g">A₀+A₁</span>, chip 1 computes <span class="g">B₀+B₁</span>.</div>
+
+<div class="step">after reduce-scatter</div>
+<div class="ring">
+  <div class="chip"><h4>chip 0</h4><div class="cells">
+    <div class="cell r"><span class="k">shard A</span><span>A₀+A₁ ✓</span></div>
+    <div class="cell x"><span class="k">shard B</span><span>—</span></div></div></div>
+  <div class="chip"><h4>chip 1</h4><div class="cells">
+    <div class="cell x"><span class="k">shard A</span><span>—</span></div>
+    <div class="cell r"><span class="k">shard B</span><span>B₀+B₁ ✓</span></div></div></div>
+</div>
+
+<div class="callout"><span class="who">bytes &amp; time</span>
+Each chip sent exactly <b>one shard = 288 MB</b> = <code>(N−1)/N · T = ½·577</code>. Measured <b>6.80 ms</b> →
+288 MB / 6.80 ms = <b>42.4 GB/s</b> per direction. With N=2 there is a single exchange; for N chips it takes <b>N−1 steps</b>,
+each moving one shard (see §6).</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">§4</span>All-gather, walked through (N = 2)</h2>
+<p>Now chip 0 owns the reduced <code>A</code> and chip 1 owns the reduced <code>B</code>, but neither has the <i>whole</i> logits tensor.
+All-gather fixes that by swapping the owned shards — <b>no addition</b>, just copies.</p>
+
+<div class="step">start (= end of reduce-scatter)</div>
+<div class="ring">
+  <div class="chip"><h4>chip 0</h4><div class="cells">
+    <div class="cell r"><span class="k">shard A</span><span>A ✓</span></div>
+    <div class="cell x"><span class="k">shard B</span><span>—</span></div></div></div>
+  <div class="chip"><h4>chip 1</h4><div class="cells">
+    <div class="cell x"><span class="k">shard A</span><span>—</span></div>
+    <div class="cell r"><span class="k">shard B</span><span>B ✓</span></div></div></div>
+</div>
+<div class="move">step 1 — each chip sends the reduced shard it owns:
+  <b>chip 0 → chip 1 : A (288 MB)</b> &nbsp;·&nbsp; <b>chip 1 → chip 0 : B (288 MB)</b>.</div>
+
+<div class="step">after all-gather — both chips hold the full reduced logits</div>
+<div class="ring">
+  <div class="chip"><h4>chip 0</h4><div class="cells">
+    <div class="cell r"><span class="k">shard A</span><span>A ✓</span></div>
+    <div class="cell r"><span class="k">shard B</span><span>B ✓</span></div></div></div>
+  <div class="chip"><h4>chip 1</h4><div class="cells">
+    <div class="cell r"><span class="k">shard A</span><span>A ✓</span></div>
+    <div class="cell r"><span class="k">shard B</span><span>B ✓</span></div></div></div>
+</div>
+
+<div class="callout"><span class="who">bytes &amp; time</span>
+Again each chip sent <b>one shard = 288 MB</b>. Measured <b>6.66 ms</b> → 43.3 GB/s per direction. Both chips now hold
+<code>[A | B]</code> = the complete head-summed logits <code>[1, 1, 5120, 56320]</code>, ready for top-k.</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">§5</span>The two phases together</h2>
+<table>
+<tr><th>phase</th><th>does</th><th class="mono">sent/chip</th><th class="mono">measured</th><th class="mono">eff. BW/dir</th></tr>
+<tr><td>reduce-scatter</td><td>add partials → each owns 1 reduced shard</td><td class="num">288 MB</td><td class="num">6.80 ms</td><td class="num">42.4 GB/s</td></tr>
+<tr><td>all-gather</td><td>swap reduced shards → everyone has all</td><td class="num">288 MB</td><td class="num">6.66 ms</td><td class="num">43.3 GB/s</td></tr>
+<tr><td><b>all-reduce</b></td><td><b>sum-everywhere</b></td><td class="num"><b>577 MB</b></td><td class="num"><b>13.46 ms</b></td><td class="num">—</td></tr>
+</table>
+<p>Total wire traffic per chip = <code>2·(N−1)/N · T = 2·½·577 = 577 MB</code> — the whole tensor's worth, split half into each phase.</p>
+
+<div class="callout warn"><span class="who">honest caveat at N = 2</span>
+At two chips the ring is degenerate (one step per phase), and ring all-reduce moves the <i>same</i> bytes as the naive
+"each chip sends its whole tensor to the other." The reduce-scatter/all-gather split earns its keep at <b>N &gt; 2</b>, where the
+ring stays ~2T per chip while naive grows as (N−1)·T. The code still uses RS+AG because it is the general primitive and it
+distributes the addition work.</p></div>
+
+<!-- ============================================================ -->
+<h2><span class="n">§6</span>The general ring (N &gt; 2), by example</h2>
+<p>To see why it is <code>(N−1)/N</code> per phase and <b>N−1 steps</b>, take <b>N = 4</b> chips, each holding a 4-chunk vector. Use toy
+values <code>chip i, chunk j = 10·i + j</code>. The true per-chunk sums are <code>ck0=60, ck1=64, ck2=68, ck3=72</code>.</p>
+
+<h3>Reduce-scatter: rotate-and-add around the ring (3 steps)</h3>
+<p>Every step, each chip sends one chunk to its right neighbour and adds the chunk it receives from the left. A different chunk is
+"in flight" on each link each step, so after 3 steps one chunk on each chip has visited all 4 chips and is fully summed:</p>
+<table>
+<tr><th>after step</th><th class="mono">chip 0</th><th class="mono">chip 1</th><th class="mono">chip 2</th><th class="mono">chip 3</th></tr>
+<tr><td>start</td><td class="mono">0,1,2,3</td><td class="mono">10,11,12,13</td><td class="mono">20,21,22,23</td><td class="mono">30,31,32,33</td></tr>
+<tr><td>step 1</td><td class="mono">0,1,2,<b style="color:var(--accent2)">36</b></td><td class="mono"><b style="color:var(--accent2)">10</b>,11,12,13</td><td class="mono">20,<b style="color:var(--accent2)">32</b>,22,23</td><td class="mono">30,31,<b style="color:var(--accent2)">54</b>,33</td></tr>
+<tr><td>step 2</td><td class="mono">0,1,<b style="color:var(--accent2)">56</b>,36</td><td class="mono">10,11,12,<b style="color:var(--accent2)">49</b></td><td class="mono"><b style="color:var(--accent2)">30</b>,32,22,23</td><td class="mono">30,<b style="color:var(--accent2)">63</b>,54,33</td></tr>
+<tr><td>step 3 ✓</td><td class="mono">0,<b style="color:var(--green)">64</b>,56,36</td><td class="mono">10,11,<b style="color:var(--green)">68</b>,49</td><td class="mono">30,32,22,<b style="color:var(--green)">72</b></td><td class="mono"><b style="color:var(--green)">60</b>,63,54,33</td></tr>
+</table>
+<p class="lede">Green = the one fully-reduced chunk each chip now owns: chip 0 → ck1 (64), chip 1 → ck2 (68), chip 2 → ck3 (72),
+chip 3 → ck0 (60). Each chip sent 3 chunks total = <code>3·(T/4) = (N−1)/N · T</code>.</p>
+
+<h3>All-gather: rotate the owned chunks (3 more steps)</h3>
+<p>Now each chip forwards the reduced chunk it owns around the same ring; after 3 steps all four chips hold
+<code>[60, 64, 68, 72]</code>. Same <code>(N−1)/N · T</code> bytes, same N−1 steps — no addition this time.</p>
+
+<div class="callout key"><span class="who">the scaling result</span>
+Per chip, all-reduce moves <code>2·(N−1)/N · T</code> and takes <code>2·(N−1)</code> link steps. As N grows the bytes approach a flat
+<b>2T</b> (vs naive's (N−1)·T), which is why ring RS+AG is the standard bandwidth-optimal all-reduce.</div>
+
+<!-- ============================================================ -->
+<h2><span class="n">§7</span>So why does our all-reduce only hit ~42 GB/s?</h2>
+<p>Not because the algorithm is wasteful — it moves the optimal 577 MB/chip. It is <b>fabric-link-bound</b>. The <code>512 GB/s</code>
+yardstick is <i>DRAM</i> bandwidth (on-chip); a tp-axis collective crosses the <b>Ethernet fabric</b>, whose Blackhole ceiling is
+~19 GB/s/link at 2 KB packets and ~38 GB/s/link at 4 KB (on-box golden). We already use <b>both</b> links (the LoudBox max), and a
+bf16 tile is exactly a 2 KB page — so at ~21 GB/s/link we are essentially at the fabric's tile-page rate, not overhead- or
+NoC-bound.</p>
+<div class="callout warn"><span class="who">the real lever</span>
+Since each phase moves <code>(N−1)/N · T</code>, the way to make this faster is <b>fewer bytes in T</b>, not CCL micro-tuning.
+<b>SP-sharding the indexer queries</b> shrinks the 5120-row logits to 1280 rows → T drops ~4× → the whole all-reduce shrinks with
+it. Bigger fabric packets (4 KB vs 2 KB tile pages) and an RM-native CCL (dropping the ±6 ms tilize/untilize round-trip) are the
+secondary levers. See the MLA report §5.4/5.5 for the full bandwidth breakdown.</div>
+
+<div class="foot">DeepSeek V3.2 MLA · reduce-scatter &amp; all-gather explainer · companion to <code>mla_layer_report.html</code> ·
+numbers from the <code>sp4×tp2</code>, 50k-cache + 5k-chunk tracy run</div>
+</div>
+</body>
+</html>
