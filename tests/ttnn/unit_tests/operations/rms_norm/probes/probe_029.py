@@ -1,0 +1,45 @@
+import torch, ttnn
+from ttnn.operations.rms_norm import rms_norm
+import ttnn.operations.rms_norm.rms_norm_program_descriptor as desc
+
+dev = ttnn.open_device(device_id=0)
+
+
+def measure(x, layout, iters=7):
+    ti = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=layout, device=dev)
+    rms_norm(ti)
+    ttnn.synchronize_device(dev)
+    ttnn.ReadDeviceProfiler(dev)
+    s = []
+    for _ in range(iters):
+        rms_norm(ti)
+        ttnn.synchronize_device(dev)
+        ttnn.ReadDeviceProfiler(dev)
+        pc = ttnn.get_latest_programs_perf_data()
+        tot = 0.0
+        f = False
+        for progs in (pc or {}).values():
+            for p in progs:
+                e = (getattr(p, "program_analyses_results", None) or {}).get("DEVICE KERNEL DURATION [ns]")
+                if e is not None:
+                    tot += float(e.duration)
+                    f = True
+        if f:
+            s.append(tot)
+    return min(s) if s else None
+
+
+try:
+    for lt, tag in [(ttnn.TILE_LAYOUT, "TILE"), (ttnn.ROW_MAJOR_LAYOUT, "RM")]:
+        for W in [256, 512, 1024, 2048, 4096]:
+            x = torch.randn(1, 1, 32, W)
+            desc._FORCE_REGIME = "A"
+            a = measure(x, lt)
+            desc._FORCE_REGIME = "B"
+            b = measure(x, lt)
+            desc._FORCE_REGIME = None
+            win = "A" if (a or 9e9) < (b or 9e9) else "B"
+            print("RES %-4s Wt=%-3d A=%8.0f B=%8.0f win=%s" % (tag, W // 32, a or -1, b or -1, win))
+finally:
+    desc._FORCE_REGIME = None
+    ttnn.close_device(dev)

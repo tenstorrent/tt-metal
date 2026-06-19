@@ -147,30 +147,28 @@ def _measure_forced(device, x, regime, **kw):
         desc._FORCE_REGIME = None
 
 
-@pytest.mark.parametrize(
-    "layout, W, expect_winner",
-    [
-        # TILE crossover ~160: A decisive at Wt=64, B decisive at Wt=256.
-        (ttnn.TILE_LAYOUT, 2048, "A"),  # Wt=64
-        (ttnn.TILE_LAYOUT, 8192, "B"),  # Wt=256
-        # ROW_MAJOR crossover ~96 (lower: RM Regime A tilizes the whole row on one
-        # core): A at Wt=64, B already winning at Wt=128.
-        (ttnn.ROW_MAJOR_LAYOUT, 2048, "A"),  # Wt=64
-        (ttnn.ROW_MAJOR_LAYOUT, 4096, "B"),  # Wt=128
-    ],
-    ids=["TILE-Wt64", "TILE-Wt256", "RM-Wt64", "RM-Wt128"],
-)
-def test_rms_norm_ab_crossover(device, layout, W, expect_winner):
-    """Force A and B on the same single-tile-row shape; the measured layout-aware
-    crossover (REGIME_B_MIN_WT_TILE / _RM) must agree with which regime is faster."""
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["TILE", "RM"])
+@pytest.mark.parametrize("W", [256, 8192], ids=["Wt8", "Wt256"])
+def test_rms_norm_ab_crossover(device, layout, W):
+    """Force A and B on the same single-tile-row shape and assert (1) the production
+    heuristic picks the faster regime within a noise band, and (2) wide rows (Wt=256)
+    are decisively faster in the (K-tuned) Regime B.
+
+    With the K-tuned _select_k, Regime B is fast enough that it wins from Wt>=16; the
+    crossover threshold (REGIME_B_MIN_WT_*=16) keeps only the single-tile-wide row
+    (Wt=8, W=256) in Regime A. We don't pin a winner at the Wt=8 boundary (it is a
+    ~15% margin, near noise) — the robust contract is that the heuristic tracks the
+    faster regime."""
     x = torch.randn(1, 1, 32, W)
     a = _measure_forced(device, x, "A", layout=layout)
     b = _measure_forced(device, x, "B", layout=layout)
     assert a is not None and b is not None, (a, b)
-    winner = "A" if a < b else "B"
-    assert winner == expect_winner, f"W={W} {layout}: A={a/1000:.1f}us B={b/1000:.1f}us, expected {expect_winner}"
 
-    # The production heuristic must select the faster regime within a noise band.
+    # (1) The production heuristic must select the faster regime within a noise band.
     chosen = measure_device_kernel_ns(device, x, layout=layout)
     best = min(a, b)
     assert chosen <= best * 1.20, f"W={W} {layout}: heuristic {chosen/1000:.1f}us, best {best/1000:.1f}us"
+
+    # (2) Wide rows: K-tuned Regime B must decisively beat single-core Regime A.
+    if W >= 8192:
+        assert b < a, f"W={W} {layout}: expected B<A, got A={a/1000:.1f}us B={b/1000:.1f}us"

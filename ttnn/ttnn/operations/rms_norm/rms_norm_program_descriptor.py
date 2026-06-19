@@ -61,22 +61,22 @@ RESIDENT_BUDGET_TILES = 560
 #      AND Wt >= REGIME_B_MIN_WT. Below the crossover, Regime A's single/few-core
 #      run beats B's mcast setup cost.
 #
-# The crossover is LAYOUT-AWARE — measured separately for TILE and ROW_MAJOR on an
-# 8x8 Wormhole grid (see changelog Refinement 6 and tests/.../test_rms_norm_perf.py),
-# A-forced vs B-forced device-kernel-ns for single-tile-row shapes (1,1,32,W) that
-# all fit L1. In both layouts Regime A device time scales ~linearly with Wt (one core
-# does the whole row) while Regime B is roughly flat (~70-110us: it splits W across K
-# cores but pays a fixed mcast all-gather cost). The crossover differs by layout:
-#
-#   TILE: A ~27.7us@Wt32 -> 196us@Wt256; B ~71-110us. Cross near Wt 96-128 (a wash);
-#         A decisive <=64 (1.5-2x), B decisive >=192 (1.4-1.8x). Threshold 160 keeps
-#         the clear A wins (Wt<=128) in A and routes the clear B wins (>=160) to B.
-#   ROW_MAJOR: Regime A additionally tilizes the whole row on ONE core, so A is much
-#         steeper: A 75us@Wt64 -> 151us@Wt128 -> 297us@Wt256; B ~108-111us. A wins
-#         only at Wt<=64, B wins from Wt=128 (40% faster). Threshold 96 sits in the
-#         64..128 gap. (A single TILE-tuned 160 would wrongly keep RM Wt=128 in A.)
-REGIME_B_MIN_WT_TILE = 160
-REGIME_B_MIN_WT_RM = 96
+# The crossover is measured against the FINAL, K-tuned Regime B (see _select_k —
+# the proxy-min-K policy makes B ~3-6x faster than the old maximize-K version). With
+# that fast B, the crossover is LOW and the same for both layouts: B wins from Wt>=16.
+# Measured (A-forced vs B-forced device-kernel-ns, single-tile-row (1,1,32,W), 8x8
+# Wormhole grid, see tests/.../test_rms_norm_perf.py):
+#   TILE: Wt=8 A=9.8 B=11.3us (A wins, 15%); Wt=16 A=15.7 B=12.0 (B); Wt=64 A=52 B=17
+#         (B 3x); Wt=128 A=100 B=23 (B 4x). Regime A scales ~linearly with Wt (one
+#         core does the whole row); K-tuned B grows slowly (~11->23us over Wt 8->128).
+#   ROW_MAJOR: Wt=8 A=13.7 B=14.8 (A); Wt=16 A=22.6 B=15.2 (B); Wt=64 A=75 B=20 (B).
+# So A only wins for a single tile-wide row (Wt=8, W=256); everything wider that fits
+# a rectangular W-split is faster in (K-tuned) B. Threshold 16 keeps Wt=8 in A and
+# routes Wt>=16 to B. (Earlier intermediate measurements gave 160/96, but that was
+# BEFORE the _select_k K-tuning — those numbers are stale; the K-tuning is what makes
+# the low crossover correct.)
+REGIME_B_MIN_WT_TILE = 16
+REGIME_B_MIN_WT_RM = 16
 
 # Precision ceiling on the crossover (NOT a perf number — a correctness floor):
 # Regime A computes Σx² as a SINGLE reduce over the whole resident shard. With
@@ -89,6 +89,10 @@ REGIME_B_MIN_WT_RM = 96
 # accumulates in fp32 and stays precise at any width, so the perf crossover governs.
 # Empirically the bf16-accumulation cliff sits between Wt=64 (passes in A) and
 # Wt=128 (fails in A): 96 forces the precision-risky rows (Wt>=96) into B.
+# NOTE: with the K-tuned perf crossover now at 16 (< 96), this ceiling is currently
+# subsumed — every Wt>=16 row already routes to B on perf grounds, so the precision
+# cliff at Wt~128 is never reached in A. It is retained as a defensive floor: if the
+# perf crossover is ever raised above 96, this keeps fp32_acc=False wide rows in B.
 REGIME_B_PRECISION_CEILING_NO_FP32ACC = 96
 
 
@@ -111,6 +115,10 @@ def _b_min_wt(layout_is_rm: bool, fp32_acc: bool) -> int:
 # regime that is infeasible for the shape (e.g. "A" on an OOM row, or "B" with no
 # rectangular partition) the descriptor falls back to the heuristic choice.
 _FORCE_REGIME = None
+# Measurement-only hook (perf tests). None -> _select_k picks the largest valid K.
+# An int -> force that K (if it qualifies) to sweep the W-split factor. Never set in
+# production.
+_FORCE_K = None
 
 # ---- ROW_MAJOR (tilize-wrapped) regime CB indices ----
 # Refinement 3: ROW_MAJOR input/output handled natively via a tilize-wrapped,
@@ -259,7 +267,8 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         # row (Wt_padded) resident, so its footprint is identical in shape to TILE.
         row_fits = _row_fits_l1(Wt_padded, input_tensor.dtype, fp32_acc, gamma, has_gamma)
 
-        K = _select_k(Wt, num_blocks_total, grid, total_cores, has_gamma)
+        _gamma_dt = gamma.dtype if has_gamma else input_tensor.dtype
+        K = _select_k(Wt, num_blocks_total, grid, total_cores, has_gamma, input_tensor.dtype, fp32_acc, _gamma_dt)
         regime_a_cores = min(num_blocks_total, total_cores)
         adds_cores = K is not None and num_blocks_total * K > regime_a_cores
 
@@ -315,7 +324,8 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, grid, total_cores, inv_W_bits, eps_bits
         )
 
-    K = _select_k(Wt, Ht_total, grid, total_cores, has_gamma)
+    _gamma_dt = gamma.dtype if has_gamma else input_tensor.dtype
+    K = _select_k(Wt, Ht_total, grid, total_cores, has_gamma, input_tensor.dtype, fp32_acc, _gamma_dt)
     regime_a_cores = min(Ht_total, total_cores)
     adds_cores = K is not None and Ht_total * K > regime_a_cores
 
@@ -526,25 +536,45 @@ def _regime_a_descriptor(
     return program, io
 
 
-def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma):
-    """Largest W-split factor K forming full-width rectangular bands that saturate the
-    grid: K divides Wt, K is a multiple of grid.x (full-width bands), num_row_groups*K
-    fits the grid, and Wt/K fits the resident budget. Returns None if none qualifies."""
+def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_dtype, fp32_acc, gamma_dtype):
+    """W-split factor K forming full-width rectangular bands: K divides Wt, K is a
+    multiple of grid.x (full-width bands), num_row_groups*K fits the grid, and the
+    per-core shard (Wt/K) fits the L1 resident byte budget. Returns None if none
+    qualifies.
+
+    Refinement 6 (K tuning, measured — this is NOT 'maximize K'): the all-gather cost
+    grows ~O(K) (each of the K cores mcasts its partial and the combine sums K tiles),
+    while the per-core reduce shrinks ~O(Wt/K). Total device time ≈ Wt/K + c·K, so
+    "maximize K" is the WORST choice — measured on (1,1,32,8192) Wt=256, Regime B is
+    K=16→33.9us vs K=64→109.8us (3.2x), and (1,1,32,16384) Wt=512 is K=16→48us vs
+    K=64→116us. We therefore pick the K that MINIMIZES the cost proxy (Wt//K + K)
+    among the qualifying candidates (tie-break: smaller K = less gather). This lands
+    K≈16 for Wt=256/512 (matching the measured optima) and adapts up (~√Wt) for wider
+    rows. The OOM floor still constrains the minimum K from below (a shard must fit
+    L1), and num_row_groups*K<=grid bounds it from above. _FORCE_K (perf tests only)
+    overrides the choice to sweep K."""
     gx = grid.x
-    budget = RESIDENT_BUDGET_TILES
-    best = None
-    for K in range(gx, total_cores + 1, gx):
-        if Wt % K != 0:
-            continue
-        if K % gx != 0:
-            continue
-        if num_row_groups * K > total_cores:
-            continue
+    inter = _intermediate_dtype(input_dtype, fp32_acc)
+
+    def _qualifies(K):
+        if K % gx != 0 or Wt % K != 0 or num_row_groups * K > total_cores:
+            return False
         Wt_s = Wt // K
-        if Wt_s + (Wt_s if has_gamma else 0) > budget:
+        return _regime_a_resident_bytes(Wt_s, input_dtype, inter, gamma_dtype, has_gamma) <= L1_RESIDENT_BUDGET_BYTES
+
+    if _FORCE_K is not None:
+        return _FORCE_K if _qualifies(_FORCE_K) else None
+
+    best = None
+    best_cost = None
+    for K in range(gx, total_cores + 1, gx):
+        if not _qualifies(K):
             continue
-        if best is None or K > best:
-            best = K
+        cost = (Wt // K) + K  # ≈ per-core reduce work + all-gather cost
+        # Strictly-less keeps the SMALLEST K on ties (loop ascends), favouring less
+        # mcast/gather overhead at equal proxy cost.
+        if best_cost is None or cost < best_cost:
+            best, best_cost = K, cost
     return best
 
 
@@ -553,7 +583,9 @@ def _regime_b_descriptor(
 ):
     num_row_groups = Ht_total  # Phase 0: bh = 1 tile-row per group
     gx = grid.x
-    K = _select_k(Wt, num_row_groups, grid, total_cores, has_gamma)
+    _fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
+    _gamma_dt = gamma.dtype if has_gamma else input_tensor.dtype
+    K = _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_tensor.dtype, _fp32_acc, _gamma_dt)
     if K is None:
         raise NotImplementedError(
             f"rms_norm: no rectangular Regime B partition for Wt={Wt}, "
@@ -969,7 +1001,9 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
     Wt = (W + 31) // 32
     num_block_groups = (total_sticks + 31) // 32  # 32-stick blocks (analogue of Ht_total)
 
-    K = _select_k(Wt, num_block_groups, grid, total_cores, has_gamma)
+    _fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
+    _gamma_dt = gamma.dtype if has_gamma else input_tensor.dtype
+    K = _select_k(Wt, num_block_groups, grid, total_cores, has_gamma, input_tensor.dtype, _fp32_acc, _gamma_dt)
     if K is None:
         raise NotImplementedError(
             f"rms_norm (RM): no rectangular Regime B partition for Wt={Wt}, "
