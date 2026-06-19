@@ -29,6 +29,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 namespace {
 
@@ -2259,7 +2260,7 @@ namespace blitz_assign_tests {
 
 using ::tt::tt_fabric::FabricNodeId;
 using ::tt::tt_fabric::MeshId;
-using ::tt::tt_metal::experimental::blitz::detail::assign_non_colliding_hops;
+using ::tt::tt_metal::experimental::tt_fabric::assign_non_colliding_hops;
 using HopPair = std::pair<FabricNodeId, FabricNodeId>;
 
 FabricNodeId node(std::uint32_t mesh, std::uint32_t chip) { return FabricNodeId(MeshId{mesh}, chip); }
