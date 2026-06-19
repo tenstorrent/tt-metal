@@ -62,7 +62,7 @@ no_gamma canonicalizations — no refinement needed for those.
 - **Golden baseline**: 22 / (22+21 supported) passing — the 21 failures are all
   Regime B (Refinement 1).
 
-### [ ] Refinement 1 — Fix Regime B cross-core all-gather correctness (BLOCKER)
+### [x] Refinement 1 — Fix Regime B cross-core all-gather correctness (BLOCKER)
 
 **Goal**: move the 21 wide / few-row `supported_fail` cells (every shape whose
 `Ht_total < grid` or whose full row exceeds the L1 resident budget, e.g.
