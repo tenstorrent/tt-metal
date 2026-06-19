@@ -274,7 +274,7 @@ def upload_page_table(
     num_blocks_per_user: int,
     mesh_device,
     weight_cache_path: Optional[PathLike] = None,
-    cache_key: str = "kv_page_table_pad8",
+    cache_key: Optional[str] = None,
 ) -> ttnn.Tensor:
     """Upload a contiguous page table ``[batch, num_blocks_per_user]`` (int32, DRAM ROW_MAJOR).
 
@@ -293,6 +293,8 @@ def upload_page_table(
     block_ids = torch.arange(batch_size * num_blocks_per_user, dtype=torch.int32)
     page_table = block_ids.reshape(batch_size, num_blocks_per_user).contiguous()
     page_table = pad_page_table_cols_to_multiple_of_8(page_table)  # no-op when already aligned
+    if cache_key is None:
+        cache_key = f"kv_page_table_b{num_blocks_per_user}_cols{page_table.shape[1]}"
     return ttnn.as_tensor(
         page_table,
         dtype=ttnn.int32,

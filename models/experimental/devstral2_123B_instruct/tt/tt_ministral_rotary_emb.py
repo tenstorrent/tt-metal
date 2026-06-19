@@ -219,7 +219,7 @@ class TtRotaryEmbedding:
                 dtype=dtype,
                 memory_config=prefill_rope_mem,
                 weight_cache_path=cache_path,
-                cache_key=f"rotary_{name}",
+                cache_key=f"rotary_{name}_pos{max_pos}",
             )
 
         self.cos_q = _upload(cos_q, "cos_q")
@@ -245,7 +245,7 @@ class TtRotaryEmbedding:
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-                cache_file_name=weight_cache_file(cache_path, f"rotary_decode_{name}"),
+                cache_file_name=weight_cache_file(cache_path, f"rotary_decode_{name}_pos{max_pos}"),
             )
 
         self.cos_q_decode = _upload_decode_lookup(cos_q, "cos_q")

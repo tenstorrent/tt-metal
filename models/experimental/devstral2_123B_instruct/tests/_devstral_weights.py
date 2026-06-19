@@ -128,7 +128,11 @@ def devstral2_isl_perf_kv_max_seq_len(isl_lengths: list[int]) -> int:
         num_chunks = max(1, (isl + kv_block - 1) // kv_block)
         padded_len = num_chunks * kv_block
         need = max(need, _round_up(padded_len + max_new, kv_block))
-    floor = _min_max_seq_len()
+    # ``DEVSTRAL2_MIN_MAX_SEQ_LEN`` (default 262144) is a prefill budget floor, not a decode-safe
+    # cap: a prompt at the floor still needs ``max_new_tokens`` slots after prefill (e.g. ISL=262144
+    # decode starts at pos 262144 = logical KV block 2048, which does not exist when max_seq_len is
+    # exactly 262144).
+    floor = _round_up(_min_max_seq_len() + max_new, kv_block)
     return _round_up_max_seq_len(max(need, floor), kv_block)
 
 
