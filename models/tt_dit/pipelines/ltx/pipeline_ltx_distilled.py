@@ -143,7 +143,10 @@ class LTXDistilledPipeline(LTXPipeline):
         # Warm the encoders last: they coresident-evict the DiT/VAE, so gen #0 then re-loads the DiT.
         # The VAE image encoder is warmed here (not before the denoise warmups) for the same reason:
         # running it evicts the transformer weights, which the denoise steps above still need resident.
-        if self.vae_encoder is not None and os.environ.get("LTX_I2V_IMAGE"):
+        # Warm whenever the checkpoint has an encoder, not only when an I2V image is staged: the first
+        # I2V request can arrive after capture, and loading the encoder then evicts the DiT and clobbers
+        # the already-captured traces' activation regions — corrupting every subsequent gen to static.
+        if self.vae_encoder is not None:
             logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
             self._warmup_encode(height // 2, width // 2)
             self._warmup_encode(height, width)
