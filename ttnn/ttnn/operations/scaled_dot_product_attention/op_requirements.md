@@ -54,7 +54,24 @@
 
 ---
 
-### [ ] Refinement 1 — Numerical configurability (float32 + bfloat8_b + compute_kernel_config)
+### [~] Refinement 1 — Numerical configurability (float32 + bfloat8_b + compute_kernel_config)
+
+> **R1 outcome (partial)**: `bfloat8_b` fully landed (incl. bf8b+causal — the
+> block-float additive −inf survives, PCC 0.9999, no EXCLUSIONS needed).
+> `float32` landed for all tile-aligned/MHA cells **except two narrow corners**:
+> (1) `float32 + head_dim=1024` (`Q1x1x128x1024`, 4 cells) hit a **hard L1 OOM** —
+> the fp32 input CBs double the footprint (cb_k/cb_v ≈ 1 MB each at Dt=32),
+> static CBs grow to 2,767,616 B > 1,572,864 B. **Lever proven**: temporarily
+> capping `kv_chunk_t=1` shrinks cb_k/cb_v and all 4 cases run+pass — deferred to
+> the memory-budget follow-up (R4 below) rather than bolting a fragile hardcoded-
+> L1 heuristic into this numeric-formats refinement. (2) `float32 + S=8192 +
+> no-mask` (`Q1x1x8192x64`, 2 cells) miss the tight fp32 rms target (rms=0.0206 >
+> 0.02, PCC=0.9999) — the known bf16-CB softmax-accumulator limitation (Issue
+> #13364, fp32 CBs hang), explicitly out of R1 scope per the verifier note and
+> tracked in `verification_report.md` (lever-less, not a refinement). Causal +
+> S=8192 fp32 passes (masking halves the accumulation depth). Golden: **414/420**
+> supported cells pass (Phase-0 140 bf16 all green; 324 correctly xfail toward R2/R3).
+
 
 **Goal**: add `ttnn.float32` and `ttnn.bfloat8_b` to `SUPPORTED["dtype"]`, expose a
 `compute_kernel_config: ttnn.ComputeKernelConfig` argument on the public entry point,
@@ -156,3 +173,48 @@ expands, so this is the `/memory-layouts` non-aligned methodology, not a new Lay
 
 **Done when**: every `alignment ∈ {w_non_aligned, h_non_aligned}` cell at supported
 dtype/kv_heads passes or is in `EXCLUSIONS`; prior phases still green.
+
+---
+
+### [ ] Refinement 4 — L1 budget for large head_dim (footprint-aware kv_chunk_t)
+
+**Goal**: make the **6** currently-failing `float32 + head_dim=1024` golden cells
+(`Q1x1x128x1024`, mask ∈ {none, causal} × scale ∈ {auto, explicit}) run without an
+L1 over-allocation, by sizing the KV streaming CBs to the per-core L1 budget instead
+of an unconditional `kv_chunk_t = largest_divisor_leq(Skv_t, DEST_LIMIT)`. Spun out
+of R1 — the fp32 dtype doubled the input-CB footprint (cb_k/cb_v ≈ 1 MB each at
+Dt=32), pushing static CBs to 2,767,616 B > the 1,572,864 B L1 ceiling.
+
+**Implementation skill**: /memory-budget-metal
+
+**Verifier notes / proven lever** (from the R1 run):
+- The failure is a clean allocator throw (`program.cpp:1487`,
+  "Statically allocated circular buffers grow to 2767616 B beyond max L1 size of
+  1572864 B"), reproducible on `Q1x1x128x1024 dtype=FLOAT32`. Not a kernel bug — a
+  resource bound from R1's fp32 input CBs.
+- **Lever already proven in R1**: temporarily setting `KV_CHUNK_MAX = 1` (so
+  `kv_chunk_t = 1`) makes **all 4** D=1024 fp32 cells run and pass (golden, both
+  mask/scale combos). kv_chunk_t reduction shrinks `cb_k`/`cb_v` (= `2·kv_chunk_t·Dt`
+  tiles) and `cb_scores`/`cb_p`/`cb_mask` proportionally; the compute kernel already
+  accepts any `kv_chunk_t` via compile-time args, so no kernel change is needed.
+- **Do NOT** apply a global `kv_chunk_t=1` (it serializes KV streaming for every
+  shape). The fix is a **footprint-aware** reduction in the program descriptor:
+  estimate the static CB total for the current `kv_chunk_t`; while it exceeds the
+  per-core L1 budget (minus a page-alignment margin — the allocator added ~4% over
+  the naive byte sum in R1), step `kv_chunk_t` down to the next smaller divisor of
+  `Skv_t` (floor 1). bf16 `Q1x1x128x1024` stays at `kv_chunk_t=4` (its ~1.43 MB
+  footprint fits), so existing cases do not regress. Use the skill's L1-budget query
+  rather than a hardcoded Blackhole constant.
+- Also re-derive `osw_qk`/`in1sb_qk` from the reduced `kv_chunk_t` (they already are
+  — `osw_qk = largest_divisor_leq(kv_chunk_t, DEST_LIMIT)`).
+
+**Done when**: the 6 `float32 + Q1x1x128x1024` golden cells pass; the 414 R1-passing
+golden cells and 24 acceptance tests stay green; no new OOM on any supported shape.
+
+> **Not a refinement — tracked separately**: `float32 + S=8192 + no-mask` (2 golden
+> cells, rms=0.0206 > 0.02 target, PCC=0.9999) is the bf16-CB softmax-accumulator
+> precision limitation (running `l`/`O` round-tripped through bf16 across 2048 KV
+> chunks; fp32 CBs hang this LLK — Issue #13364). No in-scope lever (math_fidelity
+> is accumulation-dominated here, not matmul-dominated; the default must stay HiFi2).
+> Documented in `verification_report.md` and R1's `changelog.md`. Revisit when
+> Issue #13364 is resolved, not as a standalone refinement.

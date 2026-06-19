@@ -41,3 +41,57 @@
   (float32 + bfloat8_b + compute_kernel_config, /numeric-formats-metal) →
   R2 GQA/MQA (kv_heads_mode, reader already wired) → R3 non-tile-aligned
   (alignment w/h, /memory-layouts). Covers every TARGET−SUPPORTED gap.
+
+## Refinement 1 — Numerical configurability (float32 + bfloat8_b + compute_kernel_config)
+- **Date**: 2026-06-19
+- **What was done** (descriptor-level only — zero compute-kernel changes; the
+  helper-based kernel carried all data-format reconfig automatically):
+  - `SUPPORTED["dtype"]` += `ttnn.float32`, `ttnn.bfloat8_b`.
+  - Public entry point gained `compute_kernel_config: ttnn.ComputeKernelConfig = None`.
+    Resolved via `init_device_compute_kernel_config(arch, cfg, …)` — `None` reproduces
+    the Phase-0 defaults byte-for-byte (HiFi2, fp32_dest_acc_en=True, approx=False,
+    full_sync=False); a user config overrides per-field.
+  - Output dtype now follows `Q.dtype` (was hard-coded bf16) — satisfies the golden
+    `output.dtype == input.dtype` contract for fp32/bf8b.
+  - Program descriptor: input-side CBs (cb_q/k/v/mask) and the output CB (cb_out)
+    follow the tensor dtype (`ttnn.tile_size(dtype)`); **all** matmul/reduce/eltwise
+    intermediate CBs stay bf16 with fp32-DEST accumulation (Issue #13364 — fp32 CB
+    storage hangs this LLK). fp32 inputs unpack through srcA/srcB (→ TF32) for the
+    matmuls — production SDPA behavior. ComputeConfigDescriptor now driven by the
+    resolved config. No `UnpackToDestFp32` tagging (intermediates are bf16 and feed
+    FPU matmul/reduce — tag would be incompatible).
+- **Accuracy achieved** (test_..._numerical.py precision matrix, randn, 5 shapes
+  32×32…512×64/128×128 × {bf16,fp32,bf8b} × {HiFi4,HiFi2,LoFi} × fp32_acc{T,F},
+  90/90 pass):
+  - bf16:  PCC ≥ 0.99992 (HiFi4/2), ≥ 0.99896 (LoFi); rel-RMS 0.5–1.0% (HiFi), 6–8% (LoFi).
+  - fp32:  PCC ≥ 0.99989 (HiFi4/2), ≥ 0.99887 (LoFi); rel-RMS ~same as bf16 (inputs
+    unpack to TF32, so fp32 storage adds range/contract, not mantissa precision).
+  - bf8b:  PCC ≥ 0.99980 (HiFi4/2), ≥ 0.99905 (LoFi); rel-RMS 1.7–2.2%.
+  - bf8b + causal additive −inf mask: PCC 0.9999 (the flagged sharp edge — passes,
+    no EXCLUSIONS needed). Full table in tests/.../precision_matrix_results.md.
+- **Golden test progress**: **414 / 420** supported cells passing (Phase-0 was
+  140/140 bf16; 324 cells correctly xfail toward R2/R3; 1 skipped loose placeholder).
+  - `bfloat8_b`: **fully landed** — every tile-aligned/MHA bf8b cell passes.
+  - `float32`: all pass **except 6 corners**, both left failing (NOT silenced in
+    EXCLUSIONS, per the OOM / precision-near-miss protocol):
+    1. `float32 + Q1x1x128x1024` (D=1024, 4 cells) — **hard L1 OOM**: static CBs
+       grow to 2,767,616 B > 1,572,864 B because fp32 input CBs double the footprint
+       (cb_k/cb_v ≈ 1 MB each at Dt=32). **Lever proven** (temp `kv_chunk_t=1` →
+       all 4 run+pass). Deferred to **R4** (footprint-aware kv_chunk_t,
+       /memory-budget-metal) rather than hardcoding an L1 heuristic into a
+       numeric-formats refinement.
+    2. `float32 + Q1x1x8192x64 + no-mask` (2 cells) — **precision near-miss**:
+       rms=0.0206 > 0.02 target (PCC=0.9999). bf16-CB softmax-accumulator limit over
+       2048 KV chunks (Issue #13364; fp32 CBs hang). Lever-less for the default-config
+       golden — tracked in verification_report.md, not a refinement. (Causal S=8192
+       fp32 passes — masking halves the accumulation depth.)
+- **Issues encountered**: the 6 float32 corners above. The bf8b+causal and
+  bf8b+non_aligned EXCLUSIONS candidates flagged in the R1 plan did **not**
+  materialize (bf8b+causal passes; bf8b+non_aligned isn't reachable until R3 adds
+  the alignment axis). EXCLUSIONS stays `[]`.
+- **Tests added**:
+  - tests/.../test_scaled_dot_product_attention_numerical.py — test_dtype_mask_scale
+    (48: dtype×mask×scale×attn-kind, incl. bf8b+causal), test_compute_kernel_config_honored
+    (18: config-knob plumbing), test_scaled_dot_product_attention_precision_matrix (90).
+  - tests/.../test_sdpa_dtype_probe.py — minimal isolated dtype smoke test.
+  - tests/.../precision_matrix_results.md — characterization table + observations.
