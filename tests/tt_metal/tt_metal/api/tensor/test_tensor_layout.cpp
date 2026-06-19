@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -11,20 +11,18 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include "common_tensor_test_utils.hpp"
-#include "ttnn_test_fixtures.hpp"
 #include "gtest/gtest.h"
 #include <tt-metalium/shape.hpp>
-#include "ttnn/operations/functions.hpp"
-#include "ttnn/tensor/layout/alignment.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/layout/tensor_layout.hpp"
-#include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/tensor/types.hpp"
-#include "ttnn/types.hpp"
+#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/tensor_layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
-using namespace ttnn;
-
+namespace tt::tt_metal {
 namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
 const MemoryConfig DefaultMemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt};
 const MemoryConfig L1MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::L1, std::nullopt};
 
@@ -45,7 +43,6 @@ struct TensorLayoutTestParams {
     Inputs inputs;
     Expected expected;
 };
-}  // namespace
 
 class TensorLayoutComputeTests : public ::testing::TestWithParam<TensorLayoutTestParams> {};
 
@@ -58,7 +55,7 @@ TEST_P(TensorLayoutComputeTests, TensorLayout_Generic) {
     EXPECT_EQ(layout.compute_strides(params.inputs.shape), params.expected.strides);
 
     if (params.expected.tensor_creation_works) {
-        test_utils::test_tensor_on_device(params.inputs.shape, layout);
+        ::test_utils::test_tensor_on_device(params.inputs.shape, layout);
     }
 }
 
@@ -68,7 +65,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // Tiled
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{5, 4, 3, 2}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = Shape{5, 4, 3, 2}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {5 * 4 * 32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
@@ -76,7 +73,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, bfloat16, requires padding to 2
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{6, 5, 4, 3}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{6, 5, 4, 3}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 3},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -84,7 +81,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, uint32
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{6, 5, 4, 3}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{6, 5, 4, 3}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 3},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -92,7 +89,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, bfloat16, requires padding to 2, aligned
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{6, 5, 4, 8}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{6, 5, 4, 8}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 8},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -100,7 +97,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Tile, 1 element
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
@@ -108,7 +105,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, 1 element
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -116,7 +113,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, uint32_t 1 element
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{1, 1, 1, 1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -124,7 +121,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 0, RM, in bfloat16 needs additional padding to 4 bytes
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -133,7 +130,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 0, RM, in uint32_t needs no additional padding
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -142,7 +139,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 0, Tile
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
@@ -151,7 +148,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 1, RM, bfloat16
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -160,7 +157,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 1, RM, uint32
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = Shape{1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = tt::tt_metal::Alignment({1}),
@@ -169,7 +166,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 1, Tile
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {32, 32},
                 .alignment = tt::tt_metal::Alignment({32, 32}),
@@ -188,7 +185,7 @@ TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
         DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.shape, params.padded_shape);
     EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
 
-    test_utils::test_tensor_on_device(params.shape, layout);
+    ::test_utils::test_tensor_on_device(params.shape, layout);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -361,7 +358,7 @@ TEST_P(TensorLayoutTilePaddedAlignmentTests, Tensor_TilePaddedAlignmentRegressio
     // host buffer of `compute_packed_buffer_size_bytes` into it must succeed.
     // (With the buggy alignment the device allocation would be smaller than
     // the host buffer, triggering the buffer.cpp TT_FATAL.)
-    test_utils::test_tensor_on_device(params.shape, layout);
+    ::test_utils::test_tensor_on_device(params.shape, layout);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -678,3 +675,7 @@ INSTANTIATE_TEST_SUITE_P(
                     })),
             .expected_consumed_memory_bytes_per_bank = 5 * 5 * 32 * 32 * 2,
         }));
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
+}  // namespace tt::tt_metal

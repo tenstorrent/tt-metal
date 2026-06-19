@@ -429,11 +429,12 @@ void DPrintServer::Impl::print_buffer_data(
                     // Find firmware elf path from BuildEnvManager.
                     auto [processor_class, processor_type_idx] =
                         hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
-                    auto firmware_elf_path = BuildEnvManager::get_instance().get_firmware_binary_path(
-                        device_id,
-                        programmable_core_type_idx,
-                        static_cast<uint32_t>(processor_class),
-                        processor_type_idx);
+                    auto firmware_elf_path = BuildEnvManager::get_instance(context_->get_context_id())
+                                                 .get_firmware_binary_path(
+                                                     device_id,
+                                                     programmable_core_type_idx,
+                                                     static_cast<uint32_t>(processor_class),
+                                                     processor_type_idx);
 
                     risc_data.firmware_elf_path = firmware_elf_path;
                     risc_data.firmware_elf_parser = DevicePrintParser::get_parser_for_elf(firmware_elf_path);

@@ -1366,7 +1366,21 @@ void bind_unary_threshold(
 void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
     auto doc = fmt::format(
         R"doc(
-        Performs {0} function on :attr:`input_tensor`, :attr:`eps`.
+        Performs the {0} function on :attr:`input_tensor` after clamping its elements to the interval
+        [:attr:`eps`, 1 - :attr:`eps`]. The outputs are element-wise log-odds of the clamped input.
+        If :attr:`eps` is `None`, no clamping is applied and inputs outside (0,1) produce `NaN`/`Inf`.
+
+        .. math::
+            \mathrm{{output\_tensor}}_i =
+            \ln\left(\frac{{z_i}}{{1-z_i}}\right),
+            \quad
+            z_i =
+            \begin{{cases}}
+                \mathrm{{input\_tensor}}_i, & \text{{if }} \mathrm{{eps}} = \mathrm{{None}} \\
+                \mathrm{{eps}}, & \text{{if }} \mathrm{{input\_tensor}}_i < \mathrm{{eps}} \\
+                \mathrm{{input\_tensor}}_i, & \text{{if }} \mathrm{{eps}} \leq \mathrm{{input\_tensor}}_i \leq 1-\mathrm{{eps}} \\
+                1-\mathrm{{eps}}, & \text{{if }} \mathrm{{input\_tensor}}_i > 1-\mathrm{{eps}}
+            \end{{cases}}
 
         Args:
             input_tensor (ttnn.Tensor): the input tensor.
@@ -1378,7 +1392,7 @@ void bind_unary_logit(nb::module_& mod, const std::string& info_doc = "") {
             sub_core_grids (ttnn.CoreRangeSet, optional): Sub-core grids for the operation. Defaults to `None`.
 
         Returns:
-            ttnn.Tensor: the output tensor.
+            ttnn.Tensor: the output tensor containing unbounded real-valued log-odds.
 
         Note:
             Supported dtypes and layouts:
