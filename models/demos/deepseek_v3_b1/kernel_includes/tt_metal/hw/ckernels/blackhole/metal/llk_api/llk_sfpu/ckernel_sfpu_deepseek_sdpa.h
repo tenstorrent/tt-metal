@@ -33,15 +33,16 @@ namespace ckernel::sfpu {
  *   dst_reg[worker_max_base_idx] = exp((worker_max - cur_max) * scale) * recip(cur_sum)
  */
 template <bool SDPA_EXP_APPROX_MODE, bool final_norm = false>
+inline void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
     static_assert(!(final_norm && SDPA_EXP_APPROX_MODE), "Approx mode must be disabled when final_norm is true");
 
     constexpr int ITERATIONS_HALF_FACE = 2;
-    constexpr uint32_t prev_max_base_idx = 0;
-    constexpr uint32_t prev_sum_base_idx = 1;
-    constexpr uint32_t worker_max_base_idx = 32;
-    constexpr uint32_t worker_sum_base_idx = 33;
-    constexpr uint32_t cur_max_base_idx = 64;
-    constexpr uint32_t cur_sum_base_idx = 65;
+    constexpr std::uint32_t prev_max_base_idx = 0;
+    constexpr std::uint32_t prev_sum_base_idx = 1;
+    constexpr std::uint32_t worker_max_base_idx = 32;
+    constexpr std::uint32_t worker_sum_base_idx = 33;
+    constexpr std::uint32_t cur_max_base_idx = 64;
+    constexpr std::uint32_t cur_sum_base_idx = 65;
 
     for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
         sfpi::vFloat prev_max_vec = sfpi::dst_reg[prev_max_base_idx];
