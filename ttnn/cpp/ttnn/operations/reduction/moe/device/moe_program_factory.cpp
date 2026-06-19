@@ -82,7 +82,7 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
 
     uint32_t expert_mask_cb_index = tt::CBIndex::c_1;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_in_units * expert_mask_tile_size,
+        .total_size = Wt * expert_mask_tile_size,
         .core_ranges = core_ranges,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(expert_mask_cb_index),
@@ -210,6 +210,19 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
         }}},
     });
 
+    // Intermediate buffer for adding input + expert_mask before sorting.
+    // Takes 2 tiles because two tiles are processed and freed before the next two are loaded.
+    uint32_t masked_input_cb_index = tt::CBIndex::c_12;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = 2 * input_tile_size,
+        .core_ranges = core_ranges,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(masked_input_cb_index),
+            .data_format = input_cb_data_format,
+            .page_size = input_tile_size,
+        }}},
+    });
+
     std::vector<uint32_t> reader_compile_time_args = {
         input_cb_index, index_cb_index, topk_mask_cb_index, expert_mask_cb_index, Ht, Wt, k};
     tt::tt_metal::TensorAccessorArgs(input_tensor).append_to(reader_compile_time_args);
@@ -265,7 +278,8 @@ tt::tt_metal::ProgramDescriptor MoeProgramFactory::create_descriptor(
         static_cast<uint32_t>(std::log2(Wt)),
         cb_cur_max_index,
         cb_cur_sum_index,
-        tile_width};
+        tile_width,
+        masked_input_cb_index};
 
     KernelDescriptor compute_desc;
     compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/reduction/moe/device/kernels/compute/moe.cpp";

@@ -9,13 +9,13 @@
 namespace ttml::metal::ops::layernorm_fw::device {
 
 // Attributes for the forward operation
-struct operation_attributes_t {
+struct LayerNormForwardParams {
     float epsilon;          // epsilon for numerical stability
     bool return_mean_rstd;  // whether to return mean and rstd for backward pass
 };
 
 // Tensors required for forward
-struct tensor_args_t {
+struct LayerNormForwardInputs {
     ttnn::Tensor input;
     ttnn::Tensor gamma;  // scale parameter (learnable weight)
     ttnn::Tensor beta;   // shift parameter (learnable weight)
@@ -23,6 +23,9 @@ struct tensor_args_t {
     std::optional<ttnn::Tensor> preallocated_mean = std::nullopt;
     std::optional<ttnn::Tensor> preallocated_rstd = std::nullopt;
 };
+
+using operation_attributes_t = LayerNormForwardParams;
+using tensor_args_t = LayerNormForwardInputs;
 
 // Output tensor specs and tensors
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;

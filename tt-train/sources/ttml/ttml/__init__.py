@@ -53,3 +53,8 @@ from ._mesh import Mesh, open_device_mesh, maybe_mesh, mesh, sync_gradients
 from . import fsdp
 
 from .sharding import Sharding
+
+def manual_seed(seed: int) -> None:
+    """Seed all of ttml's RNGs from a single call."""
+    init.manual_seed(seed)
+    autograd.AutoContext.get_instance().set_seed(seed)

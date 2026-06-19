@@ -106,6 +106,7 @@ void kernel_main() {
                             alignment_buffer +
                             (dst_noc_addr & w_offset_to_use);  // Guaranteed aligned to target page addr
                         tt_memmove<false, false, false, original_page_size_bytes>(
+                            noc,
                             target_align_buffer,
                             data_location,
                             original_page_size_bytes);  // Data is copied to align buffer

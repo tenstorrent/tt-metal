@@ -59,6 +59,11 @@ We use lightweight Doxygen docstrings — high-signal, low-noise (`@brief`, `@pa
 
 **When writing or updating docstrings**, follow `.claude/references/doxygen-style.md`.
 
+### Dead Code
+
+- **Commented-out code must have an explanation.** Any commented-out instruction or function call (e.g. `// TTI_*`, `// llk_*`, `// _llk_*`, `// _gmg_*`, `// MATH(`, `// UNPACK(`, `// PACK(`, `// sfpi::`) requires an inline comment on the same line or immediately above it explaining *why* it is disabled. Acceptable reasons: known HW bug workaround, arch-specific divergence (e.g. WH vs BH), pending re-evaluation.
+- **During code review, always scan for commented-out code without explanation and flag it.** Check every `//` line whose content looks like a function call or instruction using the prefixes above. Commented-out code with a clear explanation is acceptable — the explanation is what matters, not the presence of commented-out code itself.
+
 ## Test Infrastructure
 
 ### Two-Phase Test Flow

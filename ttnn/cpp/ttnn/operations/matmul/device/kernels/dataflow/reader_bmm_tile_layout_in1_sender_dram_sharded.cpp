@@ -56,8 +56,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t cb_id_out_reshard = get_named_compile_time_arg_val("cb_out_reshard");
-    constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
+    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the
+    // in1 CB pages are sized to match, so the block size in L1 must use the padded page stride
+    // (in1_num_pages * in1_page_size) rather than get_tile_size() (the unpadded tile size).
+    constexpr uint32_t in1_block_size_bytes = in1_num_pages * in1_page_size;
 
     Noc noc;
     CircularBuffer cb_in1(cb_id_in1);
@@ -104,7 +106,12 @@ void kernel_main() {
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    cb_in1.reserve_back(in1_block_num_tiles);
+    // Reserve 2 blocks up front when num_blocks > 1: the loop's reserve_back at line 133
+    // only fires after block 1's writes complete, so the initial reservation must cover
+    // both block 0 and block 1 to avoid writing outside the reserved CB window.
+    // When num_blocks == 1 the CB is single-buffered, so reserve only 1 block.
+    constexpr uint32_t initial_reserved_blocks = (num_blocks > 1) ? 2 : 1;
+    cb_in1.reserve_back(in1_block_num_tiles * initial_reserved_blocks);
     uint32_t l1_write_addr_in1_offset = 0;
     uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
@@ -208,4 +215,15 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 #endif
+
+    cb_out.pop_front(out_block_num_tiles);
+
+    // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
+    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
+    // and this hardware register persists across kernel launches. Kernels that
+    // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
+    // rely on NOC_CTRL being at its initialized value and do not re-set it, so
+    // they inherit the stale custom VC and suffer reduced DRAM bandwidth.
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
 }

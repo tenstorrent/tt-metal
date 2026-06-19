@@ -30,13 +30,16 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
 )
 @pytest.mark.parametrize(
     "D",
-    [pytest.param(4, marks=pytest.mark.skip(reason="Disabled: see #45989")), 16, 1024, 4096],
+    [4, 16, 1024, 4096],
 )
 @pytest.mark.parametrize(
     "tt_dtype",
     [
         ttnn.bfloat16,
     ],
+)
+@pytest.mark.skip(
+    reason="Disabled: device hang; tracked in https://github.com/tenstorrent/tt-metal/issues/45989 (regression from #43840)"
 )
 def test_indexed_slice(seed, B, b, D, tt_dtype, device):
     torch.manual_seed(seed)

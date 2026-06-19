@@ -6,6 +6,7 @@
 #include <type_traits>
 
 #include "boot.h"
+#include "counters.h"
 
 // BRISC firmware
 #ifdef LLK_BOOT_MODE_BRISC
@@ -125,6 +126,10 @@ int main()
                 commit_store(profiler_barrier + 2, 0U);
 
                 device_setup();
+
+                // Configure + arm counters before releasing TRISCs (no-op in NC builds).
+                llk_perf::configure_and_arm_from_brisc();
+
                 clear_trisc_soft_reset();
 
                 reset_state(counter);

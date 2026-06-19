@@ -1,0 +1,20 @@
+# deepseek_v3
+mesh_shape: [8, 4]
+cluster_axis: 0
+batch_per_device: 32
+hidden_size: 7168
+select_experts_k: 8
+num_routed_experts: 256
+num_shared_experts: 1
+has_bias: false
+
+compute:
+  intermediate_size: 2048
+  activation_type: SILU
+
+reduce:
+  shared_expert_scale: 1.0
+
+experts:
+  expert_mapping: sequential
+  shared_expert_ids_to_devices: fully_replicated

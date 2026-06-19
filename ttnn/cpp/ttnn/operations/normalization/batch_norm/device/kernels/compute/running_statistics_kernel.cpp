@@ -5,7 +5,7 @@
 #include <cstdint>
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
-#include "ttnn/kernel/compute/moreh_common.hpp"
+#include "ttnn/kernel/compute/dest_format_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
