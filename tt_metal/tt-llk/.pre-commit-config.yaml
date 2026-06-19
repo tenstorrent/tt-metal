@@ -3,7 +3,7 @@ repos:
   hooks:
     - id: fix-cstdint
       name: fix std::uint*_t, convert uint to std::uint32_t, and add cstdint include
-      entry: python3 infra/fix_cstdint.py
+      entry: python3 tt_metal/tt-llk/infra/fix_cstdint.py
       language: system
       args: ["--fix", "--quiet"]
       files: \.(cpp|cc|h|hpp|py)$
@@ -54,4 +54,4 @@ repos:
   rev: v2.4.1
   hooks:
     - id: codespell
-      args: ["-I", ".codespellignore", "-w"]
+      args: ["-I", "tt_metal/tt-llk/.codespellignore", "-w"]

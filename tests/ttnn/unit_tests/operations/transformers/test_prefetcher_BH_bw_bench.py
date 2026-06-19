@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Push-bandwidth bench: DRAM-core prefetcher vs worker-core prefetcher.
+"""Push-bandwidth bench: Tensor prefetcher vs worker-core prefetcher.
 
 Mirrors `test_prefetcher_BH_bench.py`'s shape parametrization, but swaps the
 matmul receiver for `ttnn.experimental.test_dram_prefetcher_consumer` — a discard receiver
@@ -36,8 +36,8 @@ Per-layer per receiver = ring_size pages = K_padded * (N_padded / ring_size)
 
 Shapes are the production Llama prefetcher matmul shapes at the smallest
 device count where the worker prefetcher fits — same set as the matmul
-bench. See docs/dram_core_prefetcher_bench_results.md for the matmul
-companion numbers and docs/dram_core_prefetcher_bw_results.md for the BW
+bench. See docs/tensor_prefetcher_bench_results.md for the matmul
+companion numbers and docs/tensor_prefetcher_bw_results.md for the BW
 results table.
 """
 
@@ -55,13 +55,13 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
 )
 
 
-pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
-def _require_dram_core_prefetcher(device):
+def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
@@ -148,7 +148,7 @@ def _gcb_size_bytes(page_size: int, pages_per_layer: int) -> int:
     path passes (`pages_per_layer * page_size`) so the two paths have symmetric buffer
     depth. Previously this was `4 * page_size` for the DRAM-core path, which left only
     4 pages of in-flight headroom and gave `reserve_back` a ~16× backpressure tax vs the
-    worker — making the comparison unfair (see docs/dram_core_prefetcher_drisc_profile.md).
+    worker — making the comparison unfair (see docs/tensor_prefetcher_drisc_profile.md).
     """
     return pages_per_layer * page_size
 
@@ -209,8 +209,8 @@ def _gbps(bytes_total: float, elapsed_s: float) -> float:
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bw_dram_core_prefetcher(device, op_name, shape):
-    """DRAM-core prefetcher → discard receiver. Prefetcher launched out-of-band with
+def test_bw_tensor_prefetcher(device, op_name, shape):
+    """Tensor prefetcher → discard receiver. Prefetcher launched out-of-band with
     num_layers = trace_repeats + 1 (1 warmup + N traced). A trace captures N consumer
     ops (each draining one layer worth = ring_size pages) and is replayed once. Same
     methodology as the matmul bench (test_bench_dram_core_repeats).
@@ -241,8 +241,8 @@ def test_bw_dram_core_prefetcher(device, op_name, shape):
     gcb_size = _gcb_size_bytes(page_size, pages_per_layer)
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
     )
 
@@ -266,7 +266,7 @@ def test_bw_dram_core_prefetcher(device, op_name, shape):
     ttnn.synchronize_device(device)
     elapsed = time.perf_counter() - t0
     ttnn.release_trace(device, bench_trace)
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     if os.environ.get("TT_METAL_WATCHER", "0") == "1":
         time.sleep(3)  # let watcher dump DRISC ring buffers before device close
@@ -288,10 +288,10 @@ def test_bw_dram_core_prefetcher(device, op_name, shape):
     indirect=True,
 )
 @pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
-def test_bw_dram_core_prefetcher_recv_contig(device, op_name, shape):
-    """DRAM-core prefetcher in **receiver-contiguous** layout → discard receiver.
+def test_bw_tensor_prefetcher_recv_contig(device, op_name, shape):
+    """Tensor prefetcher in **receiver-contiguous** layout → discard receiver.
 
-    Identical methodology to test_bw_dram_core_prefetcher: prefetcher launched
+    Identical methodology to test_bw_tensor_prefetcher: prefetcher launched
     out-of-band with num_layers = trace_repeats + 1, one warmup consumer drain,
     then trace captures `trace_repeats` consumer ops and is replayed once.
 
@@ -332,8 +332,8 @@ def test_bw_dram_core_prefetcher_recv_contig(device, op_name, shape):
         device, bank_to_receivers, gcb_size, dual_senders_per_bank=dual_senders
     )
 
-    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device, [(tt_weight, num_receivers)] * num_prefetch_layers, global_cb=gcb
     )
 
@@ -355,7 +355,7 @@ def test_bw_dram_core_prefetcher_recv_contig(device, op_name, shape):
     ttnn.synchronize_device(device)
     elapsed = time.perf_counter() - t0
     ttnn.release_trace(device, bench_trace)
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     if os.environ.get("TT_METAL_WATCHER", "0") == "1":
         time.sleep(3)
@@ -460,7 +460,7 @@ def test_bw_workercore_prefetcher(device, op_name, shape):
     )
 
     # Launch the prefetcher exactly once for the whole bench (mirrors the DRAM-core
-    # path's `start_dram_core_prefetcher` call). One op invocation pushes
+    # path's `start_tensor_prefetcher` call). One op invocation pushes
     # num_prefetch_layers tensors; the consumer drains them in pages_per_layer chunks.
     ttnn.dram_prefetcher(
         [tt_weight, tt_addrs], num_layers=num_prefetch_layers, global_cb=gcb, enable_performance_mode=True

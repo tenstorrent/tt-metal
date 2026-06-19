@@ -502,7 +502,6 @@ inline void calculate_typecast_uint32_to_uint16() {
     // 0 | ...  | [b] L16 = b | a |     |            |         |
     // 1 | ...  |                 |     |            | [b] L16 |
 
-    constexpr int a = p_sfpu::LREG0;
     constexpr int b = p_sfpu::LREG2;
 
 #pragma GCC unroll 9

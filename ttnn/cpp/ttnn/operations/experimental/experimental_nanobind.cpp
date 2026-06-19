@@ -49,6 +49,7 @@
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/quasar_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/multi_scale_deformable_attn/multi_scale_deformable_attn_nanobind.hpp"
@@ -56,7 +57,7 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
-#include "ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
@@ -68,6 +69,7 @@
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/generalized_moe_gate_nanobind.hpp"
+#include "ttnn/operations/experimental/indexer_score/indexer_score_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
@@ -152,6 +154,9 @@ void py_module(nb::module_& mod) {
     deepseek_prefill::per_token_cast_back::detail::bind_experimental_per_token_cast_back_operation(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
+
+    // Quasar (metal 2.0) ops — creates the ttnn.experimental.quasar submodule.
+    quasar::bind_quasar(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     reshape::detail::bind_view(mod);
 
@@ -159,7 +164,7 @@ void py_module(nb::module_& mod) {
 
     test::bind_test_hang_device_operation(mod);
     test::bind_test_dram_prefetcher_consumer(mod);
-    bind_dram_core_prefetcher(mod);
+    bind_tensor_prefetcher(mod);
 
     // CCL ops
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
@@ -178,6 +183,7 @@ void py_module(nb::module_& mod) {
     topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
+    indexer_score::detail::bind_indexer_score(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations

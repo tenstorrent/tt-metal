@@ -18,7 +18,7 @@
 
 namespace ttnn::operations::experimental::test {
 
-// Byte-for-byte validator companion to ttnn.dram_prefetcher / start_dram_core_prefetcher.
+// Byte-for-byte validator companion to ttnn.dram_prefetcher / start_tensor_prefetcher.
 // Loads a validator kernel on each receiver core of the supplied GCB; for each pushed
 // page it reads the receiver's expected tile range from `source_tensor` (via
 // TensorAccessor) and memcmps against the received bytes.

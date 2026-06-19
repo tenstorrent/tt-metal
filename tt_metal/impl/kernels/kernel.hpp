@@ -100,7 +100,7 @@ using SemaphoreLocalAccessorHandleMap = std::unordered_map<std::string, uint16_t
 // TensorParameter name so SetProgramRunArgs can fill the binding's base-address slot
 // (and any runtime accessor fields) from the corresponding TensorArgument at enqueue time.
 struct TensorBindingHandle {
-    std::string accessor_name;          // user-facing identifier (kernel symbol in `ta::`)
+    std::string accessor_name;          // user-facing identifier (kernel symbol in `tensor::`)
     std::string tensor_parameter_name;  // refers back to the program-level TensorParameter
     uint32_t cta_offset;                // first word index of this binding's payload in the kernel's compile-time args
     uint32_t addr_crta_offset;  // byte offset of this binding's base-address slot within the kernel's CRTA buffer

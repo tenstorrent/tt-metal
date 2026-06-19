@@ -3312,12 +3312,25 @@ def test_ring_joint_attention_create_perf_table(model_name):
 # Symmetric +/- band — catches both regressions and unexpected speedups.
 RING_JOINT_PERF_MARGIN = 0.01
 
-RING_JOINT_PERF_CHECK_CONFIGS = [
-    # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
-    # 4-device ring (QuietBox)
-    ("wan2_2_1xGLX", 288, 512, 4, 68.9),
-    ("mla_100k", 160, 320, 4, 63.2),
-]
+# Ring/TP geometry and per-device shapes are auto-selected by MeshConfig.detect():
+#   QuietBox -> 4-device ring (sp=4, tp=1);  Galaxy -> 8-device ring x 4 TP shards (sp=8, tp=4).
+if MESH_CONFIG.is_galaxy:
+    RING_JOINT_PERF_CHECK_CONFIGS = [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
+        # 8-device ring (Galaxy, sp=8 tp=4)
+        ("wan2_2_1xGLX", 288, 512, 8, 70.7, RING_JOINT_PERF_MARGIN),
+        # mla_100k on Galaxy is noisier than the other cases: observed run-to-run util spans
+        # ~64.8-67.8% (midpoint ~66.3%, ~+/-2.3%), well beyond the default +/-1% band. Widen to
+        # +/-3% so the gate tracks regressions without flagging this case's normal variance.
+        ("mla_100k", 160, 320, 8, 66.3, 0.03),
+    ]
+else:
+    RING_JOINT_PERF_CHECK_CONFIGS = [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util, margin)
+        # 4-device ring (QuietBox, sp=4 tp=1)
+        ("wan2_2_1xGLX", 288, 512, 4, 68.9, RING_JOINT_PERF_MARGIN),
+        ("mla_100k", 160, 320, 4, 63.2, RING_JOINT_PERF_MARGIN),
+    ]
 
 
 @pytest.mark.skipif(
@@ -3325,12 +3338,14 @@ RING_JOINT_PERF_CHECK_CONFIGS = [
     reason="Set SDPA_PERF_CHECKS=1 to run (CI: sdpa perf tests job)",
 )
 @pytest.mark.parametrize(
-    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util",
+    "model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin",
     RING_JOINT_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_JOINT_PERF_CHECK_CONFIGS],
 )
-def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
-    """Measure ring joint SDPA math utilization via tracy and assert within +/- RING_JOINT_PERF_MARGIN."""
+def test_ring_joint_attention_perf_check(
+    model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
+):
+    """Measure ring joint SDPA math utilization via tracy and assert within the config's +/- margin."""
     from tracy.process_model_log import run_device_profiler
 
     if MESH_CONFIG.sp_size != ring_size_expected:
@@ -3379,8 +3394,8 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
         local_seq_len, sq, model.d_q, model.d_v, local_nhq, duration_ns, effective_cores, model.is_causal
     )
 
-    lower = expected_util * (1 - RING_JOINT_PERF_MARGIN)
-    upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
+    lower = expected_util * (1 - margin)
+    upper = expected_util * (1 + margin)
 
     logger.info(
         f"Ring joint SDPA perf check {config_id}: "
@@ -3390,7 +3405,7 @@ def test_ring_joint_attention_perf_check(model_name, q_chunk_size, k_chunk_size,
 
     assert lower <= utilization <= upper, (
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
-        f"(expected {expected_util:.2f}%, margin +/- {RING_JOINT_PERF_MARGIN*100:.1f}%)"
+        f"(expected {expected_util:.2f}%, margin +/- {margin*100:.1f}%)"
     )
 
 
@@ -3821,14 +3836,21 @@ def test_ring_mla_create_chunked_perf_table(model_name, q_chunk_size, k_chunk_si
 
 
 # === TEST 9: CHUNKED-PREFILL ring_mla PERF CHECK (CI-gated by SDPA_PERF_CHECKS=1) ===
-# Simulates the kimi 50k+5k galaxy chunk (final, most compute-bound chunk of the kimi50k
-# chunked prefill) on the 4-device QuietBox. Symmetric +/- band, same as the ring joint
-# perf check above.
-RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
-    # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
-    # 4-device ring (QuietBox, 100 SDPA cores)
-    ("kimi50k", 32, 640, 4, 66.05),
-]
+# Profiles the kimi 50k+5k galaxy chunk (final, most compute-bound chunk of the kimi50k chunked
+# prefill): natively on Galaxy (sp=8, tp=4) and simulated on the 4-device QuietBox (sp=4, tp=1).
+# Symmetric +/- band, same as the ring joint perf check.
+if MESH_CONFIG.is_galaxy:
+    RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # 8-device ring (Galaxy, sp=8 tp=4, 100 SDPA cores)
+        ("kimi50k", 32, 640, 8, 68.5),
+    ]
+else:
+    RING_MLA_CHUNKED_PERF_CHECK_CONFIGS = [
+        # (model_name, q_chunk_size, k_chunk_size, ring_size, expected_util)
+        # 4-device ring (QuietBox, 100 SDPA cores)
+        ("kimi50k", 32, 640, 4, 66.05),
+    ]
 
 
 @pytest.mark.skipif(
@@ -3907,7 +3929,7 @@ def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, rin
     upper = expected_util * (1 + RING_JOINT_PERF_MARGIN)
 
     logger.info(
-        f"ring_mla chunked 50k+5k (galaxy-simulated) perf check {config_id}: "
+        f"ring_mla chunked 50k+5k perf check {config_id}: "
         f"duration={duration_ns/1e6:.3f} ms, math_util={utilization:.2f}% "
         f"(expected {expected_util:.2f}%, band [{lower:.2f}, {upper:.2f}])"
     )

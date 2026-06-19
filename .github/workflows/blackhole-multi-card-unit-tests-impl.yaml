@@ -73,6 +73,13 @@ jobs:
             cmd: pytest tests/nightly/blackhole/sdpa/ -svv
             timeout: 20
             test-type: fast-qb2
+          - name: ring sdpa PERF tests (QB2 only)
+            cmd: |
+              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_joint_attention_perf_check -svv
+              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_chunked_perf_check -svv
+              SDPA_PERF_CHECKS=1 pytest tests/nightly/blackhole/sdpa/test_exp_ring_joint_sdpa.py::test_exp_ring_joint_attention_perf_check -svv
+            timeout: 10
+            test-type: fast-qb2
           # NOTE: All slow / loudbox / qb multi-card BH tests have been migrated
           # into tests/pipeline_reorg/blackhole_e2e_tests.yaml and are now run by
           # the blackhole-e2e-tests workflow. This file only carries the
@@ -177,17 +184,10 @@ jobs:
         timeout-minutes: 10
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_logs
-          # tee combined stdout+stderr to a per-leg .log for ai-summary.
-          # Brace group: cmd may be multiple shell statements.
-          # PIPESTATUS: preserve real exit code (tee would mask it).
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-          {
-            ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit ${PIPESTATUS[0]}
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: ${{ matrix.test-group.cmd }}
       - name: Check latency/BW results
         id: check-data
         if: ${{ !cancelled() && matrix.test-group.name == 'fabric sanity benchmark' }}

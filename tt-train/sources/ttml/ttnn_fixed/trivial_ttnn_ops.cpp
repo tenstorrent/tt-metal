@@ -118,7 +118,7 @@ tt::tt_metal::Tensor sample(
         out = ttnn::subtract(out, logits_padding_mask.value());
     }
 
-    return ttnn::argmax(ttnn::untilize(out), 3, true, std::nullopt, true);
+    return ttnn::argmax(ttnn::untilize(out), 3, true);
 }
 
 tt::tt_metal::Tensor to_l1_interleaved(const tt::tt_metal::Tensor& t) {

@@ -371,7 +371,7 @@
     bh_p150:
       timeout: 5
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-E4B e2e tests
@@ -394,7 +394,7 @@
     bh_quietbox_2:
       timeout: 15
       tier: 3
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-26B-A4B e2e tests
@@ -411,8 +411,8 @@
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 25
-      tier: 2
+      timeout: 22
+      tier: 1
     # bh_galaxy_perf: temporarily disabled — Blackhole Galaxy fabric / ethernet
     # bring-up hits an unrecoverable hang at open_mesh_device (FabricFirmwareInitializer
     # router sync timeout / "active ethernet core … to become active again"). Same
@@ -421,7 +421,7 @@
     # bh_galaxy_perf:
     #   timeout: 15
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 - name: Gemma-4-31B e2e tests
@@ -438,14 +438,30 @@
       timeout: 10
       tier: 2
     bh_quietbox_2:
-      timeout: 30
-      tier: 2
+      timeout: 25
+      tier: 1
     # bh_galaxy_perf: temporarily disabled — same Blackhole Galaxy fabric / ethernet
     # hang as 26B-A4B above. Re-enable once root-caused.
     # bh_galaxy_perf:
     #   timeout: 15
     #   tier: 2
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
+- name: Gemma-4-12B e2e tests
+  cmd: |
+    uv pip install -r models/demos/gemma4/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface HF_MODEL=google/gemma-4-12B-it TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/google--gemma-4-12B-it
+    pytest -s --timeout 1500 models/demos/gemma4/demo/text_demo.py::test_demo
+    pytest -s --timeout 900 \
+      models/demos/gemma4/tests/unit/test_lm_head.py \
+      models/demos/gemma4/tests/unit/test_model.py::test_full_model
+  model: gemma-4-12b
+  skus:
+    bh_quietbox_2:
+      timeout: 22
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
 # ── Mistral / Mixtral ──────────────────────────────────────────────

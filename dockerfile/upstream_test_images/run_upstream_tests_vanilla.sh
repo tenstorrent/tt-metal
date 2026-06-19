@@ -161,7 +161,7 @@ test_suite_wh_6u_metal_unit_tests() {
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_deadlock_stability_6U_galaxy.yaml
 }
 
 test_suite_wh_6u_model_unit_tests() {
@@ -204,9 +204,9 @@ test_suite_bh_6u_metal_unit_tests() {
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*:-*ChannelTrimming*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*:-*ChannelTrimming*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
-    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+    RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
     # Deadlock stability tests - These validate 2D Torus (QSFP Link) stability
-    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
+    RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
@@ -231,7 +231,7 @@ UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 test_suite_bh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on BH 6U Galaxy"
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic --num-iterations 1
-    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_short_running.yaml
 }
 
 test_suite_bh_6u_python_unit_tests() {
