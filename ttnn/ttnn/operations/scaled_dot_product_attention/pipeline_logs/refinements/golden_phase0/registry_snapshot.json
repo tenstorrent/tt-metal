@@ -1,0 +1,32 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16"
+    ],
+    "layout": [
+      "TILE"
+    ],
+    "alignment": [
+      "tile_aligned"
+    ],
+    "attention_kind": [
+      "self",
+      "cross"
+    ],
+    "kv_heads_mode": [
+      "mha",
+      "gqa",
+      "mqa"
+    ],
+    "mask_mode": [
+      "none",
+      "causal"
+    ],
+    "scale_mode": [
+      "auto",
+      "explicit"
+    ]
+  },
+  "exclusions": [],
+  "invalid": []
+}
