@@ -1,6 +1,16 @@
 # SPDX-FileCopyrightText: (c) 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Devstral multimodal ISL sweep: prefill/decode perf vs context length (tt_image_demo).
+
+Builds image+text prompts from a corpus file, tiles text when ISL exceeds corpus length,
+runs ``tt_image_demo.run_tt`` per ISL point, and reports decode throughput plus a short
+generation preview.
+
+Run order: 256k first (cold device), then 4k → 128k ascending. No env vars — defaults are in this file;
+mesh width follows ``MESH_DEVICE`` like other Devstral tests (P150 → 1, BH-QB → 4).
+"""
+
 from __future__ import annotations
 
 import bz2
@@ -18,171 +28,273 @@ import torch
 import ttnn
 from models.experimental.devstarl2_small.demo import tt_image_demo
 
-
 OUTPUT_SEQ_LEN = 200
-_DEFAULT_ISLS = (4096, 8192, 16384, 32768, 65536, 131072, 262144)
-_DEFAULT_PROMPT_FILE = Path("models/tt_transformers/tests/tale-of-two-cities.txt.bz2")
+PREFILL_CHUNK_SIZE = 8192
+DEFAULT_ISLS = (4096, 8192, 16384, 32768, 65536, 131072, 262144)
+DEFAULT_PROMPT_FILE = Path("models/tt_transformers/tests/tale-of-two-cities.txt.bz2")
+DEFAULT_IMAGE = tt_image_demo._sample_image_path()
 
-_TTFT_RE = re.compile(r"TTFT \(prompt -> 1st new tok\)\s+([0-9.]+) ms")
-_FIRST_TRACED_RE = re.compile(r"First traced decode step latency\s+([0-9.]+) ms")
-_STEADY_LAT_RE = re.compile(r"Steady-state decode latency / tok\s+([0-9.]+) ms")
-_STEADY_RE = re.compile(r"Steady-state decode throughput\s+([0-9.]+) tok/s")
-_E2E_RE = re.compile(r"End-to-end throughput\s+([0-9.]+) tok/s")
+_DEMO_PERF_SEP = "──────────────────────────────────────────────────────────────"
+_RE_TTFT = re.compile(r"TTFT \(prompt -> 1st new tok\)\s+([0-9.]+) ms")
+_RE_FIRST_TRACED = re.compile(r"First traced decode step latency\s+([0-9.]+) ms")
+_RE_STEADY_LAT = re.compile(r"Steady-state decode latency / tok\s+([0-9.]+) ms")
+_RE_STEADY_TPS = re.compile(r"Steady-state decode throughput\s+([0-9.]+) tok/s")
+_RE_E2E_TPS = re.compile(r"End-to-end throughput\s+([0-9.]+) tok/s")
+
+
+@dataclass(frozen=True)
+class SweepConfig:
+    prompt_file: Path
+    mesh_width: int
+    prefill_chunk_size: int
+    image_path: Path
+    vision_max_edge: int
+    vision_square_pixels: int | None
+    isls: tuple[int, ...]
+
+    @staticmethod
+    def default() -> SweepConfig:
+        return SweepConfig(
+            prompt_file=DEFAULT_PROMPT_FILE,
+            mesh_width=mesh_width_from_platform(),
+            prefill_chunk_size=PREFILL_CHUNK_SIZE,
+            image_path=DEFAULT_IMAGE,
+            vision_max_edge=0,
+            vision_square_pixels=None,
+            isls=DEFAULT_ISLS,
+        )
+
+
+def mesh_width_from_platform() -> int:
+    """Match demo/tests: P150 → 1, BH-QB → 4, else min(4, visible devices)."""
+    env = os.environ.get("MESH_DEVICE")
+    if env in ("P150", "P150x1"):
+        return 1
+    if env in ("BH-QB", "P150x4"):
+        return 4
+    return min(4, ttnn.get_num_devices())
 
 
 @dataclass
-class _SweepResult:
+class SweepResult:
     sweep_id: str
     isl: int
     mesh_width: int
     prefill_tokens: int
-    decode_t_s_u: float
-    decode_t_s: float
+    decode_tps: float
     ttft_ms: float | None = None
     first_traced_ms: float | None = None
     steady_latency_ms: float | None = None
-    e2e_tok_s: float | None = None
+    e2e_tps: float | None = None
     skipped_reason: str | None = None
-    model_output: str | None = None
+    generated_text: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.skipped_reason is None
 
 
-def _parse_isl_sweep() -> tuple[int, ...]:
-    raw = os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_VALUES")
-    if raw is None:
-        return _DEFAULT_ISLS
-    out = []
-    for part in raw.split(","):
-        token = part.strip().lower()
-        if not token:
-            continue
-        multiplier = 1024 if token.endswith("k") else 1
-        if token.endswith("k"):
-            token = token[:-1]
-        out.append(int(token) * multiplier)
-    return tuple(out)
+class PromptBuilder:
+    """Caches tokenizer, corpus tokens, and vision image for multimodal prompt fitting."""
+
+    def __init__(self) -> None:
+        self._processor = None
+        self._source_tokens: list[int] | None = None
+        self._vision_cache: dict[tuple[str, int, int | None], object] = {}
+
+    def load_corpus(self, path: Path) -> list[int]:
+        log(f"Loading prompt text from {path}...")
+        with bz2.open(path, "rt", encoding="utf-8") as f:
+            text = f.read()
+        log(f"  Loaded {len(text)} chars from {path.name}")
+        self._source_tokens = self._tokenize(text)
+        log(f"  Ready: {len(self._source_tokens)} text tokens")
+        return self._source_tokens
+
+    @property
+    def source_tokens(self) -> list[int]:
+        if self._source_tokens is None:
+            raise RuntimeError("call load_corpus() first")
+        return self._source_tokens
+
+    def fit_messages(
+        self,
+        target_isl: int,
+        image_path: Path,
+        vision_max_edge: int,
+        vision_square_pixels: int | None,
+    ) -> tuple[list[dict], int]:
+        source_tokens = self.source_tokens
+        source_len = len(source_tokens)
+        log(
+            f"  Fitting prompt to ISL {format_isl(target_isl)} "
+            f"(image={image_path.name}, corpus={source_len} text tokens)..."
+        )
+
+        best_messages = multimodal_messages("")
+        best_tokens = self.count_tokens(
+            best_messages, image_path, vision_max_edge, vision_square_pixels, label="baseline"
+        )
+        log(f"  Baseline (image + template): {best_tokens} tokens")
+
+        if best_tokens > target_isl:
+            log(f"  Skip: baseline {best_tokens} tokens exceeds ISL {format_isl(target_isl)}")
+            return best_messages, best_tokens
+
+        text_budget = max(0, target_isl - best_tokens)
+        if text_budget > source_len:
+            reps = (text_budget + source_len - 1) // source_len
+            log(
+                f"  Corpus shorter than ISL; tiling ~{reps}x "
+                f"(~{text_budget} text tokens needed, perf workload only)"
+            )
+
+        if text_budget <= 0:
+            return best_messages, best_tokens
+
+        lo, hi = 0, text_budget
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            messages = multimodal_messages(self.text_for_token_count(mid))
+            tokens = self.count_tokens(
+                messages, image_path, vision_max_edge, vision_square_pixels, label=f"text_tokens={mid}"
+            )
+            if tokens <= target_isl:
+                best_messages, best_tokens = messages, tokens
+                lo = mid + 1
+                pct = tokens * 100 // max(target_isl, 1)
+                log(f"  Fit: {tokens}/{target_isl} prompt tokens ({pct}% ISL, text_tokens={mid})")
+            else:
+                hi = mid - 1
+
+        if best_tokens < target_isl:
+            log(
+                f"  Note: fitted {best_tokens} tokens (< ISL {format_isl(target_isl)}; "
+                "multimodal tokenization is not linear in text length)"
+            )
+        log(f"  Fitted: {best_tokens}/{target_isl} prompt tokens")
+        return best_messages, best_tokens
+
+    def text_for_token_count(self, token_count: int) -> str:
+        if token_count <= 0:
+            return ""
+        ids = tile_tokens(self.source_tokens, token_count)
+        return self.tokenizer().decode(ids)
+
+    def count_tokens(
+        self,
+        messages: list[dict],
+        image_path: Path,
+        vision_max_edge: int,
+        vision_square_pixels: int | None,
+        *,
+        label: str,
+    ) -> int:
+        log(f"  Token count ({label})...")
+        image = self.vision_image(image_path, vision_max_edge, vision_square_pixels)
+        processor = self.processor()
+        prompt = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
+        n_tokens = int(processor(text=prompt, images=image, return_tensors="pt")["input_ids"].shape[1])
+        log(f"  Token count ({label}): {n_tokens} prompt tokens")
+        return n_tokens
+
+    def preview_generation(self, text: str, max_tokens: int = OUTPUT_SEQ_LEN) -> str:
+        if not text:
+            return "(no generated text captured)"
+        tokenizer = self.tokenizer()
+        ids = tokenizer.encode(text, add_special_tokens=False)
+        if len(ids) <= max_tokens:
+            return text
+        return tokenizer.decode(ids[:max_tokens]) + " …"
+
+    def processor(self):
+        if self._processor is None:
+            model_id = tt_image_demo._DEFAULT_MODEL_ID
+            log(f"Loading HuggingFace processor ({model_id})...")
+            self._processor = tt_image_demo.AutoProcessor.from_pretrained(
+                model_id,
+                trust_remote_code=True,
+                fix_mistral_regex=True,
+                cache_dir=os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None,
+                local_files_only=False,
+                token=os.getenv("HF_TOKEN") or None,
+            )
+            log("Processor loaded.")
+        return self._processor
+
+    def tokenizer(self):
+        return getattr(self.processor(), "tokenizer", self.processor())
+
+    def vision_image(self, image_path: Path, vision_max_edge: int, vision_square_pixels: int | None):
+        key = (str(image_path.resolve()), vision_max_edge, vision_square_pixels)
+        if key not in self._vision_cache:
+            log(f"  Loading vision image {image_path.name}...")
+            image = tt_image_demo.Image.open(image_path).convert("RGB")
+            image = tt_image_demo._prepare_vision_image(image, vision_max_edge, vision_square_pixels)
+            self._vision_cache[key] = image
+            log("  Vision image ready.")
+        return self._vision_cache[key]
+
+    def _tokenize(self, text: str) -> list[int]:
+        log(f"  Tokenizing source ({len(text)} chars)...")
+        tokens = self.tokenizer().encode(text)
+        log(f"  Tokenized: {len(tokens)} tokens")
+        return tokens
 
 
-def _mesh_width() -> int:
-    raw = os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_MESH_WIDTH")
-    if raw is not None:
-        return int(raw)
-    return 4
+def run_order(isls: tuple[int, ...]) -> tuple[int, ...]:
+    """Peak ISL first (cold device), then ascending sweep for the rest."""
+    unique = tuple(sorted(set(isls)))
+    if len(unique) <= 1:
+        return unique
+    return (unique[-1],) + unique[:-1]
 
 
-def _metric(pattern: re.Pattern[str], output: str, name: str) -> float:
-    match = pattern.search(output)
-    if match is None:
-        raise AssertionError(f"Could not parse {name} from image demo output:\n{output}")
-    return float(match.group(1))
-
-
-def _format_isl(isl: int) -> str:
+def format_isl(isl: int) -> str:
     if isl >= 1024 and isl % 1024 == 0:
         return f"{isl // 1024}k"
     return str(isl)
 
 
-def _sweep_id(isl: int) -> str:
-    return f"b1_isl{_format_isl(isl)}"
+def sweep_id(isl: int) -> str:
+    return f"b1_isl{format_isl(isl)}"
 
 
-def _prompt_text(path: Path) -> str:
-    with bz2.open(path, "rt", encoding="utf-8") as f:
-        return f.read()
+def multimodal_messages(text: str) -> list[dict]:
+    return [{"role": "user", "content": [{"type": "image"}, {"type": "text", "text": text}]}]
 
 
-_PROCESSOR_CACHE = None
+def tile_tokens(source_tokens: list[int], count: int) -> list[int]:
+    if count <= 0 or not source_tokens:
+        return []
+    if count <= len(source_tokens):
+        return source_tokens[:count]
+    reps = (count + len(source_tokens) - 1) // len(source_tokens)
+    return (source_tokens * reps)[:count]
 
 
-def _processor():
-    global _PROCESSOR_CACHE
-    if _PROCESSOR_CACHE is None:
-        _PROCESSOR_CACHE = tt_image_demo.AutoProcessor.from_pretrained(
-            tt_image_demo._DEFAULT_MODEL_ID,
-            trust_remote_code=True,
-            fix_mistral_regex=True,
-            cache_dir=os.getenv("HF_TOKENIZER_CACHE") or os.getenv("HF_HUB_CACHE") or None,
-            local_files_only=False,
-            token=os.getenv("HF_TOKEN") or None,
-        )
-    return _PROCESSOR_CACHE
+def parse_demo_metrics(stdout: str) -> tuple[float, float, float, float, float]:
+    def _one(pattern: re.Pattern[str], name: str) -> float:
+        match = pattern.search(stdout)
+        if match is None:
+            raise AssertionError(f"Could not parse {name} from demo output:\n{stdout}")
+        return float(match.group(1))
+
+    return (
+        _one(_RE_STEADY_TPS, "steady-state decode throughput"),
+        _one(_RE_TTFT, "TTFT"),
+        _one(_RE_FIRST_TRACED, "first traced decode step latency"),
+        _one(_RE_STEADY_LAT, "steady-state decode latency"),
+        _one(_RE_E2E_TPS, "end-to-end throughput"),
+    )
 
 
-def _text_from_token_count(source_text: str, token_count: int) -> str:
-    tokenizer = getattr(_processor(), "tokenizer", _processor())
-    source_tokens = tokenizer.encode(source_text)
-    if not source_tokens:
-        return source_text
-    if token_count <= 0:
-        return ""
-    return tokenizer.decode(source_tokens[:token_count])
+def extract_generated_text(stdout: str) -> str:
+    sep = stdout.rfind(_DEMO_PERF_SEP)
+    return stdout[sep + len(_DEMO_PERF_SEP) :].strip() if sep >= 0 else ""
 
 
-def _multimodal_messages(text: str) -> list[dict]:
-    return [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {"type": "text", "text": text},
-            ],
-        }
-    ]
-
-
-def _prompt_token_count(
-    messages: list[dict], image_path: Path, vision_max_edge: int, vision_square_pixels: int | None
-) -> int:
-    image = tt_image_demo.Image.open(image_path).convert("RGB")
-    image = tt_image_demo._prepare_vision_image(image, vision_max_edge, vision_square_pixels)
-    processor = _processor()
-    prompt = processor.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
-    proc_out = processor(text=prompt, images=image, return_tensors="pt")
-    return int(proc_out["input_ids"].shape[1])
-
-
-def _fit_multimodal_messages(
-    source_text: str,
-    max_seq_len: int,
-    image_path: Path,
-    vision_max_edge: int,
-    vision_square_pixels: int | None,
-) -> tuple[list[dict], int]:
-    min_messages = _multimodal_messages(_text_from_token_count(source_text, 0))
-    min_tokens = _prompt_token_count(min_messages, image_path, vision_max_edge, vision_square_pixels)
-    if min_tokens > max_seq_len:
-        return min_messages, min_tokens
-
-    low = 0
-    high = max(1, max_seq_len - min_tokens)
-    best_messages = min_messages
-    best_tokens = min_tokens
-
-    while True:
-        messages = _multimodal_messages(_text_from_token_count(source_text, high))
-        tokens = _prompt_token_count(messages, image_path, vision_max_edge, vision_square_pixels)
-        if tokens > max_seq_len:
-            break
-        best_messages = messages
-        best_tokens = tokens
-        low = high
-        high *= 2
-
-    while low + 1 < high:
-        mid = (low + high) // 2
-        messages = _multimodal_messages(_text_from_token_count(source_text, mid))
-        tokens = _prompt_token_count(messages, image_path, vision_max_edge, vision_square_pixels)
-        if tokens <= max_seq_len:
-            best_messages = messages
-            best_tokens = tokens
-            low = mid
-        else:
-            high = mid
-
-    return best_messages, best_tokens
-
-
-def _clear_memory_after_isl() -> None:
+def clear_model_caches() -> None:
     for attr in vars(tt_image_demo.ModelArgs).values():
         cache_clear = getattr(attr, "cache_clear", None)
         if cache_clear is not None:
@@ -194,151 +306,153 @@ def _clear_memory_after_isl() -> None:
         torch.cuda.ipc_collect()
 
 
-def _run_image_demo_for_isl(
+def run_isl_point(
     monkeypatch,
     *,
-    source_text: str,
-    mesh_width: int,
+    prompts: PromptBuilder,
+    config: SweepConfig,
     isl: int,
-    prefill_chunk_size: int,
-    image_path: Path,
-    vision_max_edge: int,
-    vision_square_pixels: int | None,
-) -> _SweepResult:
-    sweep_id = _sweep_id(isl)
-    messages, prefill_tokens = _fit_multimodal_messages(
-        source_text, isl, image_path, vision_max_edge, vision_square_pixels
-    )
+    messages: list[dict],
+    prefill_tokens: int,
+) -> SweepResult:
+    sid = sweep_id(isl)
+    base = dict(sweep_id=sid, isl=isl, mesh_width=config.mesh_width, prefill_tokens=prefill_tokens)
+
     if prefill_tokens > isl:
-        return _SweepResult(
-            sweep_id=sweep_id,
-            isl=isl,
-            mesh_width=mesh_width,
-            prefill_tokens=prefill_tokens,
-            decode_t_s_u=0.0,
-            decode_t_s=0.0,
-            skipped_reason=f"prompt is {prefill_tokens} tokens but context window max_seq_len={isl}",
+        return SweepResult(
+            **base,
+            decode_tps=0.0,
+            skipped_reason=f"prompt is {prefill_tokens} tokens but max_seq_len={isl}",
         )
 
-    stdout = io.StringIO()
-    with monkeypatch.context() as scoped_monkeypatch, contextlib.redirect_stdout(stdout):
-        scoped_monkeypatch.setattr(tt_image_demo, "MODEL_LOADING_MESSAGES", messages)
+    log(
+        f"  Running TT demo: prefill={prefill_tokens}, decode={OUTPUT_SEQ_LEN}, "
+        f"chunk_size={config.prefill_chunk_size}"
+    )
+    buf = io.StringIO()
+    with monkeypatch.context() as mp, contextlib.redirect_stdout(buf):
+        mp.setattr(tt_image_demo, "MODEL_LOADING_MESSAGES", messages)
         tt_image_demo.run_tt(
             tt_image_demo._DEFAULT_MODEL_ID,
-            image_path,
-            mesh_width=mesh_width,
+            config.image_path,
+            mesh_width=config.mesh_width,
             text_layers=None,
             max_new_tokens=OUTPUT_SEQ_LEN,
             greedy=True,
             temperature=tt_image_demo._DEFAULT_SAMPLE_TEMPERATURE,
             seed=0,
             lm_head_max_device_cols=None,
-            vision_max_edge=vision_max_edge,
-            vision_square_pixels=vision_square_pixels,
-            prefill_chunk_size=prefill_chunk_size,
+            vision_max_edge=config.vision_max_edge,
+            vision_square_pixels=config.vision_square_pixels,
+            prefill_chunk_size=config.prefill_chunk_size,
             clear_weight_cache=False,
             perf=False,
         )
-    output = stdout.getvalue()
 
-    steady_tok_s = _metric(_STEADY_RE, output, "steady-state decode throughput")
-    return _SweepResult(
-        sweep_id=sweep_id,
-        isl=isl,
-        mesh_width=mesh_width,
-        prefill_tokens=prefill_tokens,
-        decode_t_s_u=steady_tok_s,
-        decode_t_s=steady_tok_s,
-        ttft_ms=_metric(_TTFT_RE, output, "TTFT"),
-        first_traced_ms=_metric(_FIRST_TRACED_RE, output, "first traced decode step latency"),
-        steady_latency_ms=_metric(_STEADY_LAT_RE, output, "steady-state decode latency"),
-        e2e_tok_s=_metric(_E2E_RE, output, "end-to-end throughput"),
-        model_output=output if isl == 262144 else None,
+    stdout = buf.getvalue()
+    steady_tps, ttft_ms, first_traced_ms, steady_lat_ms, e2e_tps = parse_demo_metrics(stdout)
+    return SweepResult(
+        **base,
+        decode_tps=steady_tps,
+        ttft_ms=ttft_ms,
+        first_traced_ms=first_traced_ms,
+        steady_latency_ms=steady_lat_ms,
+        e2e_tps=e2e_tps,
+        generated_text=extract_generated_text(stdout),
     )
 
 
-def _print_result(result: _SweepResult) -> None:
-    print()
-    print("------------------------------------------------------------------------------")
-    status = "skipped" if result.skipped_reason else "complete"
-    print(f"  ISL {_format_isl(result.isl)} {status}  (mesh_width={result.mesh_width})")
-    print("------------------------------------------------------------------------------")
+def log(msg: str) -> None:
+    print(msg, flush=True)
+
+
+def banner(title: str) -> None:
+    line = "-" * 78
+    print(f"\n{line}\n  {title}\n{line}")
+
+
+def print_result(result: SweepResult, prompts: PromptBuilder) -> None:
+    banner(
+        f"ISL {format_isl(result.isl)} {'skipped' if result.skipped_reason else 'complete'}  "
+        f"(mesh_width={result.mesh_width})"
+    )
     print(f"  Prefill tokens                     {result.prefill_tokens:>10}")
+
     if result.skipped_reason:
         print(f"  Skip reason                        {result.skipped_reason}")
     else:
         assert result.ttft_ms is not None
         assert result.first_traced_ms is not None
         assert result.steady_latency_ms is not None
-        assert result.e2e_tok_s is not None
+        assert result.e2e_tps is not None
         print(f"  TTFT (prompt -> 1st new tok)       {result.ttft_ms:>10.2f} ms")
         print(f"  First traced decode step latency   {result.first_traced_ms:>10.2f} ms")
         print(f"  Steady-state decode latency / tok  {result.steady_latency_ms:>10.2f} ms")
-        print(f"  Steady-state decode throughput     {result.decode_t_s_u:>10.3f} tok/s/user")
-        print(f"  Aggregate decode throughput        {result.decode_t_s:>10.3f} tok/s")
-        print(f"  End-to-end throughput              {result.e2e_tok_s:>10.3f} tok/s")
-        if result.model_output is not None:
-            print("------------------------------------------------------------------------------")
-            print("  Model output for ISL 256k")
-            print("------------------------------------------------------------------------------")
-            print(result.model_output.rstrip())
-    print("------------------------------------------------------------------------------")
+        print(f"  Steady-state decode throughput     {result.decode_tps:>10.3f} tok/s/user")
+        print(f"  End-to-end throughput              {result.e2e_tps:>10.3f} tok/s")
+        if result.generated_text is not None:
+            banner(f"Generated text (first {OUTPUT_SEQ_LEN} new tokens)")
+            print(prompts.preview_generation(result.generated_text))
+    print("-" * 78)
 
 
-def _print_report(results: list[_SweepResult], prompt_file: Path) -> None:
-    print()
-    print("------------------------------------------------------------------------------")
-    print("  Devstral image+text ISL sweep decode throughput summary")
-    print("------------------------------------------------------------------------------")
-    print(f"  prompt_file: {prompt_file}")
+def print_summary(results: list[SweepResult], config: SweepConfig) -> None:
+    banner("Devstral image+text ISL sweep decode throughput summary")
+    print(f"  prompt_file: {config.prompt_file}")
     print(f"  output_seq_len: {OUTPUT_SEQ_LEN}")
-    print("------------------------------------------------------------------------------")
+    print("-" * 78)
     print("| config       | max_seq_len | prefill_tok | decode_t/s/u | decode_t/s | status  |")
     print("| ------------ | ----------- | ----------- | ------------ | ---------- | ------- |")
-    for result in results:
-        status = "skipped" if result.skipped_reason else "ok"
+    for r in sorted(results, key=lambda x: x.isl):
+        status = "skipped" if r.skipped_reason else "ok"
         print(
-            f"| {result.sweep_id:<12} | {result.isl:>11} | {result.prefill_tokens:>11} | "
-            f"{result.decode_t_s_u:>12.2f} | {result.decode_t_s:>10.2f} | {status:<7} |"
+            f"| {r.sweep_id:<12} | {r.isl:>11} | {r.prefill_tokens:>11} | "
+            f"{r.decode_tps:>12.2f} | {r.decode_tps:>10.2f} | {status:<7} |"
         )
-    print("------------------------------------------------------------------------------")
+    print("-" * 78)
 
 
-@pytest.mark.timeout(1200)
+@pytest.mark.timeout(2400)
 @pytest.mark.models_performance_bare_metal
 def test_devstral_image_text_isl_sweep_perf(monkeypatch):
-    prompt_file = Path(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_PROMPT_FILE", str(_DEFAULT_PROMPT_FILE)))
-    source_text = _prompt_text(prompt_file)
+    config = SweepConfig.default()
+    prompts = PromptBuilder()
+    prompts.load_corpus(config.prompt_file)
 
-    mesh_width = _mesh_width()
-    if mesh_width > ttnn.get_num_devices():
-        pytest.skip(f"mesh_width={mesh_width} requested but only {ttnn.get_num_devices()} device(s) are visible.")
+    log(f"Probing TT devices (mesh_width={config.mesh_width})...")
+    num_devices = ttnn.get_num_devices()
+    log(f"  Visible TT devices: {num_devices}")
+    if config.mesh_width > num_devices:
+        pytest.skip(f"mesh_width={config.mesh_width} requested but only {num_devices} device(s) visible.")
 
-    prefill_chunk_size = int(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_PREFILL_CHUNK_SIZE", "8192"))
-    image_path = Path(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_IMAGE", str(tt_image_demo._sample_image_path())))
-    vision_max_edge = int(os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_VISION_MAX_EDGE", "0"))
-    vision_square_pixels_raw = os.environ.get("DEVSTRAL_TEXT_ISL_SWEEP_VISION_SQUARE_PIXELS")
-    vision_square_pixels = int(vision_square_pixels_raw) if vision_square_pixels_raw else None
+    run_isls = run_order(config.isls)
+    peak_isl = max(config.isls) if config.isls else 0
+    log(
+        f"Sweep: isls={[format_isl(i) for i in config.isls]}, "
+        f"run_order={[format_isl(i) for i in run_isls]} "
+        f"(peak {format_isl(peak_isl)} first, then ascending), "
+        f"image={config.image_path.name}, prefill_chunk_size={config.prefill_chunk_size}"
+    )
 
-    results = []
-    for isl in _parse_isl_sweep():
-        if os.getenv("CI") == "true" and isl == 262144:
-            continue
-        print(f"running ISL={_format_isl(isl)} mesh_width={mesh_width}")
+    results: list[SweepResult] = []
+    for isl in run_isls:
+        log(f"running ISL={format_isl(isl)} mesh_width={config.mesh_width}")
         try:
-            result = _run_image_demo_for_isl(
+            messages, prefill_tokens = prompts.fit_messages(
+                isl, config.image_path, config.vision_max_edge, config.vision_square_pixels
+            )
+            result = run_isl_point(
                 monkeypatch,
-                source_text=source_text,
-                mesh_width=mesh_width,
+                prompts=prompts,
+                config=config,
                 isl=isl,
-                prefill_chunk_size=prefill_chunk_size,
-                image_path=image_path,
-                vision_max_edge=vision_max_edge,
-                vision_square_pixels=vision_square_pixels,
+                messages=messages,
+                prefill_tokens=prefill_tokens,
             )
         finally:
-            _clear_memory_after_isl()
-        results.append(result)
-        _print_result(result)
+            clear_model_caches()
 
-    _print_report(results, prompt_file)
+        results.append(result)
+        print_result(result, prompts)
+
+    print_summary(results, config)

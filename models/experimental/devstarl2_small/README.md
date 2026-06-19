@@ -80,7 +80,9 @@ python -m tracy -p -r -v -m pytest models/experimental/devstarl2_small/tests/tes
 
 **Performance — ISL Sweep**
 
-Sweeps the input sequence length through the full vision-text pipeline. Text is sourced from the Tale of Two Cities corpus at `models/tt_transformers/tests/tale-of-two-cities.txt.bz2`; one image is always included; output is fixed at 200 tokens per sweep point. The default Devstral sweep is 4k → 256k tokens.
+Sweeps the input sequence length through the full vision-text pipeline. Text is sourced from the Tale of Two Cities corpus at `models/tt_transformers/tests/tale-of-two-cities.txt.bz2` (~192k text tokens); one image is always included; output is fixed at 200 tokens per sweep point. The default Devstral sweep is 4k → 256k tokens.
+
+For ISL points above the corpus length (e.g. 256k = 262144 tokens), the sweep **tiles (repeats) the corpus** so prefill fills the KV cache for perf workload.
 
 ```sh
 pytest models/experimental/devstarl2_small/tests/pipeline_tests/test_ministral3_text_isl_sweep.py
@@ -146,12 +148,12 @@ Results from `test_ministral3_prefill_logits.py` on BH QB-2 (`P150x4`) using the
 
 | Seq len | PCC |
 |--------:|----:|
-| 128 | 0.985114 |
-| 256 | 0.991430 |
-| 512 | 0.996213 |
-| 1024 | 0.996917 |
-| 4096 | 0.996743 |
-| 8192 | 0.996909 |
+| 128 | 0.993696 |
+| 256 | 0.996526 |
+| 512 | 0.996700 |
+| 1024 | 0.993400 |
+| 4096 | 0.986712 |
+| 8192 | 0.986108 |
 | 32k, 64k, 128k, 256k | TBD |
 
 Note: larger context lengths take longer to verify because the HuggingFace reference runs a full 24B forward pass over the entire sequence.
@@ -162,50 +164,51 @@ Results from `test_ministral3_decoder_layer.py` on BH QB-2 (`P150x4`). This comp
 
 | Step | PCC |
 |-----:|----:|
-| 0 | 0.996207 |
-| 1 | 0.997521 |
-| 2 | 0.996235 |
-| 3 | 0.996735 |
-| 4 | 0.993788 |
-| 5 | 0.993598 |
-| 6 | 0.996316 |
-| 7 | 0.997877 |
-| 8 | 0.997422 |
-| 9 | 0.992626 |
-| 10 | 0.995248 |
-| 11 | 0.997696 |
-| 12 | 0.997402 |
-| 13 | 0.995050 |
-| 14 | 0.996312 |
-| 15 | 0.997565 |
-| 16 | 0.996812 |
-| 17 | 0.997307 |
-| 18 | 0.996894 |
-| 19 | 0.997204 |
-| 20 | 0.992352 |
-| 21 | 0.997408 |
-| 22 | 0.996683 |
-| 23 | 0.997833 |
-| 24 | 0.997360 |
-| 25 | 0.997428 |
-| 26 | 0.996770 |
-| 27 | 0.998583 |
-| 28 | 0.998061 |
-| 29 | 0.998206 |
-| 30 | 0.997654 |
-| 31 | 0.998227 |
+|0  | 	0.996556|
+|1  | 	0.984737|
+|2  | 	0.996072|
+|3  | 	0.993899|
+|4  | 	0.997844|
+|5  | 	0.997391|
+|6  | 	0.998462|
+|7  | 	0.997282|
+|8  | 	0.997596|
+|9  |	0.996876|
+|10 |    0.998097|
+|11 |    0.998316|
+|12 |	0.998172|
+|13 |	0.998323|
+|14 |	0.997844|
+|15 |	0.998249|
+|16 |	0.997792|
+|17 |	0.998143|
+|18 |	0.998171|
+|19 |	0.998485|
+|20 |	0.998413|
+|21 |	0.998412|
+|22 |	0.998131|
+|23 |	0.997850|
+|24 |	0.997991|
+|25 |	0.997961|
+|26 |	0.998267|
+|27 |	0.998253|
+|28 |	0.998562|
+|29 |	0.998707|
+|30 |	0.997398|
+|31 |	0.998379|
 
 **ISL (Context Window) Sweep**
 
 | Config | Batch | ISL (max_seq_len) | Prefill tokens | decode_t/s/u (tok/s) | decode_t/s (tok/s) |
 |:-------|------:|------------------:|---------------:|---------------------:|-------------------:|
-| b1_isl4k | 1 | 4k (4096) | 4096 | 29.24 | 29.24 |
-| b1_isl8k | 1 | 8k (8192) | 8192 | 22.28 | 22.28 |
-| b1_isl16k | 1 | 16k (16384) | 16384 | 21.68 | 21.68 |
-| b1_isl32k | 1 | 32k (32768) | 32768 | 20.42 | 20.42 |
-| b1_isl64k | 1 | 64k (65536) | 65536 | 18.43 | 18.43 |
-| b1_isl128k | 1 | 128k (131072) | 131072 | 15.35 | 15.35 |
-| b1_isl256k | 1 | 256k (262144) | 262144 | 15.74 | 15.74 |
+| b1_isl4k | 1 | 4k (4096) | 4096 | 29.94 | 29.94 |
+| b1_isl8k | 1 | 8k (8192) | 8192 | 29.90 | 29.90 |
+| b1_isl16k | 1 | 16k (16384) | 16384 | 29.69 | 29.69 |
+| b1_isl32k | 1 | 32k (32768) | 32768 | 28.61 | 28.61 |
+| b1_isl64k | 1 | 64k (65536) | 65536 | 26.62 | 26.62 |
+| b1_isl128k | 1 | 128k (131072) | 131072 | 22.91 | 22.91 |
+| b1_isl256k | 1 | 256k (262144) | 262144 | 18.77 | 18.77 |
+
 
 ## Resources
 
@@ -272,6 +275,17 @@ The following optimizations were applied across the vision tower, projector, and
 - **Scaled dot-product attention (SDPA)** — Program config is chosen from sequence length: below 2048 tokens, 128×128 chunks (aligned with Mistral vision, PCC-safe); at 2048 and above, chunks scale up to 256×256 with matmul batch count. `PIXTRAL_SDPA_Q_CHUNK` and `PIXTRAL_SDPA_K_CHUNK` environment variables can override chunk sizes. The SDPA grid uses the device `max_grid_size`, and SDPA runs with an explicit DRAM memory config. Redundant `to_memory_config` after head concatenation was removed.
 - **Async collectives (multi-chip)** — Replaced synchronous `all_gather` with `all_gather_async` on mesh paths (vision attention output gather, text MLP/decoder collectives where applicable). Tuned `chunks_per_sync`, `num_workers_per_link`, `num_buffers_per_channel`, and `num_links` per cluster axis (e.g. higher sync chunking and four workers per link on vision attention gather; two links and smaller chunks on text prefill/decode) for better fabric overlap and throughput.
 - **Matmul batching and tiles** — On the 1024-token PCC path, matmul tile size increases from 512 to 1024 with batch fusion enabled. For 1540×1540 vision inputs (~12k tokens), the number of batches per matmul is roughly halved compared to the prior chunk-concat approach.
+
+
+## CI support
+
+Devstral is wired into Blackhole hardware CI via `tests/pipeline_reorg/blackhole_demo_tests.yaml` (model name `devstral-small-2-24b`, workflow `(Blackhole) Demo tests`). On BH QuietBox (`P150x4`, `MESH_DEVICE=P150x4`), CI runs:
+
+- `pytest models/experimental/devstarl2_small/tests/pipeline_tests/` — composed-model PCC, decode logits PCC, text prefill logits PCC (128–8k), and submodule pipeline tests
+- `tt_image_demo.py` — TT multimodal (1540×1540 image, 100 new tokens)
+- `tt_text_demo.py` — TT text LM
+
+**Omitted from CI (long runtime):** Prefill logits PCC above **8k** (32k, 64k, 128k, 256k).
 
 ## Open Items
 
