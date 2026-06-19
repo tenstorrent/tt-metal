@@ -328,6 +328,25 @@ sizes:
       p300x2:
         trace_region_size: 70000000
 
+  gemma-4-12b:
+    aliases:
+      - "gemma-4-12b"
+      - "gemma-4-12B"
+      - "gemma-4-12B-it"
+      - "google/gemma-4-12B-it"
+      - "models/demos/gemma4/configs/gemma-4-12B-it"
+    skus:
+      wh_n150:
+        trace_region_size: 70000000
+      wh_llmbox_perf:
+        trace_region_size: 70000000
+      bh_p150:
+        trace_region_size: 70000000
+      bh_p300:
+        trace_region_size: 70000000
+      p300x2:
+        trace_region_size: 70000000
+
   gemma-4-26b-a4b:
     aliases:
       - "gemma-4-26b-a4b"
