@@ -14,8 +14,11 @@
 // Per resident shard (one tile-row, Wt tiles wide; RM: Wt = num_chunks*reduce_block,
 // the padded shard width so each chunk is a full reduce_block):
 //   [RM]     tilize cb_rm_in chunks -> cb_input_resident (held resident)
-//   PASS 1   sum of squares over the resident shard, chunked by reduce_block
-//            (square -> reduce<SUM,REDUCE_ROW,Accumulate>) -> cb_partial_sumsq
+//   PASS 1   sum of squares over the WHOLE resident shard in one shot
+//            (single square -> single reduce<SUM,REDUCE_ROW>) -> cb_partial_sumsq
+//            (Refinement 5: the resident shard is already L1-bounded by the host
+//             A/B W-split, so the former DEST-level reduce_block chunking +
+//             reduce-Accumulate loop was redundant and has been removed.)
 //   [B]      combine the K gathered partials (copy slot 0 + K-1 adds) -> cb_partial_sumsq
 //   FINALIZE rsqrt(sum * inv_W + eps) -> cb_recip_rms
 //   PASS 2   normalize x * recip (Col bcast) [* gamma (Row bcast)] -> cb_pass2_out
@@ -79,7 +82,6 @@ void kernel_main() {
     // ---- runtime args ----
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // RM: number of 32-stick blocks
 
-    using ckl::Accumulate;
     using ckl::BinaryDataFormatReconfig;
     using ckl::BinaryFpu;
     using ckl::BinaryFpuOp;
@@ -121,38 +123,43 @@ void kernel_main() {
             }
         }
 
-        // ---------- PASS 1: sum of squares over the resident shard ----------
-        for (uint32_t c = 0; c < num_chunks; ++c) {
-            const uint32_t base = c * reduce_block;
-            const uint32_t cw = (base + reduce_block <= Wt) ? reduce_block : (Wt - base);
+        // ---------- PASS 1: sum of squares over the WHOLE resident shard ----------
+        // Refinement 5: a single square + single reduce over the full shard — the
+        // former DEST-level reduce_block chunking + reduce-Accumulate loop is gone.
+        // The per-core shard width (Wt for Regime A, Wt_s for Regime B) is already
+        // L1-bounded by the host A/B heuristic (the distributed W-split bounds the
+        // resident shard), so an in-kernel chunking-and-accumulate was redundant.
+        // ckl::eltwise_chain (square) and ckl::reduce (sum) are L1->L1 helpers that
+        // tile their own work through DEST internally, so a square / reduce over the
+        // full shard is a single call regardless of how many tiles wide it is — the
+        // kernel never sees DEST capacity. cb_squared is sized to the shard width by
+        // the descriptor (≤32 tiles for every routed shape).
+        //
+        // square resident[0 .. Wt) -> cb_squared (no pop of resident; reused in PASS-2)
+        ckl::eltwise_chain(
+            EltwiseShape::tiles(Wt),
+            BinaryFpu<
+                cb_input_resident,
+                cb_input_resident,
+                BinaryFpuOp::Mul,
+                BroadcastDim::None,
+                InputLifecycle::HeldBulk,
+                InputLifecycle::HeldBulk,
+                BinaryDataFormatReconfig::Input,
+                Dst::D0,
+                OperandKind::Block,
+                OperandKind::Block,
+                TileOffset::Set,
+                TileOffset::Set>{0, 0},
+            PackTile<cb_squared, OutputLifecycle::Streaming>{});
 
-            // square resident[base .. base+cw) -> cb_squared (no pop of resident)
-            ckl::eltwise_chain(
-                EltwiseShape::tiles(cw),
-                BinaryFpu<
-                    cb_input_resident,
-                    cb_input_resident,
-                    BinaryFpuOp::Mul,
-                    BroadcastDim::None,
-                    InputLifecycle::HeldBulk,
-                    InputLifecycle::HeldBulk,
-                    BinaryDataFormatReconfig::Input,
-                    Dst::D0,
-                    OperandKind::Block,
-                    OperandKind::Block,
-                    TileOffset::Set,
-                    TileOffset::Set>{base, base},
-                PackTile<cb_squared, OutputLifecycle::Streaming>{});
-
-            // reduce-accumulate the squared chunk into cb_partial_sumsq
-            ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_squared,
-                cb_scaler,
-                cb_partial_sumsq,
-                ReduceInputBlockShape::of(1, cw),
-                ckl::ReduceInputMemoryLayout::contiguous(),
-                Accumulate(cb_partial_sumsq, c));
-        }
+        // reduce the full squared shard into the local Sum(x^2) (single output tile)
+        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, ReduceInputPolicy::BulkWaitBulkPop>(
+            cb_squared,
+            cb_scaler,
+            cb_partial_sumsq,
+            ReduceInputBlockShape::of(1, Wt),
+            ckl::ReduceInputMemoryLayout::contiguous());
 
         // ---------- (Regime B) cross-core combine ----------
         if constexpr (num_partials > 1) {

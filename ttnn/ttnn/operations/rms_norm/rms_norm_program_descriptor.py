@@ -257,7 +257,11 @@ def _regime_a_descriptor(
         cb(CB_INPUT_RESIDENT, dt, Wt),
         cb(CB_SCALER, inter, 1),
         cb(CB_OUTPUT, dt, 2),
-        cb(CB_SQUARED, inter, reduce_block),
+        # Refinement 5: PASS-1 is now a single square + single reduce over the whole
+        # resident shard, so cb_squared holds the full shard (Wt tiles) rather than one
+        # reduce_block chunk. Wt is host-bounded by the same A/B heuristic that bounds
+        # cb_input_resident (≤32 tiles for every routed shape), so this stays well within L1.
+        cb(CB_SQUARED, inter, Wt),
         cb(CB_PARTIAL_SUMSQ, inter, 2),
         cb(CB_RECIP_RMS, inter, 2),
     ]
@@ -455,7 +459,10 @@ def _regime_b_descriptor(
         cb(CB_INPUT_RESIDENT, dt, Wt_s),
         cb(CB_SCALER, inter, 1),
         cb(CB_OUTPUT, dt, 2),
-        cb(CB_SQUARED, inter, reduce_block),
+        # Refinement 5: single square + single reduce over the whole resident shard;
+        # cb_squared holds the full per-core shard (Wt_s tiles), not one reduce_block.
+        # Wt_s is bounded by _select_k (the W-split keeps it small), so L1 is unaffected.
+        cb(CB_SQUARED, inter, Wt_s),
         cb(CB_PARTIAL_SUMSQ, inter, 2),
         cb(CB_RECIP_RMS, inter, 2),
         cb(CB_PARTIALS_GATHERED, inter, K),
@@ -670,7 +677,9 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         cb(CB_SCALER, inter, 1),
         cb(CB_RM_OUT, dt, db * reduce_block),
         cb(CB_RM_INPUT_RESIDENT, dt, Wt_padded),
-        cb(CB_RM_SQUARED, inter, reduce_block),
+        # Refinement 5: single square + single reduce over the whole tilized resident
+        # shard; cb_squared holds the full padded shard (Wt_padded tiles), not one chunk.
+        cb(CB_RM_SQUARED, inter, Wt_padded),
         cb(CB_RM_PARTIAL_SUMSQ, inter, 2),
         cb(CB_RM_RECIP_RMS, inter, 2),
         cb(CB_RM_OUT_TILED, dt, db * reduce_block),
@@ -865,7 +874,9 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
         cb(CB_SCALER, inter, 1),
         cb(CB_RM_OUT, dt, db * reduce_block),
         cb(CB_RM_INPUT_RESIDENT, dt, Wt_padded),
-        cb(CB_RM_SQUARED, inter, reduce_block),
+        # Refinement 5: single square + single reduce over the whole tilized resident
+        # shard; cb_squared holds the full padded shard (Wt_padded tiles), not one chunk.
+        cb(CB_RM_SQUARED, inter, Wt_padded),
         cb(CB_RM_PARTIAL_SUMSQ, inter, 2),
         cb(CB_RM_RECIP_RMS, inter, 2),
         cb(CB_RM_OUT_TILED, dt, db * reduce_block),
