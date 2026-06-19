@@ -130,7 +130,7 @@ def test_mla_chunked_perf_impl(mesh_device, device_params, variant, config_only)
 
     logger.info(f"profiling one {chunk}-token chunk @ {cache}-token cache (end_pos={total}) on SP={sp}×TP={tp} …")
     signpost("start")
-    out = mla.forward(tt_x, rope, kvpe_cache, kv_actual_isl=cache)
+    out = mla.forward(tt_x, rope, kvpe_cache, actual_start=cache)
     ttnn.deallocate(out)
     ttnn.synchronize_device(mesh_device)
     signpost("stop")

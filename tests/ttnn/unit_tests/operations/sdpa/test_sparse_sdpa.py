@@ -1,184 +1,254 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""sparse_sdpa (sparse MLA prefill) unit tests — Blackhole only. See PLAN_sparse_sdpa.md.
+"""sparse_sdpa (sparse MLA prefill) — BASIC post-commit smoke (Blackhole only).
 
-Correctness uses SMALL parametric shapes (the golden gathers sel[S,k,D]; full 640/2048/56320 is ~2.8 GiB).
+This file is a fast subset: op-runs/shape, output-dtype (incl. fp8), and a minimal single- and multi-chunk
+PCC with all-valid + boundary masking. The full coverage (sweeps over shapes / heads / fp8 q+kv /
+query-subblocking / sparsity, plus the perf-only test) lives in the nightly suite:
+tests/ttnn/nightly/unit_tests/operations/sdpa/test_sparse_sdpa.py
 """
-
-import math
 
 import pytest
 import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v32.reference_cpu.sparse_sdpa_prefill import sparse_mla, MASKED_INDEX
+from tests.ttnn.unit_tests.operations.sdpa.sparse_sdpa_test_utils import (
+    make_inputs,
+    golden,
+    to_dev,
+    run_op,
+    pcc,
+)
 
-K_DIM = 576
-V_DIM = 512
+K_DIM = 576  # head dim (q/kv width)
+V_DIM = 512  # V width / output width (op arg)
 
-
-def _make_inputs(H, S, T, TOPK, n_valid_fn, seed=0):
-    """Build (q, kv, indices) torch tensors matching the producer contract (tail-shaped sentinels)."""
-    gen = torch.Generator().manual_seed(seed)
-    q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
-    kv = torch.randn(1, 1, T, K_DIM, generator=gen, dtype=torch.float32)
-    indices = torch.full((1, 1, S, TOPK), MASKED_INDEX, dtype=torch.int64)
-    for s in range(S):
-        nv = max(1, min(TOPK, n_valid_fn(s)))
-        perm = torch.randperm(T, generator=gen)[:nv]
-        indices[0, 0, s, :nv] = perm
-    return q, kv, indices
+# Open the device ONCE per module (not per test) — all tests share one device config, so this avoids the
+# ~1.7s open/close on every test. The program cache persists across tests, which is fine: the recompile and
+# indexed tests clear_program_cache() at their start, and the hash keeps distinct configs separate.
+pytestmark = pytest.mark.use_module_device
 
 
-def _golden(q, kv, indices, scale):
-    # sparse_mla expects kvpe [T,576] and indices reshaped (it accepts [..,S,k]).
-    out = sparse_mla(q, kv[0, 0], indices.to(torch.int64), scale)  # [1,H,S,512]
-    return out
-
-
-def _to_dev(t, device, dtype):
-    return ttnn.from_torch(
-        t, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
-
-
-def _run_op(q, kv, indices, device, k_chunk_size):
-    tt_q = _to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_kv = _to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_idx = _to_dev(indices.to(torch.int32), device, ttnn.uint32)
-    scale = K_DIM**-0.5
-    tt_out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=k_chunk_size)
-    return ttnn.to_torch(tt_out), scale
-
-
-# ---- Phase 1: op runs, output shape/layout correct (compute is a no-op → zeros) ----
+# ---- op runs, output shape/layout correct ----
 @run_for_blackhole()
-def test_sparse_sdpa_phase1_runs(device):
+def test_sparse_sdpa_runs(device):
     H, S, T, TOPK, kc = 32, 64, 256, 64, 32
-    q, kv, indices = _make_inputs(H, S, T, TOPK, lambda s: TOPK)
-    out, _ = _run_op(q, kv, indices, device, kc)
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
+    out, _ = run_op(q, kv, indices, device, kc, V_DIM)
     assert tuple(out.shape) == (1, H, S, V_DIM), f"got {tuple(out.shape)}"
 
 
-# ---- First passing target: SINGLE-CHUNK PCC (k_chunk == TOPK) vs sparse_mla golden ----
+# ---- output dtype matches q (bf16 q -> bf16 out, fp8 q -> fp8 out) ----
 @run_for_blackhole()
-@pytest.mark.parametrize("S,T,TOPK", [(64, 256, 32), (64, 512, 64), (32, 1024, 128)])
+@pytest.mark.parametrize("q_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["q_bf16", "q_fp8"])
+def test_sparse_sdpa_output_dtype(device, q_dtype):
+    H, S, T, TOPK, kc = 32, 64, 256, 64, 32
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
+    q_host = q.to(torch.bfloat16) if q_dtype == ttnn.bfloat16 else q.to(torch.float32)
+    tt_q = to_dev(q_host, device, q_dtype)
+    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=K_DIM**-0.5, k_chunk_size=kc)
+    assert out.dtype == q_dtype, f"output dtype {out.dtype} != q dtype {q_dtype}"
+
+
+# ---- minimal PCC vs the sparse_mla golden: single chunk + multi chunk, all-valid + a boundary mask ----
+@run_for_blackhole()
 @pytest.mark.parametrize(
     "nv_fn,nv_id",
-    [(lambda s: 10**9, "all_valid"), (lambda s: 1 + (s % 7), "few_valid"), (lambda s: 1 + (s * 3) % 20, "boundary")],
+    [(lambda s: 10**9, "all_valid"), (lambda s: 1 + (s * 3) % 20, "boundary")],
     ids=lambda x: x if isinstance(x, str) else "",
 )
-def test_sparse_sdpa_pcc_single_chunk(device, S, T, TOPK, nv_fn, nv_id):
-    H = 32
-    q, kv, indices = _make_inputs(H, S, T, TOPK, nv_fn)
-    out, scale = _run_op(q, kv, indices, device, k_chunk_size=TOPK)  # single chunk
-    golden = _golden(q, kv, indices, scale).to(torch.float32)
-    pcc = torch.corrcoef(torch.stack([out.flatten().float(), golden.flatten()]))[0, 1].item()
-    assert pcc >= 0.99, f"PCC {pcc:.5f} (S={S},T={T},TOPK={TOPK},{nv_id})"
+def test_sparse_sdpa_pcc_single_chunk(device, nv_fn, nv_id):
+    H, S, T, TOPK = 32, 64, 256, 32  # k_chunk == TOPK -> single chunk
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn)
+    out, scale = run_op(q, kv, indices, device, k_chunk_size=TOPK, v_dim=V_DIM)
+    p = pcc(out, golden(q, kv, indices, scale, V_DIM))
+    assert p >= 0.99, f"PCC {p:.5f} ({nv_id})"
 
 
-# ---- Phase 5 target: multi-chunk PCC vs sparse_mla golden (needs flash accumulation) ----
-@run_for_blackhole()
-@pytest.mark.parametrize("S,T,TOPK,kc", [(64, 256, 64, 32), (64, 512, 128, 64), (32, 1024, 256, 128)])
-@pytest.mark.parametrize(
-    "nv_fn,nv_id",
-    [
-        (lambda s: 10**9, "all_valid"),
-        (lambda s: 1 + (s % 7), "few_valid"),
-        (lambda s: 1 + (s * 3) % 50, "mid_tile_boundary"),
-    ],
-    ids=lambda x: x if isinstance(x, str) else "",
-)
-def test_sparse_sdpa_pcc(device, S, T, TOPK, kc, nv_fn, nv_id):
-    H = 32
-    q, kv, indices = _make_inputs(H, S, T, TOPK, nv_fn)
-    out, scale = _run_op(q, kv, indices, device, kc)
-    golden = _golden(q, kv, indices, scale).to(torch.float32)
-    pcc = torch.corrcoef(torch.stack([out.flatten().float(), golden.flatten()]))[0, 1].item()
-    assert pcc >= 0.99, f"PCC {pcc:.5f} (S={S},T={T},TOPK={TOPK},kc={kc},{nv_id})"
-
-
-# ---- Multi-token-per-core: S (256) > num_cores (110) => each core processes 2-3 tokens.
-#      Guards the per-token CB lifecycle (Q_IN/max/sum/out must be clean between tokens). ----
-@run_for_blackhole()
-@pytest.mark.parametrize("TOPK,kc", [(64, 64), (64, 32), (128, 32)], ids=["1chunk", "2chunk", "4chunk"])
-def test_sparse_sdpa_multitoken(device, TOPK, kc):
-    H, S, T = 32, 256, 512
-    q, kv, indices = _make_inputs(H, S, T, TOPK, lambda s: 1 + (s * 5) % TOPK)
-    out, scale = _run_op(q, kv, indices, device, kc)
-    golden = _golden(q, kv, indices, scale).to(torch.float32)
-    pcc = torch.corrcoef(torch.stack([out.flatten().float(), golden.flatten()]))[0, 1].item()
-    assert pcc >= 0.99, f"PCC {pcc:.5f} (S={S},T={T},TOPK={TOPK},kc={kc})"
-
-
-# ---- Arbitrary head count: H = Sqt*32 query tile-rows processed as one subblock. The upper bound is
-#      per-core L1 (flash state + Q scale with H), so it depends on k_chunk (see the aggressive-block test).
-#      Exercises all_valid + a mid-tile boundary mask, multi-token/core (S>cores guards the cb_q_in pop). ----
-@run_for_blackhole()
-@pytest.mark.parametrize("H", [32, 64, 96, 128], ids=["h32", "h64", "h96", "h128"])
-@pytest.mark.parametrize(
-    "nv_fn,nv_id",
-    [(lambda s: 10**9, "all_valid"), (lambda s: 1 + (s * 3) % 50, "mid_tile_boundary")],
-    ids=lambda x: x if isinstance(x, str) else "",
-)
-def test_sparse_sdpa_heads(device, H, nv_fn, nv_id):
-    S, T, TOPK, kc = 256, 512, 128, 64  # 2 chunks (Skt=2); S>cores => multi-token/core (guards cb_q_in pop)
-    q, kv, indices = _make_inputs(H, S, T, TOPK, nv_fn)
-    out, scale = _run_op(q, kv, indices, device, kc)
-    golden = _golden(q, kv, indices, scale).to(torch.float32)
-    pcc = torch.corrcoef(torch.stack([out.flatten().float(), golden.flatten()]))[0, 1].item()
-    assert pcc >= 0.99, f"PCC {pcc:.5f} (H={H},{nv_id})"
-
-
-# ---- Aggressive blocking: k_chunk=32 (smallest) minimizes the per-chunk K/score L1, freeing room for more
-#      query tile-rows. H=192 fits at k_chunk=32 but OOMs at k_chunk=256 (measured max H: 96@256, 192@32). ----
 @run_for_blackhole()
 @pytest.mark.parametrize(
     "nv_fn,nv_id",
     [(lambda s: 10**9, "all_valid"), (lambda s: 1 + (s * 3) % 50, "mid_tile_boundary")],
     ids=lambda x: x if isinstance(x, str) else "",
 )
-def test_sparse_sdpa_heads_aggressive_block(device, nv_fn, nv_id):
-    H, S, T, TOPK, kc = 192, 64, 512, 128, 32  # k_chunk=32 (Skt=1) => 4 chunks; large H fits via tiny per-chunk L1
-    q, kv, indices = _make_inputs(H, S, T, TOPK, nv_fn)
-    out, scale = _run_op(q, kv, indices, device, kc)
-    golden = _golden(q, kv, indices, scale).to(torch.float32)
-    pcc = torch.corrcoef(torch.stack([out.flatten().float(), golden.flatten()]))[0, 1].item()
-    assert pcc >= 0.99, f"PCC {pcc:.5f} (H={H},kc={kc},{nv_id})"
+def test_sparse_sdpa_pcc_multi_chunk(device, nv_fn, nv_id):
+    H, S, T, TOPK, kc = 32, 64, 256, 64, 32  # 2 chunks -> flash accumulation
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn)
+    out, scale = run_op(q, kv, indices, device, kc, V_DIM)
+    p = pcc(out, golden(q, kv, indices, scale, V_DIM))
+    assert p >= 0.99, f"PCC {p:.5f} ({nv_id})"
 
 
-# ---- Perf-only (no golden; full-size golden gather is ~GBs). Profile with:
-#      python -m tracy -p -r -v -m pytest <thisfile>::test_sparse_sdpa_perf
-#      then read "DEVICE KERNEL DURATION [ns]" for SparseSDPAOperation. ----
-# nv (valid keys/token) patterns. Chunk-skip benefit is sparsity-dependent, so sweep it.
-_NV = {
-    "dense": lambda s, T, K: K,  # all TOPK valid (no skip) -> worst case, proves no regression
-    "half": lambda s, T, K: K // 2,
-    "causal": lambda s, T, K: min(s + 1, K),  # realistic prefill: position p has p+1 candidates
-    "sparse": lambda s, T, K: 256,
-    "mixed": lambda s, T, K: 1 + (s * 7) % K,  # earlier arbitrary distribution (for before/after compare)
-}
+# ---- the kv (K cache) length T rides on the accessor's runtime args, so changing T must NOT recompile ----
+@run_for_blackhole()
+def test_sparse_sdpa_kv_len_no_recompile(device):
+    H, S, TOPK, kc = 32, 64, 64, 32
+    device.clear_program_cache()
+    for T in (256, 512, 1024):  # only the kv (K cache) length differs across these calls
+        q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
+        out, scale = run_op(q, kv, indices, device, kc, V_DIM)
+        p = pcc(out, golden(q, kv, indices, scale, V_DIM))
+        assert p >= 0.99, f"PCC {p:.5f} (T={T})"
+    n = device.num_program_cache_entries()
+    assert n == 1, f"changing kv length recompiled: {n} program-cache entries (expected 1)"
+
+
+# ---- oversized persistent kv buffer (same idea as ring_mla's reuse_max): one max-size K cache, allocated
+# ---- once and reused across calls. The cache is far larger than the keys any query attends to (T >> TOPK)
+# ---- and reads are index-driven, so the unpopulated suffix is simply never addressed. ----
+@run_for_blackhole()
+def test_sparse_sdpa_oversized_persistent_kv(device):
+    H, S, T_MAX, TOPK, kc = 32, 64, 1024, 64, 32
+    device.clear_program_cache()
+    gen = torch.Generator().manual_seed(0)
+    kv = torch.randn(1, 1, T_MAX, K_DIM, generator=gen, dtype=torch.float32)
+    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)  # ONE persistent oversized K cache
+    scale = K_DIM**-0.5
+    for valid_len in (256, 1024):  # each call's queries attend only to the [0, valid_len) populated prefix
+        q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
+        indices = torch.empty((1, 1, S, TOPK), dtype=torch.int64)
+        for s in range(S):
+            indices[0, 0, s, :] = torch.randperm(valid_len, generator=gen)[:TOPK]
+        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        tt_out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc)
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv, indices, scale, V_DIM))
+        assert p >= 0.99, f"PCC {p:.5f} (valid_len={valid_len})"
+    n = device.num_program_cache_entries()  # reusing the same oversized buffer must not realloc/recompile
+    assert n == 1, f"oversized persistent kv reuse recompiled: {n} program-cache entries (expected 1)"
+
+
+def _indexed_inputs(H, S, T, TOPK, B, seed=0):
+    gen = torch.Generator().manual_seed(seed)
+    q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
+    kv_full = torch.randn(B, 1, T, K_DIM, generator=gen, dtype=torch.float32)  # B DISTINCT cache slots
+    indices = torch.empty((1, 1, S, TOPK), dtype=torch.int64)
+    for s in range(S):
+        indices[0, 0, s, :] = torch.randperm(T, generator=gen)[:TOPK]
+    return q, kv_full, indices
+
+
+# ---- indexed KV cache: kv is a shared [B,1,T,K_DIM] cache; cache_batch_idx selects the slot. Distinct
+# ---- random data per slot means a correct PCC for every slot proves the right slot is read, and a single
+# ---- program-cache entry across slots proves indexing is a runtime arg (no recompile). ----
+@run_for_blackhole()
+def test_sparse_sdpa_indexed_kv_cache(device):
+    H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 3
+    device.clear_program_cache()
+    scale = K_DIM**-0.5
+    q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)  # [B,1,T,K_DIM] shared cache
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    for cb in range(B):
+        tt_out = ttnn.transformer.sparse_sdpa(
+            tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+        )
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))  # golden uses slot cb
+        assert p >= 0.99, f"PCC {p:.5f} (cache_batch_idx={cb})"
+    n = device.num_program_cache_entries()  # changing the indexed slot must NOT recompile
+    assert n == 1, f"indexing into a different slot recompiled: {n} program-cache entries (expected 1)"
+
+
+# ---- indexed KV cache that is ND-sharded across DRAM banks (each batch slot is one shard). ----
+def _nd_sharded_dram_config(device, rows_per_shard):
+    num_banks = device.dram_grid_size().x
+    cores = [ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(num_banks)]
+    spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, rows_per_shard, K_DIM],
+        grid=ttnn.CoreRangeSet(cores),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
 
 
 @run_for_blackhole()
-@pytest.mark.parametrize(
-    "S,T,TOPK,kc,nv",
-    [
-        (640, 56320, 2048, 256, "dense"),  # production shape (Q[32,640,576], KV[56320,576], idx[640,2048])
-        (640, 56320, 2048, 256, "half"),
-        (640, 56320, 2048, 256, "causal"),
-        (640, 56320, 2048, 256, "sparse"),
-        (640, 56320, 2048, 256, "mixed"),
-        (110, 56320, 2048, 256, "dense"),  # 1 token/core, 8 chunks, real T -> representative DRAM locality
-        (8, 56320, 2048, 256, "dense"),  # 8 cores -> low DRAM contention; isolates BW headroom vs floor
-    ],
-    ids=["prod-dense", "prod-half", "prod-causal", "prod-sparse", "prod-mixed", "zone1tok", "lowcore"],
-)
-def test_sparse_sdpa_perf(device, S, T, TOPK, kc, nv):
-    H = 32
-    nv_fn = _NV[nv]
-    q, kv, indices = _make_inputs(H, S, T, TOPK, lambda s: nv_fn(s, T, TOPK))
-    out, _ = _run_op(q, kv, indices, device, kc)  # no golden; correctness covered by PCC tests
-    assert tuple(out.shape) == (1, H, S, V_DIM)
+def test_sparse_sdpa_indexed_nd_sharded_kv(device):
+    H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 2
+    device.clear_program_cache()
+    scale = K_DIM**-0.5
+    q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B)
+    nd_cfg = _nd_sharded_dram_config(device, rows_per_shard=T)  # each [1,1,T,K_DIM] slot is one shard
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = ttnn.from_torch(
+        kv_full.to(torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=nd_cfg,
+    )
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    for cb in range(B):
+        tt_out = ttnn.transformer.sparse_sdpa(
+            tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+        )
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))
+        assert p >= 0.99, f"PCC {p:.5f} (nd-sharded, cache_batch_idx={cb})"
+
+
+# ---- A SHARDED kv's per-page bank mapping derives from its tensor shape (the accessor's shard strides), which
+# ---- are baked at create time and NOT re-emitted on a cache-hit fast path. So unlike interleaved kv, changing
+# ---- a sharded kv's T must recompile — else the 2nd call would reuse stale strides and read wrong banks. Here
+# ---- both T values share ONE shard spec (same memory_config), so the hash must distinguish them by shape;
+# ---- correct PCC for both proves it does. ----
+@run_for_blackhole()
+def test_sparse_sdpa_nd_sharded_kv_len_change(device):
+    H, S, TOPK, kc = 32, 64, 64, 32
+    device.clear_program_cache()
+    scale = K_DIM**-0.5
+    nd_cfg = _nd_sharded_dram_config(device, rows_per_shard=128)  # FIXED shard shape, independent of T
+    for T in (256, 512):  # multiples of 128; same shard spec, different T (different shard count)
+        q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
+        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_kv = ttnn.from_torch(
+            kv.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=device,
+            memory_config=nd_cfg,
+        )
+        tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, scale=scale, k_chunk_size=kc)
+        p = pcc(ttnn.to_torch(out), golden(q, kv, indices, scale, V_DIM))
+        assert p >= 0.99, f"PCC {p:.5f} (nd-sharded, T={T})"
+    assert device.num_program_cache_entries() == 2, "sharded kv must recompile per shape (2 distinct T -> 2 entries)"
+
+
+# ---- cache_batch_idx is excluded from the program hash, so an out-of-range slot must be rejected even on a
+# ---- program-cache HIT (validate_on_program_cache_hit re-checks the bound; without it the gather would run
+# ---- out of bounds silently). ----
+@run_for_blackhole()
+def test_sparse_sdpa_indexed_oob_rejected_on_hit(device):
+    H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 2
+    device.clear_program_cache()
+    q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=0)  # miss: builds
+    assert device.num_program_cache_entries() == 1
+    with pytest.raises(RuntimeError):  # cache HIT, slot B is out of range [0,B) -> rejected by the hit validator
+        ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=B)
+
+
+# ---- q/indices layout/memory are NOT in the program hash, so an incompatible (e.g. TILE-layout) q with the
+# ---- same shape/dtype must be rejected on a program-cache HIT too (validate_on_program_cache_hit re-checks
+# ---- all non-hashed input invariants; without it the cached row-major program would run on a tiled tensor). ----
+@run_for_blackhole()
+def test_sparse_sdpa_bad_layout_rejected_on_hit(device):
+    H, S, T, TOPK, kc = 32, 64, 256, 64, 32
+    device.clear_program_cache()
+    q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
+    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)  # miss: builds the row-major program
+    assert device.num_program_cache_entries() == 1
+    tt_q_tile = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)  # same shape+dtype (same hash) but wrong layout -> HIT
+    with pytest.raises(RuntimeError):
+        ttnn.transformer.sparse_sdpa(tt_q_tile, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)

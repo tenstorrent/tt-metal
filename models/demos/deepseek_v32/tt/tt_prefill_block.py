@@ -372,7 +372,7 @@ class TtPrefillBlock(LightweightModule):
             kvpe_cache,
             cache_layer_idx=cache_layer_idx,
             on_layer_complete=on_layer_complete,
-            actual_isl=actual_isl,
+            actual_end=actual_isl,  # v3 base renamed actual_isl -> actual_end (the pad-zero boundary)
         )
         ttnn.deallocate(attn_norm_out)
         x = ttnn.add(x, mla_out)

@@ -253,17 +253,22 @@ class ttMLA(_ttMLAv3):
             logits = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
         return ops.topk_indices(logits, min(self.index_args.index_topk, end_pos))
 
-    def forward(self, hidden_states, rope_tensors, kvpe_cache, **kwargs):
+    def forward(self, hidden_states, rope_tensors, kvpe_cache, actual_start=None, actual_end=None, **kwargs):
+        # v3 base API (post-#46762): actual_start is the chunk's absolute first-token KV position
+        # (the old kv_actual_isl); actual_end is the pad-zero boundary (the old actual_isl). Chunked
+        # mode is fixed at construction (self.is_chunked), so actual_start is set iff is_chunked.
         seq_len_local = hidden_states.shape[2]
-        kv_isl = kwargs.get("kv_actual_isl")
+        kv_isl = actual_start
         end_pos = (kv_isl or 0) + seq_len_local * self.sp_factor
         if end_pos <= self.index_args.index_topk or not self._has_indexer:
             if self._has_indexer and kv_isl is not None:
                 self._indexer_write_k(hidden_states, seq_len_local, kv_isl)
-            return super().forward(hidden_states, rope_tensors, kvpe_cache, **kwargs)
+            return super().forward(
+                hidden_states, rope_tensors, kvpe_cache, actual_start=actual_start, actual_end=actual_end, **kwargs
+            )
 
         indices = self._indexer_topk(hidden_states, seq_len_local, start_pos=kv_isl or 0)
-        return self._dsa_forward(hidden_states, rope_tensors, kvpe_cache, indices, **kwargs)
+        return self._dsa_forward(hidden_states, rope_tensors, kvpe_cache, indices, kv_actual_isl=actual_start, **kwargs)
 
     def _sp_all_gather(self, t, dim):
         """All-gather across the SP axis (sequence) → full-S replicated on SP. sp=1: no-op."""

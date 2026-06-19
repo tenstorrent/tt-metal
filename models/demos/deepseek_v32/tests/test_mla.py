@@ -410,7 +410,7 @@ def test_v32_mla_chunked_vs_cpu_reference(
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
         )
-        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, kv_actual_isl=s)
+        out = mla_tt.forward(tt_x, rope_tensors, tt_kvpe_cache, actual_start=s)
         outs.append(
             ttnn.to_torch(
                 out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
