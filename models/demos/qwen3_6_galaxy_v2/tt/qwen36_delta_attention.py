@@ -953,14 +953,16 @@ class TtQwen36DeltaAttention(LightweightModule):
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             qkvz = qkvz_partial
         else:
-            # Cast to fp32 before all_reduce — ttnn.all_reduce with fp32 input
-            # reduces in fp32 (lines 219/334 of all_reduce_async.cpp: is_float32 path).
-            # Keep fp32 downstream so subsequent slicing/conv/beta-g run in fp32,
-            # matching the CPU reference precision throughout.
+            # Cast to fp32 before all_reduce so the 4-way col-axis summation
+            # runs in fp32, not bf16. Summation of N bf16 values in bf16
+            # accumulates N×eps_bf16 rounding; fp32 accumulation keeps it at
+            # eps_bf16 (only the initial quantization, not the reduction).
             qkvz_fp32 = ttnn.typecast(qkvz_partial, dtype=ttnn.float32)
             qkvz_partial.deallocate(True)
-            qkvz = ttnn.all_reduce(qkvz_fp32, cluster_axis=1, num_links=1, memory_config=mem)
+            qkvz_reduced = ttnn.all_reduce(qkvz_fp32, cluster_axis=1, num_links=1, memory_config=mem)
             qkvz_fp32.deallocate(True)
+            qkvz = ttnn.typecast(qkvz_reduced, dtype=ttnn.bfloat16)
+            qkvz_reduced.deallocate(True)
         out_rank = len(qkvz.shape)
         q_per_row = self.q_per_row  # 256
         v_per_row = self.v_per_row  # 768
@@ -1020,11 +1022,13 @@ class TtQwen36DeltaAttention(LightweightModule):
         if os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
             ba = ba_partial  # skip col-reduce (timing ablation)
         else:
-            # fp32 all_reduce — keep fp32 so b/a slices and beta/g ops run in fp32.
+            # fp32 all_reduce — same precision fix as QKVZ above.
             ba_fp32 = ttnn.typecast(ba_partial, dtype=ttnn.float32)
             ba_partial.deallocate(True)
-            ba = ttnn.all_reduce(ba_fp32, cluster_axis=1, num_links=1, memory_config=mem)
+            ba_reduced = ttnn.all_reduce(ba_fp32, cluster_axis=1, num_links=1, memory_config=mem)
             ba_fp32.deallocate(True)
+            ba = ttnn.typecast(ba_reduced, dtype=ttnn.bfloat16)
+            ba_reduced.deallocate(True)
         n_v_per_row = self.n_v_per_row
         if out_rank == 3:
             B_, T_, _ = list(ba.shape)
@@ -1298,16 +1302,15 @@ class TtQwen36DeltaAttention(LightweightModule):
         if self.use_tt_lang_beta_g and T == 1 and self._beta_g_kernel_state is not None:
             return self._compute_beta_g_tt_lang(b, a)
         mem = ttnn.DRAM_MEMORY_CONFIG
-        # b and a are fp32 (from the fp32 ba all_reduce → slice).
-        # Cast weights to fp32 to match. All ops run in fp32 matching CPU reference.
-        b_fp32 = ttnn.typecast(b, dtype=ttnn.float32) if b.dtype != ttnn.float32 else b
-        a_fp32 = ttnn.typecast(a, dtype=ttnn.float32) if a.dtype != ttnn.float32 else a
+        # Cast to fp32 so sigmoid/softplus/exp match the fp32 CPU reference.
+        # The inputs b, a are bf16 (BA projection output); the unary ops have
+        # measurable precision difference in bf16 vs fp32 over 48 GDN layers.
+        b_fp32 = ttnn.typecast(b, dtype=ttnn.float32)
+        a_fp32 = ttnn.typecast(a, dtype=ttnn.float32)
         beta = ttnn.sigmoid(b_fp32, memory_config=mem)
-        if b_fp32 is not b:
-            ttnn.deallocate(b_fp32)
+        ttnn.deallocate(b_fp32)
         a_biased = ttnn.add(a_fp32, ttnn.typecast(self.dt_bias, dtype=ttnn.float32), memory_config=mem)
-        if a_fp32 is not a:
-            ttnn.deallocate(a_fp32)
+        ttnn.deallocate(a_fp32)
         sp = ttnn.softplus(a_biased, memory_config=mem)
         ttnn.deallocate(a_biased)
         A_exp = ttnn.exp(ttnn.typecast(self.A_log, dtype=ttnn.float32), memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -2706,8 +2709,8 @@ class TtQwen36DeltaAttention(LightweightModule):
                 _packed_tmp = None
             if _os.environ.get("QWEN36_ABLATE_CCL", "0") == "1":
                 return partial  # skip row-reduce (timing ablation; garbage values)
-            # fp32 all_reduce: 8-way row sum in fp32, cast to bf16 only at output
-            # (the caller expects bf16 for the residual stream).
+            # fp32 all_reduce: cast before the 8-way row sum to avoid bf16
+            # accumulation rounding (8 × eps_bf16 vs eps_bf16 in fp32).
             partial_fp32 = ttnn.typecast(partial, dtype=ttnn.float32)
             partial.deallocate(True)
             reduced_fp32 = ttnn.all_reduce(
@@ -2717,9 +2720,7 @@ class TtQwen36DeltaAttention(LightweightModule):
                 memory_config=mem,
             )
             partial_fp32.deallocate(True)
-            reduced = ttnn.typecast(reduced_fp32, dtype=ttnn.bfloat16)
-            reduced_fp32.deallocate(True)
-            return reduced
+            return ttnn.typecast(reduced_fp32, dtype=ttnn.bfloat16)
 
         # V2-14 persistent-buffer path.  Linear writes directly into
         # width-sharded L1 (avoids inserted to_memory_config); the
