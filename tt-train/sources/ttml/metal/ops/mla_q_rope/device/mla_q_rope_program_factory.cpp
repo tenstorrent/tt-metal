@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "q_rope_fw_program_factory.hpp"
+#include "mla_q_rope_program_factory.hpp"
 
 #include <cstdint>
 #include <tt-metalium/host_api.hpp>
@@ -11,7 +11,7 @@
 #include <tt-metalium/work_split.hpp>
 
 #include "metal/common/program_utils.hpp"
-#include "q_rope_fw_device_operation_types.hpp"
+#include "mla_q_rope_device_operation_types.hpp"
 
 // L1 circular buffer sizes (tiles). Tr <= 8, max_dst <= 8, nope_chunk_tiles <= 8.
 //   cb_nope=2*nope_batch_tiles; worst 16
@@ -28,13 +28,13 @@
 namespace {
 
 constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal/ops/q_rope_fw/device/kernels/dataflow/reader_q_rope_fw.cpp";
+    "tt-train/sources/ttml/metal/ops/mla_q_rope/device/kernels/dataflow/reader_mla_q_rope.cpp";
 
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/ops/q_rope_fw/device/kernels/dataflow/writer_q_rope_fw.cpp";
+    "tt-train/sources/ttml/metal/ops/mla_q_rope/device/kernels/dataflow/writer_mla_q_rope.cpp";
 
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/ops/q_rope_fw/device/kernels/compute/q_rope_fw_kernel.cpp";
+    "tt-train/sources/ttml/metal/ops/mla_q_rope/device/kernels/compute/mla_q_rope_kernel.cpp";
 
 constexpr uint32_t kReaderArgQInAddr = 0;
 constexpr uint32_t kReaderArgCosAddr = 1;
@@ -58,11 +58,11 @@ constexpr uint32_t kNopeChunkTiles = 4U;
 
 }  // namespace
 
-namespace ttml::metal::ops::q_rope_fw::device {
+namespace ttml::metal::ops::mla_q_rope::device {
 
 using namespace tt::constants;
 
-struct QRopeFwKernels {
+struct MlaQRopeKernels {
     tt::tt_metal::KernelHandle reader;
     tt::tt_metal::KernelHandle writer;
     tt::tt_metal::KernelHandle compute;
@@ -70,7 +70,7 @@ struct QRopeFwKernels {
 
 static void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
-    const QRopeFwKernels& kernels,
+    const MlaQRopeKernels& kernels,
     const tt::tt_metal::Buffer* q_in_buffer,
     const tt::tt_metal::Buffer* cos_buffer,
     const tt::tt_metal::Buffer* sin_buffer,
@@ -95,7 +95,7 @@ static void assign_per_core_runtime_args(
         } else if (core_group_2.contains(core)) {
             num_blocks_per_core = num_blocks_per_core_group_2;
         } else {
-            TT_FATAL(false, "QRopeFw: core not in any work group");
+            TT_FATAL(false, "MlaQRope: core not in any work group");
         }
 
         // Q [B, H, S, D] head-major pages: tile_id(b, h, sb, w) = b*H*tiles_per_head + h*tiles_per_head + sb*Th + w.
@@ -128,7 +128,7 @@ static void assign_per_core_runtime_args(
     }
 }
 
-QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
+MlaQRopeProgramFactory::cached_program_t MlaQRopeProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& q_in = tensor_args.q_in;
     auto& q_out = output;
@@ -151,7 +151,7 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
 
     TT_FATAL(
         Tr <= 4U,
-        "QRopeFw: qk_rope_dim ({}) / TILE_W = {} exceeds max rope tiles (4, head_dim 128).",
+        "MlaQRope: qk_rope_dim ({}) / TILE_W = {} exceeds max rope tiles (4, head_dim 128).",
         args.qk_rope_dim,
         Tr);
 
@@ -236,7 +236,7 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         dst_batch_heads,
     };
 
-    QRopeFwKernels kernels;
+    MlaQRopeKernels kernels;
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, {}, kReaderKernelPath);
     kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, {}, kWriterKernelPath);
     kernels.compute = create_compute_kernel(
@@ -265,7 +265,7 @@ QRopeFwProgramFactory::cached_program_t QRopeFwProgramFactory::create(
         std::move(program), {kernels.reader, kernels.writer, kernels.compute, num_cores, num_cores_y}};
 }
 
-void QRopeFwProgramFactory::override_runtime_arguments(
+void MlaQRopeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t& /*args*/,
     const tensor_args_t& tensor_args,
@@ -298,4 +298,4 @@ void QRopeFwProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttml::metal::ops::q_rope_fw::device
+}  // namespace ttml::metal::ops::mla_q_rope::device

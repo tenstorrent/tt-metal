@@ -27,9 +27,9 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/mla_qkv_assemble_op.hpp"
+#include "ops/mla_q_rope.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/polynorm_op.hpp"
-#include "ops/q_rope_op.hpp"
 #include "ops/rand_op.hpp"
 #include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
@@ -328,13 +328,13 @@ void py_module(nb::module_& m) {
         auto py_rope = static_cast<nb::module_>(m.attr("rope"));
         py_rope.def("rope", &ttml::ops::rope, nb::arg("input"), nb::arg("rope_params"), nb::arg("token_position") = 0);
         py_rope.def(
-            "q_rope",
-            &ttml::ops::q_rope,
+            "mla_q_rope",
+            &ttml::ops::mla_q_rope,
             nb::arg("q_full"),
             nb::arg("rope_params"),
             nb::arg("qk_nope_dim"),
             nb::arg("qk_rope_dim"),
-            "MLA Q RoPE with autograd: fused metal q_rope_fw forward and backward (neg cos/sin on backward).\n"
+            "MLA Q RoPE with autograd: fused metal mla_q_rope forward and backward (neg cos/sin on backward).\n"
             "q_full: [B, n_heads, S, qk_nope_dim + qk_rope_dim] TILE bf16. Requires qk_rope_dim <= 128.");
         py_rope.def(
             "gen_freqs",

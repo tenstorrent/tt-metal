@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ops/q_rope_op.hpp"
+#include "ops/mla_q_rope.hpp"
 
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
-#include "metal/ops/q_rope_fw/q_rope_fw.hpp"
+#include "metal/ops/mla_q_rope/mla_q_rope.hpp"
 
 namespace ttml::ops {
 
-autograd::TensorPtr q_rope(
+autograd::TensorPtr mla_q_rope(
     const autograd::TensorPtr& q_full,
     const RotaryEmbeddingParams& rope_params,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim) {
-    auto q_out = ttml::metal::q_rope_fw(
+    auto q_out = ttml::metal::mla_q_rope(
         q_full->get_value(),
         rope_params.cos_cache,
         rope_params.sin_cache,
@@ -29,7 +29,7 @@ autograd::TensorPtr q_rope(
     autograd::GradFunction grad_fn = [q_full, rope_params, out, qk_nope_dim, qk_rope_dim]() {
         const auto& dL_dout = out->get_grad();
 
-        const auto dL_dq_full = ttml::metal::q_rope_fw(
+        const auto dL_dq_full = ttml::metal::mla_q_rope(
             dL_dout,
             rope_params.neg_cos_cache,
             rope_params.neg_sin_cache,

@@ -20,7 +20,7 @@
 
 namespace {
 
-struct QRopeShape {
+struct MLA_QRopeShape {
     std::string name;
     uint32_t batch = 0;
     uint32_t seq_len = 0;
@@ -78,7 +78,7 @@ ttnn::Tensor reference_q_rope(
 }
 
 void expect_q_rope_matches_reference(
-    const ttnn::Tensor& fused, const ttnn::Tensor& ref, const QRopeShape& shape, const std::string& label_prefix) {
+    const ttnn::Tensor& fused, const ttnn::Tensor& ref, const MLA_QRopeShape& shape, const std::string& label_prefix) {
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
     const uint32_t B = shape.batch;
     const uint32_t H = shape.n_heads;
@@ -103,7 +103,7 @@ void expect_q_rope_matches_reference(
 
 }  // namespace
 
-class QRopeParamTest : public ::testing::TestWithParam<QRopeShape> {
+class MLA_QRopeParamTest : public ::testing::TestWithParam<MLA_QRopeShape> {
 protected:
     static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
@@ -114,15 +114,15 @@ protected:
     }
 };
 
-TEST_P(QRopeParamTest, FusedMatchesReference) {
-    const QRopeShape shape = GetParam();
-    ASSERT_LE(shape.qk_rope_dim, 128U) << shape.name << ": q_rope_fw requires qk_rope_dim <= 128";
+TEST_P(MLA_QRopeParamTest, FusedMatchesReference) {
+    const MLA_QRopeShape shape = GetParam();
+    ASSERT_LE(shape.qk_rope_dim, 128U) << shape.name << ": mla_q_rope requires qk_rope_dim <= 128";
 
     const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
     auto q_in = make_bf16_4d(shape.batch, shape.n_heads, shape.seq_len, qk_head, /*seed=*/7U);
     auto params = build_params(shape.seq_len, shape.qk_rope_dim);
 
-    const auto fused = ttml::metal::q_rope_fw(
+    const auto fused = ttml::metal::mla_q_rope(
         q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
     const auto ref = reference_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
 
@@ -130,18 +130,22 @@ TEST_P(QRopeParamTest, FusedMatchesReference) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    QRopeShapes,
-    QRopeParamTest,
+    MLA_QRopeShapes,
+    MLA_QRopeParamTest,
     ::testing::Values(
-        QRopeShape{.name = "small", .batch = 1, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32},
-        QRopeShape{.name = "mla_like", .batch = 1, .seq_len = 32, .n_heads = 8, .qk_nope_dim = 128, .qk_rope_dim = 64},
-        QRopeShape{.name = "batch2", .batch = 2, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32},
-        QRopeShape{.name = "square_st1", .batch = 2, .seq_len = 32, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32},
-        QRopeShape{.name = "square_st2", .batch = 2, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32},
-        QRopeShape{
+        MLA_QRopeShape{.name = "small", .batch = 1, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32},
+        MLA_QRopeShape{
+            .name = "mla_like", .batch = 1, .seq_len = 32, .n_heads = 8, .qk_nope_dim = 128, .qk_rope_dim = 64},
+        MLA_QRopeShape{.name = "batch2", .batch = 2, .seq_len = 32, .n_heads = 4, .qk_nope_dim = 64, .qk_rope_dim = 32},
+        MLA_QRopeShape{
+            .name = "square_st1", .batch = 2, .seq_len = 32, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32},
+        MLA_QRopeShape{
+            .name = "square_st2", .batch = 2, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32},
+        MLA_QRopeShape{
             .name = "asym_rope2", .batch = 2, .seq_len = 64, .n_heads = 4, .qk_nope_dim = 128, .qk_rope_dim = 64},
-        QRopeShape{.name = "heads8_s96", .batch = 1, .seq_len = 96, .n_heads = 8, .qk_nope_dim = 64, .qk_rope_dim = 32},
-        QRopeShape{
+        MLA_QRopeShape{
+            .name = "heads8_s96", .batch = 1, .seq_len = 96, .n_heads = 8, .qk_nope_dim = 64, .qk_rope_dim = 32},
+        MLA_QRopeShape{
             .name = "large_tr4",
             .batch = 1,
             .seq_len = 32,
@@ -149,7 +153,7 @@ INSTANTIATE_TEST_SUITE_P(
             .qk_nope_dim = 128,
             .qk_rope_dim = 128},  // Tr = 4, Th = 8
         // Large Tn: q_nope bypasses compute (reader -> writer); only Tr rope tiles hit DST.
-        QRopeShape{
+        MLA_QRopeShape{
             .name = "chunked_nope_tn35",
             .batch = 1,
             .seq_len = 32,
@@ -157,6 +161,6 @@ INSTANTIATE_TEST_SUITE_P(
             .qk_nope_dim = 1120,
             .qk_rope_dim = 64},  // Tn = 35, Tr = 2
         // B * Ts = 8 blocks: exercises multi-core split and repeated batch-boundary jumps.
-        QRopeShape{
+        MLA_QRopeShape{
             .name = "batch4_st2", .batch = 4, .seq_len = 64, .n_heads = 2, .qk_nope_dim = 32, .qk_rope_dim = 32}),
-    [](const ::testing::TestParamInfo<QRopeShape>& info) { return info.param.name; });
+    [](const ::testing::TestParamInfo<MLA_QRopeShape>& info) { return info.param.name; });

@@ -5,9 +5,9 @@
 // ============================================================================
 // Q RoPE op-level fusion benchmark
 //
-// Measures average wall-clock time for Q RoPE forward:
+// Measures average wall-clock time for Q RoPE:
 //   composite - slice + rotary_embedding_llama + concat
-//   fused     - ttml::metal::q_rope_fw
+//   fused     - ttml::metal::mla_q_rope
 // ============================================================================
 
 #include <benchmark/benchmark.h>
@@ -110,7 +110,7 @@ ttnn::Tensor make_q_input(uint32_t batch, uint32_t n_heads, uint32_t seq_len, ui
         host, ttnn::Shape{batch, n_heads, seq_len, qk_head}, device, ttnn::Layout::TILE);
 }
 
-ttnn::Tensor composite_q_rope_fw(
+ttnn::Tensor composite_q_rope(
     const ttnn::Tensor& q_in,
     const ttml::ops::RotaryEmbeddingParams& params,
     uint32_t qk_nope_dim,
@@ -139,8 +139,7 @@ ttnn::Tensor composite_q_rope_fw(
     return ttnn::concat(std::vector<ttnn::Tensor>{q_nope, q_pe_rot}, /*dim=*/3);
 }
 
-double run_single_fw(
-    const ModelShape& shape, const SweepConfig& cfg, uint32_t batch, uint32_t seq_len, bool use_fused) {
+double run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch, uint32_t seq_len, bool use_fused) {
     auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
 
@@ -151,11 +150,11 @@ double run_single_fw(
 
     const auto run_step = [&]() {
         if (use_fused) {
-            auto out = ttml::metal::q_rope_fw(
+            auto out = ttml::metal::mla_q_rope(
                 q_in, params.cos_cache, params.sin_cache, params.trans_mat, shape.qk_nope_dim, shape.qk_rope_dim);
             benchmark::DoNotOptimize(out);
         } else {
-            auto out = composite_q_rope_fw(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
+            auto out = composite_q_rope(q_in, params, shape.qk_nope_dim, shape.qk_rope_dim);
             benchmark::DoNotOptimize(out);
         }
     };
@@ -183,8 +182,8 @@ struct RowSummary {
     uint32_t n_heads = 0;
     uint32_t qk_nope_dim = 0;
     uint32_t qk_rope_dim = 0;
-    double composite_fw_ms = 0.0;
-    double fused_fw_ms = 0.0;
+    double composite_ms = 0.0;
+    double fused_ms = 0.0;
 };
 
 void print_table(const std::string& title, const std::vector<RowSummary>& rows) {
@@ -198,8 +197,8 @@ void print_table(const std::string& title, const std::vector<RowSummary>& rows) 
         "|--------------|-------|-------|-------|------|------|--------------|----------|----------|---------|----"
         "-------|\n");
     for (const auto& row : rows) {
-        const double composite_ms = row.composite_fw_ms;
-        const double fused_ms = row.fused_fw_ms;
+        const double composite_ms = row.composite_ms;
+        const double fused_ms = row.fused_ms;
         const double saved_ms = composite_ms - fused_ms;
         fmt::print(
             "| {:<12} | {:>5} | {:>5} | {:>5} | {:>4} | {:>4} | {:>12.4f} | {:>8.4f} | {:>8.4f} | {:>6.2f}x | "
@@ -222,7 +221,7 @@ SweepConfig g_sweep_cfg;
 std::vector<BenchmarkCase> g_cases;
 std::vector<RowSummary> g_rows;
 
-void BM_QRope(benchmark::State& state) {
+void BM_MLA_QRope(benchmark::State& state) {
     const auto case_index = static_cast<size_t>(state.range(0));
     const auto& bench_case = g_cases.at(case_index);
     const auto& model = all_models().at(bench_case.model_index);
@@ -230,9 +229,8 @@ void BM_QRope(benchmark::State& state) {
     const uint32_t sequence_length = bench_case.sequence_length;
 
     for ([[maybe_unused]] auto _ : state) {
-        const double composite_fw_ms =
-            run_single_fw(model, g_sweep_cfg, batch_size, sequence_length, /*use_fused=*/false);
-        const double fused_fw_ms = run_single_fw(model, g_sweep_cfg, batch_size, sequence_length, /*use_fused=*/true);
+        const double composite_ms = run_single(model, g_sweep_cfg, batch_size, sequence_length, /*use_fused=*/false);
+        const double fused_ms = run_single(model, g_sweep_cfg, batch_size, sequence_length, /*use_fused=*/true);
 
         g_rows.push_back(RowSummary{
             .model_name = model.name,
@@ -241,11 +239,11 @@ void BM_QRope(benchmark::State& state) {
             .n_heads = model.n_heads,
             .qk_nope_dim = model.qk_nope_dim,
             .qk_rope_dim = model.qk_rope_dim,
-            .composite_fw_ms = composite_fw_ms,
-            .fused_fw_ms = fused_fw_ms,
+            .composite_ms = composite_ms,
+            .fused_ms = fused_ms,
         });
 
-        state.SetIterationTime(fused_fw_ms / 1000.0);
+        state.SetIterationTime(fused_ms / 1000.0);
         state.SetLabel(fmt::format(
             "{} B={} S={} H={} nope={} rope={}",
             model.name,
@@ -254,8 +252,8 @@ void BM_QRope(benchmark::State& state) {
             model.n_heads,
             model.qk_nope_dim,
             model.qk_rope_dim));
-        state.counters["Composite_fw_ms"] = composite_fw_ms;
-        state.counters["Fused_fw_ms"] = fused_fw_ms;
+        state.counters["Composite_ms"] = composite_ms;
+        state.counters["Fused_ms"] = fused_ms;
     }
 }
 
@@ -277,7 +275,7 @@ int main(int argc, char** argv) {
         const tt::tt_metal::distributed::MeshShape mesh(1, 1);
         ttml::autograd::ctx().open_device(mesh);
 
-        fmt::print("Q RoPE op-level benchmark (composite vs fused, forward)\n");
+        fmt::print("Q RoPE op-level benchmark (composite vs fused)\n");
         fmt::print(
             "preset models=deepseek-mla,nano-mla,mla_like,asym_rope2 batches=16,32 seq_lens=128,256,512 warmup={} "
             "measure={}\n",
@@ -285,9 +283,9 @@ int main(int argc, char** argv) {
             g_sweep_cfg.num_measure);
         fmt::print(
             "Composite: slice + rotary_embedding_llama (ComputeKernelConfig::precise) + concat.\n"
-            "Fused: q_rope_fw (fp32 dest acc, qk_rope_dim <= 128).\n");
+            "Fused: mla_q_rope (fp32 dest acc, qk_rope_dim <= 128).\n");
 
-        benchmark::RegisterBenchmark("QRope", BM_QRope)
+        benchmark::RegisterBenchmark("MLA_QRope", BM_MLA_QRope)
             ->DenseRange(0, static_cast<int>(g_cases.size()) - 1, 1)
             ->Unit(benchmark::kMillisecond)
             ->UseManualTime()
@@ -295,12 +293,12 @@ int main(int argc, char** argv) {
         benchmark::RunSpecifiedBenchmarks();
         benchmark::Shutdown();
 
-        print_table("Q RoPE forward (composite vs fused)", g_rows);
+        print_table("Q RoPE (composite vs fused)", g_rows);
 
         ttml::autograd::ctx().close_device();
         return 0;
     } catch (const std::exception& e) {
-        fmt::print(stderr, "q_rope_benchmark failed: {}\n", e.what());
+        fmt::print(stderr, "mla_q_rope_benchmark failed: {}\n", e.what());
         return 1;
     }
 }

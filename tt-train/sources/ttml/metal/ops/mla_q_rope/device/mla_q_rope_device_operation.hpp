@@ -5,17 +5,17 @@
 #pragma once
 
 #include "metal/ttnn_all_includes.hpp"
-#include "q_rope_fw_device_operation_types.hpp"
-#include "q_rope_fw_program_factory.hpp"
+#include "mla_q_rope_device_operation_types.hpp"
+#include "mla_q_rope_program_factory.hpp"
 
-namespace ttml::metal::ops::q_rope_fw::device {
+namespace ttml::metal::ops::mla_q_rope::device {
 
-struct QRopeFwDeviceOperation {
-    using operation_attributes_t = ttml::metal::ops::q_rope_fw::device::operation_attributes_t;
-    using tensor_args_t = ttml::metal::ops::q_rope_fw::device::tensor_args_t;
-    using spec_return_value_t = ttml::metal::ops::q_rope_fw::device::spec_return_value_t;
-    using tensor_return_value_t = ttml::metal::ops::q_rope_fw::device::tensor_return_value_t;
-    using program_factory_t = std::variant<QRopeFwProgramFactory>;
+struct MlaQRopeDeviceOperation {
+    using operation_attributes_t = ttml::metal::ops::mla_q_rope::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::ops::mla_q_rope::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::ops::mla_q_rope::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::mla_q_rope::device::tensor_return_value_t;
+    using program_factory_t = std::variant<MlaQRopeProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -28,11 +28,11 @@ struct QRopeFwDeviceOperation {
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttml::metal::ops::q_rope_fw::device
+}  // namespace ttml::metal::ops::mla_q_rope::device
 
 namespace ttnn::prim {
 
-ttml::metal::ops::q_rope_fw::device::QRopeFwDeviceOperation::tensor_return_value_t ttml_q_rope_fw(
+ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation::tensor_return_value_t ttml_mla_q_rope(
     const ttnn::Tensor& q_in,
     const ttnn::Tensor& cos_cache,
     const ttnn::Tensor& sin_cache,

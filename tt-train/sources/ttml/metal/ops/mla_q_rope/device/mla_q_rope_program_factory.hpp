@@ -5,11 +5,11 @@
 #pragma once
 
 #include "metal/ttnn_all_includes.hpp"
-#include "q_rope_fw_device_operation_types.hpp"
+#include "mla_q_rope_device_operation_types.hpp"
 
-namespace ttml::metal::ops::q_rope_fw::device {
+namespace ttml::metal::ops::mla_q_rope::device {
 
-struct QRopeFwProgramFactory {
+struct MlaQRopeProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id{};
         tt::tt_metal::KernelHandle writer_kernel_id{};
@@ -31,4 +31,4 @@ struct QRopeFwProgramFactory {
         tensor_return_value_t& tensor_return_value);
 };
 
-}  // namespace ttml::metal::ops::q_rope_fw::device
+}  // namespace ttml::metal::ops::mla_q_rope::device

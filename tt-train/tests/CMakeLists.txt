@@ -80,7 +80,7 @@ set(SOURCES
     ops/binary_ops_bw_test.cpp
     ops/mla_qkv_assemble_op_test.cpp
     utils/memory_utils_test.cpp
-    ops/q_rope_op_test.cpp
+    ops/mla_q_rope_op_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})
@@ -183,7 +183,7 @@ if(TARGET benchmark::benchmark)
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
-        benchmark/q_rope_benchmark.cpp
+        benchmark/mla_q_rope_benchmark.cpp
         benchmark/mla_qkv_assemble_benchmark.cpp
     )
 

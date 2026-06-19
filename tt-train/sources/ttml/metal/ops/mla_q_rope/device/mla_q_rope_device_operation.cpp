@@ -2,39 +2,39 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "q_rope_fw_device_operation.hpp"
+#include "mla_q_rope_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
 
-#include "q_rope_fw_program_factory.hpp"
+#include "mla_q_rope_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttml::metal::ops::q_rope_fw::device {
+namespace ttml::metal::ops::mla_q_rope::device {
 
-void QRopeFwDeviceOperation::validate_on_program_cache_miss(
+void MlaQRopeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "QRopeFw requires {} on device. Got {}",
+            "MlaQRope requires {} on device. Got {}",
             name,
             enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "QRopeFw: {} buffer must be allocated.", name);
+        TT_FATAL(tensor.buffer() != nullptr, "MlaQRope: {} buffer must be allocated.", name);
         TT_FATAL(
             tensor.layout() == tt::tt_metal::Layout::TILE,
-            "QRopeFw requires {} TILE layout. Got {}",
+            "MlaQRope requires {} TILE layout. Got {}",
             name,
             enchantum::to_string(tensor.layout()));
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "QRopeFw requires {} BFLOAT16. Got {}",
+            "MlaQRope requires {} BFLOAT16. Got {}",
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
-            "QRopeFw requires {} INTERLEAVED. Got {}",
+            "MlaQRope requires {} INTERLEAVED. Got {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
     };
@@ -51,63 +51,66 @@ void QRopeFwDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(
         q_in.device() == cos.device() && cos.device() == sin.device() && sin.device() == trans.device(),
-        "QRopeFw: all tensors must be on the same device.");
+        "MlaQRope: all tensors must be on the same device.");
 
     const auto q_shape = q_in.padded_shape();
-    TT_FATAL(q_shape.rank() == 4U, "QRopeFw: q_in must be rank-4. Got {}", q_shape.rank());
-    TT_FATAL(q_shape[1] >= 1U, "QRopeFw: q_in must have at least one head.");
+    TT_FATAL(q_shape.rank() == 4U, "MlaQRope: q_in must be rank-4. Got {}", q_shape.rank());
+    TT_FATAL(q_shape[1] >= 1U, "MlaQRope: q_in must have at least one head.");
 
     const uint32_t qk_head = args.qk_nope_dim + args.qk_rope_dim;
     TT_FATAL(
         q_shape[3] == qk_head,
-        "QRopeFw: q_in dim 3 must equal qk_nope_dim + qk_rope_dim = {}. Got {}",
+        "MlaQRope: q_in dim 3 must equal qk_nope_dim + qk_rope_dim = {}. Got {}",
         qk_head,
         q_shape[3]);
 
     TT_FATAL(
         args.qk_nope_dim % TILE_WIDTH == 0,
-        "QRopeFw: qk_nope_dim ({}) must be a multiple of TILE_WIDTH ({})",
+        "MlaQRope: qk_nope_dim ({}) must be a multiple of TILE_WIDTH ({})",
         args.qk_nope_dim,
         TILE_WIDTH);
-    TT_FATAL(args.qk_rope_dim != 0U, "QRopeFw: qk_rope_dim must be non-zero.");
+    TT_FATAL(args.qk_rope_dim != 0U, "MlaQRope: qk_rope_dim must be non-zero.");
     TT_FATAL(
         args.qk_rope_dim % TILE_WIDTH == 0,
-        "QRopeFw: qk_rope_dim ({}) must be a multiple of TILE_WIDTH ({})",
+        "MlaQRope: qk_rope_dim ({}) must be a multiple of TILE_WIDTH ({})",
         args.qk_rope_dim,
         TILE_WIDTH);
     TT_FATAL(
         q_shape[2] % TILE_HEIGHT == 0,
-        "QRopeFw: S ({}) must be a multiple of TILE_HEIGHT ({})",
+        "MlaQRope: S ({}) must be a multiple of TILE_HEIGHT ({})",
         q_shape[2],
         TILE_HEIGHT);
 
     const auto cos_shape = cos.padded_shape();
-    TT_FATAL(cos_shape == sin.padded_shape(), "QRopeFw: cos and sin shapes must match.");
+    TT_FATAL(cos_shape == sin.padded_shape(), "MlaQRope: cos and sin shapes must match.");
     TT_FATAL(
-        cos_shape[0] == 1U && cos_shape[1] == 1U, "QRopeFw: cos/sin dims 0-1 must be 1. Got cos shape {}", cos_shape);
+        cos_shape[0] == 1U && cos_shape[1] == 1U, "MlaQRope: cos/sin dims 0-1 must be 1. Got cos shape {}", cos_shape);
     TT_FATAL(
-        cos_shape[2] == q_shape[2], "QRopeFw: cos/sin seq dim ({}) must match q_in seq ({})", cos_shape[2], q_shape[2]);
+        cos_shape[2] == q_shape[2],
+        "MlaQRope: cos/sin seq dim ({}) must match q_in seq ({})",
+        cos_shape[2],
+        q_shape[2]);
     TT_FATAL(
         cos_shape[3] == args.qk_rope_dim,
-        "QRopeFw: cos/sin dim 3 must equal qk_rope_dim ({}). Got {}",
+        "MlaQRope: cos/sin dim 3 must equal qk_rope_dim ({}). Got {}",
         args.qk_rope_dim,
         cos_shape[3]);
 
     const auto trans_shape = trans.padded_shape();
     TT_FATAL(
         trans_shape[0] == 1U && trans_shape[1] == 1U && trans_shape[2] == TILE_HEIGHT && trans_shape[3] == TILE_WIDTH,
-        "QRopeFw: trans_mat must be [1, 1, {}, {}]. Got {}",
+        "MlaQRope: trans_mat must be [1, 1, {}, {}]. Got {}",
         TILE_HEIGHT,
         TILE_WIDTH,
         trans_shape);
 
     TT_FATAL(
         args.qk_rope_dim <= 128U,
-        "QRopeFw: qk_rope_dim must be <= 128 (fp32 dest accumulation). Got {}",
+        "MlaQRope: qk_rope_dim must be <= 128 (fp32 dest accumulation). Got {}",
         args.qk_rope_dim);
 }
 
-QRopeFwDeviceOperation::spec_return_value_t QRopeFwDeviceOperation::compute_output_specs(
+MlaQRopeDeviceOperation::spec_return_value_t MlaQRopeDeviceOperation::compute_output_specs(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& q_in = tensor_args.q_in;
     return ttnn::TensorSpec(
@@ -115,35 +118,35 @@ QRopeFwDeviceOperation::spec_return_value_t QRopeFwDeviceOperation::compute_outp
         tt::tt_metal::TensorLayout(q_in.dtype(), tt::tt_metal::Layout::TILE, q_in.memory_config()));
 }
 
-QRopeFwDeviceOperation::tensor_return_value_t QRopeFwDeviceOperation::create_output_tensors(
+MlaQRopeDeviceOperation::tensor_return_value_t MlaQRopeDeviceOperation::create_output_tensors(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     auto spec = compute_output_specs({}, tensor_args);
     return create_device_tensor(spec, tensor_args.q_in.device());
 }
 
-ttsl::hash::hash_t QRopeFwDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t MlaQRopeDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<QRopeFwDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<MlaQRopeDeviceOperation>(
         args, tensor_args.q_in.dtype(), tensor_args.q_in.logical_shape(), tensor_args.cos_cache.logical_shape());
 }
 
-QRopeFwDeviceOperation::program_factory_t QRopeFwDeviceOperation::select_program_factory(
+MlaQRopeDeviceOperation::program_factory_t MlaQRopeDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
-    return QRopeFwProgramFactory{};
+    return MlaQRopeProgramFactory{};
 }
 
-}  // namespace ttml::metal::ops::q_rope_fw::device
+}  // namespace ttml::metal::ops::mla_q_rope::device
 
 namespace ttnn::prim {
 
-ttml::metal::ops::q_rope_fw::device::QRopeFwDeviceOperation::tensor_return_value_t ttml_q_rope_fw(
+ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation::tensor_return_value_t ttml_mla_q_rope(
     const ttnn::Tensor& q_in,
     const ttnn::Tensor& cos_cache,
     const ttnn::Tensor& sin_cache,
     const ttnn::Tensor& trans_mat,
     uint32_t qk_nope_dim,
     uint32_t qk_rope_dim) {
-    using OperationType = ttml::metal::ops::q_rope_fw::device::QRopeFwDeviceOperation;
+    using OperationType = ttml::metal::ops::mla_q_rope::device::MlaQRopeDeviceOperation;
 
     auto attrs = OperationType::operation_attributes_t{
         .qk_nope_dim = qk_nope_dim,
