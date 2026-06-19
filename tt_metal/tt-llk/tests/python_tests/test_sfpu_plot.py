@@ -1435,9 +1435,12 @@ def run_case(case: Case) -> bool:
     hw_fp32 = res_tensor.to(torch.float32).contiguous().numpy()
     finite_mask = np.isfinite(golden_fp32) & np.isfinite(hw_fp32)
     if finite_mask.any():
-        gb = golden_fp32.view(np.int32)[finite_mask]
-        rb = hw_fp32.view(np.int32)[finite_mask]
-        max_ulp = int(np.abs(gb.astype(np.int64) - rb.astype(np.int64)).max())
+        gb = golden_fp32.view(np.int32)[finite_mask].astype(np.int64)
+        rb = hw_fp32.view(np.int32)[finite_mask].astype(np.int64)
+        int_min = np.iinfo(np.int32).min
+        gb = np.where(gb < 0, int_min - gb, gb)
+        rb = np.where(rb < 0, int_min - rb, rb)
+        max_ulp = int(np.abs(gb - rb).max())
         logger.info(
             "[{}] max ULP across {} finite samples: {}",
             mathop.name,
