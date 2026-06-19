@@ -5,9 +5,10 @@
 #include "generalized_moe_gate_device_operation.hpp"
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/reflection.hpp>
 
 #include <tt-metalium/buffer.hpp>
+
+#include "ttnn/operation.hpp"  // tt::tt_metal::operation::hash_operation
 
 #include "generalized_moe_gate_program_descriptor_builder.hpp"
 
@@ -156,8 +157,10 @@ std::uint64_t GeneralizedMoeGateDeviceOperation::compute_program_hash(
     // constant (kernel path, CB indices, HiFi4, configs). So hash those inputs directly instead of building
     // the full ProgramDescriptor: that path runs the builder's TT_FATALs + constructs every CB/kernel
     // descriptor + strings on EVERY dispatch (including cache hits) just to derive a key. Validation lives in
-    // validate_on_program_cache_{hit,miss}; the build happens in create_program.
-    return ttsl::hash::hash_objects_with_default_seed(
+    // validate_on_program_cache_{hit,miss}; the build happens in create_program. hash_operation<> folds the op
+    // TYPE into the key (the per-device program cache is shared across op types) — same as the framework's
+    // default hash; previously this was carried implicitly by the kernel-source path in the full descriptor.
+    return tt::tt_metal::operation::hash_operation<GeneralizedMoeGateDeviceOperation>(
         attrs.eps,
         attrs.scaling_factor,
         attrs.enable_sigmoid,
