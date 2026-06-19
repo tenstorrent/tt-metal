@@ -233,18 +233,6 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 }
 
 /**
- * @brief Set the debug feature-disable bit as a hardware bug workaround.
- *
- * @note Writes bit 11 of RISCV_DEBUG_REG_DBG_FEATURE_DISABLE (workaround for tt-metal#46219).
- */
-// TODO NC: Remove as a part of tt-metal#36411
-inline void _llk_unpack_dbg_feature_disable_()
-{
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
-                                                             // workaround for bug tt-metal#46219
-}
-
-/**
  * @brief Enable Int8 math on the FPU.
  */
 inline void _llk_enable_int8_fpu_math_()
