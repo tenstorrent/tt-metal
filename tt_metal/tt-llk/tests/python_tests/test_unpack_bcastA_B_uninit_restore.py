@@ -28,6 +28,7 @@ is already 32, so it would not reveal the regression.)
 from dataclasses import dataclass
 
 import torch
+from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import DataCopyGolden, get_golden_generator
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
@@ -41,8 +42,6 @@ from helpers.test_variant_parameters import (
     TemplateParameter,
 )
 from helpers.utils import passed_test
-
-from conftest import skip_for_blackhole
 
 # 1 SrcA tile reused for 1 SrcB tile — the minimal bcast that still sets Y-stride=32.
 BCAST_SRCA_REUSE = 1

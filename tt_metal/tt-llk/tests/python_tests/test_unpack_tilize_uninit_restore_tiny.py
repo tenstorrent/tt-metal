@@ -28,6 +28,7 @@ tilized golden.
 """
 
 import torch
+from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
@@ -37,8 +38,6 @@ from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import NUM_FACES, TEST_FACE_DIMS
 from helpers.tilize_untilize import tilize
 from helpers.utils import passed_test
-
-from conftest import skip_for_blackhole
 
 # Tiny tiles are always 2 horizontal faces ([face_r_dim, 32] => f0 | f1).
 TINY_NUM_FACES = 2

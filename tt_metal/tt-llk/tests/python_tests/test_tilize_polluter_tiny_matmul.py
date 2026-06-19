@@ -22,6 +22,7 @@ correct result; `do_restore=False` is the negative control.
 from dataclasses import dataclass
 
 import torch
+from conftest import skip_for_blackhole
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
@@ -56,8 +57,6 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
-
-from conftest import skip_for_blackhole
 
 # Tiny in0 (SrcB) is 2 horizontal faces; in1 (SrcA) is a regular 4-face 32x32 tile.
 TINY_NUM_FACES_IN0 = 2
