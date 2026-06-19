@@ -9,7 +9,7 @@ chain incl. the rope_tp seam) must match it.
 
 Run:
   source python_env/bin/activate
-  MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.5-27B-FP8 \
+  MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
     pytest -svq models/demos/blackhole/qwen3_5_9b/tests/test_model_tp_contract.py
 """
 import math
@@ -27,7 +27,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -97,7 +97,7 @@ def test_model_tp_contract(mesh_device, reset_seeds, ensure_gc):
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -137,7 +137,7 @@ def test_model_tp_long_prefill(mesh_device, reset_seeds, ensure_gc):
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

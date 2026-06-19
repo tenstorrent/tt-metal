@@ -29,12 +29,11 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 from models.tt_transformers.tt.generator import Generator
 
-# Multi-device (TP) is selected via MESH_DEVICE (e.g. P150x4). On a single device
-# the mesh is (1,1) and the model runs its validated single-device path; on a
-# multi-device mesh it needs FABRIC_1D for the TP collectives (see tp_common notes).
-_MESH_SHAPE = {"N150": (1, 1), "N300": (1, 2), "P150x4": (1, 4), "N150x4": (1, 4), "T3K": (1, 8)}.get(
-    os.environ.get("MESH_DEVICE"), (1, 1)
-)
+# Multi-device (TP) is selected via MESH_DEVICE. The 9B runs on a single P150 (1,1)
+# and the 27B on a P150x4 (1,4) Blackhole mesh; on a single device the model runs its
+# validated single-device path, on a multi-device mesh it needs FABRIC_1D for the TP
+# collectives (see tp_common notes).
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 1))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
 # needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated

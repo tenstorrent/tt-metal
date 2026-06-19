@@ -7,7 +7,7 @@ layout (transpose/reshape), partial RoPE over positions, causal SDPA, gate, and
 the row-parallel output + reduce-scatter.
 
 Run:
-    MESH_DEVICE=P150x4 HF_MODEL=/home/ttuser/atupe/Qwen27b \
+    MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen3_5_9b/tests/test_attention_tp_prefill.py -v -s
 """
 import os
@@ -38,20 +38,20 @@ def _rope_torch(x, rope_dim, theta):  # x: [S, H, HD]
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_attention_tp_prefill(mesh_device, reset_seeds, ensure_gc):
-    mp = _mp()
-    os.environ.setdefault("HF_MODEL", mp)
+    os.environ.setdefault("HF_MODEL", _mp())
     S = 64
     args = Qwen35ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     li = next(i for i, t in enumerate(args.attention_type_list) if t == "full_attention")
     logger.info(f"devices={nd} full-attn layer={li} S={S}")
 
-    sd = _load_attn_layer(mp, li)
+    # args.CKPT_DIR is the resolved local snapshot dir (Qwen35ModelArgs downloads the hub id).
+    sd = _load_attn_layer(args.CKPT_DIR, li)
     from models.tt_transformers.tt.ccl import TT_CCL
 
     tt_ccl = TT_CCL(mesh_device) if nd > 1 else None

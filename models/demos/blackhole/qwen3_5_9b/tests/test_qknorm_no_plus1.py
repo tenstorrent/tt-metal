@@ -15,7 +15,7 @@ Fast: builds a tiny synthetic state_dict and checks the loaded q_norm/k_norm equ
 
 Run:
   source python_env/bin/activate
-  MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.5-27B-FP8 \
+  MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
     pytest -svq models/demos/blackhole/qwen3_5_9b/tests/test_qknorm_no_plus1.py
 """
 import os
@@ -30,7 +30,7 @@ import ttnn
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 def test_qknorm_loaded_without_plus1(mesh_device):

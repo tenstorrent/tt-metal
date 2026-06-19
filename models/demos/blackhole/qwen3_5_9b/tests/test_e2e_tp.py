@@ -9,7 +9,7 @@ output exercises embedding + 64 TP layers (attn + GDN) + distributed norms +
 LM head end-to-end.
 
 Run:
-    MESH_DEVICE=P150x4 HF_MODEL=/home/ttuser/atupe/Qwen27b \
+    MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
       pytest models/demos/blackhole/qwen3_5_9b/tests/test_e2e_tp.py -v -s
 """
 import math
@@ -25,20 +25,20 @@ from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_e2e_tp(mesh_device, ensure_gc):
-    mp = os.path.expanduser(os.environ.get("HF_MODEL", "/home/ttuser/atupe/Qwen27b"))
-    os.environ.setdefault("HF_MODEL", mp)
+    os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
 
     logger.info("Building full TP model (loads + shards all 64 layers)...")
     model = Qwen35Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=256)
 
     from transformers import AutoTokenizer
 
-    tok = AutoTokenizer.from_pretrained(mp, trust_remote_code=True)
+    # model.args.CKPT_DIR is the resolved local snapshot dir (downloaded from the hub id).
+    tok = AutoTokenizer.from_pretrained(model.args.CKPT_DIR, trust_remote_code=True)
     prompt = "The capital of France is"
     ids = tok(prompt, return_tensors="pt").input_ids[0].tolist()
     logger.info(f"prompt ids ({len(ids)}): {ids}")

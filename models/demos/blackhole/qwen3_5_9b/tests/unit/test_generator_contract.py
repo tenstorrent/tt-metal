@@ -1,11 +1,16 @@
 # models/demos/blackhole/qwen3_5_9b/tests/unit/test_generator_contract.py
 
+import os
+
 import pytest
 import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
+
+# Single-device test: default to the 9B checkpoint (the 27B needs a multi-device mesh for TP).
+os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
 
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 FIXTURE = "models/demos/blackhole/qwen3_5_9b/tests/fixtures/generator_baseline.pt"

@@ -10,7 +10,7 @@ oracle, so this proves the paged code added in Phase 1a is correct.
 
 Run:
   source python_env/bin/activate
-  MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.5-27B-FP8 \
+  MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
     pytest -svq models/demos/blackhole/qwen3_5_9b/tests/test_attention_tp_paged.py
 """
 import json
@@ -30,7 +30,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.tp_common import dequant_fp8_block
 
 
 def _mp():
-    return os.path.expanduser(os.environ.get("HF_MODEL", "/home/ttuser/atupe/Qwen27b"))
+    return os.path.expanduser(os.environ.get("HF_MODEL", "Qwen/Qwen3.6-27B"))
 
 
 def _load_attn_layer(model_path, layer_idx):
@@ -56,7 +56,7 @@ def _load_attn_layer(model_path, layer_idx):
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)

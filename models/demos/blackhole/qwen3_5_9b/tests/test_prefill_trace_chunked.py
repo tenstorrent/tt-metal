@@ -17,11 +17,16 @@ reference (prefill_paged), with chunk-seq enabled, across multiple chunks.
 Run:
   pytest models/demos/blackhole/qwen3_5_9b/tests/test_prefill_trace_chunked.py -v -s
 """
+import os
+
 import pytest
 import torch
 from loguru import logger
 
 import ttnn
+
+# Single-device test: default to the 9B checkpoint (the 27B needs a multi-device mesh for TP).
+os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
 
 DEVICE_PARAMS = [{"l1_small_size": 24576, "num_command_queues": 2}]
 BLOCK_SIZE = 64

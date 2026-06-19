@@ -8,7 +8,7 @@ torch SwiGLU reference. Output is fractured along the hidden dim (reduce-scatter
 so it is gathered with ConcatMeshToTensor(dim=3).
 
 Run:
-    MESH_DEVICE=P150x4 HF_MODEL=/home/ttuser/atupe/Qwen27b \
+    MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
         pytest models/demos/blackhole/qwen3_5_9b/tests/test_mlp_tp.py -v -s
 """
 import json
@@ -26,7 +26,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.tp_common import dequant_fp8_block
 
 
 def _model_path():
-    return os.path.expanduser(os.environ.get("HF_MODEL", "/home/ttuser/atupe/Qwen27b"))
+    return os.path.expanduser(os.environ.get("HF_MODEL", "Qwen/Qwen3.6-27B"))
 
 
 def _load_one_layer_mlp(model_path, layer_idx):
@@ -60,18 +60,18 @@ def _load_one_layer_mlp(model_path, layer_idx):
 @torch.no_grad()
 @pytest.mark.parametrize(
     "mesh_device",
-    [{"N150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
+    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
     indirect=True,
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_mlp_tp_pcc(mesh_device, reset_seeds, ensure_gc):
-    model_path = _model_path()
-    os.environ.setdefault("HF_MODEL", model_path)
+    os.environ.setdefault("HF_MODEL", _model_path())
     args = Qwen35ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)
     nd = mesh_device.get_num_devices()
     logger.info(f"devices={nd} dim={args.dim} hidden_dim={args.hidden_dim}")
 
-    mlp_state = _load_one_layer_mlp(model_path, 0)
+    # args.CKPT_DIR is the resolved local snapshot dir (Qwen35ModelArgs downloads the hub id).
+    mlp_state = _load_one_layer_mlp(args.CKPT_DIR, 0)
 
     from models.tt_transformers.tt.ccl import TT_CCL
 

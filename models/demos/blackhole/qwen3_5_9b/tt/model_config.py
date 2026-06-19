@@ -38,15 +38,16 @@ class Qwen35ModelArgs(ModelArgs):
         **kwargs,
     ):
         # HF_MODEL (set in the environment) is the single source of truth: the base
-        # ModelArgs reads it into self.CKPT_DIR and raises a clear error if it is unset.
+        # ModelArgs reads it into self.CKPT_DIR. It defaults to the Qwen/Qwen3.6-27B hub
+        # id when unset, so no local checkpoint path is ever hardcoded.
         # Unless HF_MODEL already points at a local checkpoint dir (one containing
         # config.json), resolve it to a local snapshot dir via snapshot_download (same
         # as the vLLM wrapper): AutoConfig.from_pretrained on a bare hub id is unreliable
         # in this transformers version, but works on a directory path. The config.json
         # check (rather than os.path.isdir) avoids being fooled by a stray relative dir
         # created by the weight tensor cache when an unresolved hub id was used before.
-        hf_model = os.getenv("HF_MODEL")
-        if hf_model and not os.path.isfile(os.path.join(hf_model, "config.json")):
+        hf_model = os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
+        if not os.path.isfile(os.path.join(hf_model, "config.json")):
             from huggingface_hub import snapshot_download
 
             os.environ["HF_MODEL"] = snapshot_download(hf_model)
