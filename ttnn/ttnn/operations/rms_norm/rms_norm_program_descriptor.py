@@ -78,9 +78,31 @@ RESIDENT_BUDGET_TILES = 560
 REGIME_B_MIN_WT_TILE = 160
 REGIME_B_MIN_WT_RM = 96
 
+# Precision ceiling on the crossover (NOT a perf number — a correctness floor):
+# Regime A computes Σx² as a SINGLE reduce over the whole resident shard. With
+# fp32_dest_acc_en=False that reduce accumulates in a bf16 DEST, so a wide shard
+# (many tiles summed in bf16) loses precision — measured: a Wt=128 (W=4096) bf16
+# row + gamma with fp32_dest_acc_en=False overshoots the 0.052 relative-Frobenius
+# band in Regime A, while Regime B (narrow Wt_s shards, each reduced separately and
+# plain-summed) stays inside it. Regime B is therefore the precision-safe choice for
+# wide rows when fp32 accumulation is OFF. When fp32_dest_acc_en=True the reduce
+# accumulates in fp32 and stays precise at any width, so the perf crossover governs.
+# Empirically the bf16-accumulation cliff sits between Wt=64 (passes in A) and
+# Wt=128 (fails in A): 96 forces the precision-risky rows (Wt>=96) into B.
+REGIME_B_PRECISION_CEILING_NO_FP32ACC = 96
 
-def _b_min_wt(layout_is_rm: bool) -> int:
-    return REGIME_B_MIN_WT_RM if layout_is_rm else REGIME_B_MIN_WT_TILE
+
+def _b_min_wt(layout_is_rm: bool, fp32_acc: bool) -> int:
+    """Smallest Wt at which the heuristic routes a row-fitting shape to Regime B.
+
+    The threshold is the min of the (measured) perf crossover and the precision
+    ceiling: when fp32 accumulation is off, Regime A's wide bf16 reduce forces B
+    earlier than perf alone would.
+    """
+    perf = REGIME_B_MIN_WT_RM if layout_is_rm else REGIME_B_MIN_WT_TILE
+    if not fp32_acc:
+        return min(perf, REGIME_B_PRECISION_CEILING_NO_FP32ACC)
+    return perf
 
 
 # Measurement-only hook (perf tests). None -> use the heuristic. "A"/"B" -> force
@@ -260,7 +282,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             if adds_cores:
                 return _rm_b()
             return _rm_a()  # bounded-streaming fallback (matches prior behavior)
-        if adds_cores and Wt >= _b_min_wt(layout_is_rm=True):
+        if adds_cores and Wt >= _b_min_wt(layout_is_rm=True, fp32_acc=fp32_acc):
             return _rm_b()
         return _rm_a()
 
@@ -321,7 +343,7 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             f"rms_norm: row (Wt={Wt}, gamma={has_gamma}) exceeds L1 budget and no rectangular "
             f"Regime B partition exists for row_groups={Ht_total}, grid=({grid.x},{grid.y})."
         )
-    if adds_cores and Wt >= _b_min_wt(layout_is_rm=False):
+    if adds_cores and Wt >= _b_min_wt(layout_is_rm=False, fp32_acc=fp32_acc):
         return _make_b()
     return _make_a()
 
