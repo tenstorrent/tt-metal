@@ -1,0 +1,9 @@
+### ccl_health PASS (exit 0) — no moe_compute
+>>> device opened
+>>> bare synchronize_device OK
+>>> alloc + sync OK
+>>> reduce_scatter axis1 OK (1, 1, 16, 640)
+>>> all_gather axis1 OK (1, 1, 16, 5120)
+>>> all_gather axis0 OK (1, 1, 64, 5120)
+>>> all_gather axis0 Ring OK (1, 1, 64, 5120)
+CCL HEALTH OK

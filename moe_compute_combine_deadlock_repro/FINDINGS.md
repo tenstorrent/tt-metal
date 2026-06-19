@@ -1,0 +1,88 @@
+# moe_compute fused-combine deadlock on WH galaxy (4,8), cluster_axis=0 — repro + isolation
+
+**TL;DR for codeowners (gajanan-choudhary / amorrison):** `ttnn.experimental.moe_compute`
+in **Full mode** (fused `selective_reduce_combine`) **deadlocks** on a (4,8) WH galaxy,
+`cluster_axis=0` (4-device dispatch ring × 8 replicated cols), GLM-4.7 MoE dims. But the
+**standalone `selective_reduce_combine` op passes** on the *same* config (both Ring and
+Linear), and `moe_compute(compute_only)` (matmul, no combine) passes, and bare CCLs pass.
+**⇒ the bug is in moe_compute's FUSED integration of the combine (core placement / mux /
+matmul→combine handoff), not the combine op, not the topology, not the device.**
+
+## Config
+mesh (4,8); `cluster_axis=0` → 4 dispatch devices, 8 replicated cols; 160 experts,
+experts_per_device=5, H=5120, N(moe_intermediate)=1536, K=8, tokens_per_device=16,
+COL dispatch (`DispatchCoreAxis.COL`), `FABRIC_1D_RING`, bf4 experts.
+
+## Build
+Build-tree tt-metal HEAD `027d0f97b19` (latest-main + the **#46863** "moe_compute dynamic
+core placement" cherry-pick series; reflog HEAD@{0..5}). `.so` built 2026-06-18 13:04.
+Run with `USE_TORCH_XLA=0 ACCELERATE_USE_XLA=false` (the rebuilt tt-metal is ABI-incompatible
+with the venv's torch_xla; the repro doesn't need it).
+
+## The signal (two views; host pinpoint is authoritative)
+- **Host:** a `ttnn.synchronize_device` placed immediately after the fused `moe_compute`
+  **never returns** (process `timeout` → exit 124). The sync after `all_to_all_dispatch_metadata`
+  returns fine ⇒ the hang is inside the fused combine, not dispatch.
+  *(Without that sync, the host async-enqueues the epilogue and races ahead — the apparent
+  "hang at the epilogue reduce_scatter" is an illusion; the device is already stuck in the combine.)*
+- **Device (watcher, `TT_METAL_WATCHER=10`):** `Device 0 core(1,0) BRISC tripped assert on
+  line 260, kernel all_gather_async/.../minimal_default_writer.cpp; Last waypoint NSMD,CRBW,W,W,W`
+  — a core parked in a NOC-semaphore wait (a ring-barrier atomic-inc that never arrives).
+  (Watcher op-attribution is unreliable under async; the pinpoint above is authoritative.)
+
+## Isolation matrix (all on the SAME (4,8)/cluster_axis=0/COL/FABRIC_1D_RING device)
+| Test | Result |
+|---|---|
+| `ccl_health.py` — standalone CCLs (reduce_scatter/all_gather, axis0/axis1, Ring+Linear), NO moe_compute | **PASS** (exit 0) |
+| `moe_compute_smoke.py SMOKE_COMPUTE_ONLY=1` — device + dispatch_metadata + moe_compute **matmul** + sync | **PASS** (exit 0) |
+| `moe_compute_smoke.py SMOKE_PINPOINT=1` — fused combine, Ring (fabric default) | **HANG** (exit 124) |
+| `moe_compute_smoke.py SMOKE_PINPOINT=1 SMOKE_COMBINE_TOPO=linear` — fused combine, explicit Linear | **HANG** (exit 124) |
+| `standalone_combine_driver.py COMBINE_TOPO=ring` — standalone `selective_reduce_combine` | **PASS** (exit 0) |
+| `standalone_combine_driver.py COMBINE_TOPO=linear` — standalone `selective_reduce_combine` | **PASS** (exit 0) |
+
+The standalone driver runs the codeowners' own `run_combine_test`
+(`models/demos/deepseek_v3/tests/test_combine_tg.py`), parametrized for exactly
+(4,8)/batch64/cluster_axis0/COL/FABRIC_1D_RING/worker`((0,0),(3,3))`/mux`((4,0),(5,7))`/
+token×data parallel 4×4 — i.e. the same 4-device ring the fused path deadlocks on.
+
+## Conclusion / where to look
+The `selective_reduce_combine` op (and its ring barrier
+`fabric_multicast_bidirectional_atomic_inc_ring_1d`) works standalone on this config with
+**both** topologies. The fused `moe_compute` deadlocks using that same op internally. The
+differences are in **moe_compute's fused setup of the combine**:
+- core placement (`moe_core_placement.cpp` — log: "selected tilize cores 4, combine cores
+  16, matmul cores 12") vs the standalone test's explicit worker `((0,0),(3,3))`;
+- mux core range (smoke used `((3,0),(4,7))`; the passing standalone test uses `((4,0),(5,7))`);
+- the internal matmul-output → combine `dense_input` handoff (slots: combine consumes
+  moe_compute outputs [4]=matmul_output, [1]=activations, [2]=token_maps, [0]=token_counts);
+- topology resolution: fused path resolves from the fabric default (FABRIC_1D_RING→Ring) at
+  `moe_compute_device_operation.cpp:482-494`; passing `topology=Linear` explicitly did NOT help.
+
+Likely culprit: **#46863 (dynamic core placement)** — the pre-#46863 latest-main smoke passed
+(`logs/`), the current #46863 build hangs. (Not definitively confirmed: a `.so`-only swap to a
+pre-#46863 build is ABI-incompatible with the current python tree; needs a full pre-#46863
+checkout+rebuild.) Note the *full-model* hang predates #46863, so there may be two related
+combine-integration issues.
+
+## Workaround (validated end-to-end in the GLM-4.7 model)
+`moe_compute(compute_only=True)` (matmul only; `cluster_axis=None`, no combine) + a
+deadlock-free combine. We shipped a Ring `all_gather`+`sum` proxy; the correct fix is
+`moe_compute(compute_only)` → **standalone `selective_reduce_combine`** (the deepseek pattern),
+which this repro proves works on our config.
+
+## How to run
+```bash
+# inside the build env (TT_METAL_RUNTIME_ROOT on PYTHONPATH), USE_TORCH_XLA=0 ACCELERATE_USE_XLA=false
+# 1) device + CCL health (no moe_compute) — PASS
+python3 moe_compute_combine_deadlock_repro/ccl_health.py
+# 2) moe_compute matmul only — PASS
+SMOKE_COMPUTE_ONLY=1 python3 moe_compute_combine_deadlock_repro/moe_compute_smoke.py
+# 3) fused combine — HANG (exit 124). add SMOKE_COMBINE_TOPO=linear: still HANG
+SMOKE_PINPOINT=1 timeout 360 python3 moe_compute_combine_deadlock_repro/moe_compute_smoke.py
+# 4) standalone selective_reduce_combine — PASS (both topologies)
+USE_TORUS_MODE=1 COMBINE_TOPO=ring   python3 moe_compute_combine_deadlock_repro/standalone_combine_driver.py
+USE_TORUS_MODE=1 COMBINE_TOPO=linear python3 moe_compute_combine_deadlock_repro/standalone_combine_driver.py
+```
+Reset the galaxy between hanging runs (`tt-smi -glx_reset_auto`). `standalone_combine_driver.py`
+needs `pip install pytz` (transitive import of `models.perf.benchmarking_utils`).
+The smoke uses random weights / no HF load (~2 min); it is fully standalone (ttnn only).

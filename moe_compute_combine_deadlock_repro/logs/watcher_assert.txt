@@ -1,0 +1,4 @@
+### device watcher signal (fused combine)
+2026-06-18 08:10:10.600 | warning  |           Metal | Device 0 worker core(x= 1,y= 0) virtual(x=19,y=18): BRISC tripped an assert on line 260. Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file. Current kernel: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp. (watcher_device_reader.cpp:806)
+2026-06-18 08:10:10.600 | info     |           Metal | Last waypoint: NSMD,CRBW,   W,   W,   W (watcher_device_reader.cpp:1072)
+2026-06-18 08:10:10.600 | info     |           Metal |  BRISC: ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp (watcher_device_reader.cpp:1290)

@@ -1,0 +1,5 @@
+### moe_compute compute_only PASS (exit 0)
+dispatch ok: sparse (1, 64, 5120) idx (1, 64, 8) scr (1, 64, 8)
+>>> moe_compute(compute_only) enqueued, matmul_output (70, 2, 32, 5120)
+>>> SMOKE SYNC after moe_compute(compute_only) OK (70, 2, 32, 5120)
+SMOKE PASSED (compute_only)

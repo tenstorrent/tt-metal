@@ -1,0 +1,9 @@
+### standalone selective_reduce_combine PASS — Ring
+>>> device opened; running standalone combine (topo=ring)
+2026-06-19 09:30:50.276 | INFO     | models.demos.deepseek_v3.tests.test_combine_tg:run_combine_test:230 - TG MoE Combine Test: PASSED
+>>> STANDALONE COMBINE PASSED (topo=ring)
+
+### standalone selective_reduce_combine PASS — Linear
+>>> patched selective_reduce_combine -> topology=Linear
+2026-06-19 09:32:48.986 | INFO     | models.demos.deepseek_v3.tests.test_combine_tg:run_combine_test:230 - TG MoE Combine Test: PASSED
+>>> STANDALONE COMBINE PASSED (topo=linear)

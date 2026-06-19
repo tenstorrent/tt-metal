@@ -1,0 +1,4 @@
+### fused combine HANG (Ring default) — host pinpoint (exit 124)
+dispatch ok: sparse (1, 64, 5120) idx (1, 64, 8) scr (1, 64, 8)
+moe_compute ok: returned 6 combine (8, 16, 5120)
+(no 'SMOKE SYNC after moe_compute combine OK' -> sync hung)
