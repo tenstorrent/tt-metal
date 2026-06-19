@@ -15,7 +15,7 @@
 #   50000; pre-existing env wins). On hang the watchdog _Exit(1)'s the child;
 #   we classify that as HANG and dump the watchdog message.
 #
-# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] <test_path> [extra_pytest_args...]
+# Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]
 #
 # Options:
 #   --dev            Enables polling watcher (NoC sanitizer, waypoints, CB
@@ -123,9 +123,22 @@ DEV_MODE=false
 FAIL_FAST=true
 SIM_WORKERS=""
 SIM_WORKERS_GIVEN=false
-PRECOMPILE=false
-PRECOMPILE_EXPLICIT=false   # true once --precompile/--no-precompile is seen; disables auto-routing
+# Precompile (parallel JIT warm pass) is ON by default. Broad runs are the common case and benefit;
+# a narrow single-case run pays only a small fixed warm tax (a 2nd device-open + collect) and the
+# warm pass degrades gracefully to a cold run on any failure. For tight single-case iteration use
+# tt-probe (always inline) or --no-precompile.
+PRECOMPILE=true
 PRECOMPILE_WORKERS="${PRECOMPILE_WORKERS:-$(nproc 2>/dev/null || echo 8)}"
+
+# JIT compile server is WARM-PASS-ONLY. The endpoint (if configured) is used ONLY inside the
+# precompile warm pass; the real run and every inline / on-demand compile is ALWAYS local. Passive
+# endpoint comes from $TT_METAL_JIT_SERVER_ENDPOINT; override with --jit-server[=host:port] /
+# --no-jit-server. A configured-but-unreachable server aborts loudly (see precompile_warm).
+JIT_SERVER_ENDPOINT="${TT_METAL_JIT_SERVER_ENDPOINT:-}"
+JIT_SERVER_DISABLED=false
+# Defensive: the server-enable bit must never leak into the real run / inline path from the ambient
+# environment. precompile_warm is the ONLY place that turns it on, scoped to the warm-pass subprocess.
+unset TT_METAL_JIT_SERVER_ENABLE
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --dev)
@@ -146,23 +159,40 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --precompile)
-            # Force-on: transparently warm the JIT cache (real-device, parallel) before the
-            # real run, so kernels compile up-front in parallel instead of inline & serial.
-            # Everything is internal — no env vars, no second command. Always falls back to a
-            # normal cold run if anything goes wrong (see precompile_warm). Hardware only.
+            # Force-on (the default). Transparently warm the JIT cache (real-device, parallel)
+            # before the real run, so kernels compile up-front in parallel instead of inline.
             PRECOMPILE=true
-            PRECOMPILE_EXPLICIT=true
             shift
             ;;
         --no-precompile)
-            # Force-off: skip the warm pass even on a broad run (which auto-routing would warm).
+            # Force-off: skip the warm pass; the real run compiles kernels inline & local on demand.
             PRECOMPILE=false
-            PRECOMPILE_EXPLICIT=true
             shift
             ;;
         --precompile-workers)
             PRECOMPILE_WORKERS="$2"
             shift 2
+            ;;
+        --jit-server)
+            # Route the warm-pass compile to a remote JIT server at host:port (warm-pass only;
+            # the real run stays local). Unreachable => abort loudly.
+            if [[ $# -lt 2 ]]; then
+                echo "SAFE_PYTEST_ERROR: --jit-server requires a host:port argument"
+                exit 3
+            fi
+            JIT_SERVER_ENDPOINT="$2"
+            JIT_SERVER_DISABLED=false
+            shift 2
+            ;;
+        --jit-server=*)
+            JIT_SERVER_ENDPOINT="${1#*=}"
+            JIT_SERVER_DISABLED=false
+            shift
+            ;;
+        --no-jit-server)
+            # Force the warm pass to compile locally even if an endpoint is configured.
+            JIT_SERVER_DISABLED=true
+            shift
             ;;
         *)
             break
@@ -190,7 +220,7 @@ fi
 # --- Argument validation ---
 if [[ $# -eq 0 ]]; then
     echo "SAFE_PYTEST_ERROR: No test path provided" >&2
-    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] <test_path> [extra_pytest_args...]" >&2
+    echo "Usage: scripts/run_safe_pytest.sh [--dev] [--run-all] [--sim-workers N] [--precompile|--no-precompile] [--jit-server[=host:port]|--no-jit-server] <test_path> [extra_pytest_args...]" >&2
     exit 3
 fi
 
@@ -200,41 +230,8 @@ shift
 # Remaining args are extra pytest args — the precompile collect must use the SAME selection.
 EXTRA_ARGS=("$@")
 
-# --- Auto-route precompile by run BREADTH (unless --precompile/--no-precompile given) ---
-# Free, argv-only — no collect pre-pass. The warm pass only pays when there are many distinct
-# kernels to compile in parallel; on a narrow run its fixed overhead (a 2nd device open + a collect
-# body-run) exceeds the little serial-inline compile it would save. So:
-#   BROAD  = a whole directory or a whole test_*.py file, with NO ::nodeid and NO -k filter -> ON
-#   NARROW = a ::nodeid or a -k filter (single-case / handful repro)                         -> OFF
-# --dev does NOT force narrow: the dev-mode assert/watcher env is exported before the warm pass
-# runs, so the warm pass compiles the SAME debug-assert binaries the real run uses (build-key
-# match). A broad --dev run thus benefits from precompile like production (measured ~2.2x e2e on a
-# 569-kernel suite); only a -k / ::nodeid below keeps single-case --dev repros cold.
-# Explicit --precompile/--no-precompile win and disable this. Sim is skipped at the warm call below.
-if [[ "$PRECOMPILE_EXPLICIT" == false && "$SIM_MODE" == false ]]; then
-    _narrow=false
-    [[ "$TEST_PATH" == *"::"* ]] && _narrow=true      # nodeid selection
-    if [[ ${#EXTRA_ARGS[@]} -gt 0 ]]; then
-        for _a in "${EXTRA_ARGS[@]}"; do
-            case "$_a" in
-                -k|-k*|*"::"*) _narrow=true ;;        # -k filter or nodeid in extra args
-            esac
-        done
-    fi
-    if [[ "$_narrow" == true ]]; then
-        PRECOMPILE=false
-        echo "SAFE_PYTEST: precompile off (narrow run: nodeid/-k; pass --precompile to force)"
-    elif [[ -d "$TEST_PATH" ]]; then
-        PRECOMPILE=true
-        echo "SAFE_PYTEST: precompile auto-enabled (broad run: whole directory; --no-precompile to disable)"
-    elif [[ "$TEST_PATH" == *.py && -f "$TEST_PATH" ]]; then
-        PRECOMPILE=true
-        echo "SAFE_PYTEST: precompile auto-enabled (broad run: whole test file; --no-precompile to disable)"
-    else
-        PRECOMPILE=false
-        echo "SAFE_PYTEST: precompile off (not a whole dir/file: ${TEST_PATH}; pass --precompile to force)"
-    fi
-fi
+# Precompile is ON by default for every run (no breadth heuristic) — see the PRECOMPILE default
+# above. --no-precompile forces inline; tt-probe is the always-inline path for tight iteration.
 
 # Precompile uses WHATEVER cache the user already has (TT_METAL_CACHE if set, else tt-metal's
 # default) — both the warm-collect and the real run inherit the same value (incl. ccache state), so
@@ -249,6 +246,22 @@ PRECOMPILE_PLUGIN_DIR="$REPO_DIR"
 # ============================================================================
 
 precompile_warm() {
+    # JIT server routing (WARM-PASS-ONLY). If an endpoint is configured and not disabled, the warm
+    # pass compiles on the remote farm; the real run below is unaffected (server-enable is never
+    # exported globally — only into this subprocess via SRV_ENV). A configured-but-unreachable
+    # server is a setup error -> abort loudly (don't silently fall back to a slow local compile).
+    local -a SRV_ENV=()
+    if [[ -n "$JIT_SERVER_ENDPOINT" && "$JIT_SERVER_DISABLED" == false ]]; then
+        local _h="${JIT_SERVER_ENDPOINT%:*}" _p="${JIT_SERVER_ENDPOINT##*:}"
+        if ! timeout 5 bash -c "exec 3<>/dev/tcp/${_h}/${_p}" 2>/dev/null; then
+            echo "SAFE_PYTEST_ERROR: JIT server '${JIT_SERVER_ENDPOINT}' unreachable — aborting." >&2
+            echo "SAFE_PYTEST_ERROR: start the server, fix --jit-server, or pass --no-jit-server to compile the warm pass locally." >&2
+            exit 4
+        fi
+        SRV_ENV=(TT_METAL_JIT_SERVER_ENABLE=1 TT_METAL_JIT_SERVER_ENDPOINT="$JIT_SERVER_ENDPOINT" \
+                 TT_METAL_JIT_PREPROCESS=1 TT_METAL_JIT_SERVER_KEEPALIVE=1)
+        echo "PRECOMPILE: warm pass -> JIT server ${JIT_SERVER_ENDPOINT} (keepalive on; real run stays local)" >&2
+    fi
     [[ "$SIM_MODE" == false ]] && touch "$DIRTY_FLAG"
     echo "PRECOMPILE: ===== warmup (collect + precompile, real device) =====" >&2
     # Real-device collect over the SAME selection -> warms the shared cache. We open the same device the
@@ -264,8 +277,11 @@ precompile_warm() {
     local clog="/tmp/precompile_collect_$$.log" t0 t1 cstatus
     echo "PRECOMPILE: warming (single proc x ${PRECOMPILE_WORKERS} compile-threads) over: ${TEST_PATH} ${EXTRA_ARGS[*]}" >&2
     t0=$(date +%s)
-    UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
-    LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
+    # SRV_ENV (server-enable + preprocess + keepalive) is scoped to THIS subprocess only — it is the
+    # sole place the server is ever enabled, so the real run / inline path can never hit it.
+    env "${SRV_ENV[@]}" \
+        UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS="$PRECOMPILE_WORKERS" \
+        LOGURU_LEVEL=ERROR PYTHONPATH="$PRECOMPILE_PLUGIN_DIR" \
         pytest "${TEST_PATH}" "${EXTRA_ARGS[@]}" -p tests.plugins.up_front_collect > "$clog" 2>&1
     cstatus=$?
     t1=$(date +%s)
