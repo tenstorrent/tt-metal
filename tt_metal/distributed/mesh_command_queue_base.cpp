@@ -21,6 +21,7 @@
 #include "tt_cluster.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
+#include "tt_metal/impl/context/metal_context.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -197,6 +198,7 @@ void MeshCommandQueueBase::enqueue_write_shard_to_sub_grid(
     } else {
         this->write_sharded_buffer(buffer, host_data);
     }
+    this->drain_deferred_writes_nolock();
 
     if (blocking) {
         this->finish_nolock();
@@ -235,7 +237,6 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-
     // Track if any transfer actually used pinned memory
     std::atomic<bool> any_pinned_used = false;
 
@@ -264,6 +265,7 @@ void MeshCommandQueueBase::enqueue_write_shards_nolock(
         }
     }
     dispatch_thread_pool_->wait();
+    this->drain_deferred_writes_nolock();
 
     if (blocking) {
         this->finish_nolock();

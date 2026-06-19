@@ -28,6 +28,11 @@ struct DirectWriteGuard {
 // True when tt-sim may use the ordered direct-write path for this shard write.
 bool is_direct_write_enabled(const DirectWriteGuard& guard, const void* src, const BufferRegion& region);
 
+// True when this shard can use simulator direct writes after the caller has
+// satisfied command queue ordering.
+bool is_direct_write_candidate(
+    const DirectWriteGuard& guard, Buffer& shard_view, const void* src, const BufferRegion& region);
+
 // Synchronous host-to-device shard write used by the tt-sim fast path.
 void write_shard(
     Buffer& shard_view, const void* src, const BufferRegion& region, const CoreRangeSet* logical_core_filter);
