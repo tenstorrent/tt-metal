@@ -3,3 +3,4 @@
 {"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Debug SDPA phase-E hang","ts":"2026-06-19T20:06:32+00:00"}
 {"event":"tool_use","tool":"Agent","subagent":"ttnn-expert-debugger","description":"Find minimal chain->matmul reset","ts":"2026-06-19T21:02:07+00:00"}
 {"event":"test_run","status":"pass","test":"test_self_attention_no_mask_auto_scale[1x1x32x32]","detail":"single-tile PASSES after moving scale after QK matmul (eliminate datacopy-chain->matmul); root cause = CopyTile-chain immediately before matmul_block hangs on this LLK","ts":"2026-06-19T21:09:26+00:00"}
+{"event":"test_run","status":"pass","test":"test_scaled_dot_product_attention.py (full)","detail":"all 24 acceptance tests pass (self/cross, no-mask/explicit/causal, multi-head/batch/KV-block)","ts":"2026-06-19T21:11:01+00:00"}

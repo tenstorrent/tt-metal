@@ -22,7 +22,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "api/debug/device_print.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 void kernel_main() {
@@ -74,7 +73,6 @@ void kernel_main() {
         calculate_and_prepare_reduce_scaler<cb_scaler_max, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
     dataflow_kernel_lib::
         calculate_and_prepare_reduce_scaler<cb_scaler_sum, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
-    DEVICE_PRINT("R:scalers done num_units={}\n", num_units);
 
     constexpr uint32_t kv_block_tiles = kv_chunk_t * Dt;
 
@@ -96,7 +94,6 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         q_cb.push_back(Dt);
-        DEVICE_PRINT("R:Q pushed u={}\n", u);
 
         for (uint32_t j = 0; j < num_kv_chunks; ++j) {
             const uint32_t kv_row0 = j * kv_chunk_t;  // first kv tile-row of this block
@@ -126,7 +123,6 @@ void kernel_main() {
             }
             noc.async_read_barrier();
             v_cb.push_back(kv_block_tiles);
-            DEVICE_PRINT("R:KV pushed u={} j={}\n", u, j);
 
             // ---- mask block, natural [1, kv_chunk_t] ----
             if constexpr (use_mask) {

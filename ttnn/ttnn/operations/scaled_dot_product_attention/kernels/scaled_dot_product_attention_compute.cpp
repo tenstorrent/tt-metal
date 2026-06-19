@@ -8,9 +8,9 @@
 // query tile-row). All running statistics / accumulators are fp32
 // (fp32_dest_acc_en). Score block is kv_chunk_t tiles — never Sq_t × Skv_t.
 //
-// Phase 0 (per unit): scale Q in-place by `scale`.
 // Per KV block j:
-//   A  cb_scores = (scaled Q)·Kⱼᵀ                          (matmul_block, transpose)
+//   A  cb_scores = Q·Kⱼᵀ (unscaled)                        (matmul_block, transpose)
+//   A.5 cb_scores *= scale  (in-place)                     (mul_unary chain)
 //   B  cb_scores += maskⱼ                                  (if use_mask)
 //   C  m_blk = rowmax(cb_scores)                           (reduce MAX REDUCE_ROW)
 //   D1 m_new = max(m_prev, m_blk)         (j>0)
@@ -33,11 +33,18 @@
 // replacement of any helper.
 //
 // BOOT: mm_init does the full hw_configure; matmul_block uses InitMode::Short.
-// (Advisory deviation from op_design.md's mm_block_init: mm_init is the
-// documented partner of compute_kernel_hw_startup and is exactly the boot the
+// (Advisory deviation from op_design.md's mm_block_init: mm_init is the boot the
 // production SDPA kernel uses for this matmul+reduce+eltwise mix.)
+//
+// SCALE PLACEMENT DEVIATION (forced): op_design.md folds `scale` into Q once per
+// work unit (a CopyTile/datacopy eltwise_chain BEFORE the QK matmul). On this LLK
+// a datacopy chain immediately preceding matmul_block hangs (unpack cannot
+// transition datacopy->matmul-AB). The math is identical — scale*(Q·Kᵀ) — so the
+// scale is instead applied to cb_scores AFTER the QK matmul (phase A.5), still
+// before the additive mask (mask added in scaled space, per the design). This is
+// the only chain->matmul ordering avoided; matmul->chain / reduce->matmul / binary
+// chain->matmul (unit-boundary K->A) all work.
 
-#include "api/debug/device_print.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/matmul.h"
 #include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
@@ -88,15 +95,12 @@ void kernel_main() {
     // and desyncs the DEST-bank parity counter (chain->matmul hang). Production SDPA
     // boots with mm_init only for this exact matmul+reduce+eltwise mix.
     mm_init(cb_q, cb_k, cb_scores);
-    DEVICE_PRINT("C:boot nu={}\n", num_units);
 
     CircularBuffer q_buf(cb_q), k_buf(cb_k), v_buf(cb_v);
     CircularBuffer scores_buf(cb_scores), p_buf(cb_p);
     CircularBuffer out_accum_buf(cb_out_accum), pv_buf(cb_pv);
 
     for (uint32_t u = 0; u < num_units; ++u) {
-        DEVICE_PRINT("C:p0scaleQ(moved)\n");
-
         for (uint32_t j = 0; j < num_kv_chunks; ++j) {
             // A: cb_scores = Q·Kⱼᵀ (UNSCALED). transpose=true (within-tile) + reader
             // block-transpose => Q·Kᵀ. Q retained across KV blocks (popped in L).
@@ -114,8 +118,6 @@ void kernel_main() {
                 scores_buf,
                 MatmulBlockShape::of(/*in0_sb=*/1, in1sb_qk, /*sbh=*/1, osw_qk, /*in0_block_k=*/Dt, /*num_k=*/1));
 
-            DEVICE_PRINT("C:pA QK j={}\n", j);
-
             // A.5: scale cb_scores in-place by `scale` (folded after QK so the matmul is
             // never preceded by a datacopy chain). matmul -> chain transition.
             eltwise_chain(
@@ -123,7 +125,6 @@ void kernel_main() {
                 CopyTile<cb_scores, Dst::D0, CopyTilePolicy::WaitAndPop>{},
                 MulUnary<Dst::D0>{scale_u32},
                 PackTile<cb_scores, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
-            DEVICE_PRINT("C:pA5 scaleScores j={}\n", j);
             // B: cb_scores += maskⱼ (element-wise).
             if constexpr (use_mask) {
                 binary_add<cb_scores, cb_mask, cb_scores, BroadcastDim::None>(kv_chunk_t);
@@ -173,7 +174,6 @@ void kernel_main() {
                 copy<cb_mnew, cb_max>(1);
             }
 
-            DEVICE_PRINT("C:pC rowmax j={}\n", j);
             // E: cb_p = exp(cb_scores − m), m broadcast across columns.
             eltwise_chain(
                 kv_chunk_t,
@@ -191,7 +191,6 @@ void kernel_main() {
                 Exp<>{},
                 PackTile<cb_p, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
 
-            DEVICE_PRINT("C:pE expP j={}\n", j);
             // F: row-sum over keys. j=0 -> running l (cb_sum); j>0 -> block sum (cb_lblock).
             if (j == 0) {
                 reduce<
@@ -232,7 +231,6 @@ void kernel_main() {
                     PackTile<cb_sum, Dst::D0, PackTilePolicy::PerTileReserveAndPush>{});
             }
 
-            DEVICE_PRINT("C:pF rowsum j={}\n", j);
             // H: PV = cb_p·Vⱼ. j=0 -> running O (cb_out_accum); j>0 -> block PV (cb_pv).
             if (j == 0) {
                 matmul_block<
@@ -303,11 +301,9 @@ void kernel_main() {
             }
         }
 
-        DEVICE_PRINT("C:pH PV done\n");
         // J: recip = 1/l.
         unary<Recip<>, cb_sum, cb_recip>(1);
 
-        DEVICE_PRINT("C:pJ recip\n");
         // K: cb_out = O_accum·recip (bcast col → bf16).
         eltwise_chain(
             Dt,
