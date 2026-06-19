@@ -28,7 +28,7 @@ If they do not, use `$full-model` first. During vLLM integration you may make sm
 
 Before writing adapter code, load the datatype-sweep selection and confirm the generator constructs that exact policy: weight groups, activation/residual dtype, CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions. Serving uses the selected full-model policy. Serving a reduced-speed model does not satisfy completion.
 
-Load `models/autoports/<model>/doc/context_contract.json` and serve the recorded supported context. The default target is the HF-advertised context. Do not lower `--max-model-len`, model config context, benchmark context, or API context to work around a model bug. A smaller value is valid only when the context contract records device-DRAM evidence that it is the largest feasible context.
+Load `models/autoports/<model>/doc/context_contract.json` and serve the recorded supported context. The default target is the HF-advertised context. Do not lower `--max-model-len`, model config context, benchmark context, API context, or any other advertised serving capability to work around a model bug. A smaller value is valid only when the context contract records evidence that a hard physical device limit prevents the advertised capability from fitting or running and that the selected value is the largest feasible one.
 
 ## vLLM Adapter
 
@@ -175,7 +175,7 @@ Done means all of these are true and recorded:
 - Adapter class, low-level generator methods it delegates to, and KV-cache ownership contract.
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
-- Served max context, matching `doc/context_contract.json`, with any DRAM-only reduction evidence.
+- Served max context, matching `doc/context_contract.json`, with any hard-physical-limit reduction evidence.
 - Capability flags with evidence: no unproven `supports_async_decode=True`, explicit `tt_async_decode_allows_overlap` value with proof if true, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
 - Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.

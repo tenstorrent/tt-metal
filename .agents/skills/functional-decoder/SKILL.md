@@ -36,6 +36,8 @@ Implement forward signatures that fit the model. Keep them keyword-friendly. Rec
 
 Start by understanding the HF model. Load `AutoConfig`, inspect the installed `configuration_*.py` and `modeling_*.py`, and identify the decoder layer, attention, RoPE, cache API, MLP/MoE path, residual order, norm behavior, activation, bias flags, head shapes, and layer-kind differences. Trace through the model's execution line by line to make sure you understand it.
 
+Before writing final tests, derive the model capability contract from the HF config and model code. For decoder-layer bringup this includes the target context/sequence length, cache and position semantics, layer kinds, mode switches such as sliding vs full attention, and the externally visible prefill/decode behavior later stages must preserve. Small shapes are useful for debugging, but stage completion requires evidence for the advertised contract or a hard physical device limit reason for the largest feasible reduction.
+
 Implement correctness first. BF16, tile layout, and DRAM memory are fine while proving semantics. Move weight conversion, reshaping, dtype selection, `ttnn.as_tensor`, and cache construction into `from_state_dict` or setup helpers. Keep runtime prefill/decode free of hidden `torch`, `from_torch`, `to_torch`, or host fallback except explicit test boundaries.
 
 For MoE models, validate the real router/gate and active experts end-to-end. Component tests for gate or experts are useful diagnostics, but the decoder result should include the gate-selected expert path a real model run would use. For non-Galaxy bringup, use the GPT-OSS active-expert pattern as the default: router/top-k scores as a sparsity tensor, `ttnn.sparse_matmul` for gate/up/down projections, score weighting, and a model-appropriate reduce over experts. Do not start from Galaxy-only fused MoE paths unless you have direct evidence that the target hardware and ops support them.
@@ -49,8 +51,9 @@ Use `PCC >= 0.995` as the default acceptance bar for prefill and decode unless t
 - HF-vs-TTNN prefill and decode PCC and performance for each meaningful layer kind.
 - Prefill and decode on-device performance measured from warmed runs (using traced execution for decode) - these should have perf report outputs to prove it.
 - Paged KV-cache behavior, including page table and current-position handling.
-- Full advertised prefill/decode sequence length (test the longest you can fit if the reference model's maximum is too large for the device to fit)
-- `models/autoports/<model>/doc/context_contract.json` records the HF-advertised context, the current supported context, the largest context tested in prefill and decode, and any DRAM-only reduction with byte/probe evidence.
+- A short capability-contract evidence table: claim, evidence, and remaining risk for the advertised context/sequence length, cache behavior, layer kinds, and mode switches.
+- Full advertised prefill/decode sequence length, or the largest feasible value when a hard physical device limit prevents the advertised value from fitting or running.
+- `models/autoports/<model>/doc/context_contract.json` records the HF-advertised context, the current supported context, the largest context tested in prefill and decode, and any hard-physical-limit reduction with byte/probe evidence.
 - Determinism for repeated identical inputs tested.
 - Evidence there are no torch or host calls required within a single prefill or decode pass - everything runs and stays on device.
 - Watcher-clean run with `TT_METAL_WATCHER=10`. If the command cannot run in the environment, record the exact environment failure and replacement evidence; do not skip asserts or weaken the test.
@@ -110,6 +113,7 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 
 - Prefill commonly uses `(1, batch=1, seq_len, hidden)` style tensor shapes; decode commonly uses `(1, seq_len=1, batch, hidden)`.
 - The target sequence/context length is the full value advertised by the HF config, usually `max_position_embeddings` or the model's equivalent field. Do not create a smaller model config. Do not hide a smaller implementation behind a smaller `max_model_len`.
+- Do not reduce the advertised model capability to make bringup, tests, profiling, or serving easier. A reduction is acceptable only when a hard physical device limit prevents the advertised capability from fitting or running, such as device DRAM capacity for weights + KV/cache/state + required persistent buffers. If reduced, record the byte calculation or failed capacity probe, the largest feasible supported value, and the exact construction/serving setting that uses it.
 - Decode tests must include the full supported context length unless measured KV-cache DRAM capacity forces a reduction. If reduced, record the attempted full-length or capacity-probe command, log, failure signature or byte calculation, and largest feasible tested context.
 - Prefill tests must include the full supported sequence length unless measured L1/DRAM capacity forces a reduction. If reduced, record the attempted full-length or capacity-probe command, log, failure signature or byte calculation, and largest feasible tested sequence.
 - Do not accept "tractability", profiling/watcher cost, runtime, or small synthetic proof scope as sequence-capacity evidence.

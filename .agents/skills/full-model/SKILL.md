@@ -24,11 +24,11 @@ Implement the model-specific pieces around the working block stack:
 
 Use the strongest correct implementation available as your block stack. If there are several candidates, choose the one with the best evidence for the target mesh and explain the choice.
 
-## Context-Length Contract
+## Capability And Context Contract
 
 The full model must support the context length advertised by the HF config. Start from `models/autoports/<model>/doc/context_contract.json`, then recompute it for the full layer stack. Include all loaded weights, the full-layer KV cache, page tables, trace buffers, persistent CCL buffers, and other long-lived tensors that consume device DRAM.
 
-Do not reduce `max_model_len` to make full-model bringup pass. A smaller context is acceptable only when device DRAM cannot fit the full model plus KV cache. In that case, record the byte calculation or failed capacity probe, the largest feasible supported context, and the exact construction/server setting that uses it.
+Also preserve the rest of the advertised model capability contract established by earlier stages: cache/state semantics, layer kinds, mode switches, and the externally visible generation behavior. Do not reduce the advertised model capability to make bringup, tests, profiling, or serving easier. A reduction is acceptable only when a hard physical device limit prevents the advertised capability from fitting or running, such as device DRAM capacity for weights + KV/cache/state + required persistent buffers. If reduced, record the byte calculation or failed capacity probe, the largest feasible supported value, and the exact construction/serving setting that uses it.
 
 ## How To Approach It
 
@@ -190,7 +190,7 @@ Done means all of these are true and recorded:
 - carried-forward decoder contract: weight/activation/KV/CCL dtype policy, tensor-group exceptions, and residual layout;
 - state-dict mapping, tied-embedding behavior if relevant, and real-weight loading behavior;
 - KV-cache, page-table or position handling, prompt lengths, and repeated decode reuse;
-- context contract: HF-advertised context, full-model supported context, and any DRAM-only reduction evidence;
+- context contract: HF-advertised context, full-model supported context, and any hard-physical-limit reduction evidence;
 - full-model accuracy and qualitative generation evidence;
 - split-sampling trace evidence: model trace to logits, internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, current-position coherence, and page-table refresh coverage;
 - determinism or repeated-run coverage appropriate to the implementation risk, including logit reproducibility across runs and batch positions;

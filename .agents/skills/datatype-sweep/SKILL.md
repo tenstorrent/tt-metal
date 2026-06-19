@@ -13,7 +13,7 @@ The selected precision artifact must be complete enough for later stages to cons
 
 The expensive source of truth is full-model top-1/top-5 accuracy. Decoder-layer PCC and component timing are useful only for ordering candidates and debugging surprises.
 
-Datatype selection must preserve the context-length contract. KV-cache dtype can change the largest feasible context, so recompute `models/autoports/<model>/doc/context_contract.json` for the selected config. If a candidate only passes by lowering context, it fails unless device DRAM evidence proves that smaller value is the largest feasible context for that candidate.
+Datatype selection must preserve the capability and context contract. KV-cache dtype can change the largest feasible context, so recompute `models/autoports/<model>/doc/context_contract.json` for the selected config. If a candidate only passes by lowering context or another advertised capability, it fails unless a hard physical device limit prevents the advertised capability from fitting or running and evidence proves that the smaller value is the largest feasible one for that candidate.
 
 If the user does not provide an accuracy bar, use:
 

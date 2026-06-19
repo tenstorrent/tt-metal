@@ -83,9 +83,11 @@ Return `more-work-needed` when evidence shows one of these:
 - logs or code show a plausible bug in a stage-critical subsystem, such as
   cache ownership, trace replay, token feedback, sampling, precision policy,
   page-table handling, or model output correctness;
-- the stage lowers context length, eval length, benchmark length, or advertised
-  `max_model_len` below the HF-advertised context without device-DRAM evidence
-  proving the largest feasible context;
+- the stage lowers advertised model capability, such as context length, eval
+  length, benchmark length, served `max_model_len`, image resolution, timestep
+  schedule, cache/state size, or another model-specific contract item, without
+  evidence that a hard physical device limit prevents the advertised capability
+  from fitting or running and proving the largest feasible value;
 - the stage dismisses a material anomaly with prose instead of investigation.
 
 Do not return `more-work-needed` only because a stronger evidence format would
@@ -134,6 +136,9 @@ For generation or serving stages, also inspect:
 - context-length evidence: `doc/context_contract.json`, served `max_model_len`,
   eval/benchmark context settings, and any cap or truncation introduced by the
   stage.
+- capability-contract evidence: for nonstandard or non-LLM models, the
+  model-specific equivalent of context length, cache/state semantics, mode
+  switches, and advertised input/output limits.
 
 For optimization stages, also inspect:
 

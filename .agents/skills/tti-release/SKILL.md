@@ -11,7 +11,7 @@ This skill runs the Tenstorrent `tt-inference-server` release workflow for the g
 
 The release stage is only valid when the release workflow evaluates the just-brought-up autoport model. Do not run a stock `tt-transformers`, `models/demos`, or other packaged implementation for the same Hugging Face model. That measures a different model and must be treated as a failed release-stage artifact, even if `run.py` exits `0`.
 
-The release stage must evaluate the autoport at the context length recorded in `models/autoports/<model>/doc/context_contract.json`. Do not cap context, LongBench, benchmark prompt/completion lengths, or API limits to hide a model context bug. Only adjust a request that is mathematically invalid because prompt plus completion exceeds the real supported context, and record that as a harness issue.
+The release stage must evaluate the autoport at the context length recorded in `models/autoports/<model>/doc/context_contract.json`. Do not cap context, LongBench, benchmark prompt/completion lengths, or API limits to hide a model context bug. A reduced supported context is valid only when earlier stages recorded evidence that a hard physical device limit prevents the advertised context from fitting or running and proved the largest feasible value. Only adjust a request that is mathematically invalid because prompt plus completion exceeds the real supported context, and record that as a harness issue.
 
 ## Topology
 
@@ -187,7 +187,7 @@ Before changing release specs, eval configs, benchmark configs, or server launch
 - shortening benchmark prompt or completion lengths to avoid an L1, KV-cache, or trace bug;
 - marking a context failure as a harness issue when the request fits inside the HF-advertised context.
 
-Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat template, host-sampling-only tests that need an explicit host-sampling compatibility mode, or requests whose prompt plus completion exceeds the true supported context.
+Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat template, host-sampling-only tests that need an explicit host-sampling compatibility mode, or requests whose prompt plus completion exceeds the true supported context. If the model cannot meet the context contract for any reason other than a hard physical device limit, fix the model path or report a readiness gap; do not weaken release coverage.
 
 ## Failing Release Tests
 

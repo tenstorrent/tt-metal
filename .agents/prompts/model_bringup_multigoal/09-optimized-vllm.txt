@@ -7,9 +7,9 @@ Start from completed vLLM integration and the selected datatype-sweep config; op
 Goal completion requirements:
 - The measured path is real vLLM TT plugin serving through models/autoports/<model>/tt/generator_vllm.py.
 - vLLM sampling tests, qualitative outputs, primary single-user benchmarks, and CI serving-burst benchmarks pass.
-- Warmed primary single-user vLLM TTFT, TPOT, ITL, aggregate output throughput, and TPOT-derived decode t/s/u are measured before and after using the same run_vllm_server workload, temperature/generation-config mode, max-num-seqs, max-model-len, mesh, sampling mode, and TT config.
-- CI serving-burst metrics are measured before and after as capacity/nightly-parity evidence. Do not use CI burst as headline decode t/s/u because admission and chunked prefill can affect TPOT.
-- The optimized serving path preserves the context contract. Do not improve performance by lowering `max_model_len`, benchmark context, or eval context below the value in doc/context_contract.json.
+- Warmed primary single-user TTFT, TPOT, ITL, aggregate throughput, and TPOT-derived decode t/s/u are measured before and after using the same run_vllm_server workload, generation mode, max-num-seqs, max-model-len, mesh, sampling mode, and TT config.
+- CI serving-burst metrics are measured before and after as capacity/nightly-parity evidence. Do not use CI burst as headline decode t/s/u.
+- The optimized serving path preserves the context contract. Do not improve performance by lowering `max_model_len`, benchmark context, or eval context below doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
 - Optimized vLLM decode is about as fast as optimized full-model traced decode for comparable work.
 - The adapter implements async decode: decode_forward(..., read_from_device=False) returns device tensors; read_decode_output(..., async_read=True) performs the minimal deferred read; process_decode_output_host(...) only formats host results; supports_async_decode is true only when vLLM exercises this path.
 - Serving decode reuses persistent trace inputs and calls ttnn.execute_trace(..., blocking=False). Any synchronization or host read happens after the async boundary and is limited to the plugin contract.
