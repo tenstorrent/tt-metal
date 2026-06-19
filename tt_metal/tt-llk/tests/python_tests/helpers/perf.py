@@ -217,6 +217,70 @@ def get_unique_base_names(input_dir: Path):
     return sorted(unique_bases)
 
 
+def _collapse_duplicate_keys(frame: pd.DataFrame, label: str) -> pd.DataFrame:
+    """Collapse rows sharing the same (sweep-params, marker) key into a single row.
+
+    Two distinct sweep variants can resolve to an identical recorded key when the
+    harness normalizes a parameter before recording it (e.g. dest_acc forced from
+    No to Yes for an outlier format combo in TestConfig). Such rows are repeated
+    measurements of the same effective kernel, so their metric columns are averaged
+    into one row.
+
+    A warning is always emitted when duplicates are found, and it flags how many
+    collapsed keys disagreed on a metric value: a differing same-key pair is usually
+    benign run-to-run noise, but it is also the signature of a test that failed to
+    record a parameter that actually changes the kernel, so it should not pass
+    silently.
+    """
+    if frame.empty or "marker" not in frame.columns:
+        return frame
+
+    try:
+        marker_pos = frame.columns.get_loc("marker")
+        key_cols = list(frame.columns[: marker_pos + 1])
+        value_cols = [c for c in frame.columns if c not in key_cols]
+
+        # dropna=False: NaN-valued sweep columns are legitimate keys (pandas would
+        # otherwise drop those groups entirely).
+        group_sizes = frame.groupby(key_cols, dropna=False, sort=False).size()
+        dup_groups = group_sizes[group_sizes > 1]
+        if dup_groups.empty:
+            return frame
+
+        numeric_cols = [
+            c for c in value_cols if pd.api.types.is_numeric_dtype(frame[c])
+        ]
+        differing = 0
+        if numeric_cols:
+            nunique = frame.groupby(key_cols, dropna=False, sort=False)[
+                numeric_cols
+            ].nunique()
+            differing = int((nunique > 1).any(axis=1).sum())
+
+        logger.warning(
+            "{}: collapsing {} duplicate (sweep-params, marker) key(s) spanning "
+            "{} rows into one row each (mean of metric columns); {} key(s) had "
+            "differing metric values (run-to-run noise, or a distinguishing "
+            "parameter not recorded as a column).",
+            label,
+            int(len(dup_groups)),
+            int(dup_groups.sum()),
+            differing,
+        )
+
+        agg = {c: ("mean" if c in numeric_cols else "first") for c in value_cols}
+        collapsed = (
+            frame.groupby(key_cols, dropna=False, sort=False).agg(agg).reset_index()
+        )
+        # Restore the original column order (groupby/agg reorders columns).
+        return collapsed[list(frame.columns)]
+    except Exception as e:
+        logger.warning(
+            "{}: duplicate-key collapse skipped due to error: {}", label, e
+        )
+        return frame
+
+
 def combine_perf_reports():
     """
     Combine performance report CSV files into two files per base name:
@@ -269,6 +333,9 @@ def combine_perf_reports():
                 continue
 
             combined_regular = pd.concat(dfs_regular, ignore_index=True)
+            combined_regular = _collapse_duplicate_keys(
+                combined_regular, f"{base_name}.csv"
+            )
             combined_regular = combined_regular.sort_values(
                 by=combined_regular.columns.tolist()
             ).reset_index(drop=True)
@@ -289,6 +356,9 @@ def combine_perf_reports():
                 continue
 
             combined_post = pd.concat(dfs_post, ignore_index=True)
+            combined_post = _collapse_duplicate_keys(
+                combined_post, f"{base_name}.post.csv"
+            )
             combined_post = combined_post.sort_values(
                 by=combined_post.columns.tolist()
             ).reset_index(drop=True)
@@ -305,6 +375,9 @@ def combine_perf_reports():
 
             if dfs_counters:
                 combined_counters = pd.concat(dfs_counters, ignore_index=True)
+                combined_counters = _collapse_duplicate_keys(
+                    combined_counters, f"{base_name}.counters.csv"
+                )
                 combined_counters = combined_counters.sort_values(
                     by=combined_counters.columns.tolist()
                 ).reset_index(drop=True)
