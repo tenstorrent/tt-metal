@@ -15,6 +15,8 @@ Recorded policy is not enough. The runtime construction path must actually consu
 
 The selected precision artifact must be complete enough for later stages to consume mechanically. Include weight dtype groups, layer exceptions, compute fidelities, activation/residual dtype, CCL communication dtype, KV-cache dtype, logits/sampling dtype assumptions, and any loader/runtime flags needed to construct that exact policy. A selected config that only says "BFP8 weights" is incomplete.
 
+Recorded policy is not enough. The runtime construction path must actually consume every selected dtype and compute-fidelity field. Prove this with a model summary, config propagation check, or profiler/perf-report rows from the measured candidate. If a field appears in `selected_precision_config.json` but the code path ignores it or hard-codes a different value, the sweep is incomplete.
+
 The expensive source of truth is full-model top-1/top-5 accuracy. Decoder-layer PCC and component timing are useful only for ordering candidates and debugging surprises.
 
 Datatype selection must preserve the capability and context contract. KV-cache dtype can change the largest feasible context, so recompute `models/autoports/<model>/doc/context_contract.json` for the selected config. If a candidate only passes by lowering context or another advertised capability, it fails unless a hard physical device limit prevents the advertised capability from fitting or running and evidence proves that the smaller value is the largest feasible one for that candidate.
