@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutin
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class TtMoe(LightweightModule):
@@ -156,6 +157,7 @@ class TtMoe(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
+        routing_use_l1_small_for_semaphores: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -195,6 +197,9 @@ class TtMoe(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
+        # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
+        # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
         self.experts_per_chip = experts_per_chip
@@ -257,6 +262,7 @@ class TtMoe(LightweightModule):
             expert_dispatch_table,
             num_links=gate_config.ccl_config["NUM_LINKS"],
             experts_per_chip=experts_per_chip,
+            use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -480,10 +486,12 @@ class TtMoe(LightweightModule):
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
         if self.mesh_device.shape[1] > 1:
-            x = ttnn.all_gather(
+            x = ttnn.experimental.all_gather_async(
                 x,
                 dim=-1,  # Gather along emb_dim
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
             )

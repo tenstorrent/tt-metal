@@ -145,7 +145,7 @@ struct KernelSpec {
 
     // Tensor bindings
     // Declares that this kernel accesses a tensor parameter (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via TensorAccessor(ta::<accessor_name>)
+    // The kernel constructs the accessor via TensorAccessor(tensor::<accessor_name>)
     struct TensorBinding {
         TensorParamName tensor_parameter_name;      // identify the TensorBinding within the ProgramSpec
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)

@@ -19,6 +19,9 @@ on:
           - qwen3-32b-galaxy
           - gpt-oss-120b
           - whisper
+          - gemma-4-12b
+          - gemma-4-26b-a4b
+          - gemma-4-31b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
