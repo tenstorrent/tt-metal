@@ -171,7 +171,26 @@ void kernel_main() {
             // ---------- PASS 2: per-row Col-bcast normalize x * recip[row] ----------
             // recip held resident across the bh rows, indexed by a per-row TileOffset
             // (row r uses recip tile r); input streams Wt tiles/row in order and pops.
-            for (uint32_t r = 0; r < BLOCK_HEIGHT; ++r) {
+            // The per-row chains all read the SAME two CBs (cb_input_resident SrcA,
+            // cb_recip_rms SrcB), so only row 0 needs the unpack data-format reconfig;
+            // rows 1..bh-1 use Reconfig::None (the format is already set). [static-analyzer F1]
+            ckl::eltwise_chain(
+                EltwiseShape::tiles(Wt),
+                BinaryFpu<
+                    cb_input_resident,
+                    cb_recip_rms,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::Col,
+                    InputLifecycle::Streaming,
+                    InputLifecycle::HeldBulk,
+                    BinaryDataFormatReconfig::Input,  // establish the format once
+                    Dst::D0,
+                    OperandKind::Scalar,
+                    OperandKind::Scalar,
+                    TileOffset::Unset,
+                    TileOffset::Set>{0, 0},
+                PackTile<cb_pass2_out, OutputLifecycle::Streaming>{});
+            for (uint32_t r = 1; r < BLOCK_HEIGHT; ++r) {
                 ckl::eltwise_chain(
                     EltwiseShape::tiles(Wt),
                     BinaryFpu<
@@ -179,9 +198,9 @@ void kernel_main() {
                         cb_recip_rms,
                         BinaryFpuOp::Mul,
                         BroadcastDim::Col,
-                        InputLifecycle::Streaming,  // x streams Wt/row, pops
-                        InputLifecycle::HeldBulk,   // recip held, indexed by TileOffset r
-                        BinaryDataFormatReconfig::Input,
+                        InputLifecycle::Streaming,       // x streams Wt/row, pops
+                        InputLifecycle::HeldBulk,        // recip held, indexed by TileOffset r
+                        BinaryDataFormatReconfig::None,  // format already set by row 0
                         Dst::D0,
                         OperandKind::Scalar,
                         OperandKind::Scalar,

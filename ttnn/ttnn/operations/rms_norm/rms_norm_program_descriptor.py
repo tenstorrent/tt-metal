@@ -487,8 +487,11 @@ def _regime_a_descriptor(
     # per-row partial-Σx² / recip CBs hold bh tiles (one per row).
     bh = _regime_a_block_height(Ht_total, num_cores, has_gamma, gamma_is_rm, Wt, dt, fp32_acc, cfg)
     sumsq_pages = max(2, bh)
+    # Double-buffer the resident input when row-blocked so the reader prefetches the
+    # next bh-row block during compute (PASS-1 holds the whole block) [static-analyzer F3].
+    input_resident_pages = (2 * bh * Wt) if bh > 1 else Wt
     cbs = [
-        cb(CB_INPUT_RESIDENT, dt, bh * Wt),
+        cb(CB_INPUT_RESIDENT, dt, input_resident_pages),
         cb(CB_SCALER, inter, 1),
         cb(CB_OUTPUT, dt, 2),
         # Refinement 5: PASS-1 is now a single square + single reduce over the whole
