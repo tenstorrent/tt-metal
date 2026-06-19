@@ -62,7 +62,9 @@ The cache key is the op itself — its type, attributes, and tensor args (the fr
 
 ### Extracting the tensor
 
-The factory receives device-resident `ttnn::Tensor`s through `tensor_args` and `tensor_return_value`. Declare each `TensorParameter` from the tensor's `tensor_spec()`, and reference the same tensor from the paired `TensorArgument` in `ProgramRunArgs::tensor_args`. The adapter matches a `TensorArgument` back to its input by `MeshTensor` identity — so a `TensorArgument` must reference a tensor reachable from the factory's parameters (an io tensor, or one of the `op_owned_tensors`), never a copy. (Constructing or copying a tensor and referencing the copy fails at runtime.)
+The factory receives device-resident `ttnn::Tensor`s through `tensor_args` and `tensor_return_value`. **Extract the underlying `MeshTensor` from each at the top of the factory and work with it throughout.** A ProgramFactory builds against Metalium APIs, so its body should hold a Metalium memory object — the `MeshTensor` — rather than the TTNN wrapper. `ttnn::Tensor::mesh_tensor()` returns a `const MeshTensor&` (the rvalue overload is deleted, so call it on the named arguments, never a temporary); extract once at entry and pass `const MeshTensor&` to helpers instead of reaching back through `.mesh_tensor()` at each site. See [migration guide — Factory skeleton](metal2_migration_guide.md#factory-skeleton) for the worked example and the full tensor-type story.
+
+Declare each `TensorParameter` from the tensor's `tensor_spec()`, and reference the same tensor from the paired `TensorArgument` in `ProgramRunArgs::tensor_args`. The adapter matches a `TensorArgument` back to its input by `MeshTensor` identity — so a `TensorArgument` must reference a tensor reachable from the factory's parameters (an io tensor, or one of the `op_owned_tensors`), never a copy. (Constructing or copying a tensor and referencing the copy fails at runtime.)
 
 ---
 
