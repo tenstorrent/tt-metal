@@ -169,8 +169,11 @@ public:
         }
     }
 
-    bool open_devices(const TestFabricSetup& fabric_setup,
-                      ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
+    bool open_devices(
+        const TestFabricSetup& fabric_setup,
+        ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE,
+        bool input_uses_logical_device_ids = false) {
+        input_uses_logical_device_ids_ = input_uses_logical_device_ids;
         const auto& topology = fabric_setup.topology;
         const auto& fabric_tensix_config = fabric_setup.fabric_tensix_config.value();
 
@@ -235,6 +238,8 @@ public:
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
+
+        warn_if_logical_input_without_pinnings();
         return true;
     }
 
@@ -690,8 +695,7 @@ public:
             return get_ring_topology_dst_node_ids(src_node, initial_direction, total_hops, chip_send_type);
         }
 
-        const MeshCoordinate& src_coord = get_device_coord(src_node);
-        return compute_destination_nodes_from_hops(src_node, src_coord, hops, chip_send_type);
+        return compute_destination_nodes_from_hops(src_node, hops, chip_send_type);
     }
 
     bool are_devices_linear(const std::vector<FabricNodeId>& node_ids) const override {
@@ -834,17 +838,36 @@ public:
         return pairs;
     }
 
+    // Count how many physical hops exist walking from `src` in `direction` until the mesh edge
+    // (where the control plane reports no further neighbor). Bounded by `max_steps` and a cycle
+    // check so it terminates even if called on a wrapped dimension. This replaces coordinate
+    // edge-distance (e.g. `mesh_shape_[dim] - coord - 1`), which assumed the coordinate edge is the
+    // physical edge — true only for a canonically embedded (pinned) mesh.
+    uint32_t count_hops_to_edge(const FabricNodeId& src, RoutingDirection direction, uint32_t max_steps) const {
+        uint32_t count = 0;
+        FabricNodeId current = src;
+        while (count < max_steps) {
+            const auto next = get_neighbor_node_id_or_nullopt(current, direction);
+            if (!next.has_value() || next.value() == src) {
+                break;
+            }
+            current = next.value();
+            ++count;
+        }
+        return count;
+    }
+
     std::unordered_map<RoutingDirection, uint32_t> get_full_mcast_hops(const FabricNodeId& src_node_id) const override {
         std::unordered_map<RoutingDirection, uint32_t> hops;
         for (const auto& direction : FabricContext::routing_directions) {
             hops[direction] = 0;
         }
 
-        const auto src_coord = get_device_coord(src_node_id);
         auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
 
         if (has_flag(fabric_type, FabricType::TORUS_X)) {
-            // EW dimension: need to cover (mesh_shape_[EW_DIM] - 1) total hops
+            // EW dimension: cover (mesh_shape_[EW_DIM] - 1) total hops, split across the ring. The
+            // ring length is a logical property of the mesh graph, independent of physical placement.
             uint32_t ew_total_hops = mesh_shape_[EW_DIM] - 1;
             uint32_t ew_forward_hops = ew_total_hops / 2;                 // Half go in one direction
             uint32_t ew_backward_hops = ew_total_hops - ew_forward_hops;  // Rest go in other direction
@@ -852,8 +875,9 @@ public:
             hops[RoutingDirection::E] = ew_forward_hops;
             hops[RoutingDirection::W] = ew_backward_hops;
         } else {
-            hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
-            hops[RoutingDirection::W] = src_coord[EW_DIM];
+            // Mesh/Linear: walk real links to each edge so coverage matches actual connectivity.
+            hops[RoutingDirection::E] = count_hops_to_edge(src_node_id, RoutingDirection::E, mesh_shape_[EW_DIM] - 1);
+            hops[RoutingDirection::W] = count_hops_to_edge(src_node_id, RoutingDirection::W, mesh_shape_[EW_DIM] - 1);
         }
 
         if (has_flag(fabric_type, FabricType::TORUS_Y)) {
@@ -865,9 +889,9 @@ public:
             hops[RoutingDirection::N] = ns_forward_hops;
             hops[RoutingDirection::S] = ns_backward_hops;
         } else {
-            // Mesh/Linear: go all the way in one direction per dimension
-            hops[RoutingDirection::N] = src_coord[NS_DIM];
-            hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+            // Mesh/Linear: go all the way in one direction per dimension over real links
+            hops[RoutingDirection::N] = count_hops_to_edge(src_node_id, RoutingDirection::N, mesh_shape_[NS_DIM] - 1);
+            hops[RoutingDirection::S] = count_hops_to_edge(src_node_id, RoutingDirection::S, mesh_shape_[NS_DIM] - 1);
         }
 
         return hops;
@@ -894,17 +918,24 @@ public:
 
         const auto src_coord = get_device_coord(src_node_id);
 
+        // The half a source belongs to (and thus which single direction it multicasts) is a
+        // geometric partition of the mesh, so it stays coordinate-based. The hop *count* to the far
+        // edge is resolved over real links to match actual connectivity.
         if (dim == NS_DIM) {
             if (src_coord[NS_DIM] < mesh_shape_[NS_DIM] / 2) {
-                hops[RoutingDirection::S] = mesh_shape_[NS_DIM] - src_coord[NS_DIM] - 1;
+                hops[RoutingDirection::S] =
+                    count_hops_to_edge(src_node_id, RoutingDirection::S, mesh_shape_[NS_DIM] - 1);
             } else {
-                hops[RoutingDirection::N] = src_coord[NS_DIM];
+                hops[RoutingDirection::N] =
+                    count_hops_to_edge(src_node_id, RoutingDirection::N, mesh_shape_[NS_DIM] - 1);
             }
         } else if (dim == EW_DIM) {
             if (src_coord[EW_DIM] < mesh_shape_[EW_DIM] / 2) {
-                hops[RoutingDirection::E] = mesh_shape_[EW_DIM] - src_coord[EW_DIM] - 1;
+                hops[RoutingDirection::E] =
+                    count_hops_to_edge(src_node_id, RoutingDirection::E, mesh_shape_[EW_DIM] - 1);
             } else {
-                hops[RoutingDirection::W] = src_coord[EW_DIM];
+                hops[RoutingDirection::W] =
+                    count_hops_to_edge(src_node_id, RoutingDirection::W, mesh_shape_[EW_DIM] - 1);
             }
         } else {
             TT_THROW("input mesh dim is not supported: {}", dim);
@@ -936,21 +967,14 @@ public:
     }
 
     std::vector<std::pair<FabricNodeId, FabricNodeId>> get_directional_neighbor_pairs(
-        const std::vector<FabricNodeId>& device_ids, bool is_galaxy) const override {
+        const std::vector<FabricNodeId>& device_ids, bool /*is_galaxy*/) const override {
         std::vector<std::pair<FabricNodeId, FabricNodeId>> pairs;
 
-        // Only the Wormhole Galaxy uses coordinate-based neighbors for Ring/Torus; all others
-        // (including Blackhole Galaxy) use the control plane. The coordinate-based wraparound
-        // produces incorrect neighbors on Blackhole Galaxy. Only happens when no MGD pinnings
-        // Refer to issue #44446
-        const bool is_wormhole_galaxy =
-            is_galaxy && tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() ==
-                             tt::tt_metal::ClusterType::GALAXY;
-        const bool use_coordinate_neighbors =
-            is_wormhole_galaxy && (topology_ == Topology::Ring || topology_ == Topology::Torus);
-
+        // Neighbors are always resolved through the control plane (real links, correct neighbor
+        // mesh id, and torus wrap only where a physical wrap link actually exists). The previous
+        // Wormhole-Galaxy Ring/Torus coordinate-based path was a workaround that produced incorrect
+        // neighbors on unpinned MGD embeddings (see issue #44446) and has been removed.
         for (const auto& src_node : device_ids) {
-            const auto src_coord = get_device_coord(src_node);
             for (const auto& direction : FabricContext::routing_directions) {
                 // Z is multi-mesh capable (a chip can have Z-links to multiple meshes,
                 // each with a different mesh_id) and has no coordinate dimension, so it
@@ -970,33 +994,7 @@ public:
                     continue;
                 }
 
-                std::optional<FabricNodeId> neighbor_opt;
-
-                if (use_coordinate_neighbors) {
-                    // Coordinate-based neighbor lookup with boundary wrapping
-                    const auto neighbor_coord = src_coord.get_neighbor(
-                        mesh_shape_,
-                        get_step_for_direction(direction),
-                        get_dim_for_direction(direction),
-                        get_boundary_mode_for_dimension(get_dim_for_direction(direction)));
-
-                    if (neighbor_coord.has_value()) {
-                        neighbor_opt = get_fabric_node_id(neighbor_coord.value());
-                    }
-                } else {
-                    // Control plane neighbor lookup
-                    const auto& neighbors =
-                        tt::tt_metal::MetalContext::instance().get_control_plane().get_chip_neighbors(
-                            src_node, direction);
-
-                    if (!neighbors.empty()) {
-                        auto neighbor_mesh_it = neighbors.begin();
-                        const auto& neighbor_chips = neighbor_mesh_it->second;
-                        if (!neighbor_chips.empty()) {
-                            neighbor_opt = FabricNodeId(neighbor_mesh_it->first, neighbor_chips[0]);
-                        }
-                    }
-                }
+                const auto neighbor_opt = get_neighbor_node_id_or_nullopt(src_node, direction);
 
                 // Validate and add neighbor
                 if (neighbor_opt.has_value()) {
@@ -1329,18 +1327,14 @@ public:
 
     FabricNodeId get_mcast_start_node_id(
         const FabricNodeId& src_node_id, const std::unordered_map<RoutingDirection, uint32_t>& hops) const override {
-        const auto src_coord = get_device_coord(src_node_id);
         const auto forwarding_direction = get_forwarding_direction(hops);
 
-        // get the new coord
-        const auto new_coord = src_coord.get_neighbor(
-            mesh_shape_,
-            get_step_for_direction(forwarding_direction),
-            get_dim_for_direction(forwarding_direction),
-            get_boundary_mode_for_dimension(get_dim_for_direction(forwarding_direction)));
-        TT_FATAL(new_coord.has_value(), "Failed to get mcast start node id for src: {}, hops: {}", src_node_id, hops);
+        // Resolve the first hop via the control plane's real connectivity rather than coordinate
+        // arithmetic, so the multicast start node is the chip actually one physical link away.
+        const auto start_node = get_neighbor_node_id_or_nullopt(src_node_id, forwarding_direction);
+        TT_FATAL(start_node.has_value(), "Failed to get mcast start node id for src: {}, hops: {}", src_node_id, hops);
 
-        return get_fabric_node_id(new_coord.value());
+        return start_node.value();
     }
 
     std::vector<uint32_t> get_forwarding_link_indices_in_direction(
@@ -1519,91 +1513,39 @@ public:
         FabricNodeId current_node = src_node_id;
 
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
-            // Try to move in current direction
-            MeshCoordinate next_coord = current_coord;
+            // Geometric serpentine logic still decides the *direction* (the ring shape), using the
+            // current coordinate to detect mesh boundaries and turn.
             bool can_move = true;
-
             switch (current_direction) {
-                case RoutingDirection::N:
-                    if (current_coord[NS_DIM] == 0) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::S:
-                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::E:
-                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                    }
-                    break;
-                case RoutingDirection::W:
-                    if (current_coord[EW_DIM] == 0) {
-                        can_move = false;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                    }
-                    break;
+                case RoutingDirection::N: can_move = (current_coord[NS_DIM] != 0); break;
+                case RoutingDirection::S: can_move = (current_coord[NS_DIM] != mesh_shape_[NS_DIM] - 1); break;
+                case RoutingDirection::E: can_move = (current_coord[EW_DIM] != mesh_shape_[EW_DIM] - 1); break;
+                case RoutingDirection::W: can_move = (current_coord[EW_DIM] != 0); break;
                 default: TT_THROW("routing direction not supported: {}", current_direction);
             }
 
             // If we hit a boundary, determine next direction based on current position
             if (!can_move) {
-                if (current_direction == RoutingDirection::E) {
-                    // Hit east boundary - direction depends on current row
-                    if (current_coord[NS_DIM] == 0) {
-                        current_direction = RoutingDirection::S;
-                    } else {
-                        current_direction = RoutingDirection::N;
-                    }
-                } else if (current_direction == RoutingDirection::W) {
-                    if (current_coord[NS_DIM] == 0) {
-                        current_direction = RoutingDirection::S;
-                    } else {
-                        log_info(
-                            tt::LogTest,
-                            "current_coord {} current_direction {} next direction RoutingDirection::N",
-                            get_fabric_node_id(current_coord),
-                            current_direction);
-                        current_direction = RoutingDirection::N;
-                    }
-                } else if (current_direction == RoutingDirection::S || current_direction == RoutingDirection::N) {
-                    if (current_coord[EW_DIM] == 0) {
-                        current_direction = RoutingDirection::E;
-                    } else {
-                        current_direction = RoutingDirection::W;
-                    }
-                }
-
-                // Try again with new direction
-                switch (current_direction) {
-                    case RoutingDirection::N:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                        break;
-                    case RoutingDirection::S:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                        break;
-                    case RoutingDirection::E:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                        break;
-                    case RoutingDirection::W:
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                        break;
-                    default: TT_THROW("routing direction not supported: {}", current_direction);
+                if (current_direction == RoutingDirection::E || current_direction == RoutingDirection::W) {
+                    // Hit an east/west boundary - turn vertically depending on current row
+                    current_direction = (current_coord[NS_DIM] == 0) ? RoutingDirection::S : RoutingDirection::N;
+                } else {  // N or S
+                    current_direction = (current_coord[EW_DIM] == 0) ? RoutingDirection::E : RoutingDirection::W;
                 }
             }
 
-            // Move to next coordinate
-            current_coord = next_coord;
-            current_node = get_fabric_node_id(current_coord);
+            // Resolve the actual next node over real links rather than coordinate arithmetic, so the
+            // emitted chip is the one the fabric physically reaches in `current_direction`.
+            const auto next_opt = get_neighbor_node_id_or_nullopt(current_node, current_direction);
+            TT_FATAL(
+                next_opt.has_value(),
+                "Ring trace: no physical neighbor of {} in direction {} (hop {} of {})",
+                current_node,
+                current_direction,
+                hop + 1,
+                total_hops);
+            current_node = next_opt.value();
+            current_coord = get_device_coord(current_node);
             // Record current node and outgoing direction
             path.emplace_back(current_node, current_direction);
         }
@@ -1623,62 +1565,28 @@ public:
         FabricNodeId current_node = src_node_id;
 
         for (uint32_t hop = 0; hop < total_hops; ++hop) {
-            // Try to move in current direction
-            MeshCoordinate next_coord = current_coord;
-            [[maybe_unused]] bool need_wraparound = false;
-
-            switch (current_direction) {
-                case RoutingDirection::N:
-                    if (current_coord[NS_DIM] == 0) {
-                        // Wrap around to bottom edge
-                        next_coord = MeshCoordinate(mesh_shape_[NS_DIM] - 1, current_coord[EW_DIM]);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] - 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::S:
-                    if (current_coord[NS_DIM] == mesh_shape_[NS_DIM] - 1) {
-                        // Wrap around to top edge
-                        next_coord = MeshCoordinate(0, current_coord[EW_DIM]);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM] + 1, current_coord[EW_DIM]);
-                    }
-                    break;
-                case RoutingDirection::E:
-                    if (current_coord[EW_DIM] == mesh_shape_[EW_DIM] - 1) {
-                        // Wrap around to left edge
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], 0);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] + 1);
-                    }
-                    break;
-                case RoutingDirection::W:
-                    if (current_coord[EW_DIM] == 0) {
-                        // Wrap around to right edge
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], mesh_shape_[EW_DIM] - 1);
-                        need_wraparound = true;
-                    } else {
-                        next_coord = MeshCoordinate(current_coord[NS_DIM], current_coord[EW_DIM] - 1);
-                    }
-                    break;
-                default: TT_THROW("routing direction not supported: {}", current_direction);
-            }
-
-            // Move to next coordinate
-            current_coord = next_coord;
-            current_node = get_fabric_node_id(current_coord);
+            // Resolve each hop over real links. The direction is constant for this ring; the wrap
+            // from one edge to the opposite edge is handled by the control plane, which only returns
+            // a neighbor where a physical wrap link actually exists (so a pure mesh fails loudly here
+            // rather than silently emitting a non-adjacent opposite-edge chip).
+            const auto next_opt = get_neighbor_node_id_or_nullopt(current_node, current_direction);
+            TT_FATAL(
+                next_opt.has_value(),
+                "Ring trace: no physical neighbor of {} in direction {} (hop {} of {})",
+                current_node,
+                current_direction,
+                hop + 1,
+                total_hops);
+            current_node = next_opt.value();
+            current_coord = get_device_coord(current_node);
 
             log_debug(
                 tt::LogTest,
-                "hop {}: moved from {} to {} in direction {}, wraparound: {}",
+                "hop {}: moved from {} to {} in direction {}",
                 hop,
                 get_device_coord(src_node_id),
                 current_coord,
-                current_direction,
-                need_wraparound);
+                current_direction);
 
             // Record current node and outgoing direction
             path.emplace_back(current_node, current_direction);
@@ -1814,11 +1722,10 @@ public:
         const std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType chip_send_type) const override {
         std::map<FabricNodeId, std::map<RoutingDirection, uint32_t>> traffic_per_boundary;
-        const auto src_coord = get_device_coord(src_node_id);
 
         if (chip_send_type == ChipSendType::CHIP_UNICAST) {
             // Unicast: dimension-order routing - traverse one dimension fully, then next
-            MeshCoordinate current = src_coord;
+            FabricNodeId current = src_node_id;
 
             // Order: N/S first, then E/W (to match original behavior)
             std::vector<RoutingDirection> ordered_dirs = {
@@ -1832,18 +1739,16 @@ public:
 
                 auto path = simulate_linear_path(current, dir, dir_hops);
                 for (const auto& dest : path) {
-                    auto current_node_id = get_fabric_node_id(src_node_id.mesh_id, current);
-                    traffic_per_boundary[current_node_id][dir]++;
+                    traffic_per_boundary[current][dir]++;
                     current = dest;
                 }
             }
         } else {
             // Multicast: use the centralized trunk-and-spine logic
-            auto edges = get_multicast_traffic_edges(src_coord, hops);
+            auto edges = get_multicast_traffic_edges(src_node_id, hops);
 
             for (const auto& edge : edges) {
-                auto edge_node_id = get_fabric_node_id(src_node_id.mesh_id, edge.source);
-                traffic_per_boundary[edge_node_id][edge.direction]++;
+                traffic_per_boundary[edge.source][edge.direction]++;
             }
         }
 
@@ -1890,6 +1795,7 @@ private:
 
     bool are_devices_open_ = false;
     bool wrap_around_mesh_ = false;
+    bool input_uses_logical_device_ids_ = false;
     mutable std::map<FabricNodeId, uint32_t> device_frequency_cache_;
     mutable bool frequency_validated_ = false;
 
@@ -1996,6 +1902,26 @@ private:
         are_devices_open_ = true;
     }
 
+    bool mgd_has_pinnings() const {
+        const auto& mesh_graph = tt::tt_metal::MetalContext::instance().get_control_plane().get_mesh_graph();
+        if (!mesh_graph.get_mesh_graph_descriptor_path().has_value()) {
+            return false;
+        }
+        return !mesh_graph.get_mesh_graph_descriptor().get_pinnings().empty();
+    }
+
+    // Warn when this test group addresses devices by logical id (coordinate [mesh, [row, col]] or
+    // logical mesh+chip [mesh, chip]) but the active MGD has no ASIC pinnings.
+    void warn_if_logical_input_without_pinnings() const {
+        if (!input_uses_logical_device_ids_ || mgd_has_pinnings()) {
+            return;
+        }
+        log_warning(
+            tt::LogTest,
+            "This fabric test addresses devices by logical id (coordinate or mesh+chip) but the active "
+            "Mesh Graph Descriptor has NO ASIC pinnings.");
+    }
+
     MeshCoordinate get_displacement(const MeshCoordinate& src_coords, const MeshCoordinate& dst_coords) const {
         TT_FATAL(
             src_coords.dims() == dst_coords.dims(),
@@ -2077,22 +2003,20 @@ private:
     // So we only compute destinations within the local mesh from hops
     std::vector<FabricNodeId> compute_destination_nodes_from_hops(
         const FabricNodeId& src_node,
-        const MeshCoordinate& src_coord,
         const std::unordered_map<RoutingDirection, uint32_t>& hops,
         ChipSendType send_type) const {
-        // for now src_node is only passed for multicast, since we dont allow unicast hop expansion across hosts
         if (send_type == ChipSendType::CHIP_UNICAST) {
-            return compute_unicast_destinations(src_coord, hops);
+            return compute_unicast_destinations(src_node, hops);
         }
         if (send_type == ChipSendType::CHIP_MULTICAST) {
-            return compute_multicast_destinations(src_node, src_coord, hops);
+            return compute_multicast_destinations(src_node, hops);
         }
         TT_THROW("Unsupported send type: {}", send_type);
         return {};
     }
 
     std::vector<FabricNodeId> compute_unicast_destinations(
-        const MeshCoordinate& src_coord, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        const FabricNodeId& src_node, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
         // Validation
         std::vector<RoutingDirection> non_zero_dirs;
         for (const auto& [dir, count] : hops) {
@@ -2151,8 +2075,8 @@ private:
             }
         }
 
-        // Simulate linear path
-        MeshCoordinate current = src_coord;
+        // Walk the path hop-by-hop over real links (dimension-order: NS leg, then EW leg).
+        FabricNodeId current = src_node;
         auto major_path = simulate_linear_path(current, major, major_hops);
         if (!major_path.empty()) {
             current = major_path.back();
@@ -2162,23 +2086,20 @@ private:
             current = minor_path.back();
         }
 
-        TT_FATAL(current != src_coord, "Unicast invalid: Destination is source after hops");
+        TT_FATAL(current != src_node, "Unicast invalid: Destination is source after hops");
 
-        return {get_fabric_node_id(current)};
+        return {current};
     }
 
     std::vector<FabricNodeId> compute_multicast_destinations(
-        const FabricNodeId& src_node,
-        const MeshCoordinate& src_coord,
-        const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
-        // src_node is needed to grab the right mesh id to convert from coord to node id
-        // Assume hops is pre-split single map from builder - simulate directly
-        auto visited = simulate_multicast_split(src_coord, hops);
+        const FabricNodeId& src_node, const std::unordered_map<RoutingDirection, uint32_t>& hops) const {
+        // Assume hops is pre-split single map from builder - simulate directly over real links
+        auto visited = simulate_multicast_split(src_node, hops);
 
         std::unordered_set<FabricNodeId> unique_nodes;
-        for (const auto& coord : visited) {
-            if (coord != src_coord) {
-                unique_nodes.insert(get_fabric_node_id(src_node.mesh_id, coord));
+        for (const auto& node : visited) {
+            if (node != src_node) {
+                unique_nodes.insert(node);
             }
         }
 
@@ -2192,7 +2113,7 @@ private:
      * (for bandwidth profiling).
      */
     std::vector<TrafficEdge> get_multicast_traffic_edges(
-        const MeshCoordinate& start, const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
+        const FabricNodeId& start, const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
         std::vector<TrafficEdge> edges;
 
         // Check for actual non-zero hops to handle possible zero entries in map
@@ -2217,7 +2138,7 @@ private:
             TT_FATAL(single_dir.has_value(), "Linear multicast map has no non-zero directions: invalid");
 
             auto path = simulate_linear_path(start, single_dir.value(), single_count);
-            MeshCoordinate current = start;
+            FabricNodeId current = start;
             for (const auto& dest : path) {
                 edges.push_back({current, dest, single_dir.value()});
                 current = dest;
@@ -2229,7 +2150,7 @@ private:
 
             // Get all trunk nodes at once
             auto trunk_path = simulate_linear_path(start, trunk_dir, trunk_hops);
-            MeshCoordinate current_trunk = start;
+            FabricNodeId current_trunk = start;
 
             for (const auto& trunk_dest : trunk_path) {
                 // Edge from current trunk position in trunk direction
@@ -2246,7 +2167,7 @@ private:
                     }
 
                     auto spine_path = simulate_linear_path(current_trunk, spine_dir, spine_hops);
-                    MeshCoordinate current_spine = current_trunk;
+                    FabricNodeId current_spine = current_trunk;
                     for (const auto& spine_dest : spine_path) {
                         edges.push_back({current_spine, spine_dest, spine_dir});
                         current_spine = spine_dest;
@@ -2257,13 +2178,13 @@ private:
         return edges;
     }
 
-    std::vector<MeshCoordinate> simulate_multicast_split(
-        const MeshCoordinate& start, const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
+    std::vector<FabricNodeId> simulate_multicast_split(
+        const FabricNodeId& start, const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
         // Use get_multicast_traffic_edges as the single source of truth
         auto edges = get_multicast_traffic_edges(start, split_hops);
 
-        std::vector<MeshCoordinate> visited;
-        std::unordered_set<MeshCoordinate> seen;
+        std::vector<FabricNodeId> visited;
+        std::unordered_set<FabricNodeId> seen;
 
         for (const auto& edge : edges) {
             if (seen.insert(edge.dest).second) {
@@ -2275,41 +2196,6 @@ private:
         }
 
         return visited;
-    }
-
-    int32_t get_step_for_direction(RoutingDirection dir) const {
-        switch (dir) {
-            case RoutingDirection::N:
-            case RoutingDirection::W: return -1;
-            case RoutingDirection::S:
-            case RoutingDirection::E: return 1;
-            default: return 0;
-        }
-    }
-
-    int32_t get_dim_for_direction(RoutingDirection dir) const {
-        switch (dir) {
-            case RoutingDirection::N:
-            case RoutingDirection::S: return NS_DIM;
-            case RoutingDirection::E:
-            case RoutingDirection::W: return EW_DIM;
-            default: return -1;
-        }
-    }
-
-    MeshCoordinate::BoundaryMode get_boundary_mode_for_dimension(int32_t dim) const {
-        if (topology_ == Topology::NeighborExchange || topology_ == Topology::Ring || topology_ == Topology::Torus) {
-            auto fabric_type = tt::tt_fabric::get_fabric_type(current_fabric_config_, is_ubb_galaxy());
-            switch (fabric_type) {
-                case tt::tt_fabric::FabricType::TORUS_X:
-                    return (dim == EW_DIM) ? MeshCoordinate::BoundaryMode::WRAP : MeshCoordinate::BoundaryMode::NONE;
-                case tt::tt_fabric::FabricType::TORUS_Y:
-                    return (dim == NS_DIM) ? MeshCoordinate::BoundaryMode::WRAP : MeshCoordinate::BoundaryMode::NONE;
-                case tt::tt_fabric::FabricType::TORUS_XY: return MeshCoordinate::BoundaryMode::WRAP;
-                default: return MeshCoordinate::BoundaryMode::NONE;
-            }
-        }
-        return MeshCoordinate::BoundaryMode::NONE;
     }
 
     RoutingDirection get_trunk_direction(const std::unordered_map<RoutingDirection, uint32_t>& split_hops) const {
@@ -2324,24 +2210,31 @@ private:
         return RoutingDirection::N;  // Unreachable
     }
 
-    // Add this before simulate_direction_hops or in private section
-    std::vector<MeshCoordinate> simulate_linear_path(
-        const MeshCoordinate& start, RoutingDirection dir, uint32_t count) const {
-        std::vector<MeshCoordinate> path;
+    // Walk `count` physical hops in `dir` starting from `start`, following the control plane's
+    // real connectivity rather than coordinate arithmetic. Returns the sequence of nodes visited
+    // (excluding the start). Throws if any hop has no physical neighbor in `dir` — this is the
+    // case that pure coordinate stepping would silently mishandle (a coordinate-adjacent chip that
+    // is not actually one link away, a torus "wrap" with no physical wrap link, a trimmed/disabled
+    // link, or a mesh boundary). Because the fabric forwards hop-by-hop over the same links, the
+    // node returned here matches the chip the hardware actually routes to.
+    std::vector<FabricNodeId> simulate_linear_path(
+        const FabricNodeId& start, RoutingDirection dir, uint32_t count) const {
+        std::vector<FabricNodeId> path;
         if (count == 0) {
             return path;
         }
         path.reserve(count);
 
-        int32_t step = get_step_for_direction(dir);
-        int32_t dim = get_dim_for_direction(dir);
-        auto mode = get_boundary_mode_for_dimension(dim);
-
-        MeshCoordinate current = start;
+        FabricNodeId current = start;
         for (uint32_t i = 0; i < count; ++i) {
-            auto next_opt = current.get_neighbor(mesh_shape_, step, dim, mode);
+            auto next_opt = get_neighbor_node_id_or_nullopt(current, dir);
             if (!next_opt.has_value()) {
-                TT_THROW("Linear path invalid: Boundary exceeded in direction {} at {}", dir, current);
+                TT_THROW(
+                    "Linear path invalid: no physical neighbor of {} in direction {} (hop {} of {})",
+                    current,
+                    dir,
+                    i + 1,
+                    count);
             }
             current = next_opt.value();
             path.push_back(current);

@@ -25,10 +25,12 @@ using MeshCoordinate = tt::tt_metal::distributed::MeshCoordinate;
 enum class HighLevelTrafficPattern;  // Forward declaration
 
 // Represents a single traffic edge: source node sending to destination in a direction
-// Used for tracing multicast traffic through device boundaries and computing destinations
+// Used for tracing multicast traffic through device boundaries and computing destinations.
+// Endpoints are FabricNodeIds (not coordinates) so that paths are resolved against the
+// control plane's real connectivity and remain unambiguous across mesh boundaries.
 struct TrafficEdge {
-    MeshCoordinate source;
-    MeshCoordinate dest;
+    FabricNodeId source;
+    FabricNodeId dest;
     RoutingDirection direction{};
 };
 

@@ -200,7 +200,9 @@ int main(int argc, char** argv) {
             fabric_tensix_config);
 
         bool open_devices_success = test_context.open_devices(
-            test_config.fabric_setup, test_config.channel_trimming_mode);
+            test_config.fabric_setup,
+            test_config.channel_trimming_mode,
+            tt::tt_fabric::fabric_tests::config_uses_logical_device_ids(test_config));
         if (!open_devices_success) {
             log_warning(
                 tt::LogTest, "Skipping Test Group: {} due to unsupported fabric configuration", test_config.name);

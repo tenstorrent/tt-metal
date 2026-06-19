@@ -194,6 +194,34 @@ struct ParsedTestConfig {
     ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE;
 };
 
+// Returns true if any explicit device identifier in the parsed test config names a *logical* fabric
+// node, i.e. anything other than a bare physical ChipId
+inline bool config_uses_logical_device_ids(const ParsedTestConfig& config) {
+    const auto is_logical = [](const DeviceIdentifier& id) { return !std::holds_alternative<ChipId>(id); };
+    const auto sender_uses_logical = [&](const ParsedSenderConfig& sender) {
+        if (is_logical(sender.device)) {
+            return true;
+        }
+        for (const auto& pattern : sender.patterns) {
+            if (pattern.destination && pattern.destination->device && is_logical(pattern.destination->device.value())) {
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (const auto& sender : config.senders) {
+        if (sender_uses_logical(sender)) {
+            return true;
+        }
+    }
+    if (config.defaults && config.defaults->destination && config.defaults->destination->device &&
+        is_logical(config.defaults->destination->device.value())) {
+        return true;
+    }
+    return false;
+}
+
 struct TestConfig {
     std::string name;               // Original base name for golden lookup
     std::string parametrized_name;  // Enhanced name for debugging and logging

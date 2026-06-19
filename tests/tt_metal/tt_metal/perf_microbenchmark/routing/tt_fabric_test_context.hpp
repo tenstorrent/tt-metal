@@ -127,9 +127,11 @@ public:
 
     void process_traffic_config(TestConfig& config);
 
-    bool open_devices(const TestFabricSetup& fabric_setup,
-                      ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE) {
-        return fixture_->open_devices(fabric_setup, channel_trimming_mode);
+    bool open_devices(
+        const TestFabricSetup& fabric_setup,
+        ChannelTrimmingMode channel_trimming_mode = ChannelTrimmingMode::NONE,
+        bool input_uses_logical_device_ids = false) {
+        return fixture_->open_devices(fabric_setup, channel_trimming_mode, input_uses_logical_device_ids);
     }
 
     void compile_programs();
