@@ -58,9 +58,8 @@ from models.demos.qwen3_6_galaxy_v2.tt.ttnn_delta_rule_ops_fp32 import (
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,  # kept for back-compat; not used in fp32 path
 )
-from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (  # l2_norm_ttnn deliberately NOT imported here — the qwen35_chunk_delta_rule_ops; version (imported above) is the correct one. The experimental version was; shadowing it silently via this import block.
     _recurrent_read_query_program_config,
-    l2_norm_ttnn,
 )
 
 
@@ -2850,11 +2849,10 @@ class TtQwen36DeltaAttention(LightweightModule):
             ttnn.typecast(ttnn.transpose(k_exp, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram),
             [BH, T, K],
         )
-        # Route l2-norm output to _dram (DRAM for T>512): the [BH,T,K] fp32 tensor is ~48 MB
-        # at 16k ISL and OOMs L1 if this prefill is run un-chunked (the demo chunks at 4096; the
-        # perf harness passes full T). Matches the _dram routing of every other op in this fn.
-        q = l2_norm_ttnn(q, dim=-1, memory_config=_dram)
-        k = l2_norm_ttnn(k, dim=-1, memory_config=_dram)
+        # l2_norm_ttnn (from qwen35_chunk_delta_rule_ops) auto-selects DRAM for T>512,
+        # so the tensor stays in DRAM and avoids L1 OOM at large ISL.
+        q = l2_norm_ttnn(q, dim=-1)
+        k = l2_norm_ttnn(k, dim=-1)
         v = ttnn.reshape(
             ttnn.typecast(ttnn.transpose(v_h, 1, 2, memory_config=_dram), ttnn.float32, memory_config=_dram), [BH, T, V]
         )

@@ -523,6 +523,11 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
     # Instrument: replace TtTransformer.forward layer loop to capture per-layer outputs.
     print("[per-layer] running TT 64-layer prefill (instrumented) ...")
 
+    # QWEN36_PCC_CPU_GDN=1: substitute CPU reference output for GDN (linear attention)
+    # layers. Only TT full-attention layers run on device. Measures PCC ceiling
+    # assuming perfect GDN — isolates whether GDN or full-attn/MLP is the bottleneck.
+    _cpu_gdn_mode = os.environ.get("QWEN36_PCC_CPU_GDN", "0") == "1"
+
     # Manually replicate the forward loop, snapping x at each step.
     rot_mats = (cos_tt, sin_tt)
     x = x_tt
@@ -530,20 +535,25 @@ def test_qwen36_64_layer_per_layer_pcc(bh_glx_mesh):
     per_layer_pcc: list[float] = []
     per_layer_dtype: list[str] = []
     for i, layer in enumerate(model.layers):
-        x, h = layer(
-            x,
-            h,
-            None,
-            rot_mats,
-            0,
-            "prefill",
-            None,
-            chunk_page_table=None,
-            chunk_start_idx=0,
-            chunk_start_idx_tensor=chunk_start_idx_tt,
-            kv_cache=None,
-            batch_size=1,
-        )
+        if _cpu_gdn_mode and pattern[i] == "linear_attention":
+            # Substitute CPU reference: deallocate current TT x, inject CPU ref.
+            x.deallocate()
+            x = _send_col_sharded_hidden(per_layer_ref[i][:, :_T_PREFILL, :].to(torch.bfloat16), bh_glx_mesh, args)
+        else:
+            x, h = layer(
+                x,
+                h,
+                None,
+                rot_mats,
+                0,
+                "prefill",
+                None,
+                chunk_page_table=None,
+                chunk_start_idx=0,
+                chunk_start_idx_tensor=chunk_start_idx_tt,
+                kv_cache=None,
+                batch_size=1,
+            )
         # Don't deallocate x — it's the layer output going into next layer.
         # Clone via to_torch (gathers data; non-destructive).
         tt_hidden_cpu = _gather_col_sharded_to_full(x, bh_glx_mesh, args, T=_T_PREFILL)
