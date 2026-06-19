@@ -174,9 +174,11 @@ def test_cross_attention_transformer_block_inference(text_seq_len, batch, mesh_d
             full_text_row_masked_out_mask=full_text_mask,
             attention_mask=None,
             **{_pkv_kw: past_key_values},
-        )[
-            0
-        ]  # 0 element is the actual feature map/hidden state needed for comparison
+        )
+        # 0 element is the actual feature map/hidden state needed for comparison. transformers 5.x
+        # returns a bare Tensor (4.x returned a tuple), so only unwrap [0] when it's a tuple —
+        # otherwise [0] slices off the batch dim ([1,S,D] -> [S,D]) and breaks the PCC comparison.
+        pt_out = pt_out[0] if isinstance(pt_out, tuple) else pt_out
 
         if mode == Mode.PREFILL:
             full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
