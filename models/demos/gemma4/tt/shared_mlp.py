@@ -17,8 +17,73 @@ HF weight shapes:
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.gemma4.tt.ccl import ccl_allreduce
 from models.demos.gemma4.utils.general_utils import get_cache_file_name
+
+
+def _tiles(dim):
+    return (dim + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE
+
+
+def find_largest_divisor(n, max_divisor=8):
+    for i in range(max_divisor, 0, -1):
+        if n % i == 0:
+            return i
+    return 1
+
+
+def _best_core_grid(n_tiles, max_x, max_y):
+    """Largest grid (cx<=max_x, cy<=max_y) whose core count divides n_tiles.
+
+    Exact division keeps per_core_N * num_cores == n_tiles (no over-allocation),
+    mirroring experts/_build_sparse_matmul_config.
+    """
+    best_cores, best = 1, (1, 1)
+    for cy in range(1, max_y + 1):
+        for cx in range(1, max_x + 1):
+            cores = cx * cy
+            if n_tiles % cores == 0 and cores > best_cores:
+                best_cores, best = cores, (cx, cy)
+    return best
+
+
+def _decode_linear_1d_config(m_tiles, k_tiles, n_tiles, grid_size, is_bh):
+    """1D (N-parallel) matmul program config for a decode-mode Linear.
+
+    Decode has small M, so we use 1d splitting across N 
+
+    Constraints satisfied here:
+      - in0_block_w divides k_tiles (K streamed in even chunks)
+      - per_core_N * num_cores == n_tiles (grid chosen to divide n_tiles)
+      - out_subblock_w divides per_core_N; out_subblock_h divides per_core_M
+      - out_subblock_h * out_subblock_w <= arch cap (4 Blackhole / 8 Wormhole)
+    """
+    cx, cy = _best_core_grid(n_tiles, grid_size.x, grid_size.y)
+    num_cores = cx * cy
+
+    per_core_M = m_tiles
+    per_core_N = n_tiles // num_cores
+
+    # Must divide k_tiles exactly; derive straight from k_tiles rather than the
+    # tt_transformers k_tiles//num_cores form, which isn't guaranteed to divide.
+    in0_block_w = find_largest_divisor(k_tiles)
+
+    max_subblock = 4 if is_bh else 8
+    out_subblock_w = find_largest_divisor(per_core_N, max_subblock)
+    out_subblock_h = find_largest_divisor(per_core_M, max(1, max_subblock // out_subblock_w))
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(cx, cy),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
 
 
 class SharedMLP:
@@ -100,14 +165,28 @@ class SharedMLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def __call__(self, hidden_states):
+    def __call__(self, hidden_states, is_decode=False):
         """
         GeGLU MLP forward with TP support.
 
         gate+up are fused (column-parallel), down is row-parallel + allreduce.
+        In decode the two matmuls use tuned 1D program configs; prefill falls
+        back to the ttnn-chosen default (program_config=None).
         """
+        gate_up_pc = down_pc = None
+        if is_decode:
+            grid = self.mesh_device.compute_with_storage_grid_size()
+            is_bh = is_blackhole()
+            m_tiles = _tiles(hidden_states.shape[-2])
+            gate_up_pc = _decode_linear_1d_config(
+                m_tiles, _tiles(self.gate_up_proj.shape[-2]), _tiles(self.gate_up_proj.shape[-1]), grid, is_bh
+            )
+            down_pc = _decode_linear_1d_config(
+                m_tiles, _tiles(self.down_proj.shape[-2]), _tiles(self.down_proj.shape[-1]), grid, is_bh
+            )
+
         # Fused gate+up projection: one matmul produces the [gate | up] slab.
-        gate_up = ttnn.linear(hidden_states, self.gate_up_proj)
+        gate_up = ttnn.linear(hidden_states, self.gate_up_proj, program_config=gate_up_pc)
 
         # Split the slab into gate / up halves (per-device width when column-parallel)
         # and fuse GeGLU into the multiply: fast-approx GELU on the gate half
@@ -127,7 +206,7 @@ class SharedMLP:
         gate_up.deallocate(True)
 
         # output = hidden @ down_proj
-        output = ttnn.linear(hidden, self.down_proj)
+        output = ttnn.linear(hidden, self.down_proj, program_config=down_pc)
         hidden.deallocate(True)
 
         # Allreduce after row-parallel down_proj
