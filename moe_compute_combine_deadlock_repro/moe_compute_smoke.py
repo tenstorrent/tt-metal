@@ -303,6 +303,42 @@ def main():
             print("SMOKE PASSED (compute_only)")
             return
 
+        # THE WORKAROUND under test: moe_compute(compute_only) -> STANDALONE
+        # selective_reduce_combine on its ACTUAL outputs (NOT the fused combine, NOT
+        # synthetic tensors). compute_only emits the combine inputs in slots
+        # 0=token_counts, 1=activations, 2=token_maps, 4=matmul_output. We hand them to
+        # the standalone op with the exact combine worker cores moe_compute would use
+        # (get_moe_combine_cores). SMOKE_CO_COMBINE=1; SMOKE_COMBINE_TOPO=linear|ring.
+        if _os.environ.get("SMOKE_CO_COMBINE") == "1":
+            co = ttnn.experimental.moe_compute(
+                sparse, disp_idx, disp_scr, lin_map, tt_w0w1, tt_w2,
+                layer_id=0, output_height_shard_dim=OUTPUT_HEIGHT_SHARD_DIM,
+                intermediate_size=N, has_bias=False, compute_only=True)
+            print(">>> compute_only outs: counts", tuple(co[0].shape), "act", tuple(co[1].shape),
+                  "maps", tuple(co[2].shape), "matmul", tuple(co[4].shape), flush=True)
+            tpcd, dpcd = OUTPUT_HEIGHT_SHARD_DIM, 4  # token/data parallel core dims
+            combine_cores = ttnn.experimental.get_moe_combine_cores(device, tpcd, dpcd, H, mux_cores)
+            print(">>> get_moe_combine_cores ->", len(combine_cores), "cores", flush=True)
+            _topo = {"linear": ttnn.Topology.Linear, "line": ttnn.Topology.Linear,
+                     "ring": ttnn.Topology.Ring}.get(_os.environ.get("SMOKE_COMBINE_TOPO", "linear").lower(),
+                                                      ttnn.Topology.Linear)
+            out_pre = ttnn.moreh_full(shape=[K, TOKENS_PER_DEV, H], fill_value=0, device=device,
+                                      layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16,
+                                      memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            print(f">>> calling standalone selective_reduce_combine topology={_topo}", flush=True)
+            out = ttnn.experimental.selective_reduce_combine(
+                co[4], co[1], co[2], co[0],
+                H, TOKENS_PER_DEV, 1, K, CLUSTER_AXIS,
+                topology=_topo, num_links=1,
+                token_parallel_core_dim=tpcd, data_parallel_core_dim=dpcd,
+                worker_cores=combine_cores, mux_core_range_set=mux_cores,
+                output_tensor=out_pre, optional_cross_device_semaphore=combine_sem)
+            print(">>> standalone combine enqueued, out", tuple(out.shape), flush=True)
+            ttnn.synchronize_device(device)
+            print(">>> SMOKE SYNC after compute_only + standalone combine OK", flush=True)
+            print("SMOKE PASSED (compute_only + standalone combine)")
+            return
+
         combine_prealloc = ttnn.moreh_full(shape=[K, TOKENS_PER_DEV, H], fill_value=0, device=device,
                                            layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16,
                                            memory_config=ttnn.DRAM_MEMORY_CONFIG)

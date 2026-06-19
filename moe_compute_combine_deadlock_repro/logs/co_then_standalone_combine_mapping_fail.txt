@@ -1,0 +1,6 @@
+### compute_only -> STANDALONE selective_reduce_combine (the workaround chain) — FAILS to wire up
+>>> compute_only outs: counts (70, 8) act (1, 768) maps (5, 260) matmul (70, 2, 32, 5120)
+>>> get_moe_combine_cores -> 16 cores
+>>> calling standalone selective_reduce_combine topology=Topology.Linear
+2026-06-19 09:41:36.163 | critical |          Always | TT_FATAL: The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token (assert.hpp:104)
+RuntimeError: TT_FATAL @ /home/mvasiljev/tt-xla/third_party/tt-mlir/src/tt-mlir/third_party/tt-metal/src/tt-metal/ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_device_operation.cpp:64: activations_stride_elm == expected_activations_stride_elm

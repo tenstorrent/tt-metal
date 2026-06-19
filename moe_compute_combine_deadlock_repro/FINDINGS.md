@@ -64,11 +64,35 @@ pre-#46863 build is ABI-incompatible with the current python tree; needs a full 
 checkout+rebuild.) Note the *full-model* hang predates #46863, so there may be two related
 combine-integration issues.
 
-## Workaround (validated end-to-end in the GLM-4.7 model)
-`moe_compute(compute_only=True)` (matmul only; `cluster_axis=None`, no combine) + a
-deadlock-free combine. We shipped a Ring `all_gather`+`sum` proxy; the correct fix is
-`moe_compute(compute_only)` → **standalone `selective_reduce_combine`** (the deepseek pattern),
-which this repro proves works on our config.
+## Workaround status (honest)
+`moe_compute(compute_only=True)` (matmul only; `cluster_axis=None`, no combine) passes, and
+the standalone `selective_reduce_combine` passes on **synthetic** inputs (deepseek test). BUT
+**chaining them is NOT a drop-in.** Feeding `compute_only`'s actual outputs (slots
+0/1/2/4 = token_counts/activation/token_maps/matmul) into the standalone op
+(`moe_compute_smoke.py SMOKE_CO_COMBINE=1`, with `get_moe_combine_cores` for worker cores)
+**fails validation**:
+```
+compute_only outs: counts (70,8) act (1,768) maps (5,260) matmul (70,2,32,5120)
+TT_FATAL selective_reduce_combine_device_operation.cpp:64:
+  "token activations tensor expected to have aligned 2*experts_per_device+1 elements per token"
+  (activations_stride_elm == expected_activations_stride_elm)
+```
+So the public `moe_compute(compute_only)` outputs are NOT in the exact metadata layout the
+standalone combine expects (its `dense_activations`/metadata tensor must have stride
+`2*experts_per_device+1` per token) — the matmul→combine handoff inside the fused op does
+something the public outputs don't expose. **A clean `compute_only` + standalone-combine
+workaround therefore needs codeowner guidance on the exact tensor mapping/format** (or a
+supported path). It has NOT been made to work end-to-end (smoke or full model).
+
+What the GLM-4.7 model actually ships today: `compute_only` matmul + a Ring `all_gather`+`sum`
+**proxy** combine (runs end-to-end, but PCC NOT validated) — NOT `selective_reduce_combine`.
+
+## Open question for codeowners
+Given the standalone `selective_reduce_combine` works (both topologies) but the fused
+`moe_compute` combine deadlocks on this exact (4,8)/cluster_axis=0 config: (a) what is the
+intended supported way to run `compute_only` → standalone combine (the exact output→input
+tensor mapping/format)? and (b) why does the fused integration deadlock where the standalone
+op does not — is it the #46863 core placement / mux / handoff?
 
 ## How to run
 ```bash
