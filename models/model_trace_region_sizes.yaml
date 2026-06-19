@@ -200,7 +200,7 @@ sizes:
       p300x2:
         trace_region_size: 36000000
 
-  qwen2.5-72b-vl:
+  qwen2.5-vl-72b:
     aliases: ["Qwen2.5-VL-72B", "Qwen/Qwen2.5-VL-72B-Instruct"]
     skus:
       wh_llmbox_perf:

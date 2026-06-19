@@ -36,7 +36,7 @@ def _qwen25_vl_model_key() -> str:
     hf_model = os.getenv("HF_MODEL", "")
     hf_lower = hf_model.lower()
     if "72b" in hf_lower:
-        return "qwen2.5-72b-vl"
+        return "qwen2.5-vl-72b"
     if "32b" in hf_lower:
         return "qwen2.5-vl-32b"
     return "qwen2.5-vl-7b"
