@@ -217,6 +217,24 @@ class QuestionAnsweringPipeline:
         self.tokenizer = tokenizer
         self._args_parser = QuestionAnsweringArgumentHandler()
 
+    def __call__(self, *args, **kwargs):
+        """Drop-in for transformers' ``QuestionAnsweringPipeline.__call__``.
+
+        transformers 5.x removed the extractive pipeline; this standalone shim doesn't subclass
+        the base ``Pipeline`` (which previously supplied ``__call__``), so run the full
+        question/context -> answer flow here by chaining the shim's own methods
+        (``_args_parser`` -> ``preprocess`` -> ``_forward`` -> ``postprocess``). Returns a single
+        answer dict for one example, or a list for batched inputs (matching the 4.53 behavior).
+        """
+        examples = self._args_parser(*args, **kwargs)
+        preprocess_params, _, postprocess_params = self._sanitize_parameters()
+        answers = []
+        for example in examples:
+            features = list(self.preprocess(example, **preprocess_params))
+            model_outputs = [self._forward(feature) for feature in features]
+            answers.append(self.postprocess(model_outputs, **postprocess_params))
+        return answers[0] if len(answers) == 1 else answers
+
     @staticmethod
     def create_sample(
         question: Union[str, list[str]], context: Union[str, list[str]]
