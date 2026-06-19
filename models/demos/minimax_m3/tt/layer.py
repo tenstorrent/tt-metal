@@ -7,6 +7,7 @@ from models.demos.minimax_m3.utils.substate import substate
 
 from .attention import Attention, AttentionConfig
 from .attention_configs import MiniMaxM3AttentionProgramConfig
+from .dense_mlp import DenseMLP
 from .mlp import MLP
 from .rms_norm import RMSNorm
 
@@ -48,21 +49,38 @@ class DecoderLayer:
             tensor_cache_path=get_cache_file_name(tensor_cache_path, "post_attention_layernorm"),
             mesh_config=mesh_config,
         )
-        self.mlp = MLP(
-            mesh_device,
-            hf_config,
-            # MiniMax-M2 names the MoE block 'block_sparse_moe'.
-            substate(state_dict, "block_sparse_moe"),
-            ccl_manager,
-            dtype=dtype,
-            tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
-            mesh_config=mesh_config,
-            use_throughput_experts=use_throughput_experts,
-            tokens_per_device=tokens_per_device,
-            expert_weight_dtype=expert_weight_dtype,
-            use_ep_moe=use_ep_moe,
-            ep_seq_len_per_chip=ep_seq_len_per_chip,
+        # Hybrid dense/MoE schedule (M3): layers with moe_layer_freq[idx]==0 are a plain dense
+        # SwiGLU MLP (mlp.{gate,up,down}_proj); the rest are MoE (block_sparse_moe.*). M2 had no
+        # dense layers (all MoE), so moe_layer_freq absent -> default to MoE.
+        moe_layer_freq = getattr(hf_config, "moe_layer_freq", None)
+        self.is_dense = (
+            moe_layer_freq is not None and layer_idx < len(moe_layer_freq) and moe_layer_freq[layer_idx] == 0
         )
+        if self.is_dense:
+            self.mlp = DenseMLP(
+                mesh_device,
+                hf_config,
+                substate(state_dict, "mlp"),
+                mesh_config=mesh_config,
+                ccl_manager=ccl_manager,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
+            )
+        else:
+            self.mlp = MLP(
+                mesh_device,
+                hf_config,
+                # MiniMax-M2 names the MoE block 'block_sparse_moe'.
+                substate(state_dict, "block_sparse_moe"),
+                ccl_manager,
+                dtype=dtype,
+                tensor_cache_path=get_cache_file_name(tensor_cache_path, "mlp"),
+                mesh_config=mesh_config,
+                use_throughput_experts=use_throughput_experts,
+                tokens_per_device=tokens_per_device,
+                expert_weight_dtype=expert_weight_dtype,
+                use_ep_moe=use_ep_moe,
+                ep_seq_len_per_chip=ep_seq_len_per_chip,
+            )
 
         # MiniMax-M2 lists per-layer attention types in `attn_type_list` (all 1 =
         # full attention) via attn_type_list. Fall back gracefully.
