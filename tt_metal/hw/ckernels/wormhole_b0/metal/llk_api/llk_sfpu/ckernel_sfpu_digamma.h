@@ -83,8 +83,9 @@ inline void calculate_digamma() {
         v_if(x > 102.0f) {
             sfpi::vFloat inv_x = _sfpu_reciprocal_<2>(x);
             sfpi::vFloat inv_x2 = inv_x * inv_x;
-            // ln(x) - inv_x*0.5 - inv_x2*(1/12 - inv_x2/120)
-            sfpi::vFloat bern = sfpi::vFloat(0.0833333333f) - inv_x2 * sfpi::vFloat(0.0083333333f);
+            // ln(x) - inv_x*0.5 - inv_x2*(1/12 - inv_x2/120); 1/12 and 1/120 are in
+            // vConstFloatPrgm1/Prgm2 (programmed in digamma_init).
+            sfpi::vFloat bern = sfpi::vConstFloatPrgm1 - inv_x2 * sfpi::vConstFloatPrgm2;
             result = _calculate_log_body_no_init_(x) - inv_x * sfpi::vFloat(0.5f) - inv_x2 * bern;
             // digamma(+inf) = +inf; the log approximation clamps inf to a finite value, so
             // restore it explicitly (exp field all-ones, zero mantissa => infinity).
@@ -101,6 +102,11 @@ inline void calculate_digamma() {
 template <bool APPROXIMATION_MODE>
 void digamma_init() {
     sfpu_reciprocal_init();
+    // Bernoulli tail coefficients. Prgm0 is owned by the reciprocal above; Prgm1/Prgm2 are
+    // unused in the digamma path, so program them once here instead of materializing the
+    // literals on every loop iteration inside the large-x branch.
+    sfpi::vConstFloatPrgm1 = 0.0833333333f;  // 1/12
+    sfpi::vConstFloatPrgm2 = 0.0083333333f;  // 1/120
 }
 
 }  // namespace ckernel::sfpu
