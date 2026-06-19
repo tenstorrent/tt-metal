@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import re
+import sys
 import time
 from pathlib import Path
 from typing import Callable
@@ -35,6 +36,12 @@ def _human_time(seconds: float) -> str:
     return f"{hours}h {minutes:02d}m {secs:02d}s" if hours else f"{minutes}m {secs:02d}s"
 
 
+def _show_progress() -> bool:
+    """Show the tqdm bar only when stderr (where tqdm draws) is a TTY. Under a non-interactive stderr —
+    CI, nohup, a log aggregator — its redraws land as one line per update, so the bar is disabled there."""
+    return sys.stderr.isatty()
+
+
 def build_checkpoint_io(
     tokenizer: CharTokenizer | None,
     model_cfg: ModelConfig,
@@ -52,12 +59,22 @@ def build_checkpoint_io(
             header={"step": trainer.step, "tokenizer": tokenizer, "model_config": model_cfg},
             model_params=trainer.model.parameters(),
             optimizer=trainer.optimizer,
+            display_progress=_show_progress(),
         )
         elapsed = time.perf_counter() - start
         print(f"  Saved checkpoint to {path} ({_human_size(Path(path).stat().st_size)} in {_human_time(elapsed)})")
 
     def loader(trainer: SFTTrainer, path: str) -> int:
-        header = load_checkpoint(path, model_params=trainer.model.parameters(), optimizer=trainer.optimizer)
+        print(f"  Loading checkpoint from {path} ...", flush=True)
+        start = time.perf_counter()
+        header = load_checkpoint(
+            path,
+            model_params=trainer.model.parameters(),
+            optimizer=trainer.optimizer,
+            display_progress=_show_progress(),
+        )
+        elapsed = time.perf_counter() - start
+        print(f"  Loaded checkpoint from {path} (in {_human_time(elapsed)})")
         return int(header["step"])
 
     return saver, loader

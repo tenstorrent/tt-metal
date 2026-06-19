@@ -13,6 +13,7 @@ import os
 import pickle
 
 import ml_dtypes
+from tqdm import tqdm
 
 import ttnn
 import ttml
@@ -20,6 +21,16 @@ import ttml
 from .sharding import Sharding
 
 FORMAT_VERSION = 1
+
+# Bars render one indent level under the caller's human bracket lines; descs are left-padded to a
+# fixed width so model/optimizer bars line up. {desc} renders raw under a custom bar_format (no ": ").
+_BAR_FORMAT = "    {desc} {percentage:3.0f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
+_DESC_WIDTH = 18
+
+
+def _progress(iterable, *, total: int, desc: str, enabled: bool):
+    """Wrap `iterable` in a tqdm bar, rendered only when `enabled`. Off by default."""
+    return tqdm(iterable, total=total, desc=desc.ljust(_DESC_WIDTH), disable=not enabled, bar_format=_BAR_FORMAT)
 
 
 def _tensor_meta(tensor: ttml.autograd.Tensor) -> dict:
@@ -70,18 +81,22 @@ def _walk(value) -> tuple:
     raise ValueError(f"checkpointing: unsupported state value of type {type(value).__name__}")
 
 
-def _rebuild(node, live_node, f):
-    """Reconstruct a skeleton `node` from stream `f`, resharding each tensor per the live `live_node`."""
+def _rebuild(node, live_node, f, display_progress: bool = False, label: str = "optimizer"):
+    """Reconstruct a skeleton `node` from stream `f`, resharding each tensor per the live `live_node`.
+
+    `label` names the current sub-state (e.g. AdamW's `exp_avg`/`exp_avg_sq`) so each leaf's progress bar
+    is distinguishable rather than a string of identical "Loading optimizer" bars."""
     if not isinstance(node, dict):
         return node  # scalar
     if "named_parameters" in node:
         named = ttml.NamedParameters()
-        for name, meta in node["named_parameters"].items():
+        leaf = node["named_parameters"]
+        for name, meta in _progress(leaf.items(), total=len(leaf), desc=f"Loading {label}", enabled=display_progress):
             data = pickle.load(f)
             mapper = Sharding.from_tensor(live_node[name]).derive_mapper()
             named[name] = _tensor_from_record(meta, data, mapper)
         return named
-    return {key: _rebuild(v, live_node[key], f) for key, v in node.items()}
+    return {key: _rebuild(v, live_node[key], f, display_progress, key) for key, v in node.items()}
 
 
 def _skip(node, f) -> None:
@@ -96,11 +111,11 @@ def _skip(node, f) -> None:
         _skip(sub, f)
 
 
-def _load_params(params: ttml.NamedParameters, skeleton: dict, f) -> None:
+def _load_params(params: ttml.NamedParameters, skeleton: dict, f, display_progress: bool = False) -> None:
     """Stream a model's params back into live `params` in place, validating coverage."""
     leaf = skeleton["named_parameters"]
     restored = set()
-    for name, meta in leaf.items():
+    for name, meta in _progress(leaf.items(), total=len(leaf), desc="Loading model", enabled=display_progress):
         data = pickle.load(f)  # read every record to keep the stream aligned, even when skipping
         if name not in params:
             continue
@@ -119,13 +134,19 @@ def _load_params(params: ttml.NamedParameters, skeleton: dict, f) -> None:
         )
 
 
-def _load_optimizer(optimizer: ttml.optimizers.OptimizerBase, skeleton: dict, f) -> None:
+def _load_optimizer(
+    optimizer: ttml.optimizers.OptimizerBase, skeleton: dict, f, display_progress: bool = False
+) -> None:
     """Stream optimizer state back, resharding each moment per the live state dict, then set it."""
     live = optimizer.get_state_dict()
-    optimizer.set_state_dict({key: _rebuild(node, live[key], f) for key, node in skeleton.items()})
+    optimizer.set_state_dict(
+        {key: _rebuild(node, live[key], f, display_progress, key) for key, node in skeleton.items()}
+    )
 
 
-def save_checkpoint(path: str, *, header: dict | None = None, model_params=None, optimizer=None) -> None:
+def save_checkpoint(
+    path: str, *, header: dict | None = None, model_params=None, optimizer=None, display_progress: bool = False
+) -> None:
     """Write `header` (opaque) plus `model_params` and/or the `optimizer`'s state to `path`.
 
     `model_params` is a `NamedParameters` (e.g. `module.parameters()`); `optimizer` is an `OptimizerBase`.
@@ -144,8 +165,8 @@ def save_checkpoint(path: str, *, header: dict | None = None, model_params=None,
     tmp_path = path + ".tmp"
     with open(tmp_path, "wb") as f:
         pickle.dump({"format": FORMAT_VERSION, "header": header or {}, "manifest": manifest}, f)
-        for tensor in tensors:  # gather one tensor at a time; freed after dump
-            pickle.dump(Sharding.from_tensor(tensor).gather(tensor), f)
+        for tensor in _progress(tensors, total=len(tensors), desc="Saving checkpoint", enabled=display_progress):
+            pickle.dump(Sharding.from_tensor(tensor).gather(tensor), f)  # gather one at a time; freed after dump
     os.replace(tmp_path, path)
 
 
@@ -169,7 +190,7 @@ def read_header(path: str) -> dict:
         return _read_record0(f)["header"]
 
 
-def load_checkpoint(path: str, *, model_params=None, optimizer=None) -> dict:
+def load_checkpoint(path: str, *, model_params=None, optimizer=None, display_progress: bool = False) -> dict:
     """Restore `model_params` (assigned in place) and/or the `optimizer`'s state from `path`.
 
     `model_params` is the live `NamedParameters`; `optimizer` is the live `OptimizerBase` (restored via
@@ -186,9 +207,9 @@ def load_checkpoint(path: str, *, model_params=None, optimizer=None) -> dict:
             raise ValueError(f"checkpointing: requested group(s) {sorted(absent)} not in checkpoint {sorted(manifest)}")
         for name, skeleton in manifest.items():  # file order owns the stream order
             if name == "model" and model_params is not None:
-                _load_params(model_params, skeleton, f)
+                _load_params(model_params, skeleton, f, display_progress)
             elif name == "optimizer" and optimizer is not None:
-                _load_optimizer(optimizer, skeleton, f)
+                _load_optimizer(optimizer, skeleton, f, display_progress)
             else:
                 _skip(skeleton, f)
     return record["header"]
