@@ -19,6 +19,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
 #include "api/compute/bcast.h"
+#include "api/dataflow/circular_buffer.h"
 
 #define REDUCE_OP PoolType::SUM
 #define REDUCE_DIM ReduceDim::REDUCE_ROW
@@ -72,6 +73,23 @@ void kernel_main() {
     constexpr auto cb_bcast_scaler = tt::CBIndex::c_15;
     constexpr auto cb_final_out = tt::CBIndex::c_16;
 
+    CircularBuffer cb_weight_cb(cb_weight);
+    CircularBuffer cb_input_cb(cb_input);
+    CircularBuffer cb_partial_recv_cb(cb_partial_recv);
+    CircularBuffer cb_local_out_cb(cb_local_out);
+    CircularBuffer cb_bias_cb(cb_bias);
+    CircularBuffer cb_index_cb(cb_index);
+    CircularBuffer cb_topk_val_cb(cb_topk_val);
+    CircularBuffer cb_gathered_val_cb(cb_gathered_val);
+    CircularBuffer cb_gathered_ind_cb(cb_gathered_ind);
+    CircularBuffer cb_intermed_val_cb(cb_intermed_val);
+    CircularBuffer cb_intermed_ind_cb(cb_intermed_ind);
+    CircularBuffer cb_softmax_mask_cb(cb_softmax_mask);
+    CircularBuffer cb_softmax_tmp_cb(cb_softmax_tmp);
+    CircularBuffer cb_reduce_scalar_cb(cb_reduce_scalar);
+    CircularBuffer cb_bcast_scaler_cb(cb_bcast_scaler);
+    CircularBuffer cb_final_out_cb(cb_final_out);
+
     // =====================================================================
     // PHASE 1: Partial Matmul (all cores) — block-by-block
     // =====================================================================
@@ -91,8 +109,8 @@ void kernel_main() {
             block = BLOCK_SIZE;
         }
 
-        cb_wait_front(cb_input, block);
-        cb_wait_front(cb_weight, block);
+        cb_input_cb.wait_front(block);
+        cb_weight_cb.wait_front(block);
 
         for (uint32_t k = 0; k < block; k++) {
             matmul_block(
@@ -107,8 +125,8 @@ void kernel_main() {
                 /*kt_dim=*/1);
         }
 
-        cb_pop_front(cb_input, block);
-        cb_pop_front(cb_weight, block);
+        cb_input_cb.pop_front(block);
+        cb_weight_cb.pop_front(block);
 
         tiles_done += block;
     }
@@ -118,37 +136,37 @@ void kernel_main() {
         // SENDER: pack partial and exit (DM1 sends it to worker)
         // =================================================================
         tile_regs_commit();
-        cb_reserve_back(cb_local_out, 1);
+        cb_local_out_cb.reserve_back(1);
         tile_regs_wait();
         pack_tile(0, cb_local_out);
         tile_regs_release();
-        cb_push_back(cb_local_out, 1);
+        cb_local_out_cb.push_back(1);
         return;
     }
 
     // =====================================================================
     // WORKER PATH: add sender partials + bias → pack logit tile
     // =====================================================================
-    cb_wait_front(cb_partial_recv, 2);
+    cb_partial_recv_cb.wait_front(2);
 
     binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv, 0, 0);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_partial_recv, 1, 0);
 
-    cb_pop_front(cb_partial_recv, 2);
+    cb_partial_recv_cb.pop_front(2);
 
     // Add bias
-    cb_wait_front(cb_bias, 1);
+    cb_bias_cb.wait_front(1);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_bias, 0, 0);
-    cb_pop_front(cb_bias, 1);
+    cb_bias_cb.pop_front(1);
 
     // Pack complete logits to cb_topk_val
     tile_regs_commit();
-    cb_reserve_back(cb_topk_val, 1);
+    cb_topk_val_cb.reserve_back(1);
     tile_regs_wait();
     pack_tile(0, cb_topk_val);
     tile_regs_release();
-    cb_push_back(cb_topk_val, 1);
+    cb_topk_val_cb.push_back(1);
 
     if (!is_collector) {
         return;
@@ -161,8 +179,8 @@ void kernel_main() {
     // within a tile, so k=32 and logk=5 are intrinsic tile-level constants,
     // NOT the user-facing topk_k. The actual user k is applied later during
     // output extraction (softmax mask in dm1.cpp, output packing).
-    cb_wait_front(cb_gathered_val, num_groups);
-    cb_wait_front(cb_gathered_ind, num_groups);
+    cb_gathered_val_cb.wait_front(num_groups);
+    cb_gathered_ind_cb.wait_front(num_groups);
 
     ckernel::topk_tile_init();
     tile_regs_acquire();
@@ -199,23 +217,23 @@ void kernel_main() {
     tile_regs_commit();
 
     // Pack merged values → cb_intermed_val, indices → cb_intermed_ind
-    cb_reserve_back(cb_intermed_val, 1);
-    cb_reserve_back(cb_intermed_ind, 1);
+    cb_intermed_val_cb.reserve_back(1);
+    cb_intermed_ind_cb.reserve_back(1);
     tile_regs_wait();
     pack_tile(0, cb_intermed_val);
     pack_tile(2, cb_intermed_ind);
     tile_regs_release();
-    cb_push_back(cb_intermed_val, 1);
-    cb_push_back(cb_intermed_ind, 1);
+    cb_intermed_val_cb.push_back(1);
+    cb_intermed_ind_cb.push_back(1);
 
-    cb_pop_front(cb_gathered_val, num_groups);
-    cb_pop_front(cb_gathered_ind, num_groups);
+    cb_gathered_val_cb.pop_front(num_groups);
+    cb_gathered_ind_cb.pop_front(num_groups);
 
     // Fused: transpose values+mask + transpose indices (one DST cycle)
-    cb_wait_front(cb_intermed_val, 1);
-    cb_wait_front(cb_intermed_ind, 1);
-    cb_wait_front(cb_softmax_mask, 1);
-    cb_wait_front(cb_bcast_scaler, 1);
+    cb_intermed_val_cb.wait_front(1);
+    cb_intermed_ind_cb.wait_front(1);
+    cb_softmax_mask_cb.wait_front(1);
+    cb_bcast_scaler_cb.wait_front(1);
 
     tile_regs_acquire();
     transpose_wh_init_short(cb_intermed_val);
@@ -228,25 +246,25 @@ void kernel_main() {
     transpose_wh_tile(cb_intermed_ind, 0, 1);
     tile_regs_commit();
 
-    cb_pop_front(cb_intermed_val, 1);
-    cb_pop_front(cb_intermed_ind, 1);
-    cb_reserve_back(cb_softmax_tmp, 1);
-    cb_reserve_back(cb_intermed_val, 1);
+    cb_intermed_val_cb.pop_front(1);
+    cb_intermed_ind_cb.pop_front(1);
+    cb_softmax_tmp_cb.reserve_back(1);
+    cb_intermed_val_cb.reserve_back(1);
 
     tile_regs_wait();
     pack_tile(0, cb_softmax_tmp);
     pack_tile(1, cb_intermed_val);
     tile_regs_release();
-    cb_push_back(cb_softmax_tmp, 1);
-    cb_push_back(cb_intermed_val, 1);
+    cb_softmax_tmp_cb.push_back(1);
+    cb_intermed_val_cb.push_back(1);
 
     // =====================================================================
     // PHASE 4: Softmax on masked top-K values (collector only)
     // =====================================================================
 
     // Step 1: Find max per row
-    cb_wait_front(cb_softmax_tmp, 1);
-    cb_reserve_back(cb_reduce_scalar, 1);
+    cb_softmax_tmp_cb.wait_front(1);
+    cb_reduce_scalar_cb.reserve_back(1);
 
     tile_regs_acquire();
     reduce_init<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_softmax_tmp, cb_bcast_scaler, cb_reduce_scalar);
@@ -257,10 +275,10 @@ void kernel_main() {
     tile_regs_wait();
     pack_tile(0, cb_reduce_scalar);
     tile_regs_release();
-    cb_push_back(cb_reduce_scalar, 1);
+    cb_reduce_scalar_cb.push_back(1);
 
     // Step 2: Subtract max + Exp (fused)
-    cb_wait_front(cb_reduce_scalar, 1);
+    cb_reduce_scalar_cb.wait_front(1);
 
     tile_regs_acquire();
     sub_bcast_cols_init_short(cb_softmax_tmp, cb_reduce_scalar);
@@ -269,18 +287,18 @@ void kernel_main() {
     exp_tile</*APPROX=*/1>(0);
     tile_regs_commit();
 
-    cb_pop_front(cb_softmax_tmp, 1);
-    cb_reserve_back(cb_softmax_tmp, 1);
+    cb_softmax_tmp_cb.pop_front(1);
+    cb_softmax_tmp_cb.reserve_back(1);
     tile_regs_wait();
     pack_tile(0, cb_softmax_tmp);
     tile_regs_release();
-    cb_push_back(cb_softmax_tmp, 1);
+    cb_softmax_tmp_cb.push_back(1);
 
-    cb_pop_front(cb_reduce_scalar, 1);
+    cb_reduce_scalar_cb.pop_front(1);
 
     // Step 3: Reduce SUM per row + reciprocal
-    cb_wait_front(cb_softmax_tmp, 1);
-    cb_reserve_back(cb_reduce_scalar, 1);
+    cb_softmax_tmp_cb.wait_front(1);
+    cb_reduce_scalar_cb.reserve_back(1);
 
     tile_regs_acquire();
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, true>(cb_softmax_tmp, cb_bcast_scaler, cb_reduce_scalar);
@@ -293,13 +311,13 @@ void kernel_main() {
     tile_regs_wait();
     pack_tile(0, cb_reduce_scalar);
     tile_regs_release();
-    cb_push_back(cb_reduce_scalar, 1);
+    cb_reduce_scalar_cb.push_back(1);
 
     // Step 4: Multiply by 1/sum + copy indices (fused, one DST cycle)
-    cb_wait_front(cb_softmax_tmp, 1);
-    cb_wait_front(cb_reduce_scalar, 1);
-    cb_wait_front(cb_intermed_val, 1);
-    cb_reserve_back(cb_final_out, 2);
+    cb_softmax_tmp_cb.wait_front(1);
+    cb_reduce_scalar_cb.wait_front(1);
+    cb_intermed_val_cb.wait_front(1);
+    cb_final_out_cb.reserve_back(2);
 
     tile_regs_acquire();
     mul_bcast_cols_init_short(cb_softmax_tmp, cb_reduce_scalar);
@@ -314,11 +332,11 @@ void kernel_main() {
     pack_tile(1, cb_final_out);  // indices
     tile_regs_release();
 
-    cb_push_back(cb_final_out, 2);
-    cb_pop_front(cb_softmax_tmp, 1);
-    cb_pop_front(cb_reduce_scalar, 1);
-    cb_pop_front(cb_intermed_val, 1);
+    cb_final_out_cb.push_back(2);
+    cb_softmax_tmp_cb.pop_front(1);
+    cb_reduce_scalar_cb.pop_front(1);
+    cb_intermed_val_cb.pop_front(1);
 
-    cb_pop_front(cb_softmax_mask, 1);
-    cb_pop_front(cb_bcast_scaler, 1);
+    cb_softmax_mask_cb.pop_front(1);
+    cb_bcast_scaler_cb.pop_front(1);
 }

@@ -7,6 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -20,6 +21,9 @@ void kernel_main() {
     // CBs
     constexpr auto cb_s2c_in2 = tt::CBIndex::c_3;
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
+
+    CircularBuffer cb_s2c_in2_cb(cb_s2c_in2);
+    CircularBuffer cb_s2c_out_cb(cb_s2c_out);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -38,10 +42,10 @@ void kernel_main() {
 
     binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2);
 
-    cb_reserve_back(cb_s2c_out, num_iters);
+    cb_s2c_out_cb.reserve_back(num_iters);
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
-        cb_wait_front(cb_s2c_in2, num_cores);
+        cb_s2c_in2_cb.wait_front(num_cores);
 
         tile_regs_acquire();
         for (uint32_t k = 0; k < num_cores; ++k) {
@@ -54,8 +58,8 @@ void kernel_main() {
         pack_tile(0, cb_s2c_out);
         tile_regs_release();
 
-        cb_pop_front(cb_s2c_in2, num_cores);
+        cb_s2c_in2_cb.pop_front(num_cores);
     }
 
-    cb_push_back(cb_s2c_out, num_iters);
+    cb_s2c_out_cb.push_back(num_iters);
 }

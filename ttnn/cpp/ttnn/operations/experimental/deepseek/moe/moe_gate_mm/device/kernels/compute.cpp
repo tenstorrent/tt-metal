@@ -11,6 +11,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
+#include "api/dataflow/circular_buffer.h"
 
 #include "bias_bcast_sfpu.h"
 #include "top2_sum_sfpu.h"
@@ -57,6 +58,18 @@ void kernel_main() {
 
     // Aliases
     constexpr auto cb_w2c_in8 = tt::CBIndex::c_6;
+
+    CircularBuffer cb_r2c_w_cb(cb_r2c_w);
+    CircularBuffer cb_s2c_in_cb(cb_s2c_in);
+    CircularBuffer cb_c2w_rdy_cb(cb_c2w_rdy);
+    CircularBuffer cb_w2c_in2_cb(cb_w2c_in2);
+    CircularBuffer cb_s2c_out_cb(cb_s2c_out);
+    CircularBuffer cb_w2c_in3_cb(cb_w2c_in3);
+    CircularBuffer cb_w2c_in4_cb(cb_w2c_in4);
+    CircularBuffer cb_w2c_in5_cb(cb_w2c_in5);
+    CircularBuffer cb_w2c_in6_cb(cb_w2c_in6);
+    CircularBuffer cb_w2c_in7_cb(cb_w2c_in7);
+    CircularBuffer cb_w2c_in8_cb(cb_w2c_in8);
 
     // NOC Packet size
     constexpr uint32_t noc_packet_size = 8192;
@@ -107,7 +120,7 @@ void kernel_main() {
 
         uint32_t tile_index = 2 * 76;
         for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
-            cb_wait_front(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w_cb.wait_front(w_tiles_per_block);
 
             for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; tile_id += 2) {
                 // Perform matmul: 1 input tile @ 2 weight tiles
@@ -122,11 +135,11 @@ void kernel_main() {
                     /*rt_dim=*/1,
                     /*kt_dim=*/1);
             }
-            cb_pop_front(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w_cb.pop_front(w_tiles_per_block);
         }
 
         // Last block
-        cb_wait_front(cb_r2c_w, w_tiles_per_block);
+        cb_r2c_w_cb.wait_front(w_tiles_per_block);
         for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; tile_id += 2) {
             matmul_block(
                 cb_s2c_in,
@@ -139,20 +152,20 @@ void kernel_main() {
                 /*rt_dim=*/1,
                 /*kt_dim=*/1);
         }
-        cb_pop_front(cb_r2c_w, w_tiles_per_block);
+        cb_r2c_w_cb.pop_front(w_tiles_per_block);
 
         tile_regs_commit();
 
         tile_regs_wait();
 
-        cb_reserve_back(cb_c2w_rdy, 1);
+        cb_c2w_rdy_cb.reserve_back(1);
         // Since neighbor1 is farther, we send it first (dst 1)
         pack_tile</*out_of_order_output=*/true>(1, cb_s2c_out, /*output_tile_index=*/0);
-        cb_push_back(cb_c2w_rdy, 1);
+        cb_c2w_rdy_cb.push_back(1);
 
-        cb_reserve_back(cb_c2w_rdy, 1);
+        cb_c2w_rdy_cb.reserve_back(1);
         pack_tile</*out_of_order_output=*/true>(0, cb_s2c_out, /*output_tile_index=*/0);
-        cb_push_back(cb_c2w_rdy, 1);
+        cb_c2w_rdy_cb.push_back(1);
 
         tile_regs_release();
 
@@ -173,7 +186,7 @@ void kernel_main() {
 
     uint32_t tile_index = 0;
     for (uint32_t block_id = 0; block_id < w_num_blocks; ++block_id) {
-        cb_wait_front(cb_r2c_w, w_tiles_per_block);
+        cb_r2c_w_cb.wait_front(w_tiles_per_block);
 
         for (uint32_t tile_id = 0; tile_id < w_tiles_per_block; ++tile_id) {
             // Perform matmul: 1 input tile @ 1 weight tile
@@ -188,11 +201,11 @@ void kernel_main() {
                 /*rt_dim=*/1,
                 /*kt_dim=*/1);
         }
-        cb_pop_front(cb_r2c_w, w_tiles_per_block);
+        cb_r2c_w_cb.pop_front(w_tiles_per_block);
     }
 
     // Last block
-    cb_wait_front(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w_cb.wait_front(w_tiles_per_block);
     for (uint32_t tile_id = 0; tile_id < w_tiles_per_block_last; ++tile_id) {
         matmul_block(
             cb_s2c_in,
@@ -209,10 +222,10 @@ void kernel_main() {
     binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_w2c_in2);
 
     // Wait for the partial to come, add it
-    cb_wait_front(cb_w2c_in2, 1);
+    cb_w2c_in2_cb.wait_front(1);
     binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
         cb_w2c_in2, 0 /*in_tile_index*/, 0 /*dst_tile_index*/);
-    cb_pop_front(cb_w2c_in2, 1);
+    cb_w2c_in2_cb.pop_front(1);
 
     //-------------------------------------------------------------------------
     // Sigmoid
@@ -245,21 +258,21 @@ void kernel_main() {
     tile_regs_wait();
 
     // Store the bias adjusted scores for transpose
-    cb_reserve_back(cb_s2c_out, 1);
+    cb_s2c_out_cb.reserve_back(1);
     pack_tile</*out_of_order_output=*/true>(0, cb_s2c_out, /*output_tile_index=*/0);
-    cb_push_back(cb_s2c_out, 1);
+    cb_s2c_out_cb.push_back(1);
 
     // Store the raw scores for transpose
-    cb_reserve_back(cb_w2c_in3, 1);
+    cb_w2c_in3_cb.reserve_back(1);
     pack_tile(1, cb_w2c_in3);
-    cb_push_back(cb_w2c_in3, 1);
+    cb_w2c_in3_cb.push_back(1);
 
     tile_regs_release();
 
     tile_regs_acquire();
 
     // Transpose
-    cb_wait_front(cb_s2c_out, 1);
+    cb_s2c_out_cb.wait_front(1);
     transpose_wh_init_short(cb_s2c_out);
     transpose_wh_tile(cb_s2c_out, 0, 0);
 
@@ -269,29 +282,29 @@ void kernel_main() {
 
     tile_regs_commit();
 
-    cb_reserve_back(cb_c2w_rdy, 1);
+    cb_c2w_rdy_cb.reserve_back(1);
 
     tile_regs_wait();
     // Pack output tile
     pack_tile(0, cb_c2w_rdy);
     tile_regs_release();
-    cb_push_back(cb_c2w_rdy, 1);
+    cb_c2w_rdy_cb.push_back(1);
 
-    cb_pop_front(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w_cb.pop_front(w_tiles_per_block);
 
     //-------------------------------------------------------------------------
     // Non-collector cores
     //-------------------------------------------------------------------------
     if (core_id != COLLECTOR_CORE_ID) {
         // Wait for the group masks
-        cb_wait_front(cb_w2c_in5, 1);
+        cb_w2c_in5_cb.wait_front(1);
 
         tile_regs_acquire();
 
         // Get the adjusted scores
         transpose_wh_init_short(cb_s2c_out);
         transpose_wh_tile(cb_s2c_out, 0, 0);
-        cb_pop_front(cb_s2c_out, 1);
+        cb_s2c_out_cb.pop_front(1);
 
         // Get the group masks
         copy_tile_init(cb_w2c_in5);
@@ -301,14 +314,14 @@ void kernel_main() {
         top8_tile_init();
         top8_tile(/*tile_index=*/core_id, /*dst_index=*/0);
 
-        cb_pop_front(cb_w2c_in5, 1);
-        cb_reserve_back(cb_w2c_in8, 1);
+        cb_w2c_in5_cb.pop_front(1);
+        cb_w2c_in8_cb.reserve_back(1);
 
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, cb_w2c_in8);
         tile_regs_release();
-        cb_push_back(cb_w2c_in8, 1);
+        cb_w2c_in8_cb.push_back(1);
     }
 
     //-------------------------------------------------------------------------
@@ -316,7 +329,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     if (core_id == COLLECTOR_CORE_ID) {
         // I am collecting, let us wait for everyone else to finish sending their data to me
-        cb_wait_front(cb_w2c_in4, 1);
+        cb_w2c_in4_cb.wait_front(1);
 
         tile_regs_acquire();
         copy_tile_to_dst_init_short(cb_w2c_in4);
@@ -333,16 +346,16 @@ void kernel_main() {
         // Pack this out for other cores to get the group masks
         tile_regs_commit();
         tile_regs_wait();
-        cb_reserve_back(cb_w2c_in5, 1);
+        cb_w2c_in5_cb.reserve_back(1);
         pack_tile</*out_of_order_output=*/true>(0, cb_w2c_in5, /*output_tile_index=*/0);
         tile_regs_release();
-        cb_push_back(cb_w2c_in5, 1);
+        cb_w2c_in5_cb.push_back(1);
 
         // Get top 8 from adjusted scores, and mask them
         tile_regs_acquire();
         transpose_wh_init_short(cb_s2c_out);
         transpose_wh_tile(cb_s2c_out, 0, 0);
-        cb_pop_front(cb_s2c_out, 1);
+        cb_s2c_out_cb.pop_front(1);
 
         copy_tile_init(cb_w2c_in5);
         copy_tile(cb_w2c_in5, 0, 2);
@@ -350,10 +363,10 @@ void kernel_main() {
         top8_tile_init();
         top8_tile(/*tile_index=*/core_id, /*dst_index=*/0);
 
-        cb_pop_front(cb_w2c_in4, 1);
+        cb_w2c_in4_cb.pop_front(1);
 
         // Wait for sorted top-8 from all other cores
-        cb_wait_front(cb_w2c_in6, 4);
+        cb_w2c_in6_cb.wait_front(4);
 
         copy_tile_init(cb_w2c_in6);
         // Tile ID 0 has my own data, so we copy to 1-4
@@ -365,17 +378,17 @@ void kernel_main() {
         top8_merge_init();
         top8_merge<column_id>();
 
-        cb_pop_front(cb_w2c_in6, 4);
+        cb_w2c_in6_cb.pop_front(4);
         tile_regs_commit();
 
         tile_regs_wait();
-        cb_reserve_back(cb_s2c_out, 1);
+        cb_s2c_out_cb.reserve_back(1);
         pack_tile</*out_of_order_output=*/true>(0, cb_s2c_out, /*output_tile_index=*/0);
-        cb_push_back(cb_s2c_out, 1);
+        cb_s2c_out_cb.push_back(1);
         tile_regs_release();
 
         // Let DM1 know that we are done
-        cb_reserve_back(cb_c2w_rdy, 1);
-        cb_push_back(cb_c2w_rdy, 1);
+        cb_c2w_rdy_cb.reserve_back(1);
+        cb_c2w_rdy_cb.push_back(1);
     }
 }

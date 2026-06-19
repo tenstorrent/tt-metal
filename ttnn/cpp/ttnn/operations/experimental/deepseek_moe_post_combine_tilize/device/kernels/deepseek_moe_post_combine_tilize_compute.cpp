@@ -6,6 +6,7 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/tilize.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tt-metalium/constants.hpp"
 
 void kernel_main() {
@@ -15,16 +16,19 @@ void kernel_main() {
 
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
+    CircularBuffer cb_tilize_input(tilize_input_cb_id);
+    CircularBuffer cb_tilize_output(tilize_output_cb_id);
+
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
     fast_tilize_init(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
 
-    cb_wait_front(tilize_input_cb_id, tile_height);
-    cb_reserve_back(tilize_output_cb_id, num_tiles);
+    cb_tilize_input.wait_front(tile_height);
+    cb_tilize_output.reserve_back(num_tiles);
 
     fast_tilize_block(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
 
-    cb_push_back(tilize_output_cb_id, num_tiles);
-    cb_pop_front(tilize_input_cb_id, tile_height);
+    cb_tilize_output.push_back(num_tiles);
+    cb_tilize_input.pop_front(tile_height);
 
     fast_tilize_uninit(tilize_input_cb_id, tilize_output_cb_id, num_tiles);
 }

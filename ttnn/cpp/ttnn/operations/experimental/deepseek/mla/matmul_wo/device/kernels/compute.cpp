@@ -8,6 +8,7 @@
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -26,6 +27,10 @@ void kernel_main() {
     constexpr auto cb_r2c_w = tt::CBIndex::c_0;
     constexpr auto cb_s2c_in = tt::CBIndex::c_1;
     constexpr auto cb_c2w_out = tt::CBIndex::c_2;
+
+    CircularBuffer cb_r2c_w_cb(cb_r2c_w);
+    CircularBuffer cb_s2c_in_cb(cb_s2c_in);
+    CircularBuffer cb_c2w_out_cb(cb_c2w_out);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -75,7 +80,7 @@ void kernel_main() {
 
         tile_regs_acquire();
         for (uint32_t block_id = 0; block_id < num_blocks_per_iter; ++block_id) {
-            cb_wait_front(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w_cb.wait_front(w_tiles_per_block);
 
             for (uint32_t k = 0; k < w_tiles_per_block; k += 7) {
                 matmul_block(
@@ -89,19 +94,19 @@ void kernel_main() {
                     /*rt_dim=*/1,
                     /*kt_dim=*/1);
             }
-            cb_pop_front(cb_r2c_w, w_tiles_per_block);
+            cb_r2c_w_cb.pop_front(w_tiles_per_block);
         }
 
         tile_regs_commit();
         tile_regs_wait();
 
-        cb_reserve_back(cb_c2w_out, num_n_tiles_per_iter);
+        cb_c2w_out_cb.reserve_back(num_n_tiles_per_iter);
         pack_tile_block(0, cb_c2w_out, num_n_tiles_per_iter);
-        cb_push_back(cb_c2w_out, num_n_tiles_per_iter);
+        cb_c2w_out_cb.push_back(num_n_tiles_per_iter);
         tile_regs_release();
     }
 
     // Drain the pipeline - the last dummy push
-    cb_wait_front(cb_r2c_w, w_tiles_per_block);
-    cb_pop_front(cb_r2c_w, w_tiles_per_block);
+    cb_r2c_w_cb.wait_front(w_tiles_per_block);
+    cb_r2c_w_cb.pop_front(w_tiles_per_block);
 }
