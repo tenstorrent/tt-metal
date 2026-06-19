@@ -90,7 +90,13 @@ SUPPORTED = {
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "attention_kind": ["self", "cross"],
-    "kv_heads_mode": ["mha"],
+    # R2: gqa + mqa added. The reader already remaps Q-head → KV-head
+    # (head_group = H/H_kv, h_kv = h/head_group, kv_head_base = (b*H_kv +
+    # h_kv)*Skv_t); the writer indexes purely by Q head; _check_structural
+    # enforces H_q % H_kv == 0; the mask head index handles mask_H ∈ {1, H}.
+    # Work split is per Q head (B·H·Sq_t), so GQA/MQA is embarrassingly
+    # parallel — no new distribution, no inter-core comm, no kernel change.
+    "kv_heads_mode": ["mha", "gqa", "mqa"],
     "mask_mode": ["none", "causal"],
     "scale_mode": ["auto", "explicit"],
 }
