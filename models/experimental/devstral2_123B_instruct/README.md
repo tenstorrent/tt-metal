@@ -26,24 +26,24 @@ with **tensor parallelism (TP=8)** along the mesh cluster axis.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────┐
-│                    TtMinistral3ForCausalLM  (88 layers)                     │
+│                    TtMinistral3ForCausalLM  (88 layers)                      │
 ├──────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│  input_ids ──► TtEmbedTokens ──► ┌──────────────────────────────────────┐  │
-│                                  │  TtDecoderLayer  × 88                │  │
-│                                  │  (residual transformer block)        │  │
-│                                  └──────────────────┬───────────────────┘  │
-│                                                     ▼                      │
+│  input_ids ──► TtEmbedTokens ──► ┌──────────────────────────────────────┐    │
+│                                  │  TtDecoderLayer  × 88                │    │
+│                                  │  (residual transformer block)        │    │
+│                                  └──────────────────┬───────────────────┘    │
+│                                                     ▼                        │
 │                                            TtRMSNorm (final)                 │
-│                                                     ▼                      │
+│                                                     ▼                        │
 │                                            lm_head (column-parallel)         │
-│                                                     ▼                      │
-│                                              logits [B, S, vocab]          │
-│                                                     │                      │
-│                                                     ▼                      │
-│                              OnDeviceSampler (ttnn.argmax, optional)       │
-│                                                     ▼                      │
-│                                              next token id                 │
+│                                                     ▼                        │
+│                                              logits [B, S, vocab]            │
+│                                                     │                        │
+│                                                     ▼                        │
+│                              OnDeviceSampler (ttnn.argmax, optional)         │
+│                                                     ▼                        │
+│                                              next token id                   │
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -258,7 +258,7 @@ Prefill chunk progress logging is off by default; set ``DEVSTRAL2_ISL_PERF_CHUNK
 | Decode tok/s/u | Steady-state decode trace replay throughput |
 
 ``test_isl_sweep_perf.py -k sweep``, BH Loudbox 1×8, ``model_max_seq_len=263168``,
-``max_new_tokens=100``, decode replay cap 32 (Jun 2026):
+``max_new_tokens=100``:
 
 | ISL | TTFT (s) | Prefill tok/s | Decode tok/s/u |
 |----:|---------:|--------------:|---------------:|
