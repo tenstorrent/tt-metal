@@ -53,7 +53,12 @@ class EltwiseFpu(Fpu):
 
         generate_golden = get_golden_generator(EltwiseBinaryGolden)
         golden_tensor = generate_golden(
-            self.operation, tensor_a, tensor_b, output_format, math_fidelity
+            self.operation,
+            tensor_a,
+            tensor_b,
+            output_format,
+            math_fidelity,
+            tile_shape=operation.tile_shape,
         ).reshape(operation.max_output_dimensions)
 
         if compute_unit.acc_to_dest == AccToDest.Yes:
