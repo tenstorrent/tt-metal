@@ -115,6 +115,9 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     {
         _llk_math_dbg_feature_enable_();
     }
+
+    // Establish the operand-driven baseline for the Src zero-substitution flag.
+    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 
 /**
@@ -209,6 +212,9 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(srca_data_format);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcA format.
+    _configure_default_zero_flag_state_(srca_data_format, src_zero_flag_srcb_fmt);
 }
 
 /**
@@ -239,6 +245,9 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG1_SrcB_RMW>(srcb_data_format);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcB format.
+    _configure_default_zero_flag_state_(src_zero_flag_srca_fmt, srcb_data_format);
 }
 
 /**
@@ -274,6 +283,9 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
         constexpr std::uint32_t config_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_ADDR32, 0, config_mask>(config_data);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new formats.
+    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 
 /**

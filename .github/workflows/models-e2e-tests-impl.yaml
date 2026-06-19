@@ -110,6 +110,7 @@ jobs:
         # crashing with `OSError [Errno 30] Read-only file system`.
         HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load

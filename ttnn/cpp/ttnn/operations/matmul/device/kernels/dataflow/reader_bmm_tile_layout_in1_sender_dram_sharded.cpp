@@ -106,7 +106,12 @@ void kernel_main() {
     uint32_t curr_block_trid = 1;
     uint32_t block_trid_to_wait = 1;
 
-    cb_in1.reserve_back(in1_block_num_tiles);
+    // Reserve 2 blocks up front when num_blocks > 1: the loop's reserve_back at line 133
+    // only fires after block 1's writes complete, so the initial reservation must cover
+    // both block 0 and block 1 to avoid writing outside the reserved CB window.
+    // When num_blocks == 1 the CB is single-buffered, so reserve only 1 block.
+    constexpr uint32_t initial_reserved_blocks = (num_blocks > 1) ? 2 : 1;
+    cb_in1.reserve_back(in1_block_num_tiles * initial_reserved_blocks);
     uint32_t l1_write_addr_in1_offset = 0;
     uint32_t l1_write_addr_in1_start = cb_in1.get_write_ptr();
     l1_write_addr_in1 = l1_write_addr_in1_start;
@@ -210,4 +215,15 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 #endif
+
+    cb_out.pop_front(out_block_num_tiles);
+
+    // Restore NCRISC_RD_CMD_BUF NOC_CTRL to the firmware default (VC=1, set in
+    // noc_init). set_async_read_state<NocOptions::CUSTOM_VC> writes a per-bank VC into NOC_CTRL
+    // and this hardware register persists across kernel launches. Kernels that
+    // follow (e.g. 1d-multicast matmul readers running in DM_DEDICATED_NOC mode)
+    // rely on NOC_CTRL being at its initialized value and do not re-set it, so
+    // they inherit the stale custom VC and suffer reduced DRAM bandwidth.
+    noc.set_async_read_state<NocOptions::CUSTOM_VC, NOC_MAX_BURST_SIZE>(
+        dram_bank, in1_page_size, {.bank_id = dram_bank_id, .addr = in1_tensor_addr}, NocOptVals{.vc = 1});
 }

@@ -73,7 +73,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
     uint32_t size,
     BufferType buffer_type = BufferType::L1);
 
-// Compute the validated `block_count` to pair with `weight` in a DramCorePrefetcherInput when feeding a
+// Compute the validated `block_count` to pair with `weight` in a TensorPrefetcherInput when feeding a
 // gather_in0 1D matmul (`program_config`) from a *receiver-contiguous* DRAM weight via `gcb`. This is the
 // single place that owns the recv-contig prefetcher↔matmul cross-checks that otherwise have to be
 // reproduced (and have drifted) at every call site. It validates, then returns `block_count`:
@@ -87,7 +87,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d(
 //     accounting desyncs.
 // Throws (TT_FATAL) on any mismatch. Mirrors create_global_circular_buffer_for_matmul_1d's K-row-major
 // guards for the receiver-contiguous layout.
-uint32_t dram_core_prefetcher_block_count_for_matmul_1d(
+uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const tt::tt_metal::Tensor& weight,
     const GlobalCircularBuffer& gcb);
@@ -101,10 +101,10 @@ uint32_t dram_core_prefetcher_block_count_for_matmul_1d(
 //   * receivers need NOT be uniform per bank and the bank->ring mapping is the strided round-robin one,
 //     so no per-bank-count / contiguous-ring assertions (the matmul op asserts the strided walk);
 //   * `dual_senders_per_bank` may split each bank's receivers across two DRISC sender cores (must match
-//     the StartDramCorePrefetcher flag).
+//     the StartTensorPrefetcher flag).
 //
 // Per (config, weight) it runs the same recv-contig cross-checks as
-// dram_core_prefetcher_block_count_for_matmul_1d (num_shards == ring_size, weight K-tiles divisible by
+// tensor_prefetcher_block_count_for_matmul_1d (num_shards == ring_size, weight K-tiles divisible by
 // ring_size, per_core_N == per-receiver N). Throws (TT_FATAL) on any mismatch.
 GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
     MeshDevice* mesh_device,

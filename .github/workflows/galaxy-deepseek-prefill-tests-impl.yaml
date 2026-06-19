@@ -19,6 +19,10 @@ on:
         required: false
         type: string
         default: "all"
+      exclude-test-group:
+        required: false
+        type: string
+        default: ""
   workflow_dispatch:
 
 jobs:
@@ -60,8 +64,14 @@ jobs:
           # value or any "all" token means run the full matrix; otherwise keep entries
           # whose test_type OR test_group matches any selected token.
           TEST_TYPE="${{ inputs.test-type }}"
+          EXCLUDE_GROUP="${{ inputs.exclude-test-group }}"
           if [ -z "$TEST_TYPE" ] || \
             echo "$TEST_TYPE" | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -Fxq "all"; then
+            # Optionally drop a test_group from the "all" run (e.g. perf checks that
+            # need their own profiler build are run via a separate impl invocation).
+            if [ -n "$EXCLUDE_GROUP" ]; then
+              MATRIX=$(echo "$MATRIX" | jq -c --arg g "$EXCLUDE_GROUP" '[.[] | select(.test_group != $g)]')
+            fi
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$MATRIX" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT

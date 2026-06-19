@@ -72,14 +72,9 @@ jobs:
   wh-n300-fabric-tests:
     if: ${{ inputs.run-wh-n300-fabric-tests }}
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
+      test-category: smoke
       docker-image: ${{ inputs.docker-image }}
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

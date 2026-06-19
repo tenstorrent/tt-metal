@@ -56,7 +56,7 @@
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
 #include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
-#include "ttnn/operations/experimental/dram_core_prefetcher/dram_core_prefetcher_nanobind.hpp"
+#include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_nanobind.hpp"
@@ -64,7 +64,9 @@
 #include "ttnn/operations/experimental/minimal_matmul/minimal_matmul_split_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.hpp"
 #include "ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.hpp"
+#include "ttnn/operations/experimental/topk_large_indices/topk_large_indices_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.hpp"
+#include "ttnn/operations/experimental/indexer_score/indexer_score_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.hpp"
@@ -157,7 +159,7 @@ void py_module(nb::module_& mod) {
 
     test::bind_test_hang_device_operation(mod);
     test::bind_test_dram_prefetcher_consumer(mod);
-    bind_dram_core_prefetcher(mod);
+    bind_tensor_prefetcher(mod);
 
     // CCL ops
     auto m_experimental_ccl = mod.def_submodule("ccl_experimental", "experimental collective communication operations");
@@ -172,8 +174,10 @@ void py_module(nb::module_& mod) {
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::moe::detail::bind_deepseek_moe_gate(mod);
+    topk_large_indices::detail::bind_topk_large_indices(mod);
     topk_router_gpt::detail::bind_topk_router_gpt(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
+    indexer_score::detail::bind_indexer_score(mod);
     moe_gpt::detail::bind_moe_gpt(mod);
 
     // DeepSeek prefill MoE operations

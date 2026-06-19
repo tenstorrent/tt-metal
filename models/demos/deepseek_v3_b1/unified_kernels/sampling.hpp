@@ -7,6 +7,9 @@
 #include "kernel_utils.hpp"
 #include "api/numeric/bfloat16.h"
 #include "../metadata/metadata.hpp"
+#ifdef TRISC_MATH
+#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_sampling.h"
+#endif
 
 #if defined(COMPILE_FOR_TRISC)
 #ifndef REDUCE_OP
@@ -39,7 +42,7 @@ static inline float bf16_to_float(uint16_t bf) {
     return bits_to_float(u32);
 }
 
-// Convert float32 to bf16 bit-pattern using round-to-nearest-even
+// Convert float32 to bf16 bit-pattern using round-to-nearest
 static inline uint16_t float_to_bf16_rne(float x) {
     uint32_t u = float_to_bits(x);
 
@@ -131,119 +134,62 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #endif
 #if defined(TRISC_MATH)
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
-#include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_deepseek_top32_rm.h"
-// Sampling-local single-scalar `recip_tile`
-template <bool legacy_compat = true>
-void calculate_sampling_recip_scalar() {
-    sfpi::vFloat in = sfpi::dst_reg[0];
-    sfpi::vFloat out;
-    if constexpr (legacy_compat) {
-        out = ckernel::sfpu::_reciprocal_compat_<APPROX ? 2 : 3>(in);
-    } else if constexpr (APPROX) {
-        out = ckernel::sfpu::_sfpu_reciprocal_<0>(in);
-    } else if constexpr (DST_ACCUM_MODE) {
-        out = ckernel::sfpu::_sfpu_reciprocal_<2>(in);
-    } else {
-        out = ckernel::sfpu::_sfpu_reciprocal_<1>(in);
-    }
-    if constexpr (!(DST_ACCUM_MODE || APPROX)) {
-        out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
-    }
-    sfpi::dst_reg[0] = out;
-}
-
+#include "../kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
 template <bool legacy_compat = true>
 ALWI void sampling_recip_tile_scalar(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_recip_scalar<legacy_compat>, idst, VectorMode::None);
-}
-
-inline void calculate_sampling_clamp_max_scalar(uint32_t param) {
-    const sfpi::vFloat max_val = ckernel::sfpu::Converter::as_float(param);
-    sfpi::vFloat in = sfpi::dst_reg[0];
-    v_if(in > max_val) { sfpi::dst_reg[0] = max_val; }
-    v_endif;
+    SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (legacy_compat), idst, VectorMode::None);
 }
 
 ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
-}
-
-template <SfpuType OP>
-inline void calculate_sampling_binary_comp_first_column(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    static_assert(
-        OP == SfpuType::le || OP == SfpuType::lt || OP == SfpuType::ge,
-        "sampling_binary_comp_first_column supports le/lt/ge only");
-    constexpr uint dst_tile_size_sfpi = 32;
-    constexpr int ITERATIONS_FIRST_COLUMN = 4;
-
-    for (int d = 0; d < ITERATIONS_FIRST_COLUMN; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::vFloat result = sfpi::vConst0;
-
-        if constexpr (OP == SfpuType::le) {
-            v_if(in0 <= in1) { result = sfpi::vConst1; }
-            v_endif;
-        } else if constexpr (OP == SfpuType::lt) {
-            v_if(in0 < in1) { result = sfpi::vConst1; }
-            v_endif;
-        } else {
-            v_if(in0 >= in1) { result = sfpi::vConst1; }
-            v_endif;
-        }
-
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        sfpi::dst_reg += 2;
-    }
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
 }
 
 ALWI void sampling_le_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_binary_comp_first_column<SfpuType::le>, idst0, idst1, odst, VectorMode::C);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_binary_comp_first_column,
+        (SfpuType::le),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::C);
 }
 
 ALWI void sampling_lt_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_binary_comp_first_column<SfpuType::lt>, idst0, idst1, odst, VectorMode::C);
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_binary_comp_first_column,
+        (SfpuType::lt),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::C);
 }
 
 ALWI void sampling_ge_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_binary_comp_first_column<SfpuType::ge>, idst0, idst1, odst, VectorMode::C);
-}
-
-inline void calculate_sampling_mul_unary_scalar_first_column(uint32_t param) {
-    const sfpi::vFloat parameter = ckernel::sfpu::Converter::as_float(param);
-    constexpr int ITERATIONS_FIRST_COLUMN = 4;
-
-    for (int d = 0; d < ITERATIONS_FIRST_COLUMN; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-        sfpi::dst_reg[0] = val * parameter;
-        sfpi::dst_reg += 2;
-    }
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sampling_binary_comp_first_column,
+        (SfpuType::ge),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::C);
 }
 
 ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_sampling_mul_unary_scalar_first_column, idst, VectorMode::C, param);
-}
-
-inline void calculate_sampling_add_binary_first_column(
-    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    constexpr uint dst_tile_size_sfpi = 32;
-    constexpr int ITERATIONS_FIRST_COLUMN = 4;
-
-    for (int d = 0; d < ITERATIONS_FIRST_COLUMN; d++) {
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = in0 + in1;
-        sfpi::dst_reg += 2;
-    }
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_mul_unary_scalar_first_column, idst, VectorMode::C, param);
 }
 
 ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
-    _llk_math_eltwise_binary_sfpu_params_(
-        calculate_sampling_add_binary_first_column, idst0, idst1, odst, VectorMode::C);
+    SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_add_binary_first_column, idst0, idst1, odst, VectorMode::C);
 }
 #endif
 
@@ -609,14 +555,44 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     MATH((llk_math_top32_rm_init(in_indices_cb)));
     MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles, num_faces)));
 
-    MATH((llk_math_deepseek_top32_rm_init<false>()));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
     if constexpr (presorted) {
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, false)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            decreasing,
+            false /*skip_second*/));
     } else {
-        MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_phases_steps_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            decreasing));
     }
-    MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, false)));
-    MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_merge_,
+        (false, DST_ACCUM_MODE, false /*idir*/),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        false /*across_tiles*/));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_rebuild_,
+        (false, DST_ACCUM_MODE),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        decreasing,
+        true /*skip_second*/));
 
     for (uint32_t i = 64; i < row_elements; i += 64) {
         if (i + 64 > row_elements) {
@@ -638,20 +614,69 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
 
         if constexpr (presorted) {
-            MATH(
-                (llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles + 1, decreasing, false)));
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _bitonic_top32_rebuild_,
+                (false, DST_ACCUM_MODE),
+                value_offset_tiles + 1,
+                VectorMode::RC_custom,
+                decreasing,
+                false /*skip_second*/));
         } else {
-            MATH((llk_math_deepseek_top32_rm_local_sort<false, DST_ACCUM_MODE>(value_offset_tiles + 1, decreasing)));
+            MATH(SFPU_UNARY_CALL(
+                DST_SYNC_MODE,
+                DST_ACCUM_MODE,
+                _bitonic_top32_phases_steps_,
+                (false, DST_ACCUM_MODE),
+                value_offset_tiles + 1,
+                VectorMode::RC_custom,
+                decreasing));
         }
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, false)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles + 1, increasing, true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            false /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            increasing,
+            true /*skip_second*/));
 
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            true /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            decreasing,
+            true /*skip_second*/));
     }
     tile_regs_commit();
     tile_regs_wait();
 
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
     ckernel::pack_reconfig_data_format(out_scores_cb);
@@ -659,6 +684,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     ckernel::pack_reconfig_data_format(out_indices_cb);
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
 
     tile_regs_release();
 
@@ -709,8 +735,15 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     transpose_wh_tile(in_indices_cb, 0, index_offset_tiles);
 
     // Step 2: prepare first chunk for pre-sorted combine pipeline.
-    MATH((llk_math_deepseek_top32_rm_init<false>()));
-    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, decreasing>(value_offset_tiles)));
+    MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::unused>(sfpu::_top32_rm_init_)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_of_1024_rm_pre_sorted_prep_,
+        (false, DST_ACCUM_MODE, decreasing),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        value_offset_tiles));
 
     // Steps 3-5: ingest remaining full 1024 chunks and combine.
     for (uint32_t i = 1; i < num_chunks; ++i) {
@@ -722,13 +755,33 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         transpose_wh_init_short(in_indices_cb);
         transpose_wh_tile(in_indices_cb, i, index_offset_tiles + 1);
 
-        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_prep<false, DST_ACCUM_MODE, increasing>(
-            value_offset_tiles + 1)));
-        MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_combine<false, DST_ACCUM_MODE>((value_offset_tiles))));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_of_1024_rm_pre_sorted_prep_,
+            (false, DST_ACCUM_MODE, increasing),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            value_offset_tiles + 1));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_of_1024_rm_pre_sorted_combine_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            value_offset_tiles));
     }
 
     // Step 6: collapse per-face top-32 to a single top-32.
-    MATH((llk_math_deepseek_top32_of_1024_rm_pre_sorted_final<false, DST_ACCUM_MODE>(value_offset_tiles)));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        _bitonic_top32_of_1024_rm_pre_sorted_final_,
+        (false, DST_ACCUM_MODE),
+        value_offset_tiles,
+        VectorMode::RC_custom,
+        value_offset_tiles));
 
     // Steps 7-9: handle trailing (<1024) values in 64-element chunks.
     uint32_t num_faces = 4;
@@ -747,17 +800,60 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         MATH((llk_math_top32_rm_init(in_indices_cb)));
         MATH((llk_math_top32_rm(in_indices_cb, index_offset_tiles + 1, num_faces)));
 
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles + 1, decreasing, false)));
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles + 1, false)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles + 1, increasing, true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            decreasing,
+            false /*skip_second*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            false /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles + 1,
+            VectorMode::RC_custom,
+            increasing,
+            true /*skip_second*/));
 
-        MATH((llk_math_deepseek_top32_rm_merge<false, DST_ACCUM_MODE>(value_offset_tiles, true)));
-        MATH((llk_math_deepseek_top32_rm_rebuild<false, DST_ACCUM_MODE>(value_offset_tiles, decreasing, true)));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_merge_,
+            (false, DST_ACCUM_MODE, false /*idir*/),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            true /*across_tiles*/));
+        MATH(SFPU_UNARY_CALL(
+            DST_SYNC_MODE,
+            DST_ACCUM_MODE,
+            _bitonic_top32_rebuild_,
+            (false, DST_ACCUM_MODE),
+            value_offset_tiles,
+            VectorMode::RC_custom,
+            decreasing,
+            true /*skip_second*/));
     }
     tile_regs_commit();
     tile_regs_wait();
 
     // Step 10: pack final top-32 scores/indices.
+    // The custom TTI_SETADCXX(PAC, 1 - 1, 0x0) below packs 1 element per row across
+    // 16 rows (32 elements total) for the topk output, which requires
+    // pack_reads_per_xy_plane = FACE_R_DIM = 16 so the tile position generator counts
+    // 16 rows before resetting. Save FACE_R_DIM here and restore 1 after pack_tile.
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(FACE_R_DIM)));
     PACK(TTI_SETADCXX(p_setadc::PAC, 1 - 1, 0x0));
 
     ckernel::pack_reconfig_data_format(out_scores_cb);
@@ -766,6 +862,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
     ckernel::pack_tile(index_offset_tiles, out_indices_cb);
 
     PACK(TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0));
+    PACK((cfg_reg_rmw_tensix<PACK_COUNTERS_SEC0_pack_reads_per_xy_plane_RMW>(1)));
 
     // Reset unpacker state for downstream operations (softmax)
     UNPACK((cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0)));

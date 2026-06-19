@@ -166,8 +166,8 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
 
             // Register the build env unconditionally so JIT compilation (CompileProgram) works on mock
             // and emulated devices too. The build env is HAL/arch-derived and does not probe hardware.
-            BuildEnvManager::get_instance().add_build_env(
-                device_id, num_hw_cqs_, descriptor_->metal_context().get_context_id());
+            const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+            BuildEnvManager::get_instance(ctx_id).add_build_env(device_id, num_hw_cqs_, ctx_id);
             // build_firmware() is a pure compile/link step that doesn't touch hardware, and the
             // resulting ELFs export symbols (e.g. __fw_export_text_end) that kernel linker scripts
             // depend on -- without them, JIT-compiling kernels on a mock device fails with
@@ -182,7 +182,7 @@ void RiscFirmwareInitializer::run_async_build_phase(const std::set<tt::ChipId>& 
                                        (cluster_.get_target_device_type() == tt::TargetDevice::Mock &&
                                         !mock_firmware_sources_available_for(cluster_.arch()));
             if (!skip_fw_build) {
-                BuildEnvManager::get_instance().build_firmware(device_id);
+                BuildEnvManager::get_instance(ctx_id).build_firmware(device_id);
             }
             if (!cluster_.is_mock_or_emulated()) {
                 // Clear the entire launch message ring buffer on ethernet cores before application firmware is
@@ -611,6 +611,13 @@ void RiscFirmwareInitializer::generate_worker_logical_to_virtual_map(
                 .translate_coord_to({tt_xy_pair{0, y}, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED)
                 .y);
     }
+
+    // Pad to a multiple of 4 bytes so these vectors can be multicast via noc_multicast_write without a
+    // sub-word tail. UMD's WC memcpy_to_device handles a misaligned tail with a device read-modify-write,
+    // which on a multicast window issues a broadcast read — undefined per the NoC spec. The firmware reader
+    // indexes by logical col/row only, so the trailing zero bytes are never read.
+    worker_logical_col_to_virtual_col.resize(tt::round_up(tensix_grid_size.x, 4), 0);
+    worker_logical_row_to_virtual_row.resize(tt::round_up(tensix_grid_size.y, 4), 0);
 }
 
 void RiscFirmwareInitializer::initialize_device_bank_to_noc_tables(
@@ -1015,6 +1022,8 @@ void RiscFirmwareInitializer::initialize_firmware(
     std::optional<CoreCoord> end_core) {
     ZoneScoped;
 
+    const ContextId ctx_id = descriptor_->metal_context().get_context_id();
+
     TT_FATAL(
         core_type != HalProgrammableCoreType::TENSIX or end_core.has_value(),
         "Tensix cores require end_core to be specified for bank to noc table initialization.");
@@ -1074,15 +1083,32 @@ void RiscFirmwareInitializer::initialize_firmware(
             cluster_.noc_multicast_write(
                 &zero, sizeof(uint32_t), device_id, start_core, end_core.value(), go_message_index_addr);
         }
+
+        // Initialize fw_shared_globals_ready_addr Quasar DM0 to WAIT
+        if (cluster_.arch() == ARCH::QUASAR) {
+            auto factory = hal_.get_dev_msgs_factory(programmable_core_type);
+            const DeviceAddr mailbox_addr = hal_.get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+            const DeviceAddr fw_shared_globals_ready_addr =
+                mailbox_addr +
+                factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::fw_shared_globals_ready);
+            const uint8_t zero = 0;
+            if (core_type != HalProgrammableCoreType::TENSIX) {
+                cluster_.write_core(
+                    &zero, sizeof(zero), tt_cxy_pair(device_id, virtual_core), fw_shared_globals_ready_addr);
+            } else {
+                cluster_.noc_multicast_write(
+                    &zero, sizeof(zero), device_id, start_core, end_core.value(), fw_shared_globals_ready_addr);
+            }
+        }
     };
 
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto [_, num_build_states] = BuildEnvManager::get_instance().get_build_index_and_state_count(
+                auto [_, num_build_states] = BuildEnvManager::get_instance(ctx_id).get_build_index_and_state_count(
                     core_type_idx, processor_class, true);
                 for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
-                    auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                    auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                         device_id, core_type_idx, processor_class, riscv_id);
                     const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
@@ -1152,7 +1178,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
-                        auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, eriscv_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(
@@ -1204,7 +1230,7 @@ void RiscFirmwareInitializer::initialize_firmware(
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
                     auto num_build_states = hal_.get_processor_types_count(core_type_idx, processor_class);
                     for (uint32_t drisc_id = 0; drisc_id < num_build_states; drisc_id++) {
-                        auto fw_path = BuildEnvManager::get_instance().get_firmware_binary_path(
+                        auto fw_path = BuildEnvManager::get_instance(ctx_id).get_firmware_binary_path(
                             device_id, core_type_idx, processor_class, drisc_id);
                         const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         llrt::test_load_write_read_risc_binary(

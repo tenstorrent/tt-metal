@@ -91,7 +91,8 @@ static_assert(hashable_v<ProgramSpec>, "ProgramSpec must be hashable via ttsl re
 static_assert(hashable_v<WorkUnitSpec>, "WorkUnitSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<KernelSpec>, "KernelSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<DataflowBufferSpec>, "DataflowBufferSpec must be hashable via ttsl reflection");
-static_assert(hashable_v<RemoteDataflowBufferSpec>, "RemoteDataflowBufferSpec must be hashable via ttsl reflection");
+static_assert(
+    hashable_v<CrossNodeDataflowBufferSpec>, "CrossNodeDataflowBufferSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<SemaphoreSpec>, "SemaphoreSpec must be hashable via ttsl reflection");
 static_assert(hashable_v<TensorParameter>, "TensorParameter must be hashable via ttsl reflection");
 
@@ -473,8 +474,8 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
     auto dfb = MakeMinimalDFB("dfb");
     dfb.data_format_metadata = tt::DataFormat::Float16_b;
 
-    // Two PRODUCER bindings on the same DFB, both KernelSpecs in the same WorkUnitSpec.
-    // Multi-binding requires non-overlapping WU membership per role; this should fail.
+    // Two PRODUCER bindings on the same DFB, both KernelSpecs in the same WorkUnitSpec (so both
+    // land on the same node). A local DFB allows only one producer instance per node, so this fails.
     producer1.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     producer2.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
@@ -486,8 +487,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleProducersInSameWorkUnitFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' has multiple PRODUCER KernelSpecs sharing WorkUnitSpec 'work_unit'")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 producer instance(s)")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
@@ -516,8 +516,7 @@ TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInSameWorkUnitFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' has multiple CONSUMER KernelSpecs sharing WorkUnitSpec 'work_unit'")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("2 consumer instance(s)")));
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBWithMultipleConsumersInDifferentWorkUnitsSucceeds) {
@@ -593,7 +592,8 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
     producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
-    // Producer covers wu_p; consumer covers wu_c. Their coverages differ — invalid.
+    // Producer covers node0; consumer covers node1. Every node ends up with only one role —
+    // the per-node census rejects it (each node hosting the DFB needs both a producer and consumer).
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{
@@ -603,7 +603,39 @@ TEST_F(ProgramSpecTestQuasar, DFBProducerConsumerCoverageMismatchFails) {
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not cover the same WorkUnitSpec(s)")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("is malformed at node")));
+}
+
+// The canonical 2D-matmul placement: one compute consumer spanning the whole grid, with a
+// separate specialized DM producer per node group. The producer role has several KernelSpecs (one
+// per group's WorkUnitSpec); the single consumer joins every group's WorkUnitSpec. Each node ends
+// up with exactly one producer and one consumer instance, so the per-node census accepts it.
+TEST_F(ProgramSpecTestQuasar, LocalDFBAllGridConsumerWithPerGroupProducersSucceeds) {
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto consumer = MakeMinimalComputeKernel("compute");
+    auto dfb = MakeMinimalDFB("dfb");
+    dfb.data_format_metadata = tt::DataFormat::Float16_b;
+    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
+
+    std::vector<KernelSpec> kernels;
+    std::vector<WorkUnitSpec> work_units;
+    for (uint32_t i = 0; i < 4; ++i) {
+        const std::string dm_name = "dm" + std::to_string(i);
+        auto dm = MakeMinimalDMKernel(dm_name);
+        dm.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
+        kernels.push_back(dm);
+        // One node per group: the per-group DM lives there, and the all-grid compute joins it.
+        work_units.push_back(MakeMinimalWorkUnit("wu" + std::to_string(i), NodeCoord{i, 0}, {dm_name, "compute"}));
+    }
+    kernels.push_back(consumer);
+
+    spec.kernels = std::move(kernels);
+    spec.dataflow_buffers = {dfb};
+    spec.work_units = std::move(work_units);
+
+    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestQuasar, DFBMultiBindingAccessPatternMismatchFails) {
@@ -909,8 +941,8 @@ TEST_F(ProgramSpecTestQuasar, RoleHintIgnoredOnGen2Succeeds) {
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
-// Remote DFBs are part of the API surface but not yet supported by the runtime.
-TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
+// Cross-node DFBs are part of the API surface but not yet supported by the runtime.
+TEST_F(ProgramSpecTestQuasar, CrossNodeDFBNotYetSupportedAtRuntime) {
     NodeCoord producer_node{0, 0};
     NodeCoord consumer_node{1, 0};
 
@@ -924,7 +956,7 @@ TEST_F(ProgramSpecTestQuasar, RemoteDFBNotYetSupportedAtRuntime) {
     consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
 
     spec.kernels = {producer, consumer};
-    spec.remote_dataflow_buffers = {RemoteDataflowBufferSpec{
+    spec.cross_node_dataflow_buffers = {CrossNodeDataflowBufferSpec{
         .dfb_spec = MakeMinimalDFB("dfb"),
         .producer_consumer_map = {{producer_node, consumer_node}},
     }};
@@ -1131,6 +1163,19 @@ TEST_F(ProgramSpecTestQuasar, KernelSemaphoreBindingDuplicateAccessorFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("duplicate semaphore accessor_name 'same'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, TensorBindingOnComputeKernelTemporarilyUnsupportedFails) {
+    // TEMPORARY restriction: a TensorAccessor cannot yet be constructed in a compute kernel, so
+    // binding a tensor to one is rejected up front in ValidateProgramSpec with an apologetic message.
+    // Delete this test when compute-path tensor bindings are supported (the guard goes with it).
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.tensor_parameters = {MakeMinimalTensorParameter("t")};
+    BindTensorParameterToKernel(spec.kernels[1], "t", "t_acc");  // kernels[1] == compute_kernel
+
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("compute kernel with a tensor binding")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SemaphoreNonZeroInitialValueFailsOnQuasar) {
@@ -1642,9 +1687,9 @@ TEST_F(ProgramSpecTestQuasar, WorkUnitWithMultipleComputeKernelsFails) {
             ::testing::HasSubstr("WorkUnitSpec 'work_unit' has more than one compute kernel")));
 }
 
-TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatchFails) {
-    // A local DFB requires its producer and consumer kernels to share IDENTICAL
-    // WorkUnitSpec membership.
+TEST_F(ProgramSpecTestQuasar, LocalDFBConsumerOnNodeWithoutProducerFails) {
+    // A local DFB requires every node it lives on to host both a producer and a consumer. Here the
+    // consumer covers an extra node where no producer runs, so the per-node census rejects it.
     NodeCoord node0{0, 0};
     NodeCoord node1{1, 0};
 
@@ -1660,7 +1705,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
 
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb};
-    // Producer is on work_unit_0 only; consumer is on both work_units — membership doesn't match.
+    // Producer covers node0 only; consumer covers node0 and node1 — node1 has a consumer but no producer.
     spec.work_units = std::vector<WorkUnitSpec>{
         MakeMinimalWorkUnit("work_unit_0", node0, {"producer", "consumer"}),
         MakeMinimalWorkUnit("work_unit_1", node1, {"consumer"}),
@@ -1668,7 +1713,7 @@ TEST_F(ProgramSpecTestQuasar, LocalDFBProducerConsumerWorkUnitMembershipMismatch
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("do not cover the same WorkUnitSpec(s)")));
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("This node has a consumer but no producer")));
 }
 
 // ----------------------------------------------------------------------------
@@ -2443,8 +2488,8 @@ static_assert(
     std::is_aggregate_v<KernelSpec::RuntimeArgSchema>,
     "RuntimeArgSchema must remain an aggregate to support designated initializers");
 static_assert(
-    std::is_aggregate_v<RemoteDataflowBufferSpec>,
-    "RemoteDataflowBufferSpec must remain an aggregate to support designated initializers");
+    std::is_aggregate_v<CrossNodeDataflowBufferSpec>,
+    "CrossNodeDataflowBufferSpec must remain an aggregate to support designated initializers");
 
 // These tests document the intended construction pattern using designated initializers.
 // They serve as living documentation and will fail to compile if aggregate status is broken.
@@ -2677,7 +2722,7 @@ TEST(AggregateSpecTypes, NestedStructsDesignatedInitializers) {
     };
     EXPECT_EQ(gen1.processor, tt::tt_metal::DataMovementProcessor::RISCV_1);
 
-    RemoteDataflowBufferSpec remote_dfb{
+    CrossNodeDataflowBufferSpec remote_dfb{
         .dfb_spec =
             DataflowBufferSpec{
                 .unique_id = DFBSpecName{"remote_dfb"},
@@ -3083,7 +3128,7 @@ TEST_F(ProgramSpecTestGen1, InvalidTensorAccessorNameFails) {
 
 TEST_F(ProgramSpecTestGen1, AccessorNamesAcrossCategoriesAreSeparateNamespaces) {
     // DFB / Semaphore / TensorAccessor accessor names live in separate namespaces (each gets
-    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, ta::). Reusing
+    // its own emitted namespace in kernel_bindings_generated.h: dfb::, sem::, tensor::). Reusing
     // the same identifier across categories within one kernel must be allowed.
     ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
 
@@ -3119,7 +3164,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 // SECTION 10: TensorParameter JIT Smoke Tests (Gen1 / WH)
 // ============================================================================
 // Codegen-path smoke test for the Metal 2.0 TensorAccessor binding feature. Ends in
-// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `ta::` namespace)
+// CompileProgram, so the auto-generated kernel_bindings_generated.h (with its `tensor::` namespace)
 // must be syntactically valid and compose correctly with the rest of the kernel build. Doesn't
 // validate runtime behavior — catches regressions in codegen string-formatting, token type alias
 // generation, and include-path resolution.
@@ -3132,7 +3177,7 @@ TEST_F(ProgramSpecTestGen1, MinimalValidProgramSpecWithTensorParameterSucceeds) 
 
 TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     // DM kernel constructs a TensorAccessor from a binding token + invokes a NoC-using method.
-    // Exercises: ta:: namespace token, type alias <name>_t, the token ctor and its deduction
+    // Exercises: tensor:: namespace token, type alias <name>_t, the token ctor and its deduction
     // guide, get_common_arg_val for the implicit base address.
     NodeCoord node{0, 0};
 
@@ -3142,7 +3187,7 @@ TEST_F(ProgramSpecTestGen1, TensorAccessorBindingJITSmokeDMKernel) {
     auto dm_kernel = MakeMinimalGen1DMKernel("dm_kernel");
     dm_kernel.source = KernelSpec::SourceCode{R"(
 void kernel_main() {
-    TensorAccessor accessor(ta::input_tensor);
+    TensorAccessor accessor(tensor::input_tensor);
     auto noc_addr = accessor.get_noc_addr(0);
     (void)noc_addr;
 }

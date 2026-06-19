@@ -81,7 +81,26 @@ jobs:
           #     "additional-server-args": "--async-scheduling",
           #     "multimodal": false,
           #     "owner_id": "U08TJ70UFRT"
-          #   }
+          #   },
+          #
+          # Disabled due to Metal timeout in reduce-scatter async tests
+          # https://github.com/tenstorrent/vllm/issues/416
+          # Originally disabled in:
+          #   https://github.com/tenstorrent/tt-metal/pull/39088
+          #   {
+          #     "name": "[WH-T3K] Multi-process reduce scatter test model",
+          #     "model": "models/vllm_test_utils/t3000_multiproc_test",
+          #     "server-timeout": 4,
+          #     "benchmark-timeout": 4,
+          #     "runner-label": "config-t3000",
+          #     "arch": "arch-wormhole_b0",
+          #     "mesh-device": "(2, 4)",
+          #     "tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
+          #     "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
+          #     "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
+          #     "multimodal": false,
+          #     "co-owner-1-id": "U08CEGF78ET"
+          #   },
           all_tests='[
             {
               "name": "[WH-T3K] Gemma3-27B",
@@ -122,7 +141,20 @@ jobs:
               "runner-label": "N150",
               "arch": "arch-wormhole_b0",
               "mesh-device": "N150",
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
+              "multimodal": false,
+              "owner_id": "U08TJ70UFRT"
+            },
+            {
+              "name": "[BH-QB-2] Gemma4-12B",
+              "model": "google/gemma-4-12B-it",
+              "server-timeout": 20,
+              "benchmark-timeout": 5,
+              "runner-label": "BH-Quietbox-2",
+              "arch": "arch-blackhole",
+              "mesh-device": "P150x4",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 100000000}",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -135,7 +167,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--async-scheduling",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -147,8 +179,8 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\"}",
-              "additional-server-args": "--async-scheduling",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 100000000}",
+              "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
             },
@@ -330,20 +362,6 @@ jobs:
               "multimodal": true,
               "additional-server-args": "--async-scheduling",
               "co-owner-1-id": "U08H31YMN4Q"
-            },
-            {
-              "name": "[WH-T3K] Multi-process reduce scatter test model",
-              "model": "models/vllm_test_utils/t3000_multiproc_test",
-              "server-timeout": 4,
-              "benchmark-timeout": 4,
-              "runner-label": "config-t3000",
-              "arch": "arch-wormhole_b0",
-              "mesh-device": "(2, 4)",
-              "tt-config": "{\"rank_binding\": \"tests/tt_metal/distributed/config/2x4_multiprocess_rank_bindings.yaml\", \"mpi_args\": \"--allow-run-as-root --tag-output\", \"config_pkl_dir\": \"vllm\", \"register_test_models\": true}",
-              "additional-server-args": "--data_parallel_size 8 --tokenizer meta-llama/Llama-3.1-8B-Instruct --async-scheduling",
-              "additional-benchmark-args": "--tokenizer meta-llama/Llama-3.1-8B-Instruct",
-              "multimodal": false,
-              "co-owner-1-id": "U08CEGF78ET"
             },
             {
               "name": "[WH-T3K] NoOp test model (vLLM overhead)",

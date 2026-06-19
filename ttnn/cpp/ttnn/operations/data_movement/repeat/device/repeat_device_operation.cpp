@@ -54,7 +54,7 @@ RepeatDeviceOperation::spec_return_value_t RepeatDeviceOperation::compute_output
     if (input_tensor_a.memory_config().is_sharded()) {
         auto shard_spec = input_tensor_a.shard_spec().value();
         shard_spec.shape[0] = output_shape[0];
-        mem_config = mem_config.with_shard_spec(shard_spec);
+        mem_config = MemoryConfig(mem_config.memory_layout(), mem_config.buffer_type(), shard_spec);
     }
     return TensorSpec(
         output_shape,
