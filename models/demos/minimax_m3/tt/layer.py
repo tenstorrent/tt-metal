@@ -78,6 +78,7 @@ class DecoderLayer:
             rotary_dim=getattr(hf_config, "rotary_dim", hf_config.head_dim),
             rms_norm_eps=hf_config.rms_norm_eps,
             use_qk_norm=getattr(hf_config, "use_qk_norm", True),
+            use_gemma_norm=getattr(hf_config, "use_gemma_norm", False),
             sliding_window=getattr(hf_config, "sliding_window", None),
             max_seq_len=max_seq_len,
             max_local_batch_size=max_local_batch_size,

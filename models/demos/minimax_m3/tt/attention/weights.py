@@ -69,16 +69,23 @@ def load_attention_weights(
 
         o_proj = substate(state_dict, "o_proj")["weight"].transpose(-1, -2)
 
-        # QK-norm gains (MiniMax-M2). Full-width RMSNorm over the whole Q (head_dim *
-        # num_heads) and K (head_dim * num_kv_heads) projection output. Reshaped to
-        # [1, 1, 1, width] so the column-parallel mapper shards them across TP the
-        # same way as the Q/K projection columns.
+        # QK-norm gains (MiniMax-M3): per-head RMSNorm over head_dim, so the gain is a
+        # single [head_dim] vector shared across all heads (replicated, NOT TP-sharded).
+        # Gemma (1 + w) is folded in here (fp32, pre-bf16 cast) when use_gemma_norm, exactly
+        # like tt/rms_norm.py; reshaped to (1, 1, head_dim/32, 32) ROW_MAJOR to match the
+        # weight layout ttnn.rms_norm expects (see RMSNorm class / apply_qk_norm_per_head).
         q_norm_w = substate(state_dict, "q_norm").get("weight") if "q_norm.weight" in state_dict else None
         k_norm_w = substate(state_dict, "k_norm").get("weight") if "k_norm.weight" in state_dict else None
-        if q_norm_w is not None:
-            q_norm_w = q_norm_w.reshape(1, 1, 1, -1)
-        if k_norm_w is not None:
-            k_norm_w = k_norm_w.reshape(1, 1, 1, -1)
+
+        def _prep_qk_norm_gain(w):
+            if w is None:
+                return None
+            if config.use_gemma_norm:
+                w = w.float() + 1.0
+            return w.reshape(1, 1, -1, ttnn.TILE_SIZE)
+
+        q_norm_w = _prep_qk_norm_gain(q_norm_w)
+        k_norm_w = _prep_qk_norm_gain(k_norm_w)
 
         # Create fused QKV weight
         # Split Q, K, V across devices, then concatenate per device
@@ -144,15 +151,17 @@ def load_attention_weights(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    # QK-norm gains, sharded column-parallel (same axis as Q/K projection columns)
-    # so each TP device holds the gains for its local Q/K slice. Kept in bfloat16.
+    # QK-norm gains (M3 per-head): a single [head_dim] gain replicated across all devices
+    # (head_dim is not TP-sharded, so every device norms its local heads with the same gain).
+    # ROW_MAJOR layout to match ttnn.rms_norm's weight expectation. Kept in bfloat16.
+    replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     q_norm_tt = (
         ttnn.as_tensor(
             q_norm_w,
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=col_mesh_mapper,
+            mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "q_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -163,9 +172,9 @@ def load_attention_weights(
         ttnn.as_tensor(
             k_norm_w,
             device=mesh_device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.bfloat16,
-            mesh_mapper=col_mesh_mapper,
+            mesh_mapper=replicate_mapper,
             cache_file_name=get_cache_file_name(tensor_cache_path, "k_norm"),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

@@ -9,7 +9,7 @@ from .operations import (
     apply_allreduce,
     apply_output_projection,
     apply_output_projection_fused_rs,
-    apply_qk_norm,
+    apply_qk_norm_per_head,
     apply_qkv_projection,
     apply_rope,
     concat_heads,
@@ -72,13 +72,10 @@ def prefill_forward(
     xqkv_fused = apply_qkv_projection(hidden_states, weights)
     hidden_states.deallocate(True)  # Free input activations after projection
 
-    # QK-norm (MiniMax-M2): full-width RMSNorm on Q and K, applied on the flat
-    # projection output BEFORE the head split, matching HF order. Distributed
-    # across TP (shares only the per-token sum-of-squares).
-    if config.use_qk_norm and weights.q_norm is not None:
-        xqkv_normed = apply_qk_norm(xqkv_fused, weights, config, mesh_config, ccl_manager)
-        xqkv_fused.deallocate(True)
-        xqkv_fused = xqkv_normed
+    # NOTE (M3): QK-norm moved AFTER the head split — M3 uses per-head RMSNorm over
+    # head_dim (qk_norm_type="per_head"), not M2's full-width norm on the flat projection.
+    # See the post-split block below (matches transformers minimax_m3_vl: view-to-heads →
+    # q_norm/k_norm → RoPE).
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
     if batch_size > 1:
@@ -90,6 +87,16 @@ def prefill_forward(
 
     tt_q, tt_k, tt_v = split_qkv_heads_prefill(xqkv_fused, num_local_heads, num_local_kv_heads)
     xqkv_fused.deallocate(True)
+
+    # QK-norm (MiniMax-M3): per-head RMSNorm over head_dim on the split Q/K
+    # ([1, n_heads, S, head_dim]), applied BEFORE RoPE, on Q and K only. The gemma (1+w)
+    # fold is baked into the gain at load (weights.py); local per head (no TP reduction).
+    if config.use_qk_norm and weights.q_norm is not None:
+        tt_q_pre, tt_k_pre = tt_q, tt_k
+        tt_q = apply_qk_norm_per_head(tt_q, weights.q_norm, config.rms_norm_eps)
+        tt_k = apply_qk_norm_per_head(tt_k, weights.k_norm, config.rms_norm_eps)
+        tt_q_pre.deallocate(True)
+        tt_k_pre.deallocate(True)
 
     # Apply RoPE (use per-user seq_len positions)
     if batch_size > 1:

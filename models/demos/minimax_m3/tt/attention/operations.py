@@ -165,6 +165,20 @@ def apply_qk_norm(xqkv_fused, weights: AttentionWeights, config, mesh_config, cc
     return out
 
 
+def apply_qk_norm_per_head(tensor, norm_weight, eps: float):
+    """Apply MiniMax-M3 per-head QK-norm: RMSNorm over the head_dim (last) dimension with a
+    [head_dim] gain, broadcast across all heads.
+
+    ``tensor`` is a head-split Q or K of shape [1, n_heads, S, head_dim] (so the norm runs
+    independently per (head, token) vector — this is the M3 ``qk_norm_type=per_head`` delta vs
+    M2's full-width norm). The gemma ``(1 + w)`` fold is baked into ``norm_weight`` at load
+    (weights.py), so this is a plain ttnn.rms_norm. head_dim is NOT TP-sharded, so the norm is
+    local to each device — no cross-TP reduction (unlike the full-width distributed_rms_norm).
+    Applied BEFORE RoPE, on Q and K only (matches transformers minimax_m3_vl).
+    """
+    return ttnn.rms_norm(tensor, weight=norm_weight, epsilon=eps)
+
+
 def concat_heads(tensor):
     """
     Concatenate attention heads back to hidden dimension (prefill).

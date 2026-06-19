@@ -21,10 +21,11 @@ class AttentionConfig:
     sliding_window: int | None = None
     scaling: float | None = None  # Computed if None
 
-    # MiniMax-M2 specifics
+    # MiniMax-M2/M3 specifics
     rotary_dim: int | None = None  # partial rotary width; defaults to head_dim (full)
     rms_norm_eps: float = 1e-6  # used by QK-norm
-    use_qk_norm: bool = True  # MiniMax-M2 applies full-width RMSNorm to Q and K
+    use_qk_norm: bool = True  # M2 = full-width RMSNorm on Q/K; M3 = per-head (over head_dim)
+    use_gemma_norm: bool = False  # M3: QK-norm uses gemma (1+w) RMSNorm (folded into the gain)
 
     def __post_init__(self):
         """Compute scaling factor if not provided"""
