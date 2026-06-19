@@ -696,6 +696,32 @@ def test_ds_moe(
     "mesh_device, device_params, num_links, topology",
     [
         pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
+        pytest.param(
             (8, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
