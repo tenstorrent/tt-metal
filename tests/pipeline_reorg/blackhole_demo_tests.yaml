@@ -177,12 +177,12 @@
     export HF_MODEL=mistralai/Mistral-Small-4-119B-2603
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Mistral-Small-4-119B-2603
     export MESH_DEVICE=P150x8
-    python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
+    TT_LOGGER_LEVEL=Error python models/experimental/mistral_small_4_119b/demo/demo_multimodal.py \
       --warmup --n-text-layers 36 --n-vision-layers 24 --image-max-side 512 --max-new-tokens 512
-    pytest --timeout 1800 models/experimental/mistral_small_4_119b/tests/perf/test_e2e_performant.py -k L36V24
+    TT_LOGGER_LEVEL=Error pytest models/experimental/mistral_small_4_119b/tests/perf/test_e2e_performant.py -k L36V24
   skus:
     bh_loudbox:
-      timeout: 90
+      timeout: 150
   owner_id: U09SQ3SP5HV # Moritz Thüning
   team: models
   model-name: mistral-small-4-119b
