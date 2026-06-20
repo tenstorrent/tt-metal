@@ -692,16 +692,17 @@
    "op_family": "data_movement + reduction",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor (large Wt -> multicore-DRAM branch)"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "legacy raw API; FLAG-ONLY",
+   "last_verified": "2026-06-20",
+   "census_note": "legacy raw API; FLAG-ONLY | DEFER-DESIGN-GAP: (1) mcast recipient count number_of_dest is a RUNTIME arg (get_arg_val 6 = core_range.num_cores()), v7 NUM_ACTIVE_RECEIVER_CORES is compile-time. (2) SPLIT count: start phase mcasts number_of_dest and waits number_of_dest; substage phase mcasts number_of_dest but waits Wt/2 confirmations (!= recipient count) - single PRE_HANDSHAKE ties ack-wait to recipient count. (3) sem ids are RUNTIME args (Semaphore<>(get_arg_val)). Three known design gaps. Needs helper change (out of scope).",
    "flags": [
+    "design-gap",
     "tier:3"
    ]
   },
@@ -710,16 +711,17 @@
    "op_family": "data_movement + reduction",
    "role": "receiver",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "legacy",
+   "last_verified": "2026-06-20",
+   "census_note": "legacy | DEFER-DESIGN-GAP: worker RECEIVER half of coordinator STAR. Inverted flag (coordinator_to_cores_sem: wait(0)/set(VALID), polarity opposite to helper VALID-ready). sem ids RUNTIME args (Semaphore<>(get_arg_val)) - v7 sem ids are compile-time template params. Pairs with coordinator which itself defers (runtime recipient count + split count). Out of scope.",
    "flags": [
+    "design-gap",
     "tier:3"
    ]
   },
@@ -728,16 +730,17 @@
    "op_family": "data_movement + reduction",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "confirmation inc",
+   "last_verified": "2026-06-20",
+   "census_note": "confirmation inc | DEFER-DESIGN-GAP: return leg of the coordinator counter (up(cores_to_coordinator) per processed pair). Pure ack emit, not a Pipe face; pairs with the coordinator/reader STAR which defers (runtime recipient count + split count + runtime sem ids). No standalone Pipe migration. Out of scope.",
    "flags": [
+    "design-gap",
     "tier:3"
    ]
   },
@@ -746,16 +749,17 @@
    "op_family": "data_movement + reduction",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-TILE-L1-L1)"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "single-shot go-flag mcast to 2-3 rects; legacy API",
+   "last_verified": "2026-06-20",
+   "census_note": "single-shot go-flag mcast; legacy API | DEFER-DESIGN-GAP: (1) RUNTIME role selection: is_controller=get_arg_val(8) picks sender-vs-receiver per-core under one binary; v7 SenderPipe/ReceiverPipe are distinct compile-time types. (2) MULTI-RECT 2-3 rects with RUNTIME per-rect counts (range_{0,1,2}_size, do_third_multicast all get_arg_val); v7 takes single McastRect + compile-time NUM_ACTIVE_RECEIVER_CORES. (3) dual-use L1 word (control_value RUNTIME): receivers inc as counter, controller waits then broadcasts same cell as go-flag. (4) runtime sem id. Multiple known design gaps. Needs helper change (out of scope).",
    "flags": [
+    "design-gap",
     "tier:3"
    ]
   },
@@ -764,16 +768,17 @@
    "op_family": "data_movement + reduction",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-RM-L1-L1)"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "RM twin of above",
+   "last_verified": "2026-06-20",
+   "census_note": "RM twin of above | DEFER-DESIGN-GAP: structurally identical to move_interleaved_with_overlap (RM data path only diff). Same gaps: runtime role selection (is_controller), multi-rect 2-3 rects with runtime per-rect counts, dual-use control_value word, runtime sem id. Needs helper change (out of scope).",
    "flags": [
+    "design-gap",
     "tier:3"
    ]
   },
