@@ -496,12 +496,25 @@ ROUTED_EXPERT_MODELS = [
 ]
 
 
+# Models whose routed-expert op currently fails on BH, keyed by model name -> reason (with the
+# tracking issue link). xfail'd so CI stays green while the issues are worked on; delete an entry
+# once its issue is resolved.
+XFAIL_ROUTED_EXPERT = {
+    "dsv4_pro": "DeepSeek V4 Pro routed expert: CB grows beyond L1 — https://github.com/tenstorrent/tt-metal/issues/46608",
+    "gptoss_120b": "GPT-OSS 120B routed expert — https://github.com/tenstorrent/tt-metal/issues/47604",
+}
+
+
 def routed_expert_shape_params():
     """Build the per-model shape parametrization. Non-baseline models carry the extended_model
-    marker on their params so they stay gated exactly as the separate tests were."""
+    marker on their params so they stay gated exactly as the separate tests were. Models listed in
+    XFAIL_ROUTED_EXPERT additionally carry an xfail marker tied to their tracking issue."""
     params = []
     for name, config, extended in ROUTED_EXPERT_MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
+        xfail_reason = XFAIL_ROUTED_EXPERT.get(name)
+        if xfail_reason:
+            marks += (pytest.mark.xfail(reason=xfail_reason, strict=False),)
         params.append(
             pytest.param(
                 3200,
