@@ -262,13 +262,10 @@ class TtQwen36DeltaAttention(LightweightModule):
         self.tt_ccl = tt_ccl
         # self.dtype controls ALL weight loads via _to_device(dtype or self.dtype).
         # Passing dtype=bfloat16 quantizes weights from fp32→bf16 directly (proper
-        # precision); bf8 is the default.
-        # fp32 partial products: the col-axis all_reduce sums 4 partial K-products.
-        # If partial products are bf16, (a+b+c+d) in bf16 ≠ reference full-H matmul
-        # (non-associative rounding). fp32 partial products make the sum mathematically
-        # equivalent to the single fp32 matmul the reference computes.
+        # precision); bf8 is the default. _proj_act_dtype=bf16 keeps matmul outputs
+        # bf16 regardless of weight dtype so CCL reductions always run in bf16.
         self.dtype = dtype
-        self._proj_act_dtype = ttnn.float32
+        self._proj_act_dtype = ttnn.bfloat16
 
         # --- Mesh topology ---
         self.cluster_shape = list(mesh_device.shape)  # [8, 4]
@@ -1047,12 +1044,6 @@ class TtQwen36DeltaAttention(LightweightModule):
             # Legacy path: rebuild mixed from the separate q,k,v slices.
             mixed = ttnn.concat([q, k, v], dim=-1, memory_config=mem)
         # else: Fuse A — `mixed` is the contiguous Q|K|V slice; deallocate after conv.
-        # Cast to bf16 if fp32 — conv_state is bf16 and concat inside _causal_conv1d_fir_mesh
-        # requires matching dtypes.
-        if mixed.dtype == ttnn.float32:
-            mixed_bf16 = ttnn.typecast(mixed, dtype=ttnn.bfloat16, memory_config=mem)
-            ttnn.deallocate(mixed)
-            mixed = mixed_bf16
         mixed_conv, new_conv_state = _causal_conv1d_fir_mesh(
             mixed,
             self.conv_weight_taps,
