@@ -861,9 +861,8 @@
    ],
    "coverage_confidence": "high",
    "last_verified": "2026-06-20",
-   "census_note": "DEFERRED coverage-gap: loop-barrier mcast only runs on the requires_grid_size(101) tests; this WH n150 has 64 worker cores (8x8) -> SKIPPED. v7 SenderPipe form prepared (mirrors reader_final_topk) but not device-verifiable here. Kernel left at its pre-v7 Pipe<> spelling.",
+   "census_note": "DEFER-COVERAGE: loop-barrier mcast only driven by requires_grid_size(101) tests; this WH n150 has 64 cores. Was stale-v4 Pipe<> (9f47f2dbcad); RESTORED to raw working code (compile-clean). Remigrate+verify on a >=101-core machine.",
    "flags": [
-    "tier:1",
     "coverage-gap"
    ]
   },
