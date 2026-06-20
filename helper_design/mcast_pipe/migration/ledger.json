@@ -842,17 +842,18 @@
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "models/demos/deepseek_v3_b1/.../test_kv_cache_branch.py::test_kv_cache_branch"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "preprogram-state mcast",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFER-DESIGN-GAP: preprogram-state mcast (noc_async_write_multicast_preprogram_all_state / multicast_write_with_state / _issue_txn set-state+issue-txn split, shared-cmd-buf branch). v7 SenderPipe.send() issues a single async_write_multicast per call with no set-state path; migrating would drop the preprogram-state perf optimization that is the whole point of these unified_kernels. proposed_helpers.md explicitly defers this (no mcast set-state in object API; future). Out of scope.",
    "flags": [
-    "tier:2d"
+    "tier:2d",
+    "design-gap"
    ]
   },
   {
