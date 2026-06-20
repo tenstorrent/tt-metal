@@ -50,6 +50,15 @@ bool wrap_ge(uint32_t a, uint32_t b) {
     return diff >= 0;
 }
 
+void advance_simulator_cq_wait(MetalContext& ctx, uint32_t device_id) {
+    if (!ctx.rtoptions().get_simulator_enabled()) {
+        return;
+    }
+    for (uint32_t i = 0; i < ctx.rtoptions().get_simulator_cq_wait_clocks(); ++i) {
+        ctx.get_cluster().advance_device_execution(device_id);
+    }
+}
+
 // Cancellable timeout wrapper: invokes on_timeout() before throwing and waits for task to exit
 // Please note that the FuncBody is going to loop until the FuncWait returns false.
 // GetProgress is optional - if provided, timeout only triggers if BOTH wait_condition is true AND no progress made
@@ -687,8 +696,7 @@ void SystemMemoryManager::fetch_queue_reserve_back(const uint8_t cq_id) {
         auto fetch_operation_body = [&]() {
             ctx.get_cluster().read_core(&fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
             this->prefetch_q_dev_fences[cq_id] = fence;
-            // Yield to clock the simulator when running on TTSim; no-op on real hardware.
-            ctx.get_cluster().advance_device_execution(this->device_id);
+            advance_simulator_cq_wait(ctx, this->device_id);
         };
 
         // Condition to check if should continue waiting
@@ -771,8 +779,7 @@ uint32_t SystemMemoryManager::completion_queue_wait_front(
                 non_const_this->get_last_completed_event(cq_id));
             std::fflush(stderr);
         }
-        // Yield to clock the simulator when running on TTSim; no-op on real hardware.
-        tt::tt_metal::MetalContext::instance(this->context_id).get_cluster().advance_device_execution(this->device_id);
+        advance_simulator_cq_wait(tt::tt_metal::MetalContext::instance(this->context_id), this->device_id);
     };
 
     // Condition to check if the operation should continue
