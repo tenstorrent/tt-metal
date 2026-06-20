@@ -9,12 +9,11 @@ show_help() {
 Usage: create_venv.sh [OPTIONS]
 
 Create a Python virtual environment for tt-metal development using uv.
-Installs the specified Python version, sets up the virtual environment, and
-installs all required dependencies including dev dependencies and tt-metal itself.
+Uses the Python interpreter provided by the Nix development shell, sets up the
+virtual environment, and installs all required dependencies including dev
+dependencies and tt-metal itself.
 
 OPTIONS:
-    --python-version VER  Python version for the virtual environment (e.g., 3.10, 3.11)
-                          Default: 3.10
     --env-dir DIR         Directory where the virtual environment will be created.
                           Parent directories are created automatically if needed.
                           Default: ./python_env
@@ -31,15 +30,11 @@ ENVIRONMENT VARIABLES:
     Environment variables provide defaults that can be overridden by command-line
     arguments. Arguments always take precedence over environment variables.
 
-    VENV_PYTHON_VERSION   Python version (overridden by --python-version)
     PYTHON_ENV_DIR        Virtual environment directory (overridden by --env-dir)
 
 EXAMPLES:
-    # Use defaults (Python 3.10, ./python_env)
+    # Use defaults
     ./create_venv.sh
-
-    # Specify Python version
-    ./create_venv.sh --python-version 3.12
 
     # Custom environment directory
     ./create_venv.sh --env-dir /opt/venv
@@ -48,10 +43,7 @@ EXAMPLES:
     ./create_venv.sh --env-dir /opt/myproject/envs/dev
 
     # Using environment variables
-    PYTHON_ENV_DIR=/opt/venv VENV_PYTHON_VERSION=3.12 ./create_venv.sh
-
-    # Arguments override environment variables
-    VENV_PYTHON_VERSION=3.10 ./create_venv.sh --python-version 3.12  # Uses 3.12
+    PYTHON_ENV_DIR=/opt/venv ./create_venv.sh
 
 NOTE:
     If you encounter venv issues, running "uv pip install -e ." with the venv active
@@ -60,7 +52,6 @@ EOF
 }
 
 # Variables to track argument-provided values (take precedence over env vars)
-ARG_PYTHON_VERSION=""
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
 BUNDLE_PYTHON="false"
@@ -69,16 +60,6 @@ SKIP_COMPAT_CHECK="false"
 # Parse command-line arguments
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --python-version)
-            # Check for missing or flag-like argument (--* matches flags, not negative numbers)
-            if [ -z "$2" ] || [[ "$2" == --* ]]; then
-                echo "Error: --python-version requires a version argument (e.g., --python-version 3.10)" >&2
-                echo "Run '$0 --help' for usage information" >&2
-                exit 1
-            fi
-            ARG_PYTHON_VERSION="$2"
-            shift 2
-            ;;
         --env-dir)
             # Check for missing or flag-like argument (--* matches flags, not paths like ./dir)
             if [ -z "$2" ] || [[ "$2" == --* ]]; then
@@ -195,12 +176,6 @@ validate_env_dir() {
 # Determine repository root from this script's location.
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-# Apply configuration with precedence: arguments > OS detection > default
-# Python version
-if [ -n "$ARG_PYTHON_VERSION" ]; then
-    VENV_PYTHON_VERSION="$ARG_PYTHON_VERSION"
-fi
-
 # Environment directory
 if [ -n "$ARG_ENV_DIR" ]; then
     PYTHON_ENV_DIR="$ARG_ENV_DIR"
@@ -216,10 +191,9 @@ validate_env_dir "$PYTHON_ENV_DIR"
 
 # Create virtual environment
 echo "Creating virtual env in: $PYTHON_ENV_DIR"
-echo "  Python version: ${VENV_PYTHON_VERSION}"
+echo "  Python interpreter: $(command -v python)"
 
-
-UV_VENV_ARGS=(--link-mode copy --relocatable --no-managed-python --python "${VENV_PYTHON_VERSION}")
+UV_VENV_ARGS=(--link-mode copy --relocatable --no-managed-python --python python)
 if [[ "$FORCE_OVERWRITE" == "true" ]]; then
     UV_VENV_ARGS+=(--clear)
 fi
@@ -273,7 +247,7 @@ fi
 
 # Create .pth files for ttml
 # This allows using pre-built ttml from build_metal.sh --build-tt-train
-SITE_PACKAGES="$PYTHON_ENV_DIR/lib/python${VENV_PYTHON_VERSION}/site-packages"
+SITE_PACKAGES="$(python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')"
 
 TTML_SRC_DIR="$ROOT_DIR/tt-train/sources/ttml"
 TTML_BUILD_DIR="$ROOT_DIR/build/tt-train/sources/ttml"
