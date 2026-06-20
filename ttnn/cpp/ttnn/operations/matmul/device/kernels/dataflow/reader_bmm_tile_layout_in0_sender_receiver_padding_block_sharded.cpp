@@ -101,22 +101,21 @@ void kernel_main() {
             }
         }
     }
-    // mcast_pipe v7 (R6 role-flip): every grid core runs BOTH faces of the channel over the rotating
+    // mcast_pipe v8 (R6 role-flip): every grid core runs BOTH faces of the channel over the rotating
     // rounds. SENDER face below; the per-round RECEIVER face is built inside the loop (its ack
-    // target rotates with block_id). One count works here: the factory always sets
-    // in0_mcast_num_dests == in0_mcast_num_cores. The Pipe never counts self, so in-grid cores
-    // pass num_dests - 1. Loopback is inferred per send(): extract (src == dst, block already in
-    // cb_in0) -> EXCLUDE; non-extract (cb_in2 -> cb_in0) -> INCLUDE; out-of-grid -> EXCLUDE.
-    // In-grid single-core (active == 0) collapses to the local-copy degenerate.
+    // target rotates with block_id). Dense: ack == fan-out. The factory always sets
+    // in0_mcast_num_dests == in0_mcast_num_cores == the rect area, so the EXCLUDE fan-out the rect
+    // derives (area - (in_rect?1:0)) reproduces the old in0_pipe_active_cores exactly: in-grid cores
+    // get area-1, out-of-grid cores get area. So the default consumer_ack_count (ACK_EQUALS_FANOUT)
+    // is correct and the explicit count is gone. Loopback is inferred per send(): extract
+    // (src == dst, block already in cb_in0) -> EXCLUDE; non-extract (cb_in2 -> cb_in0) -> INCLUDE;
+    // out-of-grid -> EXCLUDE. In-grid single-core (active == 0) collapses to the local-copy degenerate.
     // DATA_READY_SEM_ID = receiver_sem id (CTA 10), CONSUMER_READY_SEM_ID = sender_sem id (CTA 9).
     // The ctor sets the local data-ready cell VALID once (folds in the dropped pre-loop set(VALID));
     // the per-round raw receiver_sem.set(INVALID) reset stays below.
-    constexpr uint32_t in0_pipe_active_cores =
-        core_in_in0_receiver_mcast_grid ? in0_mcast_num_dests - 1 : in0_mcast_num_dests;
     dataflow_kernel_lib::SenderPipe<
         noc_index,
         get_compile_time_arg_val(10),
-        in0_pipe_active_cores,
         /*PRE_HANDSHAKE=*/true,
         get_compile_time_arg_val(9)>
         in0_send_pipe(
@@ -242,7 +241,7 @@ void kernel_main() {
                         }
 
                         // mcast_pipe SENDER face: send() absorbs the ack wait (PRE_HANDSHAKE,
-                        // in0_pipe_active_cores), the data mcast (mode inferred: extract src==dst ->
+                        // ack == rect-derived fan-out), the data mcast (mode inferred: extract src==dst ->
                         // EXCLUDE n-1; non-extract -> INCLUDE n; out-of-grid -> EXCLUDE n), the VALID
                         // flag mcast on the same VC, and the flush. In-grid single-core collapses to
                         // a local copy with no handshake/flush (raw skipped both there too). The
