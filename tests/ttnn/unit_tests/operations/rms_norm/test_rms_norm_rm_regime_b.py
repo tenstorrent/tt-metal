@@ -53,7 +53,11 @@ _TOL = {ttnn.bfloat16: (0.999, 0.04), ttnn.float32: (0.9999, 0.02)}
 
 
 def _routes_through_regime_b(device, shape, dtype, gamma):
-    """Build the descriptor and confirm it is Regime B RM (carries 2 mcast semaphores)."""
+    """Build the descriptor and confirm it is Regime B RM (carries the mcast semaphores).
+
+    Regime B allocates DATA_READY + CONSUMED (the mcast handshake) and, since
+    Refinement 9 (Part A), a third PRODUCED counter for the root-relay transport — so a
+    Regime-B descriptor has >= 2 semaphores while Regime A (row-parallel) has none."""
     ti = ttnn.from_torch(
         torch.zeros(shape, dtype=torch.float32).to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32),
         dtype=dtype,
@@ -65,7 +69,7 @@ def _routes_through_regime_b(device, shape, dtype, gamma):
         ttnn.Shape(list(shape)), dtype, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
     )
     prog, _ = pd.create_program_descriptor(ti, out_t, gamma, 1e-6, None)
-    return len(prog.semaphores) == 2
+    return len(prog.semaphores) >= 2
 
 
 @pytest.mark.parametrize("dtype", [pytest.param(ttnn.bfloat16, id="bf16"), pytest.param(ttnn.float32, id="fp32")])

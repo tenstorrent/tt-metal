@@ -60,7 +60,18 @@ void kernel_main() {
     constexpr uint32_t gamma_elem = get_compile_time_arg_val(17);
     constexpr uint32_t layout_is_rm = get_compile_time_arg_val(18);
     constexpr uint32_t cb_rm_in = get_compile_time_arg_val(19);  // RM input stick dest
-    constexpr auto input_args = TensorAccessorArgs<20>();
+    // Refinement 9 (Part A): cross-core all-reduce transport selector (Regime B only).
+    //   0 = rotating-sender mcast all-gather (baseline; every one of the K cores mcasts its
+    //       partial to the K-1 others — O(K) serialized mcast rounds).
+    //   1 = root-relay gather-then-broadcast: rank 0 unicast-reads all K-1 peer partials
+    //       (one parallel read phase, gated by a "produced" counter), then issues a SINGLE
+    //       mcast of the assembled K-tile block to the group — O(1) transport phases vs the
+    //       baseline's O(K) rounds. The COMPUTE kernel is unchanged: every core still ends
+    //       with all K partials in cb_partials_gathered and runs the same single-reduce
+    //       combine, so only this reader leg differs.
+    constexpr uint32_t transport_mode = get_compile_time_arg_val(20);
+    constexpr uint32_t produced_sem_id = get_compile_time_arg_val(21);  // mode 1: peers->root "produced" counter
+    constexpr auto input_args = TensorAccessorArgs<22>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
     // ---- runtime args (superset; mcast-only args at [7..] read under constexpr) ----
@@ -200,14 +211,15 @@ void kernel_main() {
         }
     }
 
-    // ---- (Regime B) all-gather K partials over the group rectangle ----
+    // ---- (Regime B) cross-core all-reduce of the K partial Σx² over the group rectangle ----
     if constexpr (num_partials > 1) {
         const uint32_t my_rank = get_arg_val<uint32_t>(7);
         const uint32_t rect_x0 = get_arg_val<uint32_t>(8);
         const uint32_t rect_y0 = get_arg_val<uint32_t>(9);
         const uint32_t rect_x1 = get_arg_val<uint32_t>(10);
         const uint32_t rect_y1 = get_arg_val<uint32_t>(11);
-        // sender virtual coords for round j at args [12 + 2*j, 12 + 2*j + 1]
+        // sender (peer) virtual coords for rank j at args [12 + 2*j, 12 + 2*j + 1];
+        // rank 0 (== root for transport_mode==1) coords are at [12, 13].
 
         // Wait for compute's fully-accumulated local Σx² (single push).
         cb_wait_front(cb_local_sumsq, 1);
@@ -217,31 +229,85 @@ void kernel_main() {
         // which can differ from the input format — stride / transfer with the partials'
         // own tile size, never the input tile size.
         const uint32_t partial_tile_bytes = get_tile_size(cb_partials_gathered);
-        cb_reserve_back(cb_partials_gathered, num_partials);
-        const uint32_t gathered_base = get_write_ptr(cb_partials_gathered);
-        const uint32_t my_slot = gathered_base + my_rank * partial_tile_bytes;
-
-        // Fill my own slot locally (lets the sender use src == dst -> EXCLUDE_SRC).
-        noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], partial_l1), my_slot, partial_tile_bytes);
-        noc_async_read_barrier();
-
         Noc noc;
         const McastRect rect{rect_x0, rect_y0, rect_x1, rect_y1};
-        SenderPipe<num_partials - 1, data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true>
-            sender(noc, rect);
-        ReceiverPipe<data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true> receiver(noc);
 
-        for (uint32_t j = 0; j < num_partials; ++j) {
-            if (j == my_rank) {
-                sender.send(my_slot, my_slot, partial_tile_bytes);
+        if constexpr (transport_mode == 1) {
+            // ----- Root-relay gather-then-broadcast (O(1) transport phases) -----
+            // Raw noc_async_read is used for the GATHER leg (rank 0 unicast-reads each peer's
+            // cb_local_sumsq): mcast_pipe is mcast-oriented and offers no root-reads-many-peers
+            // unicast-gather primitive, so this leg stays raw (documented per the §9 rationale).
+            // The single BROADCAST leg reuses SenderPipe/ReceiverPipe (mcast_pipe), as the design
+            // directs. cb_partials_gathered sits at the same CB index (→ same L1 address) on every
+            // core, so the sender's dst_l1 == every receiver's gathered base.
+            Semaphore<> produced(produced_sem_id);
+            const uint32_t root_x = get_arg_val<uint32_t>(12);  // rank-0 (root) virtual coords
+            const uint32_t root_y = get_arg_val<uint32_t>(13);
+
+            if (my_rank == 0) {
+                cb_reserve_back(cb_partials_gathered, num_partials);
+                const uint32_t gathered_base = get_write_ptr(cb_partials_gathered);
+                // self → slot 0 (local copy)
+                noc_async_read(
+                    get_noc_addr(my_x[noc_index], my_y[noc_index], partial_l1), gathered_base, partial_tile_bytes);
+                // Gate on every peer having PRODUCED its local partial into L1 (barrier-before-
+                // signal on the peer side: a peer ups `produced` only after its compute pushed
+                // cb_local_sumsq, so the data is in L1 before root reads it). §9: counter host-init 0.
+                produced.wait_min(num_partials - 1);
+                for (uint32_t r = 1; r < num_partials; ++r) {
+                    const uint32_t px = get_arg_val<uint32_t>(12 + 2 * r);
+                    const uint32_t py = get_arg_val<uint32_t>(12 + 2 * r + 1);
+                    noc_async_read(
+                        get_noc_addr(px, py, partial_l1), gathered_base + r * partial_tile_bytes, partial_tile_bytes);
+                }
+                noc_async_read_barrier();
+                // ONE mcast of the full K-tile gathered block to the group (EXCLUDE_SRC: root is
+                // in the rect with src==dst, so it never mcasts to itself — §9 never-mcast-to-self).
+                SenderPipe<
+                    num_partials - 1,
+                    data_ready_sem_id,
+                    consumed_sem_id,
+                    Staging::Counter,
+                    /*PRE_HANDSHAKE=*/true>
+                    sender(noc, rect);
+                sender.send(gathered_base, gathered_base, num_partials * partial_tile_bytes);
+                cb_push_back(cb_partials_gathered, num_partials);
             } else {
-                const uint32_t sx = get_arg_val<uint32_t>(12 + 2 * j);
-                const uint32_t sy = get_arg_val<uint32_t>(12 + 2 * j + 1);
-                receiver.receive(sx, sy);
+                // Signal root that my partial is produced (in L1), then receive the broadcast.
+                produced.up(noc, root_x, root_y, 1);
+                cb_reserve_back(cb_partials_gathered, num_partials);
+                ReceiverPipe<data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true> receiver(
+                    noc);
+                receiver.receive(root_x, root_y);
+                cb_push_back(cb_partials_gathered, num_partials);
             }
-        }
+            cb_pop_front(cb_local_sumsq, 1);
+        } else {
+            // ----- Baseline rotating-sender mcast all-gather (O(K) rounds) -----
+            cb_reserve_back(cb_partials_gathered, num_partials);
+            const uint32_t gathered_base = get_write_ptr(cb_partials_gathered);
+            const uint32_t my_slot = gathered_base + my_rank * partial_tile_bytes;
 
-        cb_push_back(cb_partials_gathered, num_partials);
-        cb_pop_front(cb_local_sumsq, 1);
+            // Fill my own slot locally (lets the sender use src == dst -> EXCLUDE_SRC).
+            noc_async_read(get_noc_addr(my_x[noc_index], my_y[noc_index], partial_l1), my_slot, partial_tile_bytes);
+            noc_async_read_barrier();
+
+            SenderPipe<num_partials - 1, data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true>
+                sender(noc, rect);
+            ReceiverPipe<data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true> receiver(noc);
+
+            for (uint32_t j = 0; j < num_partials; ++j) {
+                if (j == my_rank) {
+                    sender.send(my_slot, my_slot, partial_tile_bytes);
+                } else {
+                    const uint32_t sx = get_arg_val<uint32_t>(12 + 2 * j);
+                    const uint32_t sy = get_arg_val<uint32_t>(12 + 2 * j + 1);
+                    receiver.receive(sx, sy);
+                }
+            }
+
+            cb_push_back(cb_partials_gathered, num_partials);
+            cb_pop_front(cb_local_sumsq, 1);
+        }
     }
 }

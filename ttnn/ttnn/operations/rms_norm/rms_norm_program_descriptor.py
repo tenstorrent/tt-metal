@@ -130,6 +130,40 @@ _FORCE_K = None
 # production.
 _FORCE_BH = None
 
+# --- Refinement 9 (Part A): cross-core all-reduce transport selector ---------------
+# The Regime-B all-reduce of the K partial Σx² has two implementations in the unified
+# reader, gated by the `transport_mode` compile-time arg:
+#   0 (TRANSPORT_MCAST_ALLGATHER) — baseline: K-round rotating-sender mcast all-gather
+#       (every one of the K cores mcasts its partial to the K-1 others). O(K) serialized
+#       mcast rounds; the dominant non-reduce term in Regime B (R6/R8).
+#   1 (TRANSPORT_ROOT_RELAY) — root-relay gather-then-broadcast: rank 0 unicast-reads all
+#       K-1 peer partials (one parallel read phase gated by a "produced" counter), then a
+#       SINGLE mcast of the assembled K-tile block to the group. O(1) transport phases.
+#       Compute is identical (every core still combines the K gathered partials).
+# Production default is decided by _select_transport. _FORCE_TRANSPORT (perf tests only)
+# overrides it for the transport bake-off; NEVER set in production.
+TRANSPORT_MCAST_ALLGATHER = 0
+TRANSPORT_ROOT_RELAY = 1
+_FORCE_TRANSPORT = None
+# Semaphore id for the mode-1 "produced" counter (peers -> root). Distinct from the
+# DATA_READY (0) / CONSUMED (1) pair used by the broadcast mcast pipe.
+PRODUCED_SEM = 2
+
+
+def _select_transport(K):
+    """Choose the Regime-B all-reduce transport.
+
+    Refinement 9 (Part A) bake-off result: the root-relay gather-then-broadcast (mode 1)
+    beats the baseline rotating-sender mcast all-gather (mode 0) on EVERY measured wide-W
+    Regime-B shape — 1.10x (Wt=128, K=16) to 1.48x (Wt=1024, K=32) — because it collapses
+    the baseline's O(K) serialized mcast rounds to O(1) transport phases (one parallel
+    gather + one mcast). The win grows with K, so it is the production default for all K.
+    _FORCE_TRANSPORT (perf tests only) overrides for the bake-off measurement itself."""
+    if _FORCE_TRANSPORT is not None:
+        return _FORCE_TRANSPORT
+    return TRANSPORT_ROOT_RELAY
+
+
 # ---- ROW_MAJOR (tilize-wrapped) regime CB indices ----
 # Refinement 3: ROW_MAJOR input/output handled natively via a tilize-wrapped,
 # row-parallel path. The math is identical to Regime A but reads/writes
@@ -562,6 +596,8 @@ def _regime_a_descriptor(
         gamma_elem,
         0,  # layout_is_rm = 0 (TILE)
         CB_INPUT_RESIDENT,  # cb_rm_in (unused)
+        TRANSPORT_MCAST_ALLGATHER,  # transport_mode (unused; num_partials==1)
+        0,  # produced_sem_id (unused; num_partials==1)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -706,6 +742,7 @@ def _regime_b_descriptor(
             f"rms_norm: no rectangular Regime B partition for Wt={Wt}, "
             f"row_groups={num_row_groups}, grid=({grid.x},{grid.y})"
         )
+    transport_mode = _select_transport(K)  # Refinement 9 (Part A)
 
     gh = K // gx  # band height (rows) per group
     Wt_s = Wt // K
@@ -768,6 +805,10 @@ def _regime_b_descriptor(
     semaphores = [
         ttnn.SemaphoreDescriptor(id=DATA_READY, core_ranges=core_ranges, initial_value=0),
         ttnn.SemaphoreDescriptor(id=CONSUMED, core_ranges=core_ranges, initial_value=0),
+        # Refinement 9 (Part A): peers->root "produced" counter for the mode-1 root-relay
+        # gather (host-init 0). Unused when transport_mode==0 but always allocated so the
+        # union of group cores carries it; cheap (one L1 word).
+        ttnn.SemaphoreDescriptor(id=PRODUCED_SEM, core_ranges=core_ranges, initial_value=0),
     ]
 
     def vcoord(lx, ly):
@@ -838,6 +879,8 @@ def _regime_b_descriptor(
         gamma_elem,
         0,  # layout_is_rm = 0 (TILE)
         CB_INPUT_RESIDENT,  # cb_rm_in (unused)
+        transport_mode,  # Refinement 9 (Part A): all-reduce transport selector
+        PRODUCED_SEM,  # produced_sem_id (mode 1 gather counter)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -1005,6 +1048,8 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         gamma_elem,
         1,  # layout_is_rm = 1 (ROW_MAJOR input)
         CB_RM_IN,  # cb_rm_in
+        TRANSPORT_MCAST_ALLGATHER,  # transport_mode (unused; RM Regime A num_partials==1)
+        0,  # produced_sem_id (unused; num_partials==1)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -1126,6 +1171,7 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
             f"rms_norm (RM): no rectangular Regime B partition for Wt={Wt}, "
             f"block_groups={num_block_groups}, grid=({grid.x},{grid.y})"
         )
+    transport_mode = _select_transport(K)  # Refinement 9 (Part A)
 
     gh = K // gx  # band height (rows of cores) per block-group
     Wt_s = Wt // K
@@ -1184,6 +1230,10 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
     semaphores = [
         ttnn.SemaphoreDescriptor(id=DATA_READY, core_ranges=core_ranges, initial_value=0),
         ttnn.SemaphoreDescriptor(id=CONSUMED, core_ranges=core_ranges, initial_value=0),
+        # Refinement 9 (Part A): peers->root "produced" counter for the mode-1 root-relay
+        # gather (host-init 0). Unused when transport_mode==0 but always allocated so the
+        # union of group cores carries it; cheap (one L1 word).
+        ttnn.SemaphoreDescriptor(id=PRODUCED_SEM, core_ranges=core_ranges, initial_value=0),
     ]
 
     def vcoord(lx, ly):
@@ -1253,6 +1303,8 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
         gamma_elem,
         1,  # layout_is_rm = 1
         CB_RM_IN,  # cb_rm_in
+        transport_mode,  # Refinement 9 (Part A): all-reduce transport selector
+        PRODUCED_SEM,  # produced_sem_id (mode 1 gather counter)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
