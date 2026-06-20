@@ -8,9 +8,9 @@
 > Status: **Correctness complete end-to-end** (every block PCC-verified on P150x8, generic ttnn ops,
 > no new kernels) and the **production decode path is captured as a bit-exact trace on the sharded
 > 8-device mesh** with on-device sampling. Perf is measured at full depth (below), including the
-> **compressed-latent KV decode path that reaches 64K context at 36 layers** (25.6× smaller KV; the
-> expanded-kv default OOMs beyond ~8K). Remaining serving optimizations (2CQ, compressed-cache prefill
-> fill to make the long-context path the default) are listed under **Current status**.
+> **compressed-latent KV path — both prefill and decode — that reaches 64K context at 36 layers** (25.6×
+> smaller KV; the expanded-kv default OOMs beyond ~8K). Remaining serving work (full-depth logit PCC +
+> generator wiring to make the long-context path the default, 2CQ) is listed under **Current status**.
 
 ## Architecture / where the code lives
 - **Text core (MLA + MoE)** — model-local modules (`tt/mistral4_text.py`) from generic ttnn ops:
@@ -55,19 +55,24 @@ PCCs are ~0.999. Passes the >0.98 full-depth gate.
 
 ## Performance (measured, P150x8, full 36 layers, sharded bfp8, steady-state, traced)
 
-**Prefill** (batch-1; single-shot ≤4K, chunked beyond):
+**Prefill — TTFT vs ISL** (batch-1). Two paths: the **expanded-kv** default (single-shot ≤4K, chunked to
+8K, then OOMs) and the **compressed-latent** chunked prefill (`forward_prefill_mla_chunked`:
+`flash_mla_prefill`/`chunked_flash_mla_prefill` over the 25.6×-smaller latent, with the chunk loop OUTSIDE
+the layer stack so the MoE only ever sees one chunk), which reaches **64K at the full 36 layers**:
 
-| ISL | 128 | 1024 | 4096 | 8192 (chunked) |
-|---|---|---|---|---|
-| TTFT | 222 ms | 632 ms | 2587 ms | 7.8 s |
-| prefill tok/s | 576 | 1619 | 1584 | ~1050 (217 ms/layer) |
+| ISL | 128 | 512 | 1024 | 2048 | 4096 | 8192 | 16384 | 32768 | 65536 |
+|---|---|---|---|---|---|---|---|---|---|
+| expanded-kv TTFT (default) | 222 ms | — | 632 ms | — | 2587 ms | 7.8 s | OOM | OOM | OOM |
+| **compressed-latent** TTFT | 222 ms | 438 ms | 624 ms | 1.29 s | 3.03 s | 7.71 s | 22.3 s | 102.5 s | 380.5 s |
+| compressed prefill tok/s | 576 | 1168 | 1641 | 1590 | 1353 | 1062 | 734 | 320 | 172 |
 
-CCL ops (MoE all-reduce, LM-head all-gather, sparse all-to-all) use **both** of the P150x8's ethernet
-links per axis (`num_links = get_num_links(mesh)`), which lifts prefill ~2–3.5% over the single-link
-default; B=1 decode is unchanged (its all-reduce payload is latency-bound, not bandwidth-bound).
-
-Largest full-depth ISL = **8192** (chunked prefill). 16384 runs at reduced layer counts but **OOMs at 36L**
-(the per-layer paged KV caches + 119B weights exceed DRAM) — a paged-cache memory-management follow-up.
+Compressed prefill matches the expanded default's TTFT everywhere expanded can reach (≤8K) and extends it
+to **64K** (where expanded OOMs — the expanded path runs the MoE over the full S, a multi-GB activation
+that OOMs at 16K even though its KV would fit; the compressed chunk-outside path bounds activations to one
+chunk). Beyond ~16K, TTFT grows with the O(S²) attention compute (it runs but is latency-heavy: 32K ≈ 103 s,
+64K ≈ 381 s, untraced). Numerically verified vs the golden expanded MLA: single-shot **0.99975**, chunked
+**0.99976**, model-level chunk-outside **1.0** (bit-exact) vs single-shot (`test_m4_prefill_mla`). CCL ops
+use both P150x8 ethernet links per axis (`num_links=get_num_links(mesh)`, ~2–3.5% prefill over single-link).
 
 **Decode — throughput vs batch** (captured trace, B=1 measured device + E2E):
 
@@ -80,11 +85,11 @@ Largest full-depth ISL = **8192** (chunked prefill). 16384 runs at reduced layer
 **Decode — throughput vs context** (batch-1, decoding at `cur_pos = ctx`; latency rises only gently as
 context grows because decode is dominated by MoE weight streaming, not attention). Two KV-cache paths:
 
-| ctx | 128 | 2048 | 4096 | 8192 | 32768 | 65536 |
-|---|---|---|---|---|---|---|
-| **expanded-kv** tok/s/user (default) | 9.2 | 9.0 | 8.8 | 8.3 | OOM | OOM |
-| **compressed-latent** tok/s/user (A6) | 9.2 | 9.2 | 9.1 | 9.1 | 8.8 | **8.5** |
-| compressed-latent ms/step | 108 | 109 | 110 | 110 | 113 | 117 |
+| ctx | 128 | 2048 | 4096 | 8192 | 16384 | 32768 | 65536 |
+|---|---|---|---|---|---|---|---|
+| **expanded-kv** tok/s/user (default) | 9.2 | 9.0 | 8.8 | 8.3 | OOM | OOM | OOM |
+| **compressed-latent** tok/s/user (A6) | 9.2 | 9.2 | 9.1 | 9.1 | 9.0 | 8.8 | **8.5** |
+| compressed-latent ms/step | 108 | 109 | 110 | 110 | 111 | 113 | 117 |
 
 (All cells measured at the full 36 layers, B=1.)
 
@@ -98,8 +103,9 @@ context ceiling from ~8K to **≥64K** on the 1×8 mesh. Numerically verified �
 0.99974, 2-layer model 0.9978 (`test_m4_mla_compressed_decode` / `test_m4_text_decode_compressed`). The
 earlier "compressed decode is op-nondeterministic" finding was wrong: it was an undersized cache (the
 paged-MLA decode op reads a full `k_chunk_size`=128 window per step, so the cache block must be ≥128;
-`init_compressed_cache` now floors it). Expanded-kv stays the default; the compressed path is opt-in
-pending a compressed-cache prefill fill + full-depth logit PCC.
+`init_compressed_cache` now floors it). The compressed-latent **prefill** is also implemented and reaches
+64K (see Prefill above), so the compressed path now covers prefill + decode end-to-end; expanded-kv stays
+the wired default and the compressed path is opt-in pending a full-depth (36-layer) logit PCC.
 
 At high batch the dense MoE is compute-bound (all 16 local experts × B tokens), so per-user throughput
 drops while aggregate rises; **sparse dispatch** (top-4 routed experts) recovers it (+39.2% @B=32). The
@@ -114,9 +120,10 @@ sparse is opt-in for batched serving.
 **Chunked prefill** (`forward_prefill_chunked`, paged k/v + `chunked_scaled_dot_product_attention`)
 processes the prompt in chunk-token windows so L1 holds only one chunk's attention — lifting the
 single-shot ~4K L1 cap. PCC 1.0 vs single-shot (`test_m4_chunked_prefill`/`test_m4_text_prefill_chunked`).
-At the **full 36 layers it is measured to 8K** (TTFT 7.8 s); **16K runs at reduced layer counts but OOMs
-at full depth** (the per-layer paged KV caches plus the 119B weights exceed DRAM) — a paged-cache
-memory-management follow-up. Single-shot prefill stays the default ≤4K; generator integration + per-chunk
+At the **full 36 layers it is measured to 8K** (TTFT 7.8 s); past 8K the expanded path OOMs at 36L (the
+full-S MoE activation, not the KV). The **compressed-latent** chunked prefill (Prefill table above) lifts
+that ceiling to **64K** by bounding activations to one chunk (chunk loop outside the layer stack) over the
+25.6×-smaller latent cache. Single-shot prefill stays the default ≤4K; generator integration + per-chunk
 trace are tracked follow-ups.
 
 **Multi-user batched decode** (traced, dense MoE) trades latency for throughput — the MoE streams
@@ -136,15 +143,16 @@ see status.
 ## Current status / remaining work
 - **Done:** full-depth logit correctness; e2e VLM correctness; on-device sampling; decode trace
   (replicated + sharded production mesh); fully on-device MoE; ISL perf sweep harness + measured
-  full-depth numbers; **chunked prefill** (paged k/v, measured to 8K full-depth — lifts the single-shot
-  ~4K cap); sharded LM head; **MoE sparse dispatch** (`forward_decode(use_sparse=True)`: `mesh_partition` →
-  all-to-all dispatch → top-4 routed experts → combine → all_gather; full-model decode sparse == dense
-  logits PCC 0.9958; computes only the 4 routed experts/token vs all 16 local dense).
-- **Remaining (optimization/polish):** chunked-prefill **16K at full depth** (paged-cache memory
-  management — OOMs at 36L today) + generator integration + per-chunk trace; sparse-decode **generator
-  wiring** (sub-device auto-setup; tok/s + trace already done); **paged compressed-latent KV** (12.8×
-  smaller cache, op-execution-nondeterministic on this BH build — see A6); **2CQ** (low value). CI
-  registration done; rebase onto latest main.
+  full-depth numbers; **expanded-kv chunked prefill** (paged k/v, measured to 8K full-depth); sharded LM
+  head; **MoE sparse dispatch** (`forward_decode(use_sparse=True)`: `mesh_partition` → all-to-all dispatch →
+  top-4 routed experts → combine → all_gather; decode sparse == dense logits PCC 0.9958); **A6
+  compressed-latent KV end-to-end** — decode (`forward_decode_mla`, reaches 64K context) AND prefill
+  (`forward_prefill_mla` / `forward_prefill_mla_chunked`, reaches 64K TTFT), 25.6× smaller KV, verified
+  0.99975–1.0 vs the golden expanded MLA (`test_m4_prefill_mla`, `test_m4_*_compressed_decode`).
+- **Remaining (optimization/polish):** make the compressed-latent path the **wired default** (full-depth
+  36-layer logit PCC + generator integration; it is validated + measured but opt-in today); a **trace** for
+  compressed prefill + sparse-decode **generator wiring** (sub-device auto-setup); long-context prefill is
+  attention-compute-bound past ~16K (untraced); **2CQ** (low value). CI registration done; rebase onto main.
 - **Dependency:** requires `transformers >= 5.10` (native `mistral4`/`mistral3`/`pixtral` + fp8 dequant).
 
 ## Reproduce

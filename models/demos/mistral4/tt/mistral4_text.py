@@ -124,6 +124,14 @@ class TtMistral4MLA(LightweightModule):
         self._sdpa_ck = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
         )
+        # flash_mla_prefill program config: q_chunk = next pow2 >= heads-padded-to-32 (the op's expectation).
+        _padded_h = ((self.H + 31) // 32) * 32
+        self._sdpa_prefill_prog = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=mesh.compute_with_storage_grid_size(),
+            q_chunk_size=1 << ((_padded_h - 1).bit_length()),
+            k_chunk_size=128,
+            exp_approx_mode=False,
+        )
 
     def _rope(self, x, cos, sin):
         xd = ttnn.matmul(x, self.P)  # de-interleave
@@ -233,6 +241,112 @@ class TtMistral4MLA(LightweightModule):
         attn = ttnn.concat(outs, dim=2) if len(outs) > 1 else outs[0]  # [B,H,S,vd]
         attn = ttnn.reshape(ttnn.transpose(attn, 1, 2), (B, S, -1))
         return ttnn.linear(attn, self.w_o)
+
+    def _mla_latent(self, x, cos, sin):
+        """Compressed kv_a latent for all positions: [B,1,S,kvl+rope] (kv_pass normed | k_rot). Shared by
+        compressed prefill (flash_mla_prefill k) and the cache write."""
+        B, S, kvl, rope = x.shape[0], x.shape[1], self.kvl, self.rope
+        kv_a = ttnn.linear(x, self.w_kva)
+        kv_pass = ttnn.rms_norm(ttnn.slice(kv_a, [0, 0, 0], [B, S, kvl]), epsilon=self.eps, weight=self.w_kvan)
+        k_rot = self._rope(ttnn.reshape(ttnn.slice(kv_a, [0, 0, kvl], [B, S, kvl + rope]), (B, 1, S, rope)), cos, sin)
+        return ttnn.concat([ttnn.reshape(kv_pass, (B, 1, S, kvl)), k_rot], dim=-1)  # [B,1,S,kvl+rope]
+
+    def _mla_q_absorbed(self, x, cos, sin):
+        """Absorbed query q_lat for all positions: [B,H,S,kvl+rope] (q_nope @ wkv_b1 | q_rope)."""
+        B, S, H, kvl, rope, nope = x.shape[0], x.shape[1], self.H, self.kvl, self.rope, self.nope
+        q = ttnn.linear(ttnn.rms_norm(ttnn.linear(x, self.w_qa), epsilon=self.eps, weight=self.w_qan), self.w_qb)
+        qh = ttnn.transpose(ttnn.reshape(q, (B, S, H, self.qk)), 1, 2)  # [B,H,S,qk]
+        q_nope = ttnn.reshape(
+            ttnn.permute(ttnn.slice(qh, [0, 0, 0, 0], [B, H, S, nope]), (1, 0, 2, 3)), (H, B * S, nope)
+        )
+        q_lat_nope = ttnn.permute(ttnn.reshape(ttnn.matmul(q_nope, self.wkv_b1), (H, B, S, kvl)), (1, 0, 2, 3))
+        q_rope = self._rope(ttnn.slice(qh, [0, 0, 0, nope], [B, H, S, self.qk]), cos, sin)  # [B,H,S,rope]
+        return ttnn.concat([q_lat_nope, q_rope], dim=-1)  # [B,H,S,kvl+rope]
+
+    def _mla_out_absorbed(self, attn, B, S):
+        """Output absorption: ctx [B,H,S,kvl] @ wkv_b2 -> [B,H,S,vd] -> o_proj -> [B,S,hidden]."""
+        H, kvl, vd = self.H, self.kvl, self.vd
+        ctx = ttnn.reshape(ttnn.permute(attn, (1, 0, 2, 3)), (H, B * S, kvl))
+        o = ttnn.permute(ttnn.reshape(ttnn.matmul(ctx, self.wkv_b2), (H, B, S, vd)), (1, 0, 2, 3))  # [B,H,S,vd]
+        return ttnn.linear(ttnn.reshape(ttnn.transpose(o, 1, 2), (B, S, H * vd)), self.w_o)
+
+    def forward_prefill_mla(self, x, cos, sin):
+        """Compressed-latent prefill (A6): the absorbed-q MLA of forward_decode_mla over ALL S query
+        positions, via ttnn.transformer.flash_mla_prefill (q = absorbed q_lat, k = the kvl+rope latent,
+        head_dim_v = kvl, causal). No expanded k/v is materialized — only the 25.6x-smaller latent — so it
+        matches forward() numerically. Single-shot (whole prompt); see forward_prefill_mla_chunked for long
+        context. Returns [B,S,hidden]; the latent for cache write is exposed via _mla_latent."""
+        B, S = x.shape[0], x.shape[1]
+        attn = ttnn.transformer.flash_mla_prefill(
+            self._mla_q_absorbed(x, cos, sin),
+            self._mla_latent(x, cos, sin),
+            head_dim_v=self.kvl,
+            is_causal=True,
+            scale=self.scale,
+            program_config=self._sdpa_prefill_prog,
+            compute_kernel_config=self._sdpa_ck,
+        )  # [B,H,S,kvl]
+        return self._mla_out_absorbed(attn, B, S)
+
+    def init_paged_compressed_cache(self, batch, max_seq, block_size=128):
+        """Paged compressed-latent cache for CHUNKED prefill: latent blocks [max_blocks, 1, block_size,
+        kvl+rope] + page_table [batch, blocks_per_user]. 25.6x smaller per token than the expanded paged
+        k/v cache, so the long-context prefill that OOMs on expanded k/v fits here. block_size must be the
+        op's k_chunk_size (128)."""
+        nblk_user = (max_seq + block_size - 1) // block_size
+        max_blocks = batch * nblk_user
+        cache = ttnn.from_torch(
+            torch.zeros(max_blocks, 1, block_size, self.kvl + self.rope, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        page_table = ttnn.from_torch(
+            torch.arange(max_blocks, dtype=torch.int32).reshape(batch, nblk_user),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh),
+        )
+        return cache, page_table
+
+    def forward_prefill_mla_chunk(self, x, cos, sin, paged_latent, page_table, chunk_start, block_size=128):
+        """ONE chunk of compressed prefill: write this chunk's latent into the paged cache and attend its
+        queries against all latent up to chunk_start+chunk via chunked_flash_mla_prefill. x [B,C,hidden] ->
+        [B,C,hidden]. Used per-chunk by the layer-level chunked prefill (so the MoE only ever sees C tokens)
+        and by forward_prefill_mla_chunked (MLA-block level)."""
+        B, C = x.shape[0], x.shape[1]
+        latc = self._mla_latent(x, cos, sin)  # [B,1,C,kvl+rope]
+        q_latc = self._mla_q_absorbed(x, cos, sin)  # [B,H,C,kvl+rope]
+        chunk_pt = ttnn.slice(page_table, [0, chunk_start // block_size], [B, (chunk_start + C) // block_size])
+        for b in range(B):
+            latf = latc if B == 1 else ttnn.slice(latc, [b, 0, 0, 0], [b + 1, 1, C, self.kvl + self.rope])
+            ttnn.experimental.paged_fill_cache(paged_latent, latf, chunk_pt, batch_idx=b)
+        ac = ttnn.transformer.chunked_flash_mla_prefill(
+            q_latc,
+            paged_latent,
+            self.kvl,
+            page_table,
+            chunk_start,
+            scale=self.scale,
+            program_config=self._sdpa_prefill_prog,
+            compute_kernel_config=self._sdpa_ck,
+        )  # [B,H,C,kvl]
+        return self._mla_out_absorbed(ac, B, C)
+
+    def forward_prefill_mla_chunked(self, x, cos, sin, paged_latent, page_table, chunk=128, block_size=128):
+        """MLA-block chunked compressed prefill: forward_prefill_mla_chunk over `chunk`-token windows, kept
+        as the single-block primitive (and its PCC test). The MODEL-level long-context prefill instead drives
+        the chunk loop OUTSIDE the layer stack (TtMistral4TextModel.forward_prefill_mla_chunked) so the MoE
+        sees only one chunk at a time. Requires S % chunk == 0. Returns [B,S,hidden]."""
+        B, S, hidden = x.shape[0], x.shape[1], x.shape[2]
+        outs = []
+        for cs in range(0, S, chunk):
+            xc = ttnn.slice(x, [0, cs, 0], [B, cs + chunk, hidden])
+            cosc = ttnn.slice(cos, [0, 0, cs, 0], [cos.shape[0], cos.shape[1], cs + chunk, cos.shape[3]])
+            sinc = ttnn.slice(sin, [0, 0, cs, 0], [sin.shape[0], sin.shape[1], cs + chunk, sin.shape[3]])
+            outs.append(self.forward_prefill_mla_chunk(xc, cosc, sinc, paged_latent, page_table, cs, block_size))
+        return ttnn.concat(outs, dim=1) if len(outs) > 1 else outs[0]  # [B,S,hidden]
 
     def forward_decode(self, x, pos_t, cos, sin, kv_cache):
         """Single-token decode: x [B,1,hidden], pos_t an int32 device tensor [B] of cur positions.
@@ -589,6 +703,43 @@ class TtMistral4DecoderLayer(LightweightModule):
         )
         return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
 
+    def forward_prefill_mla(self, x, cos, sin):
+        h = ttnn.add(x, self.mla.forward_prefill_mla(ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in), cos, sin))
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
+    def forward_prefill_mla_chunked(self, x, cos, sin, paged_latent, page_table, chunk=128, block_size=128):
+        h = ttnn.add(
+            x,
+            self.mla.forward_prefill_mla_chunked(
+                ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in),
+                cos,
+                sin,
+                paged_latent,
+                page_table,
+                chunk,
+                block_size,
+            ),
+        )
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
+    def forward_prefill_mla_chunk(self, x, cos, sin, paged_latent, page_table, chunk_start, block_size=128):
+        """One chunk through the full layer (attention + MoE on just this chunk's C tokens) — the building
+        block of long-context chunked prefill: the MoE never sees more than C tokens, so activation memory
+        stays bounded as ISL grows. x [B,C,hidden] -> [B,C,hidden]."""
+        h = ttnn.add(
+            x,
+            self.mla.forward_prefill_mla_chunk(
+                ttnn.rms_norm(x, epsilon=self.eps, weight=self.w_in),
+                cos,
+                sin,
+                paged_latent,
+                page_table,
+                chunk_start,
+                block_size,
+            ),
+        )
+        return ttnn.add(h, self.moe(ttnn.rms_norm(h, epsilon=self.eps, weight=self.w_post)))
+
 
 class TtMistral4TextModel(LightweightModule):
     """Stacked decoder layers + final norm + LM head. forward(embedded_hidden, cos, sin) -> logits.
@@ -680,6 +831,39 @@ class TtMistral4TextModel(LightweightModule):
         for layer, (paged_kv, pt) in zip(self.layers, caches):
             hidden = layer.forward_prefill_chunked(hidden, cos, sin, paged_kv, pt, chunk, block_size)
         return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
+
+    def forward_prefill_mla(self, hidden, cos, sin):
+        """Single-shot compressed-latent (A6) prefill — the long-context counterpart of forward_decode_mla."""
+        for layer in self.layers:
+            hidden = layer.forward_prefill_mla(hidden, cos, sin)
+        return self._lm_head(ttnn.rms_norm(hidden, epsilon=self.eps, weight=self.w_norm))
+
+    def init_paged_compressed_caches(self, batch, max_seq, block_size=128):
+        """Per-layer paged compressed-latent caches [(cache, page_table), ...] for chunked compressed prefill."""
+        return [layer.mla.init_paged_compressed_cache(batch, max_seq, block_size) for layer in self.layers]
+
+    def forward_prefill_mla_chunked(self, hidden, cos, sin, caches, chunk=128, block_size=128):
+        """Long-context compressed-latent (A6) prefill: the chunk loop runs OUTSIDE the layer stack, so each
+        chunk's C tokens pass through attention AND MoE before the next chunk — bounding activation memory to
+        C tokens while the 25.6x-smaller compressed KV carries cross-chunk context. This is what lifts the
+        prefill ceiling past ~8K: the expanded/within-layer-chunked paths still run the MoE over the full S
+        (a multi-GB activation that OOMs at 16K). Returns the LAST chunk's logits [B,chunk,vocab] — the
+        prefill->decode handoff needs only the final position, and [B,S,vocab] at long S would itself OOM.
+        Requires S % chunk == 0; `caches` from init_paged_compressed_caches."""
+        B, S, hdim = hidden.shape[0], hidden.shape[1], hidden.shape[2]
+        last = None
+        for cs in range(0, S, chunk):
+            ce = cs + chunk
+            h = ttnn.slice(hidden, [0, cs, 0], [B, ce, hdim])
+            cosc = ttnn.slice(cos, [0, 0, cs, 0], [cos.shape[0], cos.shape[1], ce, cos.shape[3]])
+            sinc = ttnn.slice(sin, [0, 0, cs, 0], [sin.shape[0], sin.shape[1], ce, sin.shape[3]])
+            for layer, (cache, pt) in zip(self.layers, caches):
+                h = layer.forward_prefill_mla_chunk(h, cosc, sinc, cache, pt, cs, block_size)
+            last = h
+        # lm-head only the final position — the prefill->decode handoff needs just the next-token logits,
+        # and [B,chunk,vocab] at chunk=2048 would be a needless ~0.5GB tensor.
+        last_tok = ttnn.slice(last, [0, last.shape[1] - 1, 0], [last.shape[0], last.shape[1], last.shape[2]])
+        return self._lm_head(ttnn.rms_norm(last_tok, epsilon=self.eps, weight=self.w_norm))  # [B,1,vocab]
 
     def forward_decode(self, hidden, pos_t, cos, sin, kv_caches, use_sparse=False, sub_device_id=None):
         for layer, kv in zip(self.layers, kv_caches):

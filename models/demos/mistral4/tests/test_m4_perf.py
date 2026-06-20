@@ -131,6 +131,29 @@ def test_m4_perf(mesh_device, reset_seeds):
         table.append((S, ttft, S / ttft))
         logger.info(f"PREFILL S={S}: TTFT {ttft*1e3:.1f}ms, {S/ttft:.0f} tok/s (steady-state, {N_LAYERS}L)")
 
+    # ---- COMPRESSED-latent prefill TTFT sweep: the chunked compressed prefill persists only the
+    # 25.6x-smaller latent, so TTFT is measurable at ISLs past the expanded-kv ~8K OOM ceiling.
+    # M4_PERF_COMPRESSED_ISLS=128,1024,4096,8192,16384,32768,65536 (each a multiple of 128).
+    cprefill_rows = []
+    comp_isls = os.environ.get("M4_PERF_COMPRESSED_ISLS")
+    if comp_isls:
+        isls_c = [int(s) for s in comp_isls.split(",")]
+        cc = tt.init_paged_compressed_caches(1, max_seq=max(isls_c), block_size=128)  # alloc once, reuse per ISL
+        for S in isls_c:
+            x = _repl(torch.randn(1, S, hidden) * 0.1, mesh_device)
+            cos = _repl(torch.randn(1, 1, S, rope), mesh_device)
+            sin = _repl(torch.randn(1, 1, S, rope), mesh_device)
+            # token-chunk 2048 (the proven-fast window; far fewer host dispatches than 128) over 128-page cache
+            chk = min(2048, S)
+            tt.forward_prefill_mla_chunked(x, cos, sin, cc, chunk=chk, block_size=128)  # warmup (compile)
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.time()
+            tt.forward_prefill_mla_chunked(x, cos, sin, cc, chunk=chk, block_size=128)
+            ttnn.synchronize_device(mesh_device)
+            ttft = time.time() - t0
+            cprefill_rows.append((S, ttft, S / ttft))
+            logger.info(f"PREFILL-COMPRESSED S={S}: TTFT {ttft*1e3:.1f}ms, {S/ttft:.0f} tok/s ({N_LAYERS}L)")
+
     logger.info(f"=== Mistral-Small-4 perf ({N_LAYERS}L, sharded bfp8) ===")
     for B, step, tsu, agg in decode_rows:
         logger.info(f"  decode B={B:>3}: {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user  {agg:6.0f} tok/s aggregate")
@@ -139,5 +162,7 @@ def test_m4_perf(mesh_device, reset_seeds):
     for C, step, tsu in cctx_rows:
         logger.info(f"  decode ctx {C:>6} (compressed) : {step*1e3:7.2f}ms/step  {tsu:6.1f} tok/s/user (B=1)")
     for S, ttft, tps in table:
-        logger.info(f"  ISL {S:>5}: TTFT {ttft*1e3:8.1f}ms  prefill {tps:7.0f} tok/s")
+        logger.info(f"  ISL {S:>5} (expanded prefill): TTFT {ttft*1e3:8.1f}ms  {tps:7.0f} tok/s")
+    for S, ttft, tps in cprefill_rows:
+        logger.info(f"  ISL {S:>5} (compressed prefill): TTFT {ttft*1e3:8.1f}ms  {tps:7.0f} tok/s")
     assert table and dev_dec > 0
