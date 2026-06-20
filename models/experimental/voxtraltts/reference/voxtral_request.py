@@ -36,6 +36,13 @@ def get_instruct_tokenizer(tokenizer: Any) -> Any:
     return instruct_tokenizer
 
 
+def encode_plain_text_to_token_ids(text: str, model_name_or_path: str = DEFAULT_VOXTRAL_MODEL) -> list[int]:
+    """Tokenize plain text with the Voxtral tekken instruct tokenizer (no voice/speech wrapper)."""
+    instruct_tokenizer = get_instruct_tokenizer(load_mistral_tokenizer(model_name_or_path))
+    token_ids, _, _ = instruct_tokenizer.encode_user_content(text, is_last=True)
+    return list(token_ids)
+
+
 def compose_speech_request(
     text: str,
     model_name_or_path: str = DEFAULT_VOXTRAL_MODEL,
