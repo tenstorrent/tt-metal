@@ -387,8 +387,8 @@
    "role": "sender",
    "tag": "refactor",
    "status": "migrated",
-   "migrated_api_version": 7,
-   "commit": "47f62dbd700",
+   "migrated_api_version": 8,
+   "commit": "4c7f3b919f2",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
    ],
@@ -405,7 +405,7 @@
    "role": "receiver",
    "tag": "refactor",
    "status": "migrated",
-   "migrated_api_version": 7,
+   "migrated_api_version": 8,
    "commit": "e6e5b15ef91",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
