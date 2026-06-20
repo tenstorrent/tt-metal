@@ -37,8 +37,8 @@ void kernel_main() {
     // NUM_ACTIVE_RECEIVER_CORES = recipient count = num_dests (the sender sits outside the rect, so
     // EXCLUDE_SRC mcast_dests == num_dests directly). send_signal sets the flag value each call, so
     // INITIAL_READY is irrelevant here (defaults to VALID).
-    dataflow_kernel_lib::SenderPipe<num_dests, receiver_sem_id, sender_sem_id> ready_pipe(
-        noc, dataflow_kernel_lib::McastRect{noc_start_x, noc_start_y, noc_end_x, noc_end_y});
+    dataflow_kernel_lib::SenderPipe<noc_index, receiver_sem_id, num_dests, /*PRE_HANDSHAKE=*/false> ready_pipe(
+        noc, dataflow_kernel_lib::McastRect<>{noc_start_x, noc_start_y, noc_end_x, noc_end_y});
 
     // Collect local TopK results from all cores
     for (uint32_t i = 0; i < Ht; ++i) {  // Process each height row
@@ -54,7 +54,7 @@ void kernel_main() {
         // mcast_pipe: broadcast the readiness flag (VALID) to all local-topk sender cores. send_signal
         // sets the local cell + mcasts it to the rect + fences (flush). This replaces the explicit
         // set(VALID) + set_multicast + async_write_barrier readiness broadcast.
-        ready_pipe.send_signal(VALID);
+        ready_pipe.send_signal();
 
         // Wait for all data to arrive
         // Block until all expected data (Wt_final tiles) has been received from
