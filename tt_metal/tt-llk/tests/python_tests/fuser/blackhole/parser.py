@@ -42,6 +42,7 @@ from .fpu.matmul import MatmulFpu
 from .fpu.reduce import ReduceFpu
 from .fpu.reduce_block_max import ReduceBlockMaxFpu
 from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
+from .fpu.sub_bcast_col_custom import SubBcastColCustomFpu
 from .packer.packer import Packer
 from .sfpu.binary import BinarySfpu
 from .sfpu.unary import UnarySfpu
@@ -49,6 +50,7 @@ from .unpacker.matmul import MatmulUnpacker
 from .unpacker.reduce import ReduceUnpacker
 from .unpacker.reduce_block_max import ReduceBlockMaxUnpacker
 from .unpacker.reduce_block_max_runtime import ReduceBlockMaxRuntimeUnpacker
+from .unpacker.sub_bcast_col_custom import SubBcastColCustomUnpacker
 from .unpacker.tilize_a import UnpackerTilizeA
 from .unpacker.unpack_a import UnpackerA
 from .unpacker.unpack_ab import UnpackerAB
@@ -113,6 +115,10 @@ UNPACKER_MAP = {
     ),
     "ReduceBlockMaxRuntimeUnpacker": (
         lambda s: ReduceBlockMaxRuntimeUnpacker(),
+        None,
+    ),
+    "SubBcastColCustomUnpacker": (
+        lambda s: SubBcastColCustomUnpacker(),
         None,
     ),
 }
@@ -271,6 +277,10 @@ FPU_MAP = {
             _unsupported_tile,
         ],
     ),
+    "SubBcastColCustom": (
+        lambda s: SubBcastColCustomFpu(),
+        [_no_reuse_dest, _forced_unpacker("SubBcastColCustomUnpacker")],
+    ),
 }
 
 _l1_acc_format = (
@@ -296,6 +306,7 @@ OUTPUT_DIMS = {
     "Reduce": _src_a_dims,
     "ReduceBlockMax": _src_a_dims,
     "ReduceBlockMaxRuntime": _src_a_dims,
+    "SubBcastColCustom": _src_a_dims,
 }
 
 UNARY_SFPU_OPS = {

@@ -125,7 +125,7 @@ class LoopBlockRow(FusedLoop):
         if config.perf_run_type == PerfRunType.PACK_ISOLATE:
             return code
         code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
-        code += f"std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + {block.block_x};\n"
+        code += f"[[maybe_unused]] std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + {block.block_x};\n"
         block.tile_id_global = "tile_id"
         block.tile_id_block = f"tile_y * {block.block_tiles_x}"
         if config.perf_run_type == PerfRunType.MATH_ISOLATE:
