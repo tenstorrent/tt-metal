@@ -99,20 +99,21 @@ class TestGeneratorLifecycle:
         assert torch.isfinite(logits).all(), "prefill_forward produced NaN or Inf logits"
 
     def test_decode_forward_returns_correct_shape(self, generator):
-        """decode_forward must return [1, 1, vocab_size] for B=1."""
+        """decode_forward must return (logits [1, 1, vocab_size], None) for B=1."""
         tokens = _dummy_prompt(PROMPT_LEN)
         generator.reset_state()
         generator.prefill_forward(tokens)
 
         next_token = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
         current_pos = torch.tensor([PROMPT_LEN], dtype=torch.int64)
-        logits = generator.decode_forward(next_token, current_pos=current_pos)
+        logits, log_probs = generator.decode_forward(next_token, current_pos=current_pos)
 
         assert logits.shape == (
             1,
             1,
             VOCAB_SIZE,
         ), f"Expected decode logits shape (1, 1, {VOCAB_SIZE}), got {logits.shape}"
+        assert log_probs is None
 
     def test_decode_forward_finite_logits(self, generator):
         """Traced decode must not produce NaN or Inf."""
@@ -123,7 +124,7 @@ class TestGeneratorLifecycle:
         for step in range(DECODE_STEPS):
             next_tok = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
             pos = torch.tensor([PROMPT_LEN + step], dtype=torch.int64)
-            logits = generator.decode_forward(next_tok, current_pos=pos)
+            logits, _ = generator.decode_forward(next_tok, current_pos=pos)
             assert torch.isfinite(logits).all(), f"NaN/Inf at decode step {step}"
 
     def test_decode_positions_advance(self, generator):
@@ -138,7 +139,7 @@ class TestGeneratorLifecycle:
 
         for step in range(DECODE_STEPS):
             next_tok = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
-            generator.decode_forward(next_tok)
+            generator.decode_forward(next_tok)  # return is (logits, None); pos advance is what we test
             expected_pos = PROMPT_LEN + step + 1
             assert (
                 generator._decode_pos == expected_pos
@@ -151,7 +152,7 @@ class TestGeneratorLifecycle:
         generator.reset_state()
         generator.prefill_forward(tokens1)
         first_tok = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
-        logits1 = generator.decode_forward(first_tok)
+        logits1, _ = generator.decode_forward(first_tok)
 
         # reset_state() — previously used allocate_decoder_state() which broke trace
         generator.reset_state()
@@ -167,7 +168,7 @@ class TestGeneratorLifecycle:
         ).all(), "Second request prefill has NaN/Inf — state corruption after reset_state"
 
         second_tok = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
-        logits2 = generator.decode_forward(second_tok)
+        logits2, _ = generator.decode_forward(second_tok)
         assert torch.isfinite(logits2).all(), "Second request decode has NaN/Inf — trace broken by reset_state"
 
     def test_reset_state_produces_different_output_from_different_input(self, generator):
@@ -195,7 +196,7 @@ class TestGeneratorLifecycle:
 
             for step in range(3):
                 tok = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
-                decode_logits = generator.decode_forward(tok)
+                decode_logits, _ = generator.decode_forward(tok)
                 assert torch.isfinite(decode_logits).all(), f"cycle {cycle} step {step}: NaN in decode"
 
     def test_prefill_throughput_regression(self, generator):

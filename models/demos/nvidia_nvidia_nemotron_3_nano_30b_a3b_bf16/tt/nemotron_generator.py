@@ -70,6 +70,8 @@ class _NemotronHArgs:
         self.max_seq_len = max_seq_len
         self.max_prefill_chunk_size = max_seq_len
         self.is_multimodal = False
+        self.max_batch_size = 1
+        self.vocab_size = 131_072
 
     def get_warmup_prefill_supported_seq_lens(self):
         # We override warmup_model_prefill entirely; this should never be called.
@@ -293,6 +295,37 @@ class NemotronHForCausalLM(Generator):
     # Forward passes
     # -----------------------------------------------------------------
 
+    def prefill_forward_text(
+        self,
+        tokens: torch.Tensor,  # [B, S] int64 — prompt token ids
+        page_table=None,
+        kv_cache=None,
+        prompt_lens=None,
+        empty_slots=None,
+        enable_trace=True,
+        model_id_warmup=None,
+        sampling_params=None,
+        start_pos=None,
+        return_hidden_states=False,
+        warmup_prefill=False,
+        **kwargs,
+    ) -> torch.Tensor:
+        """vLLM text-model prefill interface (called by the tt-inference-server).
+
+        Routes to our chunked prefill path and returns [B, 1, vocab_size] to
+        match the shape contract of the Generator base class.
+        """
+        current_pos_val = int(start_pos[0]) if start_pos is not None else None
+        current_pos_t = torch.tensor([current_pos_val], dtype=torch.int64) if current_pos_val is not None else None
+        logits_1v = self.prefill_forward(
+            tokens,
+            current_pos=current_pos_t,
+            kv_cache=kv_cache,
+            prompt_lens=prompt_lens,
+        )
+        # prefill_forward returns [1, vocab]; add the sequence dim → [1, 1, vocab]
+        return logits_1v.unsqueeze(1)
+
     def prefill_forward(
         self,
         tokens: torch.Tensor,  # [B, S] int64 — prompt token ids
@@ -343,9 +376,9 @@ class NemotronHForCausalLM(Generator):
         """Single-token decode step using the captured trace.
 
         vLLM calls this once per token per active sequence.
-        Returns logits [B, 1, vocab] on CPU.
-
-        Falls back to eager (cpu_gate=True) if the trace has not been captured.
+        Returns (logits [B, 1, vocab], None) matching the Generator base class
+        contract.  Falls back to eager (cpu_gate=True) if the trace has not
+        been captured.
         """
         if self._state is None:
             self.allocate_kv_cache()
@@ -369,7 +402,7 @@ class NemotronHForCausalLM(Generator):
         self._decode_pos = pos + 1
 
         logits_cpu = _host_rep(logits_tt, self.mesh_device, 1)  # [1, 1, vocab]
-        return logits_cpu  # [1, 1, vocab]
+        return logits_cpu, None  # (logits [1, 1, vocab], log_probs) matches Generator base
 
     # -----------------------------------------------------------------
     # State management
