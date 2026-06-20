@@ -669,17 +669,18 @@
    "op_family": "data_movement + reduction",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/reduction/test_argmax.py::test_argmax (shape [64,128] use_multicore=True)"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast)",
+   "last_verified": "2026-06-20",
+   "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast) | DEFER-DESIGN-GAP: FLAG-ONLY broadcast of arbitrary monotone value start_sem.set(k+1)+set_multicast with worker wait(k+1) exact \u2014 no set_multicast(value) verb (Flag=fixed VALID, Counter=inc+1/wait_min). Plus 2-rect INCLUDE+EXCLUDE in one send and simultaneous monotone start / reset done counters. Needs helper change (out of scope).",
    "flags": [
-    "tier:2b"
+    "tier:2b",
+    "design-gap"
    ]
   },
   {
