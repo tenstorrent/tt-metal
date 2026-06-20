@@ -298,17 +298,18 @@
    "op_family": "conv",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/conv3d/test_conv3d.py"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope",
+   "last_verified": "2026-06-20",
+   "census_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope | DEFER-DESIGN-GAP: Mcast-mode McastSender emitter uses mcast_num_dests as a RUNTIME arg (get_arg_val, line 93) for both mcast dest count and ack wait, but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param. Runtime recipient count inexpressible. Receiver/Passive halves are ReceiverPipe-expressible but not worth splitting the protocol. Needs helper change (out of scope).",
    "flags": [
-    "tier:2b"
+    "tier:2b",
+    "design-gap"
    ]
   },
   {
