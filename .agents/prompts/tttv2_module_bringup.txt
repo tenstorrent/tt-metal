@@ -1,0 +1,27 @@
+/goal Use $module-factoring and $tttv2-module to bring up one reusable TTTv2 module under models/common/modules/<AREA>/<NAME>.py that generalizes the <COMPUTE> compute duplicated across these references: <REF_1>, <REF_2>, <REF_3>. Locate the exact files inside each reference first.
+
+Replace the <…> placeholders first: <AREA>/<NAME> (module path), <COMPUTE> (what is duplicated), <REF_*> (reference dirs/files), <PERF_TOL> (allowed perf gap vs the reference — keep it small; perf is a priority).
+
+Clean-room factorization: derive the module yourself. Read the references and any non-compliant predecessor as input, but reproduce none of it verbatim and leave any predecessor untouched (add alongside; don't delete). Single-device first to nail accuracy before topology; multi-device collectives need fabric at the test-fixture level.
+
+Operate autonomously: don't stop at the first blocker — document it, take the conservative fallback (narrower topology, simpler interface, the path every reference shares), keep moving, and file stuck items as follow-ups. Validate every non-obvious premise against the reference source before committing, and log each as (premise → source → choice) in MODULE_NOTES.md.
+
+Goal completion requirements (do not mark complete while any is unmet):
+
+- References de-duplicated; a variation matrix (knobs × references) is written; the topology-gating check was run on every parallelism/strategy knob. Every knob that differs across references is an Optional <Name>Config field; every topology-gated knob is either exercised on the target mesh or deferred with a reason. ($module-factoring §1)
+
+- The module satisfies the Universal Module Contract per $tttv2-module: LightweightModule subclass, one <Name>Config dataclass (every field optional except weights, is_resolved() holds), simple + from_config constructors, lazy idempotent weight load, collectives via tt_ccl, every program_config/memory_config/dtype an optional config field or a docstring-justified constant. forward(...) is a straight line: mode dispatched once at the top, no static `if mode`/`if device_kind` in the per-mode methods, strategy bound at construction. All grep checks pass; output recorded in MODULE_NOTES.md.
+
+- Each reference's ttnn forward is extracted into a standalone runnable unit (no full-model/generator scaffold), committed with the tests, used as both the perf baseline and the accuracy sanity oracle. ($module-factoring §2)
+
+- ACC: the module matches an HF torch reference at PCC ≥ 0.99 per (reference × mesh × mode) covered, from identical inputs/weights with the golden cast to the device dtype. A second, non-CI-marked sanity test checks the extracted ttnn reference vs the same HF torch reference. ($module-factoring §3, $tttv2-module §3)
+
+- PERF: the module's device time is within <PERF_TOL> of the extracted reference, timed identically (trace-captured forward-only microbenchmark; profiler device time + compute/collective split; median+range), per (mesh × mode), on single AND multi device. Any gap has a named cause and is closed, not deferred. ($module-factoring §4, $tt-enable-tracing, $optimize)
+
+- Tests co-located under models/common/tests/modules/<AREA>/test_<NAME>.py, styled after test_mlp_1d.py: config-construction unit tests (no device), the vs-reference accuracy test parametrized over the mesh shapes and models the module targets, and ≥1 power-user override test. ($tttv2-module §3)
+
+- MODULE_NOTES.md (uncommitted scratchpad) holds the decision log, the de-duplicated reference set + variation matrix, the final PCC parity table and perf table, and the grep-check output; a structured <NAME>_results.json mirrors the PCC + perf numbers. An inventory row is added to models/common/modules/README.md.
+
+- A fresh independent reviewer ran $stage-review against this goal contract and returned clean-pass; any blockers it raised are fixed and re-reviewed.
+
+Do not mark this goal complete while any completion requirement is unmet.
