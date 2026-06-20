@@ -212,25 +212,25 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-
-    // mcast_pipe: the in1 (and bias in3) block data-mcast + handshake is driven by a two-sided Pipe.
-    //   data_ready = receiver_sem (S->R level flag VALID/INVALID), consumed = sender_sem (R->S counter).
-    //   EXCLUDE_SRC, Flag, PRE_HANDSHAKE=true (receivers' reused CB slot), LINK=true (orig linked
-    //   data mcast + ARCH_BLACKHOLE flush; Pipe always flushes). Same rect/sems serve both send()s.
-    dataflow_kernel_lib::Pipe<> in1_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect{
-            in1_mcast_dest_noc_start_x,
-            in1_mcast_dest_noc_start_y,
-            in1_mcast_dest_noc_end_x,
-            in1_mcast_dest_noc_end_y},  // area() = in1_mcast_num_cores (the full mcast grid)
-        in1_mcast_num_dests,            // active-core ACK count (may be < num_cores when cores-without-work exist)
-        receiver_sem,                   // data ready (S->R level flag)
-        sender_sem);                    // consumed (R->S counter)
+    // mcast_pipe v7: the in1 (and bias in3) block data-mcast + handshake is driven by a SenderPipe.
+    //   DATA_READY_SEM_ID = receiver_sem id (CTA 11, S->R level flag VALID/INVALID),
+    //   CONSUMER_READY_SEM_ID = sender_sem id (CTA 10, R->S counter), count = in1_mcast_num_dests.
+    //   EXCLUDE_SRC, Flag, PRE_HANDSHAKE=true (receivers' reused CB slot). The ctor sets the local
+    //   data-ready cell VALID once (folds in the dropped pre-loop receiver_sem.set(VALID)). Same
+    //   pipe serves both the in1 and in3/bias send()s.
+    dataflow_kernel_lib::SenderPipe<
+        noc_index,
+        get_compile_time_arg_val(11),
+        in1_mcast_num_dests,
+        /*PRE_HANDSHAKE=*/true,
+        get_compile_time_arg_val(10)>
+        in1_pipe(
+            noc,
+            dataflow_kernel_lib::McastRect<>{
+                in1_mcast_dest_noc_start_x,
+                in1_mcast_dest_noc_start_y,
+                in1_mcast_dest_noc_end_x,
+                in1_mcast_dest_noc_end_y});
 
 #ifdef IN1_SHARDED
     uint64_t in1_start_address = cb_in1.get_write_ptr();
