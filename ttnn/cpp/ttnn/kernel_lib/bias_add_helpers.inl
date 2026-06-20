@@ -7,11 +7,7 @@
 
 /**
  * @file bias_add_helpers.inl
- * @brief Implementation of add_bias_bcast_rows helper function.
- *
- * Row-broadcast bias addition matching the production kernel's bias phase
- * (bmm_large_block_zm_fused_bias_activation.cpp).
- * This file should only be included by bias_add_helpers.hpp.
+ * @brief Implementation of add_bias_bcast_rows. Include only via bias_add_helpers.hpp.
  */
 
 namespace compute_kernel_lib {
@@ -154,7 +150,7 @@ ALWI void add_bias_bcast_rows(
                     }
                 }
 
-                // PostBiasFn fires BEFORE commit (matches production kernel's SFPU placement)
+                // PostBiasFn fires BEFORE commit (MATH-thread post-bias hook)
                 post_bias(out_num_tiles);
 
                 tile_regs_commit();
@@ -163,8 +159,7 @@ ALWI void add_bias_bcast_rows(
                 // Pack out to output buffer
                 out_buf.reserve_back(out_num_tiles);
                 // Pack-side sync: packer-thread SFPU activation replaces tile_regs_wait
-                // when Activation::activation != NONE. Mirrors the new-base BMM kernel's
-                // FUSE_BIAS+SFPU_ACTIVATION path (per-tile pack with semwait/stallwait).
+                // when Activation::activation != NONE.
                 if constexpr (Activation::activation != KernelActivation::NONE) {
                     apply_activation_from_pack<
                         Activation::activation,
