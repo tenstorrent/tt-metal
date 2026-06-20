@@ -315,7 +315,7 @@
    "tag": "clean",
    "status": "migrated",
    "migrated_api_version": 7,
-   "commit": "PENDING",
+   "commit": "3a0315dea95",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm (sim multi-device on 1 chip)"
    ],
@@ -331,14 +331,14 @@
    "op_family": "normalization",
    "role": "receiver",
    "tag": "clean",
-   "status": "pending",
-   "migrated_api_version": null,
-   "commit": null,
+   "status": "migrated",
+   "migrated_api_version": 7,
+   "commit": "PENDING",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
+   "last_verified": "2026-06-20",
    "census_note": "C1",
    "flags": [
     "tier:1"
