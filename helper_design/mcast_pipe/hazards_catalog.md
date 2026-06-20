@@ -190,6 +190,27 @@ speculative — every variant is observed in production. Two new hazards surface
   (clear-before-ack), so the next round always starts from a known-off flag. Not a fork; a
   correctness rule the helper enforces.
 
+### H12 — mutable doorbell cannot be the broadcast source in a CHAIN (NEW, Round 7, from chain_link.hpp)
+- **Race / correctness:** in a store-and-forward **chain**, every link is *both* a receiver and a
+  sender. The star pattern uses A5 `set_multicast` of the sender's **own** sem cell (src id == dst id)
+  as the "data ready" source. But a chain link's own doorbell sem (`receiver_sem`) is **mutable** —
+  `receive()` drives it INVALID then waits VALID — so at *forward* time it does NOT reliably hold
+  VALID. If the link reused that cell as the relay source (A5), the local `set(VALID)` needed to make
+  the broadcast meaningful would **clobber its own upstream-receive slot** (the cell it is concurrently
+  waiting on), corrupting the chain handshake.
+- **Mitigation — single, structural ⇒ INVARIANT (not a fork; it is the chain's defining requirement):**
+  - **INV12 separate write-once `valid_sem` + cross-id relay (A5′).** The relay source is a **distinct**
+    semaphore, pinned to VALID **once in the ctor** and never re-stored, broadcast via `relay_multicast`
+    (A5′, src≠dst ASSERT) into the *next* link's `receiver_sem`. Two distinct sem ids per link
+    (write-once `valid_sem` as source, mutable `receiver_sem` as doorbell). chain_link.hpp L140-143
+    (init), L232 (relay).
+- **This is the CHAIN topology's irreducible requirement, NOT a style fork.** It is forced by the
+  topology (link is simultaneously receiver+sender), not chosen for perf — relay buys nothing for the
+  star (A5′ contract). The current `SenderPipe`/`ReceiverPipe` (single shared `data_ready` sem id,
+  A5 same-cell `set_multicast`) **structurally cannot express it** → this is the explicit Pipe
+  **capability GAP** the topology survey (Step ★) records as CHAIN=GAP. The chain family stays
+  **deferred** this round; INV12 documents *what* the abstraction must eventually grow to cover it.
+
 ## New non-fork structural requirements the API must absorb (not style choices)
 These are **generality requirements** surfaced by the census — they go to Step ★ (API feasibility),
 not the bake-off:

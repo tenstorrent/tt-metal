@@ -413,3 +413,47 @@ intentionally kept raw + documented.** All on BH p150a, single parametrization e
   stale@v5 kernels to v6 first (the matmul in0 sender's own-flag consumption is the in-context confirm
   of D1 — it must match the raw set-once pattern), then resumes the pending backlog. No manual fleet
   re-run.
+
+---
+
+## Round 7 — topology survey: CHAIN cross-id-relay GAP made explicit (2026-06-20)
+
+- **Trigger:** `tune-dm-helper feedback-2.txt` — one claim + three deliverables: the `Pipe` is a STAR
+  primitive (one shared `data_ready` sem id, A5 `set_multicast` of the sender's OWN cell, src==dst);
+  the CHAIN / store-and-forward family needs a **cross-id relay** (`Semaphore::relay_multicast`,
+  `noc_semaphore.h:192`, src sem ≠ dst sem) the Pipe cannot express; the gap was captured only
+  *implicitly* (folded into the F2=FLAG tag) and never surfaced as a first-class capability gap.
+  Deliverables: a topology matrix with SUPPORTED/GAP/OOS per cell; an explicit blocker line in
+  `migration_audit/transformer_sdpa.md`; a capability note in `proposed_helpers.md`.
+- **Re-entry routing (batched, upstream-first):** I1 `relay_multicast` is a missing primitive →
+  **Step A**; I2 chain "mutable-doorbell → write-once `valid_sem`" hazard → **Step B**; I3 SDPA-audit
+  blocker line → **Step C**; I4 topology survey + matrix → **Step ★ (Step D)**; I5 `proposed_helpers`
+  capability note → **Step F**. Leftmost = A → one forward pass **A → B → C → D → F**.
+- **Step E (bake-off) = NO-OP, no device.** relay buys **no perf** for the star (only avoids one local
+  L1 `set()` store, negligible vs the byte-identical NoC mcast). relay-vs-`set_multicast` is **not a
+  style fork** — it is forced by the chain topology (cross-id mandatory there, `ASSERT`-impossible for
+  star). No new matrix cell, no variant to measure; coverage/perf maps stand.
+- **Step G (materialize) = NO-OP, no version bump.** Chain family stays **DEFERRED** (ask was to make
+  the gap explicit, not implement relay). Helper code unchanged → `MCAST_PIPE_API_VERSION` stays **6**.
+  No fleet remigration owed.
+- **Grounding (confirmed in code, not asserted):** `Semaphore::relay_multicast` exists at
+  `noc_semaphore.h:192` with `ASSERT(local_l1_addr_ != dst_sem.local_l1_addr_)`; chain_link.hpp inits a
+  write-once `valid_sem` to VALID (L140-143) and relays it into the next link's `receiver_sem` (L232);
+  the current `SenderPipe` only does A5 same-cell `set_multicast` → structurally cannot relay.
+- **Decisions:**
+  - **A1 — contracted A5′ `relay_multicast`** (cross-id, src≠dst) as distinct from A5 (src==dst).
+  - **B1 — catalogued H12 / INV12** (mutable doorbell can't be the chain broadcast source → separate
+    write-once `valid_sem`; topology-forced INVARIANT, not a fork).
+  - **C1 — blocker #5 added** to `transformer_sdpa.md` (cross-id relay GAP = root blocker for the
+    reader_interleaved / exp_ring_joint_reader refactors).
+  - **D1 — topology matrix** (`api_feasibility.md` Step ★ Round-7 addendum): T1 STAR=SUPPORTED,
+    T2 CHAIN=GAP, T3 RING=GAP+OOS, T4 FABRIC=OOS, T5 fan-in=OOS; fine matrix over F1×handshake×
+    loopback×pre_handshake.
+  - **F1 — capability-gap note** added to `proposed_helpers.md` header (STAR-only; chain=GAP, deferred;
+    future close likely a `RelayPipe`/forwarding-link face).
+- **API before == API after: version 6 (UNCHANGED).** Paper-only re-entry; no migrated kernel goes
+  stale; nothing owed to `apply-dm-helper`.
+- **Artifacts touched:** `primitive_contracts.md` (A5′ + PRIMITIVES line), `hazards_catalog.md`
+  (H12/INV12), `migration_audit/transformer_sdpa.md` (blocker #5), `api_feasibility.md` (Step ★
+  Round-7 addendum + topology matrix), `proposed_helpers.md` (capability note), this changelog.
+- **Verification:** none — documentation-only round (no helper edit, no device).

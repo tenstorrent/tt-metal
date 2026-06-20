@@ -1,12 +1,16 @@
 # Step A — Primitive Contracts (`mcast_pipe`)
 
 PRIMITIVES: Noc::async_write_multicast, Noc::async_writes_flushed, Noc::async_write_barrier,
-Semaphore::set, Semaphore::set_multicast, Semaphore::wait, Semaphore::wait_min, Semaphore::up,
-Semaphore::inc_multicast, MulticastEndpoint, enums{McastMode,VcSelection,BarrierMode,ResponseMode}
+Semaphore::set, Semaphore::set_multicast, Semaphore::relay_multicast, Semaphore::wait,
+Semaphore::wait_min, Semaphore::up, Semaphore::inc_multicast, MulticastEndpoint,
+enums{McastMode,VcSelection,BarrierMode,ResponseMode}
 | recognition: noc_async_write_multicast(+_loopback_src,+_one_packet),
 noc_semaphore_set_multicast(+_loopback_src), noc_semaphore_set, noc_semaphore_wait,
 noc_semaphore_wait_min, noc_semaphore_inc, noc_semaphore_inc_multicast,
 noc_async_writes_flushed, noc_async_write_barrier, get_noc_multicast_addr
+| Round-7 addendum (feedback-2.txt): added Semaphore::relay_multicast (CROSS-ID broadcast,
+src sem != dst sem) — recognition tell = a write-once `valid_sem` set once in the ctor then
+`set_multicast`/`relay_multicast`-ed into a DIFFERENT receiver sem id (chain_link.hpp L232,L140-143).
 
 All contracts read from source this run (no prior-run reuse). Two layers:
 - **Substrate** (what the helper + bake-off kernels are BUILT FROM): object API —
@@ -86,6 +90,30 @@ one of these.
 - **McastMode:** EXCLUDE_SRC excludes self (num_dests=63 for 8×8 incl self); INCLUDE_SRC
   includes self (=64). Loopback `num_dests==1` may hang — same degeneracy as A1.
 - NON_POSTED (no posted variant exposed).
+
+### A5′. `Semaphore::relay_multicast<opts, dst_core_type>(noc, dst_sem, x0, y0, x1, y1, num_dests, linked=false)`
+`noc_semaphore.h:192-211` → raw `noc_semaphore_set_multicast` / `_loopback_src` with a
+**different src/dst sem id pair**. (Added Round 7 — feedback-2.txt; absent from the original census.)
+- **Does:** like A5, broadcasts the **local sem cell's current 4-byte value** to the rectangle —
+  but writes it into a **DIFFERENT destination semaphore** (`dst_sem`'s L1 offset) on each receiver.
+  Source offset (this `Semaphore`) ≠ destination offset (`dst_sem`). Returns after **enqueued**.
+- **Hard constraint baked in:** `ASSERT(local_l1_addr_ != dst_sem.local_l1_addr_)` — the two sem
+  ids **must differ**. This is what makes A5′ a distinct primitive, not a parameterization of A5
+  (A5 *is* the src==dst case; A5′ *requires* src≠dst).
+- **Why it exists (the chain topology):** in a store-and-forward CHAIN every link is *both* a
+  receiver and a sender. Its own `receiver_sem` doorbell is **mutable** — `receive()` drives it
+  INVALID then waits VALID, so that cell does NOT reliably hold VALID at forward time. The relay
+  source must therefore be a **separate, write-once `valid_sem`** pinned to VALID (set once in the
+  ctor), broadcast into the *next* link's `receiver_sem`. Reusing the doorbell id (A5) would clobber
+  the sender's own upstream-receive slot. → See hazard H12.
+- **vs A5 for the STAR topology:** in a star the sender is NOT also a receiver, so its doorbell cell
+  is free scratch — A5 (`set(VALID)` once + `set_multicast` on the shared id) is correct and simpler.
+  **relay buys NO perf for star** — the only thing it avoids is one local L1 `set()` store
+  (`*ptr=val`, negligible vs the byte-identical NoC multicast). relay earns its keep *only* when the
+  source and destination sem ids must differ (chain), never as a star optimization.
+- **cmd buf / VC / mode / degeneracy:** identical to A5 (`write_reg_cmd_buf` 2, VC 4, EXCLUDE/INCLUDE
+  via `NocOptions::MCAST_INCL_SRC`, `num_dests==1` may hang). Same H1 source-clobber on the *valid_sem*
+  cell — but since valid_sem is write-once-to-VALID, it is never re-stored, so H1 is vacuous for it.
 
 ### A6. `Semaphore::wait(value)`
 `noc_semaphore.h:91` → raw `noc_semaphore_wait` (`dataflow_api.h:495`).

@@ -17,6 +17,21 @@
 > were reordered (`NOC_ID` first, no default). API version **6**.
 > Authoritative running record: `changelog.md`.
 
+> **⚠ CAPABILITY GAP — TOPOLOGY (Round 7, 2026-06-20, feedback-2.txt).** The `Pipe` is a **STAR**
+> primitive: one sender → N pure receivers over a **single shared `data_ready` sem id**, broadcasting
+> the sender's OWN cell via A5 `set_multicast` (src sem == dst sem). It **does NOT support the CHAIN /
+> store-and-forward topology** (T2), where each link is *both* a receiver and a sender and must relay a
+> **write-once `valid_sem`** into the *next* link's *different* `receiver_sem` via cross-id
+> `Semaphore::relay_multicast` (A5′, `ASSERT(src != dst)` — `noc_semaphore.h:192`). The reason a chain
+> needs two distinct sem ids: a link's own doorbell is **mutable** (`receive()` drives it INVALID), so
+> it cannot hold the VALID broadcast source at forward time (hazard **H12 / INV12**). relay buys **no
+> perf** for the star — it is a topology-forced capability, not a style choice. The chain family
+> (chain_link.hpp reference, reader_interleaved, exp_ring_joint_reader) is **DEFERRED**; the explicit
+> per-cell verdict is the **topology matrix in `api_feasibility.md` (Step ★ Round-7 addendum)** — T1
+> STAR=SUPPORTED, T2 CHAIN=GAP, T3 RING=GAP+OOS, T4 FABRIC / T5 fan-in=OOS. Closing T2 is a future
+> capability round (likely a third `RelayPipe`/forwarding-link face, or a relay mode on `SenderPipe`),
+> scoped when the chain family is actually scheduled. **No API change / no version bump this round.**
+
 The deliverable. One fat, two-sided helper — `Pipe` — that wraps the NoC-multicast +
 semaphore-handshake block, built on the object API (`Noc` / `Semaphore<>` / `MulticastEndpoint`),
 with all style choices **decided by the on-device bake-off** (`style_bakeoff.md`), not by argument.

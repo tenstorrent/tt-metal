@@ -172,3 +172,72 @@ The API draft fixes everything *except* the style-fork **defaults** it dispatche
 - **F4 LINKING** — LinkedPair+flush vs Unlinked+barrier-between (the `Auto` predicate + deadlock/perf).
 - **F2 STAGING** — flag vs counter: *coverage* (stale-retrigger immunity) is already a known
   correctness axis; the bake-off measures whether one is also a perf win, else it stays a use-case knob.
+
+---
+
+# Step ★ — Round-7 addendum: TOPOLOGY SURVEY + CAPABILITY MATRIX (feedback-2.txt)
+
+> DERIVED FROM: the full `census.txt` + `kernel_annotations/*` (topology lens) · `primitive_contracts.md`
+> A5 vs A5′ (set_multicast vs relay_multicast) · `hazards_catalog.md` H12/INV12 · current API = v6.
+>
+> **Why this addendum exists.** Earlier rounds resolved the *style* forks (F1/F2/F3/F4) but never
+> enumerated the **topologies** the abstraction must support, so the CHAIN cross-id-relay gap was
+> captured only *implicitly* (folded into the F2=FLAG tag of `chain_link.hpp.md`) and never surfaced
+> as a first-class capability gap. This survey makes every topology's verdict **explicit** so missing
+> capabilities are recorded once, not re-discovered per kernel. **No API change this round** — the
+> chain family stays deferred; this is the map of what the Pipe covers vs. what it must grow into.
+
+## Part 1 — the distinct topologies (primary axis)
+
+| # | Topology | Mechanism | Sender also a receiver? | Verdict | Where observed |
+|---|----------|-----------|--------------------------|---------|----------------|
+| T1 | **STAR** — 1 sender → N pure receivers, **shared** sem id | A5 `set_multicast` of the sender's OWN cell (src==dst id) | No | **SUPPORTED** (current `SenderPipe`/`ReceiverPipe`, v6) | matmul, conv, gn, ln, topk, deepseek samplers (13 migrated) |
+| T2 | **CHAIN** — store-and-forward, each link **receives AND forwards** | A5′ `relay_multicast`: write-once `valid_sem` (src) → next link's `receiver_sem` (dst), **src≠dst** | **Yes** | **GAP** | chain_link.hpp (ref), reader_interleaved (refactor), exp_ring_joint_reader (refactor) |
+| T3 | **RING / all-gather** — chain + co-located per-link ring sync | T2's relay **plus** a `wait_min` ring barrier + mux-writer fabric path | Yes | **GAP** (chain half) **+ OOS** (ring sync — cleanly separable, composed externally) | exp_ring_joint_reader (ring `wait_min` L271/L430) |
+| T4 | **FABRIC mcast** — cross-chip broadcast | fabric/CCL data path (not local NoC rectangle mcast) | n/a | **OUT OF SCOPE** (different family — intent exclusion) | all_reduce worker_writer (sem rectangle is local but coupled to fabric) |
+| T5 | **Multi-producer fan-in** — N senders → 1 receiver | N independent A1/A5 streams into one cell | n/a | **OUT OF SCOPE** (INV9 precondition — VC-FIFO order is per-sender only) | none in census; documented precondition |
+
+**The single root cause of T2/T3 being a GAP (not T1):** in T1 the sender is *not* a receiver, so its
+doorbell cell is free scratch — A5 (same-id `set_multicast`) is correct and simpler. In T2/T3 every
+link is *both*, its doorbell is **mutable** (`receive()`→INVALID), so the relay needs a **separate
+write-once `valid_sem`** as source (cross-id A5′). The current Pipe has exactly one shared `data_ready`
+sem and only does A5 → it **structurally cannot** express T2/T3 (A5′'s `ASSERT(src != dst)`). See
+H12/INV12. relay buys **no perf** for T1 — it earns its keep *only* where src/dst ids must differ.
+
+## Part 2 — fine matrix (topology × style sub-axes)
+
+Each cell = does the **current v6 Pipe** cover that combination? `✓`=supported, `GAP`=needs relay/new
+capability, `OOS`=out of scope.
+
+| Topology | F1 fence | F2 handshake (flag / counter) | F3 loopback (excl / incl / degenerate) | pre_handshake (yes / no) |
+|----------|----------|-------------------------------|------------------------------------------|---------------------------|
+| **T1 STAR** | ✓ flush+linked baked (F4); barrier dialects converge to linked-flush — see note | ✓ both (`DataReadySignal=Flag\|Counter`); value-carrying flag → deferred (moe_gpt) | ✓ tri-path internal dispatch (inferred `sender_in_rect && src!=dst`); degenerate→local copy | ✓ both (`PRE_HANDSHAKE` knob) |
+| **T2 CHAIN** | **GAP** — chain uses flush+linked, but it rides A5′ relay the Pipe lacks | **GAP** — needs the **two-sem** model (write-once `valid_sem` + mutable `receiver_sem`), not one shared id | **GAP** — chain is EXCLUDE-style (injector self-fills via DRAM), but unreachable without relay | **GAP** — chain *is* pre_handshake=YES (dest reused), but blocked on relay |
+| **T3 RING** (chain half) | **GAP** | **GAP** | **GAP** | **GAP** |
+| **T3 RING** (ring sync) | **OOS** — `wait_min` ring barrier is NOT a Pipe responsibility; stays cleanly separable from the relay channel | OOS | OOS | OOS |
+| **T4 FABRIC** | OOS | OOS | OOS | OOS |
+| **T5 fan-in** | OOS | OOS | OOS | OOS |
+
+**Note on T1 F1 fence dialects.** Three fence dialects appear in STAR kernels (flush, write-barrier,
+atomic-barrier — `hazards_catalog.md` F1 amendment). The Pipe bakes **flush + always-linked** (Round 1
+−27%, Round 4 P5). The one observed BARRIER+unlinked STAR dialect (sdpa_decode `read_k`) was found to
+have **no genuine consumer** — it converges to linked-flush and would gain the −36% win (changelog
+Round 4 P5). So within T1 these are not separate *supported paths* but a single baked path the
+refactor targets converge onto; atomic-barrier remains the counter-path fence. No T1 cell is a GAP.
+
+## Verdict (Round 7)
+
+- **T1 STAR — FULLY SUPPORTED.** Every (F1 × handshake × loopback × pre_handshake) sub-cell in scope
+  is covered by the v6 `SenderPipe`/`ReceiverPipe`. No gap.
+- **T2 CHAIN — EXPLICIT GAP.** Requires cross-id relay (A5′ `relay_multicast`) + a **two-sem per link**
+  model (write-once `valid_sem` source ≠ mutable `receiver_sem` doorbell). The current single-shared-sem
+  star Pipe cannot express it. **Chain family stays DEFERRED** (reader_interleaved, exp_ring_joint_reader,
+  chain_link.hpp reference). Closing the gap is a future capability round — likely a third face
+  (a `RelayPipe`/forwarding link) or a relay mode on `SenderPipe`, decided when the chain family is
+  actually scheduled for migration.
+- **T3 RING — GAP + OOS.** Chain half = T2's gap; the co-located ring `wait_min` sync is **out of scope**
+  and must remain externally composed, never absorbed into the Pipe.
+- **T4 FABRIC / T5 fan-in — OUT OF SCOPE**, now explicitly bounded rather than silently ignored.
+
+**No bake-off, no API change, no version bump this round** (E and G are no-ops): relay is a
+topology-forced capability, not a style fork measurable on the star, and the chain family is deferred.

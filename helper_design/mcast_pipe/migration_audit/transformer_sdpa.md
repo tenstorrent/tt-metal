@@ -50,3 +50,16 @@ targets, 1 is the existing abstraction (reference), 1 is marginal/defer.
    but the API must satisfy both header shapes.
 4. **Co-located non-Pipe sync** in exp_ring_joint_reader (ring wait_min) and worker_writer (fabric
    barrier) must not be absorbed into Pipe — clean separation required.
+5. **CROSS-ID RELAY GAP — the chain family needs a primitive the Pipe cannot express today**
+   (added Round 7, feedback-2.txt; previously folded only into the F2=FLAG tag). chain_link.hpp /
+   reader_interleaved.cpp / exp_ring_joint_reader.cpp relay a **write-once `valid_sem`** (pinned VALID
+   in the ctor) into the *next* link's **`receiver_sem`** via `noc_semaphore_set_multicast` with
+   **source sem ≠ dest sem** (= `Semaphore::relay_multicast`, noc_semaphore.h:192; chain_link.hpp L232).
+   The current `SenderPipe` broadcasts its **own** `data_ready` cell into receivers' **same** sem id
+   (A5 `set_multicast`, src==dst) — it is a STAR primitive and **structurally cannot** do cross-id
+   relay (A5′ `ASSERT(src != dst)`). Reason the chain needs two distinct ids: each link is
+   simultaneously receiver AND sender, and its mutable doorbell (`receive()` → INVALID) can't hold the
+   VALID source at forward time (see hazards H12 / INV12). This is the **root blocker** for migrating
+   the whole chain family (reader_interleaved REFACTOR, exp_ring_joint_reader REFACTOR) — it is
+   tracked as **CHAIN = GAP** in the Step ★ topology matrix (`api_feasibility.md`). Chain family stays
+   **deferred** until the Pipe grows a relay capability.
