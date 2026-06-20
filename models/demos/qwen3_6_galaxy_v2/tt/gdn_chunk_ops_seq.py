@@ -218,19 +218,13 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(k_c_t)
 
     # ----------------------------------------------------------------
-    # Build L_mat = I + kk * strict_lower(L_mask)
-    # L_mask includes the diagonal (exp(0)*1 = 1), but the reference
-    # uses strictly lower triangular kk (diagonal zeroed). The delta-rule
-    # update S_t += k_t ⊗ v_t doesn't self-attend within the same token.
-    # Subtract the diagonal component: kk * L_mask - kk * eye = kk * (L_mask - eye).
+    # Build L_mat = I + kk * L_mask  (2 cheap elementwise dispatches)
     # ----------------------------------------------------------------
-    kk_off_diag = ttnn.subtract(
+    L_mat = ttnn.add(
+        _eye_1cc,
         ttnn.multiply(kk, L_mask, memory_config=_cmc),
-        ttnn.multiply(kk, _eye_1cc, memory_config=_cmc),
         memory_config=_cmc,
     )
-    L_mat = ttnn.add(_eye_1cc, kk_off_diag, memory_config=_cmc)
-    ttnn.deallocate(kk_off_diag)
     ttnn.deallocate(kk)
 
     # ----------------------------------------------------------------
