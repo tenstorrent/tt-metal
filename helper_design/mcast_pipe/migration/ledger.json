@@ -102,17 +102,18 @@
    "op_family": "matmul",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids",
+   "last_verified": "2026-06-20",
+   "census_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids | DEFER-DESIGN-GAP: sem ids are RUNTIME args (Semaphore<>(get_arg_val(i++)) at lines 54-55), but v7 SenderPipe/ReceiverPipe take DATA_READY_SEM_ID/CONSUMER_READY_SEM_ID as compile-time template params. Runtime sem id inexpressible. Needs helper change (out of scope).",
    "flags": [
-    "tier:2b"
+    "tier:2b",
+    "design-gap"
    ]
   },
   {
