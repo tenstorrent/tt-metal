@@ -25,15 +25,17 @@ OUTPUT_DEPTHS="${OUTPUT_DEPTHS:-2 8 16}"
 IN_CB="${IN_CB:-32}"        # reads on NOC0 aren't the bottleneck; fixed input depth
 N="${N:-8}"
 PAGES="${PAGES:-1024}"
-READER_NOC="${READER_NOC:-0}"   # pin reader to its best NoC
 
 # best write BW over output depths -> echoes "bw out_cb"
+# CONSTRAINT: reader and writer must be on DIFFERENT NoCs, so reader = the other NoC.
+# This means the two writer-NoC series are the two valid pipeline configs:
+#   writer=NOC1 (reader=NOC0, fast reads) and writer=NOC0 (reader=NOC1, read-capped).
 measure() { # layout_flag wnoc cores
-  local lf="$1" wnoc="$2" cores="$3" best=0 besto=0
+  local lf="$1" wnoc="$2" cores="$3" rnoc=$((1 - wnoc)) best=0 besto=0
   for o in ${OUTPUT_DEPTHS}; do
     rm -f "${DEV_CSV}"
     "${BIN}" --lean-compute --skip-output-validation ${lf} \
-      --reader-noc "${READER_NOC}" --writer-noc "${wnoc}" \
+      --reader-noc "${rnoc}" --writer-noc "${wnoc}" \
       --reader-dbuf-trid --reader-trid-in-flight "${N}" --reader-push-tiles 2 \
       --input-cb-depth-tiles "${IN_CB}" --output-cb-depth-tiles "${o}" --writer-end-barrier-mode 0 \
       --num-pages-per-core "${PAGES}" --num-programs 2 --compute-nops 0 \

@@ -694,6 +694,17 @@ BuiltProgram build_program(
     std::vector<uint32_t> reader_compile_time_args = {
         kInputCbId, cfg.reader_mode, push_tiles, page_size_tiles, trid_in_flight, cross_program_offset_tiles};
     // Defaults: reader=NOC0, writer=NOC1 (measured best). --reader-noc/--writer-noc override.
+    // HARD CONSTRAINT: the two data-movement kernels on a core must be on DIFFERENT NoCs.
+    // Putting both on the same NoC hangs the device (requires a chip reset), so fail fast.
+    TT_FATAL(
+        cfg.reader_noc <= 1 && cfg.writer_noc <= 1,
+        "--reader-noc/--writer-noc must be 0 or 1 (got reader={}, writer={})",
+        cfg.reader_noc,
+        cfg.writer_noc);
+    TT_FATAL(
+        cfg.reader_noc != cfg.writer_noc,
+        "reader and writer must use DIFFERENT NoCs (both NOC{} requested) -- same NoC hangs the device",
+        cfg.reader_noc);
     const NOC reader_noc = (cfg.reader_noc == 1) ? NOC::NOC_1 : NOC::NOC_0;
     const NOC writer_noc = (cfg.writer_noc == 1) ? NOC::NOC_1 : NOC::NOC_0;
     log_info(LogTest, "NoC assignment: reader=NOC{}, writer=NOC{}", cfg.reader_noc, cfg.writer_noc);
