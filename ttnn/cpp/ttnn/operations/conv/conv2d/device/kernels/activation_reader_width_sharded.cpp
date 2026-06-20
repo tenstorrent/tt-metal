@@ -111,23 +111,34 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reader_indices_cb.get_write_ptr());
 
-    // Set up remote VALID value (also set once by the SenderPipe ctor below; kept for the receiver path)
-    act_mcast_receiver_sem.set(VALID);
-
-    // mcast_pipe v7 SENDER face (reconstructed migration for the hang experiment).
-    // PRE_HANDSHAKE=false: the raw readiness wait (act_mcast_sender_sem.wait_min) stays raw below.
-    // NUM_ACTIVE_RECEIVER_CORES = num_reader_cores - 1 (sender not counted; loopback adds +1 -> the
-    // INCLUDE_SRC fan-out of num_reader_cores matches the raw). DATA_READY_SEM_ID = act_mcast_receiver_sem (CTA13).
-    constexpr uint32_t act_pipe_active_cores = num_reader_cores - 1;
+    // mcast_pipe v8 DUAL-PIPE (SenderPipe + ReceiverPipe) round-robin self-mcast.
+    // Each core is the sender on its own round and a receiver on the others.
+    //
+    // SENDER face (built once below, PRE_HANDSHAKE=true):
+    //   DATA_READY_SEM_ID    = act_mcast_receiver_sem (CTA13) — the VALID/INVALID data-ready flag.
+    //   CONSUMER_READY_SEM_ID = act_mcast_sender_sem (CTA12) — the receiver->sender fan-in counter.
+    //   consumer_ack_count   = num_mcast_cores - 1 (the raw fan-in wait count). DIVERGENT from the
+    //     mcast fan-out: the rect area is num_reader_cores (the broadcast lands on every reader core),
+    //     but only num_mcast_cores-1 cores actually ack. v8's runtime consumer_ack_count decouples the
+    //     two (v7 could express only one count for both -> the original hang). The ctor sets the local
+    //     data-ready cell VALID; send() re-asserts VALID per call (the M12b per-send re-assert), so the
+    //     stale-INVALID left by this core's own receive rounds is refreshed before each broadcast.
+    //
+    // RECEIVER face (built per round inside the loop): ReceiverPipe with the SAME sem ids +
+    //   PRE_HANDSHAKE=true. .receive(sx,sy) folds BOTH the raw fan-in ack (up on the consumer-ready
+    //   counter) AND the raw wait(VALID); it clears the flag after the wait (H11, clear-after-wait).
+    //   The raw top-of-round act_mcast_receiver_sem.set(INVALID) is kept — it also clears the stale
+    //   VALID this core's own sender round leaves behind.
     dataflow_kernel_lib::SenderPipe<
         noc_index,
         get_compile_time_arg_val(13),
-        act_pipe_active_cores,
-        /*PRE_HANDSHAKE=*/false>
+        /*PRE_HANDSHAKE=*/true,
+        get_compile_time_arg_val(12)>
         act_send_pipe(
             noc,
             dataflow_kernel_lib::McastRect<>{
-                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
+                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end},
+            /*consumer_ack_count=*/num_mcast_cores - 1);
 
     // Compute is divided along the width to reduce the size of CBs.
     // Only a part of the width on each core is used in one block.
@@ -211,26 +222,21 @@ void kernel_main() {
             for (uint32_t act_w_outer_i = 0; act_w_outer_i < num_input_cores; act_w_outer_i++) {
                 act_cb.reserve_back(act_block_num_tiles);
                 if (act_w_outer_i == this_core_id) {
-                    // MCAST SENDER: send entire tilized input to other cores in column
-                    // wait until all act mcast destinations have atomically incremented the act semaphore_addr (i.e.
-                    // its value should be act_mcast_num_dests), then reset the semaphore_addr value back to zero for
-                    // the next block
-
-                    act_mcast_sender_sem.wait_min(num_mcast_cores - 1);
-                    act_mcast_sender_sem.set(0);
-
+                    // MCAST SENDER: send entire tilized input to other cores in column.
                     // compute tilizes and pops cb_id_act and pushes to tilized_in0_cb_id
                     tilized_in0_cb.wait_front(act_block_num_tiles);
 
-                    // mcast_pipe v7 SENDER face: send() does the data mcast (INCLUDE_SRC inferred:
-                    // in-rect && src!=dst) + the data-ready flag mcast (ctor-once VALID) + flush.
-                    // NOTE: the raw per-send `act_mcast_receiver_sem.set(VALID)` is GONE — the v7 ctor
-                    // set it VALID once; this is exactly the suspect under test.
+                    // mcast_pipe SENDER face: send() absorbs the consumer-ready fan-in wait
+                    // (PRE_HANDSHAKE; ack_count == num_mcast_cores-1) + reset, the data mcast
+                    // (INCLUDE_SRC loopback inferred: in-rect && src!=dst), the data-ready VALID flag
+                    // mcast on the same VC (with per-send VALID re-assert), and the flush.
                     act_send_pipe.send(
                         tilized_in0_cb.get_read_ptr(), act_cb.get_write_ptr(), act_mcast_sender_size_bytes);
                 } else {
-                    // MCAST RECEIVER: receive entire tilized input from sender core
-                    // Set act semaphore value to INVALID
+                    // MCAST RECEIVER: receive entire tilized input from sender core.
+                    // Clear the flag before receiving — also clears the stale VALID this core's own
+                    // sender round left behind (the helper's clear-after-wait ends INVALID; the next
+                    // sender's send() re-asserts VALID, so this raw reset and H11 coexist).
                     act_mcast_receiver_sem.set(INVALID);
 
                     // Compute sender's logical coordinates from iteration index
@@ -241,11 +247,14 @@ void kernel_main() {
                     uint32_t sender_x = act_mcast_x_lookup[sender_logical_x];
                     uint32_t sender_y = act_mcast_y_lookup[sender_logical_y];
 
-                    // Atomic increment source core counter
-                    act_mcast_sender_sem.up(noc, sender_x, sender_y, 1);
-
-                    // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    act_mcast_receiver_sem.wait(VALID);
+                    // mcast_pipe RECEIVER face: receive() acks the sender (up on the consumer-ready
+                    // counter), waits VALID, then clears the flag (H11). Folds the raw ack + wait.
+                    dataflow_kernel_lib::ReceiverPipe<
+                        get_compile_time_arg_val(13),
+                        /*PRE_HANDSHAKE=*/true,
+                        get_compile_time_arg_val(12)>
+                        act_recv_pipe(noc);
+                    act_recv_pipe.receive(sender_x, sender_y);
                 }
 
                 act_cb.push_back(act_block_num_tiles);
