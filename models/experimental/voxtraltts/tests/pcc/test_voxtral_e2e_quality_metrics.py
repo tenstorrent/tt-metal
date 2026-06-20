@@ -40,7 +40,7 @@ MIN_CHARS_PER_S = float(os.environ.get("VOXTRAL_TTS_MIN_CHARS_PER_S", "15.0"))
 ASR_SAMPLE_RATE = 16000
 WHISPER_MODEL = "openai/whisper-small"
 
-assert len(_QUALITY_TEXT) == 500
+assert len(_QUALITY_TEXT) == len(VOXTRAL_STANDARD_CHAR_TEXT)
 
 
 def _has_module(name: str) -> bool:

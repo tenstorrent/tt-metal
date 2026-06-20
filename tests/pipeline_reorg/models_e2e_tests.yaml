@@ -638,3 +638,42 @@
       tier: 2
   owner_id: U06ECNVR0EN # Evan Smal
   team: models
+
+# ─── Voxtral TTS ────────────────────────────────────────────────────────────
+
+- name: Voxtral TTS teacher-forced E2E PCC (P150)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603 TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603 CI=true
+    pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py \
+      -k "golden_codes_pcc or golden_acoustic_pcc or acoustic_pcc" \
+      -sv --timeout=3600
+  model: voxtral-tts
+  skus:
+    bh_p150b_civ2:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Voxtral TTS demo (QB2)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
+    export CI=true
+    export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
+    python models/experimental/voxtraltts/demo/demo.py \
+      --text "Hello from Voxtral on Tenstorrent Blackhole." \
+      --output-dir generated/voxtraltts_demo \
+      --max-speech-tokens 256
+  model: voxtral-tts
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models

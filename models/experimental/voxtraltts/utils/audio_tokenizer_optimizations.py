@@ -61,11 +61,14 @@ def voxtral_audio_tokenizer_native_sdpa_optimizations() -> AudioTokenizerOptimiz
 
 
 def voxtral_audio_tokenizer_high_accuracy_optimizations() -> AudioTokenizerOptimizations:
-    """BF16 weights + HiFi2 for module PCC / golden comparisons."""
+    """BF16 weights + HiFi4 matmuls/SDPA for module PCC / golden comparisons."""
+    from models.experimental.voxtraltts.utils.config_helpers import COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC
+
     return AudioTokenizerOptimizations(
         weight_dtype=ttnn.bfloat16,
         activation_dtype=ttnn.bfloat16,
-        matmul_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
-        sdpa_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_AUDIO_TOKENIZER,
+        matmul_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC,
+        sdpa_compute_kernel_config=COMPUTE_KERNEL_CONFIG_VOXTRAL_ACOUSTIC,
+        matmul_program_config=True,
         sdpa_native_sliding_window=False,
     )
