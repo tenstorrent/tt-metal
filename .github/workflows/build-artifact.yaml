@@ -569,6 +569,7 @@ jobs:
             "--toolchain-path" "${{ env.TOOLCHAIN }}"
             ${args_fixme}
             "--enable-ccache"
+            "--disable-unity-builds"
             "--configure-only"
           )
 
@@ -581,7 +582,7 @@ jobs:
             build_args+=("--without-distributed")
           fi
           if [ "${{ inputs.profile }}" = "true" ]; then
-            build_args+=("--enable-time-trace" "--disable-unity-builds")
+            build_args+=("--enable-time-trace")
           fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_args+=("--build-umd-tests")
@@ -630,7 +631,7 @@ jobs:
 
       - name: Publish ccache summary
         run: |
-          CCACHE_STATS=$(ccache -s)
+          CCACHE_STATS=$(ccache -sv)
           echo "$CCACHE_STATS"
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
