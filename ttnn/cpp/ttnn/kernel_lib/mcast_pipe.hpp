@@ -19,50 +19,6 @@
 // rectangle or the recipient count — it needs only the two semaphores and, at `receive()` time,
 // the sender's core coords (the target of its readiness ack).
 //
-// Built ENTIRELY on the object API (`Noc`, `Semaphore<>`, Unicast/MulticastEndpoint) — no legacy
-// free functions. Every NoC transaction (data mcast, self-copy read, signal mcast) goes through the
-// `Noc` object; the multicast NoC-address math lives in `MulticastEndpoint`/`Semaphore<>`.
-//
-// -----------------------------------------------------------------------------
-// GEOMETRY + RECIPIENT COUNT (sender side only)
-// -----------------------------------------------------------------------------
-// The caller does NOT pick a multicast mode. It states two quantities and the SenderPipe infers the
-// rest:
-//   * `McastRect` is PURE GEOMETRY — the broadcast bounding box. It is NOT a transfer count, and it is
-//     the ONLY runtime ctor arg (its virtual coords vary per sender core under one kernel binary).
-//   * `NUM_ACTIVE_RECEIVER_CORES` (template, compile-time, core-uniform) is the RECIPIENT count: the
-//     number of cores the data is multicast to, NOT counting the sender's own in-place copy. It equals
-//     the EXCLUDE-source NoC `num_dests` AND the receiver->sender readiness-ack count — exactly the
-//     value every production factory already computes (matmul's `in0_mcast_num_dests`, etc.), so a
-//     shared sender kernel passes the same value across topologies (sender in-rect / out-of-rect) with
-//     no host edit. The SenderPipe derives the mcast population from it per inferred mode:
-//        no loopback : mcast_dests = NUM_ACTIVE_RECEIVER_CORES         (ack count = same)
-//        loopback    : mcast_dests = NUM_ACTIVE_RECEIVER_CORES + 1     (+1 = the sender's self-copy,
-//                      which does not ack, so the ack count stays = NUM_ACTIVE_RECEIVER_CORES)
-//
-// LOOPBACK is INFERRED per `send()`, no caller input: `loopback iff sender_in_rect && src != dst`.
-// `my_x`/`my_y` are read in the rect's NoC index space (`NOC_ID`).
-//   * sender OUTSIDE the box                 -> plain multicast, mcast_dests = N
-//   * sender INSIDE the box, src != dst       -> loopback multicast: the sender is itself a recipient
-//       (self-gather) -> mcast_dests = N + 1 (its self-copy is the +1).
-//   * sender INSIDE the box, src == dst       -> plain multicast, mcast_dests = N: the sender's copy is
-//       already in place (matmul in0); never self-overwrite. N counts the OTHER cores, not box area.
-//   * N == 0 (no receivers) -> local self-copy if the sender is in the box (a loopback to just self can
-//       hang); else nothing. Handshake/fence skipped.
-//   The signal mcast rides the SAME mode as the data mcast of that `send()`; `send_signal()` carries no
-//   data, so it is always plain (EXCLUDE-source).
-//
-// All style choices are baked in from the on-device bake-off (helper_design/mcast_pipe/
-// style_bakeoff.md):
-//   * fence    -> async_writes_flushed (data is SENT), NOT a barrier      (flush −27% vs barrier)
-//   * signal   -> level flag (VALID/INVALID) by default                   (flag −29% vs counter)
-//   * linking  -> data mcast linked to the following signal mcast, + flush (linked −36% vs unlinked)
-//   * reset    -> receiver clears its flag BEFORE acking (clear-before-ack)
-//   * ordering -> data then signal, same Noc / same VC — the signal proves the data arrived
-//
-// One internal dispatch the caller never navigates: `DataReadySignal::Counter` forces the fence to
-// an atomic barrier (a write flush would hang the non-posted multicast atomic).
-//
 // -----------------------------------------------------------------------------
 // SEMAPHORE LIFECYCLE OWNED BY THE PIPE
 // -----------------------------------------------------------------------------
@@ -107,11 +63,10 @@ namespace dataflow_kernel_lib {
 
 // -----------------------------------------------------------------------------
 // How the sender tells the receivers the data is ready (the sender->receiver data-ready signal).
-//   * Flag (default, fastest): a level flag set to VALID/INVALID, with an exact wait + reset on the
-//     receiver. The bake-off winner for the common case.
-//   * Counter: a monotone, reset-free counter (inc_multicast + wait_min). Use ONLY for protocols that
-//     genuinely need it — e.g. multi-phase streaming where a level flag would have to be re-armed.
-// (Distinct from `PRE_HANDSHAKE`, which is the *receiver->sender* "my dest is free" gate.)
+//   * Flag (default, fastest): a level flag set to VALID/INVALID. Pick this for the common case — one
+//     handshake per round, with the receiver free to reset the flag between rounds.
+//   * Counter: a monotone, reset-free counter. Pick this ONLY for tight multi-phase streaming, where
+//     the sender would otherwise stall each round waiting for the receiver to reset the flag.
 // -----------------------------------------------------------------------------
 enum class DataReadySignal { Flag, Counter };
 
@@ -163,8 +118,7 @@ private:
 // =============================================================================
 // SenderPipe — the broadcasting face of the channel.
 // =============================================================================
-// All compile-time-known, core-uniform values are TEMPLATE params (every kernel sources them from
-// `get_compile_time_arg_val`, identical across all cores running the binary):
+// All compile-time-known, core-uniform values are TEMPLATE params:
 //   * NOC_ID                     — compile-time NoC id; must match the `noc` arg. Folds my_x/my_y and
 //                                  the rect's routing corners to constants.
 //   * DATA_READY_SEM_ID          — sender->receiver "data is ready" flag id.
