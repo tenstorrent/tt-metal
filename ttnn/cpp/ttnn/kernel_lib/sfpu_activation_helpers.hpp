@@ -12,9 +12,8 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #include "internal/risc_attribs.h"
 
-// KernelActivation is the host/device shared enum; kept at global scope so
-// the matmul kernels can reference it unqualified (matches the prior
-// bmm_fused_activation.hpp surface).
+// KernelActivation is the host/device shared enum; kept at global scope so kernels
+// can reference it unqualified.
 using ttnn::operations::matmul::KernelActivation;
 
 namespace compute_kernel_lib {
@@ -75,7 +74,6 @@ using SoftplusActivation = ActivationOp<KernelActivation::SOFTPLUS, BetaBits, Th
 // tile_regs_commit and are unaffected.
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0>
 struct ActivationInitHelper {
-    // Compile-time validation
     static_assert(
         ACT == KernelActivation::NONE || ACT == KernelActivation::SILU || ACT == KernelActivation::TANH ||
             ACT == KernelActivation::GELU || ACT == KernelActivation::RELU6 || ACT == KernelActivation::SIGMOID ||
@@ -111,7 +109,6 @@ struct ActivationInitHelper {
 
 template <KernelActivation ACT, uint32_t PARAM0 = 0, uint32_t PARAM1 = 0, uint32_t PARAM2 = 0>
 struct ActivationApplyHelper {
-    // Compile-time validation
     static_assert(
         ACT == KernelActivation::NONE || ACT == KernelActivation::SILU || ACT == KernelActivation::TANH ||
             ACT == KernelActivation::GELU || ACT == KernelActivation::RELU6 || ACT == KernelActivation::SIGMOID ||
@@ -119,7 +116,6 @@ struct ActivationApplyHelper {
             ACT == KernelActivation::SELU || ACT == KernelActivation::SOFTPLUS,
         "Unsupported KernelActivation type for fused activation apply");
 
-    // Parameter-specific validation
     static_assert(
         ACT != KernelActivation::SOFTPLUS || PARAM0 != 0,
         "SOFTPLUS PARAM0 (beta) must be non-zero to avoid division by zero");
@@ -140,9 +136,7 @@ struct ActivationApplyHelper {
             relu_max_tile_pack(tile_index, max);
         } else if constexpr (ACT == KernelActivation::SIGMOID) {
             // Enhanced: PARAM0 is vector mode, PARAM1 is fast_approximate
-            constexpr VectorMode vec_mode = (PARAM0 == 1)   ? VectorMode::R
-                                            : (PARAM0 == 2) ? VectorMode::C
-                                                            : VectorMode::RC;
+            constexpr int vec_mode = (PARAM0 == 1) ? VectorMode::R : (PARAM0 == 2) ? VectorMode::C : VectorMode::RC;
             sigmoid_tile_pack<vec_mode, PARAM1 != 0>(tile_index);
         } else if constexpr (ACT == KernelActivation::HARDSIGMOID) {
             hardsigmoid_tile_pack(tile_index);
