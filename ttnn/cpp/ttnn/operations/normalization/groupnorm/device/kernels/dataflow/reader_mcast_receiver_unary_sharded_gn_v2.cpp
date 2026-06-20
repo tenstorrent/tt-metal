@@ -52,7 +52,8 @@ void kernel_main() {
     // flipped vs matmul: reduce_sender_sem is the S->R data-ready FLAG (cleared+waited here, the
     // ReceiverPipe's DATA_READY_SEM_ID), and reduce_receiver_sem is the R->S consumed COUNTER
     // (up'd on the sender here, the CONSUMED_SEM_ID). The sender coords go to receive().
-    dataflow_kernel_lib::ReceiverPipe<reduce_sender_semaphore_id, reduce_receiver_semaphore_id> reduce_pipe(noc);
+    dataflow_kernel_lib::ReceiverPipe<reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/true, reduce_receiver_semaphore_id>
+        reduce_pipe(noc);
 
 #if defined(READER_REPACK) and defined(TILIZE_IN)
     uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
