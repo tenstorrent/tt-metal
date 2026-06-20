@@ -916,17 +916,18 @@
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/nightly/.../experimental/test_moe_mm.py::test_moe_mm (dispatch_row, single device)"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "one_packet mcast collector\u21927 cores",
+   "last_verified": "2026-06-20",
+   "census_note": "one_packet mcast collector->7 cores (num_dests=7 is compile-time, expressible) | DEFER-COVERAGE: test_moe_mm unconditionally pytest.skip()s on wormhole_b0 AND blackhole (issue #44858: stable nightly moe_mm failures). This is a single WH b0 chip, so the test cannot exercise dm1.cpp here -> no runnable validation. (Migration also non-trivial: the collector group-mask mcast at lines 367-373 shares partial_semaphore with the sender->collector reduce-inc phases and multiple manual resets; a SenderPipe ctor set(VALID) would corrupt that multiplexed counter. But the binding blocker is coverage.)",
    "flags": [
-    "tier:2d"
+    "tier:2d",
+    "coverage-gap"
    ]
   },
   {
