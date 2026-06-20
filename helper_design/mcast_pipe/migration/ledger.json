@@ -201,17 +201,18 @@
    "op_family": "conv",
    "role": "sender",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (HEIGHT_SHARDED 256x256 act_block_h=32)"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
-   "census_note": "weights sender (no barrier; VC-4 FIFO)",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFERRED: single-count SenderPipe cannot represent 1D HS sender (mcast=total_num_cores-1 != ack=total_active-1; A/B hang flip confirms). Helper design limitation (num_dests off-by-one).",
    "flags": [
-    "tier:1"
+    "tier:1",
+    "coverage-gap"
    ]
   },
   {
