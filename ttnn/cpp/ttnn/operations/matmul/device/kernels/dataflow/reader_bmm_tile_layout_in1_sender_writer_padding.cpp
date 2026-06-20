@@ -212,16 +212,16 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
-    // mcast_pipe v7: the in1 (and bias in3) block data-mcast + handshake is driven by a SenderPipe.
+    // mcast_pipe v8: the in1 (and bias in3) block data-mcast + handshake is driven by a SenderPipe.
     //   DATA_READY_SEM_ID = receiver_sem id (CTA 11, S->R level flag VALID/INVALID),
-    //   CONSUMER_READY_SEM_ID = sender_sem id (CTA 10, R->S counter), count = in1_mcast_num_dests.
+    //   CONSUMER_READY_SEM_ID = sender_sem id (CTA 10, R->S counter). Dense: ack == fan-out, so the
+    //   default consumer_ack_count (ACK_EQUALS_FANOUT) is the EXCLUDE fan-out the rect derives.
     //   EXCLUDE_SRC, Flag, PRE_HANDSHAKE=true (receivers' reused CB slot). The ctor sets the local
     //   data-ready cell VALID once (folds in the dropped pre-loop receiver_sem.set(VALID)). Same
     //   pipe serves both the in1 and in3/bias send()s.
     dataflow_kernel_lib::SenderPipe<
         noc_index,
         get_compile_time_arg_val(11),
-        in1_mcast_num_dests,
         /*PRE_HANDSHAKE=*/true,
         get_compile_time_arg_val(10)>
         in1_pipe(
