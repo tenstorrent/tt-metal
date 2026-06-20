@@ -338,15 +338,13 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "720f0ede3ac93b542a5bb32796480775341af4df",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "C2",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp",
@@ -424,15 +422,13 @@
       "role": "receiver",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "7e8e0a90bcb036f5a43c02c9431470e3d5e42087",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "C2",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln.cpp",
