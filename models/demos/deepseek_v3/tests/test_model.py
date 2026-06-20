@@ -42,6 +42,13 @@ PCC_REQUIRED_DECODE = 0.97
 REFERENCE_ENTRY_VERSION = 1
 
 
+def _apply_model_test_num_layers(hf_config: PretrainedConfig, default: int = 5) -> None:
+    num_layers = int(os.getenv("DEEPSEEK_NUM_LAYERS_OVERRIDE", default))
+    hf_config.num_hidden_layers = num_layers
+    if hasattr(hf_config, "first_k_dense_replace"):
+        hf_config.first_k_dense_replace = min(hf_config.first_k_dense_replace, num_layers)
+
+
 def _default_reference_cache_dir(cache_path: Path) -> Path:
     return cache_path / "tests_cache"
 
@@ -591,7 +598,7 @@ def test_forward_pass(
     set_deterministic_env,
     state_dict,
 ):
-    hf_config_short.num_hidden_layers = 5
+    _apply_model_test_num_layers(hf_config_short)
 
     if mode != "decode":
         decode_position_ids = None
@@ -627,7 +634,7 @@ def test_mode_decode_forward_pass_batch_8_users_per_row(
     set_deterministic_env,
     state_dict,
 ):
-    hf_config_short.num_hidden_layers = 5
+    _apply_model_test_num_layers(hf_config_short)
 
     run_test_forward_pass_dpmodel(
         mode="decode",
