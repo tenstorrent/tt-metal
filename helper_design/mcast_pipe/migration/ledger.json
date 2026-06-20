@@ -333,7 +333,7 @@
    "tag": "clean",
    "status": "migrated",
    "migrated_api_version": 7,
-   "commit": "PENDING",
+   "commit": "fcec91acc5c",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm"
    ],
@@ -853,17 +853,18 @@
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "models/demos/deepseek_v3_b1/.../test_sampling.py::test_sampling_argmax_single_device_101_cores"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
-   "census_note": "flag-only loop barrier",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFERRED coverage-gap: loop-barrier mcast only runs on the requires_grid_size(101) tests; this WH n150 has 64 worker cores (8x8) -> SKIPPED. v7 SenderPipe form prepared (mirrors reader_final_topk) but not device-verifiable here. Kernel left at its pre-v7 Pipe<> spelling.",
    "flags": [
-    "tier:1"
+    "tier:1",
+    "coverage-gap"
    ]
   },
   {
