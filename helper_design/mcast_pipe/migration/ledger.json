@@ -279,17 +279,18 @@
    "op_family": "conv",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (BLOCK_SHARDED 32x32 3x3)"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
-   "census_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE",
+   "last_verified": "2026-06-20",
+   "census_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE | DEFER-DESIGN-GAP (R4): mcast_block_chunked is a producer-overlapped STREAMING chunked send (wait_front per growing tile count interleaved with per-burst mcast). v7 send() handles only fully-ready blocks (auto-chunks a ready region); cannot express the per-burst wait_front streaming. R4 explicitly deferred this round (proposed_helpers.md). Out of scope.",
    "flags": [
-    "tier:2b"
+    "tier:2b",
+    "design-gap"
    ]
   },
   {
