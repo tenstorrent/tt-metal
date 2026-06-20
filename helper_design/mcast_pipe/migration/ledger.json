@@ -824,17 +824,18 @@
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "models/demos/deepseek_v3_b1/.../test_flash_mla.py"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "k-chunk data+flag, mixed counter/flag",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFER-DESIGN-GAP: num_mcast_dests is a RUNTIME arg (ReaderArgs/WriterArgs structs, lines 141/178; used at 348/356/363 etc.), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param -> runtime recipient/ack count inexpressible (same gap as gn_v2/welford/conv3d). Plus the K-chunk mcast is only one of two per-chunk-loop branches alternating with a preprogram-state TRID-pipelined sharded read (noc_async_read_one_packet_with_state, ncrisc_brisc_sync double-buffer), gated by BRISC_MCAST_LOOPS; receiver pre-handshake uses unicast_atomic_inc_with_state (preprogram-state). Needs helper change (out of scope).",
    "flags": [
-    "tier:2d"
+    "tier:2d",
+    "design-gap"
    ]
   },
   {
