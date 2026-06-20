@@ -21,3 +21,26 @@ Likely cause: the helper send()'s loopback-mode inference and/or the active==0 l
 do not reproduce this rotating self-mcast's exact data+flag ordering across rounds (same failure class as
 conv-WS activation_reader). Needs tune-dm-helper-level work on the rotating-role loopback contract.
 Reverted to raw to keep the tree green. diff_lines_removed: full helper sender+receiver blocks.
+
+## ROOT CAUSE — CONFIRMED ON DEVICE (2026-06-20)
+Decisive A/B on the v7-migrated kernel (commit fa561f3b584), same nodeid, WH:
+- CONTROL: v7 unmodified -> HANG (watcher fired, triage written).
+- TREATMENT: v7 + ONE line `receiver_sem.set(VALID);` immediately before `in0_send_pipe.send(...)` -> PASS.
+The only delta is re-establishing the data-ready flag VALID per send round.
+
+Mechanism: the v7 `SenderPipe` ctor sets the local data-ready cell (receiver_sem, CTA10) VALID **once**
+and `send()` never re-sets it (Round-6 "flag-set lifecycle" change — the per-send local set was dropped
+as redundant for a STAR sender). But this is a ROTATING-ROLE core: the SAME receiver_sem cell is also
+its receiver cell, clobbered to INVALID every round by (a) the per-round `ReceiverPipe` ctor (inits its
+own data_ready = INVALID), (b) `receive()`'s post-wait clear, and (c) the top-of-loop raw
+`receiver_sem.set(INVALID)`. So by the time this core sends again, the ctor-once VALID is stale -> the
+flag mcast broadcasts INVALID -> receivers wait VALID forever -> hang.
+
+The raw (working) kernel does exactly the dropped set: `receiver_sem.set(VALID)` immediately before each
+`set_multicast` (HEAD lines ~286/314), with a comment warning that overwriting it INVALID too early makes
+"receivers see INVALID and hang." So Round 6's "VALID once in ctor" is correct for a STAR sender but WRONG
+for a sender whose data-ready cell doubles as a rotating receiver cell.
+
+tune-dm-helper fix options: (1) a rotating/relay-role face that re-sets VALID per send, or (2) make the
+Flag-signal `send()` re-assert the local VALID each call (reverts the Round-6 optimization for this path).
+NOT an apply-dm-helper call-site bug.
