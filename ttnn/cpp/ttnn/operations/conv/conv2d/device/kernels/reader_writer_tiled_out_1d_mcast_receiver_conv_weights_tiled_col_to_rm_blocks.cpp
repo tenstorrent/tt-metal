@@ -94,7 +94,9 @@ void kernel_main() {
     // no rect/count (receivers never multicast); the sender's coords (the consumed-ack target) are
     // passed to receive(). data_ready=receiver_sem, consumed=sender_sem (verbatim from the old Pipe<>
     // ctor's 3rd/4th args). Staging::Flag + PRE_HANDSHAKE=true (defaults) match the old Pipe<>.
-    dataflow_kernel_lib::ReceiverPipe<weights_mcast_receiver_sem_id, weights_mcast_sender_sem_id> weights_pipe(noc);
+    dataflow_kernel_lib::
+        ReceiverPipe<weights_mcast_receiver_sem_id, /*PRE_HANDSHAKE=*/true, weights_mcast_sender_sem_id>
+            weights_pipe(noc);
 
     const uint32_t remaining_tiles_to_push =
         split_reader_enabled && activation_reuse_enabled ? get_arg_val<uint32_t>(i++) : 0;
