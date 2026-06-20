@@ -43,6 +43,25 @@ namespace {
 // `_mm_clflush` invalidates one host cache line; 64 B is the line size on typical x86-64.
 constexpr uint32_t k_x86_clflush_line_bytes = 64;
 
+void advance_d2h_simulator_socket_device(MeshDevice* mesh_device, const MeshCoordinate& device_coord) {
+    if (mesh_device == nullptr) {
+        return;
+    }
+
+    const auto context_id = tt::tt_metal::extract_context_id(mesh_device);
+    const auto& cluster = MetalContext::instance(context_id).get_cluster();
+    if (cluster.get_target_device_type() != tt::TargetDevice::Simulator) {
+        return;
+    }
+
+    IDevice* device = mesh_device->get_device(device_coord);
+    if (device == nullptr) {
+        return;
+    }
+
+    cluster.advance_device_execution(device->id());
+}
+
 }  // namespace
 
 D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
@@ -397,6 +416,7 @@ void D2HSocket::wait_for_bytes(uint32_t num_bytes) {
     }
     uint32_t bytes_recv = bytes_sent_ - bytes_acked_;
     while (bytes_recv < num_bytes) {
+        advance_d2h_simulator_socket_device(mesh_device_, sender_core_.device_coord);
         if (using_hugepage_) {
             _mm_clflush(const_cast<void*>(reinterpret_cast<const volatile void*>(hugepage_bytes_sent_host_ptr_)));
             _mm_lfence();
