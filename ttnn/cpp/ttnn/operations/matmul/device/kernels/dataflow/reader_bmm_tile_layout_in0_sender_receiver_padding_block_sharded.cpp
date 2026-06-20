@@ -101,24 +101,31 @@ void kernel_main() {
             }
         }
     }
-    receiver_sem.set(VALID);
-
-    // mcast_pipe (R6 role-flip): every grid core runs BOTH faces of the channel over the rotating
+    // mcast_pipe v7 (R6 role-flip): every grid core runs BOTH faces of the channel over the rotating
     // rounds. SENDER face below; the per-round RECEIVER face is built inside the loop (its ack
     // target rotates with block_id). One count works here: the factory always sets
     // in0_mcast_num_dests == in0_mcast_num_cores. The Pipe never counts self, so in-grid cores
     // pass num_dests - 1. Loopback is inferred per send(): extract (src == dst, block already in
     // cb_in0) -> EXCLUDE; non-extract (cb_in2 -> cb_in0) -> INCLUDE; out-of-grid -> EXCLUDE.
     // In-grid single-core (active == 0) collapses to the local-copy degenerate.
+    // DATA_READY_SEM_ID = receiver_sem id (CTA 10), CONSUMER_READY_SEM_ID = sender_sem id (CTA 9).
+    // The ctor sets the local data-ready cell VALID once (folds in the dropped pre-loop set(VALID));
+    // the per-round raw receiver_sem.set(INVALID) reset stays below.
     constexpr uint32_t in0_pipe_active_cores =
         core_in_in0_receiver_mcast_grid ? in0_mcast_num_dests - 1 : in0_mcast_num_dests;
-    dataflow_kernel_lib::Pipe<> in0_send_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect{
-            in0_mcast_dest_noc_start_x, in0_mcast_dest_noc_start_y, in0_mcast_dest_noc_end_x, in0_mcast_dest_noc_end_y},
+    dataflow_kernel_lib::SenderPipe<
+        noc_index,
+        get_compile_time_arg_val(10),
         in0_pipe_active_cores,
-        receiver_sem,  // data ready (S->R level flag)
-        sender_sem);   // consumed (R->S counter)
+        /*PRE_HANDSHAKE=*/true,
+        get_compile_time_arg_val(9)>
+        in0_send_pipe(
+            noc,
+            dataflow_kernel_lib::McastRect<>{
+                in0_mcast_dest_noc_start_x,
+                in0_mcast_dest_noc_start_y,
+                in0_mcast_dest_noc_end_x,
+                in0_mcast_dest_noc_end_y});
 
     cb_in2.reserve_back(batch * in0_block_num_tiles);
 
@@ -246,14 +253,12 @@ void kernel_main() {
                         // block_id. receive() acks the sender, waits VALID, clears the flag (H11);
                         // the top-of-loop INVALID reset stays raw — it also clears the stale VALID
                         // this core's own sender round leaves behind.
-                        dataflow_kernel_lib::Pipe<> in0_recv_pipe(
-                            noc,
-                            dataflow_kernel_lib::McastRect::single_core(
-                                remote_sender_noc_x[block_id], remote_sender_noc_y[block_id]),
-                            1,
-                            receiver_sem,
-                            sender_sem);
-                        in0_recv_pipe.receive();
+                        dataflow_kernel_lib::ReceiverPipe<
+                            get_compile_time_arg_val(10),
+                            /*PRE_HANDSHAKE=*/true,
+                            get_compile_time_arg_val(9)>
+                            in0_recv_pipe(noc);
+                        in0_recv_pipe.receive(remote_sender_noc_x[block_id], remote_sender_noc_y[block_id]);
                     }
                     cb_in0.push_back(in0_block_num_tiles);
 
