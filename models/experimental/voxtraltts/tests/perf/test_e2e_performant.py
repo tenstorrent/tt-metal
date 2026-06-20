@@ -20,7 +20,7 @@ fixed short text + ``fixed_step_count`` make it a throughput regression benchmar
   2. Warm-up generation (compile + trace capture; untimed).
   3. Timed generation: full traced AR loop -> per-frame decode time + frames/s.
 
-Decode trace is on by default; this perf test uses single CQ (`configure_decode_trace(decode_trace=True, decode_trace_2cq=False)`).
+Decode trace and 2CQ are on by default (`configure_decode_trace(decode_trace=True, decode_trace_2cq=True)`).
 
 Run::
 

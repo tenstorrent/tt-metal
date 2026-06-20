@@ -238,7 +238,7 @@ export VOXTRAL_COMPUTE_MESH_SHAPE=1,1   # P150 or QB2 single-device compute (def
 export VOXTRAL_COMPUTE_MESH_SHAPE=1,4   # QB2 only — TP text on full chassis mesh
 ```
 
-Trace is **on by default** for PCC and demo (via `configure_decode_trace()` in `demo.py`; `--no-decode-trace` to disable). On 1×1, 2CQ stays off unless you set `VOXTRAL_DECODE_TRACE_2CQ=1`.
+Trace is **on by default** for PCC and demo (via `configure_decode_trace()` in `demo.py`; `--no-decode-trace` to disable). **2CQ is also on by default** on 1×1 and multi-device (`--no-decode-trace-2cq` to disable).
 
 #### CI (GitHub Actions)
 
@@ -306,7 +306,7 @@ E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` i
 | `VOXTRAL_ACOUSTIC_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_acoustic_pcc` |
 | `VOXTRAL_PIPELINE_TF_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_golden_acoustic_pcc` |
 | `VOXTRAL_DECODE_TRACE` | `1` | Enable traced text-decode replay (set `0` to disable) |
-| `VOXTRAL_DECODE_TRACE_2CQ` | `0` on 1×1, `1` on 1×4 | Second command queue for input staging overlap |
+| `VOXTRAL_DECODE_TRACE_2CQ` | — | Not read at runtime; use `--no-decode-trace-2cq` or `configure_decode_trace(decode_trace_2cq=False)` |
 | `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size (bytes) passed to device open |
 
 Regenerate the golden fixture (one-time, then commit):
@@ -472,7 +472,7 @@ Run `python models/experimental/voxtraltts/demo/demo.py --help` for the live lis
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | *(default)* | trace **on** | `VOXTRAL_DECODE_TRACE=1` — traced AR text-decode replay (best RTF). On 1×1, 2CQ stays off unless env sets it |
-| `--no-decode-trace` | off (flag) | Disable trace replay and 2CQ; switches to the short-chunk + crossfade path (slower; for debugging) |
+| `--no-decode-trace` | off (flag) | Disable trace replay and 2CQ; slower direct forward per AR step (same single-pass chunking as trace on 1×1) |
 
 #### CPU reference demo (no TT hardware)
 
@@ -497,9 +497,9 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 | `VOXTRAL_TTS_MODEL` | — | Optional override if `HF_MODEL` is set to a different model in a shared shell |
 | `VOXTRAL_COMPUTE_MESH_SHAPE` | `1,1` | Compute mesh: `1,1` (P150 / QB2 1×1 submesh) or `1,4` (QB2 tensor-parallel text) |
 | `VOXTRAL_DECODE_TRACE` | `1` | Traced AR text-decode replay. Set `0` or pass `--no-decode-trace` to disable |
-| `VOXTRAL_DECODE_TRACE_2CQ` | `0` on 1×1, `1` on 1×4 | Second command queue for overlapped input staging during trace replay |
+| `VOXTRAL_DECODE_TRACE_2CQ` | — | Not read at runtime; use `--no-decode-trace-2cq` or `configure_decode_trace(decode_trace_2cq=False)` |
 | `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size in bytes (passed to device open) |
-| `VOXTRAL_TP_CHUNK_MAX_WORDS` | `50` on 1×4 | Sentence-chunk word limit on multi-device trace path (override for chunking experiments) |
+| `VOXTRAL_TP_CHUNK_MAX_WORDS` | `50` on 1×4 | Sentence-chunk word limit on multi-device mesh (override for chunking experiments) |
 | `VOXTRAL_OUTPUT_HPF_HZ` | `80` | High-pass filter cutoff (Hz) applied to saved `.wav` to remove sub-speech rumble. Set `0` to disable |
 
 ---
