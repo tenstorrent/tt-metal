@@ -54,7 +54,7 @@ import ttnn
 from models.tt_transformers.tt.generator import Generator
 
 from .kv_cache import DEFAULT_BLOCK_SIZE, DEFAULT_MAX_SEQ_LEN, MODEL_MAX_SEQ_LEN, DecoderState, allocate_decoder_state
-from .model import WeightCache, nemotron_h_forward_stateful
+from .model import WeightCache, nemotron_h_forward_stateful, nemotron_h_prefill_stateful
 from .tp import _R, _host_rep
 
 # ---------------------------------------------------------------------------
@@ -222,10 +222,12 @@ class NemotronHForCausalLM(Generator):
     # -----------------------------------------------------------------
 
     def warmup_model_prefill(self, kv_cache, enable_trace: bool = False, can_sample_on_device: bool = False, **kwargs):
-        """Run one prefill step to prime JIT kernel compilation.
+        """Warm up the chunked prefill path to compile kernels before the first request.
 
-        Overrides Generator.warmup_model_prefill to skip the tt_transformers
-        transformer-specific warmup sweep and run a single NemotronH forward.
+        Runs a 128-token dummy sequence through nemotron_h_prefill_stateful so the
+        chunked SSD scan, dense-attention causal SDPA, and paged_fill_cache kernels
+        are compiled.  Without this, the first real prefill pays a large compilation
+        penalty.  State is reset after warmup so decode warmup starts clean.
         """
         if self.already_warmed_up_prefill:
             return
@@ -237,13 +239,17 @@ class NemotronHForCausalLM(Generator):
         print("[NemotronHForCausalLM] Warming up prefill (compiling kernels)...", flush=True)
         t0 = time.time()
 
-        # One prefill forward at position 0 (dummy token = 0).
-        self._update_ids(0)
+        # 128-token dummy sequence: compiles the chunked SSD scan + paged_fill_cache.
+        dummy_ids = torch.zeros(1, 128, dtype=torch.int64)
         self._update_pos(0)
-        nemotron_h_forward_stateful(self.mesh_device, self._ids_tt, self._wc, self._state, cpu_gate=True)
+        nemotron_h_prefill_stateful(self.mesh_device, dummy_ids, self._wc, self._state)
         ttnn.synchronize_device(self.mesh_device)
         self._state.advance()
-        self._prefill_pos = 1
+
+        # Reset in-place so decode warmup and the first real request start from zero state.
+        self._state.reset_inplace(self.mesh_device)
+        self._prefill_pos = 0
+        self._decode_pos = 0
 
         print(f"[NemotronHForCausalLM] Prefill warmup done ({time.time() - t0:.1f}s).", flush=True)
 
@@ -295,32 +301,32 @@ class NemotronHForCausalLM(Generator):
         prompt_lens: torch.Tensor = None,
         **kwargs,
     ) -> torch.Tensor:
-        """Process a prompt sequence token-by-token (S=1 decode steps).
+        """Process all S prompt tokens in one chunked-prefill forward pass.
+
+        Calls nemotron_h_prefill_stateful which runs:
+          - Mamba2 layers: bulk chunked SSD scan (fast O(S) rather than O(S²))
+          - Dense-attention layers: causal SDPA + paged_fill_cache (fills KV cache)
+          - MoE layers: per-token fallback (sparse_matmul is S=1 only)
 
         vLLM calls this once per request at the start of a new sequence.
         Returns logits for the LAST prompt position [B, 1, vocab].
-
-        Note: NemotronH processes S=1 at a time; S>1 prompts are processed
-        sequentially (no batched prefill kernel).
         """
         if self._state is None:
             self.allocate_kv_cache()
         assert tokens.shape[0] == 1, f"NemotronHForCausalLM: batch_size must be 1, got {tokens.shape[0]}"
-        seq = tokens[0].tolist()  # [S]
         start_pos = int(current_pos[0]) if current_pos is not None else self._prefill_pos
+        S = tokens.shape[1]
 
-        logits_tt = None
-        for i, tok in enumerate(seq):
-            pos = start_pos + i
-            self._update_ids(tok)
-            self._update_pos(pos)
-            logits_tt = nemotron_h_forward_stateful(
-                self.mesh_device, self._ids_tt, self._wc, self._state, cpu_gate=True
-            )
-            ttnn.synchronize_device(self.mesh_device)
-            self._state.advance()
+        # Set current_pos on device (used by dense_attention decode path; harmless for prefill).
+        self._update_pos(start_pos)
 
-        self._prefill_pos = start_pos + len(seq)
+        # Bulk chunked prefill: all S tokens in one forward pass.
+        # Returns [B, 1, vocab_size] ttnn.Tensor for the last prompt position only.
+        logits_tt = nemotron_h_prefill_stateful(self.mesh_device, tokens, self._wc, self._state)
+        ttnn.synchronize_device(self.mesh_device)
+        self._state.advance()
+
+        self._prefill_pos = start_pos + S
         self._decode_pos = self._prefill_pos
 
         # Return last-position logits on CPU: [1, 1, vocab] → [1, vocab]
@@ -372,19 +378,19 @@ class NemotronHForCausalLM(Generator):
     def reset_state(self):
         """Reset all SSM / conv / KV state to zeros for a new sequence.
 
-        Call this between independent generation requests when reusing the
-        same generator instance (e.g. in server mode between requests).
-        Reallocates the DecoderState so all persistent tensors start at zero.
+        Uses reset_inplace() which zeros SSM/conv states and current_pos via
+        copy_host_to_device_tensor, preserving all DRAM buffer addresses.
+        This is safe to call between requests when a decode trace is active —
+        the trace holds buffer address references, not tensor values, so
+        in-place zeroing does not invalidate it.  Reallocation (the prior
+        approach) would break the trace on the next execute_trace call.
         """
-        max_seq_len = self._max_seq_len
-        self._state = allocate_decoder_state(
-            self.mesh_device, B=1, max_seq_len=max_seq_len, block_size=self._block_size
-        )
+        if self._state is None:
+            self.allocate_kv_cache()
+            return
+        self._state.reset_inplace(self.mesh_device)
         self._prefill_pos = 0
         self._decode_pos = 0
-        # Note: trace is still valid (it captures ops, not data), so we do NOT
-        # release it here.  The new zero state will be updated by the trace on
-        # the next execute_trace call.
 
     # -----------------------------------------------------------------
     # Private helpers
