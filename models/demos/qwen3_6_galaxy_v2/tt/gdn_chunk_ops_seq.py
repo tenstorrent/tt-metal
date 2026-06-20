@@ -218,35 +218,28 @@ def chunk_gated_delta_rule_seq(
     ttnn.deallocate(k_c_t)
 
     # ----------------------------------------------------------------
-    # Build L_mat = I + kk * strict_lower(L_mask)
-    # BUG FIX: the original code used tril_mask (includes diagonal), so
-    # kk[t,t] entered L_mat diagonal, making it 1+kk[t,t] instead of 1.
-    # The reference uses strictly lower-triangular kk (no self-attention).
-    # CPU test confirmed: strict lower → output PCC 0.990→0.9999.
+    # Build L_mat = I + kk * L_mask  (2 cheap elementwise dispatches)
     # ----------------------------------------------------------------
-    kk_strict = ttnn.multiply(
-        ttnn.subtract(kk, ttnn.multiply(kk, _eye_1cc, memory_config=_cmc), memory_config=_cmc),
-        L_mask,
+    L_mat = ttnn.add(
+        _eye_1cc,
+        ttnn.multiply(kk, L_mask, memory_config=_cmc),
         memory_config=_cmc,
-    )  # kk * (L_mask - eye) = kk * strict_lower(L_mask)
+    )
     ttnn.deallocate(kk)
-    L_mat = ttnn.add(_eye_1cc, kk_strict, memory_config=_cmc)  # diagonal = 1.0 exactly
 
     # ----------------------------------------------------------------
-    # Normalize: D = I + diag(row_sums(|kk_strict|)) → ||D^{-1} kk_strict||_inf < 1
-    # Row-sum D (not diagonal D) guarantees Neumann series convergence for
-    # any ||kk_strict|| — the diagonal D gave ||N||_inf ≈ 4.5 (unstable → NaN).
-    # CPU verified: row-sum D gives ||N||_inf = 0.90 < 1 (stable).
+    # Normalize L_mat to unit-diagonal form: L_unit = D^{-1} L_mat
+    # Keeps off-diagonal correction values smaller → better float32 precision
+    # in blocked forward substitution.
     # ----------------------------------------------------------------
-    row_sums = ttnn.sum(ttnn.abs(kk_strict, memory_config=_cmc), dim=-1, memory_config=_cmc)
-    ttnn.deallocate(kk_strict)
-    D_diag = ttnn.add(row_sums, 1.0, memory_config=_cmc)  # D[i] = 1 + Σ_j |kk_strict[i,j]|
-    ttnn.deallocate(row_sums)
+    D_mat = ttnn.multiply(L_mat, _eye_1cc, memory_config=_cmc)
+    D_diag = ttnn.sum(D_mat, dim=-1, memory_config=_cmc)
     D_inv = ttnn.reciprocal(D_diag, memory_config=_cmc)
     ttnn.deallocate(D_diag)
     D_inv_row = ttnn.reshape(D_inv, [batch, chunk_size, 1], memory_config=_cmc)
 
-    L_strict = ttnn.subtract(L_mat, _eye_1cc, memory_config=_cmc)  # = kk_strict (diagonal=0)
+    L_strict = ttnn.subtract(L_mat, D_mat, memory_config=_cmc)
+    ttnn.deallocate(D_mat)
     ttnn.deallocate(L_mat)
     N = ttnn.multiply(D_inv_row, L_strict, memory_config=_cmc)
     ttnn.deallocate(L_strict)
