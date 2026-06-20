@@ -237,12 +237,14 @@
    "role": "sender",
    "tag": "clean",
    "status": "migrated",
-   "migrated_api_version": 7,
-   "commit": "65d233ef34803ce8b257cf91cc0703bb6872b4f2",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "migrated_api_version": 8,
+   "commit": "0826db5290c6b5920963ce08e45bdd4bbe1c5471",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (-k BLOCK_SHARDED: 48 passed, 16 skipped)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": "2026-06-20",
-   "census_note": "",
+   "census_note": "v8 dense remigration: pure deletion of 3rd template arg (NUM_ACTIVE_RECEIVER_CORES). rect area()==num_cores_y-1/num_cores_x-1==EXCLUDE fan-out==ack count; sender at row/col 0 outside rect. JIT-verified hit.",
    "flags": []
   },
   {

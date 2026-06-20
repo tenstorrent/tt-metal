@@ -151,18 +151,20 @@ void kernel_main() {
     const uint32_t act_l1_read_addr = split_reader_enabled ? cb_sharded_act_obj.get_read_ptr() : 0;
 
 #ifndef SKIP_MCAST
-    // mcast_pipe Round 4: the weights (and bias) block data-mcast + handshake is driven by a SenderPipe.
-    //   NUM_ACTIVE_RECEIVER_CORES = weights_mcast_num_dests_ct (the recipient count = the old runtime
-    //   `weights_mcast_num_dests` the Pipe<> ctor got — passed VERBATIM, the helper adds +1 internally
-    //   only for INCLUDE loopback; this sender is OUT of its own rect → EXCLUDE, no +1).
-    //   data_ready = receiver_sem_id (S->R level flag VALID/INVALID), consumed = sender_sem_id (R->S
-    //   counter). Staging::Flag + PRE_HANDSHAKE=true (defaults) match the old Pipe<>. INITIAL_READY
-    //   defaults to VALID, folding in the dropped pre-loop `weights_mcast_receiver_sem.set(VALID)`.
-    //   The McastRect (per-core virtual coords) stays the only runtime ctor arg.
+    // mcast_pipe v8: the weights (and bias) block data-mcast + handshake is driven by a SenderPipe.
+    //   DATA_READY_SEM_ID = receiver_sem_id (S->R level flag VALID/INVALID),
+    //   CONSUMER_READY_SEM_ID = sender_sem_id (R->S counter). Flag + PRE_HANDSHAKE=true (defaults)
+    //   match the old Pipe<>. The ctor sets the local data-ready cell VALID once (folds in the dropped
+    //   pre-loop `weights_mcast_receiver_sem.set(VALID)`).
+    //   DENSE site: the 2D block-sharded weights mcast rect is the strip of receiver cores (logical
+    //   rows/cols 1..N-1) and the sender (row/col 0) is OUTSIDE it, so the rect area() == the old
+    //   `weights_mcast_num_dests_ct` (num_cores_y-1 / num_cores_x-1) == the EXCLUDE fan-out == the ack
+    //   count. The dropped 3rd template arg is therefore a pure deletion: the default
+    //   consumer_ack_count (ACK_EQUALS_FANOUT) reproduces it exactly. The McastRect (per-core virtual
+    //   coords) stays the only runtime ctor arg.
     dataflow_kernel_lib::SenderPipe<
         noc_index,
         weights_mcast_receiver_sem_id,
-        weights_mcast_num_dests_ct,
         /*PRE_HANDSHAKE=*/true,
         weights_mcast_sender_sem_id>
         weights_pipe(
