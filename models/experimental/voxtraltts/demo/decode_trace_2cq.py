@@ -22,7 +22,7 @@ class DecodeTraceConfig:
     """Runtime flags for traced text-decode replay and optional 2-CQ input staging."""
 
     decode_trace: bool = True
-    decode_trace_2cq: bool | None = None  # None → off on 1×1, on on multi-device mesh
+    decode_trace_2cq: bool = True  # 2 CQs for overlapped input staging (independent of trace on/off)
 
 
 _decode_trace_config = DecodeTraceConfig()
@@ -56,12 +56,8 @@ def decode_trace_enabled() -> bool:
 
 
 def decode_trace_2cq_enabled() -> bool:
-    """True when 2CQ input staging is on (auto: off on 1×1, on on multi-device unless overridden)."""
-    if _decode_trace_config.decode_trace_2cq is not None:
-        return _decode_trace_config.decode_trace_2cq
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
-
-    return voxtral_requested_compute_mesh_shape() != (1, 1)
+    """True when the device should use 2 command queues for overlapped decode input staging."""
+    return _decode_trace_config.decode_trace_2cq
 
 
 def num_command_queues_for_decode() -> int:
