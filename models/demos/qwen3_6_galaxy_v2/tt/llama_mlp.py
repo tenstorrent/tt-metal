@@ -372,18 +372,19 @@ class TtLlamaMLP(LightweightModule):
         # distribution tail (kills sampling, EOS-first-token on long/video prefill).
         # Set QWEN36_MLP_CCL_BF16=1 to hold the prefill FF intermediate in bf16 (DRAM,
         # safe to widen) and confirm/refute that as the root cause.
-        _ccl_dt = ttnn.bfloat16 if os.environ.get("QWEN36_MLP_CCL_BF16", "0") == "1" else ttnn.bfloat8_b
-        # bf16 gate/up reduce_scatter is ONLY taken on the ttnn.linear path
-        # (seq_len < 4096 or batch_size > 1); the seq_len >= 4096 path uses
-        # minimal_matmul which always outputs bf8. Only on the bf16 path do we use a
-        # "_BF16"-suffixed buffer key so the ring reduce_scatter MISSES the dtype-pinned
-        # bf8 persistent buffer and falls back to a fresh (bf16) allocation. Using the
-        # "_BF16" key on the seq_len >= 4096 (bf8) path forces the no-persistent-buffer
-        # ring path, which DEADLOCKS at large seqlen — so gate the key on the same
-        # condition as the bf16 matmul output.
-        _w1w3_bf16 = (_ccl_dt == ttnn.bfloat16) and (seq_len < 4096 or batch_size > 1)
-        _ff1_rs_key = "FF1_BF16" if _w1w3_bf16 else "FF1"
-        _ff3_rs_key = "FF3_BF16" if _w1w3_bf16 else "FF3"
+        # Change #1 (port from TP=4 reference): ALL prefill activations/CCL in bf16.
+        # TP=4 keeps every intermediate bf16 (no dtype= on any matmul, single bf16 reduce).
+        # Our TP=32 was accumulating ~3 summing reductions in bf8 per layer ×64L, causing
+        # the observed per-layer PCC decay (0.9997→0.41 at T=4096, first drop at L2).
+        # Here we unconditionally hold gate/up/down outputs and all CCL intermediates in
+        # bf16 for the prefill path, regardless of seq_len.
+        _ccl_dt = ttnn.bfloat16
+        # "_BF16" buffer keys for SUMMING reduce_scatters (the precision-critical ops).
+        # The corresponding all_gathers use buffer_key=None (fresh output) to avoid
+        # persistent-buffer dtype mismatches — the gather is non-summing (pure concat)
+        # so dtype doesn't accumulate error.
+        _ff1_rs_key = "FF1_BF16"
+        _ff3_rs_key = "FF3_BF16"
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
         short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
@@ -416,12 +417,17 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            # minimal_matmul has no dtype= arg; typecast to bf16 to match TP=4 precision.
+            _w1_out_bf16 = ttnn.typecast(w1_out, dtype=ttnn.bfloat16)
+            ttnn.deallocate(w1_out)
+            w1_out = _w1_out_bf16
 
+        _w1_mem = w1_out.memory_config()
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out,
             cluster_axis=1,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
-            memory_config=w1_out.memory_config(),
+            memory_config=_w1_mem,
             buffer_key=_ff1_rs_key,
             dim=3,
             batch_size=batch_size,
@@ -450,35 +456,38 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            # minimal_matmul has no dtype= arg; typecast to bf16 to match TP=4 precision.
+            _w3_out_bf16 = ttnn.typecast(w3_out, dtype=ttnn.bfloat16)
+            ttnn.deallocate(w3_out)
+            w3_out = _w3_out_bf16
         ttnn.deallocate(x)
+        _w3_mem = w3_out.memory_config()
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
             cluster_axis=1,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
-            memory_config=w3_out.memory_config(),
+            memory_config=_w3_mem,
             buffer_key=_ff3_rs_key,
             dim=3,
             batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
-        # Cast the SiLU*up product back to bf8 here: the gate/up partial-K SUM
-        # (reduce_scatter above) is the precision-critical op and now runs in bf16,
-        # but line_all_gather below uses a dtype-pinned (bf8) persistent buffer and
-        # the gather is non-summing (pure concatenation), so a single bf8 cast here
-        # is harmless and avoids the buffer-dtype mismatch.
+        _w1r_mem = w1_out_reduced.memory_config()
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
             input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-            dtype=ttnn.bfloat8_b,
-            memory_config=w1_out.memory_config(),
+            dtype=ttnn.bfloat16,
+            memory_config=_w1r_mem,
         )
+        ttnn.deallocate(w1_out_reduced)
+        ttnn.deallocate(w3_out_reduced)
         w2_in_gathered = self.tt_ccl.line_all_gather(
             w2_in,
             cluster_axis=1,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
-            memory_config=w3_out.memory_config(),
-            buffer_key="FF3",
+            memory_config=_w3_mem,
+            buffer_key=None,  # fresh bf16 output — no persistent buffer dtype mismatch
             dim=3,
         )
         ttnn.deallocate(w2_in)
@@ -489,7 +498,7 @@ class TtLlamaMLP(LightweightModule):
                 w2_in_gathered,
                 self.w2_interleaved,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 program_config=short_lens_pc_2,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
@@ -501,13 +510,21 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            # minimal_matmul has no dtype= arg; typecast to bf16 to match TP=4 precision.
+            _w2_out_bf16 = ttnn.typecast(w2_out, dtype=ttnn.bfloat16)
+            ttnn.deallocate(w2_out)
+            w2_out = _w2_out_bf16
+        ttnn.deallocate(w2_in_gathered)
 
+        # buffer_key=None: prefill line_all_reduce decomposes to RS+AG (DRAM path,
+        # no L1 persistent buffer needed). The "FF2" persistent buffer is bf8 and would
+        # cast our bf16 w2_out down; None lets both RS and AG allocate fresh bf16 outputs.
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="FF2",
+            buffer_key=None,
             batch_size=batch_size,
         )
         ttnn.deallocate(w2_out)
@@ -517,17 +534,5 @@ class TtLlamaMLP(LightweightModule):
             w2_out_reduced = ttnn.reshape(
                 w2_out_reduced, (1, 1, original_shape[-4] * original_shape[-3] * original_shape[-2], original_shape[-1])
             )
-
-        # qwen3.6 residual-stream dtype lock (olmo session-11 lesson):
-        # the MLP's reduction output flows directly into the post-MLP residual
-        # add in TtTransformerBlock.forward. Even though w1/w2/w3 matmuls cast
-        # to bfloat8_b for L1 footprint, the residual stream is more accurate
-        # when held in bfloat16. The 4L test still passes with this typecast;
-        # the 64L per-layer sweep shows real-prompt-position PCC > 0.998 at
-        # every layer with this in place.
-        if getattr(self.args, "is_qwen36", False) and w2_out_reduced.dtype != ttnn.bfloat16:
-            w2_out_bf16 = ttnn.typecast(w2_out_reduced, dtype=ttnn.bfloat16)
-            ttnn.deallocate(w2_out_reduced)
-            w2_out_reduced = w2_out_bf16
 
         return w2_out_reduced

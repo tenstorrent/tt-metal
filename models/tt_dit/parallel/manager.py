@@ -361,6 +361,8 @@ class CCLManager:
                 ttnn.reset_global_semaphore_value(sem, 0)
             for sem in self.ag_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
+            for sem in self.barrier_semaphores[axis]:
+                ttnn.reset_global_semaphore_value(sem, 0)
         # Reset ping-pong indices so they pair with the just-reset semaphores.
         self.rs_ping_pong_idx = [0, 0]
         self.ag_ping_pong_idx = [0, 0]

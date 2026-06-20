@@ -55,6 +55,50 @@ _VIDEO_PROMPT = os.environ.get(
 )
 
 
+def _make_moving_ball_clip(path: str, n_frames: int = 16, hw: int = 336, fps: int = 8) -> None:
+    """Write a synthetic mp4: large red ball moving left→right on a blue background.
+
+    Parameters chosen so HF processor extracts ≥4 temporal features and the ball
+    occupies ~15% of the frame — enough signal for the vision encoder to describe it.
+    - 16 frames @ 8 fps = 2 s; HF 2-fps sampling → 4 temporal outputs
+    - 336×336 (Qwen3VL native resolution); ball radius = 15% of frame width
+    - green stripe across the lower third adds a second recognizable landmark
+    Use QWEN36_MM_VIDEO=synthetic to trigger this path.
+    """
+    import fractions
+
+    import av
+    import numpy as np
+
+    container = av.open(path, mode="w")
+    stream = container.add_stream("libx264", rate=fps)
+    stream.width = hw
+    stream.height = hw
+    stream.pix_fmt = "yuv420p"
+    stream.time_base = fractions.Fraction(1, fps)
+    radius = hw // 5  # ~12% of frame
+    stripe_y = int(hw * 0.65)
+    stripe_h = hw // 8
+    for t in range(n_frames):
+        img = np.zeros((hw, hw, 3), dtype=np.uint8)
+        img[:, :] = [20, 80, 180]  # blue background
+        # green stripe in lower third
+        img[stripe_y : stripe_y + stripe_h, :] = [40, 160, 60]
+        # red ball moving left → right
+        cx = int(hw * 0.1 + (hw * 0.8) * t / max(n_frames - 1, 1))
+        cy = hw // 3
+        ys, xs = np.ogrid[:hw, :hw]
+        mask = (xs - cx) ** 2 + (ys - cy) ** 2 <= radius**2
+        img[mask] = [210, 40, 40]  # red ball
+        frame = av.VideoFrame.from_ndarray(img, format="rgb24")
+        frame.pts = t
+        for pkt in stream.encode(frame):
+            container.mux(pkt)
+    for pkt in stream.encode():
+        container.mux(pkt)
+    container.close()
+
+
 def _load_video_frames(path: str):
     """Decode a video file into (frames [T, C, H, W] uint8 tensor, source_fps).
 
@@ -144,7 +188,14 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
     if _VIDEO_PATH:
         from transformers.video_utils import VideoMetadata
 
-        frames, src_fps = _load_video_frames(_VIDEO_PATH)  # [T, C, H, W] uint8, source fps
+        video_path = _VIDEO_PATH
+        if video_path == "synthetic":
+            video_path = os.path.join(os.getcwd(), "generated", "qwen36_mm_demo_ball.mp4")
+            os.makedirs(os.path.dirname(video_path), exist_ok=True)
+            _make_moving_ball_clip(video_path)
+            logger.info(f"[mm-demo] generated moving-ball synthetic clip at {video_path}")
+
+        frames, src_fps = _load_video_frames(video_path)  # [T, C, H, W] uint8, source fps
         T_src = int(frames.shape[0])
         metadata = VideoMetadata(
             total_num_frames=T_src,
@@ -158,7 +209,7 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
         # HF processor samples to its stock 2 fps default using this metadata.
         prompt = _VIDEO_PROMPT
         _prepare = lambda: gen.prepare_inputs(prompt, videos=[frames], video_metadata=[metadata])  # noqa: E731
-        logger.info(f"[mm-demo] VIDEO branch: {_VIDEO_PATH} ({T_src} src frames @ {src_fps:.2f} fps)")
+        logger.info(f"[mm-demo] VIDEO branch: {video_path} ({T_src} src frames @ {src_fps:.2f} fps)")
     else:
         img = Image.open(_IMAGE_PATH).convert("RGB").resize((224, 224))
         prompt = _IMAGE_PROMPT
@@ -232,7 +283,17 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
     # warmup-compiled + traced path.
     t_prefill = time.perf_counter() - _t
     last_logits = _gather_prefill_logits_to_cpu(prefill_hidden, bh_glx_mesh, args, model, last_token_idx=S_unpadded - 1)
-    first_tok = int(last_logits.reshape(-1)[: args.vocab_size].float().argmax().item())
+    _use_sampling = os.environ.get("QWEN36_SAMPLE", "0") != "0"
+    _logits_1d = last_logits.reshape(-1)[: args.vocab_size].float()
+    if _use_sampling:
+        _temperature = float(os.environ.get("QWEN36_TEMPERATURE", "1.0"))
+        _top_k = int(os.environ.get("QWEN36_TOP_K", "20"))
+        _probs = torch.softmax(_logits_1d / _temperature, dim=-1)
+        _top_k_probs, _top_k_ids = torch.topk(_probs, _top_k)
+        _sampled = torch.multinomial(_top_k_probs, 1)
+        first_tok = int(_top_k_ids[_sampled].item())
+    else:
+        first_tok = int(_logits_1d.argmax().item())
     logger.info(f"[mm-demo] first decode token = {first_tok} ({tok.decode([first_tok])!r})")
 
     # --- DECODE: KV/seq index = S_unpadded; rope position = max(pos_3d)+1 ---
@@ -253,7 +314,6 @@ def test_mm_demo_qwen36(bh_glx_mesh):  # noqa: F811  (direct-open mesh fixture f
         mesh_mapper=ttnn.ReplicateTensorToMesh(bh_glx_mesh),
     )
 
-    _use_sampling = os.environ.get("QWEN36_SAMPLE", "0") != "0"
     tt_sampling = None
     if _use_sampling:
         from models.common.sampling.tt_sampling import TTSampling

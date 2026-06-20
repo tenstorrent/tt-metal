@@ -775,6 +775,21 @@ class TtLlamaAttention(LightweightModule):
                 self.k_norm_w = self._build_qwen36_qknorm_weight(
                     self.state_dict[k_norm_str + ".weight"], add_unit_offset=self.zero_centered_norm
                 )
+                # Change A (port from TP=4 reference, attention/tp.py:234-241):
+                # qk-norm uses the SHARP (w+1) scale at PREFILL to retrieve the long
+                # context, but the FLAT (raw w) scale at DECODE. The reference found
+                # sharp-at-decode "loops/junks at 64k" (per-step decode noise flips
+                # retrieval); flat decode averages over keys and stays coherent. Build
+                # a flat twin (raw w, no +1); the decode path selects it unless
+                # QWEN36_QKNORM_DECODE_SHARP=1. (When zero_centered_norm is False the
+                # twin equals q_norm_w, so this is a no-op there.)
+                self.q_norm_w_flat = self._build_qwen36_qknorm_weight(
+                    self.state_dict[q_norm_str + ".weight"], add_unit_offset=False
+                )
+                self.k_norm_w_flat = self._build_qwen36_qknorm_weight(
+                    self.state_dict[k_norm_str + ".weight"], add_unit_offset=False
+                )
+                self._qknorm_decode_sharp = os.environ.get("QWEN36_QKNORM_DECODE_SHARP", "0") == "1"
                 # Keep the un-baked CPU weights for any host-side audits.
                 self.q_norm_weight = self.state_dict[q_norm_str + ".weight"]
                 self.k_norm_weight = self.state_dict[k_norm_str + ".weight"]
@@ -1323,22 +1338,17 @@ class TtLlamaAttention(LightweightModule):
         # feeding decode, but it did NOT fix the LaTeX/formula sampling collapse and
         # slightly worsened greedy (chat-template token leak), so it was reverted. The
         # remaining tail degeneration is not a CCL-reduction dtype issue.
+        # Change #1 attention (port from TP=4): xqkv matmul output bf16, all_reduce bf16.
+        # buffer_key=None: prefill line_all_reduce decomposes to RS+AG (DRAM); no
+        # persistent buffer needed and avoids dtype mismatch with bf8 "QKV" buffer.
         xqkv = ttnn.linear(
             x_11SH,
             self.wqkv_interleaved,
-            dtype=self.ccl_dtype,
+            dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
-        # Minimal matmul is giving bad outputs for seqlen > 128
-        # xqkv = ttnn.experimental.minimal_matmul(
-        #     input_tensor=x_11SH,
-        #     weight_tensor=self.wqkv_interleaved,
-        #     config=self.model_config["XQKV_PREFILL_MINIMAL_PROGCFG"](seq_len),
-        #     compute_kernel_config=self.compute_kernel_config_hifi2,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
 
         ttnn.deallocate(x_11SH)
 
@@ -1347,7 +1357,7 @@ class TtLlamaAttention(LightweightModule):
             cluster_axis=1,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="QKV",
+            buffer_key=None,
             batch_size=batch_size,
         )
         ttnn.deallocate(xqkv)
@@ -1418,16 +1428,10 @@ class TtLlamaAttention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(k_heads_1KSD)
-
-        k_fill = k_heads_1KSD_8b
-
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
-
-        ttnn.deallocate(v_heads_1VSD)
-
-        v_fill = v_heads_1VSD_8b
+        # Keep K/V in bf16 — KV cache is bf16 by default and bf8 typecast here
+        # degrades SDPA precision at every full-attn layer, compounding over 16 layers.
+        k_fill = k_heads_1KSD
+        v_fill = v_heads_1VSD
 
         if batch_size > 1:
             k_fill = ttnn.reshape(k_fill, [1, 1, seq_len, -1])
@@ -1464,9 +1468,8 @@ class TtLlamaAttention(LightweightModule):
                 user_id % self.batch_size_per_device_group,
             )
 
-        # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
-        ttnn.deallocate(q_heads_1QSD)
+        # Keep Q in bf16 for SDPA precision (no bf8 typecast).
+        q_heads_1QSD_8b = q_heads_1QSD  # name kept for downstream compatibility
 
         # Run ring_distributed_sdpa for > 1k seqlen because we are seeing worse perf for <=1k seqlen as compared to regular SDPA
         # ring_distributed_sdpa needs seqlen//8 to be atleast one tile (32)
@@ -1597,7 +1600,7 @@ class TtLlamaAttention(LightweightModule):
                 attn_output_11SH,
                 self.wo_interleaved,
                 compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),
             )
@@ -1609,18 +1612,21 @@ class TtLlamaAttention(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            _wo_bf16 = ttnn.typecast(output_11SH, dtype=ttnn.bfloat16)
+            ttnn.deallocate(output_11SH)
+            output_11SH = _wo_bf16
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # Reduce-scatter
+        # buffer_key=None: prefill RS+AG path, no persistent bf8 buffer interference.
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
             num_links=min(3, self.model_config["GALAXY_NUM_LINKS"]),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            buffer_key="WO_AG" if seq_len <= 4096 else "WO",
+            buffer_key=None,
         )
         output_11SH.deallocate()
 
@@ -2068,10 +2074,24 @@ class TtLlamaAttention(LightweightModule):
             xqkvg.deallocate(True)
 
             q_normed = _qwen36_qknorm_flat_to_heads(
-                q_flat, self.q_norm_w, self.qk_norm_eps, B, n_q_pc, T, hd, self.compute_kernel_config_hifi4
+                q_flat,
+                self.q_norm_w if self._qknorm_decode_sharp else self.q_norm_w_flat,
+                self.qk_norm_eps,
+                B,
+                n_q_pc,
+                T,
+                hd,
+                self.compute_kernel_config_hifi4,
             )
             k_normed = _qwen36_qknorm_flat_to_heads(
-                k_flat, self.k_norm_w, self.qk_norm_eps, B, n_kv_pc, T, hd, self.compute_kernel_config_hifi4
+                k_flat,
+                self.k_norm_w if self._qknorm_decode_sharp else self.k_norm_w_flat,
+                self.qk_norm_eps,
+                B,
+                n_kv_pc,
+                T,
+                hd,
+                self.compute_kernel_config_hifi4,
             )
             q_flat.deallocate(True)
             k_flat.deallocate(True)
@@ -2111,10 +2131,24 @@ class TtLlamaAttention(LightweightModule):
             xqkvg.deallocate(True)
 
             q_normed = _qwen36_qknorm_flat_to_heads(
-                q_flat, self.q_norm_w, self.qk_norm_eps, B, n_q_pc, T, hd, self.compute_kernel_config_hifi4
+                q_flat,
+                self.q_norm_w if self._qknorm_decode_sharp else self.q_norm_w_flat,
+                self.qk_norm_eps,
+                B,
+                n_q_pc,
+                T,
+                hd,
+                self.compute_kernel_config_hifi4,
             )
             k_normed = _qwen36_qknorm_flat_to_heads(
-                k_flat, self.k_norm_w, self.qk_norm_eps, B, n_kv_pc, T, hd, self.compute_kernel_config_hifi4
+                k_flat,
+                self.k_norm_w if self._qknorm_decode_sharp else self.k_norm_w_flat,
+                self.qk_norm_eps,
+                B,
+                n_kv_pc,
+                T,
+                hd,
+                self.compute_kernel_config_hifi4,
             )
             q_flat.deallocate(True)
             k_flat.deallocate(True)

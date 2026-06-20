@@ -26,37 +26,39 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
     """Compute diagonal block inverses of L_mat using _solve_lower_triangular_ttnn.
 
     L_mat_4d: [BH, NC, C, C] float32 lower-triangular, positive diagonal (~2)
-    eye_32:   [1, 32, 32] float32 identity pre-allocated on device (required for trace compat)
-    Returns:  [BH, NC, C, 32] float32 — 4 diagonal block inverses stacked as [C, 32]
+    eye_32:   [1, _TILE, _TILE] float32 identity pre-allocated on device (required for trace compat)
+    Returns:  [BH, NC, C, _TILE] float32 — (C//_TILE) diagonal block inverses stacked as [C, _TILE]
 
-    Each 32x32 diagonal block B is inverted via the same D^{-1}-Neumann-NS path
+    Each _TILE x _TILE diagonal block B is inverted via the same D^{-1}-Neumann-NS path
     used by _solve_lower_triangular_ttnn in the parallel scan.
+    C must be a multiple of _TILE (={_TILE}).
     """
+    assert C % _TILE == 0, f"chunk_size ({C}) must be a multiple of _TILE ({_TILE})"
     if eye_32 is None:
         # Fallback for tests that don't pass cached_masks — not trace-compatible.
         eye_32 = ttnn.from_torch(
-            torch.eye(32, dtype=torch.float32).unsqueeze(0),  # [1, 32, 32]
+            torch.eye(_TILE, dtype=torch.float32).unsqueeze(0),
             dtype=ttnn.float32,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-    Ct = C // 32  # = 4
+    Ct = C // _TILE
     batch = BH * NC
     L_flat = ttnn.reshape(L_mat_4d, [batch, C, C], memory_config=_cmc)
 
     inv_blocks = []
     for b in range(Ct):
-        row_start = b * 32
-        col_start = b * 32
+        row_start = b * _TILE
+        col_start = b * _TILE
         block = ttnn.slice(
-            L_flat, [0, row_start, col_start], [batch, row_start + 32, col_start + 32], memory_config=_cmc
+            L_flat, [0, row_start, col_start], [batch, row_start + _TILE, col_start + _TILE], memory_config=_cmc
         )
         # _solve_lower_triangular_ttnn: D^{-1} normalization + Neumann + 2 NS steps
         block_inv = _solve_lower_triangular_ttnn(block, eye_32, mesh_device)
         ttnn.deallocate(block)
-        inv_blocks.append(block_inv)  # [batch, 32, 32]
+        inv_blocks.append(block_inv)  # [batch, _TILE, _TILE]
 
     # Do NOT deallocate L_flat: it is a reshape (view) of L_mat_4d which is the
     # same L_unit_4d tensor passed as a kernel input.  Freeing L_flat frees L_unit_4d's
@@ -71,7 +73,7 @@ def _compute_L_inv_ttnn(L_mat_4d, BH, NC, C, mesh_device, _cmc=None, eye_32=None
     # in use causes the kernel to read from freed memory on later runs when the
     # allocator reuses that address. The caller's ttnn.deallocate(L_inv_4d) will
     # release the buffer when it is no longer needed.
-    L_inv_4d = ttnn.reshape(L_inv_flat, [BH, NC, C, 32], memory_config=_cmc)
+    L_inv_4d = ttnn.reshape(L_inv_flat, [BH, NC, C, _TILE], memory_config=_cmc)
     return L_inv_4d
 
 
@@ -99,6 +101,8 @@ def chunk_gated_delta_rule_seq(
         fp32_dest_acc_en=True,
         packer_l1_acc=False,
     )
+
+    assert chunk_size % _TILE == 0, f"chunk_size ({chunk_size}) must be a multiple of _TILE ({_TILE})"
 
     BH = q.shape[0]
     T = q.shape[1]
