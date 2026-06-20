@@ -204,15 +204,13 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "d93798c8e0793bd2c104815e7a9d5b45c8f0e04f",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
@@ -220,15 +218,13 @@
       "role": "sender",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "65d233ef34803ce8b257cf91cc0703bb6872b4f2",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
@@ -236,31 +232,27 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "b37b1853d20cc977fdb532288faac51338c76d30",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/activation_reader_width_sharded.cpp",
       "op_family": "conv",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "status": "quarantined",
+      "migrated_api_version": null,
+      "commit": "9b5d9b5823f4be01adfc074b33091799791aa63a",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
-      "census_note": "INCLUDE_SRC loopback + barrier; mixed R\u2192S counter / S\u2192R flag",
-      "flags": [
-        "needs_recheck"
-      ]
+      "last_verified": "2026-06-20",
+      "census_note": "INCLUDE_SRC loopback + barrier; mixed R\u2192S counter / S\u2192R flag | QUARANTINED 2026-06-20: v7 helper migration HANGS on WS conv; reverted to raw primitives (pre-helper 77b3e62c8a1).",
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
