@@ -6,20 +6,25 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.functional import swiglu_mlp as reference_swiglu_mlp
+from models.experimental.voxtraltts.tests.common import load_acoustic_fm_layer_weights_or_skip
 from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
 
 
 @torch.no_grad()
 def test_voxtral_mlp_pcc(device, reset_seeds):
+    """SwiGLU MLP PCC at production FM dims (3072 → 9216) with checkpoint weights."""
+    layer_weights = load_acoustic_fm_layer_weights_or_skip(0)
+    w1 = layer_weights["feed_forward.w1.weight"]
+    w2 = layer_weights["feed_forward.w2.weight"]
+    w3 = layer_weights["feed_forward.w3.weight"]
+
+    hidden = int(w1.shape[1])
+    intermediate = int(w1.shape[0])
     batch = 1
     seq_len = 64
-    hidden = 3072
-    intermediate = 9216
 
+    torch.manual_seed(0)
     torch_input = torch.randn(batch, 1, seq_len, hidden, dtype=torch.bfloat16)
-    w1 = torch.randn(intermediate, hidden, dtype=torch.bfloat16)
-    w2 = torch.randn(hidden, intermediate, dtype=torch.bfloat16)
-    w3 = torch.randn(intermediate, hidden, dtype=torch.bfloat16)
 
     reference_output = reference_swiglu_mlp(torch_input.squeeze(1), w1, w2, w3)
 

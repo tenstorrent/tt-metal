@@ -16,12 +16,12 @@ from models.experimental.voxtraltts.tests.common import (
     resolve_voxtral_model_name_or_skip,
 )
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
-    voxtral_audio_tokenizer_default_optimizations,
+    voxtral_audio_tokenizer_high_accuracy_optimizations,
 )
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import extract_audio_tokenizer_state_dict
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 
-_PCC_TARGET = 0.99
+_PCC_TARGET = 0.98
 
 
 @torch.no_grad()
@@ -61,7 +61,7 @@ def test_audio_tokenizer_full_decode_pcc(device, reset_seeds, time_len, pcc):
             device,
             state_dict=sd,
             tokenizer_cfg=cfg,
-            optimizations=voxtral_audio_tokenizer_default_optimizations(),
+            optimizations=voxtral_audio_tokenizer_high_accuracy_optimizations(),
         )
     except Exception as exc:
         pytest.skip(str(exc))

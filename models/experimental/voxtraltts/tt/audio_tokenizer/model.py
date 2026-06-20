@@ -659,27 +659,49 @@ class VoxtralTTAudioTokenizer:
             raise ValueError(f"Expected 37 codebooks, got k={k}")
 
         codes_rm = ttnn.to_layout(codes_b37t, ttnn.ROW_MAJOR_LAYOUT)
-        idx_rm = ttnn.add(codes_rm, self._mm_offsets_tt)
+        mem = ttnn.DRAM_MEMORY_CONFIG
+        out_bt_rm: ttnn.Tensor | None = None
+        d: int | None = None
+        for cb in range(k):
+            cb_codes_rm = ttnn.slice(codes_rm, [0, cb, 0], [b, cb + 1, t])
+            off_cb_rm = ttnn.slice(self._mm_offsets_tt, [0, cb, 0], [1, cb + 1, 1])
+            cb_idx_rm = ttnn.add(cb_codes_rm, off_cb_rm)
+            if cb_codes_rm.is_allocated():
+                ttnn.deallocate(cb_codes_rm)
+            if off_cb_rm.is_allocated():
+                ttnn.deallocate(off_cb_rm)
+            cb_idx_bt = ttnn.reshape(cb_idx_rm, (b, t))
+            if cb_idx_rm.is_allocated():
+                ttnn.deallocate(cb_idx_rm)
+            emb_bt = self.mm_audio_codebook_embedding(cb_idx_bt)
+            if cb_idx_bt.is_allocated():
+                ttnn.deallocate(cb_idx_bt)
+            if d is None:
+                d = int(emb_bt.shape[2])
+            emb_rm = ttnn.to_layout(emb_bt, ttnn.ROW_MAJOR_LAYOUT, memory_config=mem)
+            if emb_bt.is_allocated():
+                ttnn.deallocate(emb_bt)
+            if out_bt_rm is None:
+                out_bt_rm = emb_rm
+            else:
+                acc_rm = ttnn.add(out_bt_rm, emb_rm, memory_config=mem)
+                if out_bt_rm.is_allocated():
+                    ttnn.deallocate(out_bt_rm)
+                if emb_rm.is_allocated():
+                    ttnn.deallocate(emb_rm)
+                out_bt_rm = acc_rm
         if codes_rm is not codes_b37t and codes_rm.is_allocated():
             ttnn.deallocate(codes_rm)
-        flat_rm = ttnn.reshape(idx_rm, (b * k, t))
-        if idx_rm is not flat_rm and idx_rm.is_allocated():
-            ttnn.deallocate(idx_rm)
-        emb_flat = self.mm_audio_codebook_embedding(flat_rm)
-        if flat_rm.is_allocated():
-            ttnn.deallocate(flat_rm)
-        d = int(emb_flat.shape[2])
-        emb4 = ttnn.reshape(emb_flat, (b, k, t, d))
-        if emb_flat is not emb4 and emb_flat.is_allocated():
-            ttnn.deallocate(emb_flat)
-        out = ttnn.sum(emb4, dim=1)
-        if emb4.is_allocated():
-            ttnn.deallocate(emb4)
+        if out_bt_rm is None or d is None:
+            raise RuntimeError("MM encode produced no embeddings.")
         if b == 1:
-            reshaped = ttnn.reshape(out, (t, d))
-            if out is not reshaped and out.is_allocated():
-                ttnn.deallocate(out)
-            return reshaped
+            out_td_rm = ttnn.reshape(out_bt_rm, (t, d))
+            if out_bt_rm is not out_td_rm and out_bt_rm.is_allocated():
+                ttnn.deallocate(out_bt_rm)
+            return ttnn.to_layout(out_td_rm, ttnn.TILE_LAYOUT, memory_config=mem)
+        out = ttnn.to_layout(out_bt_rm, ttnn.TILE_LAYOUT, memory_config=mem)
+        if out_bt_rm.is_allocated():
+            ttnn.deallocate(out_bt_rm)
         return out
 
     def latent_from_codes_tt(self, codes_b37t: ttnn.Tensor) -> ttnn.Tensor:

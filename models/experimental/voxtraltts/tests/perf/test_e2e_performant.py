@@ -46,7 +46,7 @@ from models.experimental.voxtraltts.demo.decode_trace_2cq import (  # noqa: E402
     num_command_queues_for_decode,
 )
 
-configure_decode_trace(decode_trace=True, decode_trace_2cq=False)
+configure_decode_trace(decode_trace=True, decode_trace_2cq=True)
 from models.experimental.voxtraltts.reference.voxtral_config import (  # noqa: E402
     DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
 )
