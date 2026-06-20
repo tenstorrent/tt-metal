@@ -55,7 +55,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
+                    * - BFLOAT16, FLOAT32
                       - TILE, ROW_MAJOR
 
                 The :attr:`output_tensor` will be in the following data type and layout:
@@ -65,7 +65,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
 
                     * - dtype
                       - layout
-                    * - BFLOAT16
+                    * - BFLOAT16, FLOAT32
                       - TILE
 
             Memory Support:
@@ -73,7 +73,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
 
             Limitations:
                 - All input tensors must be on-device.
-                - When :attr:`dim` is not specified (i.e. full product), the :attr:`input_tensor` must be bfloat16, and keepdim=True is not supported  (as this operation results in a scalar).
+                - When :attr:`dim` is not specified (i.e. full product), keepdim=True is not supported  (as this operation results in a scalar).
                 - Sharding is not supported for this operation
         )doc",
         "prod",

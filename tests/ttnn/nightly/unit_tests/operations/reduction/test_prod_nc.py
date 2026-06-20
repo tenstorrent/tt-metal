@@ -14,10 +14,9 @@ TILE_HEIGHT = 32
 TILE_WIDTH = 32
 
 
-def get_tensors(input_shape, output_shape, device):
+def get_tensors(input_shape, output_shape, device, npu_dtype=ttnn.bfloat16):
     torch.manual_seed(2023)
-    npu_dtype = ttnn.bfloat16
-    cpu_dtype = torch.bfloat16
+    cpu_dtype = torch.float32 if npu_dtype == ttnn.float32 else torch.bfloat16
     npu_layout = ttnn.TILE_LAYOUT
 
     torch_input = torch.randint(-100, 100, input_shape, dtype=cpu_dtype)
@@ -62,14 +61,15 @@ def get_tensors(input_shape, output_shape, device):
     ),
     ids=["0", "1"],
 )
+@pytest.mark.parametrize("npu_dtype", (ttnn.bfloat16, ttnn.float32), ids=["bfloat16", "float32"])
 # Support for dim 2,3 in composite_ops
-def test_prod_dims(input_shape, dims, device):
+def test_prod_dims(input_shape, dims, npu_dtype, device):
     output_shape = input_shape.copy()
 
     for dim in dims:
         output_shape[dim] = 1
 
-    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device)
+    (tt_input, tt_output, torch_input) = get_tensors(input_shape, output_shape, device, npu_dtype)
 
     torch_output = torch.prod(torch_input, dims[0], True)
 
