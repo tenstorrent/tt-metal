@@ -88,14 +88,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
     _llk_math_pack_sync_init_<DST_SYNC, is_fp32_dest_acc_en>();
 
-    // The typecast SFPU integer datapath relies on debug feature bit 11 (32-bit
-    // dest mode) being set. In production this is owned by the LLK API; here we
-    // set it explicitly around the compute and clear it again below.
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        _llk_math_dbg_feature_disable_();
-    }
-
     // Program the SFPU for this specific typecast pair (no-op for pairs handled
     // purely by unpacker/packer format conversion). Goes through the shared
     // unary-SFPU dispatch under SfpuType::typecast, with the (IN, OUT) format
@@ -138,12 +130,6 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 TYPECAST_OUT_FORMAT>(block_tile);
         }
         _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
-    }
-
-    // Clear debug feature bit 11, restoring default FPU behavior.
-    if constexpr (is_fp32_dest_acc_en)
-    {
-        _llk_math_dbg_feature_enable_();
     }
 }
 
