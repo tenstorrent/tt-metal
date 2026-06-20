@@ -7,6 +7,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
 
 void kernel_main() {
     // Runtime args
@@ -29,7 +30,6 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     Noc noc;
-    Semaphore<> receiver_sem(receiver_sem_id);
     Semaphore<> sender_sem(sender_sem_id);
     UnicastEndpoint remote;
     CircularBuffer values_cb(values_cb_index);
@@ -49,11 +49,20 @@ void kernel_main() {
     const uint32_t final_values_base = final_values_cb_addr + start_wt * tile_bytes_values * Kt;
     const uint32_t final_indices_base = final_indices_cb_addr + start_wt * tile_bytes_ind * Kt;
 
+    // mcast_pipe: this local-topk core RECEIVES the readiness invite flag broadcast by the final
+    // (aggregator) core's SenderPipe::send_signal() in reader_final_topk. receive_signal() waits the
+    // flag VALID and clears it (INVALID) for the next round — folding the per-iteration
+    // receiver_sem.wait(VALID) + receiver_sem.set(INVALID). PRE_HANDSHAKE=false: this core does NOT ack
+    // through the Pipe — its readiness ack to the final core is the custom fan-in counter sender_sem,
+    // incremented by Kt AFTER the data scatter (multi-producer, Pipe does not own it), kept raw below.
+    // data_ready = receiver_sem (the flag the final core broadcasts).
+    dataflow_kernel_lib::ReceiverPipe<receiver_sem_id, /*PRE_HANDSHAKE=*/false> ready_pipe(noc);
+
     // Send local TopK results to final core
     for (uint32_t j = 0; j < Ht; ++j) {  // For each height row
         // Wait for permission to send
-        // Block until the final core signals readiness to receive data
-        receiver_sem.wait(VALID);
+        // Block until the final core signals readiness to receive data (and clear the flag for next round)
+        ready_pipe.receive_signal();
 
         // Transfer local TopK results
         // Send Kt tiles of locally computed TopK values to final core
@@ -91,9 +100,6 @@ void kernel_main() {
         // Signal completion: increment sender semaphore by Kt (number of tiles sent)
         sender_sem.up(noc, noc_final_x, noc_final_y, Kt);
         noc.async_atomic_barrier();
-
-        // Reset receiver semaphore to prepare for next round
-        receiver_sem.set(INVALID);
     }  // j loop
 
     // Ensure all atomic operations complete before kernel termination
