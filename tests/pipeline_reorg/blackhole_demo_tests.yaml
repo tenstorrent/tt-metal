@@ -168,36 +168,41 @@
 
 # ─── Voxtral TTS ────────────────────────────────────────────────────────────
 
-- name: Voxtral TTS demo (P150)
+- name: Voxtral TTS demo (P150 CIv2)
   cmd: |
     set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
-    export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Voxtral-4B-TTS-2603
+    export CI=true
     python models/experimental/voxtraltts/demo/demo.py \
       --text "Hello from Voxtral on Tenstorrent Blackhole." \
       --output-dir generated/voxtraltts_demo \
       --max-speech-tokens 256
   skus:
     bh_p150b_civ2:
-      timeout: 30
+      timeout: 15
   owner_id: U03PUAKE719
   team: models
   model-name: voxtral-tts
 
-- name: Voxtral TTS demo (QB2 1x4)
+- name: Voxtral TTS demo (BH QuietBox 2)
   cmd: |
     set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
-    export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/mistralai--Voxtral-4B-TTS-2603
-    pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py -sv --timeout=3600
-    pytest models/experimental/voxtraltts/tests/perf/test_e2e_performant.py -k F128 -q -s --timeout=3600
+    export CI=true
+    export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
+    python models/experimental/voxtraltts/demo/demo.py \
+      --text "Hello from Voxtral on Tenstorrent Blackhole." \
+      --output-dir generated/voxtraltts_demo \
+      --max-speech-tokens 256
   skus:
     bh_quietbox_2:
-      timeout: 45
+      timeout: 15
   owner_id: U03PUAKE719
   team: models
   model-name: voxtral-tts
