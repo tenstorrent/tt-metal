@@ -12,15 +12,13 @@
       "role": "sender",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "3d31e412f9d4a5c9a05f4ca625dd72d8d9b27e85",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "KNOWN INSTANCE; canonical P1",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_receiver.cpp",
@@ -28,15 +26,13 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "85cc48b1373d2f6d0faf48ad3665de9a62ebed5d",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "P1 receiver; 3-state flag wait_min",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_sender_writer_padding.cpp",
@@ -44,15 +40,13 @@
       "role": "hybrid",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "3a90bb8928626886801d3db7373b54772e2cb8c7",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "KNOWN INSTANCE; P1",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_receiver_writer_padding.cpp",
@@ -60,15 +54,13 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "592e92169277b7ae09d83348b3ebb481a4493f20",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "P1 receiver",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_dram_sharded.cpp",
@@ -89,16 +81,14 @@
       "op_family": "matmul",
       "role": "hybrid",
       "tag": "refactor",
-      "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "status": "quarantined",
+      "migrated_api_version": null,
+      "commit": "49c5bd8f96f2a8716b936a324c233cc5ee27b18e",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
-      "census_note": "KNOWN INSTANCE; P3 ROTATING-ROLE; same-CB loopback; degenerate-unicast",
-      "flags": [
-        "needs_recheck"
-      ]
+      "last_verified": "2026-06-20",
+      "census_note": "KNOWN INSTANCE; P3 ROTATING-ROLE; same-CB loopback; degenerate-unicast | QUARANTINED 2026-06-20: v7 rotating-role migration HANGS on 2D in0-sharded matmul; reverted to raw (parent of c9f5f852bdf).",
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/experimental/matmul/group_attn_matmul/device/kernels/dataflow/reader_mcast_transformer_group_attn_matmul.cpp",
