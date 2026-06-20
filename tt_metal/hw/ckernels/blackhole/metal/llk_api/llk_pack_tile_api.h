@@ -4,6 +4,7 @@
 
 #pragma once
 #include "llk_pack_common_api.h"
+#include "sanitizer/api.h"
 
 /*************************************************************************
  * LLK PACK
@@ -49,6 +50,17 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
     LLK_ASSERT(
         (tile_index < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
+
+    llk::san::pack_operand_check(
+        is_fp32_dest_acc_en,
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_output_face_r_dim(output_id),
+        get_output_tile_c_dim(output_id),
+        get_output_num_faces(output_id),
+        llk::san::IGNORE,
+        llk::san::IGNORE);
+
     _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
 }
 
@@ -63,6 +75,16 @@ inline void llk_matmul_pack(
     LLK_ASSERT(
         ((start_tile_index + ntiles - 1) < get_pack_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE>()),
         "Dst tile exceeds packer destination capacity for the configured W-stride.");
+
+    llk::san::pack_operand_check(
+        is_fp32_dest_acc_en,
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        get_output_face_r_dim(output_id),
+        get_output_tile_c_dim(output_id),
+        get_output_num_faces(output_id),
+        llk::san::IGNORE,
+        llk::san::IGNORE);
 
     for (uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
         std::uint32_t pack_tile_addr =
