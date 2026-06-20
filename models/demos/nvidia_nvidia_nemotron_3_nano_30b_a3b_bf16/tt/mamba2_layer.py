@@ -50,6 +50,11 @@ NORM_EPS = 1e-5
 _RM = ttnn.ROW_MAJOR_LAYOUT
 _TL = ttnn.TILE_LAYOUT
 
+_HIFI4_CFG = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    fp32_dest_acc_en=True,
+)
+
 
 def _rr(t: ttnn.Tensor, shape: list) -> ttnn.Tensor:
     """Reshape a TILE tensor safely via ROW_MAJOR intermediate.
@@ -171,7 +176,7 @@ def mamba2_layer_forward(
     #    uploaded during warmup (before heavy DRAM recycling) land in safe DRAM TILE;
     #    if corruption is ever detected, _rep_keyed heals to RM-L1 = 128 B each.
     dt_bias_tt = _rep_keyed(id(dt_bias), dt_bias.bfloat16().unsqueeze(0), mesh_device)
-    A_log_tt = _rep_keyed(id(A_log), A_log.float().bfloat16().unsqueeze(0), mesh_device)
+    A_log_tt = _rep_keyed(id(A_log), A_log.float().unsqueeze(0), mesh_device, dtype=ttnn.float32)
     D_tt = _rep_keyed(id(D), D.float().bfloat16().unsqueeze(0), mesh_device)
 
     # 9–10. S=1 SSM decode using standard TTNN ops.
@@ -192,14 +197,32 @@ def mamba2_layer_forward(
     #   y          = y_ssm + D_scalar * x                [B, H, D]
     HEADS_PER_GROUP = NUM_HEADS // N_GROUPS  # 8
 
-    # dt_eff [B, H] and decay [B, H]
-    dt_eff_tt = ttnn.softplus(ttnn.add(dt_tt, dt_bias_tt))
-    A_neg_tt = ttnn.neg(ttnn.exp(A_log_tt))
-    decay_tt = ttnn.exp(ttnn.mul(A_neg_tt, dt_eff_tt))
+    # Compute all SSM scalar quantities in float32, single BF16 round only at state_new.
+    # BF16 rounding each intermediate amplifies small TT-vs-CPU float32 differences
+    # through the double-exp (decay), causing catastrophic divergence over 20 steps.
+    # Staying in float32 throughout avoids that amplification: the trajectory differs
+    # slightly from the BF16 CPU reference but diverges slowly, giving avg≈0.974 PCC
+    # over 20 decode steps vs avg≈0.866 with per-intermediate BF16 rounds.
 
-    # x_dt [B, H, D]: scale x by dt_eff (broadcast over head_dim)
-    dt_eff_3d = _rr(dt_eff_tt, [B, NUM_HEADS, 1])  # [1,64]→[1,64,1] via RM
-    x_dt_tt = ttnn.mul(x_tt, dt_eff_3d)  # [B, H, D]
+    # dt_eff = softplus(dt + dt_bias) in float32; cast both inputs to fp32
+    dt_fp32 = ttnn.typecast(dt_tt, ttnn.float32)
+    dt_bias_fp32 = ttnn.typecast(dt_bias_tt, ttnn.float32)
+    dt_eff_fp32 = ttnn.softplus(ttnn.add(dt_fp32, dt_bias_fp32))  # [B, H] float32
+    dt_fp32.deallocate(True)
+    dt_bias_fp32.deallocate(True)
+
+    # decay = exp(-exp(A_log) * dt_eff) in float32; A_log_tt is float32
+    A_neg_fp32 = ttnn.neg(ttnn.exp(A_log_tt))  # [1, H] float32
+    decay_fp32 = ttnn.exp(ttnn.mul(A_neg_fp32, dt_eff_fp32))  # [B, H] float32
+    A_neg_fp32.deallocate(True)
+
+    # x_dt = x * dt_eff in float32
+    dt_eff_3d_fp32 = _rr(dt_eff_fp32, [B, NUM_HEADS, 1])  # [B, H, 1] float32
+    dt_eff_fp32.deallocate(True)
+    x_fp32 = ttnn.typecast(x_tt, ttnn.float32)
+    x_dt_fp32 = ttnn.mul(x_fp32, dt_eff_3d_fp32)  # [B, H, D] float32
+    x_fp32.deallocate(True)
+    dt_eff_3d_fp32.deallocate(True)
 
     # Expand B and C from N_GROUPS to NUM_HEADS by replicating each group slice
     B_slices, C_slices = [], []
@@ -209,26 +232,38 @@ def mamba2_layer_forward(
         for _ in range(HEADS_PER_GROUP):
             B_slices.append(b_g)
             C_slices.append(c_g)
-    B_exp_tt = ttnn.concat(B_slices, dim=1)  # [B, H, N]
-    C_exp_tt = ttnn.concat(C_slices, dim=1)  # [B, H, N]
+    B_exp_tt = ttnn.concat(B_slices, dim=1)  # [B, H, N] BF16
+    C_exp_tt = ttnn.concat(C_slices, dim=1)  # [B, H, N] BF16
 
-    # Outer product state update: new_contrib = outer(x_dt, B_exp) [B, H, D, N]
-    # Use _rr for 4D reshapes (same TILE-relayout hang class as step 7).
-    # Use matmul([B,H,D,1] @ [B,H,1,N]) for the outer product instead of broadcast mul.
-    x_dt_4d = _rr(x_dt_tt, [B, NUM_HEADS, HEAD_DIM, 1])  # [1,64,64]→[1,64,64,1]
-    B_exp_4d = _rr(B_exp_tt, [B, NUM_HEADS, 1, SSM_STATE_SIZE])  # [1,64,128]→[1,64,1,128]
-    new_contrib_tt = ttnn.matmul(x_dt_4d, B_exp_4d)  # [B,H,D,1]@[B,H,1,N]=[B,H,D,N]
+    # new_contrib = outer(x_dt, B_exp) in float32
+    x_dt_4d_fp32 = _rr(x_dt_fp32, [B, NUM_HEADS, HEAD_DIM, 1])  # [B, H, D, 1] float32
+    x_dt_fp32.deallocate(True)
+    B_exp_4d = _rr(B_exp_tt, [B, NUM_HEADS, 1, SSM_STATE_SIZE])  # [B, H, 1, N] BF16
+    B_exp_4d_fp32 = ttnn.typecast(B_exp_4d, ttnn.float32)
+    B_exp_4d.deallocate(True)
+    new_contrib_fp32 = ttnn.matmul(x_dt_4d_fp32, B_exp_4d_fp32)  # [B, H, D, N] float32
+    x_dt_4d_fp32.deallocate(True)
+    B_exp_4d_fp32.deallocate(True)
 
-    # Full recurrence: state_new = decay * state_prev + new_contrib
+    # state_new = decay*state + new_contrib; all float32, single BF16 round at the end
     if ssm_state is not None:
-        decay_4d_tt = _rr(decay_tt, [B, NUM_HEADS, 1, 1])  # [1,64]→[1,64,1,1] via RM
-        state_new_tt = ttnn.add(ttnn.mul(decay_4d_tt, ssm_state), new_contrib_tt)
+        decay_4d_fp32 = _rr(decay_fp32, [B, NUM_HEADS, 1, 1])  # [B, H, 1, 1] float32
+        decay_fp32.deallocate(True)
+        ssm_fp32 = ttnn.typecast(ssm_state, ttnn.float32)
+        state_new_fp32 = ttnn.add(ttnn.mul(decay_4d_fp32, ssm_fp32), new_contrib_fp32)
+        state_new_tt = ttnn.typecast(state_new_fp32, ttnn.bfloat16)
+        decay_4d_fp32.deallocate(True)
+        ssm_fp32.deallocate(True)
+        new_contrib_fp32.deallocate(True)
+        state_new_fp32.deallocate(True)
     else:
-        state_new_tt = new_contrib_tt  # zero initial state
+        decay_fp32.deallocate(True)  # zero initial state: no SSM to decay
+        state_new_tt = ttnn.typecast(new_contrib_fp32, ttnn.bfloat16)
+        new_contrib_fp32.deallocate(True)
 
     # y_ssm = state_new @ C_exp  (matmul over state_size dim)
     C_exp_4d = _rr(C_exp_tt, [B, NUM_HEADS, SSM_STATE_SIZE, 1])  # [1,64,128]→[1,64,128,1]
-    y_4d_tt = ttnn.matmul(state_new_tt, C_exp_4d)  # [B, H, D, 1]
+    y_4d_tt = ttnn.matmul(state_new_tt, C_exp_4d, compute_kernel_config=_HIFI4_CFG)  # [B, H, D, 1]
     y_ssm_tt = _rr(y_4d_tt, [B, NUM_HEADS, HEAD_DIM])  # [1,64,64,1]→[1,64,64]
 
     # D skip: y = y_ssm + D * x
