@@ -69,8 +69,7 @@ public:
 
         // Optional host-side hook applied in place to a copy of `bytes` before the
         // mapper runs (raw-bytes overload only). Must be length-preserving.
-        std::function<void(ttsl::Span<std::byte> bytes,
-                           ttsl::Span<const std::byte> metadata)> preprocessor;
+        std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor;
     };
 
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -86,17 +85,13 @@ public:
     // Raw bytes path. `bytes` must equal `Config::global_spec.compute_packed_buffer_size_bytes()`.
     // `metadata` is required to be exactly `Config::metadata_size_bytes` bytes
     // long when metadata is enabled, empty otherwise.
-    void forward_to_tensor(
-        ttsl::Span<const std::byte> bytes,
-        ttsl::Span<const std::byte> metadata = {});
+    void forward_to_tensor(ttsl::Span<const std::byte> bytes, ttsl::Span<const std::byte> metadata = {});
 
     // Distributed host tensor path. `host_tensor` must be a host tensor with
     // `tensor_spec() == get_per_shard_spec()` and a populated shard at every
     // covered coord. Streams the per-coord shards through the sockets verbatim;
     // `metadata` follows the same per-call contract as the bytes overload.
-    void forward_to_tensor(
-        const Tensor& host_tensor,
-        ttsl::Span<const std::byte> metadata = {});
+    void forward_to_tensor(const Tensor& host_tensor, ttsl::Span<const std::byte> metadata = {});
 
     // Block until every in-flight host->socket write has been ACKed by the
     // device-side kernel.
@@ -161,8 +156,7 @@ public:
     static std::unique_ptr<H2DStreamService> connect(
         const std::string& service_id,
         std::optional<uint32_t> timeout_ms = std::nullopt,
-        std::function<void(ttsl::Span<std::byte> bytes,
-                           ttsl::Span<const std::byte> metadata)> preprocessor = nullptr);
+        std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor = nullptr);
 
 private:
     // Connector-mode ctor used by connect(): `mesh_device_` stays null; arity
@@ -229,5 +223,4 @@ private:
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
 };
-
 }  // namespace tt::tt_metal
