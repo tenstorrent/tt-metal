@@ -4,6 +4,7 @@ Source of truth: ledger.json. CURRENT = MCAST_PIPE_API_VERSION 7.
 
 | status | ver | tag | kernel |
 |---|---|---|---|
+| migrated | 7 | refactor | activation_reader_width_sharded.cpp |
 | migrated | 7 | clean | reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp |
 | migrated | 7 | clean | writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp |
 | migrated | 7 | clean | writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp |
@@ -15,7 +16,6 @@ Source of truth: ledger.json. CURRENT = MCAST_PIPE_API_VERSION 7.
 | migrated | 7 | refactor | welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp |
 | migrated | 7 | refactor | reader_mcast_sender_unary_sharded_ln.cpp |
 | migrated | 7 | clean | reader_final_topk.cpp |
-| quarantined | - | refactor | activation_reader_width_sharded.cpp |
 | quarantined | - | refactor | reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp |
 | pending | - | refactor | persistent_h2d_receiver.cpp |
 | pending | - | clean | sampling_kernel.cpp |
@@ -75,4 +75,4 @@ Source of truth: ledger.json. CURRENT = MCAST_PIPE_API_VERSION 7.
 | deferred | - | ref | chain_link.hpp |
 
 ## Totals
-migrated@v7: 11 | quarantined: 2 | pending: 48 | deferred: 8
+migrated@v7: 12 | quarantined: 1 | pending: 48 | deferred: 8

@@ -6,14 +6,20 @@
 - **Machine:** single-chip **Wormhole** (this run). NOTE: the prior migration + ledger were last verified on **Blackhole p150a** — the two hangs below surfaced only now, on WH.
 - **Remigration breakdown:** 13 stale kernels owed (all recorded at v4). **11 remigrated v4→v7 (device-verified). 2 quarantined.** 0 net-new (Tier-0-only run).
 
-## Rollout state @ v7 (from ledger.json)
+## Rollout state @ v7 (from ledger.json) — UPDATED 2026-06-20 after conv-WS re-investigation
 | status | count |
 |---|---|
-| migrated (current @ v7) | 11 |
-| quarantined | 2 |
+| migrated (current @ v7) | 12 |
+| quarantined | 1 |
 | pending | 48 |
 | deferred | 8 |
-- **0 stale remain** among the formerly-migrated set: every migrated entry is now at v7 (or quarantined). The migrated fleet is current at v7.
+- **0 stale remain** among the formerly-migrated set: every migrated entry is now at v7. The migrated fleet is current at v7.
+- **conv-WS lifted from quarantine → migrated@v7** (commit b9e23dafb11): a correct v7 migration passes the
+  full WS matrix (48/0). Its original quarantine was a **migration bug**, not a helper-contract gap (see
+  log). **block_sharded is now the ONLY quarantined kernel** and the only real `tune-dm-helper` gap.
+- **block_sharded hang ROOT CAUSE CONFIRMED on device:** Round-6 "ctor sets VALID once" breaks the
+  rotating-role sender whose data-ready cell doubles as a `ReceiverPipe` (clear-AFTER-wait) cell →
+  ctor-once VALID goes stale → broadcasts INVALID → hang. A/B: v7 + per-send `set(VALID)` → PASS.
 
 ## Per-kernel results
 | kernel | group | role | status | validation | commit | Δlines |

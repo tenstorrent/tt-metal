@@ -1,10 +1,32 @@
-# activation_reader_width_sharded.cpp — QUARANTINED
+# activation_reader_width_sharded.cpp — MIGRATED v7 (quarantine LIFTED 2026-06-20)
 
 - Group: G3 conv (WS sender, PRE_HANDSHAKE=false round-robin self-mcast)
-- Commit: 9b5d9b5823f4be01adfc074b33091799791aa63a (revert to raw primitives)
-- Status: QUARANTINED (status=quarantined, migrated_api_version=null)
-- Validation nodeid: test_conv_features WIDTH_SHARDED output_channels=353 input_channels=384 input_height=8 input_width=8 (BFLOAT8_B/BFLOAT8_B HiFi4 fp32_accum=True)
-- Result: v7 helper migration = HANG; raw pre-helper version = PASS
+- FINAL: status=migrated, migrated_api_version=7, commit=b9e23dafb11.
+- Validation: full WS matrix `test_conv_features -k WIDTH_SHARDED` = **48 passed / 16 legit RM+bf8 skips / 0 fail**.
+
+## RE-INVESTIGATION (2026-06-20) — the quarantine was a MIGRATION BUG, not a helper gap
+The original Tier-0 subagent quarantined this as a HANG (same suspected class as block_sharded). On
+re-investigation that conclusion is WRONG. A *correct* v7 migration PASSES:
+- `SenderPipe<noc_index, act_mcast_receiver_sem(CTA13), num_reader_cores-1, /*PRE_HANDSHAKE=*/false>(noc, McastRect<>{...})`
+- keep the raw readiness wait (`act_mcast_sender_sem.wait_min(num_mcast_cores-1)`) — PRE_HANDSHAKE=false
+- `send(tilized_in0_cb.get_read_ptr(), act_cb.get_write_ptr(), size)` (loopback INCLUDE_SRC inferred)
+- **REMOVE the raw flag `set(INVALID)` (was before the mcast) and `set(VALID)`** — the helper ctor owns the flag.
+
+This reconstruction was run on device: PASS (control = no hang), stable across reruns, full WS matrix green.
+
+### Why it works here but block_sharded genuinely doesn't (the real distinction)
+conv-WS's raw receiver uses **clear-BEFORE-wait**: it sets the flag INVALID *before* `wait(VALID)` and
+never clears after, so each receiver round *ends* with the cell at VALID (the sender delivered it). The
+v7 `SenderPipe` ctor-once VALID is therefore preserved across rotating rounds — no stale-INVALID broadcast.
+block_sharded uses the helper `ReceiverPipe`, which does **clear-AFTER-wait** (H11) → cell ends INVALID →
+ctor-once VALID goes stale → hang (confirmed separately). Same self-mcast shape, opposite reset discipline.
+
+### Likely original mistake
+The subagent's v7 source was amended away (never committed cleanly), so the exact line is unrecoverable.
+Most probable: it left the stale raw `act_mcast_receiver_sem.set(INVALID)` *before* `send()` while removing
+the per-send `set(VALID)`, so the helper's flag mcast broadcast INVALID. Its "count-collapse" hypothesis
+(num_reader_cores-1 vs num_mcast_cores-1) was a guess, now FALSIFIED on device (the working migration keeps
+the raw num_mcast_cores-1 wait and the helper's num_reader_cores fan-out, and they coexist fine).
 
 ## Why quarantined
 This kernel runs a mixed raw/helper round-robin self-mcast: each core is sender on its
