@@ -47,12 +47,8 @@ void kernel_main() {
     // pointing back at the sender (the target of the R->S consumed ack). data_ready=receiver_sem,
     // consumed=sender_sem. receive() = ack (up) + wait(VALID) + clear (set INVALID), clear-before-ack
     // across iterations (H11); the receiver's flag cell starts at 0 so the first iter is safe.
-    dataflow_kernel_lib::Pipe<> in0_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect::single_core(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y),
-        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
-        receiver_sem,            // data ready (S->R level flag)
-        sender_sem);             // consumed (R->S counter)
+    dataflow_kernel_lib::ReceiverPipe<get_compile_time_arg_val(5), /*PRE_HANDSHAKE=*/true, get_compile_time_arg_val(4)>
+        in0_pipe(noc);  // data_ready=receiver_sem (CTA 5), consumed=sender_sem (CTA 4); sender coords -> receive()
 
     for (uint32_t b = 0; b < batch; ++b) {
         if constexpr (get_batch_from_reader) {
@@ -88,7 +84,7 @@ void kernel_main() {
 
                     // mcast_pipe: ack the sender (consumed) + wait for the in0 block VALID flag +
                     // clear it for the next round.
-                    in0_pipe.receive();
+                    in0_pipe.receive(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y);
 
                     cb_in0.push_back(in0_block_num_tiles);
                 }
