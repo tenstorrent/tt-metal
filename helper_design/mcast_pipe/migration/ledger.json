@@ -644,8 +644,8 @@
    "role": "receiver",
    "tag": "clean",
    "status": "migrated",
-   "migrated_api_version": 7,
-   "commit": "15c9fa959849196d0f1ae4f501370444d7cd33d4",
+   "migrated_api_version": 8,
+   "commit": "f8879d8c5ce4d5bda50a3257b9be7e32c684b0f9",
    "validation_set": [],
    "coverage_confidence": "unknown",
    "last_verified": "2026-06-20",
@@ -658,7 +658,7 @@
    "role": "sender",
    "tag": "refactor",
    "status": "migrated",
-   "migrated_api_version": 7,
+   "migrated_api_version": 8,
    "commit": "a362b90343a",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/reduction/test_topk.py::test_topk (W=8192 multicore)"
