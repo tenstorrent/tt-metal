@@ -1,132 +1,124 @@
-# mcast_pipe rollout — final report (autonomous backlog run, 2026-06-20 @ v7)
+# mcast_pipe rollout — final report (re-entry @ v8, 2026-06-20)
 
 ## Run header
-- **Helper version (CURRENT):** `MCAST_PIPE_API_VERSION 7`. Unit test `test_mcast_pipe.py` green (45/45). No version bump this run.
-- **Entry mode:** re-entry. **Migration mode:** `run-all`. **Machine:** single-chip **Wormhole b0 (n150, 64 worker cores)**.
-- **Scope:** (1) lift `block_sharded` from quarantine; (2) tier + migrate all 48 pending kernels; (3) keep the 8 design-deferred kernels deferred.
-- **Headline:** block_sharded lifted (the helper's per-send flag-VALID re-assert fix worked). Of the 48 pending, **6 net-new migrated + device-verified**, **42 deferred** — 19 on genuine helper **design gaps** (route to tune-dm-helper), 23 on **coverage** (no test runnable on this single chip). The helper was **never modified** (correct — design fixes are tune-dm-helper's job).
+- **Helper version (CURRENT):** `MCAST_PIPE_API_VERSION 8` (Round 10 — the **D2 count split**). Unit
+  test `test_mcast_pipe.py` green **50/50** at intake. Helper **NOT modified** this run (only read).
+- **Entry mode:** re-entry on a v7→v8 bump. **Migration mode:** `run-all` (autonomous, no halt).
+  **Machine:** single-chip **Wormhole b0**.
+- **Scope (per user request):** (1) remigrate every already-migrated kernel to v8 (the staleness
+  sweep); (2) upgrade the conv-WS `activation_reader_width_sharded.cpp` from its partial
+  (SenderPipe-only + raw receiver) form to a **full dual-pipe** (SenderPipe + ReceiverPipe).
+- **Headline:** **19 / 19 migrated@v8, 0 failures, 0 quarantined.** Every stale kernel remigrated;
+  the conv-WS dual-pipe upgrade — the highest-risk item, quarantined once at v7 — **passed on device**.
 
-## Rollout state @ v7 (from ledger.json) — 69 entries
+## The v7→v8 caller-facing move (what made everything stale)
+`SenderPipe` **dropped its 3rd template param** `NUM_ACTIVE_RECEIVER_CORES`. Fan-out is now derived
+from the rect's `area()`; a divergent consumer-ack count moves to a runtime ctor arg
+`consumer_ack_count` (default `ACK_EQUALS_FANOUT` = the EXCLUDE fan-out). `ReceiverPipe` **unchanged**.
+- **SenderPipe sites** = caller-facing-broken → rewritten (dense: pure arg deletion; divergent: delete
+  arg + pass `consumer_ack_count`).
+- **ReceiverPipe-only sites** = code unchanged → re-verified (their test runs alongside the sender) +
+  version bumped 7→8.
+
+## Rollout state @ v8 (from ledger.json) — 69 entries
 | status | count |
 |---|---|
-| **migrated (current @ v7)** | **19** |
+| **migrated (current @ v8)** | **19** |
 | pending | **0** |
 | quarantined | **0** |
-| deferred | **50** (8 original design-deferred + 19 new design-gap + 23 coverage-gap) |
+| deferred | **50** (8 original design-deferred + 19 design-gap + 23 coverage-gap) |
 
-0 pending and 0 stale → **the migratable-on-this-chip fleet is fully current at v7.** Every remaining kernel is deferred for a documented reason (helper design gap or no single-chip coverage).
+**0 pending and 0 stale → the migratable-on-this-chip fleet is fully current at v8.** Every remaining
+kernel is deferred for a documented reason (helper design gap or no single-chip coverage).
 
-## Immediate priority — block_sharded lifted ✅
-- `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp`: restored the clean v7 two-Pipe rotating-role STAR call site from `fa561f3b584`. The helper fix `20cf0df46ee` (re-assert source-cell VALID per send) removed the Round-6 ctor-once-VALID staleness that hung this rotating-role core.
-- Validation: `test_matmul_2d_multiple_output_blocks_per_core --run-all` = **56 passed, 72 skipped, 0 failed, no hang**.
-- Ledger: quarantined → migrated@v7 (commit `7953a2a2e52`). **0 quarantined remain.**
+## Per-tier results
+| tier | scope | kernels | migrated | failed | quarantined |
+|---|---|---|---|---|---|
+| 0a | matmul (sender remigrate ×3 + receiver re-verify ×2) | 5 | 5 | 0 | 0 |
+| 0b | layernorm sharded (sender ×3 + receiver ×3) | 6 | 6 | 0 | 0 |
+| 0c | groupnorm v2 (receiver-only ×2, no code edit) | 2 | 2 | 0 | 0 |
+| 0d | topk (sender ×1 + receiver ×1) | 2 | 2 | 0 | 0 |
+| 0e | conv weights (sender ×1 + receiver ×2) | 3 | 3 | 0 | 0 |
+| 1 | **conv-WS dual-pipe upgrade** (net-new) | 1 | 1 | 0 | 0 |
+| **total** | | **19** | **19** | **0** | **0** |
 
-## Per-tier results (the 48 pending backlog)
-| tier | scope | migrated | deferred (design) | deferred (coverage) |
+## Per-kernel detail
+### Tier 0a — matmul
+| kernel | face | action | commit | test result |
 |---|---|---|---|---|
-| 1 | clean, single-chip-verified | **2** | 1 | 1 |
-| 2a | normalization sharded refactor | **3** | 2 | 0 |
-| 2b | reduction + matmul + conv refactor | **1** | 5 | 0 |
-| 2c | sdpa refactor | 0 | 2 | 0 |
-| 2d | deepseek/moe single-device | 0 | 4 | 1 |
-| 3 | legacy-API sort + move | 0 | 5 | 0 |
-| — | (coverage-gap, not tiered — unverifiable on 1 chip) | — | — | 21 |
-| **total** | | **6** | **19** | **23** |
+| reader_bmm_tile_layout_in0_sender_padding.cpp | sender | **divergent** — drop arg + `consumer_ack_count=in0_mcast_num_dests` (num_cores-1) | 2dc2b7e5617 | 1D 48/0 |
+| reader_bmm_tile_layout_in1_sender_writer_padding.cpp | sender | dense — pure deletion | d5ca9f7dbe1 | 2D 56/0 |
+| reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp | sender+recv | dense — pure deletion (+ dead-var cleanup); recv arm unchanged | 5a9d07277df | 2D 56/0 |
+| reader_bmm_tile_layout_in0_receiver.cpp | receiver | no code edit; re-verify + bump | (kept) | 1D 48/0 |
+| reader_bmm_tile_layout_in1_receiver_writer_padding.cpp | receiver | no code edit; re-verify + bump | (kept) | 2D 56/0 |
 
-### Migrated this run (6 net-new, all device-verified, 0 failures)
-| kernel | tier | test | result |
+> **Notable:** `in0_sender_padding` was NOT dense — under `uneven_width` the mcast rect covers more
+> cores than actually ack, so the v8-default `ACK_EQUALS_FANOUT` over-waits → HANG. The explicit
+> `consumer_ack_count` (exactly the D2 mechanism Round 10 added) was required. This is the first
+> production confirmation of the divergent-ack arm outside the unit test.
+
+### Tier 0b — layernorm (all dense, pure deletions; PRE_HANDSHAKE=false)
+| kernel | face | commit | test |
 |---|---|---|---|
-| `reader_mcast_sender_unary_sharded_ln_post_allgather.cpp` | 1 | test_post_allgather_layernorm | 64/0 |
-| `reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp` | 1 | test_post_allgather_layernorm | 64/0 |
-| `reader_mcast_receiver_unary_sharded_ln.cpp` | 2a | test_layer_norm_sharded_single_stage | 64/0 |
-| `reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp` | 2a | test_pre_allgather_layernorm | 32/0 |
-| `reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp` | 2a | test_pre_allgather_layernorm | 32/0 |
-| `writer_local_topk.cpp` | 2b | test_topk (W=8192) | 80 passed / 80 xfail / 0 fail |
+| reader_mcast_sender_unary_sharded_ln.cpp | sender | 2b662e1ba1f | single_stage 64/0 |
+| reader_mcast_receiver_unary_sharded_ln.cpp | receiver | (kept) | single_stage 64/0 |
+| reader_mcast_sender_unary_sharded_ln_pre_allgather.cpp | sender (send_signal) | 4c7f3b919f2 | pre_allgather 32/0 |
+| reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp | receiver | (kept) | pre_allgather 32/0 |
+| reader_mcast_sender_unary_sharded_ln_post_allgather.cpp | sender (loopback INCLUDE) | 65d3debd959 | post_allgather 64/0 |
+| reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp | receiver | (kept) | post_allgather 64/0 |
 
-(plus block_sharded lifted = 7 kernels brought to green this run. Migrated total 12 → **19**.)
+### Tier 0c — groupnorm v2 (ReceiverPipe-only, no code edit; senders are deferred design-gaps)
+| kernel | commit | test |
+|---|---|---|
+| reader_mcast_receiver_unary_sharded_gn_v2.cpp | (kept) | gn_v2_8x4_grid 6/6 |
+| welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp | (kept) | gn_v2_8x4_grid (welford) |
 
-### Note on commit hashes
-Per-kernel atomic commits + paired ledger write-backs throughout (revert-clean, bisectable). All local — **nothing pushed/rebased/reset**. Migrated-this-run commits: `3a0315dea95`, `fcec91acc5c`, `f348c649e02`, `47f62dbd700`, `e6e5b15ef91`, `a362b90343a` (+ block_sharded `7953a2a2e52`).
+### Tier 0d — topk
+| kernel | face | commit | test |
+|---|---|---|---|
+| reader_final_topk.cpp | sender (send_signal, PRE_HANDSHAKE=false) — pure deletion | f8879d8c5ce | topk W=8192: 80 pass / 80 xfail / 0 fail |
+| writer_local_topk.cpp | receiver | (kept) | topk W=8192 |
 
-## Coverage gaps (23 — migrated NOTHING here; cannot gate on this chip)
-Not migrated because no test reaches them on a single WH n150. **NOT silent breakage** — each kernel left in its known-good raw state (the one stale-v4 leftover, `sampling_kernel.cpp`, was restored from dead `Pipe<>` to raw, commit `f67d2b3ce96`).
-- **3 matmul programming-example readers** — binary-only (`metal_example_matmul_multicore_reuse_mcast`), no pytest.
-- **4 interleaved group_norm** kernels (`reader_mcast_*_unary_gn`, `welford_reader_mcast_*_unary_gn`) — sweep-only (every unit test shards input → v2 factory).
-- **1 deepseek sampling** (`sampling_kernel.cpp`) — only `requires_grid_size(101)` tests drive it; this chip has 64 cores.
-- **1 moe_gate_mm** (`dm1.cpp`) — `test_moe_mm` unconditionally `pytest.skip()`s on wormhole_b0 + blackhole (issue #44858).
-- **14 multi-device CCL / deepseek-prefill / ring** kernels — require mesh ≥2 (rms_allgather ×2, llama AG-matmul worker_receiver, deepseek_prefill dispatch/combine/unified_ffn, moe_gpt tilize ×2, selective_reduce_combine ×2, all_gather_concat_writer, all_to_all_sender_writer, sdpa exp_ring_joint_reader, persistent_h2d_receiver).
+### Tier 0e — conv weights
+| kernel | face | commit | test |
+|---|---|---|---|
+| writer_tiled_out_2d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp | sender — dense pure deletion | 0d31bb2d615 | BLOCK_SHARDED 48/0, PCC 0.9999992 |
+| writer_tiled_out_2d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp | receiver | (kept) | BLOCK_SHARDED |
+| reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp | receiver | (kept) | HEIGHT_SHARDED 256×256 act_block_h=32 |
 
-## Known gaps — the 8 original design-deferred (stay deferred, per request)
-chain / ring / fabric / deepseek-preprogram: `chain_link.hpp` (ref), matmul `in0_ring_all_gather` + `in1_ring_all_gather`, llama `in1_ring_all_gather`, all_reduce `worker_writer.cpp` (fabric), multicast example `coordinator_kernel.cpp`, deepseek `mcast.hpp` + `dataflow_utils.hpp` (preprogram-state).
+### Tier 1 — conv-WS dual-pipe upgrade (THE user request) ✅
+| kernel | before | after | commit | test |
+|---|---|---|---|---|
+| activation_reader_width_sharded.cpp | SenderPipe-only (PRE_HANDSHAKE=false) + **raw receiver** (`act_mcast_receiver_sem.wait(VALID)`) + **raw fan-in counter** (`act_mcast_sender_sem.wait_min(num_mcast_cores-1)`) | **SenderPipe** (PRE_HANDSHAKE=true, `consumer_ack_count = num_mcast_cores-1`) **+ ReceiverPipe** (`.receive(sx,sy)`) | 4063ade12d0 (+ ledger 239a53c42fa) | WIDTH_SHARDED matrix **48 passed / 16 RM+bf8 skips / 0 fail**, smoke PCC 0.9999565, no hang |
 
----
+**Why it works now (it was quarantined at v7):**
+- The data-mcast fan-out (`num_reader_cores` = rect `area()`) **diverges** from the consumer-ack count
+  (`num_mcast_cores - 1`). v7 had one count for both → the receiver/handshake stayed raw. **v8's
+  `consumer_ack_count` decouples them** — the exact D2 gap Round 10 closed.
+- The `ReceiverPipe` clear-AFTER-wait (H11) discipline that made this self-mcast hang at v7 is defused
+  by Round 9's **per-send VALID re-assert (M12b)** in `send()` (same fix that lifted block_sharded).
+- Sem wiring confirmed against the host factory: CTA13 = `act_mcast_receiver_sem` (data-ready flag),
+  CTA12 = `act_mcast_sender_sem` (consumer-ready fan-in), both host-created on `all_cores` init 0.
 
-# DESIGN-BLOCKED — needs a helper change (route to tune-dm-helper)
+## Commit hygiene
+Per-kernel atomic commits + paired ledger write-backs throughout (revert-clean, bisectable). All
+**local** — nothing pushed / rebased / reset. The **helper header was never touched** this run (correct;
+design fixes are tune-dm-helper's job). Per-kernel verbose logs in `migration/log/`.
 
-19 pending kernels are migratable in PRINCIPLE but the **v7 API cannot express them**. The helper was NOT
-modified (per the failure policy). Grouped by the specific limitation; each is a candidate scope item for a
-future `tune-dm-helper` round. (Several kernels hit more than one; listed under the dominant blocker.)
+## Coverage notes / risks
+- **conv-WS coverage upgraded:** its ledger `validation_set` was empty + `coverage_confidence=unknown`
+  at intake. Now filled (`test_conv_features` WIDTH_SHARDED matrix, device-JIT-verified) with
+  `coverage_confidence=high`. The single highest-risk item of the run, now well-tested.
+- All other migrations land on already-green, device-verified call sites; no new coverage gaps.
 
-### D1 — Runtime recipient count (`num_dests` is a `get_arg_val`, but `NUM_ACTIVE_RECEIVER_CORES` is a compile-time template) — THE dominant blocker
-The host factory computes per-core recipient counts at runtime (varies by core/worker-type). v7 can only
-take the count as a compile-time template arg.
-- `reader_mcast_sender_unary_sharded_gn_v2.cpp`, `welford_reader_mcast_sender_unary_sharded_gn_v2.cpp` (per-rect runtime counts)
-- `flash_mla.hpp` (`num_mcast_dests` runtime)
-- `tilize_reader.cpp` / `tilize_writer.cpp` (moe_compute) (3 rects, runtime counts)
-- `experimental/conv3d/.../writer.cpp` (Mcast-mode runtime `mcast_num_dests`)
-- `dataflow_common.hpp` (sdpa_decode `read_k`) (runtime `num_dests` + D4)
-- `move_interleaved_with_overlap.cpp`, `move_stick_layout_interleaved_with_overlap.cpp` (D2/D3 too)
-- **Fix:** a SenderPipe runtime-`num_dests` mode (count as a ctor/`send()` runtime arg).
+## Out of scope (unchanged): 50 deferred kernels
+Stay deferred per the prior run + user request — 8 original design-deferred, 19 design-gap
+(D1/D3–D9), 23 coverage-gap (multi-device / no single-chip test). Not touched this run.
 
-### D2 — Split mcast-dest count vs consumer-ack count (one count can't serve both)
-The data/flag broadcast goes to one set of cores; the consumer-ready ack arrives from a different-sized set.
-- `reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` (mcast = total_num_cores-1 incl. noop; ack = total_active-1) — **A/B hang-site flip confirmed on device**
-- `reader_bmm_tile_layout_in0_sender_dram_sharded.cpp` (grid mcast vs dram-bank ack; contradictory across worker types)
-- `coordinator_single_row_multi_core.cpp` (sort) (start=`number_of_dest` vs substage=`Wt/2`)
-- **Fix:** separate `MCAST_DEST_COUNT` and `CONSUMER_ACK_COUNT`.
-
-### D3 — Runtime sem ids (data-ready / consumer sem ids are compile-time template params)
-- `reader_mcast_transformer_group_attn_matmul.cpp` (`Semaphore<>(get_arg_val(i++))`)
-- sort `coordinator_single_row_multi_core.cpp`, `reader_single_row_multi_core.cpp`
-- move `move_interleaved_with_overlap.cpp`, `move_stick_layout_interleaved_with_overlap.cpp`
-- **Fix:** allow sem ids as runtime ctor args.
-
-### D4 — Runtime sender/receiver role under one binary (helper faces are distinct compile-time types)
-`do_mcast`/`is_controller` selects the role per-core at runtime; v7 SenderPipe and ReceiverPipe are separate compile-time types.
-- `dataflow_common.hpp` (sdpa_decode, `do_mcast`), move kernels (`is_controller`)
-- **Fix:** a unified role-dispatched Pipe (CT or runtime predicate selects the face).
-
-### D5 — Arbitrary / value-carrying flag (`set_multicast(value)` + `wait(value)`)
-Broadcasting a data value (token counts, monotone k+1) in the sem word. v7 has only Flag (fixed VALID) and Counter (inc+1 / wait_min).
-- `reader_argmax_interleaved_multicore.cpp` (monotone value k+1)
-- `tilize_writer.cpp` (moe_compute) (running token-count value)
-- **Fix:** a `send_value(v)` / `wait_value(v)` verb.
-
-### D6 — Multi-rectangle with per-rect modes (1–3 rects, mixed INCLUDE_SRC/EXCLUDE_SRC, single trailing barrier)
-A per-rect `.send()` loop is fine for compile-time counts, but these combine D6 with D1/D5 making them unexpressible.
-- `reader_argmax_interleaved_multicore.cpp` (2 rects, different loopback modes in one logical send)
-- gn_v2 senders, moe_compute tilize_reader, move kernels
-- **Fix:** a rect-list `send()` where each entry carries its own mode + count.
-
-### D7 — CHAIN / relay (store-and-forward) topology (only STAR rectangle-mcast supported)
-Each link is receiver+sender, forwarding via cross-id `relay_multicast(valid_sem → receiver_sem)`, src≠dst (STAR SenderPipe asserts src==dst).
-- `reader_interleaved.cpp` (sdpa prefill, open-coded twin of the deferred `chain_link.hpp`)
-- **Fix:** the long-known CHAIN/relay topology mode (same gap as `chain_link.hpp`).
-
-### D8 — Producer-overlapped streaming chunked send (`send()` handles only fully-ready blocks)
-`mcast_block_chunked` is an R4 streaming send: per-burst growing `wait_front`, payload > NOC_MAX_BURST. R4 was explicitly out of scope this round.
-- `reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp`
-- **Fix:** a streaming/chunked `send()` that interleaves producer `wait_front` per burst.
-
-### D9 — Preprogram-state mcast (set-state / issue-txn split; shared cmd buf) — no v7 set-state path
-- `kv_cache_update.hpp` (deepseek) — `proposed_helpers.md` already lists set-state as out-of-scope.
-- **Fix:** a set-state/issue-txn split API (large scope; likely its own round).
-
----
-
-## Recommendation for the next tune-dm-helper round
-**D1 (runtime num_dests) + D2 (split dest/ack count) + D3 (runtime sem ids)** unblock the largest share —
-they're the same theme (move the STAR parameters from compile-time template to runtime args) and would
-recover the gn_v2 senders, conv 1D-HS sender, dram-sharded matmul, group_attn, conv3d, and the moe_compute
-pair. D5 (value-carrying flag) and D6 (rect-list) are smaller, independent adds. D7 (chain) and D9
-(preprogram-state) are large, separate efforts already known as gaps.
+## Hand-off / observation for the next tune-dm-helper round
+The v8 `consumer_ack_count` mechanism that unblocked conv-WS also directly addresses the other **D2
+divergence deferrals** — most concretely the conv-1D weights **sender**
+`reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp` (deferred at v7 on
+the split mcast-dest vs consumer-ack count, A/B-confirmed on device) and the dram-sharded matmul
+sender. These are now candidates to **un-defer in a future divergent-tier apply-dm-helper run** (out of
+this run's user-requested scope). D1 (runtime num_dests for gn_v2 senders), D3–D9 remain genuine gaps.

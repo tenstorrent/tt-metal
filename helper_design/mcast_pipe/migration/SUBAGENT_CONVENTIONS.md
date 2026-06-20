@@ -1,21 +1,43 @@
 # mcast_pipe migration — per-tier subagent conventions (read first)
 
-You are migrating a TIER of kernel call sites from **raw open-coded mcast+handshake primitives** to the
-materialized helper **`ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp`** (MCAST_PIPE_API_VERSION 7). Work from
+You are migrating a TIER of kernel call sites to the materialized helper
+**`ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp`** (MCAST_PIPE_API_VERSION **8**). Work from
 `/localdev/sjovic/tt-metal`. Device is a single Wormhole b0, SHARED + SEQUENTIAL — never run device
 tests in parallel, never in the background.
+
+This run is a **re-entry on a v7→v8 bump (Round 10 — D2 count split)**. Most of your work is
+**remigration**: porting an ALREADY-migrated v7 call site to the v8 API. See "The v7→v8 move" below.
 
 ## Environment / build
 - `source python_env/bin/activate` before any test.
 - Kernel-only edits (.cpp/.hpp under .../kernels/ and the helper header) need **NO host rebuild** — JIT
   compiles them at test time. You are only editing kernel code, so do NOT run ./build_metal.sh.
 
-## The v7 helper API (target form)
-Read `helper_design/mcast_pipe/proposed_helpers.md` and the helper header for the authoritative API.
-Quick shape (translate raw primitives INTO this):
-- **Sender:** `dataflow_kernel_lib::SenderPipe<NOC_ID, DATA_READY_SEM_ID, NUM_ACTIVE_RECEIVER_CORES,
-  PRE_HANDSHAKE, CONSUMER_READY_SEM_ID, DataReadySignal>(noc, McastRect<NOC_ID>{x0,y0,x1,y1})` then
-  `.send(src,dst,size)`. Control/flag-only: `.send_signal()` (no arg).
+## The v7→v8 move (Round 10 — D2 count split) — THE remigration transform
+`SenderPipe` **dropped its 3rd template param** `NUM_ACTIVE_RECEIVER_CORES`. The mcast fan-out is now
+DERIVED from the rect's `area()`. A divergent consumer-ack count moves to a **runtime ctor arg**.
+`ReceiverPipe` is **UNCHANGED** (receiver-only kernels need no code edit — just re-verify + bump).
+
+```
+v7:  SenderPipe<NOC_ID, DATA_READY_SEM_ID, NUM_ACTIVE_RECEIVER_CORES, PRE_HANDSHAKE,
+                CONSUMER_READY_SEM_ID, DataReadySignal>(noc, McastRect<NOC_ID>{...})
+v8:  SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID,
+                DataReadySignal>(noc, McastRect<NOC_ID>{...}, consumer_ack_count = ACK_EQUALS_FANOUT)
+```
+- **Dense site (ack == fan-out): pure deletion** — remove the 3rd template arg, add NOTHING to the
+  ctor (the default `ACK_EQUALS_FANOUT` = the EXCLUDE fan-out the rect derives). This is the common
+  Tier-0 case.
+- **Divergent site (ack ≠ fan-out): pass `consumer_ack_count` as the ctor's 3rd arg** — the smaller
+  active-receiver count the kernel's raw fan-in counter used (e.g. conv-WS `num_mcast_cores-1`).
+- `McastRect` gained `constexpr uint32_t area()`. `ACK_EQUALS_FANOUT` / `UNUSED_SEM_ID` are sentinels
+  in the header.
+- Read `proposed_helpers.md` Round-10 header + `changelog.md` §"Round 10" + the helper header for the
+  authoritative API.
+
+## The v8 helper API (target form)
+- **Sender:** `dataflow_kernel_lib::SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE,
+  CONSUMER_READY_SEM_ID, DataReadySignal>(noc, McastRect<NOC_ID>{x0,y0,x1,y1}[, consumer_ack_count])`
+  then `.send(src,dst,size)`. Control/flag-only: `.send_signal()` (no arg).
 - **Receiver:** `dataflow_kernel_lib::ReceiverPipe<DATA_READY_SEM_ID, PRE_HANDSHAKE, CONSUMER_READY_SEM_ID>(noc)`
   then `.receive(sender_x, sender_y)` (sender coords passed to the call). Control: `.receive_signal()`.
 - **PRE_HANDSHAKE=false** for a pure-signal sender that never gates on a consumer-ready sem → then OMIT
@@ -45,7 +67,7 @@ For each kernel in the tier, sequentially:
    - `git add <kernel>` and commit: `apply mcast_pipe to <kernel basename>` with a one-line body noting
      the test + counts. END the message with: `Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>`
    - LEDGER WRITE-BACK (mandatory): in `helper_design/mcast_pipe/migration/ledger.json` set the entry's
-     status=migrated, migrated_api_version=7, commit=<hash>, last_verified="2026-06-20". Use this exact
+     status=migrated, migrated_api_version=8, commit=<hash>, last_verified="2026-06-20". Use this exact
      idiom so the pre-commit EOF hook is a no-op (json.dump omits trailing newline → hook aborts commit):
        ```python
        json.dump(led, open(p,'w'), indent=1)   # then:
