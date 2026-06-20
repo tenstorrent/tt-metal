@@ -1,0 +1,8 @@
+---
+interface:
+  display_name: "Module Factoring"
+  short_description: "Factor several ttnn references into one TTTv2 module and prove PCC + perf parity"
+  default_prompt: "Use $module-factoring to bring up one reusable TTTv2 module that generalizes the compute duplicated across two or more ttnn references: de-duplicate the references, build the variation matrix, run the topology-gating check, decide where variation lives (config vs. forward), extract each reference's forward into a standalone runnable unit, and prove the module matches every reference at PCC >= 0.99 (vs an HF torch reference) and at device-perf parity within a small tolerance (vs the extracted reference) on single and multi device."
+
+policy:
+  allow_implicit_invocation: true
