@@ -271,14 +271,16 @@
    "role": "hybrid",
    "tag": "refactor",
    "status": "migrated",
-   "migrated_api_version": 7,
-   "commit": "b9e23dafb11",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "migrated_api_version": 8,
+   "commit": "4063ade12d0",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (WIDTH_SHARDED matrix)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": "2026-06-20",
-   "census_note": "INCLUDE_SRC loopback + barrier; mixed R\u2192S counter / S\u2192R flag | QUARANTINED 2026-06-20: v7 helper migration HANGS on WS conv; reverted to raw primitives (pre-helper 77b3e62c8a1).",
+   "census_note": "INCLUDE_SRC loopback round-robin self-mcast; dual-pipe SenderPipe+ReceiverPipe. Divergent: rect fan-out (num_reader_cores) != consumer_ack_count (num_mcast_cores-1) -> v8 consumer_ack_count.",
    "flags": [],
-   "note": "Lifted from quarantine: correct v7 migration passes full WS matrix (48/0). Prior quarantine was a migration bug."
+   "note": "v8 dual-pipe: both faces use the helper (was sender-only + raw receiver). consumer_ack_count=num_mcast_cores-1 divergence is the v8-unblocked case."
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp",
