@@ -93,7 +93,9 @@ void kernel_main() {
     // mcast_pipe Round 4: receiver side of the weights (and bias) block channel. A ReceiverPipe carries
     // no rect/count; the sender's coords (consumed-ack target) are passed to receive().
     // data_ready=receiver_sem, consumed=sender_sem (verbatim from the old Pipe<> 3rd/4th ctor args).
-    dataflow_kernel_lib::ReceiverPipe<weights_mcast_receiver_sem_id, weights_mcast_sender_sem_id> weights_pipe(noc);
+    dataflow_kernel_lib::
+        ReceiverPipe<weights_mcast_receiver_sem_id, /*PRE_HANDSHAKE=*/true, weights_mcast_sender_sem_id>
+            weights_pipe(noc);
 
     const bool is_sender_core = get_arg_val<uint32_t>(i++) > 0;
 
