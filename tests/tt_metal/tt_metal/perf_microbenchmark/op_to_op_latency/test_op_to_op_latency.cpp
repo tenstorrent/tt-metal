@@ -140,10 +140,12 @@ struct BenchmarkConfig {
     // true = column-major (fix x, vary y first). Lets us probe NoC-direction asymmetry
     // (a row of cores contends differently on the torus than a column).
     bool core_layout_col = false;
-    // Swap which NoC reader/writer use. Default: reader=NOC1, writer=NOC0. The two NoCs
-    // route opposite directions on the torus, so one favors the read path and the other
-    // the write path (more so with many cores). Spot-check which assignment is better.
-    bool swap_nocs = false;
+    // NoC assignment for reader / writer (0 = NOC0, 1 = NOC1). The two NoCs route opposite
+    // directions on the torus; measured read-BW table shows reads scale to ~206 GB/s on
+    // NOC0 but cap at ~67 on NOC1, so the defaults are reader=NOC0, writer=NOC1 (the
+    // opposite of the framework default reader=NOC1/writer=NOC0). Override per kernel.
+    uint32_t reader_noc = 0;
+    uint32_t writer_noc = 1;
     bool buffer_tune = false;
     std::string buffer_tune_input_depths = "2,4,6,8,12,16,24,32";
     std::string buffer_tune_output_depths;
@@ -212,8 +214,12 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     if (test_args::has_command_option(args, "--core-layout-col")) {
         cfg.core_layout_col = true;
     }
+    cfg.reader_noc = test_args::get_command_option_uint32(args, "--reader-noc", cfg.reader_noc);
+    cfg.writer_noc = test_args::get_command_option_uint32(args, "--writer-noc", cfg.writer_noc);
     if (test_args::has_command_option(args, "--swap-nocs")) {
-        cfg.swap_nocs = true;
+        // Back-compat: legacy framework assignment (reader=NOC1, writer=NOC0).
+        cfg.reader_noc = 1;
+        cfg.writer_noc = 0;
     }
     if (test_args::has_command_option(args, "--buffer-tune")) {
         cfg.buffer_tune = true;
@@ -687,9 +693,10 @@ BuiltProgram build_program(
     const uint32_t cross_program_offset_tiles = cfg.cross_program_dram_offset ? total_num_tiles : 0u;
     std::vector<uint32_t> reader_compile_time_args = {
         kInputCbId, cfg.reader_mode, push_tiles, page_size_tiles, trid_in_flight, cross_program_offset_tiles};
-    // Default reader=NOC1, writer=NOC0; --swap-nocs flips them.
-    const NOC reader_noc = cfg.swap_nocs ? NOC::NOC_0 : NOC::NOC_1;
-    const NOC writer_noc = cfg.swap_nocs ? NOC::NOC_1 : NOC::NOC_0;
+    // Defaults: reader=NOC0, writer=NOC1 (measured best). --reader-noc/--writer-noc override.
+    const NOC reader_noc = (cfg.reader_noc == 1) ? NOC::NOC_1 : NOC::NOC_0;
+    const NOC writer_noc = (cfg.writer_noc == 1) ? NOC::NOC_1 : NOC::NOC_0;
+    log_info(LogTest, "NoC assignment: reader=NOC{}, writer=NOC{}", cfg.reader_noc, cfg.writer_noc);
     TensorAccessorArgs(*input_buffer).append_to(reader_compile_time_args);
     auto reader_kernel = CreateKernel(
         program,

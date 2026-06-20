@@ -29,11 +29,11 @@ PAGES="${PAGES:-1024}"
 echo "orientation,noc,units,cores,in_cb,read_gbps" > "${OUT}"
 
 # best read BW over input depths -> echoes "bw in_cb"
-measure() { # layout_flag swap_flag cores
-  local lf="$1" sw="$2" cores="$3" best=0 bestd=0
+measure() { # layout_flag extra_flags cores
+  local lf="$1" extra="$2" cores="$3" best=0 bestd=0
   for d in ${INPUT_DEPTHS}; do
     rm -f "${DEV_CSV}"
-    "${BIN}" --read-only --lean-compute ${lf} ${sw} \
+    "${BIN}" --read-only --lean-compute ${lf} ${extra} \
       --reader-dbuf-trid --reader-trid-in-flight "${N}" --reader-push-tiles 2 \
       --input-cb-depth-tiles "${d}" --output-cb-depth-tiles 2 \
       --num-pages-per-core "${PAGES}" --num-programs 2 --compute-nops 0 \
@@ -47,19 +47,19 @@ measure() { # layout_flag swap_flag cores
   echo "${best} ${bestd}"
 }
 
-for noc in default swapped; do
-  sw=""; [ "${noc}" = "swapped" ] && sw="--swap-nocs"
+for rnoc in 0 1; do
+  noc="noc${rnoc}"; extra="--reader-noc ${rnoc}"
   for u in $(seq 1 "${HEIGHT}"); do          # rows: 1..HEIGHT rows of WIDTH cores
     cores=$((u * WIDTH))
-    read -r bw d < <(measure "" "${sw}" "${cores}")
+    read -r bw d < <(measure "" "${extra}" "${cores}")
     echo "rows,${noc},${u},${cores},${d},${bw}" >> "${OUT}"
-    echo "rows noc=${noc} ${u} row(s) cores=${cores} -> ${bw} GB/s (in_cb=${d})"
+    echo "rows reader=${noc} ${u} row(s) cores=${cores} -> ${bw} GB/s (in_cb=${d})"
   done
   for u in $(seq 1 "${WIDTH}"); do            # cols: 1..WIDTH columns of HEIGHT cores
     cores=$((u * HEIGHT))
-    read -r bw d < <(measure "--core-layout-col" "${sw}" "${cores}")
+    read -r bw d < <(measure "--core-layout-col" "${extra}" "${cores}")
     echo "cols,${noc},${u},${cores},${d},${bw}" >> "${OUT}"
-    echo "cols noc=${noc} ${u} col(s) cores=${cores} -> ${bw} GB/s (in_cb=${d})"
+    echo "cols reader=${noc} ${u} col(s) cores=${cores} -> ${bw} GB/s (in_cb=${d})"
   done
 done
 echo "READ_BW_NOC_TABLE_COMPLETE -> ${OUT}"
