@@ -1431,8 +1431,8 @@ class VoxtralTTSPipeline:
         )
         acoustic_noise_scale = _env_float("VOXTRAL_ACOUSTIC_NOISE_SCALE", 1.0)
 
-        # Production uses staged trace replay (execute_trace). Direct per-op forward diverges
-        # numerically on TT → hiss/clarity loss. Disabling decode trace selects the short-chunk path.
+        # Production uses staged trace replay (execute_trace). Direct per-op forward is slower and
+        # can diverge numerically on TT → hiss/clarity loss; chunking policy is unchanged.
         # Debug (return_debug) keeps the legacy prefill_from_embeds + forward path for host traces.
         from models.experimental.voxtraltts.demo.decode_trace_2cq import (
             AcousticFMBuffers,
