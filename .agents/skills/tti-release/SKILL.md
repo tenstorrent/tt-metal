@@ -7,7 +7,9 @@ description: Run the tt-inference-server model release workflow for the complete
 
 ## Overview
 
-This skill runs the Tenstorrent `tt-inference-server` release workflow for the generated `models/autoports/<model>` implementation whose vLLM serving path is already complete. The goal is a copied-back markdown release report plus a short local handoff note with exact commands, versions, recovery actions, and residual readiness gaps.
+This skill runs the Tenstorrent `tt-inference-server` release workflow for the generated `models/autoports/<model>` implementation whose vLLM serving path is already complete. The goal is a copied-back markdown release report plus a short local handoff note with exact commands, versions, recovery actions, and release-readiness status.
+
+Separate release workflow success from release readiness. `run.py` exiting `0`, API requests completing, or a report being copied back proves the release harness ran. It does not prove the model is ready if the report contains failed accuracy, API conformance, or benchmark target rows.
 
 The release stage is only valid when the release workflow evaluates the just-brought-up autoport model. Do not run a stock `tt-transformers`, `models/demos`, or other packaged implementation for the same Hugging Face model. That measures a different model and must be treated as a failed release-stage artifact, even if `run.py` exits `0`.
 
@@ -197,6 +199,26 @@ Use `$autofix` for report-marked API/spec/test failures even when `run.py` exits
 
 Do not use `$autofix` for pure infrastructure failures such as missing Docker, Hugging Face auth, SSH problems, or ARC/reset hangs; recover those with the topology and reset policy above. For accuracy or performance target failures, first decide whether the evidence points to an implementation/test bug or a real readiness gap. Use `$autofix` for the former. Record the latter in `RUN_NOTES.md` and the final response.
 
+## Release Readiness Failures
+
+Parse the final release report and report data. Classify every failed accuracy, benchmark target, API conformance, and missing/incomparable metric row as one of:
+
+- `fixed`: the issue was fixed and the release report was regenerated;
+- `issue-waived`: a current linked issue or release note shows the same row fails for the correct canonical implementation, or proves the eval/benchmark target is invalid for reasons unrelated to this autoport;
+- `readiness-fail`: this autoport is below the expected release bar.
+
+Disclosure is not a waiver. A row is not `issue-waived` merely because it is called out in `RUN_NOTES.md`. Include the issue URL, affected rows, canonical/control behavior, and why the waiver applies.
+
+For text LLMs, treat `meta_ifeval` and `meta_gpqa_cot` as mandatory quality gates unless a current linked issue proves the correct canonical implementation fails the same eval in the same way. These failures usually indicate a real model or serving bug, such as stale token/position feedback, async decode reset corruption, sampling/seed handling, chat-template mismatch, or prefill/decode mode-switch corruption. Use `$autofix` and rerun the affected evals before accepting the stage.
+
+LongBench and other long-context rows may have legitimate release-harness issues, but they still need row-specific evidence. For example, a current issue may waive `longbench_code_e` or `longbench_fewshot_e` for one model because the canonical release path is using the wrong chat-template setting. Do not generalize that waiver to unrelated eval rows or models.
+
+The final status must say one of:
+
+- `release-readiness-pass`: all required rows passed or have row-specific issue waivers;
+- `release-workflow-pass/readiness-fail`: the release workflow ran, but one or more required rows failed without a valid waiver;
+- `release-workflow-fail`: the release workflow itself did not complete.
+
 ## Report And Copy-Back
 
 The release workflow writes the final customer markdown under:
@@ -244,8 +266,10 @@ Done means:
 - No copied final report or run spec identifies the evaluated implementation as stock `models/tt_transformers`, `models/demos`, or another packaged implementation for the same HF model.
 - The copied run spec, server launch, and report data preserve the supported context from `doc/context_contract.json`.
 - Any failing release tests or API conformance rows were either fixed with `$autofix` and rerun, or explicitly classified as non-test readiness gaps with evidence.
+- Any failed accuracy, benchmark target, API conformance, or incomparable metric row is classified as `fixed`, `issue-waived`, or `readiness-fail`. A `readiness-fail` means the stage is not clean-pass.
+- `meta_ifeval` and `meta_gpqa_cot` pass for text LLMs, or each failure has a current linked issue proving the correct canonical implementation fails the same eval in the same way.
 - Final release markdown is copied under `models/autoports/<model>/doc/tti_release/`.
-- `RUN_NOTES.md` records the exact physical host, repo tag, Docker image/version, command, env variables that mattered, reset/retry actions, copied artifacts, and residual readiness gaps.
-- The report is skimmed and the README/RUN_NOTES call out any failing accuracy, benchmark target, or API conformance checks.
+- `RUN_NOTES.md` records the exact physical host, repo tag, Docker image/version, command, env variables that mattered, reset/retry actions, copied artifacts, release-readiness status, failed rows, and waiver issue links where applicable.
+- The report is skimmed and the README/RUN_NOTES call out any failing accuracy, benchmark target, or API conformance checks with the classification above.
 - The physical host has no leftover `tt-inference-server` Docker container from this run and no leftover release tmux session.
 - The final response names the release report path and whether a Pushover or other requested notification was sent.
