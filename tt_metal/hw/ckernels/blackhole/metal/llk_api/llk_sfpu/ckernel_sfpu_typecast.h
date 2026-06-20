@@ -637,7 +637,7 @@ inline void init_typecast_fp32_to_uint8() {
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint_to_uint8() {
     sfpi::vConstIntPrgm0 = 0xFF;
-    sfpi::vConstIntPrgm1 = 0x0000FFFF;
+    sfpi::vConstIntPrgm1 = UINT16_LOW_MASK;
 }
 
 }  // namespace sfpu
