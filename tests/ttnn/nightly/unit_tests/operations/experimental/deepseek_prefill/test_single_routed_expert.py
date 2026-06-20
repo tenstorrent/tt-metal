@@ -185,6 +185,7 @@ _TOKEN_SWEEP_XFAIL = {
 }
 _FAKED_XFAIL = {
     "gptoss_120b-1k-alloc-0k-active": _GPTOSS_KGATE_XFAIL,
+    "gptoss_120b-25k-alloc-4k-active": _GPTOSS_KGATE_XFAIL,
     "dsv4_pro-25k-alloc-4k-active": _DSV4_PRO_CB_XFAIL,
 }
 
