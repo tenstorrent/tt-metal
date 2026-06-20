@@ -4,15 +4,11 @@
 
 #pragma once
 
-// Compatibility helpers for working with CircularBuffer and
-// DataflowBuffer behind a uniform interface in compute helpers.
-//
-// CircularBuffer exposes get_cb_id() (uint32_t); DataflowBuffer exposes
-// get_id() (uint16_t). The buf_id() overload set lets generic helper code
-// grab the integer ID for legacy LLK calls regardless of which buffer type
-// the caller constructed. Sync methods (reserve_back / push_back / wait_front
-// / pop_front) already share names across both classes, so no wrapper needed
-// for those.
+// Uniform integer-ID access for CircularBuffer and DataflowBuffer in generic compute
+// helpers. CircularBuffer exposes get_cb_id(); DataflowBuffer exposes get_id(); the
+// buf_id() overloads return the ID for legacy LLK calls regardless of buffer type. The
+// sync methods (reserve_back / push_back / wait_front / pop_front) already share names
+// across both, so they need no wrapper.
 
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_buffer.h"
