@@ -179,8 +179,10 @@
     export MESH_DEVICE=P150x8
     # Full 36-layer validation vs HF reference: reproduces the documented PCC.
     # Prefill ISL sweep (base 5-tok + 128); teacher-forced multi-step decode.
-    TT_LOGGER_LEVEL=Error pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -k "base or 128"
-    TT_LOGGER_LEVEL=Error pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_pcc.py
+    # --timeout=0 disables the 300s per-test pytest-timeout: the 119B HF reference
+    # build alone takes ~4 min, so the default cap kills the test mid-build.
+    TT_LOGGER_LEVEL=Error pytest models/experimental/mistral_small_4_119b/tests/test_text_prefill_pcc.py -k "base or 128" --timeout=0
+    TT_LOGGER_LEVEL=Error pytest models/experimental/mistral_small_4_119b/tests/test_text_decode_pcc.py --timeout=0
   skus:
     bh_loudbox:
       timeout: 1200
