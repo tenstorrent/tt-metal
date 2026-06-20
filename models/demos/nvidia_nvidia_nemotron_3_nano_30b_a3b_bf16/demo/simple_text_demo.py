@@ -245,7 +245,7 @@ def run_demo(
                 break
             tok_t = torch.tensor([[next_tok]], dtype=torch.int64)  # [1, 1]
             pos_t = torch.tensor([isl + step], dtype=torch.int64)  # [1]
-            logits_t = gen.decode_forward(tok_t, current_pos=pos_t)  # [1, 1, vocab]
+            logits_t, _ = gen.decode_forward(tok_t, current_pos=pos_t)  # ([1, 1, vocab], None)
             next_tok = int(logits_t[0, 0].argmax())
             generated.append(next_tok)
             if not quiet and step < 3:
