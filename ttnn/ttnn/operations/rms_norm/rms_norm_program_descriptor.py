@@ -697,13 +697,23 @@ def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_dtype, fp3
     grows ~O(K) (each of the K cores mcasts its partial and the combine sums K tiles),
     while the per-core reduce shrinks ~O(Wt/K). Total device time ≈ Wt/K + c·K, so
     "maximize K" is the WORST choice — measured on (1,1,32,8192) Wt=256, Regime B is
-    K=16→33.9us vs K=64→109.8us (3.2x), and (1,1,32,16384) Wt=512 is K=16→48us vs
-    K=64→116us. We therefore pick the K that MINIMIZES the cost proxy (Wt//K + K)
-    among the qualifying candidates (tie-break: smaller K = less gather). This lands
-    K≈16 for Wt=256/512 (matching the measured optima) and adapts up (~√Wt) for wider
-    rows. The OOM floor still constrains the minimum K from below (a shard must fit
-    L1), and num_row_groups*K<=grid bounds it from above. _FORCE_K (perf tests only)
-    overrides the choice to sweep K."""
+    K=16→33.9us vs K=64→109.8us (3.2x). We pick the K that MINIMIZES a measured cost
+    proxy among the qualifying candidates (tie-break: smaller K). The OOM floor
+    constrains the minimum K from below (a shard must fit L1), and num_row_groups*K<=grid
+    bounds it from above. _FORCE_K (perf tests only) overrides the choice to sweep K.
+
+    Refinement 9 (Part C): re-tuned proxy for the root-relay transport (Part A). The old
+    proxy (Wt//K + K) modeled the baseline mcast all-gather's ~O(K) cost with a linear +K
+    transport penalty. Root-relay collapses transport to ~O(1) phases, so (a) the per-core
+    work (Wt//K) is now the heavier term — bigger K (more cores, smaller shards) is more
+    attractive — and (b) the residual transport/NoC-contention scales with the TOTAL grid
+    cores used (num_row_groups*K), NOT K alone (a 2-row-group shape at K that saturates the
+    grid pays more than a 1-row-group shape at the same K). The new proxy
+    `2.5*(Wt//K) + num_row_groups*K` (integer-scaled `5*(Wt//K) + 2*num_row_groups*K`) was
+    fit to the measured K optima under root-relay across Wt∈{64,128,256,384,512,1024} and
+    1- vs 2-row-group shapes — it matches every measured optimum (e.g. it lifts Wt=512
+    from K=16→K=32, a measured 37.1→30.5us / 18% win, while keeping the 2-row-group
+    Wt=384 at K=16 where K=32 would saturate the grid and regress). See changelog R9."""
     gx = grid.x
     inter = _intermediate_dtype(input_dtype, fp32_acc)
 
@@ -721,9 +731,11 @@ def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_dtype, fp3
     for K in range(gx, total_cores + 1, gx):
         if not _qualifies(K):
             continue
-        cost = (Wt // K) + K  # ≈ per-core reduce work + all-gather cost
+        # Re-tuned root-relay proxy (Refinement 9 Part C): 2.5*(per-core work) + (total grid
+        # cores used). Integer-scaled by 2 to avoid floats; ranking is preserved.
+        cost = 5 * (Wt // K) + 2 * num_row_groups * K
         # Strictly-less keeps the SMALLEST K on ties (loop ascends), favouring less
-        # mcast/gather overhead at equal proxy cost.
+        # transport/contention at equal proxy cost.
         if best_cost is None or cost < best_cost:
             best, best_cost = K, cost
     return best
