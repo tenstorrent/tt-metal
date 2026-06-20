@@ -1025,17 +1025,18 @@
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss (1x1 mesh)"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFER-DESIGN-GAP: co-compiled with tilize_writer (same value-carrying-flag family). Its own data broadcasts (per-expert counts, total_chunks) target MULTIPLE distinct rectangles (tilize / matmul / all-worker bounding boxes) with RUNTIME num_dests (tilize_bounding_box_num_cores-1, matmul_bounding_box_num_cores, all_worker_cores_bounding_box_num_cores-1, lines 795-857). v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is compile-time + single rect per Pipe; runtime multi-rect counts inexpressible (same gap as gn_v2). Companion to the writer's value-carrying flag. Needs helper change (out of scope). [coverage note: WH single-card test also requires grid>=7x10 (70 cores); a 64-core n150 8x8 grid would pytest.skip.]",
    "flags": [
-    "tier:2d"
+    "tier:2d",
+    "design-gap"
    ]
   },
   {
@@ -1043,17 +1044,18 @@
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFER-DESIGN-GAP: VALUE-CARRYING FLAG. matmul_chunk_ready_semaphore broadcasts a MONOTONE running value via noc_semaphore_set(addr,set_value)+set_multicast (set_value=1 then set_value++ per chunk, lines 408/694-702); receivers noc_semaphore_wait(addr,value). matmul_chunk_available broadcasts an ACCUMULATED runtime value (wait_value += num_matmul_cores then set_multicast, lines 513-524). Neither maps to v7 Flag (fixed VALID/INVALID) nor Counter (inc+1/wait_min). Plus multiple distinct mcast rects with RUNTIME num_dests (num_matmul_cores etc.). Two design gaps (arbitrary-value set_multicast + runtime count). Needs helper change (out of scope).",
    "flags": [
-    "tier:2d"
+    "tier:2d",
+    "design-gap"
    ]
   },
   {
