@@ -83,6 +83,12 @@ Return `more-work-needed` when evidence shows one of these:
 - logs or code show a plausible bug in a stage-critical subsystem, such as
   cache ownership, trace replay, token feedback, sampling, precision policy,
   page-table handling, or model output correctness;
+- a release or serving stage has failed accuracy, API conformance, benchmark
+  target, or missing/incomparable metric rows that are only disclosed, not
+  fixed or supported by a row-specific current issue waiver;
+- a text LLM release has failed `meta_ifeval` or `meta_gpqa_cot` without a
+  current linked issue proving the correct canonical implementation fails the
+  same eval in the same way;
 - the stage lowers advertised model capability, such as context length, eval
   length, benchmark length, served `max_model_len`, image resolution, timestep
   schedule, cache/state size, or another model-specific contract item, without
@@ -139,6 +145,19 @@ For generation or serving stages, also inspect:
 - capability-contract evidence: for nonstandard or non-LLM models, the
   model-specific equivalent of context length, cache/state semantics, mode
   switches, and advertised input/output limits.
+
+For release stages, also inspect:
+
+- the final release markdown and report data JSON, not only `RUN_NOTES.md`;
+- every failed accuracy, API conformance, benchmark target, and
+  missing/incomparable metric row;
+- waiver evidence for any failed row claimed to be non-blocking. A valid waiver
+  names the row, links a current issue or release note, and shows the correct
+  canonical implementation or harness target fails for the same non-autoport
+  reason. Disclosure alone is not a waiver;
+- mandatory text-LLM quality gates such as `meta_ifeval` and `meta_gpqa_cot`.
+  Treat these as required work unless a current linked issue proves the correct
+  canonical implementation fails the same eval in the same way.
 
 For optimization stages, also inspect:
 
