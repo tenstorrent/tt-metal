@@ -47,7 +47,8 @@ void kernel_main() {
     // the non-welford gn_v2 receiver the GN naming is flipped vs matmul: reduce_sender_sem is the S->R
     // data-ready FLAG (cleared+waited here, the ReceiverPipe's DATA_READY_SEM_ID), reduce_receiver_sem
     // is the R->S consumed COUNTER (the CONSUMED_SEM_ID). The sender coords go to receive().
-    dataflow_kernel_lib::ReceiverPipe<reduce_sender_semaphore_id, reduce_receiver_semaphore_id> reduce_pipe(noc);
+    dataflow_kernel_lib::ReceiverPipe<reduce_sender_semaphore_id, /*PRE_HANDSHAKE=*/true, reduce_receiver_semaphore_id>
+        reduce_pipe(noc);
 
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex_global(cb_ex_global_id);
