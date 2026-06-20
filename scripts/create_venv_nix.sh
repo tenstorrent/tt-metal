@@ -20,9 +20,6 @@ OPTIONS:
     --force               Overwrite existing virtual environment without prompting.
                           By default, warns and prompts for confirmation if the
                           target directory exists and is not empty.
-    --bundle-python       Deep-copy the Python interpreter into the venv instead of
-                          using symlinks. This makes the venv fully self-contained
-                          and portable, at the cost of increased disk space.
     --skip-compat-check   Skip the package compatibility check (uv pip check).
     --help, -h            Show this help message and exit
 
@@ -54,7 +51,6 @@ EOF
 # Variables to track argument-provided values (take precedence over env vars)
 ARG_ENV_DIR=""
 FORCE_OVERWRITE="false"
-BUNDLE_PYTHON="false"
 SKIP_COMPAT_CHECK="false"
 
 # Parse command-line arguments
@@ -72,10 +68,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --force)
             FORCE_OVERWRITE="true"
-            shift
-            ;;
-        --bundle-python)
-            BUNDLE_PYTHON="true"
             shift
             ;;
         --skip-compat-check)
@@ -281,11 +273,6 @@ if [ "$(git -C "$ROOT_DIR" rev-parse --git-dir)" = "$(git -C "$ROOT_DIR" rev-par
     # hooks a second time, causing every `git commit` to run pre-commit twice.
 else
     echo "In worktree: not generating git hooks"
-fi
-
-# Bundle Python interpreter into the venv if requested
-if [[ "$BUNDLE_PYTHON" == "true" ]]; then
-    "${ROOT_DIR}/scripts/bundle_python_into_venv.sh" "$PYTHON_ENV_DIR" --force
 fi
 
 # Compile bytecode at the end to take advantage of parallelism
