@@ -211,10 +211,10 @@
    ],
    "coverage_confidence": "high",
    "last_verified": "2026-06-20",
-   "census_note": "DEFERRED: single-count SenderPipe cannot represent 1D HS sender (mcast=total_num_cores-1 != ack=total_active-1; A/B hang flip confirms). Helper design limitation (num_dests off-by-one).",
+   "census_note": "DESIGN-GAP: split mcast-dest count (total_num_cores-1, full rect incl. noop) vs consumer-ack count (total_active-1); single compile-time NUM_ACTIVE_RECEIVER_CORES cannot serve both. A/B hang-site flip confirmed on device.",
    "flags": [
     "tier:1",
-    "coverage-gap"
+    "design-gap"
    ]
   },
   {
@@ -583,7 +583,8 @@
    "last_verified": "2026-06-20",
    "census_note": "DEFERRED: CHAIN/relay topology (helper design gap). Forward path uses cross-id relay_multicast(valid_sem -> receiver_sem, src!=dst); each link is simultaneously receiver+sender. STAR SenderPipe asserts src==dst, structurally cannot relay. = chain_link.hpp reference pattern, T2 CHAIN=GAP.",
    "flags": [
-    "tier:2c"
+    "tier:2c",
+    "design-gap"
    ]
   },
   {
@@ -619,7 +620,8 @@
    "last_verified": "2026-06-20",
    "census_note": "DEFERRED: runtime recipient count + runtime role. read_k STAR is otherwise expressible (vertical-col mcast, sem set_multicast src==dst, no pre-handshake), BUT num_dests is a pure runtime arg (helper NUM_ACTIVE_RECEIVER_CORES is compile-time only) and do_mcast selects sender-vs-receiver per-core at runtime under one binary (helper Sender/ReceiverPipe are distinct compile-time-chosen types). Two design gaps.",
    "flags": [
-    "tier:2c"
+    "tier:2c",
+    "design-gap"
    ]
   },
   {
