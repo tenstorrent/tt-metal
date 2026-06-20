@@ -651,14 +651,14 @@
    "op_family": "data_movement + reduction",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
-   "migrated_api_version": null,
-   "commit": null,
+   "status": "migrated",
+   "migrated_api_version": 7,
+   "commit": "a362b90343a",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/reduction/test_topk.py::test_topk (W=8192 multicore)"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
+   "last_verified": "2026-06-20",
    "census_note": "unicast scatter + up(counter)",
    "flags": [
     "tier:2b"
