@@ -51,7 +51,7 @@
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
 // changes.
-#define MCAST_PIPE_API_VERSION 6
+#define MCAST_PIPE_API_VERSION 7
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -69,6 +69,12 @@ namespace dataflow_kernel_lib {
 //     the sender would otherwise stall each round waiting for the receiver to reset the flag.
 // -----------------------------------------------------------------------------
 enum class DataReadySignal { Flag, Counter };
+
+// Sentinel for the CONSUMER_READY_SEM_ID template param: "no consumer-ready semaphore". The default
+// when PRE_HANDSHAKE is false (the receiver→sender readiness ack is not used), so the no-handshake
+// caller omits the arg entirely. A real CTA semaphore id is small and dense, so this reserved value is
+// never a live id; a `static_assert` rejects PRE_HANDSHAKE=true paired with this sentinel.
+static constexpr uint32_t UNUSED_SEM_ID = 0xFFFFFFFFu;
 
 // -----------------------------------------------------------------------------
 // A multicast destination rectangle, in NoC (virtual) coordinates. PURE GEOMETRY: the broadcast
@@ -119,14 +125,16 @@ private:
 // SenderPipe — the broadcasting face of the channel.
 // =============================================================================
 // All compile-time-known, core-uniform values are TEMPLATE params:
-//   * NOC_ID                     — compile-time NoC id; must match the `noc` arg. Folds my_x/my_y and
-//                                  the rect's routing corners to constants.
+//   * NOC_ID                     — compile-time NoC id; must match the `noc` arg (ctor ASSERTs this).
+//                                  Folds my_x/my_y and the rect's routing corners to constants.
 //   * DATA_READY_SEM_ID          — sender->receiver "data is ready" flag id.
-//   * CONSUMER_READY_SEM_ID      — receiver->sender "my dest is free" counter id (used iff PRE_HANDSHAKE).
 //   * NUM_ACTIVE_RECEIVER_CORES  — the RECIPIENT count (see header). The Pipe derives the ack count and
 //                                  mcast_dests from it.
-//   * DATA_READY_SIGNAL          — Flag (default) | Counter (use-case knob).
-//   * PRE_HANDSHAKE              — gate each send on receivers having drained (use-case knob).
+//   * PRE_HANDSHAKE              — gate each send on receivers having drained (use-case knob, default).
+//   * CONSUMER_READY_SEM_ID      — receiver->sender "my dest is free" counter id. Used ONLY when
+//                                  PRE_HANDSHAKE; defaults to UNUSED_SEM_ID so the no-handshake caller
+//                                  omits it. A static_assert rejects PRE_HANDSHAKE without a real id.
+//   * DATA_READY_SIGNAL          — Flag (default) | Counter (use-case knob); the rarest knob, last.
 // The ONLY runtime ctor input is the `McastRect` — its virtual coords vary per sender core under one
 // compiled binary (e.g. each row-sender in a 2D matmul targets a different row), so it is set per-core
 // via runtime args. `send()`/`send_signal()` payload + the receiver's sender coords are runtime for
@@ -134,15 +142,24 @@ private:
 template <
     uint8_t NOC_ID,
     uint32_t DATA_READY_SEM_ID,
-    uint32_t CONSUMER_READY_SEM_ID,
     uint32_t NUM_ACTIVE_RECEIVER_CORES,
-    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
-    bool PRE_HANDSHAKE = true>
+    bool PRE_HANDSHAKE = true,
+    uint32_t CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag>
 class SenderPipe {
+    static_assert(
+        !PRE_HANDSHAKE || CONSUMER_READY_SEM_ID != UNUSED_SEM_ID,
+        "PRE_HANDSHAKE=true requires a real CONSUMER_READY_SEM_ID (the receiver->sender readiness ack). "
+        "Pass it, or set PRE_HANDSHAKE=false for a fire-and-forget broadcast.");
+
 public:
     // `dest` — receiver rectangle (geometry only). The only runtime ctor arg (see above).
     explicit SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest) :
         noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
+        // Catch a NoC mismatch early (only meaningful under --dev): the precomputed routing corners and
+        // my_x/my_y are baked for NOC_ID, so a `noc` running a different NoC would mcast to the wrong
+        // corners / mis-test containment.
+        ASSERT(noc_.get_noc_id() == NOC_ID);
         // `consumer_ready` is NOT kernel-initialized: remote receivers increment it with no
         // happens-before relative to this ctor, so a ctor set(0) would clobber an early ack and hang.
         // Its initial 0 comes from host `CreateSemaphore(..., 0)`.
@@ -155,6 +172,10 @@ public:
         if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
             data_ready_.set(VALID);
         }
+        // Whether this sender's own core lies in the receiver rect is fixed at construction (my coords
+        // and the rect are both constant now), so compute it ONCE here rather than per send().
+        in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
+                   my_y[NOC_ID] <= dest_.yhi();
     }
 
     // ===== DATA channel (a block + a ready signal) =====
@@ -167,7 +188,7 @@ public:
         // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
         // a local copy (a loopback to just self may hang); else nothing.
         if (NUM_ACTIVE_RECEIVER_CORES == 0) {
-            if (sender_in_rect_()) {
+            if (in_rect_) {
                 local_copy_(src_l1, dst_l1, size);
             }
             return;
@@ -177,8 +198,9 @@ public:
             consumer_ready_.set(0);
         }
         // Loopback iff the sender is in the box AND lands its own copy somewhere other than its source
-        // (src == dst means the copy is already in place; never self-overwrite in place).
-        const bool loopback = sender_in_rect_() && src_l1 != dst_l1;
+        // (src == dst means the copy is already in place; never self-overwrite in place). The
+        // in-box test is precomputed in the ctor; only the src/dst aliasing varies per send.
+        const bool loopback = in_rect_ && src_l1 != dst_l1;
         // NUM_ACTIVE_RECEIVER_CORES is the recipient count (= EXCLUDE-source num_dests = ack count). The
         // loopback path adds +1 for the sender's own self-copy, which never acks, so the consumer_ready
         // wait above stays on NUM_ACTIVE_RECEIVER_CORES.
@@ -200,13 +222,6 @@ public:
     }
 
 private:
-    // ---- is the sender's own core inside the receiver rect? (compare in NOC_ID's space) ----
-    bool sender_in_rect_() const {
-        const uint32_t mx = my_x[NOC_ID];
-        const uint32_t my = my_y[NOC_ID];
-        return mx >= dest_.xlo() && mx <= dest_.xhi() && my >= dest_.ylo() && my <= dest_.yhi();
-    }
-
     // ---- data multicast via the Noc object ----
     void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
         const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
@@ -244,13 +259,11 @@ private:
 
     // ---- post-send fence ----
     void fence_() {
+        noc_.async_writes_flushed();  // SENT — source L1 safe to reuse. The signal proves arrival.
         if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-            // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that must be
-            // drained, so a write flush is not sufficient — an atomic barrier is forced.
-            noc_.async_writes_flushed();
+            // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that the flush
+            // above does not drain, so the Counter path additionally waits the atomic barrier.
             noc_.async_atomic_barrier();
-        } else {
-            noc_.async_writes_flushed();  // SENT — source L1 safe to reuse. The signal proves arrival.
         }
     }
 
@@ -275,6 +288,7 @@ private:
     McastRect<NOC_ID> dest_;
     Semaphore<> data_ready_;
     Semaphore<> consumer_ready_;
+    bool in_rect_;  // is this sender's own core inside the receiver rect? computed once in the ctor
 };
 
 // =============================================================================
@@ -282,17 +296,26 @@ private:
 // =============================================================================
 // Sem ids + use-case knobs are TEMPLATE params (compile-time, core-uniform — same as SenderPipe).
 //   * DATA_READY_SEM_ID      — sender->receiver "data is ready" flag id (this core waits on it).
+//   * PRE_HANDSHAKE          — ack the sender before waiting (use-case knob, default); must match the
+//                              SenderPipe's.
 //   * CONSUMER_READY_SEM_ID  — receiver->sender "my dest is free" counter id (this core increments it
-//                              on the sender remotely; the id supplies the shared L1 offset).
-//   * DATA_READY_SIGNAL / PRE_HANDSHAKE — must match the SenderPipe's.
+//                              on the sender remotely; the id supplies the shared L1 offset). Used ONLY
+//                              when PRE_HANDSHAKE; defaults to UNUSED_SEM_ID so the no-handshake caller
+//                              omits it. A static_assert rejects PRE_HANDSHAKE without a real id.
+//   * DATA_READY_SIGNAL      — must match the SenderPipe's; the rarest knob, last.
 // The only runtime input is the sender's coords, passed to receive() (they vary per receiver in 2D and
 // rotate per block when the sender role rotates — must be runtime).
 template <
     uint32_t DATA_READY_SEM_ID,
-    uint32_t CONSUMER_READY_SEM_ID,
-    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag,
-    bool PRE_HANDSHAKE = true>
+    bool PRE_HANDSHAKE = true,
+    uint32_t CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
+    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag>
 class ReceiverPipe {
+    static_assert(
+        !PRE_HANDSHAKE || CONSUMER_READY_SEM_ID != UNUSED_SEM_ID,
+        "PRE_HANDSHAKE=true requires a real CONSUMER_READY_SEM_ID (the receiver->sender readiness ack). "
+        "Pass it, or set PRE_HANDSHAKE=false to wait the data-ready signal without acking.");
+
 public:
     explicit ReceiverPipe(const Noc& noc) :
         noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {

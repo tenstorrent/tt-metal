@@ -7,6 +7,63 @@ against feasibility.)
 
 ---
 
+## Round-8 re-entry addendum (2026-06-20) — consumer-sem optionality + arg reorder (contract-only)
+
+> DERIVED FROM: feedback-3.txt items 1–4. Re-entry at **Step D** (leftmost — item 2 is a signature /
+> param-order / optionality change). Items 1, 3, 4 are **Step G** (implementation: add assert,
+> ctor-precompute `sender_in_rect`, hoist the flush) and touch no contract. Authoritative API record =
+> `changelog.md` (Round 8). This addendum revises ONE contract point; no pattern coverage changes.
+
+**Claim (item 2):** when `PRE_HANDSHAKE=false`, `CONSUMER_READY_SEM_ID` is constructed but never waited
+on (`SenderPipe::send` only `wait`s it under `if constexpr (PRE_HANDSHAKE)`; `ReceiverPipe::receive`
+only `up`s it under the same guard). Two **in-scope** call sites prove the dead arg: ln-sharded
+`phase1_pipe` (`reader_mcast_sender_unary_sharded_ln.cpp`) and conv-WS `act_mcast_pipe`
+(`activation_reader_width_sharded.cpp`) both pass `PRE_HANDSHAKE=false` and are forced to supply a
+consumer sem the Pipe ignores. (Invariant 5 satisfied — the `false` arm has real users.)
+
+**Decision (user pick — keep the named knob, make the sem optional, push the rarest knob last):**
+`CONSUMER_READY_SEM_ID` becomes a **trailing param defaulted to an `UNUSED_SEM_ID` sentinel**, guarded
+by `static_assert(!PRE_HANDSHAKE || CONSUMER_READY_SEM_ID != UNUSED_SEM_ID)`. `PRE_HANDSHAKE` stays an
+explicit bool and moves **before** the sem (gate-then-resource). `DATA_READY_SIGNAL` moves to **last**
+(its `Counter` arm is the rarest, most-defaulted knob).
+
+**Revised contract — the only change to the draft:**
+
+```cpp
+// UNUSED_SEM_ID = a reserved sentinel id (no real CTA sem uses it) meaning "no consumer sem".
+template <
+    uint8_t  NOC_ID,                                       // required
+    uint32_t DATA_READY_SEM_ID,                            // required
+    uint32_t NUM_ACTIVE_RECEIVER_CORES,                    // required
+    bool     PRE_HANDSHAKE       = true,                   // gate
+    uint32_t CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,        // required IFF PRE_HANDSHAKE (static_assert)
+    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag>   // rarest knob, last
+class SenderPipe;   // static_assert(!PRE_HANDSHAKE || CONSUMER_READY_SEM_ID != UNUSED_SEM_ID, ...)
+
+template <
+    uint32_t DATA_READY_SEM_ID,                            // required
+    bool     PRE_HANDSHAKE       = true,                   // gate
+    uint32_t CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,        // required IFF PRE_HANDSHAKE (static_assert)
+    DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag>   // rarest knob, last
+class ReceiverPipe;   // same static_assert
+```
+
+Call-site forms after the reorder:
+- handshake sender (matmul/conv-weights): `SenderPipe<NOC, DR, NUM, true, CR>`
+- no-handshake sender (ln phase1 / conv-WS): `SenderPipe<NOC, DR, NUM, false>`   ← drops the dead sem
+- counter sender: `SenderPipe<NOC, DR, NUM, true, CR, DataReadySignal::Counter>`
+- handshake receiver: `ReceiverPipe<DR, true, CR>`   ·   no-handshake receiver: `ReceiverPipe<DR, false>`
+
+Side effect (improvement): the all-default form `SenderPipe<NOC, DR, NUM>` now **fails the
+static_assert** (`PRE_HANDSHAKE=true` + no sem) — a control-only sender like topk (`send_signal`, never
+gates) must declare `PRE_HANDSHAKE=false` honestly, which is more correct than its current default-true.
+
+**Verdict: FEASIBLE WITH REVISION (contract-only).** No pattern coverage changes; no style fork touched.
+Caller-facing (reordered + optional arg) → `MCAST_PIPE_API_VERSION` bump (6→7). Step E is a re-confirm
+no-op (no device). Items 1/3/4 are internal-only (no contract change, no bump on their own).
+
+---
+
 ## Round-6 re-entry addendum (2026-06-20) — flag-set lifecycle + arg order (contract-only)
 
 > DERIVED FROM: feedback.txt items 1, 2, 5. Re-entry at **Step D** (leftmost — signature + param

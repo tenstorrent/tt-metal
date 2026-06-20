@@ -46,7 +46,7 @@ void kernel_main() {
 
     // The receiver takes no rectangle / count — just the noc; the sem ids are template params.
     // The sender's coords (target of the consumer-ready ack) are passed to receive().
-    ReceiverPipe<data_ready_sem_id, consumer_ready_sem_id, STG, pre_handshake != 0> pipe(noc);
+    ReceiverPipe<data_ready_sem_id, pre_handshake != 0, consumer_ready_sem_id, STG> pipe(noc);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.receive(sender_x, sender_y);

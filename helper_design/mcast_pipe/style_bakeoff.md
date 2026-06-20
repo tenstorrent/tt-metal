@@ -6,6 +6,16 @@
 The bake-off resolves the four style forks the API draft (Step ★) left open, by measurement, not
 argument: **coverage screen first (cheap, correctness/hang), perf+L1 only on survivors.**
 
+> **Round-8 re-entry (2026-06-20) — E re-confirm NO-OP, no device.** feedback-3.txt item 2 (make
+> `CONSUMER_READY_SEM_ID` a trailing sentinel-defaulted arg so the no-handshake caller omits it;
+> reorder so `PRE_HANDSHAKE` precedes the sem and `DATA_READY_SIGNAL` is last) is a pure signature /
+> optionality change. It touches NONE of the four style forks (F1 fence / F2 staging / F3 loopback /
+> F4 linking), adds no variant, adds no matrix cell — the same `wait`/`up` happen under the same
+> `if constexpr (PRE_HANDSHAKE)` guard, just selected by a differently-spelled template list. Items
+> 1/3/4 are implementation-only (NoC-mismatch assert, ctor-precompute `sender_in_rect`, flush hoist)
+> and equally fork-neutral. All coverage maps and ns/L1 numbers below stand verbatim. No re-measure,
+> no re-decide.
+>
 > **Round-6 re-entry (2026-06-20) — E re-confirm NO-OP, no device.** feedback.txt items 1,2,5
 > (flag-set lifecycle: ctor-set-once VALID + drop `INITIAL_FLAG_VALUE` + no per-send local set;
 > reorder template args) touch NONE of the four style forks. `set_multicast` always broadcast the

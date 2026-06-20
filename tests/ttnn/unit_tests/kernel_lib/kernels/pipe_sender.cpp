@@ -64,9 +64,10 @@ void kernel_main() {
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
 
-    // Compile-time, core-uniform values (noc id + sem ids + count + signal/pre_handshake) are template
-    // params; the only runtime ctor input is the receiver rectangle.
-    SenderPipe<noc_index, data_ready_sem_id, consumer_ready_sem_id, num_active_cores, STG, pre_handshake != 0> pipe(
+    // Compile-time, core-uniform values (noc id + sem ids + count + pre_handshake/signal) are template
+    // params; the only runtime ctor input is the receiver rectangle. Arg order: NOC_ID, data-ready id,
+    // recipient count, PRE_HANDSHAKE gate, consumer-ready id (used iff PRE_HANDSHAKE), then the signal.
+    SenderPipe<noc_index, data_ready_sem_id, num_active_cores, pre_handshake != 0, consumer_ready_sem_id, STG> pipe(
         noc, McastRect<>{x0, y0, x1, y1});
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {

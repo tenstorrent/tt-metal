@@ -60,16 +60,10 @@ void kernel_main() {
 
     // Sender is IN the rect -> the Pipe infers loopback (hardware writes the payload to self too). No
     // pre-handshake (fresh single-use dest here). num_active_cores is the recipient count; when it == 0
-    // the degenerate guard collapses the self-only loopback to a local copy. CONSUMER_READY_SEM_ID is
-    // unused (PRE_HANDSHAKE=false) -> reuse data_ready_sem_id.
-    SenderPipe<
-        noc_index,
-        data_ready_sem_id,
-        /*CONSUMER_READY=*/data_ready_sem_id,
-        num_active_cores,
-        DataReadySignal::Flag,
-        /*PRE_HANDSHAKE=*/false>
-        pipe(noc, McastRect<>{x0, y0, x1, y1});
+    // the degenerate guard collapses the self-only loopback to a local copy. PRE_HANDSHAKE=false, so the
+    // consumer-ready id (and the Flag signal default) are omitted entirely.
+    SenderPipe<noc_index, data_ready_sem_id, num_active_cores, /*PRE_HANDSHAKE=*/false> pipe(
+        noc, McastRect<>{x0, y0, x1, y1});
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);

@@ -457,3 +457,65 @@ intentionally kept raw + documented.** All on BH p150a, single parametrization e
   (H12/INV12), `migration_audit/transformer_sdpa.md` (blocker #5), `api_feasibility.md` (Step ★
   Round-7 addendum + topology matrix), `proposed_helpers.md` (capability note), this changelog.
 - **Verification:** none — documentation-only round (no helper edit, no device).
+
+---
+
+## Round 8 — consumer-sem optionality + arg reorder + 3 implementation fixes (2026-06-20)
+
+- **Trigger:** `tune-dm-helper feedback-3.txt` — four claims: (1) add an `ASSERT` that `NOC_ID` matches
+  the `Noc` the `SenderPipe` runs on (and review for other needed asserts); (2) `CONSUMER_READY_SEM_ID`
+  shouldn't have to be passed when `PRE_HANDSHAKE=false` — reorder the args meaningfully; (3)
+  `sender_in_rect` shouldn't be recomputed per `send()` — compute it in the ctor; (4) hoist
+  `async_writes_flushed()` out of the `fence_()` `if constexpr` so the `else` disappears.
+- **Re-entry routing (batched, upstream-first):** item 2 → **Step D** (signature / param-order /
+  optionality = a contract change); items 1, 3, 4 → **Step G** (materialization invariants — enforce an
+  already-stated precondition, ctor-precompute, internal refactor; no contract change). Leftmost = D →
+  one forward pass **D → E → F → G**. No mooting, no conflicts (item 2 doesn't remove the subject of
+  1/3/4). **Step E was a re-confirm no-op** (item 2 touches no style fork and adds no matrix cell —
+  the same `wait`/`up` run under the same `if constexpr (PRE_HANDSHAKE)` guard) — **no device bake-off.**
+- **Item-2 design (user pick — keep the named knob, make the sem optional, push the rarest knob last):**
+  `CONSUMER_READY_SEM_ID` became a **trailing param defaulted to `UNUSED_SEM_ID`** (a reserved sentinel
+  `0xFFFFFFFF`), guarded by `static_assert(!PRE_HANDSHAKE || CONSUMER_READY_SEM_ID != UNUSED_SEM_ID)`.
+  `PRE_HANDSHAKE` moved **before** the sem (gate-then-resource); `DATA_READY_SIGNAL` moved to **last**
+  (its `Counter` arm is the rarest/most-defaulted knob). Confirmed in-scope (invariant 5): two migrated
+  call sites already use `PRE_HANDSHAKE=false` — ln-sharded `phase1_pipe`
+  (`reader_mcast_sender_unary_sharded_ln.cpp`) and conv-WS `act_mcast_pipe`
+  (`activation_reader_width_sharded.cpp`) — both were forced to pass a consumer sem the Pipe ignores.
+- **Decisions:**
+  - **D1 (item 2) — SenderPipe args** `<NOC_ID, DATA_READY_SEM_ID, NUM_ACTIVE_RECEIVER_CORES,
+    PRE_HANDSHAKE=true, CONSUMER_READY_SEM_ID=UNUSED_SEM_ID, DATA_READY_SIGNAL=Flag>`;
+    **ReceiverPipe args** `<DATA_READY_SEM_ID, PRE_HANDSHAKE=true, CONSUMER_READY_SEM_ID=UNUSED_SEM_ID,
+    DATA_READY_SIGNAL=Flag>`. Both carry the `static_assert`. Side effect (improvement): the all-default
+    `SenderPipe<NOC,DR,NUM>` now fails the assert, so a control-only sender (topk `send_signal`, which
+    never gates) must declare `PRE_HANDSHAKE=false` honestly.
+  - **G1 (item 1) — NoC-mismatch assert.** `ASSERT(noc_.get_noc_id() == NOC_ID)` in the SenderPipe ctor
+    (only meaningful under `--dev`; the routing corners + `my_x/my_y` are baked for `NOC_ID`). Reviewed
+    for other asserts: the `McastRect<NOC_ID>` ctor-arg type already forces rect/sender NoC agreement at
+    compile time, and the new `static_assert` covers the handshake/sem coupling — no further runtime
+    assert added.
+  - **G2 (item 3) — `sender_in_rect` precomputed.** The method `sender_in_rect_()` is deleted; the ctor
+    computes a `bool in_rect_` once (my coords + rect both fixed at construction). `send()` uses
+    `in_rect_ && src_l1 != dst_l1` (only the src/dst aliasing varies per send).
+  - **G3 (item 4) — flush hoisted.** `fence_()` now calls `async_writes_flushed()` unconditionally, then
+    adds `async_atomic_barrier()` only on the Counter path. The `else` is gone.
+- **API before (version 6):** `SenderPipe<NOC_ID, DATA_READY_SEM_ID, CONSUMER_READY_SEM_ID,
+  NUM_ACTIVE_RECEIVER_CORES, DataReadySignal=Flag, PRE_HANDSHAKE=true>`,
+  `ReceiverPipe<DATA_READY_SEM_ID, CONSUMER_READY_SEM_ID, DataReadySignal=Flag, PRE_HANDSHAKE=true>`.
+- **API after (version 7):** signatures in D1 above. `McastRect<NOC_ID=noc_index>`, `send`/`receive`/
+  `send_signal`/`receive_signal` bodies unchanged.
+- **`MCAST_PIPE_API_VERSION` 6 → 7** (caller-facing: reordered template args + the now-optional
+  consumer sem → every migrated SenderPipe/ReceiverPipe call site is rewritten). All Round-6 migrated
+  kernels are now **stale@v6**. (Items 1/3/4 are internal-only and would not bump on their own.)
+- **Artifacts touched:** `api_feasibility.md` (Round-8 addendum), `style_bakeoff.md` (E no-op note),
+  `proposed_helpers.md` (header), this changelog, `mcast_pipe.hpp` (materialized: version, sentinel,
+  both templates, both static_asserts, ctor assert + `in_rect_` precompute, `fence_` hoist, deleted
+  `sender_in_rect_()`), the 3 unit-test kernels (`pipe_sender`/`pipe_receiver`/`pipe_f3_sender`).
+- **Verification (BH p150a):** header-only + JIT kernel change (no `build_metal.sh` rebuild).
+  `test_mcast_pipe.py` **39/39 PASS** — `test_smoke` (compile gate, handshake sender), `test_coverage`
+  (flag+counter × rects × n_iters × payloads), `test_noc1_sender_corner_order`, `test_pre_handshake`
+  (CR-provided handshake arm), `test_f3_loopback` + `test_f3_degenerate` (no-handshake arm with CR
+  **omitted** — proves the new trailing-default path and the static_assert accepts it). No hangs. No
+  provisional dual-paths (none re-decided).
+- **Hand-off:** re-invoke `apply-dm-helper helper_design/mcast_pipe/` → Tier-0 remigrates the stale@v6
+  kernels to v7 first (positional template args shifted; the two `PRE_HANDSHAKE=false` sites can now
+  drop their dead consumer-sem arg), then resumes the pending backlog. No manual fleet re-run.

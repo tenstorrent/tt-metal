@@ -14,8 +14,13 @@
 > ctor sets the sender's local flag `VALID` once and `set_multicast` rebroadcasts it; the per-send
 > local set is gone), `HandshakeKind` → **`DataReadySignal`**, `CONSUMED_SEM_ID` →
 > **`CONSUMER_READY_SEM_ID`**, `send_signal` lost its `value` param, and the SenderPipe template args
-> were reordered (`NOC_ID` first, no default). API version **6**.
-> Authoritative running record: `changelog.md`.
+> were reordered (`NOC_ID` first, no default). **Round 8 (2026-06-20)** made `CONSUMER_READY_SEM_ID` a
+> trailing param defaulted to an `UNUSED_SEM_ID` sentinel (guarded by `static_assert(!PRE_HANDSHAKE ||
+> CONSUMER_READY_SEM_ID != UNUSED_SEM_ID)`) so the no-handshake caller omits it; `PRE_HANDSHAKE` now
+> precedes the sem (gate-then-resource) and `DATA_READY_SIGNAL` moved to last. Also folded in three
+> implementation-only fixes (no contract change): a `NOC_ID`-vs-`Noc` ctor `ASSERT`, `sender_in_rect`
+> precomputed in the ctor, and the post-send flush hoisted out of the `fence_()` `if constexpr`. API
+> version **7**. Authoritative running record: `changelog.md`.
 
 > **⚠ CAPABILITY GAP — TOPOLOGY (Round 7, 2026-06-20, feedback-2.txt).** The `Pipe` is a **STAR**
 > primitive: one sender → N pure receivers over a **single shared `data_ready` sem id**, broadcasting
