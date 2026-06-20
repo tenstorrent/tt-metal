@@ -506,7 +506,7 @@
    "role": "receiver",
    "tag": "refactor",
    "status": "migrated",
-   "migrated_api_version": 7,
+   "migrated_api_version": 8,
    "commit": "f348c649e02",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_layer_norm_sharded.py::test_layer_norm_sharded_single_stage"
