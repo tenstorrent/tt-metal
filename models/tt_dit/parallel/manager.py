@@ -374,14 +374,9 @@ class CCLManager:
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
-        # Clear all_gather persistent-buffer cache so the next vision encode gets
-        # freshly allocated DRAM buffers with clean fabric metadata. Reusing the
-        # same persistent buffers across requests leaves stale per-buffer
-        # synchronization state in the ETH fabric that the semaphore reset above
-        # cannot clear (it's below the Python semaphore layer), causing the
-        # video→video hang (all_gather_persistent_buffer TIMEOUT on the 2nd+ video).
-        self._ping_pong_buffer_cache = {k: v for k, v in self._ping_pong_buffer_cache.items() if k[0] != "ag"}
-        self._ping_pong_buffer_indices = {k: v for k, v in self._ping_pong_buffer_indices.items() if k[0] != "ag"}
+        # Reset all buffer ping-pong indices to 0 so they pair with the reset semaphores.
+        # Keep DRAM buffers at their existing addresses — evicting and reallocating gives
+        # different addresses which can confuse ETH fabric routing on the next request.
         for _k in self._ping_pong_buffer_indices:
             self._ping_pong_buffer_indices[_k] = 0
 
