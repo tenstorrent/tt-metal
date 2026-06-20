@@ -6,7 +6,7 @@ set -eo pipefail
 # Function to display help message
 show_help() {
     cat << 'EOF'
-Usage: create_venv.sh [OPTIONS]
+Usage: ./scripts/create_venv_nix.sh [OPTIONS]
 
 Create a Python virtual environment for tt-metal development using uv.
 Uses the Python interpreter provided by the Nix development shell, sets up the
@@ -31,16 +31,16 @@ ENVIRONMENT VARIABLES:
 
 EXAMPLES:
     # Use defaults
-    ./create_venv.sh
+    ./scripts/create_venv_nix.sh
 
     # Custom environment directory
-    ./create_venv.sh --env-dir /opt/venv
+    ./scripts/create_venv_nix.sh --env-dir /opt/venv
 
     # Nested directory (parent directories created automatically)
-    ./create_venv.sh --env-dir /opt/myproject/envs/dev
+    ./scripts/create_venv_nix.sh --env-dir /opt/myproject/envs/dev
 
     # Using environment variables
-    PYTHON_ENV_DIR=/opt/venv ./create_venv.sh
+    PYTHON_ENV_DIR=/opt/venv ./scripts/create_venv_nix.sh
 
 NOTE:
     If you encounter venv issues, running "uv pip install -e ." with the venv active
