@@ -418,15 +418,13 @@
       "role": "sender",
       "tag": "refactor",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "00fa71996414099e717a2d7baecaca46dcbd097e",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "C3 TWO-PHASE flag\u2192MONOTONE-counter streaming",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln.cpp",
