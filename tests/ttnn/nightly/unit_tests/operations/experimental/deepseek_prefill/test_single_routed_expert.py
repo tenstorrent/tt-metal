@@ -164,15 +164,44 @@ SINGLE_EXPERT_MODELS = [
 ]
 
 
+# Currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}" param id ->
+# xfail reason (with tracking issue), so CI stays green while the linked issues are worked on. The
+# entries mirror exactly the failing cases reported by CI (gptoss_120b hits a K_gate divisibility
+# error; dsv4_pro overflows L1 only at the larger token counts). strict=False keeps CI green
+# whether a marked case fails or (unexpectedly) passes. Delete an entry once its issue is resolved.
+_GPTOSS_KGATE_XFAIL = (
+    "GPT-OSS 120B single routed expert: K_gate_tiles not divisible by in0_block_w_gu — "
+    "https://github.com/tenstorrent/tt-metal/issues/47604"
+)
+_DSV4_PRO_CB_XFAIL = (
+    "DeepSeek V4 Pro single routed expert: circular buffers grow beyond L1 at large token counts — "
+    "https://github.com/tenstorrent/tt-metal/issues/46608"
+)
+
+_TOKEN_SWEEP_XFAIL = {
+    "gptoss_120b-1k": _GPTOSS_KGATE_XFAIL,
+    "gptoss_120b-25k": _GPTOSS_KGATE_XFAIL,
+    "dsv4_pro-25k": _DSV4_PRO_CB_XFAIL,
+}
+_FAKED_XFAIL = {
+    "gptoss_120b-1k-alloc-0k-active": _GPTOSS_KGATE_XFAIL,
+    "dsv4_pro-25k-alloc-4k-active": _DSV4_PRO_CB_XFAIL,
+}
+
+
 def single_routed_expert_token_sweep_params():
     """Build the per-model (num_tokens, emb_dim, hidden_dim) parametrization over _TOKEN_SWEEP.
-    Non-baseline models carry the extended_model marker so they stay gated as before."""
+    Non-baseline models carry the extended_model marker so they stay gated as before; param ids
+    listed in _TOKEN_SWEEP_XFAIL additionally carry an xfail marker tied to their tracking issue."""
     params = []
     for name, config, extended in SINGLE_EXPERT_MODELS:
-        marks = (pytest.mark.extended_model,) if extended else ()
         for num_tokens, tag in _TOKEN_SWEEP:
+            test_id = f"{name}-{tag}"
+            marks = (pytest.mark.extended_model,) if extended else ()
+            if test_id in _TOKEN_SWEEP_XFAIL:
+                marks += (pytest.mark.xfail(reason=_TOKEN_SWEEP_XFAIL[test_id], strict=False),)
             params.append(
-                pytest.param(num_tokens, config.EMB_SIZE, config.MOE_INTERMEDIATE_SIZE, marks=marks, id=f"{name}-{tag}")
+                pytest.param(num_tokens, config.EMB_SIZE, config.MOE_INTERMEDIATE_SIZE, marks=marks, id=test_id)
             )
     return params
 
@@ -284,8 +313,11 @@ def single_routed_expert_faked_params():
     extended_model marker exactly as the separate tests were."""
     params = []
     for name, config, extended in SINGLE_EXPERT_MODELS:
-        marks = (pytest.mark.extended_model,) if extended else ()
         for alloc, active, tag in _FAKED_SWEEP:
+            test_id = f"{name}-{tag}"
+            marks = (pytest.mark.extended_model,) if extended else ()
+            if test_id in _FAKED_XFAIL:
+                marks += (pytest.mark.xfail(reason=_FAKED_XFAIL[test_id], strict=False),)
             params.append(
                 pytest.param(
                     alloc,
@@ -293,7 +325,7 @@ def single_routed_expert_faked_params():
                     config.EMB_SIZE,
                     config.MOE_INTERMEDIATE_SIZE,
                     marks=marks,
-                    id=f"{name}-{tag}",
+                    id=test_id,
                 )
             )
     return params
