@@ -352,6 +352,11 @@ class CCLManager:
         deadlocks. This is the cross-request vision-encoder hang (TT_THROW fetch-queue
         timeout) seen when a video request follows image/multi-image requests, so the
         indices MUST be reset together with the semaphores."""
+        # Drain all in-flight device operations before touching semaphores or buffers.
+        # The ETH fabric may still have queued work from the previous vision encode;
+        # resetting semaphores while the fabric is active corrupts synchronization.
+        ttnn.synchronize_device(self.mesh_device)
+
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
