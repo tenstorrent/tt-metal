@@ -57,16 +57,17 @@ void kernel_main() {
     // mcast_pipe (C2 flag-only sender): the pre-allgather coordinator broadcasts a FLAG-ONLY doorbell
     // (no data payload) on reduce_sender_sem (CTA 1, S->R level flag) to the receiver rect, then does
     // its gather reads (the HOLE) afterward. EXCLUDE_SRC: the sender sits outside the receiver rect.
-    // NUM_ACTIVE_RECEIVER_CORES = num_blocks - 1 (recipients, sender excluded). PRE_HANDSHAKE=false:
+    // v8: PURE DELETION — the dropped NUM_ACTIVE_RECEIVER_CORES (= num_blocks - 1) equals the EXCLUDE
+    // fan-out the rect derives (the sender sits outside the receiver box, so area == num_blocks - 1 ==
+    // the recipient count). send_signal() uses that derived fan-out directly. PRE_HANDSHAKE=false:
     // the consumer-drain gate (reduce_receiver_sem.wait below) is the protocol gate that must precede
-    // the flag broadcast, so it stays raw; CONSUMER_READY_SEM_ID omitted. send_signal() couples the
-    // flag set(VALID) re-assert + set_multicast(EXCLUDE_SRC) + flush (was set(VALID) + set_multicast).
+    // the flag broadcast, so it stays raw; CONSUMER_READY_SEM_ID omitted (no consumer-ack to override).
+    // send_signal() couples the flag set(VALID) re-assert + set_multicast(EXCLUDE_SRC) + flush.
     constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
-    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_sem_id, num_blocks - 1, /*PRE_HANDSHAKE=*/false>
-        reduce_pipe(
-            noc,
-            dataflow_kernel_lib::McastRect<>{
-                mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
+    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_sem_id, /*PRE_HANDSHAKE=*/false> reduce_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect<>{
+            mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);
     const DataFormat data_format = get_dataformat(cb_ex_partial2);
