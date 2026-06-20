@@ -74,26 +74,20 @@ export ARCH_NAME=blackhole_140_arch_eth_dispatch.yaml
 
 Use `python_env/bin/python -m pip install` for all installs. The system `pip` does not install into the project virtualenv.
 
-**Core inference packages** — tokenizer, weight loading, audio output (from the repo root):
+**Core and quality-metric packages** — single install from the repo root:
 
 ```bash
 python_env/bin/python -m pip install -r models/experimental/voxtraltts/requirements.txt
 ```
 
-**Quality metric packages** — required for `tests/pcc/test_voxtral_e2e_quality_metrics.py`:
-
-```bash
-python_env/bin/python -m pip install utmosv2 speechbrain
-```
-
-> No specific version is required for `utmosv2` or `speechbrain`. The code loads them via `importlib` and guards each test with `@pytest.mark.skipif(not _has_module(...))`, so missing them skips the quality-metric tests rather than crashing.
+That file includes `speechbrain` (ECAPA-TDNN speaker similarity), `utmosv2` (UTMOS-v2 MOS), `librosa`, and `transformers` (Whisper WER) for `tests/pcc/test_voxtral_e2e_quality_metrics.py`. If those optional imports are missing, the quality test is skipped rather than crashing the rest of the suite.
 
 ### Step 3 — Set model weights path
 
 **Option A — HuggingFace repo ID (auto-download):**
 
 ```bash
-export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
+export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
 ```
 
 Weights are downloaded on first use and cached in `~/.cache/huggingface/`.
@@ -101,7 +95,7 @@ Weights are downloaded on first use and cached in `~/.cache/huggingface/`.
 **Option B — Local directory:**
 
 ```bash
-export VOXTRAL_TTS_MODEL=/path/to/local/weights
+export HF_MODEL=/path/to/local/weights
 ```
 
 The directory must contain the `.safetensors` files. No download occurs.
@@ -190,7 +184,7 @@ models/experimental/voxtraltts/
 
 ## 5. Tests
 
-All tests require the environment from [Section 2](#2-installation) and `VOXTRAL_TTS_MODEL` set.
+All tests require the environment from [Section 2](#2-installation) and `HF_MODEL` set (same convention as other models in `tests/pipeline_reorg/`).
 
 ### 5.1 Unit tests
 
@@ -232,7 +226,8 @@ These tests compare TT hardware output against a float32 CPU reference and asser
 From the repo root, after [Section 2](#2-installation):
 
 ```bash
-export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
+export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
 export ARCH_NAME=blackhole_140_arch_eth_dispatch.yaml
 ```
 
@@ -243,7 +238,31 @@ export VOXTRAL_COMPUTE_MESH_SHAPE=1,1   # P150 or QB2 single-device compute (def
 export VOXTRAL_COMPUTE_MESH_SHAPE=1,4   # QB2 only — TP text on full chassis mesh
 ```
 
-Trace is **on by default** for PCC and demo (`VOXTRAL_DECODE_TRACE=1`). On 1×1, 2CQ stays off unless you set `VOXTRAL_DECODE_TRACE_2CQ=1`.
+Trace is **on by default** for PCC and demo (via `configure_decode_trace()` in `demo.py`; `--no-decode-trace` to disable). On 1×1, 2CQ stays off unless you set `VOXTRAL_DECODE_TRACE_2CQ=1`.
+
+#### CI (GitHub Actions)
+
+Voxtral jobs use the canonical Blackhole demo cache layout (`HF_HOME`, `HF_MODEL`, `TT_CACHE_PATH` — see header in `tests/pipeline_reorg/blackhole_demo_tests.yaml`).
+
+| Pipeline | Job | Hardware |
+|----------|-----|----------|
+| `models_unit_tests.yaml` | Voxtral TTS unit tests | P150 (`bh_p150b_civ2`) |
+| `models_unit_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 (`bh_quietbox_2`) |
+| `models_e2e_tests.yaml` | Teacher-forced E2E PCC (golden codes / acoustic / golden acoustic) | P150 |
+| `models_e2e_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 (`bh_quietbox_2`) |
+| `blackhole_demo_tests.yaml` | Demo smoke WAV | P150 CIv2 (1×1) |
+| `blackhole_demo_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 |
+
+Local dry-run of the gated unit suite (excludes `tests/perf`):
+
+```bash
+export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
+export CI=true
+pytest models/experimental/voxtraltts/tests/ \
+  --ignore=models/experimental/voxtraltts/tests/perf \
+  -q --timeout=3600
+```
 
 #### E2E waveform PCC (recommended)
 
@@ -380,7 +399,7 @@ source python_env/bin/activate
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 export ARCH_NAME=blackhole_140_arch_eth_dispatch.yaml
-export VOXTRAL_TTS_MODEL=mistralai/Voxtral-4B-TTS-2603
+export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
 python_env/bin/python -m pip install -r models/experimental/voxtraltts/requirements.txt
 ```
 
@@ -474,8 +493,8 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VOXTRAL_TTS_MODEL` | — | Model weights path or HF repo ID (used when `--model` is omitted) |
-| `HF_MODEL` | — | Fallback for `--model` if `VOXTRAL_TTS_MODEL` is unset |
+| `HF_MODEL` | `mistralai/Voxtral-4B-TTS-2603` | Model weights path or HF repo ID (used when `--model` is omitted; same as other models pipelines) |
+| `VOXTRAL_TTS_MODEL` | — | Optional override if `HF_MODEL` is set to a different model in a shared shell |
 | `VOXTRAL_COMPUTE_MESH_SHAPE` | `1,1` | Compute mesh: `1,1` (P150 / QB2 1×1 submesh) or `1,4` (QB2 tensor-parallel text) |
 | `VOXTRAL_DECODE_TRACE` | `1` | Traced AR text-decode replay. Set `0` or pass `--no-decode-trace` to disable |
 | `VOXTRAL_DECODE_TRACE_2CQ` | `0` on 1×1, `1` on 1×4 | Second command queue for overlapped input staging during trace replay |
@@ -485,7 +504,7 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 
 ---
 
-## 6. Performnce and Accuracy
+## 6. Performance and Accuracy
 
 ### 6.1 PCC targets (accuracy)
 
@@ -621,7 +640,7 @@ Accuracy preset (`voxtral_text_high_accuracy_optimizations`): BF16 weights + HiF
 | **Dense ALiBi SDPA** | On | Full causal + sliding-window ALiBi attention mask; production accuracy |
 | **Matmul Tier 1 program configs** | On | Explicit 2D multicast configs per decoder layer; auto-disabled for `T > 6400` to avoid L1 OOM |
 
-```bas
+```bash
 export VOXTRAL_AUDIO_TOKENIZER_MATMUL_PROGCFG_OFF=1   # disable Tier 1 configs
 ```
 

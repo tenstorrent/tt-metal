@@ -32,18 +32,21 @@ class VoxtralTTSemanticCodebookQuantizer:
             self._c_norm_f32.to(torch.float32).contiguous(),
             mesh_device,
             dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.centroids_sn_tile = voxtral_from_torch(
             c_bf16.transpose(0, 1).contiguous(),
             mesh_device,
             dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.centroid_embedding_weight_tt = voxtral_from_torch(
             c_bf16.contiguous(),
             mesh_device,
             dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
