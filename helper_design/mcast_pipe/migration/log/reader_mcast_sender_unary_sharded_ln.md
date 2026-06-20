@@ -1,17 +1,28 @@
-# reader_mcast_sender_unary_sharded_ln.cpp — v7
-- Group G5 layernorm, sender (refactor, two-phase). Commit 00fa71996414099e717a2d7baecaca46dcbd097e. migrated v7 — PASS.
-- Validation: test_layer_norm_sharded_single_stage[dtype=torch.bfloat16-...use_welford=True-h=256-w=512-num_cores_h=4-num_cores_w=4-block_ht=2-block_wt=4-subblock_wt=1] — PASS.
+# reader_mcast_sender_unary_sharded_ln — v7→v8 remigration
 
-## Delta
-Only PHASE-1 (control-flag broadcast) uses the helper. Phase-2 (monotone counter streaming via
-reduce_sender_sem.set(block+2) + raw set_multicast, lines 273-305) stays DEFERRED RAW per the existing
-comment — the Flag/Counter pipe verbs can't express the per-side counter base without desyncing receivers.
+**Tier:** 0b (layernorm sharded), v7→v8 REMIGRATION run.
+**Status:** migrated, migrated_api_version=8, commit=2b662e1ba1f.
 
-Phase-1 was on the old intermediate API (Staging::Flag enum + a trailing INITIAL_READY=INVALID param
-that was removed in R6 + wrong arg order). Control-only (send_signal) -> PRE_HANDSHAKE=false, consumer omitted:
-  SenderPipe<num_blocks-1, reduce_sender_sem_id, reduce_receiver_sem_id, Staging::Flag, false, INVALID>(noc, McastRect{...}) + send_signal(VALID)
-  -> SenderPipe<noc_index, reduce_sender_sem_id, num_blocks-1, /*PRE_HANDSHAKE=*/false>(noc, McastRect<>{...}) + send_signal()
-The raw reduce_receiver_sem.wait/set drain gate (the protocol gate preceding the flag) stays raw. The
-removed INITIAL_READY=INVALID: v7's Flag ctor sets the local cell VALID, but phase-2 immediately
-overwrites it with set(block+2) before its own mcast, and phase-1's send_signal broadcasts VALID as
-intended — verified correct on device. diff_lines_removed: 4 (Staging/INITIAL_READY/reorder + send_signal arg).
+## Transform: PURE DELETION
+Dropped the 3rd `SenderPipe` template arg `NUM_ACTIVE_RECEIVER_CORES` (= `num_blocks - 1`).
+
+### Why dense (pure deletion), not divergent
+- Phase-1 sender broadcasts a FLAG-ONLY doorbell via `send_signal()`.
+- Sender sits ABOVE the receiver rect (rect starts one row below) -> sender NOT in box.
+- Therefore rect `area()` == `num_blocks - 1` == the EXCLUDE fan-out the helper derives.
+  The old explicit count equalled the derived fan-out -> pure deletion.
+- `PRE_HANDSHAKE=false` -> there is no consumer-ack wait, so `consumer_ack_count` is never
+  consulted; nothing added to the ctor.
+- Phase-2 (monotone `set(block+2)` streaming) remains DEFERRED RAW (unchanged) — reuses the
+  same sem cell as a counter; Flag/Counter Pipe verbs cannot express per-side without
+  desyncing the receiver base.
+
+## Diff
+- Template arg list: 4 -> 3 (removed `num_blocks - 1`). Comment block rewritten.
+- diff_lines_removed: 1 template arg + comment churn.
+
+## Validation
+`tests/ttnn/unit_tests/operations/fused/test_layer_norm_sharded.py::test_layer_norm_sharded_single_stage`
+- Smoke (--dev): bf16, welford=True, h=256 w=512, 4x4 cores -> PASSED.
+- Full (--run-all): 64 passed, 0 failed, no hang.
+- JIT build confirmed (kernel present in generated/).
