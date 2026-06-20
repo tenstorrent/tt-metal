@@ -3,8 +3,11 @@
 
 from __future__ import annotations
 
+import bz2
 import os
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import pytest
 import torch
@@ -26,6 +29,107 @@ VOXTRAL_STANDARD_CHAR_TEXT = (
     "inference, and twenty four kilohertz audio output for customer support, real time translation, reading "
     "applications, call centers, and responsive multilingual assistant workflows with clear speech.."
 )
+
+# Same fixture as ``models/tt_transformers/tests/test_model_prefill.py``.
+TALE_OF_TWO_CITIES_BZ2 = (
+    Path(__file__).resolve().parents[3] / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
+)
+
+
+@lru_cache(maxsize=1)
+def tale_of_two_cities_text_or_skip() -> str:
+    """Raw UTF-8 text of *A Tale of Two Cities* (shared PCC / perf fixture)."""
+    if not TALE_OF_TWO_CITIES_BZ2.is_file():
+        pytest.skip(f"Missing tale prompt fixture: {TALE_OF_TWO_CITIES_BZ2}")
+    with bz2.open(TALE_OF_TWO_CITIES_BZ2, "rt", encoding="utf-8") as f:
+        text = f.read()
+    if not text:
+        pytest.skip("Tale of Two Cities fixture is empty")
+    return text
+
+
+@lru_cache(maxsize=1)
+def tale_of_two_cities_token_ids_or_skip() -> tuple[int, ...]:
+    """Tokenize *A Tale of Two Cities* for PCC / perf prompts."""
+    text = tale_of_two_cities_text_or_skip()
+    from models.experimental.voxtraltts.reference.voxtral_request import encode_plain_text_to_token_ids
+
+    model_name = resolve_voxtral_model_name_or_skip()
+    try:
+        token_ids = encode_plain_text_to_token_ids(text, model_name)
+    except ImportError as exc:
+        pytest.skip(f"mistral-common required for tale prompts: {exc}")
+    except Exception as exc:
+        pytest.skip(f"Voxtral tokenizer unavailable for tale prompts ({model_name}): {exc}")
+    if not token_ids:
+        pytest.skip("Tale of Two Cities tokenization returned an empty sequence")
+    logger.info(f"Tale of Two Cities prompt: {len(token_ids)} tokens from {TALE_OF_TWO_CITIES_BZ2.name}")
+    return tuple(int(t) for t in token_ids)
+
+
+def tale_prompt_tokens(seq_len: int) -> torch.Tensor:
+    ids = tale_of_two_cities_token_ids_or_skip()
+    if len(ids) < seq_len:
+        pytest.skip(f"Tale prompt has {len(ids)} tokens, need seq_len={seq_len}")
+    return torch.tensor([list(ids[:seq_len])], dtype=torch.int64)
+
+
+def tale_continuation_tokens(start: int, count: int) -> torch.Tensor:
+    ids = tale_of_two_cities_token_ids_or_skip()
+    end = start + count
+    if len(ids) < end:
+        pytest.skip(f"Tale prompt has {len(ids)} tokens, need continuation [{start}:{end})")
+    return torch.tensor([list(ids[start:end])], dtype=torch.int64)
+
+
+def _tale_speech_text_for_min_prompt_len_impl(min_prompt_len: int, model_name: str, voice: str) -> tuple[str, int]:
+    from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
+
+    text = tale_of_two_cities_text_or_skip()
+    lo, hi = 1, len(text)
+    best_text = ""
+    best_len = 0
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        prefix = text[:mid]
+        prompt_len = len(compose_speech_request(prefix, model_name, voice=voice)["prompt_token_ids"])
+        if prompt_len >= min_prompt_len:
+            best_text, best_len = prefix, prompt_len
+            hi = mid - 1
+        else:
+            lo = mid + 1
+    if best_len < min_prompt_len:
+        pytest.skip(
+            f"Tale speech prompt cannot reach min_prompt_len={min_prompt_len} "
+            f"(best voice-wrapped length={best_len})"
+        )
+    return best_text, best_len
+
+
+@lru_cache(maxsize=32)
+def _tale_speech_text_for_min_prompt_len_cached(min_prompt_len: int, model_name: str, voice: str) -> tuple[str, int]:
+    return _tale_speech_text_for_min_prompt_len_impl(min_prompt_len, model_name, voice)
+
+
+def tale_speech_text_for_min_prompt_len(
+    min_prompt_len: int,
+    *,
+    model_name: str,
+    voice: str = "casual_male",
+) -> tuple[str, int]:
+    """Return ``(text_prefix, prompt_seq_len)`` with voice-wrapped speech prompt length ≥ ``min_prompt_len``.
+
+    Uses binary search over the tale fixture so perf sweeps exercise production
+    ``compose_speech_request`` tokenization (voice template + user text).
+    """
+    return _tale_speech_text_for_min_prompt_len_cached(min_prompt_len, model_name, voice)
+
+
+def speech_prompt_seq_len(text: str, *, model_name: str, voice: str = "casual_male") -> int:
+    """Voice-wrapped prompt length for ``compose_speech_request`` (production path)."""
+    from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
+
+    return len(compose_speech_request(text, model_name, voice=voice)["prompt_token_ids"])
 
 
 def ensure_voxtral_device_available() -> None:
@@ -341,8 +445,10 @@ def create_real_voxtral_text_model_or_skip(
 ):
     """Build the TT text model with the production config by default.
 
-    ``use_paged_kv_cache=True`` is required for bulk prefill beyond ~4096 tokens on
-    Blackhole (L1 attention CB limit). Matches ``VoxtralTTSPipeline.from_model_name``.
+    When ``use_paged_kv_cache=True``, builds ``paged_attention_config`` for long-context
+    attention (required beyond ~256 tokens on Blackhole). The text model itself always
+    uses ``use_paged_kv_cache=False`` so it allocates internal KV blocks (``layer_past``);
+    ``True`` is only for vLLM with an external KV cache — see ``VoxtralTTSPipeline``.
     """
     import math
 
@@ -362,6 +468,7 @@ def create_real_voxtral_text_model_or_skip(
             max_seq_len=max_seq_len,
             optimizations=optimizations,
             paged_attention_config=paged_cfg,
+            # Internal KV blocks; paged_attention_config selects paged SDPA layout.
             use_paged_kv_cache=False,
         )
     except Exception as exc:
