@@ -503,7 +503,7 @@ design names, and it is structurally distinct from R7's compute-init amortizatio
 > here. If you discover further worthwhile work, record it in `changelog.md` under a
 > "Future ideas (not queued)" note ONLY; do not add it to `op_requirements.md`.
 
-### [ ] Refinement 9 — All-reduce algorithm + combine compute (and conditional K re-tune)
+### [x] Refinement 9 — All-reduce algorithm + combine compute (and conditional K re-tune)
 
 **THIS IS THE LAST REFINEMENT. It has NO authority to add new refinements/follow-ups**
 (see the queue-closed directive above). Any leftover idea goes to `changelog.md` as a

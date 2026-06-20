@@ -498,6 +498,77 @@
     `test_rms_norm_regime_b_rowblocking_exhausted` (profiler-gated): reproduces the
     parallel-group-flatness and K-monotonicity measurements that close R8.
 
+## Refinement 9 — All-reduce algorithm + combine compute (and conditional K re-tune)
+- **Date**: 2026-06-20
+- **Status**: COMPLETE (`[x]`). All three parts landed with measured wins; golden non-regressed.
+- **What was done**:
+  - **Part B — combine compute (single reduce).** The Regime-B cross-core combine summed the
+    K gathered partial-Σx² tiles with `copy` + (K-1) eltwise `add`s — each an L1→L1
+    `eltwise_chain` (read two operands, pack the running sum back) = K-1 unnecessary L1
+    round-trips. Replaced with a SINGLE `reduce<SUM,REDUCE_ROW>` over the contiguous K-tile
+    block (`rms_norm_compute.cpp`): each partial is a PASS-1 REDUCE_ROW output (per-stick sum
+    in col 0, other cols zero), so summing the K tiles' rows yields the per-stick total in
+    col 0 in one helper call (DEST-accumulate, pack once). The Refinement-1 invariant
+    (cb_local_sumsq hands over only the FULLY-accumulated local Σx²) is preserved. Measured
+    (combine alone, same transport/K): neutral at small K, grows with K —
+    (1,1,32,32768) 76.99→71.56us (−7%), (1,1,64,12288) 50.23→47.89us (−4.7%).
+  - **Part A — all-reduce transport (root-relay gather-then-broadcast).** The baseline was a
+    K-round rotating-sender mcast all-gather (every one of the K cores mcasts its partial to
+    the K-1 others) — O(K) serialized mcast rounds, the dominant non-reduce term. Added a
+    root-relay transport gated by a `transport_mode` CT arg (`rms_norm_reader.cpp`): rank 0
+    unicast-reads all K-1 peer partials (one parallel gather phase, gated by a new PRODUCED
+    semaphore) then issues a SINGLE mcast of the assembled K-tile block to the group — O(1)
+    transport phases. **Compute is unchanged** — every core still ends with all K partials in
+    cb_partials_gathered and runs the Part-B single-reduce combine, so only the reader's
+    Regime-B leg differs. The broadcast reuses SenderPipe/ReceiverPipe (mcast_pipe); the
+    gather uses raw `noc_async_read` (mcast_pipe has no root-reads-many unicast-gather
+    primitive — documented at the bypass site; §9 hang-checklist honored: virtual coords,
+    PRODUCED host-init 0, EXCLUDE_SRC never-mcast-to-self, semaphores on the union).
+    `_select_transport` makes root-relay the production **default** (mode 0 retained behind
+    the CT arg + `_FORCE_TRANSPORT` for the bake-off). Measured bake-off (same K, mode0 vs
+    mode1, bf16, best-of-9, 8x8 Wormhole) — root-relay wins everywhere, win grows with K:
+    (1,1,32,4096) 1.10x, (1,1,32,8192) 1.35x, (1,1,64,8192) 1.29x, (1,1,32,16384) 1.22x,
+    (1,1,64,12288) 1.22x, (1,1,32,32768) 1.48x.
+  - **Part C — conditional K + crossover re-tune (a win WAS measured, so done).** The cheaper
+    O(1) transport changed the K economics: the per-core work (Wt//K) is now the heavier term
+    and the residual transport/NoC-contention scales with TOTAL grid cores used
+    (num_row_groups*K), not K alone. (1) Re-fit the `_select_k` cost proxy from `Wt//K + K`
+    to `2.5*(Wt//K) + num_row_groups*K` (integer-scaled `5*(Wt//K) + 2*num_row_groups*K`),
+    validated against the device-measured K optimum of every wide-W shape — it lifts e.g.
+    Wt=512 K=16→K=32 (37.1→30.4us, +18%) and Wt=384/2-row-groups K=16→K=24 (39.7→33.3us,
+    +16%, 3 core-rows/group) while correctly keeping the 2-row-group case off the full grid.
+    (2) Lowered the A/B crossover `REGIME_B_MIN_WT_*` 16→8: root-relay made Regime B win even
+    at the narrowest partitionable row (Wt=8/W=256/K=8: B 7.5us TILE / 11.2us RM vs A 9.8 /
+    13.7 — A won here under the old mcast transport). Well-bounded (Wt∈[9,15] has no
+    mult-of-gx divisor → stays A; Wt<8 has no partition).
+- **End-to-end measured improvement (R8 baseline mcast+old-K → R9 root-relay+new-K, bf16)**:
+  (1,1,32,4096) 21.6→16.2us 1.33x | (1,1,32,8192) 31.3→21.9us 1.43x |
+  (1,1,32,16384) 45.2→30.4us 1.49x | (1,1,64,12288) 47.6→33.3us 1.43x |
+  (1,1,32,32768) 71.5→49.3us 1.45x. ~1.3–1.5x faster on every wide-W Regime-B shape.
+- **Accuracy achieved**: both transports + the reduce-combine are numerically correct — all-ones
+  exact and random-vs-torch PCC ≥ 0.99 (typically ≥ 0.99999) on the wide-W shapes (±gamma);
+  precision_matrix 641/641 incl. bfloat8_b through root-relay (PCC ≥ 0.9999, the verifier's
+  bf8b Regime-B re-check passes). No Inf/NaN.
+- **Golden test progress**: **1683/1683 supported passing** (2940 skipped, 420 xfailed, 0 failed,
+  0 xpass-drift) — identical to the R8 baseline, no regression. Non-registry refinement:
+  SUPPORTED unchanged. Aux suites all green: precision_matrix 641, regime_b/rm_regime_b/
+  acceptance/transport 121, regression+translated+reduce_simplification+layout_matrix+
+  row_blocking+precision_baseline 281, perf (profiler) bake-off+crossover+rowblocking_exhausted+
+  baseline all pass.
+- **Issues encountered**: (1) the rm_regime_b "is this Regime B" detector counted semaphores
+  `== 2`; Regime B now carries the 3rd PRODUCED semaphore → updated to `>= 2`. (2) the R8
+  `rowblocking_exhausted` K-monotonicity assertion (`k64 > k16*1.5`) no longer held because
+  root-relay FLATTENED the K-cost curve (the assertion was written for the old ~O(K) mcast) —
+  relaxed to `k64 > k32` (pushing K past its optimum is still net-negative, just by a smaller
+  margin, which is exactly R9's win). (3) the crossover test failed at Wt=8 because B now wins
+  there → drove the crossover re-tune (16→8). All root-caused and fixed; no deferrals.
+- **Tests added**:
+  - `tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_transport.py` — 22 cases (no
+    profiler): root-relay-is-default + PRODUCED semaphore present; BOTH transports correct vs
+    torch (all-ones exact + random PCC, ±gamma) on 5 wide-W shapes; `_select_k` re-tune picks.
+  - `test_rms_norm_perf.py::test_rms_norm_transport_bakeoff` (profiler-gated) — device-time
+    mode0-vs-mode1 sweep → `transport_bakeoff_results.md`, asserts root-relay not slower.
+
 ### Future ideas (not queued — per the QUEUE-CLOSED directive)
 - **Oversubscribed Regime B coverage** (NOT row-blocking/coalescing): allow each Regime-B
   core to own multiple row-groups (`num_units > 1`, sequential per-row-group gathers) so
