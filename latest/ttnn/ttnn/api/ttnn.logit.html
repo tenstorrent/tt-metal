@@ -20,36 +20,12 @@
         <script src="../../_static/doctools.js?v=888ff710"></script>
         <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
         <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
-        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
         <script src="../../_static/posthog.js?v=aa5946f9"></script>
     <script src="../../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.ltz" href="ttnn.ltz.html" />
-    <link rel="prev" title="ttnn.logical_right_shift" href="ttnn.logical_right_shift.html" />
- 
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        // Add noindex to keep old versions out of search results
-        var noindex = document.createElement('meta');
-        noindex.name = 'robots';
-        noindex.content = 'noindex';
-        document.head.appendChild(noindex);
-        // Add canonical pointing to latest (clean URL, no query/fragment)
-        var canonical = document.createElement('link');
-        canonical.rel = 'canonical';
-        canonical.href = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        document.head.appendChild(canonical);
-    }
-})();
-</script>
+    <link rel="prev" title="ttnn.logical_right_shift" href="ttnn.logical_right_shift.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -260,32 +236,6 @@
       </nav>
 
       <div class="wy-nav-content">
-<div id="tt-version-warning" style="display:none"></div>
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        var latestUrl = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        var banner = document.getElementById('tt-version-warning');
-        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
-        banner.textContent = 'You are viewing documentation for an older version (';
-        var versionEl = document.createElement('strong');
-        versionEl.textContent = version;
-        banner.appendChild(versionEl);
-        banner.appendChild(document.createTextNode('). '));
-        var link = document.createElement('a');
-        link.href = latestUrl;
-        link.textContent = 'Click here for the latest version.';
-        banner.appendChild(link);
-        banner.style.display = 'block';
-    }
-})();
-</script>
-
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -309,20 +259,7 @@
 <span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">logit</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_core_grids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.CoreRangeSet</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn.Tensor</span></span></span><a class="headerlink" href="#ttnn.logit" title="Permalink to this definition"></a>
 </dt>
 <dd>
-<p>Performs the logit function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code> after clamping its elements to the interval
-[<code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>, 1 - <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>]. The outputs are element-wise log-odds of the clamped input.
-If <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code> is <cite>None</cite>, no clamping is applied and inputs outside (0,1) produce <cite>NaN</cite>/<cite>Inf</cite>.</p>
-<div class="math notranslate nohighlight">
-\[\begin{split}\mathrm{output\_tensor}_i =
-\ln\left(\frac{z_i}{1-z_i}\right),
-\quad
-z_i =
-\begin{cases}
-    \mathrm{input\_tensor}_i, &amp; \text{if } \mathrm{eps} = \mathrm{None} \\
-    \mathrm{eps}, &amp; \text{if } \mathrm{input\_tensor}_i &lt; \mathrm{eps} \\
-    \mathrm{input\_tensor}_i, &amp; \text{if } \mathrm{eps} \leq \mathrm{input\_tensor}_i \leq 1-\mathrm{eps} \\
-    1-\mathrm{eps}, &amp; \text{if } \mathrm{input\_tensor}_i &gt; 1-\mathrm{eps}
-\end{cases}\end{split}\]</div>
+<p>Performs logit function on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>, <code class="xref py py-attr docutils literal notranslate"><span class="pre">eps</span></code>.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span>
 </dt>
@@ -342,7 +279,7 @@ z_i =
 <dt class="field-odd">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-odd">
-<p><em>ttnn.Tensor</em> – the output tensor containing unbounded real-valued log-odds.</p>
+<p><em>ttnn.Tensor</em> – the output tensor.</p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -440,9 +377,7 @@ async function loadVersions() {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const pathParts = location.pathname.split('/');
-        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
-        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
+        const projectCode = location.pathname.split('/')[3];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -460,9 +395,7 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    const parts = window.location.pathname.split('/');
-    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
-    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
+    return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 

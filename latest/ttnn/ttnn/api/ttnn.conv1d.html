@@ -25,29 +25,7 @@
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
     <link rel="next" title="ttnn.conv2d" href="ttnn.conv2d.html" />
-    <link rel="prev" title="ttnn.embedding" href="ttnn.embedding.html" />
- 
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        // Add noindex to keep old versions out of search results
-        var noindex = document.createElement('meta');
-        noindex.name = 'robots';
-        noindex.content = 'noindex';
-        document.head.appendChild(noindex);
-        // Add canonical pointing to latest (clean URL, no query/fragment)
-        var canonical = document.createElement('link');
-        canonical.rel = 'canonical';
-        canonical.href = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        document.head.appendChild(canonical);
-    }
-})();
-</script>
+    <link rel="prev" title="ttnn.embedding" href="ttnn.embedding.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -149,32 +127,6 @@
       </nav>
 
       <div class="wy-nav-content">
-<div id="tt-version-warning" style="display:none"></div>
-<script>
-(function() {
-    var parts = window.location.pathname.split('/');
-    // Only applies to the hosted docs layout: /tt-metal/{version}/{project}/...
-    // Skips local builds (make html/server) where this prefix is absent.
-    var version = parts[1] === 'tt-metal' ? (parts[2] || '') : '';
-    if (version && version !== 'latest') {
-        var latestUrl = (window.location.origin + window.location.pathname)
-            .replace('/tt-metal/' + version + '/', '/tt-metal/latest/');
-        var banner = document.getElementById('tt-version-warning');
-        // Build with DOM nodes/textContent so URL-derived data is never parsed as HTML (avoids DOM XSS).
-        banner.textContent = 'You are viewing documentation for an older version (';
-        var versionEl = document.createElement('strong');
-        versionEl.textContent = version;
-        banner.appendChild(versionEl);
-        banner.appendChild(document.createTextNode('). '));
-        var link = document.createElement('a');
-        link.href = latestUrl;
-        link.textContent = 'Click here for the latest version.';
-        banner.appendChild(link);
-        banner.style.display = 'block';
-    }
-})();
-</script>
-
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
@@ -195,7 +147,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.conv1d">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv1d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MeshDevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kernel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span> <span class="pre">or</span> <span class="pre">tuple[int,</span> <span class="pre">int]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dilation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conv_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><span class="pre">ttnn.Conv2dConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DeviceComputeKernelConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">slice_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Conv2dSliceConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_output_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_weights_and_bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">The</span> <span class="pre">output</span> <span class="pre">tensor,</span> <span class="pre">output</span> <span class="pre">length,</span> <span class="pre">and</span> <span class="pre">the</span> <span class="pre">preprocessed</span> <span class="pre">weights</span> <span class="pre">and</span> <span class="pre">bias.</span></span></span><a class="headerlink" href="#ttnn.conv1d" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">conv1d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MeshDevice</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">input_length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kernel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span> <span class="pre">or</span> <span class="pre">tuple[int,</span> <span class="pre">int]</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dilation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias_tensor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.Tensor</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dtype</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DataType</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">conv_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><span class="pre">ttnn.Conv2dConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">compute_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.DeviceComputeKernelConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">memory_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ttnn.MemoryConfig</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_output_dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_weights_and_bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">The</span> <span class="pre">output</span> <span class="pre">tensor,</span> <span class="pre">output</span> <span class="pre">length,</span> <span class="pre">and</span> <span class="pre">the</span> <span class="pre">preprocessed</span> <span class="pre">weights</span> <span class="pre">and</span> <span class="pre">bias.</span></span></span><a class="headerlink" href="#ttnn.conv1d" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Applies a 1D convolution over an input signal composed of several input planes. Implemented as a 2D Convolution of input height 1 and input width as input_length.</p>
@@ -227,7 +179,6 @@
 <li><p><strong>conv_config</strong> (<a class="reference internal" href="ttnn.Conv2dConfig.html#ttnn.Conv2dConfig" title="ttnn.Conv2dConfig"><em>ttnn.Conv2dConfig</em></a><em>, </em><em>optional</em>) – Configuration for convolution. Default: None</p></li>
 <li><p><strong>compute_config</strong> (<em>ttnn.DeviceComputeKernelConfig</em><em>, </em><em>optional</em>) – Configuration for compute kernel. Default: None</p></li>
 <li><p><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>) – Output Tensor’s Memory Configuration. Default: None</p></li>
-<li><p><strong>slice_config</strong> (<a class="reference internal" href="ttnn.Conv2dSliceConfig.html#ttnn.Conv2dSliceConfig" title="ttnn.Conv2dSliceConfig"><em>ttnn.Conv2dSliceConfig</em></a><em>, </em><em>optional</em>) – Configuration for slicing the input &amp; output tensors in DRAM along the input_length (width) dimension. Use slice_type=Conv2dDRAMSliceWidth with num_slices=0 to auto-determine the number of slices, or num_slices=N to slice manually. DRAM_HEIGHT slicing is not supported because the conv1d height is always 1. If None, the op runs fully in L1 (L1_FULL). Default: None</p></li>
 <li><p><strong>return_output_dim</strong> (<em>bool</em><em>, </em><em>optional</em>) – If true, the op also returns the length of the output tensor. Default: False</p></li>
 <li><p><strong>return_weights_and_bias</strong> (<em>bool</em><em>, </em><em>optional</em>) – If true, the op also returns the preprocessed weight and bias on device. Default: False</p></li>
 </ul>
@@ -298,9 +249,7 @@ async function loadVersions() {
         const response = await fetch(VERSIONS_URL);
         const data = await response.json();
         const versionList = document.getElementById('version-list');
-        const pathParts = location.pathname.split('/');
-        // Hosted layout: /tt-metal/{version}/{project}/...; local builds: /{project}/...
-        const projectCode = pathParts[1] === 'tt-metal' ? pathParts[3] : pathParts[1];
+        const projectCode = location.pathname.split('/')[3];
 
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
@@ -318,9 +267,7 @@ async function loadVersions() {
 loadVersions();
 
 function getCurrentVersion() {
-    const parts = window.location.pathname.split('/');
-    // Hosted layout: /tt-metal/{version}/...; local builds fall back to 'latest'.
-    return parts[1] === 'tt-metal' ? parts[2] : 'latest';
+    return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 
