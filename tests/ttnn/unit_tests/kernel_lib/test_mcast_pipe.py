@@ -7,15 +7,15 @@
 # instead of the raw object-API bake-off kernels.
 #
 # What changed vs the bake-off:
-#   * F1 fence is BAKED IN to flush — there is no barrier variant to test (the helper has no
-#     barrier knob, by design). The "f1_*"/"f4_unlinked" loser variants are gone.
-#   * Variants now exercise the helper's actual axes: STAGING (Flag default | Counter knob),
-#     LINK (linked default | unlinked fallback), PRE_HANDSHAKE.
-#   * EXCLUDE_SRC vs INCLUDE_SRC is NO LONGER a knob (Round 2): the Pipe infers it at runtime
-#     from sender-in-rect. So these tests double as the inference gate —
-#       sender out-of-rect (test_coverage/test_smoke) -> Pipe must infer EXCLUDE,
-#       sender in-rect     (test_f3_loopback)         -> Pipe must infer INCLUDE_SRC loopback,
-#       num_active_cores==1 (test_f3_degenerate)      -> Pipe must collapse to a local copy.
+#   * The fence is BAKED IN to flush — there is no barrier variant to test (the helper has no
+#     barrier knob, by design), and linking is always on (no unlinked variant).
+#   * Variants exercise the helper's actual axes: the data-ready signal (Flag default | Counter
+#     knob) and PRE_HANDSHAKE.
+#   * Loopback is NOT a knob: the Pipe infers it at runtime from sender-in-rect. So these tests
+#     double as the inference gate —
+#       sender out-of-rect (test_coverage/test_smoke) -> Pipe must infer a plain mcast,
+#       sender in-rect     (test_f3_loopback)         -> Pipe must infer loopback,
+#       num_active_cores==0 (test_f3_degenerate)      -> Pipe must collapse to a local copy.
 #
 # Green here == the helper reproduces the bake-off WINNERS' behavior bit-exact, with no hang,
 # AND infers the right multicast mode purely from geometry + the active-core count.
@@ -47,7 +47,7 @@ def _defines(staging_counter):
 # variant is gone (it would be identical to flag_linked).
 VARIANTS = {
     "flag_linked": (0,),  # canonical clean-spine path: Flag + linked pair + flush
-    "counter": (1,),  # HandshakeKind::Counter knob (atomic-barrier fence)
+    "counter": (1,),  # DataReadySignal::Counter knob (atomic-barrier fence)
 }
 
 
@@ -364,7 +364,7 @@ def test_f3_loopback(device, payload_tiles):
     _run_f3(device, rect_len=4, payload_tiles=payload_tiles, n_iters=1)
 
 
-# Degenerate guard: rect_len==1 => num_active_cores==1 self-only. The Pipe must collapse INCLUDE_SRC
+# Degenerate guard: rect_len==1 => num_active_cores==0 self-only. The Pipe must collapse the
 # loopback to a local copy (else the raw loopback hangs). Only the sender core participates.
 def test_f3_degenerate(device):
     _run_f3(device, rect_len=1, payload_tiles=1, n_iters=1)

@@ -7,6 +7,36 @@ against feasibility.)
 
 ---
 
+## Round-6 re-entry addendum (2026-06-20) — flag-set lifecycle + arg order (contract-only)
+
+> DERIVED FROM: feedback.txt items 1, 2, 5. Re-entry at **Step D** (leftmost — signature + param
+> order + count/flag semantics). Items 3/4/6 are Step-F wording. The authoritative API is
+> `changelog.md` (Round 6). This addendum revises the contract; no pattern coverage changes.
+
+**Claims (items 1, 2, 5):**
+1. The per-send local `data_ready.set()` is needed only off the loopback path, and there only ONCE.
+2. `INITIAL_FLAG_VALUE` is dead (the per-send `set` always overwrote the ctor init) — drop it; keep a
+   ctor `set(VALID)` for the no-loopback case.
+5. Reorder the SenderPipe template args.
+
+**Why it's a contract change, confirmed in code:** `Semaphore<>::set_multicast` (`noc_semaphore.h:165`)
+broadcasts the sender's **local cell** as its source — no `value` arg. For the Flag signal the source
+is always `VALID`, so it is set ONCE in the ctor and reused (the proven raw matmul does exactly this:
+`reader_bmm_tile_layout_in0_sender_padding.cpp:53` sets `VALID` once before the loop). `INITIAL_FLAG_VALUE`
+could never reach the wire → drop the param.
+
+**Revised contract (the only change to the draft):**
+- Drop `INITIAL_FLAG_VALUE`. Ctor sets the sender's local data-ready cell `= VALID` once (Flag only).
+  `send()` does no per-send local set; `send_signal()` is a plain doorbell (no `value` param).
+- SenderPipe template arg order: `NOC_ID` (no default, first) → `DATA_READY_SEM_ID` →
+  `CONSUMER_READY_SEM_ID` → `NUM_ACTIVE_RECEIVER_CORES` → `DATA_READY_SIGNAL` (=Flag) → `PRE_HANDSHAKE`.
+
+**Verdict: FEASIBLE WITH REVISION (contract-only).** No pattern coverage changes; no style fork is
+touched. Caller-facing (removed param + reordered args + `send_signal` signature) → `MCAST_PIPE_API_VERSION`
+bump (5→6). Step E is a re-confirm no-op; no device work.
+
+---
+
 ## Round-5 re-entry addendum (2026-06-19) — `McastRect` is templated on the NoC id
 
 > DERIVED FROM: feedback.txt item 1. Re-entry at **Step D** (contract change, leftmost). The rest

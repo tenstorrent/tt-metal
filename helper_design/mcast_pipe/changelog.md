@@ -345,3 +345,71 @@ intentionally kept raw + documented.** All on BH p150a, single parametrization e
   stayed baked-in; no fork re-decided).
 - **Hand-off:** re-invoke `apply-dm-helper helper_design/mcast_pipe/` → Tier-0 remigrates the 13
   stale@v4 kernels to v5 first, then resumes the 46 pending. No manual fleet re-run.
+
+---
+
+## Round 6 — flag-set lifecycle, naming, arg order, comment cleanup (2026-06-20)
+
+- **Trigger:** `tune-dm-helper feedback.txt` — six claims: (1) the per-send local `data_ready.set()`
+  is needed only off the loopback path, and there only ONCE (not per send); (2) `INITIAL_FLAG_VALUE`
+  is dead weight (the per-send `set` always overwrote the ctor init), drop it but keep a ctor
+  `set(VALID)` for the no-loopback case; (3) rename the `consumed` semaphore → `consumer_ready`;
+  (4) `HandshakeKind` is a bad name (reads like `PRE_HANDSHAKE`) → `DataReadySignal`; (5) reorder the
+  SenderPipe template args; (6) rewrite comments for the FINAL API only (drop round/version
+  archaeology, deleted-method and obsolete-template-arg references).
+- **Re-entry routing (batched, upstream-first):** items 1,2,5 → **Step D** (contract: signature +
+  param order + count/flag semantics); items 3,4,6 → **Step F** (wording/rename). Leftmost = D → one
+  forward pass D→E→F→G. **Step E was a re-confirm no-op** (none of the six touches a style fork —
+  flush/barrier, flag/counter, linked/unlinked — or adds a matrix cell; coverage/perf maps stand) —
+  **no device bake-off.**
+- **Root cause for items 1+2 (confirmed in code, not asserted):** `Semaphore<>::set_multicast`
+  (`noc_semaphore.h:165`) broadcasts the sender's **local cell** as its source — it takes NO `value`
+  argument. For the Flag signal that source is always `VALID`, so it is correctly set **once** in the
+  ctor and reused every send; the per-send `data_ready.set()` was redundant. This is exactly the
+  proven raw matmul pattern: `reader_bmm_tile_layout_in0_sender_padding.cpp:53` sets the local cell
+  `= VALID` ONCE before the loop, then mcasts each iteration. `INITIAL_FLAG_VALUE` could therefore
+  never reach the wire (the per-send set clobbered it) → dropped. The loopback path needs no local set
+  at all (its INCLUDE-source mcast writes the sender's own cell). The lone `INITIAL_FLAG_VALUE=INVALID`
+  consumer (sharded-LN phase-1 signal sender) is unaffected: it never reads its own cell as a flag and
+  phase-2 explicitly re-sets that cell (`reader_mcast_sender_unary_sharded_ln.cpp:276`), so always
+  ctor-setting `VALID` is correct.
+- **Decisions:**
+  - **D1 (items 1+2) — flag-set lifecycle.** Drop the `INITIAL_FLAG_VALUE` template param. The ctor
+    sets the sender's local data-ready cell `= VALID` once (Flag signal only). `send()` no longer does
+    a per-send local set — `signal_ready_` just `set_multicast`s the persistent local `VALID`.
+  - **D2 (item 5) — SenderPipe template arg order** is now `NOC_ID` (no default, first) → sem ids →
+    `NUM_ACTIVE_RECEIVER_CORES` → `DATA_READY_SIGNAL` (default Flag) → `PRE_HANDSHAKE` (default, last).
+  - **F1 (item 3) — `CONSUMED_SEM_ID` → `CONSUMER_READY_SEM_ID`**, member `consumed_` →
+    `consumer_ready_` (both faces).
+  - **F2 (item 4) — `HandshakeKind` → `DataReadySignal`** (members `Flag`, `Counter` unchanged); the
+    `HANDSHAKE` param → `DATA_READY_SIGNAL`. Disambiguates from `PRE_HANDSHAKE`.
+  - **F3 (item 1, follow-on) — `send_signal` loses its `value` param** (user pick): since
+    `set_multicast` broadcasts the local cell and the ctor seeds `VALID`, `send_signal()` is a plain
+    doorbell. No in-scope caller passed non-`VALID` (topk + sharded-LN both use `VALID`; the
+    value-carrying moe_gpt is deferred and reads its own cell), so the param was a footgun (would
+    silently broadcast `VALID`) — dropped per materialization invariant #5.
+  - **F4 (item 6) — comments rewritten for the final API**: removed round-number archaeology
+    (Round 4/5, R6, F1/F2/F4 codes as narrative), the deleted-`start_end_for_noc` mention, the
+    "include/exclude-src template arg" leftovers, and the long sdpa-read_k linking back-story.
+- **API before:** `SenderPipe<N, DR, C, HandshakeKind=Flag, PRE_HANDSHAKE=true, INITIAL_FLAG_VALUE=VALID,
+  NOC_ID=noc_index>(noc, McastRect<>{...})`, `ReceiverPipe<DR, C, HandshakeKind=Flag, PRE_HANDSHAKE=true>(noc)`.
+- **API after (API version 6):**
+  `SenderPipe<NOC_ID, DATA_READY_SEM_ID, CONSUMER_READY_SEM_ID, NUM_ACTIVE_RECEIVER_CORES,
+   DataReadySignal=Flag, PRE_HANDSHAKE=true>(noc, McastRect<NOC_ID>{...})`,
+  `ReceiverPipe<DATA_READY_SEM_ID, CONSUMER_READY_SEM_ID, DataReadySignal=Flag, PRE_HANDSHAKE=true>(noc)`,
+  `send_signal()` (no arg). `McastRect<NOC_ID=noc_index>` unchanged.
+- **`MCAST_PIPE_API_VERSION` 5 → 6** (caller-facing: removed param + renamed enum/param + reordered
+  template args + `send_signal` signature → every migrated call site is rewritten). All Round-4/5
+  migrated kernels are now **stale@v5**.
+- **Artifacts touched:** `api_feasibility.md` (Round-6 addendum), `style_bakeoff.md` (E no-op note),
+  `proposed_helpers.md` (header), this changelog, `mcast_pipe.hpp` (materialized), the 3 unit-test
+  kernels (`pipe_sender`/`pipe_receiver`/`pipe_f3_sender`) + `test_mcast_pipe.py` (ported).
+- **Verification (BH p150a):** header-only + JIT kernel change (no `build_metal.sh` rebuild).
+  `test_mcast_pipe.py` **39/39 PASS** — the green re-confirm of the materialization, exercising the
+  no-loopback path across `n_iters=8` (proves ctor-set-once VALID + no per-send set holds across
+  iterations), loopback (`test_f3_loopback`), the degenerate local-copy collapse, NoC1 corner order,
+  and pre_handshake. No provisional dual-paths (none re-decided).
+- **Hand-off:** re-invoke `apply-dm-helper helper_design/mcast_pipe/` → Tier-0 remigrates the
+  stale@v5 kernels to v6 first (the matmul in0 sender's own-flag consumption is the in-context confirm
+  of D1 — it must match the raw set-once pattern), then resumes the pending backlog. No manual fleet
+  re-run.

@@ -10,6 +10,11 @@
 > pass — `Staging` → **`HandshakeKind`**, `INITIAL_READY` → **`INITIAL_FLAG_VALUE`** (flag-only scope
 > now self-documenting), and `McastRect` is templated on the NoC id (`McastRect<NOC_ID = noc_index>`)
 > with the routing-correct corners precomputed in its ctor instead of re-derived per `send()`.
+> **Round 6 (2026-06-20)** is a lifecycle/naming/arg-order pass — dropped `INITIAL_FLAG_VALUE` (the
+> ctor sets the sender's local flag `VALID` once and `set_multicast` rebroadcasts it; the per-send
+> local set is gone), `HandshakeKind` → **`DataReadySignal`**, `CONSUMED_SEM_ID` →
+> **`CONSUMER_READY_SEM_ID`**, `send_signal` lost its `value` param, and the SenderPipe template args
+> were reordered (`NOC_ID` first, no default). API version **6**.
 > Authoritative running record: `changelog.md`.
 
 The deliverable. One fat, two-sided helper — `Pipe` — that wraps the NoC-multicast +

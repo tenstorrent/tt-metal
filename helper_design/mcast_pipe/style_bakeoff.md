@@ -6,6 +6,15 @@
 The bake-off resolves the four style forks the API draft (Step ★) left open, by measurement, not
 argument: **coverage screen first (cheap, correctness/hang), perf+L1 only on survivors.**
 
+> **Round-6 re-entry (2026-06-20) — E re-confirm NO-OP, no device.** feedback.txt items 1,2,5
+> (flag-set lifecycle: ctor-set-once VALID + drop `INITIAL_FLAG_VALUE` + no per-send local set;
+> reorder template args) touch NONE of the four style forks. `set_multicast` always broadcast the
+> local cell as its source — the change moves the single source-set from per-send to the ctor and
+> deletes a dead knob; it does not alter which mitigation any fork takes, add a variant, or add a
+> matrix cell. The Flag-vs-Counter fork is untouched (Counter still inc_multicast + atomic-barrier).
+> All coverage maps and ns/L1 numbers below stand verbatim. Items 3,4,6 are renames/comments (Step F).
+> No re-measure, no re-decide.
+>
 > **Round-5 re-entry (2026-06-19) — E re-confirm NO-OP, no device.** feedback.txt item 1 (template
 > `McastRect` on the NoC id, precompute corners in the ctor) touches NONE of the four style forks
 > (F1 fence / F2 staging / F3 loopback / F4 linking). It changes where a constexpr-foldable corner
