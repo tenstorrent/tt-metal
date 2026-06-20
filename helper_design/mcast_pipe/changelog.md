@@ -519,3 +519,55 @@ intentionally kept raw + documented.** All on BH p150a, single parametrization e
 - **Hand-off:** re-invoke `apply-dm-helper helper_design/mcast_pipe/` → Tier-0 remigrates the stale@v6
   kernels to v7 first (positional template args shifted; the two `PRE_HANDSHAKE=false` sites can now
   drop their dead consumer-sem arg), then resumes the pending backlog. No manual fleet re-run.
+
+## Round 9 — Flag-path per-send VALID re-assert (M12b), rotating-role STAR fix (2026-06-20)
+
+- **Trigger:** `tune-dm-helper feedback-4.txt` — one claim: restore the sender's per-send `set(VALID)`
+  on the Flag path that Round 6 removed. Device-confirmed root cause + A/B bisect (WH, 2026-06-20) on
+  `reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp`, test
+  `test_matmul_2d_multiple_output_blocks_per_core[...transpose_mcast=True...in0_sharded=True-grid_size=(8,4)...b=1]`:
+  CONTROL = v7 unmodified → **HANG**; TREATMENT = v7 + one line `set(VALID)` before the flag send → **PASS**.
+- **Re-entry routing:** leftmost contradicted artifact = **Step B**. The root cause is hazard **H12**
+  (a mutable doorbell can't be the broadcast source), already in the catalog but scoped to the CHAIN
+  topology only. feedback-4 proves H12 **also fires for the rotating-role STAR** (a core that is both a
+  sender and a receiver on the SAME shared `data_ready` cell — its receiver turn drives the cell INVALID,
+  so the Round-6 ctor-once VALID is stale by its next sender turn), AND that the STAR has a **cheaper
+  mitigation the catalog never listed** (re-assert VALID per send — the star's source IS its dest cell,
+  `src==dst`, so it can re-store without the chain's cross-id relay). That is "a valid mitigation the
+  catalog doesn't list" → Step B. One forward pass **B → C → D → E → F → G**, all downstream steps cheap
+  re-confirms (no new device bake-off).
+- **Decision — M12b (DOMINANT single path, coverage-decided, NOT a fork/knob):** the Flag-path
+  `signal_ready_` re-asserts `data_ready_.set(VALID)` before the flag `set_multicast`, **unconditionally,
+  not gated behind a predicate.** It covers BOTH cells: required for the rotating-role STAR (hang without
+  it), a redundant no-op store for the pure STAR (its cell is never clobbered). Counter path untouched
+  (monotone — no level flag, no source cell to refresh). Reverses Round-6 D1 with a corrected rationale:
+  Round 6 dropped the set as "redundant for a STAR sender" — true for a *pure* STAR, but the helper also
+  serves *rotating* senders whose data-ready cell doubles as a clear-after-wait receiver cell.
+- **Re-decide, not re-measure (Step E):** the device evidence is feedback-4's A/B; no `bakeoff_*` matrix
+  re-run. E.4 case 1 (DOMINANT). Recorded in `style_bakeoff.md` §Round-9.
+- **R6 consequence:** the rotating-role STAR is now **migratable** with two Pipes (`SenderPipe` +
+  per-round `ReceiverPipe` on the shared cell, `receive(sx,sy)` for the rotating coord). The earlier
+  "R6 confirmed hard / same-core sender+receiver hangs" verdict was a *symptom* of the Round-6 bug, not
+  infeasibility. (CHAIN gap unchanged — it still needs INV12 cross-id relay; source ≠ dest there.)
+- **API before/after (version 7):** signatures UNCHANGED — the edit is internal to
+  `SenderPipe::signal_ready_()`/`send()`. No template arg, knob, face, or count semantics changed.
+- **`MCAST_PIPE_API_VERSION` 7 → 7 (NO BUMP).** Caller-facing API is identical; an internal `send()`-body
+  change does not bump (G.4). No migrated call site is made stale; no fleet remigration is owed *by the
+  version key*. (block_sharded is separately quarantined and recoverable — see hand-off.)
+- **Artifacts touched:** `hazards_catalog.md` (H12 amendment + M12b), `migration_audit/_SUMMARY.md` +
+  `migration_audit/matmul.md` (R6 now migratable), `api_feasibility.md` (Round-9 addendum, no change),
+  `style_bakeoff.md` (Round-9 re-decide), `proposed_helpers.md` (header + baked-in-choices table + R6
+  defer note), this changelog, `mcast_pipe.hpp` (materialized: per-send `set(VALID)` on the Flag path in
+  `signal_ready_`, ctor + header comments corrected; version define left at 7), and the unit test
+  (new `pipe_rotating.cpp` kernel + `test_rotating_role` 6-cell parametrization).
+- **Verification (WH, this run):** header-only + JIT kernel change (no `build_metal.sh` rebuild).
+  `test_mcast_pipe.py` **45/45 PASS** (39 prior + 6 new `test_rotating_role`). Regression-guard proof:
+  temporarily reverting the `set(VALID)` line makes `test_rotating_role[n_iters=2-payload_tiles=1]`
+  **HANG** (dispatch timeout, triage shows both `pipe_rotating.cpp` cores stuck) — so the new cell
+  genuinely catches a regression back to ctor-once-VALID. Line restored; full suite green.
+- **Provisional items:** none. M12b is coverage-decided (correctness), not a micro-bench dual-path.
+- **Hand-off:** re-invoke `apply-dm-helper helper_design/mcast_pipe/`. Note: because the API version did
+  NOT change, no Tier-0 staleness sweep is triggered by the version key. The work owed is specifically to
+  **lift `block_sharded` out of quarantine** — its v7 call site is recoverable from commit `fa561f3b584`
+  (raw revert currently at HEAD); with M12b in the helper it now passes. apply-dm-helper re-verifies it
+  against its mapped test and flips the ledger entry `quarantined → migrated@v7`.

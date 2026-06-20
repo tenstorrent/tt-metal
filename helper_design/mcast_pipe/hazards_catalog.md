@@ -211,6 +211,38 @@ speculative — every variant is observed in production. Two new hazards surface
   **capability GAP** the topology survey (Step ★) records as CHAIN=GAP. The chain family stays
   **deferred** this round; INV12 documents *what* the abstraction must eventually grow to cover it.
 
+#### H12 amendment — H12 ALSO fires for the rotating-role STAR; a cheaper mitigation exists (Round 9, 2026-06-20, feedback-4.txt)
+- **Scope was too narrow.** The Round-7 entry pinned H12 to the CHAIN topology only. The **rotating-role
+  STAR** (one core takes a *sender turn* for block *b* and a *receiver turn* for block *b′* — matmul
+  `..._in0_sender_receiver_padding_block_sharded`, group_attn) is the **same hazard in a star**: that
+  core's `data_ready` cell is *mutable* because its own `ReceiverPipe::receive()` drives it INVALID at
+  the end of each receive (clear-after-wait). So the cell does **not** stay VALID between the core's
+  sender turns.
+- **Why Round 6 missed it.** Round 6 decided D1 "ctor sets the local data-ready cell VALID once;
+  `set_multicast` rebroadcasts it; no per-send local set." That reasoning is correct **for a pure STAR
+  sender** (its cell is never clobbered) but **wrong for a rotating-role sender** (its receiver turn
+  clobbers the same cell INVALID). Device-confirmed A/B (WH, 2026-06-20): v7 unmodified HANGS;
+  v7 + a per-send `set(VALID)` before the flag `set_multicast` PASSES — the only delta is re-establishing
+  the source cell VALID per send round. (The raw kernel always did exactly this, with a comment warning
+  that overwriting it INVALID too early makes receivers `wait(VALID)` forever.)
+- **Mitigation NOT in the catalog — `M12b re-assert VALID per send` (the star case):** because the
+  star's broadcast source cell **IS** the dest cell (`src id == dst id`, A5), the link does **not** need
+  the chain's distinct write-once `valid_sem`. It only needs to **re-store its own cell = VALID
+  immediately before each flag `set_multicast`**, so the broadcast source is fresh every round. This is
+  strictly cheaper than INV12's cross-id relay (one extra local L1 store vs a second sem id + A5′ relay)
+  and is the correct fix *for the star* — the chain still needs INV12 because its source and dest are
+  **different** cells (it cannot re-store the source without clobbering the doorbell it is waiting on).
+  - **M12b is DOMINANT, not a fork (coverage-decided):** it covers BOTH the rotating-role STAR
+    (required — hang without it) and the pure STAR (redundant no-op store — harmless). Pure-STAR senders
+    pay one redundant L1 store; rotating senders are correct. → **bake it in unconditionally on the Flag
+    path; do NOT gate it behind a predicate** (gating costs more than the redundant store it saves).
+  - **Counter path is unaffected** — it is monotone (`inc_multicast` + `wait_min`), has no level flag and
+    no source cell to keep VALID. M12b is Flag-path-only.
+- **Consequence for R6 (Step C / Step ★):** the rotating-role STAR is **migratable** with two Pipes (one
+  `SenderPipe` + one `ReceiverPipe` on the shared cell) once M12b lands. The original "R6 confirmed hard
+  by the bake-off — same-core sender+receiver hangs" verdict was a **symptom of this missing mitigation**,
+  not evidence of infeasibility. (The CHAIN GAP is unchanged — it still needs INV12 cross-id relay.)
+
 ## New non-fork structural requirements the API must absorb (not style choices)
 These are **generality requirements** surfaced by the census — they go to Step ★ (API feasibility),
 not the bake-off:

@@ -298,3 +298,27 @@ refactor targets converge onto; atomic-barrier remains the counter-path fence. N
 
 **No bake-off, no API change, no version bump this round** (E and G are no-ops): relay is a
 topology-forced capability, not a style fork measurable on the star, and the chain family is deferred.
+
+---
+
+## Round-9 addendum (2026-06-20, feedback-4.txt) — NO API change
+
+DERIVED FROM: hazards_catalog H12 amendment (M12b) · proposed_helpers Round 9 · changelog Round 9.
+
+Re-entry routed at **Step B** (H12's mitigation set was incomplete for the rotating-role STAR). The
+fix — re-assert the sender's own `data_ready` cell = VALID per send on the **Flag path** before the
+flag `set_multicast` — is **internal to `SenderPipe::send()`/`signal_ready_`**. It touches **no**
+caller-facing surface:
+
+- **No template-arg change** — same `SenderPipe`/`ReceiverPipe` signatures (version 7).
+- **No new knob, no new face** — explicitly NOT gated behind a predicate (M12b is DOMINANT: redundant
+  no-op store for the pure STAR, required for the rotating STAR). A two-Pipe rotating-role call site
+  uses the *existing* `SenderPipe` + `ReceiverPipe` unchanged.
+- **No count-semantics change** — `NUM_ACTIVE_RECEIVER_CORES`, loopback derivation, ack accounting all
+  unchanged.
+
+**Feasibility verdict — unchanged: T1 STAR FULLY SUPPORTED**, now *including* the rotating-role STAR
+sub-case (two Pipes on a shared cell), which the Round-7 survey had implicitly conflated with the
+CHAIN gap. CHAIN (T2) is still a GAP — it needs INV12 cross-id relay because its source ≠ dest cell;
+the star can re-store its own cell, so M12b suffices. **No bake-off cell (re-decide only), no API
+change, no `MCAST_PIPE_API_VERSION` bump** (G is an internal `send()`-body edit).

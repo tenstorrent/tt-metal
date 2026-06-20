@@ -26,6 +26,14 @@ block inventory; this is the **pre-migration blocker view**.
    per-iteration. A fixed sender-object + receiver-object model **cannot express this**. This is the
    single biggest threat to the two-sided `Pipe` premise → **Step ★ must rule on it** (likely:
    `receive(sender_coord, …)` takes a per-call sender; role-flip kernels tagged `refactor`/`defer`).
+   - **UPDATE (Round 9, feedback-4.txt):** the rotating-role STAR **IS migratable** with two Pipes (a
+     `SenderPipe` + a `ReceiverPipe` sharing the `data_ready` cell, `receive(sender_x, sender_y)`
+     taking the rotating coord) — once the **M12b** Flag-path fix lands (re-assert the source cell VALID
+     per send; see hazards_catalog H12 amendment). The earlier "cannot express / confirmed hard, same-core
+     sender+receiver hangs" verdict was a **symptom of the Round-6 ctor-once-VALID decision** (the
+     receiver turn clobbers the shared cell INVALID, so the once-set source went stale), NOT proof of
+     infeasibility. block_sharded is currently `quarantined`; M12b lifts it. group_attn additionally
+     carries an F1 barrier-after-flag disagreement (matmul.md #5) — a separate refactor cost, unchanged.
 
 3. **Flag-only sends with no data** — the *entire* data_movement/reduction group, plus ln_pre and
    gn "go" flags, never call `noc_async_write_multicast` at all (4-byte sem mcast only). A Pipe that

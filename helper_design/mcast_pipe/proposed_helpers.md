@@ -20,7 +20,14 @@
 > precedes the sem (gate-then-resource) and `DATA_READY_SIGNAL` moved to last. Also folded in three
 > implementation-only fixes (no contract change): a `NOC_ID`-vs-`Noc` ctor `ASSERT`, `sender_in_rect`
 > precomputed in the ctor, and the post-send flush hoisted out of the `fence_()` `if constexpr`. API
-> version **7**. Authoritative running record: `changelog.md`.
+> version **7**. **Round 9 (2026-06-20, feedback-4.txt)** REVERSES Round-6's "no per-send local set":
+> the Flag path now **re-asserts the sender's own `data_ready` cell = VALID per send** before the flag
+> `set_multicast` (mitigation **M12b**, hazards_catalog H12 amendment). Round 6 was right for a pure STAR
+> sender but wrong for a **rotating-role** sender whose receiver turn (clear-after-wait) clobbers the same
+> shared cell INVALID between its sender turns — the ctor-once VALID goes stale and receivers hang.
+> Internal to `send()`/`signal_ready_`, Flag-path-only, NOT gated (DOMINANT: redundant no-op for the
+> pure STAR, required for the rotating STAR). **No caller-facing change → API stays version 7, no bump.**
+> Authoritative running record: `changelog.md`.
 
 > **⚠ CAPABILITY GAP — TOPOLOGY (Round 7, 2026-06-20, feedback-2.txt).** The `Pipe` is a **STAR**
 > primitive: one sender → N pure receivers over a **single shared `data_ready` sem id**, broadcasting
@@ -114,6 +121,7 @@ public:
 | **F2 staging default** | level **flag** | flag 5505 ns vs counter 7719 ns = **−29%**; counter also needs an atomic barrier + ACK accounting. Counter exposed only as the `Staging::Counter` use-case knob. |
 | **flag reset ownership** | receiver clears **before** signalling ready (clear-before-next) | H11 — avoids first-iteration cross-op stale-VALID; the Pipe pins it so callers can't get it wrong. |
 | **data→flag ordering** | issue data, then flag, same `Noc`/VC-4 | INV4 — the property that lets the flag prove arrival (so flush suffices). |
+| **Flag source freshness** | Flag path **re-asserts local cell = VALID per send** (before `set_multicast`) | H12/M12b (Round 9) — DOMINANT coverage: required for the rotating-role STAR (receiver turn clobbers the shared cell INVALID), redundant no-op store for the pure STAR. On-device A/B in `style_bakeoff.md` §Round-9 (ctor-once → HANG; per-send set → PASS). NOT gated. Counter path untouched (monotone). Reverses Round-6 D1. |
 
 ## Internal dual-paths (style dispatch on a constexpr predicate — NOT caller knobs; within the ~2 cap)
 
@@ -178,9 +186,13 @@ llama worker_receiver, gn_v2 receiver. `(EXCLUDE or INCLUDE, Flag, flush, pre_ha
 
 **Defer / out of scope (NOT this round — human-review items):**
 - **Rotating-sender / role-flip (R6):** matmul `..._in0_sender_receiver_padding_block_sharded`,
-  group_attn — same core sends block b and receives block b′. Needs a **two-Pipe** refactor (one
-  sending, one receiving) or stays on raw API. **Confirmed hard by the bake-off** (same-core
-  sender+receiver hangs). **Biggest refactor-cost item — flag for the human.**
+  group_attn — same core sends block b and receives block b′. Migrates with a **two-Pipe** refactor
+  (one `SenderPipe`, one `ReceiverPipe` sharing the `data_ready` cell, `receive(sx,sy)` per rotating
+  coord). ~~Confirmed hard by the bake-off (same-core sender+receiver hangs).~~ **Round 9 update
+  (feedback-4.txt):** the hang was the **Round-6 ctor-once-VALID bug**, NOT infeasibility — with M12b
+  (Flag path re-asserts source VALID per send) the two-Pipe model works. block_sharded is currently
+  quarantined; M12b lifts it (apply-dm-helper Tier-0). Still the biggest refactor-cost item (loopback +
+  degenerate + lockstep pop); group_attn adds an F1 barrier-after-flag disagreement.
 - Ring/unicast (matmul in0_ring, sdpa ring legs, sort cross-core) — not rectangle-mcast.
 - Fabric / cross-chip CCL legs — intent exclusion.
 - Preprogram-state perf optimization (deepseek mcast.hpp) — no mcast set-state in object API; future.

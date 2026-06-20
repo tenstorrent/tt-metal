@@ -28,10 +28,10 @@
 //   * ReceiverPipe inits its own `data_ready` = INVALID (Flag signal). SAFE: the receiver writes it
 //                  before its own ack, and the sender — the only other writer — is gated behind that
 //                  ack.
-//   * SenderPipe   sets its own local `data_ready` cell = VALID once in the ctor (Flag signal). SAFE:
-//                  the sender is the sole writer of its own cell before the first send. This is the
-//                  value the per-send mcast broadcasts (`set_multicast` reads the local cell as its
-//                  source), so it is set once and reused — never re-set per send.
+//   * SenderPipe   sets its own local `data_ready` cell = VALID in the ctor (Flag signal). SAFE: the
+//                  sender is the sole writer of its own cell before the first send. send() re-asserts
+//                  VALID each call, so a core that also receives on this cell broadcasts a fresh VALID
+//                  instead of the stale INVALID its last receive left behind.
 //   * SenderPipe does NOT init `consumer_ready`. That counter is incremented by REMOTE receivers with
 //                  no happens-before relative to the sender's ctor (a receiver can ack before the
 //                  sender core even runs), so a ctor `set(0)` would clobber an early ack and hang. Its
@@ -164,11 +164,8 @@ public:
         // happens-before relative to this ctor, so a ctor set(0) would clobber an early ack and hang.
         // Its initial 0 comes from host `CreateSemaphore(..., 0)`.
         //
-        // The sender's OWN local data-ready cell IS owned by this ctor (only the sender writes it
-        // before the first send). For the Flag signal, `set_multicast` broadcasts this local cell as
-        // its source, and that source is always VALID, so it is set ONCE here and reused every send —
-        // never re-set per send. The no-loopback path relies on this (its EXCLUDE-source mcast does not
-        // touch the sender's own cell); the loopback path overwrites it harmlessly with the same VALID.
+        // Initial VALID for the flag cell that set_multicast broadcasts. send() re-asserts it each call
+        // (so a core that also receives on this cell doesn't broadcast a stale INVALID).
         if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
             data_ready_.set(VALID);
         }
@@ -243,17 +240,23 @@ private:
 
     // ---- signal the receivers the data is ready ----
     // `loopback` mirrors the data mcast of the same send(); send_signal() has no data, so it is always
-    // plain (EXCLUDE-source). The Flag path broadcasts the sender's persistent local VALID cell (set
-    // once in the ctor) — no per-send local set.
+    // plain (EXCLUDE-source).
     void signal_ready_(bool loopback, uint32_t mcast_dests) {
         const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
         if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
             data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, mcast_dests);  // monotone +1
-        } else if (loopback) {
-            data_ready_.set_multicast<NocOptions::MCAST_INCL_SRC>(
-                noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
         } else {
-            data_ready_.set_multicast<NocOptions::DEFAULT>(noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
+            // set_multicast broadcasts this core's own cell as the source, so re-assert VALID first: a
+            // core that also receives on this cell leaves it INVALID after a receive, and a once-only set
+            // would go stale and stall the receivers. Redundant no-op for a send-only core.
+            data_ready_.set(VALID);
+            if (loopback) {
+                data_ready_.set_multicast<NocOptions::MCAST_INCL_SRC>(
+                    noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
+            } else {
+                data_ready_.set_multicast<NocOptions::DEFAULT>(
+                    noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
+            }
         }
     }
 

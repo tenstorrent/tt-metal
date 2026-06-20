@@ -368,3 +368,116 @@ def test_f3_loopback(device, payload_tiles):
 # loopback to a local copy (else the raw loopback hangs). Only the sender core participates.
 def test_f3_degenerate(device):
     _run_f3(device, rect_len=1, payload_tiles=1, n_iters=1)
+
+
+# ============ ROTATING-ROLE regression ============
+# Two cores ping-pong over a SINGLE shared data_ready cell: each is a sender on some iters and a
+# receiver on others. A core's receiver turn clears the shared cell, so its next sender turn must
+# re-assert VALID before broadcasting it -- otherwise it broadcasts a stale INVALID and the partner's
+# receive() hangs. Sender is always out of its 1x1 partner rect (no loopback).
+def _run_rotating(device, payload_tiles, n_iters):
+    assert n_iters % 2 == 0, "ping-pong needs an even iter count"
+    page_bytes = TILE_BYTES
+    payload_pages = payload_tiles
+    recv_per_core = n_iters // 2
+    num_recv_total = 2 * recv_per_core
+
+    # core A = (0,0) role 0 (sends on even iters); core B = (0,1) role 1 (sends on odd iters)
+    A, B = (0, 0), (0, 1)
+
+    in_shape = [1, 1, 32, 32 * payload_tiles]
+    payload = torch.arange(0, payload_tiles * 1024, dtype=torch.float32).reshape(in_shape).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(
+        payload, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    out_shape = [num_recv_total, 1, 32, 32 * payload_tiles]
+    output_tensor = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(out_shape), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
+    io_tensors = [input_tensor, output_tensor]
+
+    union_crs = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(*A), ttnn.CoreCoord(*A)),
+            ttnn.CoreRange(ttnn.CoreCoord(*B), ttnn.CoreCoord(*B)),
+        ]
+    )
+
+    cb_src, cb_dst = 0, 1
+    cbs = [
+        ttnn.CBDescriptor(
+            total_size=payload_pages * page_bytes,
+            core_ranges=union_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_src, data_format=ttnn.bfloat16, page_size=page_bytes)
+            ],
+        ),
+        ttnn.CBDescriptor(
+            total_size=payload_pages * page_bytes,
+            core_ranges=union_crs,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(buffer_index=cb_dst, data_format=ttnn.bfloat16, page_size=page_bytes)
+            ],
+        ),
+    ]
+
+    # data_ready: host-init 0 (the pipes own its per-side init); consumer_ready: host-init 0 (a
+    # remote-incremented counter, MUST be host-owned per the helper contract).
+    DATA_READY, CONSUMED = 0, 1
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=DATA_READY, core_ranges=union_crs, initial_value=0),
+        ttnn.SemaphoreDescriptor(id=CONSUMED, core_ranges=union_crs, initial_value=0),
+    ]
+
+    va = _virt(device, *A)
+    vb = _virt(device, *B)
+
+    def _kernel_for(role, partner_virt, out_start_pages):
+        ct = [cb_src, cb_dst, DATA_READY, CONSUMED, payload_pages, page_bytes, n_iters]
+        ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+        ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+        rt = ttnn.RuntimeArgs()
+        core = A if role == 0 else B
+        rt[core[0]][core[1]] = [
+            input_tensor.buffer_address(),
+            0,
+            partner_virt[0],
+            partner_virt[1],
+            output_tensor.buffer_address(),
+            out_start_pages,
+            role,
+        ]
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(*core), ttnn.CoreCoord(*core))])
+        # role 0 runs on the reader NoC, role 1 on the writer NoC (one kernel per core)
+        cfg = ttnn.ReaderConfigDescriptor() if role == 0 else ttnn.WriterConfigDescriptor()
+        return ttnn.KernelDescriptor(
+            kernel_source=f"{KERNEL_DIR}/pipe_rotating.cpp",
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=crs,
+            compile_time_args=ct,
+            runtime_args=rt,
+            config=cfg,
+        )
+
+    # A's partner is B; B's partner is A. A writes its received blocks to DRAM slots starting at 0;
+    # B starts after A's region.
+    kA = _kernel_for(role=0, partner_virt=vb, out_start_pages=0)
+    kB = _kernel_for(role=1, partner_virt=va, out_start_pages=recv_per_core * payload_pages)
+
+    pd = ttnn.ProgramDescriptor(kernels=[kA, kB], semaphores=semaphores, cbs=cbs)
+    output = ttnn.generic_op(io_tensors, pd)
+
+    torch_out = ttnn.to_torch(output).reshape(num_recv_total, 1, 32, 32 * payload_tiles)
+    for jj in range(num_recv_total):
+        assert torch.equal(
+            torch_out[jj].to(torch.float32), payload[0].to(torch.float32)
+        ), f"rotating-role: received block {jj} mismatch"
+    logger.info(f"ROTATING-ROLE pt={payload_tiles} N={n_iters}: PASS (no hang, all blocks bit-exact)")
+
+
+# n_iters>=2 is enough: a core's first receiver turn clobbers the shared cell, so its second
+# (sender) turn is the first to broadcast a stale flag without M12b. Larger N stresses repetition.
+@pytest.mark.parametrize("payload_tiles", [1, 4])
+@pytest.mark.parametrize("n_iters", [2, 4, 8])
+def test_rotating_role(device, payload_tiles, n_iters):
+    _run_rotating(device, payload_tiles=payload_tiles, n_iters=n_iters)

@@ -224,3 +224,36 @@ Single-path defaults for F1 (flush), F2 (flag). **Two** internal dispatch points
 size). Within the ~2-per-helper cap. F1/F2 are NOT dual-paths (flush/flag dominate globally; counter is a
 use-case knob). Perf gaps are micro-bench (provisional per E.4) but F1/F2/F4 all clear ≥10% comfortably;
 F3 is correctness/geometry-forced (not provisional).
+
+---
+
+## Round 9 (2026-06-20, feedback-4.txt) — F-flag-source-freshness: re-DECIDE only (no new device run)
+
+DERIVED FROM: hazards_catalog H12 amendment (M12b) · feedback-4.txt on-device A/B.
+
+**New fork surfaced at Step B, decided by the device evidence the feedback already supplies — no new
+matrix cell measured.** The fork is *how the Flag path keeps its broadcast source cell VALID*:
+
+| Variant | Coverage | Decision |
+|---|---|---|
+| **A — ctor-once VALID** (Round 6: set local cell VALID once in ctor, never per send) | pure STAR: PASS · **rotating-role STAR: HANG** | rejected — fails the rotating cell |
+| **B — re-assert VALID per send** (M12b: re-store local cell = VALID before each flag `set_multicast`) | pure STAR: PASS (redundant no-op store) · **rotating-role STAR: PASS** | **DOMINANT — bake in** |
+
+**On-device A/B (WH, 2026-06-20, from feedback-4.txt)**, kernel
+`reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp`, test
+`test_matmul_2d_multiple_output_blocks_per_core[...transpose_mcast=True...in0_sharded=True-grid_size=(8,4)...b=1]`:
+- CONTROL = v7 unmodified → **HANG** (receivers `wait(VALID)` forever; the rotating core's receiver turn
+  left the shared `data_ready` cell INVALID, so the once-set ctor source went stale).
+- TREATMENT = v7 + one line `set(VALID)` before the flag send → **PASS**. Only delta: re-establish the
+  source cell VALID per send round.
+
+**Outcome — E.4 case 1 (DOMINANT single path), coverage-decided (NOT provisional).** Variant B covers
+**all** cells; Variant A fails the rotating cell with a hang. → **bake B in unconditionally on the Flag
+path. NOT a dual-path, NOT a knob** (feedback explicit: do not gate behind a predicate — the pure-STAR
+cost is one redundant L1 store, far cheaper than a branch). **Counter path untouched** (monotone; no
+level flag, no source cell to refresh).
+
+**Dual-path budget unaffected** — M12b adds zero internal dispatch points (it is an unconditional store
+on the Flag path). The cap (F3, F4) is unchanged. This is a **re-decide**, not a re-measure: the device
+evidence is the feedback's A/B; no `bakeoff_*` matrix re-run. Step G adds a rotating-role **unit-test
+cell** as the persisted regression guard (reproduces hang→pass).
