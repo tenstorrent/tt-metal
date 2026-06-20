@@ -155,9 +155,15 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
-    // mcast_pipe v7: the in0 block data-mcast + handshake is driven by a SenderPipe.
+    // mcast_pipe v8: the in0 block data-mcast + handshake is driven by a SenderPipe.
     //   DATA_READY_SEM_ID = receiver_sem id (CTA 16, S->R level flag VALID/INVALID),
-    //   CONSUMER_READY_SEM_ID = sender_sem id (CTA 15, R->S counter), count = in0_mcast_num_dests.
+    //   CONSUMER_READY_SEM_ID = sender_sem id (CTA 15, R->S counter).
+    //   DIVERGENT site (ack != fan-out): the rect is the FULL receiver bounding box (its area gives the
+    //   data-mcast fan-out), but only the active cores ack. The factory sets in0_mcast_num_dests (CTA 17)
+    //   = num_cores - 1 (active receivers, excluding the sender), which can be < area-1 when num_blocks_x
+    //   does not fill the box (uneven_width). So pass consumer_ack_count = in0_mcast_num_dests as the
+    //   ctor's 3rd arg; the inactive cores in the box receive the data but never ack, so the default
+    //   ACK_EQUALS_FANOUT would over-wait and hang.
     //   The sender sits in the box corner but is NOT a recipient (num_dests < area) so the Pipe
     //   infers EXCLUDE_SRC — it must not self-overwrite its own in0 source. PRE_HANDSHAKE=true: dest L1
     //   is the receivers' reused in0 CB slot, so the R->S "consumed" wait gates each block. The ctor
@@ -167,7 +173,6 @@ void kernel_main() {
     dataflow_kernel_lib::SenderPipe<
         noc_index,
         get_compile_time_arg_val(16),
-        in0_mcast_num_dests,
         /*PRE_HANDSHAKE=*/true,
         get_compile_time_arg_val(15)>
         in0_pipe(
@@ -176,7 +181,8 @@ void kernel_main() {
                 in0_mcast_dest_noc_start_x,
                 in0_mcast_dest_noc_start_y,
                 in0_mcast_dest_noc_end_x,
-                in0_mcast_dest_noc_end_y});
+                in0_mcast_dest_noc_end_y},
+            in0_mcast_num_dests);
 
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = cb_in0.get_write_ptr();
