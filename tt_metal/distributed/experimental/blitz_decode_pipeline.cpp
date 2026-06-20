@@ -24,6 +24,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
 
@@ -252,11 +253,10 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
     // With loopback:    N hops: mesh_0→mesh_1→...→mesh_{N-1}→mesh_0
     // Without loopback: N-1 hops: mesh_0→mesh_1→...→mesh_{N-1} (no return)
     //
-    // This is a system-of-distinct-representatives problem: per-hop greedy first-fit can strand a later
-    // hop by claiming a chip that hop's only remaining candidate needs (common on rings where each
-    // inter-mesh boundary exposes very few cable pairs, e.g. a large LINE-dimension ring). Solve it with
-    // backtracking over all hops, trying the most-constrained hop first (minimum remaining values) so a
-    // valid assignment is found whenever one exists.
+    // Greedy first-fit can strand a mid-chain hop on rings with few cable pairs per boundary, so
+    // tt_fabric::assign_non_colliding_hops() (topology_mapper_utils) does a backtracking global
+    // assignment (distinct representatives, most-constrained-hop-first) that succeeds whenever a valid
+    // layout exists.
     const std::size_t num_hops = initialize_loopback ? num_meshes : num_meshes - 1;
     using HopPair = std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>;
 
@@ -270,10 +270,7 @@ ResolvedBlitzDecodePipelineAllocation build_pipeline_allocation_from_topology(bo
             !candidates[i].empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
     }
 
-    // Resolve a collision-free pair for every hop. Greedy first-fit can strand a mid-chain hop on
-    // rings with few cable pairs per boundary, so detail::assign_non_colliding_hops() does a
-    // backtracking global assignment that succeeds whenever a valid layout exists.
-    auto assignment = detail::assign_non_colliding_hops(candidates);
+    auto assignment = ::tt::tt_metal::experimental::tt_fabric::assign_non_colliding_hops(candidates);
     TT_FATAL(
         assignment.has_value(),
         "Could not assign non-colliding inter-mesh pairs for all {} hops of the blitz decode pipeline ring "

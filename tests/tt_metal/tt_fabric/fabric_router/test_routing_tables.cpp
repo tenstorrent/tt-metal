@@ -29,6 +29,7 @@
 #include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <fmt/format.h>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 namespace {
 
