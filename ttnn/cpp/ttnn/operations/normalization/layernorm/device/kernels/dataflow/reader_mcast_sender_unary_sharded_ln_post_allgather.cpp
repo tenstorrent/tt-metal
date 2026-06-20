@@ -37,17 +37,19 @@ void kernel_main() {
     // mcast_pipe (C1 post_allgather): one-shot loopback broadcast of the global reduce result + a
     // VALID data-ready flag, INCLUDE_SRC. The sender reads its OWN reduced stats (cb_stats_reduced) and
     // writes them into cb_ex_global on ALL num_blocks cores INCLUDING itself (src != dst => true
-    // loopback): NUM_ACTIVE_RECEIVER_CORES = num_blocks - 1 (recipients excluding self), the helper
-    // adds +1 for the self-copy. data_ready = reduce_sender_sem (CTA 1, S->R level flag). NO
-    // pre-handshake: each receiver mcasts into a FRESH reserve_back slot, so PRE_HANDSHAKE=false
-    // (CONSUMER_READY_SEM_ID omitted). send() couples the data mcast + VALID flag (was the old split
+    // loopback). v8: PURE DELETION — the dropped NUM_ACTIVE_RECEIVER_CORES (= num_blocks - 1) equals
+    // the EXCLUDE fan-out the rect derives: the rect covers all num_blocks cores INCLUDING the sender,
+    // so area == num_blocks and the EXCLUDE fan-out == area - 1 == num_blocks - 1. send() detects
+    // src != dst with the sender in-box and adds +1 for the self-copy (INCLUDE_SRC) automatically.
+    // data_ready = reduce_sender_sem (CTA 1, S->R level flag). NO pre-handshake: each receiver mcasts
+    // into a FRESH reserve_back slot, so PRE_HANDSHAKE=false (CONSUMER_READY_SEM_ID omitted; no
+    // consumer-ack to override). send() couples the data mcast + VALID flag (was the old split
     // global_reduce_sender + global_semaphore_set); the CB push/pop between them are local bookkeeping.
     constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
-    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_sem_id, num_blocks - 1, /*PRE_HANDSHAKE=*/false>
-        reduce_pipe(
-            noc,
-            dataflow_kernel_lib::McastRect<>{
-                mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
+    dataflow_kernel_lib::SenderPipe<noc_index, reduce_sender_sem_id, /*PRE_HANDSHAKE=*/false> reduce_pipe(
+        noc,
+        dataflow_kernel_lib::McastRect<>{
+            mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
 
     cb_stats_reduced_obj.wait_front(stats_tiles * block_h);
     cb_ex_global_obj.reserve_back(stats_tiles * block_h);
