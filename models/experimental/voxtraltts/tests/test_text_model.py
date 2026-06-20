@@ -25,6 +25,8 @@ from models.experimental.voxtraltts.reference.voxtral_config import (
 from models.experimental.voxtraltts.tests.common import (
     create_real_voxtral_text_model_or_skip,
     resolve_voxtral_model_name_or_skip,
+    tale_continuation_tokens,
+    tale_prompt_tokens,
 )
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
 
@@ -42,11 +44,6 @@ def _use_paged_kv(seq_len: int) -> bool:
 
 def _prefill_tile_start(token_index: int) -> int:
     return (int(token_index) // 32) * 32
-
-
-def _decode_multistep_tokens_seed(seq_len: int) -> int:
-    """Deterministic decode stream that stays ≥0.98 PCC for 32 teacher-forced steps."""
-    return 2000 + seq_len
 
 
 def _tt_last_logits_from_tokens(
@@ -252,8 +249,9 @@ def test_text_model_prefill_pcc(device, reset_seeds, seq_len):
     """Last-token **logits** PCC, all layers, production ``max_seq_len`` KV budget.
 
     Mirrors ``models/tt_transformers/tests/mixtral/test_mixtral_model_prefill.py``:
-    build with full ``max_seq_len`` (65536), sweep shorter ``seq_len`` prompts, compare last-token
-    logits from ``ttnn_prefill_forward`` / ``process_output_prefill`` vs reference logits.
+    build with full ``max_seq_len`` (65536), sweep shorter ``seq_len`` prompts from
+    *A Tale of Two Cities*, compare last-token logits from ``ttnn_prefill_forward`` /
+    ``process_output_prefill`` vs reference logits.
     """
     max_seq_len = DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
     model = create_real_voxtral_text_model_or_skip(
@@ -265,13 +263,8 @@ def test_text_model_prefill_pcc(device, reset_seeds, seq_len):
     args = model.inner.args
     state_dict = args.load_state_dict()
 
-    tokens = torch.randint(
-        0,
-        model.inner.vocab_size,
-        (1, seq_len),
-        dtype=torch.int64,
-        generator=torch.Generator().manual_seed(42 + seq_len),
-    )
+    tokens = tale_prompt_tokens(seq_len)
+    logger.info(f"test_text_model_prefill_pcc seq_len={seq_len} tale_tokens=True")
 
     tt_x, rot_mats_global, rot_mats_local, _, _, _ = model.prepare_inputs_prefill(tokens, start_pos=0)
     tt_logits = model.inner.ttnn_prefill_forward(
@@ -308,21 +301,9 @@ def test_text_model_decode_pcc(device, reset_seeds, seq_len):
         optimizations=voxtral_text_logits_pcc_optimizations,
         use_paged_kv_cache=_use_paged_kv(seq_len),
     )
-    vocab_size = model.inner.vocab_size
-    prompt_tokens = torch.randint(
-        0,
-        vocab_size,
-        (1, seq_len),
-        dtype=torch.int64,
-        generator=torch.Generator().manual_seed(42 + seq_len),
-    )
-    decode_input_token = torch.randint(
-        0,
-        vocab_size,
-        (1,),
-        dtype=torch.int64,
-        generator=torch.Generator().manual_seed(1000 + seq_len),
-    )
+    prompt_tokens = tale_prompt_tokens(seq_len)
+    decode_input_token = tale_continuation_tokens(seq_len, 1)[:, 0:1]
+    logger.info(f"test_text_model_decode_pcc seq_len={seq_len} tale_tokens=True")
 
     _run_tt_prefill_fill_kv(model, prompt_tokens)
     tt_tokens, tt_current_pos, tt_rope_idxs, tt_page_table = model.prepare_inputs_decode(
@@ -366,21 +347,9 @@ def test_text_model_decode_multistep_pcc(device, reset_seeds, seq_len, decode_st
         optimizations=voxtral_text_logits_pcc_optimizations,
         use_paged_kv_cache=_use_paged_kv(seq_len),
     )
-    vocab_size = model.inner.vocab_size
-    prompt_tokens = torch.randint(
-        0,
-        vocab_size,
-        (1, seq_len),
-        dtype=torch.int64,
-        generator=torch.Generator().manual_seed(42 + seq_len),
-    )
-    decode_tokens = torch.randint(
-        0,
-        vocab_size,
-        (1, decode_steps),
-        dtype=torch.int64,
-        generator=torch.Generator().manual_seed(_decode_multistep_tokens_seed(seq_len)),
-    )
+    prompt_tokens = tale_prompt_tokens(seq_len)
+    decode_tokens = tale_continuation_tokens(seq_len, decode_steps)
+    logger.info(f"test_text_model_decode_multistep_pcc seq_len={seq_len} tale_tokens=True")
 
     _assert_decode_multistep_logits_pcc(
         model,
@@ -412,25 +381,13 @@ def test_text_model_decode_tail_context_multistep_pcc(device, reset_seeds):
         optimizations=voxtral_text_logits_pcc_optimizations,
         use_paged_kv_cache=True,
     )
-    vocab_size = model.inner.vocab_size
-    prompt_tokens = torch.randint(
-        0,
-        vocab_size,
-        (1, seq_len),
-        dtype=torch.int64,
-        generator=torch.Generator().manual_seed(42 + seq_len),
-    )
-    decode_tokens = torch.randint(
-        0,
-        vocab_size,
-        (1, decode_steps),
-        dtype=torch.int64,
-        generator=torch.Generator().manual_seed(_decode_multistep_tokens_seed(seq_len)),
-    )
+    prompt_tokens = tale_prompt_tokens(seq_len)
+    decode_tokens = tale_continuation_tokens(seq_len, decode_steps)
 
     logger.info(
         f"test_text_model_decode_tail_context_multistep_pcc: "
-        f"prompt_len={seq_len}, decode_steps={decode_steps}, max_pos={seq_len + decode_steps - 1}"
+        f"prompt_len={seq_len}, decode_steps={decode_steps}, max_pos={seq_len + decode_steps - 1}, "
+        f"tale_tokens=True"
     )
     _assert_decode_multistep_logits_pcc(
         model,
