@@ -381,15 +381,15 @@
    "op_family": "normalization",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
-   "migrated_api_version": null,
-   "commit": null,
+   "status": "migrated",
+   "migrated_api_version": 7,
+   "commit": "47f62dbd700",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "C2 flag-only; atomic-barrier",
+   "last_verified": "2026-06-20",
+   "census_note": "C2 flag-only sender -> send_signal(); consumer-drain gate + gather HOLE kept raw",
    "flags": [
     "tier:2a"
    ]
