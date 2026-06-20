@@ -130,15 +130,17 @@ void kernel_main() {
             // is DEFERRED RAW: it reuses this same reduce_sender_sem cell as a counter, which the
             // Flag/Counter Pipe verbs cannot express per-side without desyncing the receiver base.
             // Sender sits above the receiver rect (which starts one row below) -> EXCLUDE_SRC inferred.
-            // NUM_ACTIVE_RECEIVER_CORES = recipient count = num_blocks - 1 (the receiver rect, sender
-            // excluded). data_ready=reduce_sender_sem (CTA 1), consumed=reduce_receiver_sem (CTA 0),
-            // PRE_HANDSHAKE=false. INITIAL_READY=INVALID: this signal sender's flag cell starts cleared
-            // (phase-2 later reuses it as a monotone counter), folding in the old pre-loop clear.
+            // v8: PURE DELETION — the dropped NUM_ACTIVE_RECEIVER_CORES (= num_blocks - 1) equals the
+            // EXCLUDE fan-out the rect derives (the sender is NOT in the receiver box, so area ==
+            // num_blocks - 1 == the recipient count). send_signal() uses that derived fan-out directly,
+            // and PRE_HANDSHAKE=false means there is no consumer-ack wait to override, so no ctor count.
+            // data_ready=reduce_sender_sem (CTA 1), PRE_HANDSHAKE=false (no consumer-ready sem). The
+            // signal sender's flag cell starts cleared (phase-2 later reuses it as a monotone counter),
+            // folding in the old pre-loop clear.
             constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
             dataflow_kernel_lib::SenderPipe<
                 noc_index,
                 reduce_sender_sem_id,
-                num_blocks - 1,
                 /*PRE_HANDSHAKE=*/false>
                 phase1_pipe(
                     noc,
