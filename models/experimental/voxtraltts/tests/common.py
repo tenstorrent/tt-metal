@@ -336,9 +336,23 @@ def create_real_voxtral_text_model_or_skip(
     max_batch_size: int = 1,
     dtype=ttnn.bfloat16,
     optimizations=voxtral_text_default_optimizations,
+    use_paged_kv_cache: bool = False,
+    paged_block_size: int = 32,
 ):
-    """Build the TT text model with the production config by default."""
+    """Build the TT text model with the production config by default.
+
+    ``use_paged_kv_cache=True`` is required for bulk prefill beyond ~4096 tokens on
+    Blackhole (L1 attention CB limit). Matches ``VoxtralTTSPipeline.from_model_name``.
+    """
+    import math
+
+    from models.tt_transformers.tt.common import PagedAttentionConfig
+
     model_name_or_path = resolve_voxtral_model_name_or_skip()
+    paged_cfg = None
+    if use_paged_kv_cache:
+        max_num_blocks = math.ceil(max_seq_len / paged_block_size)
+        paged_cfg = PagedAttentionConfig(block_size=paged_block_size, max_num_blocks=max_num_blocks)
     try:
         return VoxtralTTTextModel.create_from_model_name(
             mesh_device=device,
@@ -347,9 +361,34 @@ def create_real_voxtral_text_model_or_skip(
             max_batch_size=max_batch_size,
             max_seq_len=max_seq_len,
             optimizations=optimizations,
+            paged_attention_config=paged_cfg,
+            use_paged_kv_cache=False,
         )
     except Exception as exc:
         pytest.skip(f"Unable to build VoxtralTTTextModel from real checkpoint: {exc}")
+
+
+def build_voxtral_text_page_table_host(*, max_seq_len: int, paged_block_size: int = 32) -> torch.Tensor:
+    """Host page table ``[1, max_num_blocks]`` sized to the full KV block pool."""
+    import math
+
+    max_num_blocks = math.ceil(max_seq_len / paged_block_size)
+    return torch.arange(max_num_blocks, dtype=torch.int32).unsqueeze(0)
+
+
+def build_voxtral_text_page_table_tt(mesh_device, *, max_seq_len: int, paged_block_size: int = 32) -> ttnn.Tensor:
+    """Device page table for paged KV prefill/decode (full block pool)."""
+    page_table_host = build_voxtral_text_page_table_host(
+        max_seq_len=max_seq_len,
+        paged_block_size=paged_block_size,
+    )
+    return ttnn.from_torch(
+        page_table_host,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
 
 
 def create_voxtral_audio_tokenizer_or_skip(
