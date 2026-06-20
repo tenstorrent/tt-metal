@@ -67,7 +67,7 @@ class DataArgs:
     # value like 64 for quick smoke tests; leave at 0 to always use the auto-estimate.
     max_speech_tokens: int = 5000
     seed: int = 0
-    default_voice: str = "casual_female"
+    default_voice: str = "casual_male"
     warmup_iters: int = 1
     inline_texts: list[str] | None = None
     voice: str | None = None

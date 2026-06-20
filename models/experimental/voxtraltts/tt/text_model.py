@@ -17,6 +17,10 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     get_VoxtralTTArgs,
     voxtral_text_default_optimizations,
 )
+from models.experimental.voxtraltts.utils.mesh import (
+    voxtral_replicate_mesh_mapper,
+    voxtral_tp_shard_last_dim_mapper,
+)
 
 
 def _swap_text_mlps(inner, state_dict, weight_cache_path, dtype) -> None:

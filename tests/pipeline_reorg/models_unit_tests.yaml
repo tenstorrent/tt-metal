@@ -678,4 +678,42 @@
       timeout: 20
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
+- name: Voxtral TTS unit tests
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
+    export CI=true
+    pytest models/experimental/voxtraltts/tests/ \
+      --ignore=models/experimental/voxtraltts/tests/perf \
+      -q --timeout=3600
+  model: voxtral-tts
+  skus:
+    bh_p150b_civ2:
+      timeout: 25
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+
+- name: Voxtral TTS demo (QB2)
+  cmd: |
+    set -e
+    uv pip install -r models/experimental/voxtraltts/requirements.txt
+    export HF_HOME=/mnt/MLPerf/huggingface
+    export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
+    export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
+    export CI=true
+    export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
+    python models/experimental/voxtraltts/demo/demo.py \
+      --text "Hello from Voxtral on Tenstorrent Blackhole." \
+      --output-dir generated/voxtraltts_demo \
+      --max-speech-tokens 256
+  model: voxtral-tts
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models

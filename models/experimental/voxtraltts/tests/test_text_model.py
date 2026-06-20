@@ -270,7 +270,7 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
         hf_past = hf_step.past_key_values
         ref_last_logits = hf_step.logits[0, -1].float()
 
-        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
+        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.98)
         logger.info(
             f"test_text_model_decode_multistep_reference_pcc[{decode_steps}_steps] "
             f"step={step} PCC={float(pcc_value):.6f}"

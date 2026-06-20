@@ -24,7 +24,7 @@ VOXTRAL_STANDARD_CHAR_TEXT = (
     "realistic expressive speech with natural prosody across English, French, Spanish, German, Italian, "
     "Portuguese, Dutch, Arabic, and Hindi. The system supports preset voices, low latency streaming, batch "
     "inference, and twenty four kilohertz audio output for customer support, real time translation, reading "
-    "applications, call centers, and responsive multilingual assistant workflows. With clear speech."
+    "applications, call centers, and responsive multilingual assistant workflows with clear speech.."
 )
 
 
@@ -294,6 +294,39 @@ def resolve_voxtral_model_name_or_skip() -> str:
             "Set VOXTRAL_TTS_MODEL or HF_MODEL to a Voxtral model/repo."
         )
     return model_name_or_path
+
+
+def load_voxtral_checkpoint_or_skip() -> dict[str, torch.Tensor]:
+    """Load the full Voxtral safetensors checkpoint or skip when unavailable."""
+    from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
+
+    model_name_or_path = resolve_voxtral_model_name_or_skip()
+    try:
+        return _load_safetensors_state_dict(model_name_or_path)
+    except Exception as exc:
+        pytest.skip(f"No checkpoint available: {exc}")
+
+
+def load_acoustic_fm_layer_weights_or_skip(layer_idx: int = 0) -> dict[str, torch.Tensor]:
+    """Per-layer weights from ``acoustic_transformer.layers.{layer_idx}``."""
+    from models.experimental.voxtraltts.reference.functional import extract_acoustic_layer_weights
+
+    full = load_voxtral_checkpoint_or_skip()
+    weights = extract_acoustic_layer_weights(full, layer_idx)
+    if not weights:
+        pytest.skip(f"No acoustic_transformer.layers.{layer_idx} weights in checkpoint")
+    return weights
+
+
+def load_audio_tokenizer_state_dict_or_skip() -> dict[str, torch.Tensor]:
+    """Audio tokenizer subset of the Voxtral checkpoint."""
+    from models.experimental.voxtraltts.tt.audio_tokenizer.model import extract_audio_tokenizer_state_dict
+
+    full = load_voxtral_checkpoint_or_skip()
+    sd = extract_audio_tokenizer_state_dict(full)
+    if not sd:
+        pytest.skip("No audio tokenizer weights in checkpoint")
+    return sd
 
 
 def create_real_voxtral_text_model_or_skip(
