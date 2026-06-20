@@ -108,12 +108,8 @@ void kernel_main() {
 
     // mcast_pipe: receiver side of the in1 (and bias in3) block channel. Degenerate 1x1 rect points
     // back at the sender (consumed-ack target). data_ready=receiver_sem, consumed=sender_sem.
-    dataflow_kernel_lib::Pipe<> in1_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect::single_core(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y),
-        /*num_active_cores=*/1,  // unused on the receive path (receivers never multicast)
-        receiver_sem,            // data ready (S->R level flag)
-        sender_sem);             // consumed (R->S counter)
+    dataflow_kernel_lib::ReceiverPipe<get_compile_time_arg_val(5), /*PRE_HANDSHAKE=*/true, get_compile_time_arg_val(4)>
+        in1_pipe(noc);  // data_ready=receiver_sem (CTA 5), consumed=sender_sem (CTA 4); sender coords -> receive()
 
     // WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
@@ -128,7 +124,7 @@ void kernel_main() {
                     cb_in1.reserve_back(in1_block_num_tiles);
 
                     // mcast_pipe: ack sender (consumed) + wait in1 VALID flag + clear for next round.
-                    in1_pipe.receive();
+                    in1_pipe.receive(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y);
 
                     cb_in1.push_back(in1_block_num_tiles);
                 }
@@ -140,7 +136,7 @@ void kernel_main() {
                     cb_in3.reserve_back(in3_block_w);
 
                     // mcast_pipe: same channel, now waiting on the bias (in3) block.
-                    in1_pipe.receive();
+                    in1_pipe.receive(in1_mcast_sender_noc_x, in1_mcast_sender_noc_y);
 
                     cb_in3.push_back(in3_block_w);
                 }
