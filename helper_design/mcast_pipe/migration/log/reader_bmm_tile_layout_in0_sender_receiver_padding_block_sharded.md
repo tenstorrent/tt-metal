@@ -44,3 +44,12 @@ for a sender whose data-ready cell doubles as a rotating receiver cell.
 tune-dm-helper fix options: (1) a rotating/relay-role face that re-sets VALID per send, or (2) make the
 Flag-signal `send()` re-assert the local VALID each call (reverts the Round-6 optimization for this path).
 NOT an apply-dm-helper call-site bug.
+
+## LIFTED FROM QUARANTINE (2026-06-20, re-entry @ v7)
+- Helper fix 20cf0df46ee (per-send flag-VALID re-assert inside SenderPipe.send for Flag-signal path)
+  removes the Round-6 ctor-once-VALID staleness for rotating-role cores.
+- Restored the clean v7 call site from fa561f3b584 (no manual workaround line needed — the helper now
+  re-asserts VALID per send internally).
+- Validation: test_matmul_2d_multiple_output_blocks_per_core --run-all = 56 passed, 72 skipped, 0 failed,
+  NO HANG (smoke + full function). transpose_mcast=True + in0_sharded=True params hit this kernel.
+- Ledger: quarantined -> migrated@v7.

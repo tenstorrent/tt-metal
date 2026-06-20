@@ -81,13 +81,15 @@
    "op_family": "matmul",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "quarantined",
-   "migrated_api_version": null,
-   "commit": "49c5bd8f96f2a8716b936a324c233cc5ee27b18e",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "status": "migrated",
+   "migrated_api_version": 7,
+   "commit": "049d2446bd5eda3aa1c92610f310b8c0844fa215",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core (transpose_mcast=True, in0_sharded=True)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": "2026-06-20",
-   "census_note": "KNOWN INSTANCE; P3 ROTATING-ROLE; same-CB loopback; degenerate-unicast | QUARANTINED 2026-06-20: v7 rotating-role migration HANGS on 2D in0-sharded matmul; reverted to raw (parent of c9f5f852bdf).",
+   "census_note": "R6 rotating-role STAR; lifted from quarantine by helper per-send flag-VALID re-assert (20cf0df46ee)",
    "flags": []
   },
   {
