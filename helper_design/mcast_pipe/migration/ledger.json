@@ -70,11 +70,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py::test_matmul_in1_dram_sharded_with_program_cache"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "P2 worker-type-dispatched (3 runtime core types)",
-   "flags": []
+   "flags": [
+    "tier:2b"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in0_sender_receiver_padding_block_sharded.cpp",
@@ -100,11 +104,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/nightly/unit_tests/operations/matmul/test_attn_matmul.py::test_group_attn_matmul"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "P3 rotating-role; per-iter barrier (F1 disagreement); runtime sem ids",
-   "flags": []
+   "flags": [
+    "tier:2b"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
@@ -139,42 +147,54 @@
    "op_family": "matmul",
    "role": "hybrid",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "NO pytest - metal_example_matmul_multicore_reuse_mcast binary only"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "didactic P1 (raw API)",
-   "flags": []
+   "census_note": "didactic P1 (raw API) | DEFER-COVERAGE: NO pytest - metal_example_matmul_multicore_reuse_mcast binary only",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_receiver_in1_sender.cpp",
    "op_family": "matmul",
    "role": "hybrid",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "NO pytest - binary only"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "didactic, 2 independent Pipes",
-   "flags": []
+   "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "tt_metal/programming_examples/matmul/matmul_common/kernels/dataflow/reader_bmm_tile_layout_in0_sender_in1_receiver.cpp",
    "op_family": "matmul",
    "role": "hybrid",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "NO pytest - binary only"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "didactic, 2 independent Pipes",
-   "flags": []
+   "census_note": "didactic, 2 independent Pipes | DEFER-COVERAGE: NO pytest - binary only",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_sender_conv_weights_tiled_col_to_rm_blocks.cpp",
@@ -184,11 +204,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (HEIGHT_SHARDED 256x256 act_block_h=32)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "weights sender (no barrier; VC-4 FIFO)",
-   "flags": []
+   "flags": [
+    "tier:1"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/reader_writer_tiled_out_1d_mcast_receiver_conv_weights_tiled_col_to_rm_blocks.cpp",
@@ -255,11 +279,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (BLOCK_SHARDED 32x32 3x3)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "all 3 F3 sub-cases; CHUNKED send > NOC_MAX_BURST_SIZE",
-   "flags": []
+   "flags": [
+    "tier:2b"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/conv3d/device/kernels/writer.cpp",
@@ -269,11 +297,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/conv3d/test_conv3d.py"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "3 modes; ack-only/no-consume receive; unicast forwarding chain OUT of scope",
-   "flags": []
+   "flags": [
+    "tier:2b"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_ln_post_allgather.cpp",
@@ -283,11 +315,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm (sim multi-device on 1 chip)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "C1 pure-flag NO-pre-handshake fresh-slot",
-   "flags": []
+   "flags": [
+    "tier:1"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_post_allgather.cpp",
@@ -297,11 +333,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "C1",
-   "flags": []
+   "flags": [
+    "tier:1"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_sharded_gn_v2.cpp",
@@ -311,11 +351,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (legacy)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "C2 multi-rect; raw-L1 src",
-   "flags": []
+   "flags": [
+    "tier:2a"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_gn_v2.cpp",
@@ -339,11 +383,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "C2 flag-only; atomic-barrier",
-   "flags": []
+   "flags": [
+    "tier:2a"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/reader_mcast_receiver_unary_sharded_ln_pre_allgather.cpp",
@@ -353,25 +401,33 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_pre_allgather_layernorm"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "C2; atomic-barrier",
-   "flags": []
+   "flags": [
+    "tier:2a"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_gn.cpp",
    "op_family": "normalization",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "sweep-only"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "C2 multi-rect",
-   "flags": []
+   "census_note": "C2 multi-rect | DEFER-COVERAGE: sweep-only",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_sender_unary_sharded_gn_v2.cpp",
@@ -381,25 +437,33 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (welford)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "C2 multi-rect",
-   "flags": []
+   "flags": [
+    "tier:2a"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_gn.cpp",
    "op_family": "normalization",
    "role": "receiver",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "sweep-only"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "C2",
-   "flags": []
+   "census_note": "C2 | DEFER-COVERAGE: sweep-only",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_reader_mcast_receiver_unary_sharded_gn_v2.cpp",
@@ -437,39 +501,51 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/normalization/test_layer_norm_sharded.py::test_layer_norm_sharded_single_stage"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "C3",
-   "flags": []
+   "flags": [
+    "tier:2a"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_sender_unary_gn.cpp",
    "op_family": "normalization",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "sweep-only (interleaved GN routes nowhere from unit tests)"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "C4 double-flag-per-exchange",
-   "flags": []
+   "census_note": "C4 double-flag-per-exchange | DEFER-COVERAGE: sweep-only (interleaved GN routes nowhere from unit tests)",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/dataflow/reader_mcast_receiver_unary_gn.cpp",
    "op_family": "normalization",
    "role": "receiver",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "sweep-only"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "C4",
-   "flags": []
+   "census_note": "C4 | DEFER-COVERAGE: sweep-only",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/chain_link.hpp",
@@ -493,25 +569,33 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/transformer/test_sdpa_prefill.py::test_sdpa_noncausal (b1 nh8 nkv1 s2048 d128)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "open-coded chain-link, K+V",
-   "flags": []
+   "flags": [
+    "tier:2c"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
    "op_family": "transformer + sdpa",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    ">=4 devices (test_exp_ring_joint_sdpa.py)"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "open-coded chain-link + ring sync (ring part oos)",
-   "flags": []
+   "census_note": "open-coded chain-link + ring sync (ring part oos) | DEFER-COVERAGE: >=4 devices (test_exp_ring_joint_sdpa.py)",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/kernels/dataflow/dataflow_common.hpp",
@@ -521,11 +605,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/transformer/test_sdpa_decode.py::test_sdpa_decode_sharded (use_k_mcast=1)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "read_k vertical-column mcast; BARRIER + linked=false (inverse F1 of chain)",
-   "flags": []
+   "flags": [
+    "tier:2c"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/device/kernels/dataflow/worker_writer.cpp",
@@ -563,11 +651,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/reduction/test_topk.py::test_topk (W=8192 multicore)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "unicast scatter + up(counter)",
-   "flags": []
+   "flags": [
+    "tier:2b"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/reduction/argmax/device/kernels/reader_argmax_interleaved_multicore.cpp",
@@ -577,11 +669,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/reduction/test_argmax.py::test_argmax (shape [64,128] use_multicore=True)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "richest fork coverage; 2-rect, INCLUDE+EXCLUDE in one send; FLAG-ONLY (no data mcast)",
-   "flags": []
+   "flags": [
+    "tier:2b"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/coordinator_single_row_multi_core.cpp",
@@ -591,11 +687,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor (large Wt -> multicore-DRAM branch)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "legacy raw API; FLAG-ONLY",
-   "flags": []
+   "flags": [
+    "tier:3"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/reader_single_row_multi_core.cpp",
@@ -605,11 +705,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "legacy",
-   "flags": []
+   "flags": [
+    "tier:3"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/data_movement/sort/device/kernels/dataflow/writer_single_row_multi_core.cpp",
@@ -619,11 +723,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/data_movement/test_sort.py::test_sort_long_tensor"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "confirmation inc",
-   "flags": []
+   "flags": [
+    "tier:3"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_interleaved_with_overlap.cpp",
@@ -633,11 +741,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-TILE-L1-L1)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "single-shot go-flag mcast to 2-3 rects; legacy API",
-   "flags": []
+   "flags": [
+    "tier:3"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/data_movement/move/device/kernels/dataflow/move_stick_layout_interleaved_with_overlap.cpp",
@@ -647,11 +759,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/tt_eager/python_api_testing/unit_testing/misc/test_move.py::test_move_op (overlap-RM-L1-L1)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "RM twin of above",
-   "flags": []
+   "flags": [
+    "tier:3"
+   ]
   },
   {
    "kernel": "tt_metal/programming_examples/contributed/multicast/kernels/dataflow/coordinator_kernel.cpp",
@@ -703,11 +819,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "models/demos/deepseek_v3_b1/.../test_flash_mla.py"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "k-chunk data+flag, mixed counter/flag",
-   "flags": []
+   "flags": [
+    "tier:2d"
+   ]
   },
   {
    "kernel": "models/demos/deepseek_v3_b1/unified_kernels/kv_cache_update.hpp",
@@ -717,11 +837,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "models/demos/deepseek_v3_b1/.../test_kv_cache_branch.py::test_kv_cache_branch"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "preprogram-state mcast",
-   "flags": []
+   "flags": [
+    "tier:2d"
+   ]
   },
   {
    "kernel": "models/demos/deepseek_v3_b1/micro_ops/sampling/kernels/sampling_kernel.cpp",
@@ -731,39 +855,51 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "models/demos/deepseek_v3_b1/.../test_sampling.py::test_sampling_argmax_single_device_101_cores"
+   ],
+   "coverage_confidence": "high",
    "last_verified": null,
    "census_note": "flag-only loop barrier",
-   "flags": []
+   "flags": [
+    "tier:1"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/reader_dispatch.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "min mesh 2x2 - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "data + COUNTER inc_multicast + wait_min",
-   "flags": []
+   "census_note": "data + COUNTER inc_multicast + wait_min | DEFER-COVERAGE: min mesh 2x2 - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/combine/device/kernels/dataflow/reader_combine.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "min mesh 2x2 - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "data + COUNTER inc_multicast",
-   "flags": []
+   "census_note": "data + COUNTER inc_multicast | DEFER-COVERAGE: min mesh 2x2 - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/device/kernels/dm1.cpp",
@@ -773,81 +909,105 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/nightly/.../experimental/test_moe_mm.py::test_moe_mm (dispatch_row, single device)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "one_packet mcast collector\u21927 cores",
-   "flags": []
+   "flags": [
+    "tier:2d"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_sender_reader.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "mesh (rms_test.py) - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "INCLUDE_SRC loopback + barrier",
-   "flags": []
+   "census_note": "INCLUDE_SRC loopback + barrier | DEFER-COVERAGE: mesh (rms_test.py) - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/rms_allgather/device/kernels/dataflow/rms_writer.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "mesh - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "INCLUDE_SRC loopback",
-   "flags": []
+   "census_note": "INCLUDE_SRC loopback | DEFER-COVERAGE: mesh - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/worker_receiver.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "receiver",
    "tag": "clean",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "ring_size>1 - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "INCLUDE_SRC partner",
-   "flags": []
+   "census_note": "INCLUDE_SRC partner | DEFER-COVERAGE: ring_size>1 - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_reader.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "4x8 mesh - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "value-carrying flag (token counts in sem word)",
-   "flags": []
+   "census_note": "value-carrying flag (token counts in sem word) | DEFER-COVERAGE: 4x8 mesh - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/tilize_writer.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "4x8 mesh - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "value-carrying flag",
-   "flags": []
+   "census_note": "value-carrying flag | DEFER-COVERAGE: 4x8 mesh - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_reader.cpp",
@@ -857,11 +1017,15 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss (1x1 mesh)"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "",
-   "flags": []
+   "flags": [
+    "tier:2d"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/tilize_writer.cpp",
@@ -871,95 +1035,123 @@
    "status": "pending",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/nightly/.../experimental/test_moe_compute_single_card.py::test_moe_compute_single_card_gpt_oss"
+   ],
+   "coverage_confidence": "med",
    "last_verified": null,
    "census_note": "",
-   "flags": []
+   "flags": [
+    "tier:2d"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/reader.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "galaxy (test_selective_combine_6U.py) - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "flag-only sync",
-   "flags": []
+   "census_note": "flag-only sync | DEFER-COVERAGE: galaxy (test_selective_combine_6U.py) - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/kernels/dataflow/writer.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "galaxy - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "flag-only sync",
-   "flags": []
+   "census_note": "flag-only sync | DEFER-COVERAGE: galaxy - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/kernels/llama_all_gather_concat_writer.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "TG/mesh - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "flag-only",
-   "flags": []
+   "census_note": "flag-only | DEFER-COVERAGE: TG/mesh - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/all_to_all_async_generic/device/kernels/all_to_all_sender_writer.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "bh_1d_mesh - multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "INCLUDE_SRC loopback (intra-chip leg); fabric leg oos",
-   "flags": []
+   "census_note": "INCLUDE_SRC loopback (intra-chip leg); fabric leg oos | DEFER-COVERAGE: bh_1d_mesh - multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "deepseek_prefill multi-device"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait (deepseek_prefill family)",
-   "flags": []
+   "census_note": "multi-mcast sender: in0/in1/gate/up data write_multicast + flag set_multicast + wait (deepseek_prefill family) | DEFER-COVERAGE: deepseek_prefill multi-device",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/persistent_h2d_receiver.cpp",
    "op_family": "ccl / deepseek / examples",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "no identified single-chip test (host_io persistent path)"
+   ],
+   "coverage_confidence": "none",
    "last_verified": null,
-   "census_note": "data write_multicast + counter inc_multicast (mixed-counter); name says receiver but it multicasts",
-   "flags": []
+   "census_note": "data write_multicast + counter inc_multicast (mixed-counter); name says receiver but it multicasts | DEFER-COVERAGE: no identified single-chip test (host_io persistent path)",
+   "flags": [
+    "coverage-gap"
+   ]
   },
   {
    "kernel": "ttnn/cpp/ttnn/operations/experimental/ccl/llama_all_gather_matmul_async/device/kernels/reader_bmm_tile_layout_in1_ring_all_gather.cpp",
