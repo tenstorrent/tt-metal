@@ -290,7 +290,7 @@ inline void calculate_typecast_uint32_to_fp16b() {
         TTI_SFPADDI(0x4f00, p_sfpu::LREG1, 0);  // 2^31
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_6, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_6, 0);
     }
 }
 

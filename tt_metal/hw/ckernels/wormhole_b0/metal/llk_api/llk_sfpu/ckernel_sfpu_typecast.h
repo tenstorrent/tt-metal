@@ -275,7 +275,6 @@ inline void calculate_typecast_int32_to_fp32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_fp16b() {
-#ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
@@ -285,46 +284,8 @@ inline void calculate_typecast_uint32_to_fp16b() {
         TTI_SFPADDI(0x4f00, p_sfpu::LREG1, 0);  // 2^31
         TTI_SFPENCC(0, 0, 0, 0);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG1, p_sfpu::LREG1, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
     }
-#else
-    // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // Note: L0=0.0 and L1=2**31.  The sign bit is stored in L7 and used to pick L0 or L1
-    // for SFPMAD's VA:
-    //
-    // - if sign bit is 0, then compute L0*1.0 + v = v
-    // - if sign bit is 1, then compute L1*1.0 + v = 2**31 + v
-    //
-    // t | Load | Simple             | MAD                     | Round            | Store   |
-    // - | ---- | ------------------ | ----------------------- | ---------------- | ------- |
-    // 0 | [v]  |                    |                         |                  |         |
-    // 1 |      |                    |                         | L7 = v >> 31     |         |
-    // 2 |      | v = setsgn(v, 0)   |                         |                  |         |
-    // 0 | ...  | [v] = cast(v)      |                         |                  |         |
-    // 1 | ...  |                    | [v] v = L[L7]*1.0 + v   |                  |         |
-    // 2 | ...  |                    |                         |                  |         |
-    // 0 | ...  |                    |                         | [v] L16 = rnd(v) |         |
-    // 1 | ...  |                    |                         |                  | [v] L16 |
-
-    TTI_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_USHORT, 0);
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, 0x4f00);  // 2**31
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_2, v >> 2);
-        TT_SFPSHFT2(v, p_sfpu::LREG12, p_sfpu::LREG7, 5);  // SFPSHFT2_MOD1_SHFT_LREG
-        TT_SFPSETSGN(0, v, v, 1);
-    }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -601,42 +562,7 @@ inline void init_typecast_uint16_to_fp16b() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void init_typecast_uint32_to_fp16b() {
-#ifndef DISABLE_SFPLOADMACRO
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
-
-    // InstructionTemplate[0]
-    TTI_SFPCAST(0, 12, 0);
-
-    // InstructionTemplate[1]
-    TTI_SFPMAD(0, p_sfpu::LCONST_1, 0, 13, 4);  // SFPMAD_MOD1_INDIRECT_VA
-
-    // InstructionTemplate[2]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
-
-    // Macro 0
-    {
-        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (2 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0x00 | 0x00 | (3 << 3) | (4 + 1);
-        constexpr std::uint32_t round_bits = 0x00 | 0x40 | (5 << 3) | (4 + 2);
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (6 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
-
-    // Misc: {
-    //   StoreMod0: DEFAULT,
-    //   UsesLoadMod0ForStore: {0},
-    //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
-    // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::DEFAULT, 8, 1);
-#endif
-}
+inline void init_typecast_uint32_to_fp16b() {}
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_fp32_to_uint16() {}
