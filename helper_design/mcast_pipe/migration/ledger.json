@@ -499,15 +499,15 @@
    "op_family": "normalization",
    "role": "receiver",
    "tag": "refactor",
-   "status": "pending",
-   "migrated_api_version": null,
-   "commit": null,
+   "status": "migrated",
+   "migrated_api_version": 7,
+   "commit": "f348c649e02",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_layer_norm_sharded.py::test_layer_norm_sharded_single_stage"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
-   "census_note": "C3",
+   "last_verified": "2026-06-20",
+   "census_note": "C3 two-phase: phase-1 ReceiverPipe; phase-2 monotone wait_min(block+2) kept raw (shared-cell counter reuse, matches sender twin)",
    "flags": [
     "tier:2a"
    ]
