@@ -23,6 +23,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
+#include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 
 #include "tt_metal/impl/context/metal_context.hpp"
 
@@ -65,11 +66,10 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
     // With loopback:    N hops: mesh_0→mesh_1→...→mesh_{N-1}→mesh_0
     // Without loopback: N-1 hops: mesh_0→mesh_1→...→mesh_{N-1} (no return)
     //
-    // This is a system-of-distinct-representatives problem: per-hop greedy first-fit can strand a later
-    // hop by claiming a chip that hop's only remaining candidate needs (common on rings where each
-    // inter-mesh boundary exposes very few cable pairs, e.g. a large LINE-dimension ring). Solve it with
-    // backtracking over all hops, trying the most-constrained hop first (minimum remaining values) so a
-    // valid assignment is found whenever one exists.
+    // Greedy first-fit can strand a mid-chain hop on rings with few cable pairs per boundary, so
+    // tt_fabric::assign_non_colliding_hops() (topology_mapper_utils) does a backtracking global
+    // assignment (distinct representatives, most-constrained-hop-first) that succeeds whenever a valid
+    // layout exists.
     const std::size_t num_hops = initialize_loopback ? num_meshes : num_meshes - 1;
     using HopPair = std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>;
 
@@ -83,10 +83,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline_from_topology(bool initiali
             !candidates[i].empty(), "No inter-mesh connection from mesh {} to mesh {}", *mesh_ids[i], *mesh_ids[next]);
     }
 
-    // Resolve a collision-free pair for every hop. Greedy first-fit can strand a mid-chain hop on
-    // rings with few cable pairs per boundary, so detail::assign_non_colliding_hops() does a
-    // backtracking global assignment that succeeds whenever a valid layout exists.
-    auto assignment = detail::assign_non_colliding_hops(candidates);
+    auto assignment = ::tt::tt_metal::experimental::tt_fabric::assign_non_colliding_hops(candidates);
     TT_FATAL(
         assignment.has_value(),
         "Could not assign non-colliding inter-mesh pairs for all {} hops of the blitz decode pipeline ring "
@@ -680,61 +677,6 @@ void validate_pipeline(const std::vector<BlitzDecodePipelineStage>& stages, bool
 }
 
 }  // namespace
-
-namespace detail {
-
-std::optional<std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>>>
-assign_non_colliding_hops(
-    const std::vector<std::vector<std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>>>& candidates) {
-    using HopPair = std::pair<tt::tt_fabric::FabricNodeId, tt::tt_fabric::FabricNodeId>;
-    const std::size_t num_hops = candidates.size();
-
-    // Visit the most-constrained hops first (fewest candidates) so the search prunes quickly.
-    std::vector<std::size_t> visit_order(num_hops);
-    for (std::size_t i = 0; i < num_hops; i++) {
-        visit_order[i] = i;
-    }
-    std::stable_sort(visit_order.begin(), visit_order.end(), [&](std::size_t a, std::size_t b) {
-        return candidates[a].size() < candidates[b].size();
-    });
-
-    // selected_hop[i] = chosen (exit, peer) pair for ring position i.
-    std::vector<std::optional<HopPair>> selected_hop(num_hops);
-    std::set<tt::tt_fabric::FabricNodeId> used_nodes;
-    std::function<bool(std::size_t)> assign = [&](std::size_t k) -> bool {
-        if (k == num_hops) {
-            return true;
-        }
-        const std::size_t hop = visit_order[k];
-        for (const auto& pair : candidates[hop]) {
-            if (used_nodes.contains(pair.first) || used_nodes.contains(pair.second)) {
-                continue;
-            }
-            selected_hop[hop] = pair;
-            used_nodes.insert(pair.first);
-            used_nodes.insert(pair.second);
-            if (assign(k + 1)) {
-                return true;
-            }
-            used_nodes.erase(pair.first);
-            used_nodes.erase(pair.second);
-            selected_hop[hop].reset();
-        }
-        return false;
-    };
-    if (!assign(0)) {
-        return std::nullopt;
-    }
-
-    std::vector<HopPair> hops;
-    hops.reserve(num_hops);
-    for (auto& hop : selected_hop) {
-        hops.push_back(*hop);
-    }
-    return hops;
-}
-
-}  // namespace detail
 
 std::vector<BlitzDecodePipelineStage> generate_blitz_decode_pipeline(bool initialize_loopback) {
     auto stages = build_pipeline_from_topology(initialize_loopback);
