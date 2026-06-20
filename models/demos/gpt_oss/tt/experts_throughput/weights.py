@@ -1016,7 +1016,8 @@ def create_fused_moe_gpt_config(
     )
 
     # --- Pre-allocate dispatch output tensors ---
-    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    dispatch_drain_core = ttnn.CoreCoord(min(6, compute_grid.x - 1), min(9, compute_grid.y - 1))
 
     # Sparse buffer: [ring_devices, total_tokens, K] → each device gets [1, total_tokens, K]
     tt_dispatch_sparse = ttnn.from_torch(

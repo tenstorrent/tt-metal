@@ -10,6 +10,15 @@
 using namespace ttnn::operations::ccl::common;
 using tt::data_movement::common::tt_memmove;
 
+#ifdef A2A_METADATA_LOGICAL_ROUTER_READ
+FORCE_INLINE void zero_l1_bytes(uint32_t addr, uint32_t begin, uint32_t end) {
+    auto* ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(addr);
+    for (uint32_t i = begin; i < end; ++i) {
+        ptr[i] = 0;
+    }
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t input_tensor_cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
@@ -48,6 +57,8 @@ void kernel_main() {
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
     constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
+    constexpr uint32_t aligned_scores_page_size = get_compile_time_arg_val(42);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
     constexpr auto input_args = TensorAccessorArgs<45>();
@@ -114,7 +125,14 @@ void kernel_main() {
 
         // All workers read indices (needed for routing decisions)
         uint32_t l1_write_addr = get_write_ptr(indices_tensor_cb_id);
+#ifdef A2A_METADATA_LOGICAL_ROUTER_READ
+        noc_async_read(get_noc_addr(i, indices_addr_gen), l1_write_addr, indices_page_size);
+        if constexpr (aligned_indices_page_size > indices_page_size) {
+            zero_l1_bytes(l1_write_addr, indices_page_size, aligned_indices_page_size);
+        }
+#else
         noc_async_read_page(i, indices_addr_gen, l1_write_addr);
+#endif
 
         // manually fill in shared expert IDs to the metadata
         if constexpr (num_shared_experts > 0) {
@@ -127,7 +145,14 @@ void kernel_main() {
         if (is_primary_payload_worker) {
             cb_reserve_back(scores_tensor_cb_id, 1);
             l1_write_addr = get_write_ptr(scores_tensor_cb_id);
+#ifdef A2A_METADATA_LOGICAL_ROUTER_READ
+            noc_async_read(get_noc_addr(i, scores_addr_gen), l1_write_addr, scores_page_size);
+            if constexpr (aligned_scores_page_size > scores_page_size) {
+                zero_l1_bytes(l1_write_addr, scores_page_size, aligned_scores_page_size);
+            }
+#else
             noc_async_read_page(i, scores_addr_gen, l1_write_addr);
+#endif
 
             if constexpr (num_shared_experts > 0) {
                 auto* l1_scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_write_addr);

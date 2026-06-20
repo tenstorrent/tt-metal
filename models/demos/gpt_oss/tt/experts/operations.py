@@ -3,6 +3,8 @@
 
 """Core expert operations - pure functions for composability."""
 
+import os
+
 import ttnn
 
 from .config import ExpertConfig
@@ -68,9 +70,21 @@ def reduce_experts(expert_output):
 
 def apply_expert_parallel_allreduce(tensor, mesh_config, ccl_manager):
     """Apply expert parallel allreduce communication."""
+    debug = os.environ.get("GPT_OSS_EXPERT_ALLREDUCE_DEBUG") == "1"
+    if debug:
+        print(
+            f"GPT_OSS_EXPERT_ALLREDUCE_DEBUG before EP all_reduce "
+            f"shape={tensor.shape} axis={mesh_config.ep_axis} num_links={ccl_manager.num_links}",
+            flush=True,
+        )
+    if os.environ.get("GPT_OSS_EXPERT_ALLREDUCE_NORMALIZE") == "DRAM":
+        tensor = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+        tensor = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
     tensor_allreduced = ttnn.all_reduce(
         tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.ep_axis
     )
+    if debug:
+        print("GPT_OSS_EXPERT_ALLREDUCE_DEBUG after EP all_reduce", flush=True)
     tensor.deallocate(True)
     return tensor_allreduced
 
@@ -93,9 +107,21 @@ def apply_tensor_parallel_allreduce(tensor, mesh_config, mesh_device, seq_len, c
     Returns:
         Allreduced tensor
     """
+    debug = os.environ.get("GPT_OSS_EXPERT_ALLREDUCE_DEBUG") == "1"
+    if debug:
+        print(
+            f"GPT_OSS_EXPERT_ALLREDUCE_DEBUG before TP all_reduce "
+            f"shape={tensor.shape} axis={mesh_config.tp_axis} num_links={ccl_manager.num_links}",
+            flush=True,
+        )
+    if os.environ.get("GPT_OSS_EXPERT_ALLREDUCE_NORMALIZE") == "DRAM":
+        tensor = ttnn.to_memory_config(tensor, ttnn.DRAM_MEMORY_CONFIG)
+        tensor = ttnn.to_memory_config(tensor, ttnn.L1_MEMORY_CONFIG)
     tensor_allreduced = ttnn.all_reduce(
         tensor, num_links=ccl_manager.num_links, topology=ttnn.Topology.Ring, cluster_axis=mesh_config.tp_axis
     )
+    if debug:
+        print("GPT_OSS_EXPERT_ALLREDUCE_DEBUG after TP all_reduce", flush=True)
     tensor.deallocate(True)
 
     return tensor_allreduced
