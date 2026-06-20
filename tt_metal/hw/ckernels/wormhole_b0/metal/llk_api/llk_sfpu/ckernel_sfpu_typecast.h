@@ -398,6 +398,7 @@ inline void calculate_typecast_uint32_to_uint16() {
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
         TTI_SFPIADD(
             0, p_sfpu::LCONST_0, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE | sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST);
         TTI_SFPSHFT((-16) & 0xFFF, 0, p_sfpu::LREG0, 1);
