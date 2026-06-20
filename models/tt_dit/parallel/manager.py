@@ -345,18 +345,13 @@ class CCLManager:
     def reset_global_semaphores(self):
         """Reset all global semaphores to 0 AND the ping-pong indices that pair with them.
 
-        The ping-pong indices (rs/ag/np/sr/barrier + per-shape buffer indices) advance on
-        every collective and select which buffer/semaphore half the NEXT collective uses.
-        Resetting the semaphore VALUES without resetting these indices desyncs them — the
-        next collective then waits on the wrong (already-consumed) semaphore half and
-        deadlocks. This is the cross-request vision-encoder hang (TT_THROW fetch-queue
-        timeout) seen when a video request follows image/multi-image requests, so the
-        indices MUST be reset together with the semaphores."""
-        # Drain all in-flight device operations before touching semaphores or buffers.
-        # The ETH fabric may still have queued work from the previous vision encode;
-        # resetting semaphores while the fabric is active corrupts synchronization.
-        ttnn.synchronize_device(self.mesh_device)
-
+        The ping-pong indices (rs/ag/np/sr/barrier) advance on every collective and select
+        which semaphore half the NEXT collective uses. Resetting the semaphore VALUES without
+        resetting these indices desyncs them — the next collective then waits on the wrong
+        (already-consumed) semaphore half and deadlocks. This is the cross-request
+        vision-encoder hang (TT_THROW fetch-queue timeout) seen when a video request follows
+        image/multi-image requests, so the indices MUST be reset together with the semaphores.
+        Barrier semaphore values must also be reset (index reset alone is not sufficient)."""
         for axis in [0, 1]:
             for sem in self.np_ping_pong_semaphores[axis]:
                 ttnn.reset_global_semaphore_value(sem, 0)
@@ -374,11 +369,6 @@ class CCLManager:
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
-        # Reset all buffer ping-pong indices to 0 so they pair with the reset semaphores.
-        # Keep DRAM buffers at their existing addresses — evicting and reallocating gives
-        # different addresses which can confuse ETH fabric routing on the next request.
-        for _k in self._ping_pong_buffer_indices:
-            self._ping_pong_buffer_indices[_k] = 0
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
