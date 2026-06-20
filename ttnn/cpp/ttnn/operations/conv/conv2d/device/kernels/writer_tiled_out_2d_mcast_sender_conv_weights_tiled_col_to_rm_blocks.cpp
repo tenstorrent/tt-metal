@@ -159,12 +159,16 @@ void kernel_main() {
     //   counter). Staging::Flag + PRE_HANDSHAKE=true (defaults) match the old Pipe<>. INITIAL_READY
     //   defaults to VALID, folding in the dropped pre-loop `weights_mcast_receiver_sem.set(VALID)`.
     //   The McastRect (per-core virtual coords) stays the only runtime ctor arg.
-    dataflow_kernel_lib::
-        SenderPipe<weights_mcast_num_dests_ct, weights_mcast_receiver_sem_id, weights_mcast_sender_sem_id>
-            weights_pipe(
-                noc,
-                dataflow_kernel_lib::McastRect{
-                    mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
+    dataflow_kernel_lib::SenderPipe<
+        noc_index,
+        weights_mcast_receiver_sem_id,
+        weights_mcast_num_dests_ct,
+        /*PRE_HANDSHAKE=*/true,
+        weights_mcast_sender_sem_id>
+        weights_pipe(
+            noc,
+            dataflow_kernel_lib::McastRect<>{
+                mcast_rect.noc_x_start, mcast_rect.noc_y_start, mcast_rect.noc_x_end, mcast_rect.noc_y_end});
 #endif
 
     // read in bias if enabled (done only once for all batches)
