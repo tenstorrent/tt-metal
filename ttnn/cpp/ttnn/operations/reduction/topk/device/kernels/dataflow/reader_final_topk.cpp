@@ -34,10 +34,11 @@ void kernel_main() {
     // tiles to land. Only the readiness broadcast is a Pipe op (send_signal); the fan-in counter wait
     // is a separate multi-producer channel the (single-sender) SenderPipe does not own (INV9), kept raw.
     // data_ready=receiver_sem (the flag we broadcast); consumed unused on this control path.
-    // NUM_ACTIVE_RECEIVER_CORES = recipient count = num_dests (the sender sits outside the rect, so
-    // EXCLUDE_SRC mcast_dests == num_dests directly). send_signal sets the flag value each call, so
-    // INITIAL_READY is irrelevant here (defaults to VALID).
-    dataflow_kernel_lib::SenderPipe<noc_index, receiver_sem_id, num_dests, /*PRE_HANDSHAKE=*/false> ready_pipe(
+    // Fan-out is DERIVED from the rect area (the sender sits outside the rect, so the EXCLUDE-source
+    // mcast_dests == num_dests directly) — no recipient-count template arg. PRE_HANDSHAKE=false means
+    // this fire-and-forget broadcast never waits a consumer-ready ack, so consumer_ack_count is inert
+    // and the ctor takes none. send_signal sets the flag value each call (defaults to VALID).
+    dataflow_kernel_lib::SenderPipe<noc_index, receiver_sem_id, /*PRE_HANDSHAKE=*/false> ready_pipe(
         noc, dataflow_kernel_lib::McastRect<>{noc_start_x, noc_start_y, noc_end_x, noc_end_y});
 
     // Collect local TopK results from all cores
