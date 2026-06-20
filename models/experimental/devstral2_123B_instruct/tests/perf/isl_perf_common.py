@@ -66,7 +66,13 @@ ISL_PERF_FULL_SWEEP_TIMEOUT_SEC = int(os.environ.get("DEVSTRAL2_ISL_PERF_SWEEP_T
 
 _OUTPUT_DIR = Path(__file__).resolve().parent.parent / "isl_sweep_perf_outputs"
 
-_isl_perf_model_cache: dict[tuple[tuple[int, int], int], tuple[TtMinistral3ForCausalLM, Devstral2Args, str]] = {}
+_IslPerfModelCacheKey = tuple[int, tuple[int, int], int]
+_isl_perf_model_cache: dict[_IslPerfModelCacheKey, tuple[TtMinistral3ForCausalLM, Devstral2Args, str]] = {}
+
+
+def _isl_perf_model_cache_key(mesh_device, model_max_seq_len: int) -> _IslPerfModelCacheKey:
+    """Key by mesh device identity so a new pytest fixture does not reuse stale device tensors."""
+    return (id(mesh_device), tuple(mesh_device.shape), model_max_seq_len)
 
 
 def _chunk_log_every(num_chunks: int) -> Optional[int]:
@@ -184,12 +190,18 @@ def get_or_build_isl_perf_model(
     isl_lengths: list[int],
 ) -> tuple[TtMinistral3ForCausalLM, Devstral2Args, str]:
     model_max_seq_len = devstral2_isl_perf_kv_max_seq_len(isl_lengths)
-    cache_key = (tuple(mesh_device.shape), model_max_seq_len)
+    cache_key = _isl_perf_model_cache_key(mesh_device, model_max_seq_len)
     if cache_key not in _isl_perf_model_cache:
-        logger.info(f"Building ISL perf TT model for mesh={cache_key[0]}, max_seq_len={model_max_seq_len}")
+        logger.info(
+            f"Building ISL perf TT model for mesh={cache_key[1]}, "
+            f"max_seq_len={model_max_seq_len}, mesh_device_id={cache_key[0]}"
+        )
         _isl_perf_model_cache[cache_key] = build_isl_perf_model(mesh_device, isl_lengths)
     else:
-        logger.info(f"Reusing ISL perf TT model for mesh={cache_key[0]}, max_seq_len={model_max_seq_len}")
+        logger.info(
+            f"Reusing ISL perf TT model for mesh={cache_key[1]}, "
+            f"max_seq_len={model_max_seq_len}, mesh_device_id={cache_key[0]}"
+        )
     return _isl_perf_model_cache[cache_key]
 
 
