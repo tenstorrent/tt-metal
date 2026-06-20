@@ -155,27 +155,28 @@ void kernel_main() {
     const auto s_sparsity = TensorAccessor(sparsity_args, sparsity_addr);
 
 #ifndef SKIP_MCAST
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    receiver_sem.set(VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-
-    // mcast_pipe: the in0 block data-mcast + handshake is driven by a two-sided Pipe.
-    //   data_ready = receiver_sem (S->R level flag, VALID/INVALID), consumed = sender_sem (R->S counter).
+    // mcast_pipe v7: the in0 block data-mcast + handshake is driven by a SenderPipe.
+    //   DATA_READY_SEM_ID = receiver_sem id (CTA 16, S->R level flag VALID/INVALID),
+    //   CONSUMER_READY_SEM_ID = sender_sem id (CTA 15, R->S counter), count = in0_mcast_num_dests.
     //   The sender sits in the box corner but is NOT a recipient (num_dests < area) so the Pipe
-    //   infers EXCLUDE_SRC — it must not self-overwrite its own in0 source. LINK=true: data;flag + flush
-    //   (matches the original linked data mcast + ARCH_BLACKHOLE flush). PRE_HANDSHAKE=true: dest L1
-    //   is the receivers' reused in0 CB slot, so the R->S "consumed" wait gates each block.
-    dataflow_kernel_lib::Pipe<> in0_pipe(
-        noc,
-        dataflow_kernel_lib::McastRect{
-            in0_mcast_dest_noc_start_x,
-            in0_mcast_dest_noc_start_y,
-            in0_mcast_dest_noc_end_x,
-            in0_mcast_dest_noc_end_y},  // area() = in0_mcast_num_cores (the full mcast grid)
-        in0_mcast_num_dests,            // active-core ACK count (may be < num_cores when cores-without-work exist)
-        receiver_sem,                   // data ready (S->R level flag)
-        sender_sem);                    // consumed (R->S counter)
+    //   infers EXCLUDE_SRC — it must not self-overwrite its own in0 source. PRE_HANDSHAKE=true: dest L1
+    //   is the receivers' reused in0 CB slot, so the R->S "consumed" wait gates each block. The ctor
+    //   sets the local data-ready cell VALID once (folds in the dropped pre-loop receiver_sem.set(VALID)).
+    //   The raw receiver_sem/sender_sem objects stay: the batch-valid set_multicast path below is a
+    //   separate signaling channel the Pipe does not own.
+    dataflow_kernel_lib::SenderPipe<
+        noc_index,
+        get_compile_time_arg_val(16),
+        in0_mcast_num_dests,
+        /*PRE_HANDSHAKE=*/true,
+        get_compile_time_arg_val(15)>
+        in0_pipe(
+            noc,
+            dataflow_kernel_lib::McastRect<>{
+                in0_mcast_dest_noc_start_x,
+                in0_mcast_dest_noc_start_y,
+                in0_mcast_dest_noc_end_x,
+                in0_mcast_dest_noc_end_y});
 
 #ifdef IN0_SHARDED
     uint32_t in0_start_address = cb_in0.get_write_ptr();
