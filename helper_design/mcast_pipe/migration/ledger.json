@@ -83,7 +83,7 @@
    "tag": "refactor",
    "status": "migrated",
    "migrated_api_version": 7,
-   "commit": "049d2446bd5eda3aa1c92610f310b8c0844fa215",
+   "commit": "7953a2a2e5244c3c74208f65b9329da4ff00d447",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core (transpose_mcast=True, in0_sharded=True)"
    ],
