@@ -25,6 +25,7 @@ constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint16() {
+    // TODO: Attempt to use LOADMACRO #46751
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -192,6 +193,7 @@ inline void calculate_typecast_fp32_to_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_fp16b() {
+    // TODO: Attempt to use LOADMACRO #46751
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -275,6 +277,7 @@ inline void calculate_typecast_int32_to_fp32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_fp16b() {
+    // TODO: Attempt to use LOADMACRO #46751
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
@@ -355,6 +358,7 @@ inline void calculate_typecast_uint16_to_uint32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_uint32_to_uint16() {
+    // TODO: Attempt to use LOADMACRO #46751
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
@@ -370,6 +374,7 @@ inline void calculate_typecast_uint32_to_uint16() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_int32_to_uint16() {
+    // TODO: Attempt to use LOADMACRO #46751
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
