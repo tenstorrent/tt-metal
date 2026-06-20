@@ -412,9 +412,24 @@ void run_d2h_stream_service_case(
     }
 }
 
-using D2HStreamServiceTest = ::tt::tt_metal::GenericMeshDeviceFixture;
+// Service cores (ServiceCoreManager::claim) are only supported on Blackhole or UBB Galaxy
+// clusters; skip the whole suite on any other configuration so unsupported runners skip
+// cleanly instead of hitting the claim TT_FATAL.
+class D2HStreamServiceTest : public ::tt::tt_metal::GenericMeshDeviceFixture {
+protected:
+    void SetUp() override {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        if (!(cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE)) {
+            GTEST_SKIP() << "D2HStreamService service cores require Blackhole or UBB Galaxy";
+        }
+        ::tt::tt_metal::GenericMeshDeviceFixture::SetUp();
+    }
+};
 
 TEST_F(D2HStreamServiceTest, Replicated_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
     struct Row {
         uint32_t per_row_size;
         uint32_t N;
@@ -445,6 +460,9 @@ TEST_F(D2HStreamServiceTest, Replicated_Sweep) {
 }
 
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {1, 0});
     const uint32_t per_row_bytes = 640 * sizeof(uint32_t);
     D2HServiceCase cs{
@@ -457,6 +475,9 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync) {
 }
 
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {1, 0});
     const tt::tt_metal::CoreCoord metadata_master{0, 0};
     const uint32_t per_row_bytes = 640 * sizeof(uint32_t);
@@ -471,6 +492,9 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata) {
 }
 
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata_SingleWorker) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
     const tt::tt_metal::CoreRange worker_cores({0, 0}, {0, 0});
     const tt::tt_metal::CoreCoord metadata_master{0, 0};
     const uint32_t per_row_bytes = 640 * sizeof(uint32_t);
@@ -485,6 +509,9 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Metadata_SingleWorker) {
 }
 
 TEST_F(D2HStreamServiceTest, Sharded_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "Sharded_Sweep requires a 2D mesh; got " << mesh_shape;
@@ -551,6 +578,9 @@ TEST_F(D2HStreamServiceTest, Sharded_Sweep) {
 }
 
 TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
     struct Row {
         uint32_t per_row_size;
         uint32_t N;
@@ -640,6 +670,9 @@ TEST_F(D2HStreamServiceTest, Replicated_WorkerSync_Sweep) {
 }
 
 TEST_F(D2HStreamServiceTest, Sharded_WorkerSync_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "D2HStreamService kernels are only available on UBB Galaxy systems";
+    }
     const auto mesh_shape = this->mesh_device_->shape();
     if (mesh_shape.dims() != 2) {
         GTEST_SKIP() << "Sharded_WorkerSync_Sweep requires a 2D mesh; got " << mesh_shape;
