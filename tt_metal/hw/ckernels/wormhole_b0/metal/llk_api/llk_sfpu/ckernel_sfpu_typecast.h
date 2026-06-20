@@ -16,39 +16,22 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
+// Mask that keeps the low 16 bits (the UInt16 value) of a 32-bit dest word and clears the garbage high bits.
+constexpr std::uint16_t UINT16_LOW_MASK = 0xFFFF;
+
+// SFPSTORE mode that swaps the high and low 16 bits before writing, so a value computed in the low 16 bits
+// lands in the high 16 bits where the packer reads UInt16 out of a 32-bit dest word.
+constexpr std::uint32_t SFPSTORE_MODE_SWAP_HI_LO16 = 9;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS>
 inline void calculate_typecast_fp32_to_uint16() {
-#ifdef DISABLE_SFPLOADMACRO
 #pragma GCC unroll 0
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
         TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
     }
-#else
-    // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
-    //
-    // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
-    //
-    // t | Load | Simple            | MAD | Round            | Store   |
-    // - | ---- | ----------------- | --- | ---------------- | ------- |
-    // 0 | [v]  |                   |     |                  |         |
-    // 1 | nop  | [v] = max(v, 0.0) |     |                  |         |
-    // 0 | ...  | (must be idle)    |     | (must be idle)   |         |
-    // 1 | ...  |                   |     | [v] L16 = rnd(v) |         |
-    // 0 | ...  |                   |     |                  | [v] L16 |
-
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        int v = d & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
-        TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, v >> 2);
-        TTI_SFPNOP;
-    }
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-    TTI_SFPNOP;
-#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -516,7 +499,7 @@ inline void init_typecast_fp32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_uint32() {
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -655,7 +638,7 @@ inline void init_typecast_int32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint16_to_fp32() {
-    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0xFFFF);
+    TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, UINT16_LOW_MASK);
 }
 
 template <bool APPROXIMATION_MODE>
@@ -727,34 +710,7 @@ inline void init_typecast_uint32_to_fp16b() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void init_typecast_fp32_to_uint16() {
-#ifndef DISABLE_SFPLOADMACRO
-    // InstructionTemplate[0]
-    TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf);  // L[VD] = max(0, L[VD])
-
-    // InstructionTemplate[1]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-
-    // Macro 0
-    {
-        constexpr std::uint32_t simple_bits = 0x80 | 0x00 | (0 << 3) | (4 + 0);
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0x00 | 0x40 | (2 << 3) | (4 + 1);
-        constexpr std::uint32_t store_bits = 0x00 | 0x40 | (3 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 0, 0);
-    }
-
-    // Misc: {
-    //   StoreMod0: LO16,
-    //   UsesLoadMod0ForStore: {0},
-    //   UnitDelayKind: {1}, (WaitForElapsedInstructions=1)
-    // }
-    TTI_SFPCONFIG(0x100 | InstrModLoadStore::LO16, 8, 1);
-#endif
-}
+inline void init_typecast_fp32_to_uint16() {}
 
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_uint16() {
