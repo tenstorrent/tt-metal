@@ -1,23 +1,28 @@
-# reader_mcast_sender_unary_sharded_ln_post_allgather.cpp — v7
+# reader_mcast_sender_unary_sharded_ln_post_allgather — v7→v8 remigration
 
-- Group: normalization (layernorm post_allgather SENDER), tag clean (C1)
-- Status: migrated v7 — PASS
-- Validation: test_post_allgather_layernorm (single-chip, num_devices simulated by input chunking).
-  Smoke: num_devices=4 BFLOAT8_B is_rmsnorm=False --dev PASS. Family --run-all: 64 passed, 0 failed.
-- (F1,F2,F3,pre_hs) = (barrier, FLAG, INCLUDE_SRC, NO)
+**Tier:** 0b (layernorm sharded), v7→v8 REMIGRATION run.
+**Status:** migrated, migrated_api_version=8, commit=65d3debd959.
 
-## Delta
-Raw two-lambda block (global_reduce_sender data mcast + global_semaphore_set flag mcast) ->
-one SenderPipe::send():
-  SenderPipe<noc_index, reduce_sender_sem_id, num_blocks-1, /*PRE_HANDSHAKE=*/false>
-      reduce_pipe(noc, McastRect<>{...});
-  reduce_pipe.send(cb_stats_reduced.read_ptr, cb_ex_global.read_ptr, stats_tiles*num_tiles_per_worker_bytes);
-- True LOOPBACK: src (cb_stats_reduced c_21) != dst (cb_ex_global c_15), sender ∈ rect -> helper's
-  INCLUDE_SRC loopback path (+1 self-copy). NUM_ACTIVE_RECEIVER_CORES = num_blocks-1 (recipients excl.
-  self); the old raw used INCLUDE_SRC + num_blocks count.
-- PRE_HANDSHAKE=false: receivers mcast into a fresh reserve_back slot; no R->S ack sem exists (single
-  sem reduce_sender_sem = CTA 1). CONSUMER_READY_SEM_ID omitted.
-- send() couples data + VALID flag (data-before-flag, same VC, flush). The intervening cb_ex_global
-  push_back / cb_stats_reduced pop_front are local CB bookkeeping, reordered after send().
-- Dropped: MulticastEndpoint, the explicit Semaphore<> reduce_sender_sem, both lambdas, the pre-flag
-  reduce_sender_sem.set(VALID) (ctor sets local cell VALID; send re-asserts). diff_lines_removed: ~24.
+## Transform: PURE DELETION
+Dropped the 3rd `SenderPipe` template arg `NUM_ACTIVE_RECEIVER_CORES` (= `num_blocks - 1`).
+
+### Why dense (pure deletion), the loopback case
+- One-shot loopback (INCLUDE_SRC) `send()`: the sender reads its own reduced stats and writes
+  them into cb_ex_global on ALL num_blocks cores INCLUDING itself (src != dst).
+- The rect covers all num_blocks cores including the sender, so rect `area()` == num_blocks.
+  The helper derives the EXCLUDE fan-out as `area - (in_rect?1:0)` == num_blocks - 1, which
+  equals the old explicit count. `send()` detects the in-box src != dst and adds +1 for the
+  self-copy (INCLUDE_SRC) automatically -> the loopback +1 the old code wanted is preserved.
+- `PRE_HANDSHAKE=false` (each receiver mcasts into a fresh reserve_back slot) -> no consumer-ack
+  count to override; nothing added to the ctor.
+
+## Diff
+- Template arg list: 4 -> 3 (removed `num_blocks - 1`). Comment rewritten. clang-format reflowed
+  the call site (whitespace only).
+- diff_lines_removed: 1 template arg + comment churn.
+
+## Validation
+`tests/ttnn/unit_tests/operations/fused/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm`
+- Smoke (--dev): bf8b in/out/weights, 8x2 grid, num_devices=4, rmsnorm=True -> PASSED.
+- Full (--run-all): 64 passed, 0 failed, no hang.
+- JIT build confirmed.

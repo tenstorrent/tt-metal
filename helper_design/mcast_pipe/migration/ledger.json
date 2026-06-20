@@ -318,8 +318,8 @@
    "role": "sender",
    "tag": "clean",
    "status": "migrated",
-   "migrated_api_version": 7,
-   "commit": "3a0315dea95",
+   "migrated_api_version": 8,
+   "commit": "65d3debd959",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm (sim multi-device on 1 chip)"
    ],
@@ -336,7 +336,7 @@
    "role": "receiver",
    "tag": "clean",
    "status": "migrated",
-   "migrated_api_version": 7,
+   "migrated_api_version": 8,
    "commit": "fcec91acc5c",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_distributed_layernorm_sharded.py::test_post_allgather_layernorm"
