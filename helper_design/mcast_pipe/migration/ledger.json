@@ -67,17 +67,18 @@
    "op_family": "matmul",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_dram_sharded.py::test_matmul_in1_dram_sharded_with_program_cache"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "P2 worker-type-dispatched (3 runtime core types)",
+   "last_verified": "2026-06-20",
+   "census_note": "P2 worker-type-dispatched (3 runtime core types) | DEFER-DESIGN-GAP: split mcast-dest count vs consumer-ack count. type1 mcasts (num_cores-1)=grid-1 but waits num_dests=banks; type2 mcasts num_cores=grid (INCLUDE) but waits num_dests-1=banks-1. Single NUM_ACTIVE_RECEIVER_CORES cannot serve both contradictory constraints. Needs helper change (out of scope).",
    "flags": [
-    "tier:2b"
+    "tier:2b",
+    "design-gap"
    ]
   },
   {
