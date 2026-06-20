@@ -223,12 +223,14 @@
    "role": "receiver",
    "tag": "clean",
    "status": "migrated",
-   "migrated_api_version": 7,
+   "migrated_api_version": 8,
    "commit": "d93798c8e0793bd2c104815e7a9d5b45c8f0e04f",
-   "validation_set": [],
-   "coverage_confidence": "unknown",
+   "validation_set": [
+    "tests/ttnn/unit_tests/operations/conv/test_conv2d.py::test_conv_features (HEIGHT_SHARDED ic16 oc16 256x256 act_block_h=32 BF16)"
+   ],
+   "coverage_confidence": "high",
    "last_verified": "2026-06-20",
-   "census_note": "",
+   "census_note": "ReceiverPipe unchanged in v8; re-verified (no code edit), JIT-built on HEIGHT_SHARDED 256x256 act_block_h=32 path. Existing commit kept.",
    "flags": []
   },
   {
