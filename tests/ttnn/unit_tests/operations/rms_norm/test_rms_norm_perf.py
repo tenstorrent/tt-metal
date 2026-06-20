@@ -154,11 +154,10 @@ def test_rms_norm_ab_crossover(device, layout, W):
     heuristic picks the faster regime within a noise band, and (2) wide rows (Wt=256)
     are decisively faster in the (K-tuned) Regime B.
 
-    With the K-tuned _select_k, Regime B is fast enough that it wins from Wt>=16; the
-    crossover threshold (REGIME_B_MIN_WT_*=16) keeps only the single-tile-wide row
-    (Wt=8, W=256) in Regime A. We don't pin a winner at the Wt=8 boundary (it is a
-    ~15% margin, near noise) — the robust contract is that the heuristic tracks the
-    faster regime."""
+    Refinement 9 (Part C): the root-relay transport made Regime B cheap enough that it
+    wins from Wt>=8 (W=256) — the crossover (REGIME_B_MIN_WT_*) was lowered 16 -> 8.
+    So even the single-tile-wide row now routes to (and is faster in) Regime B. The
+    robust contract asserted here is that the heuristic tracks the faster regime."""
     x = torch.randn(1, 1, 32, W)
     a = _measure_forced(device, x, "A", layout=layout)
     b = _measure_forced(device, x, "B", layout=layout)
@@ -201,10 +200,13 @@ def test_rms_norm_regime_b_rowblocking_exhausted(device):
           per-gather fixed cost were serialized, 2 groups would cost ~2x; it does not.
 
       (2) K-MONOTONICITY — the all-gather cost grows with K, so the K-doubling that
-          ``bh>1`` requires is strictly net-negative. Forcing K up on a single-row-group
-          shape (where every K fits the grid) shows device time rising monotonically
-          with K (measured K=16 ~34us < K=32 < K=64 ~110us). bh>1 buys exactly this
-          K increase, while the per-core reduce work it would save is already flat.
+          ``bh>1`` requires is net-negative beyond the optimum. Forcing K to the grid
+          maximum on a single-row-group shape still raises device time vs the tuned K.
+          (NOTE: Refinement 9's root-relay transport FLATTENED this curve — the old
+          mcast all-gather was ~O(K) so K=64 was ~3x the tuned K; root-relay is ~O(1)
+          phases, so K=64 is now only modestly worse than the tuned K. The conclusion
+          is unchanged — pushing K past its optimum is still a regression — but the
+          margin is smaller, so the assertion below is k_max > k_tuned, not > 1.5x.)
 
     Conclusion (see changelog.md R8): the only theoretical Regime-B win is a *coverage*
     extension (oversubscribed grids — shapes with num_row_groups*K_min > total_cores
@@ -225,14 +227,56 @@ def test_rms_norm_regime_b_rowblocking_exhausted(device):
         f"(ratio {t2/t1:.2f}); a serialized per-gather fixed cost would push this toward 2x"
     )
 
-    # (2) K-monotonicity: forcing K up (what bh>1 requires) is net-negative. Single
-    #     row-group so every K in {16,32,64} qualifies (1*K <= 64, K|256, K%8==0).
+    # (2) K-monotonicity past the optimum: forcing K to the grid max (what bh>1 requires)
+    #     is net-negative. Single row-group so every K in {16,32,64} qualifies (1*K <= 64,
+    #     K|256, K%8==0). Under R9's root-relay transport K=32 is the tuned optimum and
+    #     K=64 (full grid, root gathers 63 peers) is worse — pushing K up still regresses.
     k16 = _measure_forced_k(device, x1, 16)
     k32 = _measure_forced_k(device, x1, 32)
     k64 = _measure_forced_k(device, x1, 64)
     assert k16 is not None and k32 is not None and k64 is not None, (k16, k32, k64)
-    # K=64 must be clearly worse than K=16 (the all-gather cost dominates the growth).
-    assert k64 > k16 * 1.5, (
-        f"expected raising K (the bh>1 lever) to be net-negative: K=16={k16/1000:.1f}us, "
-        f"K=32={k32/1000:.1f}us, K=64={k64/1000:.1f}us"
+    # K=64 (grid max) must be worse than the tuned K=32 optimum. Margin is smaller than
+    # the pre-R9 mcast curve (root-relay flattened it), so assert net-negative, not 1.5x.
+    assert k64 > k32, (
+        f"expected raising K past the optimum (the bh>1 lever) to be net-negative: "
+        f"K=16={k16/1000:.1f}us, K=32={k32/1000:.1f}us (tuned), K=64={k64/1000:.1f}us"
     )
+
+
+def _measure_forced_transport(device, x, transport, **kw):
+    try:
+        desc._FORCE_REGIME = "B"
+        desc._FORCE_TRANSPORT = transport
+        return measure_device_kernel_ns(device, x, **kw)
+    finally:
+        desc._FORCE_REGIME = None
+        desc._FORCE_TRANSPORT = None
+
+
+def test_rms_norm_transport_bakeoff(device):
+    """Refinement 9 (Part A) — the root-relay gather-then-broadcast transport beats the
+    baseline rotating-sender mcast all-gather on wide-W Regime-B shapes.
+
+    Baseline (mode 0): K-round rotating-sender mcast all-gather, O(K) serialized rounds.
+    Root-relay (mode 1): rank 0 unicast-gathers all K partials (one parallel phase) then a
+    SINGLE mcast of the K-tile block, O(1) transport phases. Measured speedups (best-of-7,
+    bf16, 8x8 Wormhole) ranged 1.10x (Wt=128) to 1.48x (Wt=1024); the win grows with K.
+    This asserts root-relay is not slower (with a noise band) on the representative shapes —
+    the production default is root-relay (see _select_transport / changelog R9).
+    """
+    rows = ["# rms_norm Regime-B transport bake-off (device kernel ns, lower=better)\n",
+            "| shape | mcast all-gather | root-relay | speedup |", "|---|---|---|---|"]
+    worst_ratio = 1.0
+    for shape in [(1, 1, 32, 4096), (1, 1, 32, 8192), (1, 1, 64, 8192), (1, 1, 32, 16384),
+                  (1, 1, 32, 32768), (1, 1, 64, 12288)]:
+        x = torch.randn(*shape)
+        m0 = _measure_forced_transport(device, x, desc.TRANSPORT_MCAST_ALLGATHER)
+        m1 = _measure_forced_transport(device, x, desc.TRANSPORT_ROOT_RELAY)
+        if m0 is None or m1 is None:
+            pytest.skip("profiler returned no per-program timing")
+        ratio = m0 / m1
+        worst_ratio = min(worst_ratio, ratio)
+        rows.append(f"| {'x'.join(map(str, shape))} | {_fmt(m0)} | {_fmt(m1)} | {ratio:.2f}x |")
+    (Path(__file__).parent / "transport_bakeoff_results.md").write_text("\n".join(rows) + "\n")
+    # Root-relay must not regress any shape beyond a small noise band.
+    assert worst_ratio > 0.95, f"root-relay regressed a shape (worst speedup {worst_ratio:.2f}x); table written"

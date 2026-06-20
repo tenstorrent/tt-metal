@@ -79,8 +79,15 @@ RESIDENT_BUDGET_TILES = 560
 # routes Wt>=16 to B. (Earlier intermediate measurements gave 160/96, but that was
 # BEFORE the _select_k K-tuning — those numbers are stale; the K-tuning is what makes
 # the low crossover correct.)
-REGIME_B_MIN_WT_TILE = 16
-REGIME_B_MIN_WT_RM = 16
+# Refinement 9 (Part C): root-relay transport (Part A) made Regime B cheaper, lowering the
+# crossover from 16 to 8. Measured at Wt=8 (W=256, the narrowest partitionable row, K=8):
+# Regime B 7.5us (TILE) / 11.2us (RM) now BEATS single-core Regime A 9.8us / 13.7us — under
+# the old mcast transport A won here (which is why the crossover was 16). Wt=8 is the only
+# new value this admits (Wt in [9,15] has no mult-of-gx divisor, so it stays Regime A), so
+# the change is well-bounded; golden stays 1683/1683. Below Wt=8 (W<256) no rectangular
+# partition exists and the row stays in Regime A.
+REGIME_B_MIN_WT_TILE = 8
+REGIME_B_MIN_WT_RM = 8
 
 # Precision ceiling on the crossover (NOT a perf number — a correctness floor):
 # Regime A computes Σx² as a SINGLE reduce over the whole resident shard. With
