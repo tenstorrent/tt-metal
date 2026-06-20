@@ -573,15 +573,15 @@
    "op_family": "transformer + sdpa",
    "role": "hybrid",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/transformer/test_sdpa_prefill.py::test_sdpa_noncausal (b1 nh8 nkv1 s2048 d128)"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
-   "census_note": "open-coded chain-link, K+V",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFERRED: CHAIN/relay topology (helper design gap). Forward path uses cross-id relay_multicast(valid_sem -> receiver_sem, src!=dst); each link is simultaneously receiver+sender. STAR SenderPipe asserts src==dst, structurally cannot relay. = chain_link.hpp reference pattern, T2 CHAIN=GAP.",
    "flags": [
     "tier:2c"
    ]
@@ -609,15 +609,15 @@
    "op_family": "transformer + sdpa",
    "role": "both",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/transformer/test_sdpa_decode.py::test_sdpa_decode_sharded (use_k_mcast=1)"
    ],
    "coverage_confidence": "med",
-   "last_verified": null,
-   "census_note": "read_k vertical-column mcast; BARRIER + linked=false (inverse F1 of chain)",
+   "last_verified": "2026-06-20",
+   "census_note": "DEFERRED: runtime recipient count + runtime role. read_k STAR is otherwise expressible (vertical-col mcast, sem set_multicast src==dst, no pre-handshake), BUT num_dests is a pure runtime arg (helper NUM_ACTIVE_RECEIVER_CORES is compile-time only) and do_mcast selects sender-vs-receiver per-core at runtime under one binary (helper Sender/ReceiverPipe are distinct compile-time-chosen types). Two design gaps.",
    "flags": [
     "tier:2c"
    ]
