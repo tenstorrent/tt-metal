@@ -13,6 +13,7 @@ from helpers.data_format_inference import is_format_combination_outlier
 from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.logger import logger
+from helpers.tile_constants import validate_tile_dimensions
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -69,6 +70,9 @@ class OperandDefinition(BaseModel):
     name: str = Field(..., min_length=1)
     dims: Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
     format: DataFormat
+    tile_dims: Optional[
+        Annotated[Tuple[int, int], Field(min_length=2, max_length=2)]
+    ] = None
     const_value: Optional[float] = None
 
     @field_validator("dims")
@@ -77,9 +81,29 @@ class OperandDefinition(BaseModel):
         for dim in v:
             if dim <= 0:
                 raise ValueError(f"must be positive, got {dim}")
-            if dim % 32 != 0:
-                raise ValueError(f"must be multiple of 32, got {dim}")
         return tuple(v)
+
+    @field_validator("tile_dims", mode="before")
+    @classmethod
+    def validate_tile_dims(cls, v):
+        if v is None:
+            return v
+        v = tuple(v)
+        validate_tile_dimensions(v)
+        return v
+
+    @model_validator(mode="after")
+    def validate_dims_align_to_tiles(self) -> "OperandDefinition":
+        tile_r, tile_c = self.tile_dims if self.tile_dims is not None else (32, 32)
+        if self.dims[0] % tile_r != 0:
+            raise ValueError(
+                f"dims[0]={self.dims[0]} must be a multiple of tile row dimension {tile_r}"
+            )
+        if self.dims[1] % tile_c != 0:
+            raise ValueError(
+                f"dims[1]={self.dims[1]} must be a multiple of tile column dimension {tile_c}"
+            )
+        return self
 
     @field_validator("format", mode="before")
     @classmethod
@@ -155,9 +179,13 @@ class FuserConfigSchema(BaseModel):
                 dimensions=op_def.dims,
                 data_format=op_def.format,
                 const_value=op_def.const_value,
+                tile_dims=op_def.tile_dims,
             )
 
-        pipeline = [op.to_fused_operation(operands) for op in self.operations]
+        pipeline = [
+            op.to_fused_operation(operands, dest_acc=self.dest_acc.value)
+            for op in self.operations
+        ]
 
         return FuserConfig(
             pipeline=pipeline,

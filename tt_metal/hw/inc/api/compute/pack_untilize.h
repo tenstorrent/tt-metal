@@ -163,6 +163,7 @@ template <
     bool dense = false,
     bool configure_remap = true>
 ALWI void pack_untilize_dest_init(uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     pack_untilize_detail::
         pack_untilize_dest_init_impl<block_ct_dim, full_ct_dim, narrow_row, row_num_datums, dense, configure_remap>(
             ocb, call_line);
@@ -199,6 +200,7 @@ template <
     "Face geometry is now derived from the output CB metadata; use the pack_untilize_dest_init(ocb) "
     "overload instead.")]] ALWI void
 pack_untilize_dest_init(uint32_t ocb, uint32_t face_r_dim, uint32_t num_faces, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     pack_untilize_detail::
@@ -238,6 +240,7 @@ template <
     "derived from the output CB metadata.")]] ALWI void
 pack_untilize_dest_init_skip_remap(
     uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
     pack_untilize_detail::
@@ -279,6 +282,7 @@ pack_untilize_dest_init_skip_remap(
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, true>(icb, ocb, call_line);
 }
 
@@ -301,6 +305,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     pack_untilize_detail::pack_untilize_init_impl<block_ct_dim, full_ct_dim, false>(icb, ocb, call_line);
 }
 
@@ -331,6 +336,7 @@ ALWI void pack_untilize_init_skip_remap(uint32_t icb, uint32_t ocb, uint32_t cal
 // clang-format on
 template <uint32_t block_ct_dim = 8, uint32_t full_ct_dim = block_ct_dim>
 ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb, uint32_t block_c_index = 0) {
+    LLK_SAN_FUNCTION();
     for (uint32_t r = 0; r < block_rt_dim; ++r) {
         MATH((llk_math_wait_for_dest_available()));
         for (uint32_t c = 0; c < block_ct_dim; ++c) {
@@ -406,6 +412,7 @@ ALWI void pack_untilize_dest(
     uint32_t block_rt_dim = 1,
     uint32_t block_c_index = 0 /* used when full_ct_dim > block_ct_dim*/,
     uint32_t tile_dst_rt_offset = 0) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     PACK((llk_pack_untilize<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums, tile_dst_ct_offset, dense>(
         block_rt_dim, ocb, block_c_index, tile_dst_rt_offset)));
@@ -458,6 +465,7 @@ pack_untilize_dest(
     [[maybe_unused]] uint32_t face_r_dim,
     [[maybe_unused]] uint32_t num_faces,
     uint32_t tile_dst_rt_offset) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wdeprecated-declarations"
@@ -486,6 +494,7 @@ pack_untilize_dest(
  */
 // clang-format on
 ALWI void pack_untilize_uninit(uint32_t ocb) {
+    LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
     // Reconfigure data format to match the initial configuration, before calling init.
     // Init is called to ensure special untilize init overrides are cleaned up.
