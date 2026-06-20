@@ -349,17 +349,18 @@
    "op_family": "normalization",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (legacy)"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
-   "census_note": "C2 multi-rect; raw-L1 src",
+   "last_verified": "2026-06-20",
+   "census_note": "C2 multi-rect | DEFER-DESIGN-GAP: multi-rect per-rect num_dests is a RUNTIME arg (get_arg_val), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param; runtime num_dests inexpressible. Needs helper change (out of scope).",
    "flags": [
-    "tier:2a"
+    "tier:2a",
+    "design-gap"
    ]
   },
   {
@@ -435,17 +436,18 @@
    "op_family": "normalization",
    "role": "sender",
    "tag": "refactor",
-   "status": "pending",
+   "status": "deferred",
    "migrated_api_version": null,
    "commit": null,
    "validation_set": [
     "tests/ttnn/unit_tests/operations/normalization/test_group_norm.py::test_group_norm_with_block_sharded_v2_8x4_grid (welford)"
    ],
    "coverage_confidence": "high",
-   "last_verified": null,
-   "census_note": "C2 multi-rect",
+   "last_verified": "2026-06-20",
+   "census_note": "C2 multi-rect | DEFER-DESIGN-GAP: multi-rect per-rect num_dests is a RUNTIME arg (get_arg_val), but v7 SenderPipe NUM_ACTIVE_RECEIVER_CORES is a compile-time template param; runtime num_dests inexpressible. Needs helper change (out of scope).",
    "flags": [
-    "tier:2a"
+    "tier:2a",
+    "design-gap"
    ]
   },
   {
