@@ -564,15 +564,13 @@
       "role": "receiver",
       "tag": "clean",
       "status": "migrated",
-      "migrated_api_version": 4,
-      "commit": null,
+      "migrated_api_version": 7,
+      "commit": "15c9fa959849196d0f1ae4f501370444d7cd33d4",
       "validation_set": [],
       "coverage_confidence": "unknown",
-      "last_verified": "round-4 (BH p150a)",
+      "last_verified": "2026-06-20",
       "census_note": "cleanest modern receiver",
-      "flags": [
-        "needs_recheck"
-      ]
+      "flags": []
     },
     {
       "kernel": "ttnn/cpp/ttnn/operations/reduction/topk/device/kernels/dataflow/writer_local_topk.cpp",
