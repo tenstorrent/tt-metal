@@ -53,3 +53,22 @@ NOT an apply-dm-helper call-site bug.
 - Validation: test_matmul_2d_multiple_output_blocks_per_core --run-all = 56 passed, 72 skipped, 0 failed,
   NO HANG (smoke + full function). transpose_mcast=True + in0_sharded=True params hit this kernel.
 - Ledger: quarantined -> migrated@v7.
+
+## REMIGRATED TO v8 (2026-06-20, Tier 0a)
+Commit `5a9d07277dfb07178185f131ad5290b0d0cbe7c0`. migrated v8 — PASS.
+
+Transform: v8 SenderPipe dropped the 3rd template param. **PURE DELETION** of the 3rd template arg
+(`in0_pipe_active_cores,`) AND the now-dead `constexpr uint32_t in0_pipe_active_cores = ...` declaration
+(its only use was that template arg). The per-round ReceiverPipe arm (lines ~256-260) is UNCHANGED — v8
+ReceiverPipe is identical to v7.
+
+Dense justification: the factory always sets `in0_mcast_num_dests == in0_mcast_num_cores == rect area`, so
+the EXCLUDE fan-out the rect derives — `area() - (in_rect ? 1 : 0)` — reproduces the old
+`in0_pipe_active_cores` (`core_in_in0_receiver_mcast_grid ? num_dests-1 : num_dests`) exactly: in-grid cores
+get `area-1`, out-of-grid cores get `area`. The rect's `in_rect_` containment IS `core_in_in0_receiver_mcast_grid`.
+So the default `consumer_ack_count = ACK_EQUALS_FANOUT` is correct and the explicit count is gone. The
+per-send flag-VALID re-assert (helper fix 20cf0df46ee that lifted this from quarantine) is preserved in v8.
+
+Validation: `test_matmul_2d_multiple_output_blocks_per_core` --run-all = **56 passed, 72 skipped, 0 failed,
+NO HANG**; 2D smoke (transpose_mcast=True + in0_sharded=True, grid (8,4)) PASS. JIT-built confirmed
+(`generated/watcher/watcher.log`). diff_lines_removed: 3 (template arg + 2-line constexpr decl).

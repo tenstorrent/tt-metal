@@ -26,7 +26,7 @@
    "role": "receiver",
    "tag": "clean",
    "status": "migrated",
-   "migrated_api_version": 7,
+   "migrated_api_version": 8,
    "commit": "85cc48b1373d2f6d0faf48ad3665de9a62ebed5d",
    "validation_set": [],
    "coverage_confidence": "unknown",
@@ -54,7 +54,7 @@
    "role": "receiver",
    "tag": "clean",
    "status": "migrated",
-   "migrated_api_version": 7,
+   "migrated_api_version": 8,
    "commit": "592e92169277b7ae09d83348b3ebb481a4493f20",
    "validation_set": [],
    "coverage_confidence": "unknown",
@@ -87,8 +87,8 @@
    "role": "hybrid",
    "tag": "refactor",
    "status": "migrated",
-   "migrated_api_version": 7,
-   "commit": "7953a2a2e5244c3c74208f65b9329da4ff00d447",
+   "migrated_api_version": 8,
+   "commit": "5a9d07277dfb07178185f131ad5290b0d0cbe7c0",
    "validation_set": [
     "tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_matmul_2d_multiple_output_blocks_per_core (transpose_mcast=True, in0_sharded=True)"
    ],
