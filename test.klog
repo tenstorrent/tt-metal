@@ -1,0 +1,94 @@
+Traceback (most recent call last):
+  File "/localdev/nostojic/tt-metal/python_env/bin/pytest", line 12, in <module>
+    sys.exit(console_main())
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/config/__init__.py", line 223, in console_main
+    code = main()
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/config/__init__.py", line 193, in main
+    config = _prepareconfig(new_args, plugins)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/config/__init__.py", line 361, in _prepareconfig
+    config: Config = pluginmanager.hook.pytest_cmdline_parse(
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/pluggy/_hooks.py", line 512, in __call__
+    return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/pluggy/_callers.py", line 167, in _multicall
+    raise exception
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/pluggy/_callers.py", line 139, in _multicall
+    teardown.throw(exception)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/helpconfig.py", line 124, in pytest_cmdline_parse
+    config = yield
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/pluggy/_callers.py", line 121, in _multicall
+    res = hook_impl.function(*args)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/config/__init__.py", line 1192, in pytest_cmdline_parse
+    self.parse(args)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/config/__init__.py", line 1545, in parse
+    self.pluginmanager.load_setuptools_entrypoints("pytest11")
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/pluggy/_manager.py", line 416, in load_setuptools_entrypoints
+    plugin = ep.load()
+  File "/home/nostojic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/importlib/metadata/__init__.py", line 171, in load
+    module = import_module(match.group('module'))
+  File "/home/nostojic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/importlib/__init__.py", line 126, in import_module
+    return _bootstrap._gcd_import(name[level:], package, level)
+  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 992, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 992, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 241, in _call_with_frames_removed
+  File "<frozen importlib._bootstrap>", line 1050, in _gcd_import
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/assertion/rewrite.py", line 197, in exec_module
+    exec(co, module.__dict__)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/dash/__init__.py", line 36, in <module>
+    from .dash import (  # noqa: F401,E402
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/assertion/rewrite.py", line 197, in exec_module
+    exec(co, module.__dict__)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/dash/dash.py", line 77, in <module>
+    from ._jupyter import jupyter_dash, JupyterDisplayMode
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/_pytest/assertion/rewrite.py", line 197, in exec_module
+    exec(co, module.__dict__)
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/dash/_jupyter.py", line 19, in <module>
+    from IPython import get_ipython
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/IPython/__init__.py", line 53, in <module>
+    from .terminal.embed import embed
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/IPython/terminal/embed.py", line 16, in <module>
+    from IPython.terminal.interactiveshell import TerminalInteractiveShell
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/IPython/terminal/interactiveshell.py", line 31, in <module>
+    from prompt_toolkit.auto_suggest import AutoSuggestFromHistory
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/__init__.py", line 27, in <module>
+    from .application import Application
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/application/__init__.py", line 3, in <module>
+    from .application import Application
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/application/application.py", line 36, in <module>
+    from prompt_toolkit.buffer import Buffer
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/buffer.py", line 26, in <module>
+    from .completion import (
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/completion/__init__.py", line 3, in <module>
+    from .base import (
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/completion/base.py", line 11, in <module>
+    from prompt_toolkit.formatted_text import AnyFormattedText, StyleAndTextTuples
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/formatted_text/__init__.py", line 27, in <module>
+    from .html import HTML
+  File "/localdev/nostojic/tt-metal/python_env/lib/python3.10/site-packages/prompt_toolkit/formatted_text/html.py", line 3, in <module>
+    import xml.dom.minidom as minidom
+  File "/home/nostojic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/xml/dom/minidom.py", line 23, in <module>
+    from xml.dom.xmlbuilder import DOMImplementationLS, DocumentLS
+  File "/home/nostojic/.local/share/uv/python/cpython-3.10-linux-x86_64-gnu/lib/python3.10/xml/dom/xmlbuilder.py", line 6, in <module>
+    from xml.dom.NodeFilter import NodeFilter
+  File "<frozen importlib._bootstrap>", line 1027, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1006, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 688, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 879, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 975, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1074, in get_data
+KeyboardInterrupt
