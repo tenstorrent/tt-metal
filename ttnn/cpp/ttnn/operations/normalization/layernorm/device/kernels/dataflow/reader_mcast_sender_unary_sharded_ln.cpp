@@ -135,21 +135,18 @@ void kernel_main() {
             // PRE_HANDSHAKE=false. INITIAL_READY=INVALID: this signal sender's flag cell starts cleared
             // (phase-2 later reuses it as a monotone counter), folding in the old pre-loop clear.
             constexpr uint32_t reduce_sender_sem_id = get_compile_time_arg_val(1);
-            constexpr uint32_t reduce_receiver_sem_id = get_compile_time_arg_val(0);
             dataflow_kernel_lib::SenderPipe<
-                num_blocks - 1,
+                noc_index,
                 reduce_sender_sem_id,
-                reduce_receiver_sem_id,
-                dataflow_kernel_lib::Staging::Flag,
-                false,
-                INVALID>
+                num_blocks - 1,
+                /*PRE_HANDSHAKE=*/false>
                 phase1_pipe(
                     noc,
-                    dataflow_kernel_lib::McastRect{
+                    dataflow_kernel_lib::McastRect<>{
                         mcast_dest_noc_start_x, mcast_dest_noc_start_y, mcast_dest_noc_end_x, mcast_dest_noc_end_y});
             reduce_receiver_sem.wait(num_blocks - 1);
             reduce_receiver_sem.set(0);
-            phase1_pipe.send_signal(VALID);
+            phase1_pipe.send_signal();
         }
 
         // ============================================================================
