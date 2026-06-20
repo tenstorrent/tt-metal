@@ -571,3 +571,69 @@ intentionally kept raw + documented.** All on BH p150a, single parametrization e
   **lift `block_sharded` out of quarantine** — its v7 call site is recoverable from commit `fa561f3b584`
   (raw revert currently at HEAD); with M12b in the helper it now passes. apply-dm-helper re-verifies it
   against its mapped test and flips the ledger entry `quarantined → migrated@v7`.
+
+---
+
+## Round 10 — split the recipient count (D2) + rect-derived fan-out (D1 half) (2026-06-20)
+
+- **Trigger:** `tune-dm-helper` feedback round — close design-gap **D2** (report.md): the v7
+  `NUM_ACTIVE_RECEIVER_CORES` template param served THREE jobs at once — the consumer-ack handshake wait
+  (`send` :194), the data mcast `num_dests` (:204), and the signal mcast `num_dests` (:217). The fan-out
+  (204/217) is the cores the broadcast physically lands on; the handshake (194) is only the *active*
+  receivers that ack. They diverge whenever the mcast box holds inactive/noop cores (conv-WS,
+  dram-sharded, conv-1D-weights), so those kernels stayed raw/deferred. Plus the PERF ask: precompute all
+  constants in the ctor; make `send()` do no arithmetic.
+- **Re-entry routing (Step D, leftmost):** the claim changes *what a count means* and splits one param
+  into two — a contract change, no measurement disputed. One forward pass **D → E → F → G**. **Step E was
+  a re-decide NO-OP, no device** (the split touches none of the four style forks — flush/barrier,
+  flag/counter, linked/unlinked, EXCLUDE/INCLUDE; the conv-1D-weights hang it unblocks was already an
+  A/B-confirmed coverage fact, report.md D2, not a perf measurement).
+- **Decisions:**
+  - **A — fan-out from geometry.** Re-added `McastRect::area()` = `(xhi-xlo+1)*(yhi-ylo+1)` on the
+    normalized corners — **count use only, NOT loopback inference** (loopback stays the Round-3 rule
+    `in_rect_ && src!=dst`). `SenderPipe` derives `num_dests_excl_ = area-(in_rect?1:0)` and
+    `num_dests_incl_ = +1`. Because the rect corners are runtime, `area()` is runtime → **runtime fan-out
+    for free (resolves D1's fan-out half).**
+  - **B — handshake gets its own count.** New runtime ctor arg `consumer_ack_count`, **defaulting to the
+    sentinel `ACK_EQUALS_FANOUT`** (= the derived EXCLUDE fan-out). Dense callers omit it; a divergent
+    caller (conv-WS: `num_mcast_cores-1`; dram-sharded: `num_dram_banks`; conv-1D-weights: `total_active-1`)
+    passes its own smaller count.
+  - **PERF — ctor precompute.** The ctor caches `in_rect_`, `num_dests_excl_`, `num_dests_incl_`,
+    `degenerate_(=excl==0)`, `ack_count_`. `send()` does only: degenerate→local-copy guard;
+    `wait(ack_count_)`; `loopback = in_rect_ && src!=dst`; **branch-select** `mcast_dests = loopback ?
+    num_dests_incl_ : num_dests_excl_` (no arithmetic); issue + fence.
+  - **Proven invariant — `num_dests == area ± source`** (device-grounded this round across all 10 migrated
+    senders, including the conv-WS case once feared a counterexample: the factory sets
+    `num_reader_cores = all_cores.bounding_box().size() = area`, so its INCLUDE fan-out IS the area; what
+    diverges there is the *ack* count — exactly the thing the split decouples). Consequence: **every dense
+    call site re-migrates by simply dropping its count arg** — the rect carries the fan-out and the ack
+    default. The explicit-ack arm's first consumers are the deferred divergence kernels this round
+    unblocks (not a dead knob).
+- **Scope guard:** D3–D9 untouched. **Per-send-varying ack is OUT** (`ack_count_` is ctor-cached; the
+  sort coordinator's start-vs-substage ack varies per send — not covered, and D3-blocked anyway). Recorded.
+- **API before (version 7):** `SenderPipe<NOC_ID, DATA_READY_SEM_ID, NUM_ACTIVE_RECEIVER_CORES,
+  PRE_HANDSHAKE=true, CONSUMER_READY_SEM_ID=UNUSED, DataReadySignal=Flag>(noc, McastRect<>{...})`.
+- **API after (version 8):** `SenderPipe<NOC_ID, DATA_READY_SEM_ID, PRE_HANDSHAKE=true,
+  CONSUMER_READY_SEM_ID=UNUSED, DataReadySignal=Flag>(noc, McastRect<>{...}, consumer_ack_count =
+  ACK_EQUALS_FANOUT)`. `McastRect` gains `area()`. `ReceiverPipe` UNCHANGED.
+- **`MCAST_PIPE_API_VERSION` 7 → 8** (caller-facing: removed template param + added ctor arg + re-added
+  `area()` → every migrated `SenderPipe` site is rewritten). All Round-9 migrated kernels are now
+  **stale@v7**.
+- **Artifacts touched:** `api_feasibility.md` (Round-10 addendum + invariant table), `style_bakeoff.md`
+  (E re-decide no-op), `proposed_helpers.md` (header), this changelog, `mcast_pipe.hpp` (materialized:
+  `area()`, `ACK_EQUALS_FANOUT` sentinel, SenderPipe template/ctor/send/send_signal/members), the three
+  sender unit-test kernels (`pipe_sender`/`pipe_f3_sender`/`pipe_rotating`) + `test_mcast_pipe.py`
+  (consumer-ack slot + two new cases).
+- **Verification (Wormhole b0, this run):** header-only + JIT kernel change (no `build_metal.sh`
+  rebuild). `test_mcast_pipe.py` **50/50 PASS** (45 prior + 3 `test_runtime_fanout` + 2 `test_split_count`).
+  **Regression-guard proof:** temporarily passing the dense default ack (`ACK_EQUALS_FANOUT` → fan-out=4)
+  in `test_split_count` makes the sender wait 4 acks while only 2 arrive → **HANG** (operation-timeout
+  triage dispatched), so the new split-count cell genuinely catches the round-1 conv-1D-weights regression;
+  explicit ack=2 restored, full suite green.
+- **Provisional items:** none. The split is contract/coverage-decided (the divergence is a correctness
+  fact), not a micro-bench dual-path.
+- **Hand-off:** re-invoke `apply-dm-helper helper_design/mcast_pipe/`. The version bump (7→8) triggers a
+  Tier-0 staleness sweep: every kernel with `migrated_api_version < 8` is remigrated first — for the
+  dense sites this is a pure deletion of the count arg (the rect now carries it). Then apply-dm-helper can
+  newly migrate the D2 divergence kernels (conv-WS-with-handshake, dram-sharded, conv-1D-weights) that the
+  split unblocks, passing their explicit `consumer_ack_count`.

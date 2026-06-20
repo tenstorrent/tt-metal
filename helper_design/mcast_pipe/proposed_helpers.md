@@ -27,6 +27,16 @@
 > shared cell INVALID between its sender turns — the ctor-once VALID goes stale and receivers hang.
 > Internal to `send()`/`signal_ready_`, Flag-path-only, NOT gated (DOMINANT: redundant no-op for the
 > pure STAR, required for the rotating STAR). **No caller-facing change → API stays version 7, no bump.**
+> **Round 10 (2026-06-20)** closes design-gap **D2** — the v7 `NUM_ACTIVE_RECEIVER_CORES` template param
+> served three jobs (handshake-ack count, data fan-out, signal fan-out), which collide whenever the mcast
+> rect's bounding box holds inactive cores (conv-WS, dram-sharded, conv-1D-weights). The split: the
+> **fan-out is derived from `McastRect::area()`** (re-added, count use only — loopback inference stays
+> `in_rect_ && src!=dst`), `num_dests_excl_ = area-(in_rect?1:0)` / `num_dests_incl_ = +1`; the
+> **handshake gets its own runtime `consumer_ack_count` ctor arg, defaulting to the EXCLUDE fan-out** so
+> dense callers omit it. The `NUM_ACTIVE_RECEIVER_CORES` template param is **removed**. Proven invariant
+> (`num_dests == area ± source`) device-grounded across all 10 migrated senders; dense remigration is a
+> pure deletion of the count arg. Runtime rect → runtime fan-out (resolves D1's fan-out half).
+> Caller-facing → API version **7 → 8**. D3–D9 untouched; per-send-varying ack (sort) stays deferred.
 > Authoritative running record: `changelog.md`.
 
 > **⚠ CAPABILITY GAP — TOPOLOGY (Round 7, 2026-06-20, feedback-2.txt).** The `Pipe` is a **STAR**

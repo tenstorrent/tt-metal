@@ -51,7 +51,7 @@
 // re-materialization changes the caller-facing API (renamed/removed type, moved param, changed
 // count/flag semantics — anything that forces a call site rewrite); leave it for internal-only
 // changes.
-#define MCAST_PIPE_API_VERSION 7
+#define MCAST_PIPE_API_VERSION 8
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -76,10 +76,20 @@ enum class DataReadySignal { Flag, Counter };
 // never a live id; a `static_assert` rejects PRE_HANDSHAKE=true paired with this sentinel.
 static constexpr uint32_t UNUSED_SEM_ID = 0xFFFFFFFFu;
 
+// Sentinel for the SenderPipe `consumer_ack_count` ctor arg: "the ack count equals the EXCLUDE-source
+// mcast fan-out" (the dense case — every core the broadcast lands on also acks). The default, so dense
+// callers omit the arg entirely and let the rect carry both the fan-out and the ack count. A divergent
+// caller (the mcast box holds inactive cores that receive but never ack — conv width-sharded,
+// dram-sharded, conv-1D weights) passes its own smaller ack count to override.
+static constexpr uint32_t ACK_EQUALS_FANOUT = 0xFFFFFFFFu;
+
 // -----------------------------------------------------------------------------
 // A multicast destination rectangle, in NoC (virtual) coordinates. PURE GEOMETRY: the broadcast
-// bounding box. The transfer/ack count is the separate `NUM_ACTIVE_RECEIVER_CORES` template param, NOT
-// the area. Sender side only (the receiver does not multicast).
+// bounding box. The mcast fan-out (the `num_dests` the hardware lands on) is DERIVED from `area()`:
+// every single mcast's num_dests == its rect area ± source (`SenderPipe` computes `area-(in_rect?1:0)`
+// for EXCLUDE, `+1` for INCLUDE loopback). The consumer-ack count is a separate `SenderPipe` ctor arg —
+// it differs from the fan-out only when the box holds inactive/noop cores. Sender side only (the
+// receiver does not multicast).
 //
 // Templated on the NoC id. The mcast hardware walks the rect from `start` in the NoC's routing
 // direction up to `end`, so `start` must be the corner the routing reaches FIRST: the low corner on
@@ -116,6 +126,12 @@ struct McastRect {
     constexpr uint32_t ylo() const { return ylo_; }
     constexpr uint32_t yhi() const { return yhi_; }
 
+    // Bounding-box area = the INCLUDE-source mcast fan-out (the cores the broadcast lands on). COUNT
+    // USE ONLY — never the loopback-mode test (that stays `in_rect_ && src!=dst`). Computed on the
+    // normalized corners, so it is order-independent like the containment test. Runtime (the corners
+    // are runtime), so the fan-out it feeds is runtime too.
+    constexpr uint32_t area() const { return (xhi_ - xlo_ + 1) * (yhi_ - ylo_ + 1); }
+
 private:
     uint32_t xlo_, xhi_, ylo_, yhi_;
     Bounds start_end_;
@@ -128,21 +144,25 @@ private:
 //   * NOC_ID                     — compile-time NoC id; must match the `noc` arg (ctor ASSERTs this).
 //                                  Folds my_x/my_y and the rect's routing corners to constants.
 //   * DATA_READY_SEM_ID          — sender->receiver "data is ready" flag id.
-//   * NUM_ACTIVE_RECEIVER_CORES  — the RECIPIENT count (see header). The Pipe derives the ack count and
-//                                  mcast_dests from it.
 //   * PRE_HANDSHAKE              — gate each send on receivers having drained (use-case knob, default).
 //   * CONSUMER_READY_SEM_ID      — receiver->sender "my dest is free" counter id. Used ONLY when
 //                                  PRE_HANDSHAKE; defaults to UNUSED_SEM_ID so the no-handshake caller
 //                                  omits it. A static_assert rejects PRE_HANDSHAKE without a real id.
 //   * DATA_READY_SIGNAL          — Flag (default) | Counter (use-case knob); the rarest knob, last.
-// The ONLY runtime ctor input is the `McastRect` — its virtual coords vary per sender core under one
-// compiled binary (e.g. each row-sender in a 2D matmul targets a different row), so it is set per-core
-// via runtime args. `send()`/`send_signal()` payload + the receiver's sender coords are runtime for
-// the same reason (CB pointers; rotating senders).
+// The mcast FAN-OUT (the cores the broadcast lands on) is NOT a param — it is derived from the rect's
+// `area()` (num_dests == area ± source). Runtime ctor inputs:
+//   * the `McastRect` — its virtual coords vary per sender core under one compiled binary (e.g. each
+//                       row-sender in a 2D matmul targets a different row), so it is set per-core via
+//                       runtime args; its area gives the runtime fan-out.
+//   * consumer_ack_count — the handshake (consumer-ready) wait count. Defaults to ACK_EQUALS_FANOUT (=
+//                          the EXCLUDE fan-out the rect derives), so dense callers omit it. A caller
+//                          whose mcast box holds inactive/noop cores (they receive but never ack) passes
+//                          its own smaller ack count. Used only under PRE_HANDSHAKE; cached in the ctor.
+// `send()`/`send_signal()` payload + the receiver's sender coords are runtime too (CB pointers; rotating
+// senders).
 template <
     uint8_t NOC_ID,
     uint32_t DATA_READY_SEM_ID,
-    uint32_t NUM_ACTIVE_RECEIVER_CORES,
     bool PRE_HANDSHAKE = true,
     uint32_t CONSUMER_READY_SEM_ID = UNUSED_SEM_ID,
     DataReadySignal DATA_READY_SIGNAL = DataReadySignal::Flag>
@@ -153,8 +173,12 @@ class SenderPipe {
         "Pass it, or set PRE_HANDSHAKE=false for a fire-and-forget broadcast.");
 
 public:
-    // `dest` — receiver rectangle (geometry only). The only runtime ctor arg (see above).
-    explicit SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest) :
+    // `dest` — receiver rectangle (geometry only); its area gives the runtime mcast fan-out.
+    // `consumer_ack_count` — the handshake wait count (used only under PRE_HANDSHAKE). Defaults to
+    // ACK_EQUALS_FANOUT, meaning "= the EXCLUDE fan-out the rect derives" (the dense case). Both are
+    // runtime ctor args; everything they feed is precomputed ONCE here so send() does no arithmetic.
+    explicit SenderPipe(
+        const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count = ACK_EQUALS_FANOUT) :
         noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
         // Catch a NoC mismatch early (only meaningful under --dev): the precomputed routing corners and
         // my_x/my_y are baked for NOC_ID, so a `noc` running a different NoC would mcast to the wrong
@@ -173,6 +197,18 @@ public:
         // and the rect are both constant now), so compute it ONCE here rather than per send().
         in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
                    my_y[NOC_ID] <= dest_.yhi();
+        // Fan-out, derived from the rect area (num_dests == area ± source) — precomputed so send()
+        // branch-selects between two constants with no arithmetic:
+        //   * EXCLUDE-source count: area minus self if this sender is in its own box;
+        //   * INCLUDE-source (loopback) count: +1 for the sender's own self-copy.
+        num_dests_excl_ = dest_.area() - (in_rect_ ? 1u : 0u);
+        num_dests_incl_ = num_dests_excl_ + 1u;
+        // Degenerate self-only box (a 1x1 rect that IS the sender): no receivers, send() does a local
+        // copy. (`area==1 && in_rect` => excl==0.)
+        degenerate_ = (num_dests_excl_ == 0u);
+        // Handshake ack count: the dense default IS the EXCLUDE fan-out (every landing core acks);
+        // a divergent caller overrides with its smaller active-core count.
+        ack_count_ = (consumer_ack_count == ACK_EQUALS_FANOUT) ? num_dests_excl_ : consumer_ack_count;
     }
 
     // ===== DATA channel (a block + a ready signal) =====
@@ -184,24 +220,24 @@ public:
     void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
         // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
         // a local copy (a loopback to just self may hang); else nothing.
-        if (NUM_ACTIVE_RECEIVER_CORES == 0) {
+        if (degenerate_) {
             if (in_rect_) {
                 local_copy_(src_l1, dst_l1, size);
             }
             return;
         }
         if constexpr (PRE_HANDSHAKE) {
-            consumer_ready_.wait(NUM_ACTIVE_RECEIVER_CORES);
+            consumer_ready_.wait(ack_count_);
             consumer_ready_.set(0);
         }
         // Loopback iff the sender is in the box AND lands its own copy somewhere other than its source
         // (src == dst means the copy is already in place; never self-overwrite in place). The
         // in-box test is precomputed in the ctor; only the src/dst aliasing varies per send.
         const bool loopback = in_rect_ && src_l1 != dst_l1;
-        // NUM_ACTIVE_RECEIVER_CORES is the recipient count (= EXCLUDE-source num_dests = ack count). The
-        // loopback path adds +1 for the sender's own self-copy, which never acks, so the consumer_ready
-        // wait above stays on NUM_ACTIVE_RECEIVER_CORES.
-        const uint32_t mcast_dests = loopback ? NUM_ACTIVE_RECEIVER_CORES + 1 : NUM_ACTIVE_RECEIVER_CORES;
+        // Branch-select between the two precomputed fan-out counts (no arithmetic): the loopback path
+        // adds the sender's own self-copy (+1), which never acks, so the consumer_ready wait above stays
+        // on ack_count_ regardless.
+        const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
         send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
         signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
         fence_();
@@ -211,10 +247,10 @@ public:
     // Broadcast a plain readiness signal (a doorbell). Always plain (EXCLUDE-source) — no data
     // accompanies it. Pairs with ReceiverPipe::receive_signal().
     void send_signal() {
-        if (NUM_ACTIVE_RECEIVER_CORES == 0) {
+        if (degenerate_) {
             return;  // nobody to signal
         }
-        signal_ready_(/*loopback=*/false, NUM_ACTIVE_RECEIVER_CORES);
+        signal_ready_(/*loopback=*/false, num_dests_excl_);
         fence_();
     }
 
@@ -291,7 +327,11 @@ private:
     McastRect<NOC_ID> dest_;
     Semaphore<> data_ready_;
     Semaphore<> consumer_ready_;
-    bool in_rect_;  // is this sender's own core inside the receiver rect? computed once in the ctor
+    bool in_rect_;             // is this sender's own core inside the receiver rect? computed once in the ctor
+    bool degenerate_;          // self-only box (no receivers) -> send() does a local copy
+    uint32_t num_dests_excl_;  // EXCLUDE-source mcast fan-out  = area - (in_rect?1:0)
+    uint32_t num_dests_incl_;  // INCLUDE-source (loopback) fan-out = num_dests_excl_ + 1
+    uint32_t ack_count_;       // consumer-ready handshake wait count (PRE_HANDSHAKE only)
 };
 
 // =============================================================================

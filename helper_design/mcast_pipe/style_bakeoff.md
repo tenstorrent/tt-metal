@@ -6,6 +6,19 @@
 The bake-off resolves the four style forks the API draft (Step ★) left open, by measurement, not
 argument: **coverage screen first (cheap, correctness/hang), perf+L1 only on survivors.**
 
+> **Round-10 re-entry (2026-06-20) — E re-decide NO-OP, no device.** The D2 split (derive the mcast
+> fan-out from `McastRect::area()` instead of the `NUM_ACTIVE_RECEIVER_CORES` param; give the consumer
+> handshake its own runtime `consumer_ack_count`, defaulting to the EXCLUDE fan-out) is a **count-sourcing
+> / contract** change. It touches NONE of the four style forks (F1 fence / F2 staging / F3 loopback /
+> F4 linking): the EXCLUDE/INCLUDE choice is still the same per-send `in_rect_ && src!=dst` rule (F3
+> coverage map stands); the fence, staging, and linking arms are byte-identical. No new variant, no new
+> matrix cell — splitting one number into two changes *which value* `wait()`/`num_dests` receive, not
+> *which mitigation* any fork takes. The conv-1D-weights hang the split unblocks was already an
+> A/B-confirmed coverage fact (report.md D2), not a perf measurement. All coverage maps and ns/L1
+> numbers below stand verbatim. The new unit cells (split-count ack<area; runtime fan-out) are
+> **helper-coverage cells** verified by the Step-G unit test on device, NOT bake-off re-measures. No
+> re-measure, no re-decide of any winner.
+>
 > **Round-8 re-entry (2026-06-20) — E re-confirm NO-OP, no device.** feedback-3.txt item 2 (make
 > `CONSUMER_READY_SEM_ID` a trailing sentinel-defaulted arg so the no-handshake caller omits it;
 > reorder so `PRE_HANDSHAKE` precedes the sem and `DATA_READY_SIGNAL` is last) is a pure signature /

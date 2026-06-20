@@ -31,7 +31,10 @@ void kernel_main() {
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(2);
     constexpr uint32_t consumer_ready_sem_id = get_compile_time_arg_val(3);
-    constexpr uint32_t num_active_cores = get_compile_time_arg_val(4);
+    // The mcast fan-out is now derived from the rect area; this slot carries the consumer-ack count.
+    // ACK_EQUALS_FANOUT (0xFFFFFFFF) means "ack == the EXCLUDE fan-out" (dense default); a smaller value
+    // is the split-count case (fan-out > ack: the box has cores that receive but don't ack).
+    constexpr uint32_t consumer_ack_count = get_compile_time_arg_val(4);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(5);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t num_iters = get_compile_time_arg_val(7);
@@ -64,11 +67,13 @@ void kernel_main() {
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
 
-    // Compile-time, core-uniform values (noc id + sem ids + count + pre_handshake/signal) are template
-    // params; the only runtime ctor input is the receiver rectangle. Arg order: NOC_ID, data-ready id,
-    // recipient count, PRE_HANDSHAKE gate, consumer-ready id (used iff PRE_HANDSHAKE), then the signal.
-    SenderPipe<noc_index, data_ready_sem_id, num_active_cores, pre_handshake != 0, consumer_ready_sem_id, STG> pipe(
-        noc, McastRect<>{x0, y0, x1, y1});
+    // Compile-time, core-uniform values (noc id + sem ids + pre_handshake/signal) are template params.
+    // Runtime ctor inputs: the receiver rectangle (its area gives the fan-out) and the consumer-ack
+    // count (defaults to the EXCLUDE fan-out; here passed explicitly so the harness can drive the
+    // split-count case). Arg order: NOC_ID, data-ready id, PRE_HANDSHAKE gate, consumer-ready id (used
+    // iff PRE_HANDSHAKE), then the signal.
+    SenderPipe<noc_index, data_ready_sem_id, pre_handshake != 0, consumer_ready_sem_id, STG> pipe(
+        noc, McastRect<>{x0, y0, x1, y1}, consumer_ack_count);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);

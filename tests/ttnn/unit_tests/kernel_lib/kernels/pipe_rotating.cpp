@@ -59,10 +59,11 @@ void kernel_main() {
     cb_dst_obj.reserve_back(payload_pages);  // landing region; write_ptr == base == the mcast target
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
 
-    // SenderPipe built ONCE (ctor sets the local data_ready cell VALID). num_active=1 (the partner);
-    // partner is the 1x1 dest rect; sender is out-of-rect => plain mcast, no loopback. PRE_HANDSHAKE
-    // so the ping-pong serializes through the consumer_ready ack.
-    SenderPipe<noc_index, data_ready_sem_id, /*num_active=*/1, /*PRE_HANDSHAKE=*/true, consumer_ready_sem_id> send_pipe(
+    // SenderPipe built ONCE (ctor sets the local data_ready cell VALID). The partner is the 1x1 dest
+    // rect; sender is out-of-rect => plain mcast (area 1, excl 1), no loopback. PRE_HANDSHAKE so the
+    // ping-pong serializes through the consumer_ready ack — the ack count defaults to the EXCLUDE
+    // fan-out (1, the partner), so no explicit ack arg is needed.
+    SenderPipe<noc_index, data_ready_sem_id, /*PRE_HANDSHAKE=*/true, consumer_ready_sem_id> send_pipe(
         noc, McastRect<>{partner_x, partner_y, partner_x, partner_y});
 
     const auto out = TensorAccessor(out_args, output_addr);
