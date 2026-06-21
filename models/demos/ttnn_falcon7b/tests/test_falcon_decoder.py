@@ -91,7 +91,15 @@ def test_falcon_decoder(
         llm_mode, dtype, decoder_input, batch, seq_len, configuration.num_attention_heads, kv_cache_len, device
     )
     layer_past, tt_layer_past = create_kv_cache(llm_mode, dtype, batch, kv_cache_len, configuration, device)
-    position_embeddings = torch_model.self_attention.rotary_emb(decoder_input, position_ids)
+    # transformers 5.x moved RoPE off FalconAttention onto FalconModel.rotary_emb; the bare
+    # attention/decoder layer no longer exposes .rotary_emb. Use it when present (<5), else
+    # build a FalconRotaryEmbedding from the config (5.x).
+    if hasattr(torch_model.self_attention, "rotary_emb"):
+        position_embeddings = torch_model.self_attention.rotary_emb(decoder_input, position_ids)
+    else:
+        from transformers.models.falcon.modeling_falcon import FalconRotaryEmbedding
+
+        position_embeddings = FalconRotaryEmbedding(configuration)(decoder_input, position_ids)
 
     pytorch_out, pytorch_layer_present = torch_model(
         hidden_states=decoder_input,

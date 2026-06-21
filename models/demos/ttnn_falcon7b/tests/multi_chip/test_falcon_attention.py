@@ -127,7 +127,15 @@ def test_falcon_attention(
         mesh_device,
         mesh_mapper=ShardTensorToMesh(mesh_device, dim=0),
     )
-    position_embeddings = torch_model.rotary_emb(attention_input, position_ids)
+    # transformers 5.x moved RoPE off FalconAttention onto FalconModel.rotary_emb; the bare
+    # attention/decoder layer no longer exposes .rotary_emb. Use it when present (<5), else
+    # build a FalconRotaryEmbedding from the config (5.x).
+    if hasattr(torch_model, "rotary_emb"):
+        position_embeddings = torch_model.rotary_emb(attention_input, position_ids)
+    else:
+        from transformers.models.falcon.modeling_falcon import FalconRotaryEmbedding
+
+        position_embeddings = FalconRotaryEmbedding(configuration)(attention_input, position_ids)
 
     pytorch_out, pytorch_layer_present = torch_model(
         attention_input,
