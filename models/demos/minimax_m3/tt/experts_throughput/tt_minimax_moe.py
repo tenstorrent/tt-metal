@@ -27,7 +27,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
-from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert  # noqa: F401 (base class)
+
+from .composite_routed_expert import CompositeRoutedExpert
 
 
 class TtMiniMaxMoE(LightweightModule):
@@ -54,6 +56,8 @@ class TtMiniMaxMoE(LightweightModule):
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path=None,
         layer_idx: int = 0,
+        swiglu_limit: float = 7.0,  # M3 clamped swigluoai (composite routed expert)
+        alpha: float = 1.702,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -133,7 +137,10 @@ class TtMiniMaxMoE(LightweightModule):
             dtype=ttnn.uint32,
         )
         global_expert_idx_tt = ttnn.squeeze(ttnn.squeeze(global_expert_idx_tt, 0), 0)
-        self.routed_expert = TtRoutedExpert(
+        # M3 uses the COMPOSITE routed expert (clamped swigluoai via ttnn matmuls + apply_swiglu),
+        # since the fused unified_routed_expert_moe kernel bakes in SiLU. See CompositeRoutedExpert
+        # for the fused-kernel optimization TODO.
+        self.routed_expert = CompositeRoutedExpert(
             mesh_device=mesh_device,
             experts_per_chip=experts_per_chip,
             global_expert_idx_table=global_expert_idx_tt,
@@ -145,6 +152,8 @@ class TtMiniMaxMoE(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+            swiglu_limit=swiglu_limit,
+            alpha=alpha,
         )
         self.reduce_module = TtReduceModule(
             mesh_device=mesh_device,

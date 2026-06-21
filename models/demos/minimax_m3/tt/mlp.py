@@ -131,6 +131,8 @@ class MLP:
                 num_links=ccl_manager.num_links,
                 routed_expert_weights_dtype=expert_weight_dtype,
                 weight_cache_path=_ep_cache_dir(tensor_cache_path),
+                swiglu_limit=getattr(hf_config, "swiglu_limit", 7.0),
+                alpha=getattr(hf_config, "swiglu_alpha", 1.702),
             )
             self.use_throughput_experts = False
             self.ep_dgs = dgs

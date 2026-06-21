@@ -2,18 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-E3 — MiniMax-M2 EXPERT-PARALLEL MoE block vs torch reference, on a real Galaxy.
+E3 — MiniMax-M3 EXPERT-PARALLEL (EP=32) MoE block vs torch reference, on a real Galaxy.
 
-Reuses the DeepSeek EP machinery (it's generic + already validated on this box):
-  gate -> deepseek_prefill.dispatch -> routed_expert_ffn -> combine -> reduce
-but with MiniMax-M2 specifics:
-  - emb_dim=3072, hidden_dim=1536, 256 experts / top-8
-  - NO expert groups (n_expert_groups=1, n_limited_groups=1) -> plain top-8
-  - NO shared expert (shared_expert_weights=None)
-  - route_scale=1.0
+Reuses the DeepSeek EP plumbing (dispatch/combine/reduce + extract/insert) but with M3's
+CompositeRoutedExpert (clamped "swigluoai" FFN via ttnn matmuls + apply_swiglu, NOT the fused
+SiLU kernel). The reference TorchExpert.forward is monkeypatched to the same clamped swigluoai so
+both sides match. M3 EP specifics:
+  - emb_dim=3072, hidden_dim=1536, 128 experts / top-4  -> 4 experts/device on 32 chips
+  - NO expert groups (n_expert_groups=1, n_limited_groups=1) -> plain top-4
+  - NO shared expert here (validated in the non-EP block test #7; added in mlp.py for both paths)
+  - route_scale=1.0 (routed_scaling_factor reaches EP via our TopKRouter in production, tested in #7)
 
-Validates the TTNN EP MoE (TtMoe) against the TorchMoe reference (both DeepSeek's,
-configured identically) -> proves the EP mechanics are correct at MiniMax dims.
+Validates the EP dispatch/combine + the composite clamped-swigluoai expert FFN at M3 EP=32 dims.
 Random weights; isolated from attention/SP. Standalone (no pytest fixtures).
 
 Run:
@@ -38,10 +38,23 @@ def main():
     ap.add_argument("--capacity", type=int, default=8, help="dispatch_buffer_capacity_factor")
     args = ap.parse_args()
 
+    import torch.nn.functional as F
+
     import ttnn
     from models.common.utility_functions import comp_pcc
     from models.demos.deepseek_v3_d_p.reference.minimax_m2_7_config import MiniMaxM27Config
+    from models.demos.deepseek_v3_d_p.reference.tt.moe.expert import TorchExpert
     from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import TorchMoe
+
+    # M3: the routed/shared experts use clamped "swigluoai", not SiLU. Patch the reference
+    # TorchExpert.forward so TorchMoe matches our CompositeRoutedExpert (clamped on both sides).
+    def _clamped_swigluoai_forward(self, x):
+        gate_out = F.linear(x, self.gate_proj).clamp(max=7.0)
+        up_out = F.linear(x, self.up_proj).clamp(min=-7.0, max=7.0)
+        activated = (up_out + 1.0) * (gate_out * torch.sigmoid(1.702 * gate_out))
+        return F.linear(activated, self.down_proj)
+
+    TorchExpert.forward = _clamped_swigluoai_forward
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
         ExpertMapping,
         compute_constants,
@@ -57,9 +70,9 @@ def main():
 
     torch.manual_seed(42)
 
-    # MiniMax-M2 MoE dims
-    EMB, HID, E, K = 3072, 1536, 256, 8
-    N_GROUP, TOPK_GROUP, ROUTE_SCALE = 1, 1, 1.0  # no groups, no scaling
+    # MiniMax-M3 EP=32 MoE dims: 128 experts / top-4 -> 4 experts/device on 32 chips.
+    EMB, HID, E, K = 3072, 1536, 128, 4
+    N_GROUP, TOPK_GROUP, ROUTE_SCALE = 1, 1, 1.0  # no groups; routed_scaling validated separately (#7)
     shape = (args.rows, args.cols)
     print(
         f"[ep-moe] mesh={shape} seq/chip={args.seq} experts={E}/top{K} emb={EMB} hid={HID} (no groups, no shared)",
