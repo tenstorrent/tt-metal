@@ -537,17 +537,18 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 //      `reinterpret_cast<T*>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>(N)))`
 //      (Quasar kernels pass raw L1 firmware offsets as runtime args; x86 needs
 //      translation through the per-thread __emule_bridge_l1 base pointer.)
+//   4. `reinterpret_cast<...tt_l1_ptr...*>(IDENT)` →
+//      `reinterpret_cast<...tt_l1_ptr...*>((uintptr_t)__emule_local_l1_to_ptr(IDENT))`
+//      (Ops that deref a raw L1 address held in a named ct-arg/identifier rather
+//      than a CB read-ptr — e.g. distributed_topk's pos_addr — need the same
+//      translation; the helper no-ops on already-absolute operands.)
 // Reads from `src_path`, writes the patched source to `out_path`, and throws
 // on any I/O failure.
-static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
-    std::ifstream in(src_path);
-    if (!in) {
-        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
-    }
-    std::stringstream ss;
-    ss << in.rdbuf();
-    std::string src = ss.str();
-
+// Apply the x86 source rewrites (#1-#4 above) to a source string in place and
+// return it.  Shared between the generated kernel .cpp and the blaze op kernel
+// *headers* it includes (the raw-L1-pointer derefs frequently live in the
+// header, not the .cpp body).
+static std::string apply_x86_source_rewrites(std::string src) {
     static const std::regex mhartid_re(
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
     src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
@@ -566,6 +567,77 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
     src = std::regex_replace(
         src, l1_named_arg_ptr_re,
         "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
+
+    //   4. `reinterpret_cast<...tt_l1_ptr...*>(IDENT)` →
+    //      `reinterpret_cast<...tt_l1_ptr...*>((uintptr_t)__emule_local_l1_to_ptr(IDENT))`
+    //      Some blaze ops deref a raw L1 address held in a named ct-arg rather
+    //      than routing it through a CB read-ptr.  E.g. distributed_topk casts
+    //      `pos_addr` (= metadata_tensor.buffer_address(), a raw firmware L1
+    //      offset) straight to a BlazeMetadata*; argmax derefs the same struct
+    //      but via get_read_ptr(cb) (already absolute), which is why argmax
+    //      worked and distributed_topk segfaulted.  `tt_l1_ptr` is the silicon
+    //      marker that the cast target lives in L1, so it is the reliable signal
+    //      that the operand is an L1 address needing translation.  The operand
+    //      is restricted to a bare (namespace-qualified) identifier so this never
+    //      matches the get_arg_val<>()/get_read_ptr() forms above (function-call
+    //      operands have parens/angle-brackets) — no double-wrap.  A subscripted
+    //      operand (e.g. `sem[i]`) is also left alone (the `[` ends the match).
+    //      __emule_local_l1_to_ptr passes already-absolute addresses through
+    //      unchanged, so wrapping a CB-read-ptr/semaphore operand that is already
+    //      absolute is a safe no-op; only raw offsets get rebased.
+    static const std::regex l1_ptr_ident_re(
+        R"(reinterpret_cast<([^>]*tt_l1_ptr[^>]*\*)>\s*\(\s*([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\))");
+    src = std::regex_replace(
+        src, l1_ptr_ident_re, "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr($2))");
+
+    return src;
+}
+
+static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
+    std::ifstream in(src_path);
+    if (!in) {
+        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string src = apply_x86_source_rewrites(ss.str());
+
+    // The raw-L1-pointer derefs (#3/#4) frequently live in the blaze op kernel
+    // *header* the generated .cpp #includes (e.g. distributed_topk's
+    // get_curr_pos_from_addr in blaze/ops/distributed_topk/kernels/op.hpp), not
+    // in the .cpp body — so rewriting only the .cpp would miss them.  For each
+    // directly-included `.../blaze/ops/<op>/kernels/*.hpp`, emit a rewritten copy
+    // next to the patched .cpp and repoint the #include at it.  blaze op kernel
+    // headers use only root-rooted includes (blaze/..., api/...) resolved via the
+    // compiler -I flags, never paths relative to their own location, so a copy in
+    // the temp dir compiles identically.  blaze's source tree stays untouched.
+    const std::filesystem::path out_dir = std::filesystem::path(out_path).parent_path();
+    static const std::regex blaze_op_hdr_inc_re(
+        R"RE(#include\s*"([^"]*/blaze/ops/[^"]*/kernels/[^"]*\.hpp)")RE");
+    std::string rebuilt;
+    auto search_start = src.cbegin();
+    std::smatch m;
+    int hdr_idx = 0;
+    while (std::regex_search(search_start, src.cend(), m, blaze_op_hdr_inc_re)) {
+        rebuilt.append(search_start, m[0].first);
+        std::string replacement = m[0].str();  // default: keep the original include
+        std::ifstream hin(m[1].str());
+        if (hin) {
+            std::stringstream hss;
+            hss << hin.rdbuf();
+            const std::filesystem::path patched =
+                out_dir / ("patched_hdr_" + std::to_string(hdr_idx++) + ".hpp");
+            std::ofstream hout(patched.string());
+            if (hout) {
+                hout << apply_x86_source_rewrites(hss.str());
+                replacement = "#include \"" + patched.string() + "\"";
+            }
+        }
+        rebuilt += replacement;
+        search_start = m[0].second;
+    }
+    rebuilt.append(search_start, src.cend());
+    src = std::move(rebuilt);
 
     std::ofstream out(out_path);
     if (!out) {
