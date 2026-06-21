@@ -329,7 +329,6 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
     # hack in num_users * num_layers into batch size, so each user's layers are contiguous in memory
     num_layers = num_kvpe_cache_layers
     seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kvpe_cache = torch.zeros(num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim)
 
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
@@ -347,13 +346,32 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         nd_shard_spec=kv_nd_shard_spec,
     )
 
-    tt_kvpe_cache = ttnn.from_torch(
-        torch_kvpe_cache,
-        dtype=ttnn.bfloat8_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
+    # Build the cache one user-slot at a time and concatenate on-device. Converting the whole
+    # (num_users * num_layers, 1, seq_len_local, head_dim) tensor in a single ttnn.from_torch packs
+    # it through the host bfloat8 packer (pack_as_bfp_tiles), whose tile/element indexing is `int`
+    # and which materializes the full buffer at once — for large num_users * seq_len that overflows
+    # / blows up host memory and segfaults. Per-slot, each pack is (num_layers, 1, seq_len_local,
+    # head_dim) — 1/num_users the size — and concat(dim=0) in slot order reproduces the exact
+    # user-major batch layout (slot * num_layers + layer) the migration address tables assume.
+    per_slot = []
+    for _ in range(num_users):
+        torch_slot = torch.zeros(num_layers, 1, seq_len_local, kvpe_cache_head_dim)
+        per_slot.append(
+            ttnn.from_torch(
+                torch_slot,
+                dtype=ttnn.bfloat8_b,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=kv_mem_config,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+        )
+
+    if len(per_slot) == 1:
+        return per_slot[0]
+
+    tt_kvpe_cache = ttnn.concat(per_slot, dim=0, memory_config=kv_mem_config)
+    for slot_tensor in per_slot:
+        ttnn.deallocate(slot_tensor)
 
     return tt_kvpe_cache
