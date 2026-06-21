@@ -74,6 +74,11 @@ void bind_dispatch(nb::module_& mod) {
             use_fp8_dispatch (bool, optional): Pack the dispatched buffer as Fp8_e4m3
                 (DataType::FP8_E4M3). Requires TILE input layout, not supported on
                 Wormhole_B0. Defaults to False.
+            use_fp8_scale (bool, optional): Fuse per-token FP8 quantization into the
+                tile-layout dispatch compute: compute a per-128-element scale per token,
+                divide + cast to e4m3, and append each token's scales (hidden/128 fp32
+                values) to its metadata. Requires use_fp8_dispatch and TILE input, and
+                metadata_len >= 5 + hidden/128. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
                 sender on the tile-layout path.
 
@@ -106,6 +111,7 @@ void bind_dispatch(nb::module_& mod) {
         nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
         nb::arg("use_l1_small_for_semaphores") = false,
         nb::arg("use_fp8_dispatch") = false,
+        nb::arg("use_fp8_scale") = false,
         nb::arg("num_untilizers_per_sender") = 2);
 }
 

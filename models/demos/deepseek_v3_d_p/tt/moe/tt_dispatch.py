@@ -66,6 +66,7 @@ class TtDispatchModule(LightweightModule):
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
         fp8_output: bool = False,
+        fp8_scale: bool = False,
         subdevice_id=None,
         num_untilizers_per_sender: int = 2,
     ):
@@ -89,10 +90,16 @@ class TtDispatchModule(LightweightModule):
             num_links: Number of fabric links for remote token writes.
             topology: Fabric topology for remote token writes.
             fp8_output: Output dtype for the dispatched buffer.
+            fp8_scale: Fuse per-token FP8 (e4m3) scaling into dispatch. Computes a per-token,
+                per-128-element scale, divides the token by it, casts to e4m3, and appends the
+                scales to the per-token metadata. Requires fp8_output and metadata_len large
+                enough to hold the scales (>= 5 + emb_dim / 128).
             num_untilizers_per_sender: Number of untilizer cores per sender (any N >= 1).
         """
         if fp8_output and "blackhole" not in ttnn.get_arch_name():
             raise ValueError("fp8_output requires Blackhole hardware")
+        if fp8_scale and not fp8_output:
+            raise ValueError("fp8_scale requires fp8_output")
         super().__init__()
         self.mesh_device = mesh_device
         self.dispatch_group_size = dispatch_group_size
@@ -106,6 +113,7 @@ class TtDispatchModule(LightweightModule):
         self.num_links = num_links
         self.topology = topology
         self.fp8_output = fp8_output
+        self.fp8_scale = fp8_scale
         self.subdevice_id = subdevice_id
         # num_untilizers_per_sender >= 1 is validated on the device op side
         # (DispatchDeviceOperation::validate_on_program_cache_miss).
@@ -272,6 +280,7 @@ class TtDispatchModule(LightweightModule):
             num_links=self.num_links,
             topology=self.topology,
             use_fp8_dispatch=self.fp8_output,
+            use_fp8_scale=self.fp8_scale,
             subdevice_id=self.subdevice_id,
             num_untilizers_per_sender=self.num_untilizers_per_sender,
         )

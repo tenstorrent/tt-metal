@@ -60,6 +60,23 @@ void DispatchDeviceOperation::validate_on_program_cache_miss(
             "FP8 output is not supported with ROW_MAJOR input layout; use TILE layout when fp8_output=True");
     }
 
+    // FP8-scale path: per-token quantization fused into the tile-layout compute. The per-token scales
+    // (hidden/128 fp32 values) are appended to the metadata page after the 5-int32 header, so metadata_len
+    // must hold both.
+    if (operation_attributes.use_fp8_scale) {
+        TT_FATAL(
+            operation_attributes.use_fp8_dispatch, "use_fp8_scale requires use_fp8_dispatch (e4m3 output) to be set");
+        const uint32_t hidden_dim = tensor_args.input_tensor.logical_shape()[-1];
+        TT_FATAL(
+            hidden_dim % 128 == 0, "use_fp8_scale requires hidden_size to be a multiple of 128, got {}", hidden_dim);
+        const uint32_t required_metadata_len = 5 + hidden_dim / 128;
+        TT_FATAL(
+            operation_attributes.metadata_len >= required_metadata_len,
+            "use_fp8_scale requires metadata_len >= 5 + hidden/128 = {}, got {}",
+            required_metadata_len,
+            operation_attributes.metadata_len);
+    }
+
     // Validate output memory config is DRAM interleaved (not sharded)
     TT_FATAL(
         !operation_attributes.output_mem_config.is_sharded(),
@@ -157,6 +174,7 @@ prefill_dispatch(
     const CoreRangeSet& worker_core_range_set,
     bool use_l1_small_for_semaphores,
     bool use_fp8_dispatch,
+    bool use_fp8_scale,
     uint32_t num_untilizers_per_sender) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::dispatch::DispatchDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -174,6 +192,7 @@ prefill_dispatch(
             .worker_core_range_set = worker_core_range_set,
             .use_l1_small_for_semaphores = use_l1_small_for_semaphores,
             .use_fp8_dispatch = use_fp8_dispatch,
+            .use_fp8_scale = use_fp8_scale,
             .num_untilizers_per_sender = num_untilizers_per_sender},
         OperationType::tensor_args_t{
             .input_tensor = input_tensor,

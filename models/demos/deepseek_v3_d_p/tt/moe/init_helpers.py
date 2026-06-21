@@ -426,6 +426,8 @@ def compute_constants(
     dispatch_group_size,
     dispatch_buffer_capacity_factor,
     experts_per_chip_override: int | None = None,
+    use_fp8_scale: bool = False,
+    emb_dim: int | None = None,
 ):
     """
     Compute derived constants for MoE configuration.
@@ -445,6 +447,11 @@ def compute_constants(
             Required when simulating one Galaxy column on a single-column LB
             mesh: the table indexes 256 global expert IDs but only 8 of them
             physically live on each chip (not 256/8=32).
+        use_fp8_scale: If True, the fused fp8-scale dispatch path appends one fp32 scale per
+            128-element block to each token's metadata row, so metadata_len is widened to fit
+            them (requires emb_dim).
+        emb_dim: Embedding dimension; only needed when use_fp8_scale is True to size the
+            per-token scales (emb_dim // 128 of them).
 
     Returns:
         experts_per_chip: Number of experts per chip
@@ -464,6 +471,12 @@ def compute_constants(
     else:
         experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
+    # The fused fp8-scale dispatch path appends one fp32 scale per 128-element block to each
+    # token's metadata row, so widen metadata_len to hold them.
+    if use_fp8_scale:
+        assert emb_dim is not None, "use_fp8_scale=True requires emb_dim to size the per-token scales"
+        assert emb_dim % 128 == 0, f"use_fp8_scale requires emb_dim ({emb_dim}) to be a multiple of 128"
+        metadata_len += emb_dim // 128
 
     # TODO: For now, we are ignoring the num_experts_per_tok, but it will be needed once
     # we support replicated experts (See Issue #41293)

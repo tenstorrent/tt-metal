@@ -5,6 +5,7 @@
 #include "dispatch_device_operation.hpp"
 #include "kernels/dataflow/dispatch_plan.hpp"  // PlanHeader / PlanEntry layout (host sizes the plan CB from these)
 #include <algorithm>
+#include <bit>
 #include <array>
 #include <utility>
 #include <limits>
@@ -229,6 +230,22 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         --block_ct_dim_dispatch;
     }
 
+    // FP8-scale path: one pack-untilize block must equal exactly one 128-element scale block
+    // (4 tiles of 32 cols), so the compute can reduce per-128-element amax per token and divide
+    // the same 4 tiles before packing.  Force block_ct_dim = 4.
+    constexpr uint32_t SCALE_BLOCK_W = 128;
+    constexpr uint32_t FP8_SCALE_TILES = SCALE_BLOCK_W / 32;  // 4 tiles per 128-element scale block
+    if (operation_attributes.use_fp8_scale) {
+        TT_FATAL(
+            operation_attributes.use_fp8_dispatch, "use_fp8_scale requires use_fp8_dispatch (e4m3 output) to be set");
+        TT_FATAL(
+            full_ct_dim_dispatch % FP8_SCALE_TILES == 0,
+            "use_fp8_scale requires hidden_size to be a multiple of 128 (got {})",
+            hidden_size);
+        block_ct_dim_dispatch = FP8_SCALE_TILES;
+    }
+    const uint32_t num_scale_blocks_dispatch = full_ct_dim_dispatch / FP8_SCALE_TILES;  // hidden / 128
+
     // ==================== Semaphores ====================
     // Per-entry credit, each kept on the consumer's L1 (producer NOC-incs):
     //   data_avail  (sender L1, init=0):                untilize → sender, "entry ready".
@@ -323,6 +340,31 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         /*buffering_factor=*/2 * read_batch_size,
         /*cb_id=*/tt::CBIndex::c_11,
         "untilize_untilize_output");
+
+    // ===== FP8-scale path: fp32 scratch CBs for the fused per-token quantization =====
+    // Mirrors per_token_cast_to_fp8: cb_scaler (reduce scaler), cb_abs (abs tiles for one 128-block),
+    // cb_scale_tiles (col0 = per-token scales; compute -> writer), cb_inv_scale_tiles (col0 = 1/scale),
+    // cb_out_tile (divided tiles -> pack_untilize). cb_scale_tiles holds a full batch's scale blocks
+    // because the writer drains them only after the whole batch is untilized.
+    if (operation_attributes.use_fp8_scale) {
+        constexpr uint32_t TILE_BYTES_FP32 = 32u * 32u * 4u;
+        auto add_fp32_tile_cb = [&](tt::CBIndex cb_id, uint32_t num_tiles) {
+            desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+                .total_size = num_tiles * TILE_BYTES_FP32,
+                .core_ranges = untilize_core_grid,
+                .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(cb_id),
+                    .data_format = tt::DataFormat::Float32,
+                    .page_size = TILE_BYTES_FP32,
+                }}},
+            });
+        };
+        add_fp32_tile_cb(tt::CBIndex::c_12, 1);                          // cb_scaler
+        add_fp32_tile_cb(tt::CBIndex::c_20, 2 * FP8_SCALE_TILES);        // cb_abs
+        add_fp32_tile_cb(tt::CBIndex::c_21, num_scale_blocks_dispatch);  // cb_scale_tiles (-> writer)
+        add_fp32_tile_cb(tt::CBIndex::c_22, 2);                          // cb_inv_scale_tiles
+        add_fp32_tile_cb(tt::CBIndex::c_23, 2 * FP8_SCALE_TILES);        // cb_out_tile
+    }
     // c_13: metadata scratch (untilize writer builds metadata here before NOC-writing).
     detail::create_tensor_cb(
         desc,
@@ -638,6 +680,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             linearized_mesh_coord,                                 // 27
             static_cast<uint32_t>(topology),                       // 28
             block_ct_dim_dispatch,                                 // 29: must match the compute kernel
+            static_cast<uint32_t>(tt::CBIndex::c_12),              // 30: cb_scaler_id (FP8_SCALE only)
         };
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(untilize_reader_compile_args);
@@ -661,11 +704,16 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             writer_cb_size,                                              // 11: sender writer CB size
             static_cast<uint32_t>(tt::CBIndex::c_15),                    // 12: cb_route_info_scratch_id
             read_batch_size * operation_attributes.num_experts_per_tok,  // 13: meta_scratch_slots
+            static_cast<uint32_t>(tt::CBIndex::c_21),                    // 14: cb_scale_id (FP8_SCALE only)
+            num_scale_blocks_dispatch,                                   // 15: num_scale_blocks (= hidden/128)
         };
         tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(untilize_writer_compile_args);
         tt::tt_metal::TensorAccessorArgs(metadata_tensor.buffer()).append_to(untilize_writer_compile_args);
 
         auto untilize_kernel_defines = fabric_defines;  // carries AXIS define if set
+        if (operation_attributes.use_fp8_scale) {
+            untilize_kernel_defines["FP8_SCALE"] = "1";  // reader fills scaler; writer appends scales to metadata
+        }
 
         CoreRangeSet single_untilize_core({CoreRange(all_untilize_cores[j])});
         tt::tt_metal::KernelDescriptor untilize_reader_kd;
@@ -690,6 +738,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         untilize_writer_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         untilize_writer_kd.core_ranges = single_untilize_core;
         untilize_writer_kd.compile_time_args = std::move(untilize_writer_compile_args);
+        untilize_writer_kd.defines = {untilize_kernel_defines.begin(), untilize_kernel_defines.end()};
         untilize_writer_kd.config = tt::tt_metal::DataMovementConfigDescriptor{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::detail::preferred_noc_for_dram_write(mesh_device->arch()),
@@ -707,14 +756,32 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             "untilize_dispatch.cpp";
         untilize_compute_kd.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
         untilize_compute_kd.core_ranges = untilize_core_grid;
-        untilize_compute_kd.compile_time_args = {
-            static_cast<uint32_t>(tt::CBIndex::c_10),  // cb_signal_id
-            static_cast<uint32_t>(tt::CBIndex::c_11),  // cb_untilize_id
-            static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
-            (uint32_t)hidden_size,
-            read_batch_size,
-            block_ct_dim_dispatch,  // block_ct_dim
+        std::vector<uint32_t> untilize_compute_args = {
+            static_cast<uint32_t>(tt::CBIndex::c_10),  // 0: cb_signal_id
+            static_cast<uint32_t>(tt::CBIndex::c_11),  // 1: cb_untilize_id
+            static_cast<uint32_t>(tt::CBIndex::c_0),   // 2: cb_in_id
+            (uint32_t)hidden_size,                     // 3
+            read_batch_size,                           // 4
+            block_ct_dim_dispatch,                     // 5: block_ct_dim
         };
+        std::map<std::string, std::string> untilize_compute_defines;
+        if (operation_attributes.use_fp8_scale) {
+            // clamp(amax, 1e-4) / 448 -> scale, recip -> 1/scale. Constants match per_token_cast_to_fp8.
+            const uint32_t clamp_min_bits = std::bit_cast<uint32_t>(1.0e-4f);  // SCALE_CLAMP_MIN
+            const uint32_t clamp_max_bits = std::bit_cast<uint32_t>(3.0e38f);
+            const uint32_t inv_e4m3_max_bits = std::bit_cast<uint32_t>(1.0f / 448.0f);  // 1 / E4M3_MAX_NORMAL
+            untilize_compute_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_12));  // 6: cb_scaler
+            untilize_compute_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_20));  // 7: cb_abs
+            untilize_compute_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_21));  // 8: cb_scale_tiles (-> writer)
+            untilize_compute_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_22));  // 9: cb_inv_scale_tiles
+            untilize_compute_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_23));  // 10: cb_out_tile
+            untilize_compute_args.push_back(clamp_min_bits);                            // 11
+            untilize_compute_args.push_back(clamp_max_bits);                            // 12
+            untilize_compute_args.push_back(inv_e4m3_max_bits);                         // 13
+            untilize_compute_defines["FP8_SCALE"] = "1";
+        }
+        untilize_compute_kd.compile_time_args = std::move(untilize_compute_args);
+        untilize_compute_kd.defines = {untilize_compute_defines.begin(), untilize_compute_defines.end()};
         untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
             // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses

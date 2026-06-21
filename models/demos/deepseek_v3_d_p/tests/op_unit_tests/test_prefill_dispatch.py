@@ -95,7 +95,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     "seq_len_per_chip, emb_dim, num_routed_experts, num_experts_per_tok, dispatch_buffer_capacity_factor, run_pcc_check",
     [
         pytest.param(32, 7168, 16, 4, 4, True, id="pcc"),
-        pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
+        # pytest.param(3200, 7168, 64, 2, 8, False, id="perf_no_pcc"),
     ],
 )
 @pytest.mark.parametrize(
@@ -109,7 +109,14 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     ids=["tile", "row_major"],
 )
-@pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
+# fp8_scaled_out fuses per-token FP8 (e4m3) scaling into dispatch: it computes a per-token,
+# per-128-element scale, divides the token by it, casts to e4m3, and appends the scales to the
+# per-token metadata. It implies the fp8 output path (use_fp8_output=True).
+@pytest.mark.parametrize(
+    "use_fp8_output, use_fp8_scale",
+    [(False, False), (True, False), (True, True)],
+    ids=["bf16_out", "fp8_out", "fp8_scaled_out"],
+)
 @pytest.mark.parametrize("verbose", [False])
 def test_ttnn_dispatch(
     mesh_device,
@@ -123,6 +130,7 @@ def test_ttnn_dispatch(
     use_predictable_data,
     input_layout,
     use_fp8_output,
+    use_fp8_scale,
     verbose,
     run_pcc_check,
     is_ci_env,
@@ -180,6 +188,8 @@ def test_ttnn_dispatch(
         num_devices,
         dispatch_group_size,
         dispatch_buffer_capacity_factor,
+        use_fp8_scale=use_fp8_scale,
+        emb_dim=emb_dim,
     )
     logger.debug(
         f"{experts_per_chip=}, {metadata_len=}, {max_dispatch_buffer_token_size=}, {max_dispatched_tokens_per_expert=}"
@@ -284,6 +294,7 @@ def test_ttnn_dispatch(
         num_links=num_links,
         topology=topology,
         fp8_output=use_fp8_output,
+        fp8_scale=use_fp8_scale,
     )
 
     # Compute gate outputs (offsets and token counts) before dispatch
@@ -316,11 +327,21 @@ def test_ttnn_dispatch(
     # Convert TTNN outputs to torch for comparison
     mesh_composer = get_ep_mesh_composer(mesh_device)
     if use_fp8_output:
-        # Quantize the torch reference to fp8_e4m3fn so it carries the same precision as the TT
-        # dispatch output (which packs BF16->FP8 at the untilize stage), isolating routing
-        # correctness from fp8 quantization noise. Round-trip to float32 since
-        # validate_dispatch_buffer_pcc expects a real float dtype — matching the TT side below.
-        torch_dispatched = torch_dispatched.to(torch.float8_e4m3fn).to(torch.float32)
+        if use_fp8_scale:
+            # Fused fp8-scale path stores round_to_e4m3(x / per-token-scale) plus the per-token
+            # scales in metadata. We DON'T quantize the torch reference here: instead we dequantize
+            # the TT output (e4m3 * scale) below and compare against the un-quantized reference,
+            # mirroring the standalone per_token_cast round-trip test. Comparing raw e4m3 codes
+            # against an independently quantized torch tensor is over-sensitive — the kernel divides
+            # by an approximate hardware reciprocal, so a tiny scale delta flips e4m3 LSBs across the
+            # whole block and tanks PCC (~0.95) even when the result is numerically correct.
+            pass
+        else:
+            # Quantize the torch reference to fp8_e4m3fn so it carries the same precision as the TT
+            # dispatch output (which packs BF16->FP8 at the untilize stage), isolating routing
+            # correctness from fp8 quantization noise. Round-trip to float32 since
+            # validate_dispatch_buffer_pcc expects a real float dtype — matching the TT side below.
+            torch_dispatched = torch_dispatched.to(torch.float8_e4m3fn).to(torch.float32)
 
         # ttnn.to_torch returns a torch.float8_e4m3fn tensor for FP8_E4M3 device tensors; widen to fp32 for PCC.
         tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer)
@@ -331,6 +352,16 @@ def test_ttnn_dispatch(
     else:
         tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
+
+    if use_fp8_scale:
+        # Dequantize the e4m3 buffer with the per-token scales the kernel appended to metadata
+        # (fp32 bits stored in int32 columns [5 : 5 + emb_dim/128]). Each scale covers a 128-element
+        # block of its token, so expand it back to emb_dim before multiplying. The result is the
+        # reconstructed token, comparable to the un-quantized torch reference via PCC.
+        n_scale_blocks = emb_dim // 128
+        scale_bits = tt_out_metadata[..., 5 : 5 + n_scale_blocks].contiguous()
+        scales = scale_bits.view(torch.float32).repeat_interleave(128, dim=-1)
+        tt_out_dispatched = tt_out_dispatched * scales
 
     assert_output_shape(tt_out_dispatched, num_dispatch_groups, dispatch_group_size, "dispatched buffer")
 

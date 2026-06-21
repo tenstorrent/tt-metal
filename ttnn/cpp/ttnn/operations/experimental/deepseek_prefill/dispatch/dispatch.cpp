@@ -31,6 +31,7 @@ std::array<ttnn::Tensor, 2> dispatch(
     std::optional<tt::tt_fabric::Topology> topology,
     bool use_l1_small_for_semaphores,
     bool use_fp8_dispatch,
+    bool use_fp8_scale,
     uint32_t num_untilizers_per_sender) {
     auto* mesh_device = input_tensor.device();
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
@@ -77,6 +78,7 @@ std::array<ttnn::Tensor, 2> dispatch(
         subdevice_core_range_set,
         use_l1_small_for_semaphores,
         use_fp8_dispatch,
+        use_fp8_scale,
         num_untilizers_per_sender);
 }
 

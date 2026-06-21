@@ -55,6 +55,23 @@
 constexpr uint32_t ROUTE_INFO_SENTINEL = 0xFFFFFFFF;
 constexpr uint32_t TRID_NON_LOCAL_WRITE = 1;
 
+#ifdef FP8_SCALE
+// Per-token FP8 scales are appended to the metadata page after the 5x int32 header.
+constexpr uint32_t SCALE_TILE_BYTES = 32u * 32u * 4u;  // one fp32 scale tile
+constexpr uint32_t SCALE_META_OFFSET = 5u;             // scales follow [src chip, tok idx, k, expert, weight]
+constexpr uint32_t SCALE_FACE_H = 16u;
+constexpr uint32_t SCALE_FACE_W = 16u;
+constexpr uint32_t SCALE_FACES_PER_ROW = 32u / SCALE_FACE_W;                        // 2
+constexpr uint32_t SCALE_FACE_ELEMS = SCALE_FACE_H * SCALE_FACE_W;                  // 256
+constexpr uint32_t SCALE_FACE_ROW_STRIDE = SCALE_FACES_PER_ROW * SCALE_FACE_ELEMS;  // 512
+
+// Index of column 0 of tile row `row` (the token's slot within the 32-token batch), face-aware.
+// Mirrors extract_first_column in writer_per_token_cast_to_fp8.cpp.
+static inline uint32_t scale_col0_index(uint32_t row) {
+    return (row / SCALE_FACE_H) * SCALE_FACE_ROW_STRIDE + (row % SCALE_FACE_H) * SCALE_FACE_W;
+}
+#endif
+
 void kernel_main() {
     // ===== Compile-time args =====
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
@@ -74,8 +91,12 @@ void kernel_main() {
     constexpr uint32_t writer_cb_size = get_compile_time_arg_val(11);            // = read_batch_size = 32
     constexpr uint32_t cb_route_info_scratch_id = get_compile_time_arg_val(12);  // 16B local scratch
     constexpr uint32_t meta_scratch_slots = get_compile_time_arg_val(13);
+#ifdef FP8_SCALE
+    constexpr uint32_t cb_scale_id = get_compile_time_arg_val(14);       // compute -> writer scales (c_21)
+    constexpr uint32_t num_scale_blocks = get_compile_time_arg_val(15);  // hidden / 128
+#endif
 
-    constexpr auto output_args = TensorAccessorArgs<14>();
+    constexpr auto output_args = TensorAccessorArgs<16>();
     constexpr auto metadata_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     // ===== Runtime args =====
@@ -149,6 +170,12 @@ void kernel_main() {
 
         uint32_t untilize_read_ptr = get_read_ptr(cb_untilize_id);
 
+#ifdef FP8_SCALE
+        // Per-token FP8 scales for this batch: num_scale_blocks fp32 tiles, col 0 = per-token scale.
+        cb_wait_front(cb_scale_id, num_scale_blocks);
+        uint32_t scale_read_ptr = get_read_ptr(cb_scale_id);
+#endif
+
         // Wait for reader to publish the per-batch route plan
         cb_wait_front(cb_plan_id, 1);
         uint32_t plan_addr = get_read_ptr(cb_plan_id);
@@ -199,6 +226,18 @@ void kernel_main() {
                     meta[2] = (int32_t)k;
                     meta[3] = (int32_t)routed_expert;
                     meta[4] = (int32_t)weight;
+#ifdef FP8_SCALE
+                    // Append this token's per-128-element scales (fp32 bits) after the header.
+                    {
+                        volatile tt_l1_ptr uint32_t* meta_u = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_addr);
+                        uint32_t col0 = scale_col0_index(token_t);
+                        for (uint32_t b = 0; b < num_scale_blocks; ++b) {
+                            volatile tt_l1_ptr uint32_t* sb =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_read_ptr + b * SCALE_TILE_BYTES);
+                            meta_u[SCALE_META_OFFSET + b] = sb[col0];
+                        }
+                    }
+#endif
                     noc_async_write_page(page_idx, metadata_addr_gen, meta_addr);
                     local_count++;
                 } else {
@@ -255,6 +294,19 @@ void kernel_main() {
                     meta[2] = (int32_t)k;
                     meta[3] = (int32_t)routed_expert;
                     meta[4] = (int32_t)weight;
+#ifdef FP8_SCALE
+                    // Append this token's per-128-element scales (fp32 bits) after the header.
+                    {
+                        volatile tt_l1_ptr uint32_t* meta_u =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xdev_metadata_scratch_addr);
+                        uint32_t col0 = scale_col0_index(token_t);
+                        for (uint32_t b = 0; b < num_scale_blocks; ++b) {
+                            volatile tt_l1_ptr uint32_t* sb =
+                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scale_read_ptr + b * SCALE_TILE_BYTES);
+                            meta_u[SCALE_META_OFFSET + b] = sb[col0];
+                        }
+                    }
+#endif
                     uint64_t c6_slot = sender_c6_base_noc_addr + slot * aligned_metadata_page_size;
                     noc_async_write_one_packet_with_trid(
                         xdev_metadata_scratch_addr, c6_slot, aligned_metadata_page_size, TRID_NON_LOCAL_WRITE);
@@ -277,6 +329,9 @@ void kernel_main() {
 
         cb_pop_front(cb_plan_id, 1);
         cb_pop_front(cb_untilize_id, read_batch_size);
+#ifdef FP8_SCALE
+        cb_pop_front(cb_scale_id, num_scale_blocks);
+#endif
     }
 
     // Teardown: the reader pushes one extra end-of-plan sentinel page after the last batch.

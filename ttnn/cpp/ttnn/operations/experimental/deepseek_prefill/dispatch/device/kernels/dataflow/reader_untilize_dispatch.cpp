@@ -96,8 +96,11 @@ void kernel_main() {
     constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(28);
 
     constexpr uint32_t block_ct_dim = get_compile_time_arg_val(29);
+#ifdef FP8_SCALE
+    constexpr uint32_t cb_scaler_id = get_compile_time_arg_val(30);  // reduce scaler CB
+#endif
 
-    constexpr auto input_args = TensorAccessorArgs<30>();
+    constexpr auto input_args = TensorAccessorArgs<31>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
@@ -185,6 +188,29 @@ void kernel_main() {
         (uint32_t)IS_OWNER,
         (uint32_t)total_batches,
         (uint32_t)total_workers);
+
+#ifdef FP8_SCALE
+    // Fill the reduce-MAX scaler tile once: zero, then 1.0 in row 0 of each 16x16 face (4 faces).
+    // Matches reader_per_token_cast_to_fp8.cpp; consumed by the fused compute's REDUCE_ROW max.
+    {
+        constexpr uint32_t TILE_ELEMS = 32u * 32u;
+        constexpr uint32_t FACE_ELEMS = 16u * 16u;
+        constexpr uint32_t NUM_FACES = 4u;
+        constexpr uint32_t FACE_W = 16u;
+        constexpr uint32_t ONE_F32_BITS = 0x3f800000u;  // 1.0f
+        cb_reserve_back(cb_scaler_id, 1);
+        volatile tt_l1_ptr uint32_t* sc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_scaler_id));
+        for (uint32_t i = 0; i < TILE_ELEMS; ++i) {
+            sc[i] = 0;
+        }
+        for (uint32_t f = 0; f < NUM_FACES; ++f) {
+            for (uint32_t j = 0; j < FACE_W; ++j) {
+                sc[f * FACE_ELEMS + j] = ONE_F32_BITS;
+            }
+        }
+        cb_push_back(cb_scaler_id, 1);
+    }
+#endif
 
     // ===== Indices / weights scratch (overwritten per batch, single page slot used) =====
     cb_reserve_back(cb_indices_id, read_batch_size);

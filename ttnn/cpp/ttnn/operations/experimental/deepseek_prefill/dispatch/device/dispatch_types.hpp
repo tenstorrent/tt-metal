@@ -29,6 +29,10 @@ struct DispatchParams {
     CoreRangeSet worker_core_range_set;
     bool use_l1_small_for_semaphores = false;
     bool use_fp8_dispatch = false;
+    // Per-token FP8 quantization fused into the tile-layout dispatch compute: computes a
+    // per-128-element scale per token, divides + casts to e4m3, and ships each token's scales
+    // inside its per-token metadata. Requires use_fp8_dispatch (e4m3 output) and TILE input.
+    bool use_fp8_scale = false;
     uint32_t num_untilizers_per_sender = 2;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
@@ -45,6 +49,7 @@ struct DispatchParams {
         "worker_core_range_set",
         "use_l1_small_for_semaphores",
         "use_fp8_dispatch",
+        "use_fp8_scale",
         "num_untilizers_per_sender");
 
     auto attribute_values() const {
@@ -62,6 +67,7 @@ struct DispatchParams {
             worker_core_range_set,
             use_l1_small_for_semaphores,
             use_fp8_dispatch,
+            use_fp8_scale,
             num_untilizers_per_sender);
     };
 };
