@@ -1635,7 +1635,7 @@ def _select_candidate(
                 "benchmark_mode": benchmark_mode,
             }
         )
-        if winner is None or (winner_avg_us is not None and avg_us < winner_avg_us) or winner_avg_us is None:
+        if winner is None or avg_us < winner_avg_us:
             winner = candidate
             winner_avg_us = avg_us
 
@@ -1841,7 +1841,13 @@ def explain_matmul(
     if not isinstance(input_tensor_a, ttnn.Tensor):
         raise TypeError("explain_matmul requires input_tensor_a to be a ttnn.Tensor on device or mesh")
 
-    prepared = _prepare_inputs(input_tensor_a, input_tensor_b, bias)
+    # When only reading the cache (allow_tuning=False), skip host-tensor staging:
+    # staging allocates device memory and writes cache files, which is unexpected
+    # for a read-only inspection call.
+    if allow_tuning:
+        prepared = _prepare_inputs(input_tensor_a, input_tensor_b, bias)
+    else:
+        prepared = PreparedMatmulInputs(input_tensor_a=input_tensor_a, input_tensor_b=input_tensor_b, bias=bias)
     if not isinstance(prepared.input_tensor_b, ttnn.Tensor):
         raise TypeError("explain_matmul requires input_tensor_b to be a ttnn.Tensor or a host torch.Tensor")
 

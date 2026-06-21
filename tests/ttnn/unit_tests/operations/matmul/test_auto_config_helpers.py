@@ -4,9 +4,17 @@
 import dataclasses
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from ttnn._experimental.auto_config import matmul as auto_matmul
+
+
+@pytest.fixture(autouse=True)
+def clear_runtime_records():
+    auto_matmul.AutoMatmulCache.clear_runtime()
+    yield
+    auto_matmul.AutoMatmulCache.clear_runtime()
 
 
 def _make_signature():

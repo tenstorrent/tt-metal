@@ -6,11 +6,19 @@ import torch
 
 import ttnn
 import ttnn.operations.matmul as matmul_ops
+from ttnn._experimental.auto_config import matmul as auto_matmul
 
 from models.common.utility_functions import torch_random
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
+
+
+@pytest.fixture(autouse=True)
+def clear_runtime_records():
+    auto_matmul.AutoMatmulCache.clear_runtime()
+    yield
+    auto_matmul.AutoMatmulCache.clear_runtime()
 
 
 def _ok_candidate_entries(result):
