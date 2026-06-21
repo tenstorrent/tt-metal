@@ -19,6 +19,8 @@ Environment:
   HOST_LOAD_SUMMARY_FILE      Default file to append the summary to.
   HOST_LOAD_DISK_DEVICES      Comma-separated /sys/block device names to include.
                              Defaults to whole non-loop, non-ram, non-dm block devices.
+                             Disk metrics are physical block-device I/O; cached
+                             filesystem reads are not counted as disk reads.
   HOST_LOAD_NET_INTERFACES    Comma-separated network interface names to include.
                              Defaults to all interfaces except lo.
 
@@ -195,6 +197,8 @@ read_disk_bytes() {
     local write_sectors=0
     local stat_file device_read_sectors device_write_sectors
 
+    # /sys/block/*/stat reports block-layer sectors, so this is physical device
+    # I/O. It intentionally does not count filesystem reads served from cache.
     while IFS= read -r stat_file; do
         read -r _ _ device_read_sectors _ _ _ device_write_sectors _ _ < "$stat_file" || continue
         read_sectors=$((read_sectors + device_read_sectors))
@@ -446,16 +450,6 @@ format_rate() {
     printf "%s/s\n" "$(format_bytes "$1")"
 }
 
-sar_context() {
-    if command -v sar >/dev/null 2>&1; then
-        local version
-        version="$(sar -V 2>&1 | awk 'NR == 1 { print; exit }')"
-        printf "available (%s); summary uses /proc counters for dependency-free command wrapping\n" "$version"
-    else
-        printf "not found; install sysstat for sar, but this wrapper does not require it\n"
-    fi
-}
-
 emit_summary() {
     local command_status="$1"
     summarize_samples
@@ -514,7 +508,6 @@ emit_summary() {
         echo "Command: $command_display"
         echo "Exit code: $command_status"
         echo "Samples: $samples over ${duration_s}s (target interval: ${interval}s)"
-        echo "sar: $(sar_context)"
         echo ""
         echo "CPU utilization (capacity: ${cpu_cores} cores):"
         echo "  min: ${cpu_min}% | max: ${cpu_max}% | mean: ${cpu_mean}%"
@@ -522,10 +515,10 @@ emit_summary() {
         echo "  min: ${mem_min}% | max: ${mem_max}% | mean: ${mem_mean}%"
         echo "Swap utilization (capacity: ${swap_total} swap):"
         echo "  min: ${swap_min}% | max: ${swap_max}% | mean: ${swap_mean}%"
-        echo "Disk reads:"
+        echo "Physical disk reads:"
         echo "  total: ${disk_read_total_h} | average rate: ${disk_read_avg_h}"
         echo "  sample rate min: ${disk_read_min_h} | max: ${disk_read_max_h} | mean: ${disk_read_mean_h}"
-        echo "Disk writes:"
+        echo "Physical disk writes:"
         echo "  total: ${disk_write_total_h} | average rate: ${disk_write_avg_h}"
         echo "  sample rate min: ${disk_write_min_h} | max: ${disk_write_max_h} | mean: ${disk_write_mean_h}"
         echo "Network receive:"
