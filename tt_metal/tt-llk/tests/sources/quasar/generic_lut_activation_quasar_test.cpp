@@ -141,7 +141,8 @@ using namespace ckernel::sfpu;
 // build) LUT_RR_METHOD stays 0 (none) and the kernel is byte-identical to before.
 #ifndef LUT_RR_METHOD
 #define LUT_RR_METHOD 0 // 0 none, 1 log, 2 exp, 3 cbrt,
-                        // 4 expalu_exp2, 5 expalu_log2, 6 expalu_pow
+                        // 4 expalu_exp2, 5 expalu_log2, 6 expalu_pow,
+                        // 7 trig (sin/cos), 8 tan
 #endif
 // legacy log
 #ifndef LUT_RR_LOG_LN2
@@ -187,6 +188,24 @@ using namespace ckernel::sfpu;
 #endif
 #ifndef LUT_RR_POW_RECIP
 #define LUT_RR_POW_RECIP 0
+#endif
+// trig (sin/cos) — method 7
+#ifndef LUT_RR_TRIG_INV_PI
+#define LUT_RR_TRIG_INV_PI 0.3183098861837907f // 1/pi
+#endif
+#ifndef LUT_RR_TRIG_PI
+#define LUT_RR_TRIG_PI 3.141592653589793f
+#endif
+// tan — method 8 (Cody-Waite two-stage; constants are fp32-exact and MUST match
+// range_reduction.py NEG_PI_2_HI/LO so the numpy fp32 golden is faithful).
+#ifndef LUT_RR_TAN_INV_HALFPI
+#define LUT_RR_TAN_INV_HALFPI 0.6366197723675814f // 1/(pi/2)
+#endif
+#ifndef LUT_RR_TAN_PI2_HI
+#define LUT_RR_TAN_PI2_HI 1.5703125f // pi/2 high bits
+#endif
+#ifndef LUT_RR_TAN_PI2_LO
+#define LUT_RR_TAN_PI2_LO 0.0004837512969970703f // pi/2 remainder
 #endif
 
 constexpr std::uint32_t POLY_DEGREE  = LUT_POLY_DEGREE;
@@ -323,6 +342,18 @@ sfpi_inline sfpi::vFloat rr_scale_by_r(sfpi::vFloat v, sfpi::vInt r)
     }
     v_endif;
     return out;
+}
+
+// Parity p in {0,1} of a signed integer kv: p = kv - 2*floor(kv/2). Computed in
+// the float domain (no vInt multiply / no signed bit-AND ambiguity on Quasar),
+// returned as a vFloat that is exactly 0.0f or 1.0f. |kv| <= ~few is exact in fp32.
+sfpi_inline sfpi::vFloat rr_parity_f(sfpi::vInt kv)
+{
+    const sfpi::vFloat kf = rr_int_to_float(kv);
+    const sfpi::vInt   h  = rr_floor_to_int(kf * sfpi::vFloat(0.5f)); // floor(k/2)
+    const sfpi::vFloat hf = rr_int_to_float(h);
+    // p = k - 2*h  via fused FMA: (-2)*hf + kf (no SFPADDI)
+    return __builtin_rvtt_sfpmad(hf.get(), sfpi::vFloat(-2.0f).get(), kf.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 }
 
 #endif // LUT_RR_METHOD != 0
@@ -462,6 +493,22 @@ sfpi_inline void piecewise_generic_lut_sfp_rows()
     sfpi::vInt         q_i, r_i;
     rr_divmod_floor(e_i, LUT_RR_POW_N, q_i, r_i);
     r_arg = rr_mantissa(ax);
+#elif LUT_RR_METHOD == 7 // trig: k=round(x/pi); s = x - k*pi
+    const sfpi::vFloat t_k  = x_in * sfpi::vFloat(LUT_RR_TRIG_INV_PI);
+    const sfpi::vInt   k_i  = rr_round_to_int(t_k);
+    const sfpi::vFloat k_f  = rr_int_to_float(k_i);
+    // s = x - k*pi via fused FMA: (-pi)*k + x (no SFPADDI)
+    r_arg = __builtin_rvtt_sfpmad(k_f.get(), sfpi::vFloat(-(float)(LUT_RR_TRIG_PI)).get(), x_in.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    const sfpi::vFloat trig_sign = rr_parity_f(k_i); // 0.0 (even k) or 1.0 (odd k)
+#elif LUT_RR_METHOD == 8 // tan: j=round(x/(pi/2)); Cody-Waite a = x - j*(pi/2)
+    const sfpi::vFloat t_j  = x_in * sfpi::vFloat(LUT_RR_TAN_INV_HALFPI);
+    const sfpi::vInt   j_i  = rr_round_to_int(t_j);
+    const sfpi::vFloat j_f  = rr_int_to_float(j_i);
+    // Cody-Waite stage 1: a_hi = (-PI2_HI)*j + x   (fused FMA)
+    const sfpi::vFloat a_hi = __builtin_rvtt_sfpmad(j_f.get(), sfpi::vFloat(-(float)(LUT_RR_TAN_PI2_HI)).get(), x_in.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    // Cody-Waite stage 2: a    = (-PI2_LO)*j + a_hi (fused FMA)
+    r_arg = __builtin_rvtt_sfpmad(j_f.get(), sfpi::vFloat(-(float)(LUT_RR_TAN_PI2_LO)).get(), a_hi.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    const sfpi::vFloat tan_odd = rr_parity_f(j_i); // 0.0 (even j) or 1.0 (odd j)
 #endif
 
     // ---- Clamp r_arg to [b0, bN] (the REDUCED domain) with explicit v_if
@@ -531,6 +578,20 @@ sfpi_inline void piecewise_generic_lut_sfp_rows()
 #else
         result = sfpi::vFloat(0.0f);
 #endif
+    }
+    v_endif;
+#elif LUT_RR_METHOD == 7 // trig: result = (-1)^k * P(s)
+    // sign_flip = +1 (even k) / -1 (odd k). Branch on the precomputed parity.
+    v_if (trig_sign == sfpi::vFloat(1.0f))
+    {
+        result = -result;
+    }
+    v_endif;
+#elif LUT_RR_METHOD == 8 // tan: j even -> P(a); j odd -> -1/P(a)
+    const sfpi::vFloat tan_recip = -rr_recip(result); // -1/P(a), computed on all lanes
+    v_if (tan_odd == sfpi::vFloat(1.0f))
+    {
+        result = tan_recip;
     }
     v_endif;
 #endif

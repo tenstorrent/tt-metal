@@ -194,7 +194,7 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
     rr_enabled = meta.get("range_reduction_enabled", "False").lower() == "true"
     # Only the exponent family is implemented in the kernel; everything else
     # (none/trig/tan) falls back to the legacy [b0,bN] path.
-    _SUPPORTED_RR = {"log", "exp", "cbrt", "exponent_alu_exp2", "exponent_alu_log2", "exponent_alu_pow"}
+    _SUPPORTED_RR = {"log", "exp", "cbrt", "exponent_alu_exp2", "exponent_alu_log2", "exponent_alu_pow", "trig", "tan"}
     if rr_method not in _SUPPORTED_RR:
         rr_enabled = False
     params = {}
@@ -217,6 +217,12 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
             params["n"] = int(float(meta["expalu_root_n"]))
             params["recip"] = meta.get("expalu_reciprocal", "False").lower() == "true"
             params["scale"] = [_mf("expalu_pow_scale_c0"), _mf("expalu_pow_scale_c1"), _mf("expalu_pow_scale_c2")]
+        elif rr_method in ("trig", "tan"):
+            # No kernel-tunable params: the kernel hardcodes pi / Cody-Waite
+            # constants (matching range_reduction.py). trig_symmetry is metadata
+            # only (the golden activation name already selects sin/cos/tan); the
+            # reduced-domain bounds drive the clamp via b0/bN, parsed below.
+            pass
 
     # Sort by lo to guarantee ascending boundaries (kernel relies on this).
     seg_rows.sort(key=lambda r: r[0])
@@ -335,6 +341,8 @@ class GENERIC_LUT_DATA(TemplateParameter):
             "exponent_alu_exp2": 4,
             "exponent_alu_log2": 5,
             "exponent_alu_pow": 6,
+            "trig": 7,
+            "tan": 8,
         }
         _COMP = {"": 0, "sigmoid": 1, "minus_one": 2}
         rr = self.lut
@@ -363,6 +371,10 @@ class GENERIC_LUT_DATA(TemplateParameter):
                 for i, c in enumerate(p["scale"]):
                     if c is not None:
                         lines.append(f"#define LUT_RR_SCALE{i} {c:.10e}f")
+            elif rr.rr_method in ("trig", "tan"):
+                # Method code already emitted via LUT_RR_METHOD above; the kernel
+                # hardcodes pi / Cody-Waite constants, so no further #defines.
+                pass
         return "\n".join(lines)
 
 
