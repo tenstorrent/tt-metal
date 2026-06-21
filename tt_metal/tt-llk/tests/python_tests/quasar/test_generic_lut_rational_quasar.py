@@ -38,8 +38,10 @@ Reproduce (from tt_metal/tt-llk/tests/python_tests):
 
 import csv
 import os
+import sys
 from dataclasses import dataclass
 
+import numpy as np
 import pytest
 import torch
 from helpers.format_config import DataFormat
@@ -90,14 +92,26 @@ class RationalLUT:
     boundaries: list  # length num_segments + 1
     num_coeffs: list  # num_segments lists, each length num_degree + 1 (c0..cn)
     den_coeffs: list  # num_segments lists, each length den_degree + 1 (c0..cm)
+    activation: str = "sigmoid"
+    use_ground_truth: bool = False
+    # Range reduction (parsed from CSV METADATA; method='none' -> disabled).
+    rr_method: str = "none"
+    rr_enabled: bool = False
+    rr_original_min: float = None
+    rr_original_max: float = None
+    rr_reduced_min: float = None
+    rr_reduced_max: float = None
+    rr_params: dict = None  # method-specific (see parse_rational_csv)
 
 
-def parse_rational_csv(path: str) -> RationalLUT:
+def parse_rational_csv(path: str, act: str = DEFAULT_ACT) -> RationalLUT:
     seg_rows = []
+    meta = {}
     with open(path) as f:
         reader = csv.DictReader(f)
         for row in reader:
             if row["segment_id"] == "METADATA":
+                meta[(row["lo"] or "").strip()] = (row["hi"] or "").strip()
                 continue
             seg_rows.append(row)
 
@@ -118,6 +132,40 @@ def parse_rational_csv(path: str) -> RationalLUT:
     num_coeffs = [[float(r[f"n{i}"]) for i in range(num_degree + 1)] for r in seg_rows]
     den_coeffs = [[float(r[f"d{i}"]) for i in range(den_degree + 1)] for r in seg_rows]
 
+    # ---- Parse range-reduction metadata (identical key names to the poly test).
+    def _mf(k):  # metadata float (None if absent/empty)
+        return float(meta[k]) if k in meta and meta[k] != "" else None
+
+    rr_method = meta.get("range_reduction_method", "none")
+    rr_enabled = meta.get("range_reduction_enabled", "False").lower() == "true"
+    _SUPPORTED_RR = {"log", "exp", "cbrt", "exponent_alu_exp2", "exponent_alu_log2", "exponent_alu_pow", "trig", "tan"}
+    if rr_method not in _SUPPORTED_RR:
+        rr_enabled = False
+    params = {}
+    if rr_enabled:
+        if rr_method == "log":
+            params["ln2"] = _mf("log_ln2_constant")
+        elif rr_method == "exp":
+            params["mult"] = _mf("exp_log2_multiplier")
+            params["const"] = _mf("exp_log2_constant")
+        elif rr_method == "cbrt":
+            params["scale"] = [_mf("cbrt_scale_c0"), _mf("cbrt_scale_c1"), _mf("cbrt_scale_c2")]
+        elif rr_method == "exponent_alu_exp2":
+            params["mult"] = _mf("expalu_log2_multiplier")
+            params["compose"] = meta.get("expalu_compose", "") or ""
+        elif rr_method == "exponent_alu_log2":
+            params["scale"] = _mf("expalu_log_scale")
+            params["basis"] = meta.get("expalu_log2_basis", "m")
+            params["offset"] = _mf("expalu_input_offset") or 0.0
+        elif rr_method == "exponent_alu_pow":
+            params["n"] = int(float(meta["expalu_root_n"]))
+            params["recip"] = meta.get("expalu_reciprocal", "False").lower() == "true"
+            params["scale"] = [_mf("expalu_pow_scale_c0"), _mf("expalu_pow_scale_c1"), _mf("expalu_pow_scale_c2")]
+        elif rr_method in ("trig", "tan"):
+            # No kernel-tunable params: the kernel hardcodes pi / Cody-Waite
+            # constants (matching range_reduction.py).
+            pass
+
     return RationalLUT(
         num_segments=len(seg_rows),
         num_degree=num_degree,
@@ -125,6 +173,15 @@ def parse_rational_csv(path: str) -> RationalLUT:
         boundaries=boundaries,
         num_coeffs=num_coeffs,
         den_coeffs=den_coeffs,
+        activation=act,
+        use_ground_truth=rr_enabled,
+        rr_method=rr_method,
+        rr_enabled=rr_enabled,
+        rr_original_min=_mf("range_reduction_original_min"),
+        rr_original_max=_mf("range_reduction_original_max"),
+        rr_reduced_min=_mf("range_reduction_reduced_min"),
+        rr_reduced_max=_mf("range_reduction_reduced_max"),
+        rr_params=params,
     )
 
 
@@ -161,15 +218,76 @@ class RATIONAL_LUT(TemplateParameter):
         flat_num = [c for seg in lut.num_coeffs for c in seg]
         flat_den = [c for seg in lut.den_coeffs for c in seg]
 
+        # For the exponent_alu_log2 m_minus_1 basis, the kernel's polynomial
+        # argument is u = mantissa - 1. The boundaries are used by the kernel
+        # ONLY for the clamp + segment selection, so they must live in the SAME
+        # u-space as r_arg. The CSV stores them in m-space [1,2]; shift by -1 so
+        # the clamp/selection match r_arg and the u-basis coeffs. (None of the 7
+        # target best-picks use m_minus_1, but this keeps the rational codegen in
+        # lockstep with the poly contract.)
+        emit_boundaries = list(lut.boundaries)
+        if (
+            lut.rr_enabled
+            and lut.rr_method == "exponent_alu_log2"
+            and (lut.rr_params or {}).get("basis") == "m_minus_1"
+        ):
+            emit_boundaries = [b - 1.0 for b in emit_boundaries]
+
         lines = [
             "// === Injected piecewise-rational LUT (from QUASAR_LUT_CSV) ===",
             f"constexpr std::uint32_t RAT_NUM_SEGMENTS = {nseg};",
             f"constexpr std::uint32_t RAT_NUM_DEGREE = {nd};",
             f"constexpr std::uint32_t RAT_DEN_DEGREE = {dd};",
-            f"constexpr std::array<float, {nseg + 1}> RAT_BOUNDARIES = {{ {self._fmt_floats(lut.boundaries)} }};",
+            f"constexpr std::array<float, {nseg + 1}> RAT_BOUNDARIES = {{ {self._fmt_floats(emit_boundaries)} }};",
             f"constexpr std::array<float, {nseg * (nd + 1)}> RAT_NUM_COEFFS = {{ {self._fmt_floats(flat_num)} }};",
             f"constexpr std::array<float, {nseg * (dd + 1)}> RAT_DEN_COEFFS = {{ {self._fmt_floats(flat_den)} }};",
         ]
+
+        # ---- Range-reduction macros (only when enabled). Numeric method codes
+        # match the kernel's LUT_RR_METHOD contract; non-RR CSVs and the default
+        # sigmoid build emit none of these -> byte-identical to the legacy path.
+        _CODE = {
+            "none": 0,
+            "log": 1,
+            "exp": 2,
+            "cbrt": 3,
+            "exponent_alu_exp2": 4,
+            "exponent_alu_log2": 5,
+            "exponent_alu_pow": 6,
+            "trig": 7,
+            "tan": 8,
+        }
+        _COMP = {"": 0, "sigmoid": 1, "minus_one": 2}
+        rr = self.lut
+        if rr.rr_enabled:
+            p = rr.rr_params
+            lines.append(f"#define LUT_RR_METHOD {_CODE[rr.rr_method]}")
+            if rr.rr_method == "log":
+                lines.append(f"#define LUT_RR_LOG_LN2 {p['ln2']:.10e}f")
+            elif rr.rr_method == "exp":
+                lines.append(f"#define LUT_RR_EXP_MULT {p['mult']:.10e}f")
+                lines.append(f"#define LUT_RR_EXP_CONST {p['const']:.10e}f")
+            elif rr.rr_method == "cbrt":
+                for i, c in enumerate(p["scale"]):
+                    if c is not None:
+                        lines.append(f"#define LUT_RR_SCALE{i} {c:.10e}f")
+            elif rr.rr_method == "exponent_alu_exp2":
+                lines.append(f"#define LUT_RR_EXP2_MULT {p['mult']:.10e}f")
+                lines.append(f"#define LUT_RR_COMPOSE {_COMP[p['compose']]}")
+            elif rr.rr_method == "exponent_alu_log2":
+                lines.append(f"#define LUT_RR_LOG2_SCALE {p['scale']:.10e}f")
+                lines.append(f"#define LUT_RR_LOG2_BASIS_MMINUS1 {1 if p['basis'] == 'm_minus_1' else 0}")
+                lines.append(f"#define LUT_RR_INPUT_OFFSET {p['offset']:.10e}f")
+            elif rr.rr_method == "exponent_alu_pow":
+                lines.append(f"#define LUT_RR_POW_N {p['n']}")
+                lines.append(f"#define LUT_RR_POW_RECIP {1 if p['recip'] else 0}")
+                for i, c in enumerate(p["scale"]):
+                    if c is not None:
+                        lines.append(f"#define LUT_RR_SCALE{i} {c:.10e}f")
+            elif rr.rr_method in ("trig", "tan"):
+                # Method code already emitted via LUT_RR_METHOD above; the kernel
+                # hardcodes pi / Cody-Waite constants, so no further #defines.
+                pass
         return "\n".join(lines)
 
 
@@ -197,6 +315,33 @@ def piecewise_rational_golden(x: torch.Tensor, lut: RationalLUT) -> torch.Tensor
         p = torch.where(mask, _eval_poly(lut.num_coeffs[seg], x_clamped), p)
         q = torch.where(mask, _eval_poly(lut.den_coeffs[seg], x_clamped), q)
     return p / q
+
+
+def _ground_truth_golden_rational(lut: RationalLUT, x: torch.Tensor) -> torch.Tensor:
+    """Golden = TRUE activation (fitter's compute_ground_truth).
+
+    When range reduction is enabled, the kernel reproduces the full activation
+    over the ORIGINAL domain via reduce+reconstruct, so the golden is the exact
+    activation over the full domain (NO clamp). Otherwise the golden is the true
+    activation over the clamped reduced domain [b0,bN]."""
+    repo = os.environ.get("QUASAR_FITTER_REPO", "/localdev/nkapre/tt-polynomial-fitter")
+    if repo not in sys.path:
+        sys.path.insert(0, repo)
+    from ground_truth import compute_ground_truth  # noqa: E402
+
+    if lut.rr_enabled:
+        x_eval = x.to(torch.float64)  # FULL original domain, no clamp
+    else:
+        b0, bN = lut.boundaries[0], lut.boundaries[lut.num_segments]
+        x_eval = torch.clamp(x.to(torch.float64), b0, bN)
+    y = compute_ground_truth(lut.activation, x_eval.numpy())
+    return torch.as_tensor(np.asarray(y, dtype=np.float64))
+
+
+def _rational_golden(lut: RationalLUT, x: torch.Tensor) -> torch.Tensor:
+    if lut.use_ground_truth:
+        return _ground_truth_golden_rational(lut, x)
+    return piecewise_rational_golden(x, lut)
 
 
 def _ulp_error(golden: torch.Tensor, result: torch.Tensor, out_format) -> float:
@@ -235,7 +380,7 @@ def test_generic_lut_rational_quasar(
 
     csv_path = os.environ.get("QUASAR_LUT_CSV", DEFAULT_CSV)
     act = os.environ.get("QUASAR_ACT", DEFAULT_ACT)
-    lut = parse_rational_csv(csv_path)
+    lut = parse_rational_csv(csv_path, act)
     print(
         f"\n[generic_lut_rational_quasar] act={act} csv={os.path.basename(csv_path)} "
         f"segs={lut.num_segments} num_deg={lut.num_degree} den_deg={lut.den_degree} "
@@ -256,15 +401,18 @@ def test_generic_lut_rational_quasar(
         input_dimensions_B=input_dimensions,
     )
 
-    # Scale inputs into the LUT domain [b0, bN].
-    lo_dom, hi_dom = lut.boundaries[0], lut.boundaries[-1]
+    # Scale inputs into the evaluation domain. With range reduction the kernel
+    # covers the FULL original domain; otherwise only the reduced LUT span.
+    if lut.rr_enabled:
+        dom_lo, dom_hi = lut.rr_original_min, lut.rr_original_max
+    else:
+        dom_lo, dom_hi = lut.boundaries[0], lut.boundaries[-1]
     src_A_f = src_A.to(torch.float32)
     lo, hi = src_A_f.min(), src_A_f.max()
     if hi > lo:
-        span = hi_dom - lo_dom
-        src_A_f = (src_A_f - lo) / (hi - lo) * span + lo_dom
+        src_A_f = (src_A_f - lo) / (hi - lo) * (dom_hi - dom_lo) + dom_lo
     else:
-        src_A_f = torch.zeros_like(src_A_f)
+        src_A_f = torch.full_like(src_A_f, (dom_lo + dom_hi) / 2.0)
     src_A = src_A_f.to(format_dict[formats.input_format])
 
     num_faces = MAX_NUM_FACES
@@ -279,7 +427,7 @@ def test_generic_lut_rational_quasar(
     # numerics, ttsim-supported, and it does not change any other config's PCC.
     TestConfig.ARCH_SPECIFIC_OPTIONS = "-mno-tt-tensix-optimize-combine"
 
-    golden_values = piecewise_rational_golden(src_A.to(torch.float32), lut)
+    golden_values = _rational_golden(lut, src_A.to(torch.float32))
     golden_tensor = golden_values.to(format_dict[formats.output_format])
 
     configuration = TestConfig(
@@ -326,9 +474,15 @@ def test_generic_lut_rational_quasar(
     print(f"[generic_lut_rational_quasar] PCC = {pcc}")
     print(f"[generic_lut_rational_quasar] ULP = {ulp}")
 
-    assert passed_test(
-        golden_tensor,
-        res_tensor,
-        formats.output_format,
-        print_pcc=True,
-    )
+    if lut.use_ground_truth:
+        # Real fitter coeffs validated against the TRUE activation over the FULL
+        # original domain: the driver gates on PCC >= 0.99.
+        assert pcc >= 0.99, f"PCC {pcc} below 0.99 for {lut.activation}"
+    else:
+        # Non-RR rational: golden replicates the kernel algorithm exactly.
+        assert passed_test(
+            golden_tensor,
+            res_tensor,
+            formats.output_format,
+            print_pcc=True,
+        )
