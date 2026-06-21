@@ -48,7 +48,7 @@ void kernel_main() {
     DataflowBuffer dfb0(dfb::out_data);
     const uint32_t tile_bytes = dfb0.get_entry_size();
 
-    const auto src_a = TensorAccessor(ta::src_tensor);
+    const auto src_a = TensorAccessor(tensor::src_tensor);
 
 #if GENERATE_BCAST_SCALER
     // TODO(AP): cleanup, probably with named args/param pack/reflection.
