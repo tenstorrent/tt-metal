@@ -574,7 +574,11 @@ jobs:
         timeout-minutes: 90
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
-          cmake --build build --target install
+          "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
+            --interval 1 \
+            --label "cmake build (install target)" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            -- cmake --build build --target install
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
