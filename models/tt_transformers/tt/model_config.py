@@ -4252,7 +4252,10 @@ class HfDecoderWrapper:
                 **{cache_kw: self.past_key_values},
             )
 
-        output = result[0]
+        # transformers 5.x decoder layers return the hidden-states tensor directly instead of a
+        # (hidden_states, ...) tuple; only unwrap [0] when it's actually a tuple, otherwise result[0]
+        # would index the batch dim and drop a leading dimension (e.g. [1,1,dim] -> [1,dim]).
+        output = result[0] if isinstance(result, tuple) else result
         return output
 
     def __call__(self, *args, **kwargs):

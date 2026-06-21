@@ -714,7 +714,9 @@ class HfGemmaDecoderWrapper:
             attention_mask=mask,
             **{cache_kw: self.past_key_values},
         )
-        output = result[0]
+        # transformers 5.x decoder layers return the hidden-states tensor directly instead of a
+        # tuple; only unwrap [0] when it's actually a tuple (otherwise result[0] drops a leading dim).
+        output = result[0] if isinstance(result, tuple) else result
         return output
 
     def __call__(self, *args, **kwargs):
