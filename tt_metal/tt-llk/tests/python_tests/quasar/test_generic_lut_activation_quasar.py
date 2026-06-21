@@ -103,6 +103,14 @@ class LutConfig:
     boundaries: list  # length num_segments+1, ascending
     coeffs: list  # num_segments lists of (degree+1) Horner coeffs (c0..cN)
     use_ground_truth: bool  # True -> golden is the true activation; else algorithmic
+    # Range reduction (parsed from CSV METADATA; method='none' -> disabled).
+    rr_method: str = "none"
+    rr_enabled: bool = False
+    rr_original_min: float = None
+    rr_original_max: float = None
+    rr_reduced_min: float = None
+    rr_reduced_max: float = None
+    rr_params: dict = None  # method-specific (see _parse_fitter_csv)
 
 
 def _default_lut() -> LutConfig:
@@ -149,6 +157,7 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
     Rows whose segment_id is non-numeric (e.g. METADATA) are skipped.
     """
     seg_rows = []
+    meta = {}
     with open(path, newline="") as f:
         reader = csv.reader(f)
         header = next(reader)
@@ -161,10 +170,13 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
         for row in reader:
             if not row:
                 continue
+            if row[0] == "METADATA":
+                meta[row[1].strip()] = row[2].strip()
+                continue
             try:
                 int(row[0])
             except ValueError:
-                continue  # METADATA / blank rows
+                continue  # blank / non-segment rows
             lo = float(row[lo_idx])
             hi = float(row[hi_idx])
             coeffs = [float(row[i]) for i in coeff_idx]
@@ -174,9 +186,46 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
     if not seg_rows:
         raise ValueError(f"No segment rows parsed from {path}")
 
+    # ---- Parse range-reduction metadata -------------------------------------
+    def _mf(k):  # metadata float (None if absent/empty)
+        return float(meta[k]) if k in meta and meta[k] != "" else None
+
+    rr_method = meta.get("range_reduction_method", "none")
+    rr_enabled = meta.get("range_reduction_enabled", "False").lower() == "true"
+    # Only the exponent family is implemented in the kernel; everything else
+    # (none/trig/tan) falls back to the legacy [b0,bN] path.
+    _SUPPORTED_RR = {"log", "exp", "cbrt", "exponent_alu_exp2", "exponent_alu_log2", "exponent_alu_pow"}
+    if rr_method not in _SUPPORTED_RR:
+        rr_enabled = False
+    params = {}
+    if rr_enabled:
+        if rr_method == "log":
+            params["ln2"] = _mf("log_ln2_constant")
+        elif rr_method == "exp":
+            params["mult"] = _mf("exp_log2_multiplier")
+            params["const"] = _mf("exp_log2_constant")
+        elif rr_method == "cbrt":
+            params["scale"] = [_mf("cbrt_scale_c0"), _mf("cbrt_scale_c1"), _mf("cbrt_scale_c2")]
+        elif rr_method == "exponent_alu_exp2":
+            params["mult"] = _mf("expalu_log2_multiplier")
+            params["compose"] = meta.get("expalu_compose", "") or ""
+        elif rr_method == "exponent_alu_log2":
+            params["scale"] = _mf("expalu_log_scale")
+            params["basis"] = meta.get("expalu_log2_basis", "m")
+            params["offset"] = _mf("expalu_input_offset") or 0.0
+        elif rr_method == "exponent_alu_pow":
+            params["n"] = int(float(meta["expalu_root_n"]))
+            params["recip"] = meta.get("expalu_reciprocal", "False").lower() == "true"
+            params["scale"] = [_mf("expalu_pow_scale_c0"), _mf("expalu_pow_scale_c1"), _mf("expalu_pow_scale_c2")]
+
     # Sort by lo to guarantee ascending boundaries (kernel relies on this).
     seg_rows.sort(key=lambda r: r[0])
-    poly_rows = _longest_nonasymptotic_run(seg_rows)
+    # RR (exponent-family) configs are fully-polynomial over the reduced domain
+    # and carry no asymptotic tails, so the asymptotic-run filter does not apply.
+    if rr_enabled:
+        poly_rows = seg_rows
+    else:
+        poly_rows = _longest_nonasymptotic_run(seg_rows)
     if not poly_rows:
         raise ValueError(
             f"{path}: no non-asymptotic (pure polynomial) segments — this config "
@@ -204,6 +253,13 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
         boundaries=boundaries,
         coeffs=coeffs,
         use_ground_truth=True,
+        rr_method=rr_method,
+        rr_enabled=rr_enabled,
+        rr_original_min=_mf("range_reduction_original_min"),
+        rr_original_max=_mf("range_reduction_original_max"),
+        rr_reduced_min=_mf("range_reduction_reduced_min"),
+        rr_reduced_max=_mf("range_reduction_reduced_max"),
+        rr_params=params,
     )
 
 
@@ -239,20 +295,75 @@ class GENERIC_LUT_DATA(TemplateParameter):
             v = 0.0 if abs(float(v)) < 1.18e-38 else float(v)
             return f"{v:.10e}f"
 
+        # For the exponent_alu_log2 m_minus_1 basis, the kernel's polynomial
+        # argument is u = mantissa - 1 (it does r_arg = rr_mantissa(x) - 1). The
+        # boundaries are used by the kernel ONLY for the clamp + segment selection,
+        # so they must live in the SAME u-space as r_arg. The CSV stores them in
+        # m-space [1,2]; shift by -1 so the clamp/selection match r_arg and the
+        # u-basis coeffs. Without this a single [1,2] segment clamps every u in
+        # [0,1] up to 1.0, collapsing the poly to a constant -> the result becomes
+        # a pure exponent step function (PCC ~0.975, the observed log/log2/log10 fail).
+        emit_boundaries = list(self.lut.boundaries)
+        if (
+            self.lut.rr_enabled
+            and self.lut.rr_method == "exponent_alu_log2"
+            and (self.lut.rr_params or {}).get("basis") == "m_minus_1"
+        ):
+            emit_boundaries = [b - 1.0 for b in emit_boundaries]
+
         # Only /* */ block comments here: a // line comment inside a
         # backslash-spliced macro would swallow the following line.
-        parts = ["/* boundaries b0..bS */ " + ", ".join(f(b) for b in self.lut.boundaries) + ","]
+        parts = ["/* boundaries b0..bS */ " + ", ".join(f(b) for b in emit_boundaries) + ","]
         for seg in range(self.lut.num_segments):
             parts.append(f"/* seg{seg} */ " + ", ".join(f(c) for c in self.lut.coeffs[seg]) + ",")
         # Trailing comma on the last line is fine inside { ... }.
         body = " \\\n    ".join(parts)
-        return "\n".join(
-            [
-                f"#define LUT_POLY_DEGREE {self.lut.degree}",
-                f"#define LUT_NUM_SEGMENTS {self.lut.num_segments}",
-                f"#define LUT_DATA_INIT {{ \\\n    {body} }}",
-            ]
-        )
+        lines = [
+            f"#define LUT_POLY_DEGREE {self.lut.degree}",
+            f"#define LUT_NUM_SEGMENTS {self.lut.num_segments}",
+            f"#define LUT_DATA_INIT {{ \\\n    {body} }}",
+        ]
+
+        # ---- Range-reduction macros (only when enabled). Numeric method codes
+        # match the kernel's LUT_RR_METHOD contract; non-RR CSVs and the default
+        # sigmoid build emit none of these -> byte-identical to the legacy path.
+        _CODE = {
+            "none": 0,
+            "log": 1,
+            "exp": 2,
+            "cbrt": 3,
+            "exponent_alu_exp2": 4,
+            "exponent_alu_log2": 5,
+            "exponent_alu_pow": 6,
+        }
+        _COMP = {"": 0, "sigmoid": 1, "minus_one": 2}
+        rr = self.lut
+        if rr.rr_enabled:
+            p = rr.rr_params
+            lines.append(f"#define LUT_RR_METHOD {_CODE[rr.rr_method]}")
+            if rr.rr_method == "log":
+                lines.append(f"#define LUT_RR_LOG_LN2 {p['ln2']:.10e}f")
+            elif rr.rr_method == "exp":
+                lines.append(f"#define LUT_RR_EXP_MULT {p['mult']:.10e}f")
+                lines.append(f"#define LUT_RR_EXP_CONST {p['const']:.10e}f")
+            elif rr.rr_method == "cbrt":
+                for i, c in enumerate(p["scale"]):
+                    if c is not None:
+                        lines.append(f"#define LUT_RR_SCALE{i} {c:.10e}f")
+            elif rr.rr_method == "exponent_alu_exp2":
+                lines.append(f"#define LUT_RR_EXP2_MULT {p['mult']:.10e}f")
+                lines.append(f"#define LUT_RR_COMPOSE {_COMP[p['compose']]}")
+            elif rr.rr_method == "exponent_alu_log2":
+                lines.append(f"#define LUT_RR_LOG2_SCALE {p['scale']:.10e}f")
+                lines.append(f"#define LUT_RR_LOG2_BASIS_MMINUS1 {1 if p['basis'] == 'm_minus_1' else 0}")
+                lines.append(f"#define LUT_RR_INPUT_OFFSET {p['offset']:.10e}f")
+            elif rr.rr_method == "exponent_alu_pow":
+                lines.append(f"#define LUT_RR_POW_N {p['n']}")
+                lines.append(f"#define LUT_RR_POW_RECIP {1 if p['recip'] else 0}")
+                for i, c in enumerate(p["scale"]):
+                    if c is not None:
+                        lines.append(f"#define LUT_RR_SCALE{i} {c:.10e}f")
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -282,17 +393,24 @@ def _algorithmic_golden(lut: LutConfig, x: torch.Tensor) -> torch.Tensor:
 
 
 def _ground_truth_golden(lut: LutConfig, x: torch.Tensor) -> torch.Tensor:
-    """Golden = TRUE activation (fitter's compute_ground_truth) over the clamped
-    domain, so PCC/ULP reflect the real LUT's end-to-end accuracy."""
+    """Golden = TRUE activation (fitter's compute_ground_truth).
+
+    When range reduction is enabled, the kernel reproduces the full activation
+    over the ORIGINAL domain via reduce+reconstruct, so the golden is the exact
+    activation over the full domain (NO clamp to [b0,bN]). Otherwise the golden
+    is the true activation over the clamped reduced domain [b0,bN]."""
     repo = os.environ.get("QUASAR_FITTER_REPO", "/localdev/nkapre/tt-polynomial-fitter")
     if repo not in sys.path:
         sys.path.insert(0, repo)
     from ground_truth import compute_ground_truth  # noqa: E402
 
-    b0 = lut.boundaries[0]
-    bN = lut.boundaries[lut.num_segments]
-    x_clamped = torch.clamp(x.to(torch.float64), b0, bN)
-    y = compute_ground_truth(lut.activation, x_clamped.numpy())
+    if lut.rr_enabled:
+        x_eval = x.to(torch.float64)  # full original domain, no clamp
+    else:
+        b0 = lut.boundaries[0]
+        bN = lut.boundaries[lut.num_segments]
+        x_eval = torch.clamp(x.to(torch.float64), b0, bN)
+    y = compute_ground_truth(lut.activation, x_eval.numpy())
     return torch.as_tensor(np.asarray(y, dtype=np.float64))
 
 
@@ -372,13 +490,18 @@ def test_generic_lut_activation_quasar(
         input_dimensions_B=input_dimensions,
     )
 
-    # Scale inputs into the LUT domain [b0, bN].
+    # Scale inputs into the evaluation domain. With range reduction the kernel
+    # covers the FULL original domain; otherwise only the reduced LUT span.
+    if lut.rr_enabled:
+        dom_lo, dom_hi = lut.rr_original_min, lut.rr_original_max
+    else:
+        dom_lo, dom_hi = b0, bN
     src_A_f = src_A.to(torch.float32)
     lo, hi = src_A_f.min(), src_A_f.max()
     if hi > lo:
-        src_A_f = (src_A_f - lo) / (hi - lo) * (bN - b0) + b0
+        src_A_f = (src_A_f - lo) / (hi - lo) * (dom_hi - dom_lo) + dom_lo
     else:
-        src_A_f = torch.full_like(src_A_f, (b0 + bN) / 2.0)
+        src_A_f = torch.full_like(src_A_f, (dom_lo + dom_hi) / 2.0)
     src_A = src_A_f.to(format_dict[formats.input_format])
 
     num_faces = MAX_NUM_FACES
