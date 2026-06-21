@@ -4229,6 +4229,8 @@ class HfDecoderWrapper:
             else "past_key_value"
         )
         if self.rotary_emb_local is not None:
+            # transformers <5 Gemma3 decoder layer takes split global/local rope and selects via
+            # is_sliding internally; pass both (global=full_attention, local=sliding_attention).
             if "layer_type" in inspect.signature(self.rotary_emb_local.forward).parameters:
                 position_embeddings_local = self.rotary_emb_local(x, position_ids, layer_type="sliding_attention")
             else:
@@ -4243,6 +4245,18 @@ class HfDecoderWrapper:
                 **{cache_kw: self.past_key_values},
             )
         else:
+            # transformers 5.x Gemma3 decoder layer takes a single `position_embeddings` and expects
+            # the CALLER to supply the rope for this layer's type (the model picks full_attention vs
+            # sliding_attention per layer). Layer 0 is sliding, so computing global rope here (as the
+            # default above does) feeds the wrong rope and the reference diverges from the TT decoder
+            # (which applies the correct per-layer rope). Recompute with this layer's own layer_type.
+            _layer_type = getattr(getattr(self.decoder, "self_attn", None), "layer_type", None)
+            if (
+                self.rotary_emb is not None
+                and _layer_type is not None
+                and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters
+            ):
+                position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
             result = self.decoder.forward(
                 x,
                 position_embeddings=position_embeddings,
