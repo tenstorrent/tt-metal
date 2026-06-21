@@ -41,6 +41,11 @@ jobs:
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
+    env:
+      # S3 ccache config — lift to repo vars/secrets when ready
+      CCACHE_S3_BUCKET: ccache
+      CCACHE_S3_PREFIX: tt-metal
+      CCACHE_S3_READONLY: "false"
     defaults:
       run:
         shell: bash
@@ -53,21 +58,97 @@ jobs:
           echo "python_version_nodot=${PYTHON_VERSION_NODOT}" >> $GITHUB_OUTPUT
           echo "Selected Python ${{ inputs.python-version }} (${PYTHON_VERSION_NODOT})"
 
-      - name: Check Redis credentials
+      - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+            echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks, otherwise it resolves an invalid URL and the job fails
-          # Omit |read-only unless actually true — ccache 4.13 treats the presence of the
-          # option (even =false) as read-only due to an std::optional<bool> check bug.
-          CCACHE_REMOTE_STORAGE="redis://${{ vars.REDIS_USER }}:${{ secrets.REDIS_PASSWORD }}@${{ vars.REDIS_HOST }}:${{ vars.REDIS_PORT }}${{ vars.REDIS_IS_READONLY == 'true' && '|read-only=true' || '' }}"
+          # The ccache-storage-s3 helper reads credentials from the standard AWS
+          # credential chain, so export them to the job environment.
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
+          # The s3:// scheme makes ccache auto-spawn and manage the helper itself:
+          # it derives the binary name (ccache-storage-s3) from the scheme and looks
+          # it up in libexec, forking it on demand and respawning across build steps.
+          # Garage's s3_region is configured as "garage" — must match exactly or signing fails.
+          CCACHE_REMOTE_STORAGE="s3://${CCACHE_S3_BUCKET}|region=garage|prefix=${CCACHE_S3_PREFIX}|endpoint_url=http://garage.garage.svc.cluster.local:3900"
+          if [ "${CCACHE_S3_READONLY}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          # Garage is a cluster-internal service reached directly from inside a Docker bridge
+          # network — the same way build-artifact.yaml's container: job reaches it. The
+          # cibuildwheel build below runs in a bridge-networked container, so the
+          # ccache-storage-s3 helper connects DIRECTLY to garage:3900, bypassing the Squid proxy
+          # via NO_PROXY (the AWS Go SDK honors NO_PROXY). We export the bypass here so it is
+          # forwarded into the cibuildwheel container.
+          echo "NO_PROXY=${NO_PROXY:+${NO_PROXY},}garage.garage.svc.cluster.local" >> $GITHUB_ENV
+          echo "no_proxy=${no_proxy:+${no_proxy},}garage.garage.svc.cluster.local" >> $GITHUB_ENV
+          # Enable debug logging from the ccache-storage-s3 helper binary.
+          echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          # AWS SDK Go v2 (≥1.32) computes CRC32 checksums on every PutObject by default.
+          # Garage uses plain HTTP and ccache's payload arrives as an unseekable stream, so
+          # the SDK can't compute the checksum upfront and fails. "when_required" tells the
+          # SDK to skip checksum computation for regular PUTs.
+          echo "AWS_REQUEST_CHECKSUM_CALCULATION=when_required" >> $GITHUB_ENV
+          # Explicit Garage endpoint as an AWS SDK env var fallback. The helper reads this
+          # if ccache does not forward |endpoint_url=... as CRSH_ATTR_* (defensive belt-and-suspenders).
+          echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
+
+      - name: Fetch ccache-storage-s3 helper for the manylinux container
+        # The pre-built manylinux image only copies /usr/local/bin/ccache from the
+        # ccache tool layer — it drops /usr/local/libexec, which is where the
+        # ccache-storage-s3 helper lives. The ccache binary derives the helper name
+        # from the s3:// scheme and looks it up in its baked-in libexecdir
+        # (/usr/local/libexec); when the helper is absent the first compile fails with
+        # "ccache: error: unknown remote storage scheme: s3". dockerfile/Dockerfile.manylinux
+        # now copies libexec too, but pre-built images on older tags still lack it, so we
+        # download the helper on the HOST runner (which has proxy egress to GitHub) and
+        # volume-mount it into the cibuildwheel container at the path ccache searches.
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        env:
+          # Keep in sync with STORAGE_HELPER_VERSION/SHA256 in dockerfile/scripts/install-ccache.sh
+          STORAGE_HELPER_VERSION: "0.1.7"
+          STORAGE_HELPER_SHA256: "3ac52edbcbda895c5514f13eac39e6d9a9e2550234b331c8e14050a94b79854c"
+        run: |
+          set -euo pipefail
+          HELPER_DIR="${RUNNER_TEMP}/ccache-helper"
+          mkdir -p "${HELPER_DIR}"
+          URL="https://github.com/blozano-tt/ccache-storage-s3-go/releases/download/v${STORAGE_HELPER_VERSION}/ccache-storage-s3-go-${STORAGE_HELPER_VERSION}-linux-amd64.tar.gz"
+          TARBALL="${HELPER_DIR}/helper.tar.gz"
+          curl -fsSL -o "${TARBALL}" "${URL}"
+          echo "${STORAGE_HELPER_SHA256}  ${TARBALL}" | sha256sum -c -
+          tar -xzf "${TARBALL}" -C "${HELPER_DIR}"
+          rm -f "${TARBALL}"
+          BIN=$(find "${HELPER_DIR}" -type f -name 'ccache-storage-s3*' | head -n 1)
+          if [ -z "${BIN}" ]; then
+            echo "ERROR: ccache-storage-s3 binary not found in tarball" >&2
+            exit 1
+          fi
+          # Land it at a stable path the build step mounts into the container.
+          TARGET="${HELPER_DIR}/ccache-storage-s3.bin"
+          install -m 0755 "${BIN}" "${TARGET}"
+          echo "CCACHE_S3_HELPER_PATH=${TARGET}" >> "$GITHUB_ENV"
+          echo "Fetched ccache-storage-s3 helper to ${TARGET}"
+
+      # NOTE: build-artifact.yaml has a curl-based "Verify S3 connectivity" probe, but we do
+      # NOT replicate it here. That probe relies on `curl --aws-sigv4` sending the
+      # X-Amz-Content-Sha256 header, which Garage requires. The Ubuntu CI image used by
+      # build-artifact.yaml ships curl 8.x (sends the header → probe passes), but THIS job's
+      # manylinux image (quay.io/pypa/manylinux_2_34_x86_64) ships curl 7.76.1, whose
+      # --aws-sigv4 does NOT emit X-Amz-Content-Sha256. Garage therefore rejects the probe PUT
+      # with HTTP 400 "Missing X-Amz-Content-Sha256 field" — a limitation of that old curl, not
+      # of ccache or of connectivity. The actual ccache remote-storage path does not use curl:
+      # ccache spawns the ccache-storage-s3 Go helper, whose AWS Go SDK always sends
+      # X-Amz-Content-Sha256 correctly. So the curl probe would only ever test a tool ccache
+      # never uses. We drop it and let ccache exercise the real (Go SDK) path during the build;
+      # CCACHE_REMOTE_ONLY=true below keeps any remaining helper hiccup non-fatal to the build.
 
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -103,18 +184,61 @@ jobs:
           CIBW_BUILD: "cp${{ steps.format_python_version.outputs.python_version_nodot }}-manylinux_x86_64*"
           CIBW_SKIP: "*-musllinux_*"
           CIBW_BUILD_FRONTEND: build
+          # Mount the ccache-storage-s3 helper (fetched on the host above) into the
+          # container at ccache's baked-in libexecdir so the s3:// remote-storage scheme
+          # resolves. Without this the manylinux image's ccache (which only has bin/ccache,
+          # not libexec/ccache-storage-s3) aborts every compile with
+          # "unknown remote storage scheme: s3". Empty when the helper wasn't fetched
+          # (forks): cibuildwheel ignores an empty CIBW_CONTAINER_ENGINE and CCACHE_REMOTE_ONLY
+          # keeps a missing helper non-fatal so the build still proceeds.
+          CIBW_CONTAINER_ENGINE: "${{ env.CCACHE_S3_HELPER_PATH && format('docker; create_args: --volume {0}:/usr/local/libexec/ccache-storage-s3:ro', env.CCACHE_S3_HELPER_PATH) || '' }}"
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
             CCACHE_REMOTE_STORAGE="${{ env.CCACHE_REMOTE_STORAGE }}"
+            AWS_ACCESS_KEY_ID="${{ env.AWS_ACCESS_KEY_ID }}"
+            AWS_SECRET_ACCESS_KEY="${{ env.AWS_SECRET_ACCESS_KEY }}"
+            AWS_DEFAULT_REGION=garage
+            AWS_REQUEST_CHECKSUM_CALCULATION=when_required
+            AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900
+            CRSH_LOGFILE=/tmp/ccache-storage-s3.log
             CIBW_ENABLE_TRACY="${{ inputs.tracy && 'ON' || 'OFF' }}"
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
             CIBW_ENABLE_LTO="${{ inputs.enable-lto && 'ON' || 'OFF' }}"
+            NO_PROXY=garage.garage.svc.cluster.local
+            no_proxy=garage.garage.svc.cluster.local
+          # cibuildwheel runs the build in a Docker container on the default bridge network.
+          # From that bridge the ccache-storage-s3 helper (AWS Go SDK) reaches garage:3900
+          # DIRECTLY — the same path that makes build-artifact.yaml's container: job work.
+          # Routing garage through the Squid proxy instead returns HTTP 400 on the SigV4 PUT,
+          # so we set NO_PROXY=garage above to bypass the proxy for garage. The helper honors
+          # NO_PROXY (AWS Go SDK). CCACHE_REMOTE_ONLY=true keeps a helper that still can't
+          # reach garage non-fatal, so the compile proceeds regardless.
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
-          CIBW_BEFORE_TEST: ccache -s
+          # CIBW_AFTER_BUILD does not exist in cibuildwheel v2.23.2. Use repair-wheel-command
+          # instead: it runs inside the container after compilation, supports {dest_dir}/{wheel}
+          # substitution, and always fires even when CIBW_TEST_SKIP bypasses before_test.
+          # /project is a container-internal COPY (not bind-mount) — writes there are lost.
+          # /output is created by cibuildwheel AFTER repair returns, so we mkdir -p it first;
+          # cibuildwheel's own mkdir -p /output is idempotent. docker cp /output/. wheelhouse/
+          # then copies everything there — including ccache-wheel-stats.txt — to the host.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: >-
+            mkdir -p /output &&
+            ccache -sv > /output/ccache-wheel-stats.txt 2>&1;
+            cat /output/ccache-wheel-stats.txt;
+            auditwheel repair -w {dest_dir} {wheel}
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_TEST_SKIP: ${{ inputs.build-type == 'ASan' && '*' || '' }}
           CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
+      - name: 📊 Publish ccache summary
+        if: always()
+        run: |
+          if [ -f wheelhouse/ccache-wheel-stats.txt ]; then
+            printf '\n## ccache (wheel build)\n```\n' >> "$GITHUB_STEP_SUMMARY"
+            cat wheelhouse/ccache-wheel-stats.txt >> "$GITHUB_STEP_SUMMARY"
+            printf '```\n' >> "$GITHUB_STEP_SUMMARY"
+          fi
 
       - name: 📦 Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'

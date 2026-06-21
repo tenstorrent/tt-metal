@@ -463,21 +463,37 @@ jobs:
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
       - name: Verify S3 connectivity (write / read-back / delete)
+        # NOTE: this probe is intentionally NON-FATAL. ccache treats the remote
+        # cache as a soft dependency (remote errors degrade to local misses), so a
+        # transient Garage hiccup must not turn into a hard build failure. We warn
+        # and continue rather than `exit 1`. The probe is purely diagnostic.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          BASE="http://garage.garage.svc.cluster.local:3900/${CCACHE_S3_BUCKET}/${CCACHE_S3_PREFIX}/.s3-connectivity-test"
+          # Use a per-job unique key so concurrent jobs (this is a reusable workflow
+          # invoked by many pipelines against the same bucket/prefix) don't clobber
+          # each other's PUT/GET/DELETE windows and cause spurious 404 read-backs.
+          KEY=".s3-connectivity-test-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}-${RANDOM}"
+          BASE="http://garage.garage.svc.cluster.local:3900/${CCACHE_S3_BUCKET}/${CCACHE_S3_PREFIX}/${KEY}"
           PAYLOAD="ccache-s3-connectivity-ok"
           SIGV4="aws:amz:garage:s3"
           CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
-          # PUT
-          echo "${PAYLOAD}" | curl -fsS -X PUT --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
-            "${BASE}" --data-binary @- -o /dev/null
-          # GET and verify
-          RESULT=$(curl -fsS --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}")
-          [ "${RESULT}" = "${PAYLOAD}" ] || { echo "Read-back mismatch: got '${RESULT}'"; exit 1; }
-          # DELETE
-          curl -fsS -X DELETE --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}" -o /dev/null
-          echo "S3 connectivity verified: write/read-back/delete all OK"
+          probe() {
+            # PUT
+            echo "${PAYLOAD}" | curl -fsS -X PUT --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
+              "${BASE}" --data-binary @- -o /dev/null || return 1
+            # GET and verify
+            local result
+            result=$(curl -fsS --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}") || return 1
+            [ "${result}" = "${PAYLOAD}" ] || { echo "Read-back mismatch: got '${result}'"; return 1; }
+            # DELETE (best effort cleanup)
+            curl -fsS -X DELETE --aws-sigv4 "${SIGV4}" --user "${CREDS}" "${BASE}" -o /dev/null || true
+            return 0
+          }
+          if probe; then
+            echo "S3 connectivity verified: write/read-back/delete all OK"
+          else
+            echo "::warning::S3 connectivity probe failed; ccache will degrade remote misses to local. Continuing."
+          fi
 
       - name: Set artifact name
         id: set-artifact-name

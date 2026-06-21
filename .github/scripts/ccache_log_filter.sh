@@ -16,9 +16,23 @@ echo "=== ccache Remote Storage Analysis (S3/crsh) ==="
 echo ""
 
 # --- Remote hit/miss summary from ccache log ---
-REMOTE_HITS=$(grep -c "Remote storage hit" "$INPUT" 2>/dev/null || echo 0)
-REMOTE_MISSES=$(grep -c "Remote storage miss" "$INPUT" 2>/dev/null || echo 0)
-REMOTE_PUTS=$(grep -c "Sending result.*to remote" "$INPUT" 2>/dev/null || echo 0)
+# Note: `grep -c` already prints `0` (and exits 1) when there are no matches, so a
+# `|| echo 0` fallback would append a SECOND `0`, corrupting the value into the
+# two-line string "0\n0" and breaking the summary. Capture grep's own count and
+# only substitute `0` on a genuine error exit (status > 1).
+count_matches() {
+    local out rc
+    out=$(grep -c "$1" "$INPUT" 2>/dev/null)
+    rc=$?
+    if [ "$rc" -gt 1 ]; then
+        echo 0
+    else
+        echo "$out"
+    fi
+}
+REMOTE_HITS=$(count_matches "Remote storage hit")
+REMOTE_MISSES=$(count_matches "Remote storage miss")
+REMOTE_PUTS=$(count_matches "Sending result.*to remote")
 
 echo "Remote cache hits:   ${REMOTE_HITS}"
 echo "Remote cache misses: ${REMOTE_MISSES}"
