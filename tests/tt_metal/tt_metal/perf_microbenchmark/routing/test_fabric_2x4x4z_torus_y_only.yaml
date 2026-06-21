@@ -1,0 +1,18 @@
+Tests:
+  - name: "2DTorusYNeighborExchangeIntra"
+    fabric_setup:
+      topology: Torus
+      torus_config: Y
+
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc]
+      num_links: [1]
+
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 30000
+
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: intra_mesh

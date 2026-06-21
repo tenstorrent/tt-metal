@@ -156,7 +156,15 @@ void kernel_main() {
 #endif
 
 #ifdef DEST_CHIP_ID
+    // [Step 3a-combine] Size the destination table by the actual dest count rather than the mesh
+    // geometry. Default == mesh_rows*mesh_cols; under TT_DEEPSEEK_CROSS_MESH_DISPATCH the host
+    // appends the peer mesh's devices and passes NUM_DEST_DEVICES = 2*mesh_devices so this array
+    // (and the dest loops below) match the DEST_CHIP_ID/DEST_MESH_ID macros.
+#ifdef NUM_DEST_DEVICES
+    constexpr uint32_t total_mesh_devices = NUM_DEST_DEVICES;
+#else
     constexpr uint32_t total_mesh_devices = mesh_rows * mesh_cols;
+#endif
     constexpr uint8_t dest_chip_ids[total_mesh_devices] = DEST_CHIP_ID;
     constexpr uint8_t dest_mesh_ids[total_mesh_devices] = DEST_MESH_ID;
 

@@ -6,6 +6,7 @@
 #include "kernels/dataflow/dispatch_plan.hpp"  // PlanHeader / PlanEntry layout (host sizes the plan CB from these)
 #include <algorithm>
 #include <array>
+#include <cstdlib>  // std::getenv (TT_DEEPSEEK_CROSS_MESH_DISPATCH gate, Step 3a)
 #include <utility>
 #include <limits>
 #include <tt-metalium/core_coord.hpp>
@@ -464,6 +465,29 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
+    // [Step 3a, EXPERIMENTAL — gated by TT_DEEPSEEK_CROSS_MESH_DISPATCH] Unified SP=8 over two
+    // Z-connected 4x4 meshes (single_bh_galaxy_2x4x4_z): append the peer mesh's devices to the
+    // destination table so a token can be routed to an expert on the OTHER mesh, the hop riding
+    // the inter-mesh chord/Z links. The dispatch kernel already routes by (dst_mesh_id,
+    // dst_chip_id) via get_next_hop_router_direction (returns Z for a peer-mesh dest), so no
+    // kernel change is needed. Default OFF => byte-identical to single-mesh behavior.
+    // NOTE: these appended destinations are not yet *targeted* by any expert until the
+    // expert_dispatch_table is reindexed to the 8-device group (increment 3b).
+    if (std::getenv("TT_DEEPSEEK_CROSS_MESH_DISPATCH") != nullptr && !dest_mesh_id.empty()) {
+        const uint32_t local_mesh_id = dest_mesh_id.front();
+        const uint32_t peer_mesh_id = (local_mesh_id == 0) ? 1u : 0u;  // 2-mesh single galaxy
+        const uint32_t num_local_devices = static_cast<uint32_t>(dest_chip_id.size());
+        for (uint32_t c = 0; c < num_local_devices; ++c) {
+            dest_mesh_id.push_back(peer_mesh_id);
+            dest_chip_id.push_back(c);
+        }
+        log_debug(
+            tt::LogOp,
+            "[cross-mesh] local mesh {} appended peer mesh {} devices -> {} total destinations",
+            local_mesh_id,
+            peer_mesh_id,
+            dest_mesh_id.size());
+    }
     log_debug(tt::LogOp, "dest_chip_id: {}", ccl::common::stringify(dest_chip_id));
     log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
@@ -505,7 +529,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         detail::get_page_size(dispatch_table_tensor),
 
         // Operation parameters (7)
-        mesh_view.num_devices(),  // num_devices
+        static_cast<uint32_t>(dest_chip_id.size()),  // num_devices (= dest count; grows to 2x for cross-mesh, Step 3a)
         (uint32_t)hidden_size,
         operation_attributes.experts_per_chip,
         operation_attributes.num_routed_experts,
@@ -632,12 +656,12 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             operation_attributes.max_dispatch_buffer_token_size,   // 21
             s,                                                     // 22: dispatch_core_idx
             num_cores,                                             // 23: num_dispatch_cores
-            mesh_view.num_devices(),                               // 24: num_devices
-            mesh_view.num_rows(),                                  // 25
-            mesh_view.num_cols(),                                  // 26
-            linearized_mesh_coord,                                 // 27
-            static_cast<uint32_t>(topology),                       // 28
-            block_ct_dim_dispatch,                                 // 29: must match the compute kernel
+            static_cast<uint32_t>(dest_chip_id.size()),  // 24: num_devices (= dest count; 2x for cross-mesh, Step 3a)
+            mesh_view.num_rows(),                        // 25
+            mesh_view.num_cols(),                        // 26
+            linearized_mesh_coord,                       // 27
+            static_cast<uint32_t>(topology),             // 28
+            block_ct_dim_dispatch,                       // 29: must match the compute kernel
         };
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(untilize_reader_compile_args);
@@ -1142,6 +1166,29 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
+    // [Step 3a, EXPERIMENTAL — gated by TT_DEEPSEEK_CROSS_MESH_DISPATCH] Unified SP=8 over two
+    // Z-connected 4x4 meshes (single_bh_galaxy_2x4x4_z): append the peer mesh's devices to the
+    // destination table so a token can be routed to an expert on the OTHER mesh, the hop riding
+    // the inter-mesh chord/Z links. The dispatch kernel already routes by (dst_mesh_id,
+    // dst_chip_id) via get_next_hop_router_direction (returns Z for a peer-mesh dest), so no
+    // kernel change is needed. Default OFF => byte-identical to single-mesh behavior.
+    // NOTE: these appended destinations are not yet *targeted* by any expert until the
+    // expert_dispatch_table is reindexed to the 8-device group (increment 3b).
+    if (std::getenv("TT_DEEPSEEK_CROSS_MESH_DISPATCH") != nullptr && !dest_mesh_id.empty()) {
+        const uint32_t local_mesh_id = dest_mesh_id.front();
+        const uint32_t peer_mesh_id = (local_mesh_id == 0) ? 1u : 0u;  // 2-mesh single galaxy
+        const uint32_t num_local_devices = static_cast<uint32_t>(dest_chip_id.size());
+        for (uint32_t c = 0; c < num_local_devices; ++c) {
+            dest_mesh_id.push_back(peer_mesh_id);
+            dest_chip_id.push_back(c);
+        }
+        log_debug(
+            tt::LogOp,
+            "[cross-mesh] local mesh {} appended peer mesh {} devices -> {} total destinations",
+            local_mesh_id,
+            peer_mesh_id,
+            dest_mesh_id.size());
+    }
     log_debug(tt::LogOp, "dest_chip_id: {}", ccl::common::stringify(dest_chip_id));
     log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
@@ -1183,7 +1230,7 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         detail::get_page_size(dispatch_table_tensor),
 
         // Operation parameters (7)
-        mesh_view.num_devices(),  // num_devices
+        static_cast<uint32_t>(dest_chip_id.size()),  // num_devices (= dest count; grows to 2x for cross-mesh, Step 3a)
         (uint32_t)hidden_size,
         operation_attributes.experts_per_chip,
         operation_attributes.num_routed_experts,

@@ -1,0 +1,58 @@
+# --- Meshes ---------------------------------------------------------------
+# Single BH galaxy (32 chips) carved into 2 Z-connected meshes ("2x4x4"), LINE/LINE variant.
+#
+#   - Z dimension = 2 meshes (mesh_id 0..1):
+#       * mesh 0 = galaxy rows 1-4 (top half)
+#       * mesh 1 = galaxy rows 5-8 (bottom half)
+#   - Each mesh is a 4x4 grid (16 chips) with dim_types [LINE, LINE]: BOTH the row
+#     axis (dim 0 / Y) and the col axis (dim 1 / X) are open LINES (no intra-mesh
+#     wrap). This is the [LINE,LINE] sibling of single_bh_galaxy_2x4x4_z (which is
+#     [RING,RING]). Intra-mesh neighbor hops use the non-Z N/S/E/W routing directions.
+#   - Z links: the physical vertical (column) cables that CROSS the rows-4/rows-5 mesh
+#     boundary become inter-mesh Z links (assign_z_direction). On the single-galaxy
+#     wiring there are 3 such crossing cables PER COLUMN, so 3 * 4 cols = 12 Z links:
+#       * row1 <-> row8  (the purple column-ring wrap edge, top-to-bottom)
+#       * row3 <-> row6  (the extra green vertical cable)
+#       * row4 <-> row5  (the adjacent-row edge straddling the mesh split)
+#     These are auto-discovered by the control plane from the physical ethernet
+#     topology once each mesh owns its 16 chips; the descriptor only declares that the
+#     mesh0<->mesh1 boundary is a Z connection. Note: the Z mapping is NOT a uniform
+#     (row r -> row r) stack -- row1->row8, row3->row6, row4->row5 -- which is exactly
+#     why these have to be carried as Z links rather than as an intra-mesh dim-0 wrap.
+#
+# Neighbor-exchange therefore exercises BOTH:
+#   - non-Z links: intra-mesh 4x4 LINE adjacency (N/S/E/W, no wrap)
+#   - Z links:     the 3-per-column inter-mesh crossing cables (assign_z_direction)
+#
+# Launch: 2 MPI ranks on a single host, one per mesh (TT_MESH_ID 0..1), each rank
+# pinned to its 16 chips via TT_VISIBLE_DEVICES (galaxy rows 1-4 -> mesh 0,
+# rows 5-8 -> mesh 1). Single-process bring-up (rank 0 owning both meshes) also works
+# because every mesh has host_topology [1,1].
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] dim_types: [ LINE, LINE ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: STRICT }
+}
+
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+
+  # mesh 0 (rows 1-4) <-> mesh 1 (rows 5-8): the 3-per-column vertical crossing cables.
+  # RELAXED so the control plane takes whatever Z-capable crossing links physically exist
+  # (it will not fail if fewer than `count` are present on a given chip pair).
+  connections {
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
+    channels { count: 2 policy: RELAXED }
+    assign_z_direction: true
+  }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

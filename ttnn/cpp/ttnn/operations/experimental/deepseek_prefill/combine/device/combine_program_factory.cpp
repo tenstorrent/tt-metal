@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <bitset>
+#include <cstdlib>  // std::getenv (TT_DEEPSEEK_CROSS_MESH_DISPATCH gate, Step 3a-combine)
 #include <map>
 #include <utility>
 #include <limits>
@@ -482,6 +483,20 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         dest_mesh_id.push_back(*dest_fabric_node_id.mesh_id);
         dest_chip_id.push_back((uint32_t)dest_fabric_node_id.chip_id);
     }
+    // [Step 3a-combine, EXPERIMENTAL — gated by TT_DEEPSEEK_CROSS_MESH_DISPATCH] Mirror of the
+    // dispatch destination extension: append the peer mesh's devices so the combine return path
+    // can reach experts on the other Z-connected mesh (over the chord/Z links). The writer kernel
+    // routes by (dst_mesh_id, dst_chip_id), and total_mesh_devices is sized from NUM_DEST_DEVICES
+    // (set below) to match this extended table. Default OFF => byte-identical to single-mesh.
+    if (std::getenv("TT_DEEPSEEK_CROSS_MESH_DISPATCH") != nullptr && !dest_mesh_id.empty()) {
+        const uint32_t local_mesh_id = dest_mesh_id.front();
+        const uint32_t peer_mesh_id = (local_mesh_id == 0) ? 1u : 0u;  // 2-mesh single galaxy
+        const uint32_t num_local_devices = static_cast<uint32_t>(dest_chip_id.size());
+        for (uint32_t c = 0; c < num_local_devices; ++c) {
+            dest_mesh_id.push_back(peer_mesh_id);
+            dest_chip_id.push_back(c);
+        }
+    }
 
     // Compile-time args shared by reader and writer
     std::vector<uint32_t> compile_time_args = {
@@ -585,6 +600,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         fabric_defines["DEST_CHIP_ID"] = ccl::common::stringify(dest_chip_id);
         fabric_defines["DEST_MESH_ID"] = ccl::common::stringify(dest_mesh_id);
         fabric_defines["DIRECTIONS"] = ccl::common::stringify(directions);
+        // [Step 3a-combine] Size the kernel's dest table by the actual destination count (=
+        // 2*mesh_devices when the peer mesh was appended above), not mesh_rows*mesh_cols.
+        fabric_defines["NUM_DEST_DEVICES"] = std::to_string(dest_chip_id.size());
     }
     if (operation_attributes.axis.has_value()) {
         fabric_defines["AXIS"] = std::to_string(operation_attributes.axis.value());
