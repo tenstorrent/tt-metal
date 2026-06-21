@@ -195,6 +195,19 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
 
+        if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
+        {
+            // UInt16 case needs to use format switching for 32bit dest
+            // without the debug bit 11 hack to write into high bits
+            // avoiding BroadcastType::NONE mode as that path is used by SFPU
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_val_RMW>(to_underlying(DataFormat::Tf32));
+            }
+        }
+
         if constexpr (type == DataCopyType::A2D)
         {
             ckernel_template::run();
@@ -212,6 +225,17 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             else
             {
                 ckernel_template::run();
+            }
+        }
+
+        if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
+        {
+            // Undo format switching option: clear the override and zero-flag-disable bits set above so the
+            // implied SrcA format and default zero-flag behavior are restored (matches the Blackhole path).
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             }
         }
 
@@ -343,9 +367,17 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
+        else if (is_fp32_dest_acc_en && (dst_format == to_underlying(DataFormat::UInt16)))
+        {
+            // Typecasting uint16 to 32bit data, need data to be written to lower 16 bits without modification
+            // to be consumed by SFPU easily.
+            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
+            tmp.program();
+        }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(0, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }

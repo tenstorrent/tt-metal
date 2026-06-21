@@ -77,13 +77,13 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
  * @brief Configure the math (FPU) thread's ALU control registers for the given source data formats.
  *
  * Programs the source A/B ALU formats, enables INT8 math when either source is Int8/Int32, and sets FP32 dest
- * accumulation mode. Applies HW-bug workarounds (disables debug feature bit 11) for INT8 math and for the
- * UInt16-with-FP32-dest combination, otherwise re-enables it.
+ * accumulation mode. Always clears debug feature bit 11 (32-bit dest mode workaround) to establish a known-good
+ * baseline; bit 11 is never set by any math/SFPU path (tt-llk#1568).
  *
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: Data format of source B (DataFormat enum underlying value).
- * @note May disable debug feature bit 11 via @ref _llk_math_dbg_feature_disable_ for INT8/UInt16 workarounds (budabackend#1948).
+ * @note Clears debug feature bit 11 via @ref _llk_math_dbg_feature_enable_; it is never set here.
  * @note srcb_data_format programs ALU_FORMAT_SPEC_REG1_SrcB, which the SFPU also reads to interpret data it loads from DEST.
  *       For SFPU work, pass a srcb_data_format whose exponent family (BF16 vs FP16) matches the data in DEST (tt-llk #951).
  */
@@ -103,21 +103,6 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-
-    // Workaround for HW bugs:
-    // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
-    // budabackend#1948: fp32 dest and movd2a/b with UInt16 srcA/B
-    bool uint16_with_fp32_dest =
-        is_fp32_dest_acc_en && ((srca_data_format == to_underlying(DataFormat::UInt16)) || (srcb_data_format == to_underlying(DataFormat::UInt16)));
-
-    if (int8_math_enabled || uint16_with_fp32_dest)
-    {
-        _llk_math_dbg_feature_disable_();
-    }
-    else
-    {
-        _llk_math_dbg_feature_enable_();
-    }
 
     // Establish the operand-driven baseline for the Src zero-substitution flag.
     _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
