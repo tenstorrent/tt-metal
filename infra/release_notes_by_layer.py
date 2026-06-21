@@ -14,6 +14,7 @@ import urllib.request
 
 # (header, path prefixes) in priority order; first matching prefix wins per file.
 LAYERS = [
+    ("LLK (low-level kernels)", ["tt_metal/tt-llk/", "tt_metal/hw/ckernels/"]),
     ("Metalium (tt-metal core)", ["tt_metal/", "tests/tt_metal/"]),
     ("TT-NN", ["ttnn/", "tests/ttnn/", "tests/tt_eager/"]),
     ("tt-train", ["tt-train/"]),
