@@ -74,6 +74,19 @@ NamedShm NamedShm::create(const std::string& name, size_t size) {
     return NamedShm(name, ptr, size);
 }
 
+NamedShm NamedShm::create_anonymous(size_t size) {
+    TT_FATAL(size > 0, "Anonymous shared memory size must be > 0");
+    // MAP_ANONYMOUS|MAP_SHARED produces pages that are NOT backed by tmpfs.
+    // Unlike shm_open()+mmap(MAP_SHARED), these pages can be DMA-pinned with
+    // TENSTORRENT_PIN_PAGES_CONTIGUOUS on systems without IOMMU (e.g. Blackhole).
+    void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_SHARED, -1, 0);
+    if (ptr == MAP_FAILED) {
+        TT_THROW("mmap(MAP_ANONYMOUS|MAP_SHARED) failed for size {}: {}", size, std::strerror(errno));
+    }
+    // Kernel zero-initializes MAP_ANONYMOUS pages; no explicit memset needed.
+    return NamedShm("", ptr, size);
+}
+
 NamedShm NamedShm::open(const std::string& name, size_t size) {
     TT_FATAL(!name.empty() && name[0] == '/', "POSIX shm name must start with '/': {}", name);
     TT_FATAL(size > 0, "Shared memory size must be > 0");
