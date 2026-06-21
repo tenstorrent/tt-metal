@@ -54,7 +54,6 @@ using stream_service_common::claim_service_cores;
 using stream_service_common::core_range_size;
 using stream_service_common::derive_chunk_plan;
 using stream_service_common::make_worker_sync_args;
-using stream_service_common::make_zero_host_tensor;
 using stream_service_common::WorkerSyncArgs;
 
 // Allocate one zero-initialised uint32 L1 word on a service core, recording the
@@ -231,7 +230,10 @@ struct MapperOutput {
 MapperOutput run_mapper(D2DStreamConfig& cfg) {
     TT_FATAL(cfg.mapper != nullptr, "D2DStreamService: cfg.mapper must not be null");
     auto mapper = std::move(cfg.mapper);
-    const auto distributed_dummy = (*mapper)(make_zero_host_tensor(cfg.global_spec));
+    // Qualify explicitly: an unqualified call would, via ADL on the
+    // tt::tt_metal::TensorSpec argument, also find tt::tt_metal::make_zero_host_tensor
+    // from socket_service_common.hpp (same Unity translation unit) and be ambiguous.
+    const auto distributed_dummy = (*mapper)(stream_service_common::make_zero_host_tensor(cfg.global_spec));
     return MapperOutput{
         .per_shard_spec = distributed_dummy.tensor_spec(),
         .topology = distributed_dummy.tensor_topology(),

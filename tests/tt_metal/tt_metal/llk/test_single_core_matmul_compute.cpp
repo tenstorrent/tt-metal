@@ -12,16 +12,17 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <unistd.h>
 #include <array>
-#include <functional>
 #include <map>
 #include <memory>
 #include <ostream>
+#include <random>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/mxfp4.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
@@ -73,6 +74,7 @@ struct BlockedMatmulConfig {
     tt::DataFormat in1_fmt = tt::DataFormat::Float16_b;
     tt::DataFormat out_fmt = tt::DataFormat::Float16_b;
     bool fp32_dest_acc_en = false;
+    bool enable_2x_src_format = false;
 };
 
 void create_CBs_for_fused_matmul(
@@ -253,15 +255,30 @@ OperandStimulus make_operand_stimulus(tt::DataFormat fmt, uint32_t tile_count, u
         // Generate random floats in face-major tile order (no spatial reshape),
         // pack to Bfp8_b L1 layout, then unpack to get the float values
         // post-quantization for the golden reference.
-        auto rand_float = std::bind(std::uniform_real_distribution<float>(-rng, +rng), std::mt19937(seed));
+        std::mt19937 gen(seed);
+        std::uniform_real_distribution<float> dist(-rng, +rng);
         std::vector<float> raw(num_elements);
         for (float& v : raw) {
-            v = rand_float();
+            v = dist(gen);
         }
         out.packed =
             pack_as_bfp8_tiles<float>(ttsl::make_const_span(raw), /*row_major_input=*/false, /*is_exp_a=*/false);
         out.floats = unpack_bfp8_tiles_into_float_vec(
             ttsl::make_const_span(out.packed), /*row_major_output=*/false, /*is_exp_a=*/false);
+    } else if (fmt == tt::DataFormat::MxFp4) {
+        // MXFP4 (S1E2M1, OCP microscaling) input. Same staging as Bfp8_b: generate random
+        // floats in face-major tile order, pack to the MXFP4 L1 layout, then unpack to recover
+        // the post-quantization float values used as the golden reference. NOTE: this L1 layout
+        // is identical for plain MxFp4 and the register-only MxFp4_2x variants -- the 2x packing
+        // happens in the unpacker (L1->SrcReg), not here.
+        std::mt19937 gen(seed);
+        std::uniform_real_distribution<float> dist(-rng, +rng);
+        std::vector<float> raw(num_elements);
+        for (float& v : raw) {
+            v = dist(gen);
+        }
+        out.packed = pack_as_mxfp4_tiles<float>(ttsl::make_const_span(raw), /*row_major_input=*/false);
+        out.floats = unpack_mxfp4_tiles_into_float_vec(ttsl::make_const_span(out.packed), /*row_major_output=*/false);
     } else {
         TT_FATAL(false, "make_operand_stimulus: unsupported fmt {}", static_cast<int>(fmt));
     }
@@ -813,7 +830,10 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
             core,
             tt_metal::experimental::quasar::QuasarComputeConfig{
-                .num_threads_per_cluster = 1, .compile_args = compute_compile_args, .defines = compute_defines});
+                .num_threads_per_cluster = 1,
+                .enable_2x_src_format = cfg.enable_2x_src_format,
+                .compile_args = compute_compile_args,
+                .defines = compute_defines});
 
         tt_metal::experimental::dfb::BindDataflowBufferToProducerConsumerKernels(
             program_, in0_id, reader_kernel, compute_kernel);
@@ -995,6 +1015,26 @@ TEST_F(LLKMeshDeviceFixture, TensixTestSingleCoreMultiBlockL1AccComputeMatmul) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(id), config));
     }
+}
+
+// Quasar-only test for matmul variant that enables the 2x source format optimization for MxFp4_2x format,
+// This optimization allows src register datums to store two elements in one.
+// Since MxFp4_2x only supports GAPOOL and MVMUL/MVMULDI instructions, we cannot test it with multiple blocks
+// since multi-block matmul kernel uses datacopy from SRC to DST which is not supported by MxFp4_2x format.
+// We can still verify the correctness of the optimization with single block matmul.
+// L1 acc doesn't work in this case since it also relies on datacopy from SRC to DST for the accumulation.
+TEST_F(LLKQuasarMeshDeviceSingleCardFixture, TensixTestSingleCoreSingleBlockComputeMatmulMxFp4X2) {
+    unit_tests::compute::matmul::BlockedMatmulConfig config{
+        .M = 2,
+        .K = 2,
+        .N = 2,
+        .num_blocks = 1,
+        .packer_l1_acc = false,
+        .in0_fmt = tt::DataFormat::MxFp4,
+        .in1_fmt = tt::DataFormat::MxFp4,
+        .out_fmt = tt::DataFormat::Float16_b,
+        .enable_2x_src_format = true};
+    ASSERT_TRUE(unit_tests::compute::matmul::blocked_matmul(this->devices_.at(0), config));
 }
 
 // FP8 variants of the multi-block matmul. Blackhole-gated because Fp8_e4m3 only exists on BH

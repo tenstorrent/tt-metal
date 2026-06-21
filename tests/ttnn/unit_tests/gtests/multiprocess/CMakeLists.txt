@@ -51,3 +51,27 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/ttnn/multiprocess
 )
+
+# Cross-process D2HStreamService test: owns its main() (MPI world setup), so it is a
+# standalone target rather than using setup_multiprocess_unit_test. Launched with `mpirun -np 2`.
+add_executable(cross_process_d2h_stream_service_test)
+target_sources(cross_process_d2h_stream_service_test PRIVATE test_cross_process_d2h_stream_service.cpp)
+target_link_libraries(
+    cross_process_d2h_stream_service_test
+    PRIVATE
+        TTNN::CPP
+        tt_metal
+        test_common_libs
+)
+target_include_directories(
+    cross_process_d2h_stream_service_test
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+)
+set_target_properties(
+    cross_process_d2h_stream_service_test
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/ttnn/multiprocess
+)

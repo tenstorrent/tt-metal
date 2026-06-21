@@ -18,6 +18,7 @@ from helpers.tilize_untilize import tilize_block, untilize_block
 
 class SubBcastColCustomUnpacker(Unpacker):
     loop: FusedLoop = LoopBlockRow()
+    per_block_init = True
 
     def get_headers(self) -> List[str]:
         return [
@@ -39,8 +40,17 @@ class SubBcastColCustomUnpacker(Unpacker):
         num_faces = compute_unit.src_a.tile_shape.total_num_faces()
         face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
 
+        src_b_tile_dims = (
+            compute_unit.src_b.tile_shape.total_row_dim(),
+            compute_unit.src_b.tile_shape.total_col_dim(),
+        )
+        src_b_num_faces = compute_unit.src_b.tile_shape.total_num_faces()
         tilized_b = tilize_block(
-            tensor_b, compute_unit.src_b.dimensions, compute_unit.src_b.data_format
+            tensor_b,
+            compute_unit.src_b.dimensions,
+            compute_unit.src_b.data_format,
+            num_faces=src_b_num_faces,
+            tile_dimensions=src_b_tile_dims,
         )
         broadcast_golden = get_golden_generator(BroadcastGolden)
 
@@ -63,6 +73,8 @@ class SubBcastColCustomUnpacker(Unpacker):
             tilized_b,
             compute_unit.src_b.data_format,
             compute_unit.src_b.dimensions,
+            tile_dimensions=src_b_tile_dims,
+            num_faces=src_b_num_faces,
         )
 
         return tensor_a.flatten(), tensor_b.flatten()
