@@ -343,32 +343,30 @@ class CCLManager:
         )
 
     def reset_global_semaphores(self):
-        """Reset all global semaphores to 0 AND the ping-pong indices that pair with them.
+        """Reinitialize all CCL semaphores at fresh L1 addresses between vision requests.
 
-        The ping-pong indices (rs/ag/np/sr/barrier) advance on every collective and select
-        which semaphore half the NEXT collective uses. Resetting the semaphore VALUES without
-        resetting these indices desyncs them — the next collective then waits on the wrong
-        (already-consumed) semaphore half and deadlocks. This is the cross-request
-        vision-encoder hang (TT_THROW fetch-queue timeout) seen when a video request follows
-        image/multi-image requests, so the indices MUST be reset together with the semaphores.
-        Barrier semaphore values must also be reset (index reset alone is not sufficient)."""
-        for axis in [0, 1]:
-            for sem in self.np_ping_pong_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.sr_ping_pong_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.rs_ping_pong_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.ag_ping_pong_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-            for sem in self.barrier_semaphores[axis]:
-                ttnn.reset_global_semaphore_value(sem, 0)
-        # Reset ping-pong indices so they pair with the just-reset semaphores.
+        Resetting semaphore VALUES at the same L1 address is not sufficient — the ETH
+        fabric's internal synchronization state (ring-buffer counters, fetch-queue entries)
+        persists and causes TT_THROW TIMEOUT on the next vision encode regardless of value
+        resets. The only reliable fix is to allocate NEW semaphores at NEW L1 addresses so
+        that all_gather_async cannot match any residual state from the previous request.
+
+        Old semaphore objects are released (Python GC) after self.*_semaphores is replaced;
+        their L1 space is reclaimed when TTNN's L1 allocator next defragments. The buffer
+        cache is also cleared so newly-created buffers pair correctly with the new semaphores.
+        """
+        # Allocate fresh semaphores at new L1 addresses, replacing all existing ones.
+        self._init_semaphores()
+        # Reset all ping-pong indices.
         self.rs_ping_pong_idx = [0, 0]
         self.ag_ping_pong_idx = [0, 0]
         self.np_ping_pong_idx = [0, 0]
         self.sr_ping_pong_idx = [0, 0]
         self.barrier_idx = [0, 0]
+        # Clear buffer caches so the next encode allocates DRAM buffers that pair
+        # with the new semaphore addresses (old buffers may reference stale ETH routing).
+        self._ping_pong_buffer_cache = {}
+        self._ping_pong_buffer_indices = {}
 
     def all_gather_persistent_buffer(
         self, tensor: ttnn.Tensor, /, *, dim: int, mesh_axis: int | None, use_hyperparams: bool = False
