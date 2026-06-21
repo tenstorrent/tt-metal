@@ -125,7 +125,7 @@ def _preserve_fp32_precision(formats: InputOutputFormat) -> bool:
     bf_family = (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Bfp4_b)
     return (
         in_fmt == DataFormat.Float32
-        or (in_fmt in bf_family)
+        or (out_fmt == DataFormat.UInt8 and in_fmt in bf_family)
         or (in_fmt == DataFormat.UInt16 and out_fmt == DataFormat.UInt8)
         or (in_fmt == DataFormat.UInt8)
     )
