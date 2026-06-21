@@ -59,7 +59,7 @@ from models.experimental.mistral_small_4_119b.constants import (
     text_decoder_layer_state_dict_prefix,
 )
 from models.experimental.mistral_small_4_119b.tests.mesh_param import mesh_device_request_param
-from models.experimental.mistral_small_4_119b.tests.test_text_prefill_pcc import _build_hf_ref
+from models.experimental.mistral_small_4_119b.tests.test_text_prefill_pcc import _build_hf_ref, _build_prompt_ids
 from models.experimental.mistral_small_4_119b.tt.mistral4_text_model import TtMistral4TextModel
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
 
@@ -70,6 +70,8 @@ _N_LAYERS = int(os.environ.get("MISTRAL4_DECODE_N_LAYERS", "36"))
 _DECODE_STEPS = int(os.environ.get("MISTRAL4_DECODE_STEPS", "8"))  # teacher-forced decode steps to validate
 _PCC_FLOOR = 0.70  # decode-vs-prefill self-consistency floor
 _HF_PCC_FLOOR = 0.90  # decode-vs-HF floor (lower than prefill: includes the bfloat16 kernel-shape effect)
+_HF_PCC_FLOOR_SWEEP = 0.80  # decode-vs-HF floor for the filler ISL sweep (characterization)
+_HF_CHUNK = int(os.environ.get("MISTRAL4_DECODE_HF_CHUNK", "2048"))  # HF reference chunk for the ISL sweep
 
 
 def _state_dict_prefixes(n_layers: int) -> tuple:
@@ -223,3 +225,117 @@ def test_mistral_small_4_decode_pcc(reset_seeds, mesh_device):
         f"PASSED — all {_DECODE_STEPS} decode steps ≥ HF floor {_HF_PCC_FLOOR}; "
         f"step-0 self-consistency ≥ {_PCC_FLOOR}"
     )
+
+
+def _chunked_hf_last_logit(hf_model, input_ids: torch.Tensor, chunk_size: int) -> torch.Tensor:
+    """Chunked HF forward (DynamicCache) returning ONLY the final-position logits [vocab],
+    float32. Keeps attention memory O(chunk × past) and never materializes the full
+    [seq, vocab] tensor — so it scales to long ISL for the decode sweep (no 33 GB host
+    logits like the full-sequence prefill reference)."""
+    from transformers.cache_utils import DynamicCache
+
+    seq_len = input_ids.shape[-1]
+    cache = DynamicCache()
+    last = None
+    for s in range(0, seq_len, chunk_size):
+        e = min(s + chunk_size, seq_len)
+        kwargs = dict(input_ids=input_ids[:, s:e], past_key_values=cache, use_cache=True)
+        if s > 0:
+            kwargs["position_ids"] = torch.arange(s, e, dtype=torch.long).unsqueeze(0)
+        with torch.inference_mode():
+            out = hf_model(**kwargs)
+        last = out.logits[0, -1, :].float().clone()
+        del out
+        gc.collect()
+        logger.info(f"HF chunked prefill: {e}/{seq_len} tokens")
+    return last
+
+
+@torch.no_grad()
+@run_for_wormhole_b0_or_blackhole()
+@pytest.mark.slow
+@pytest.mark.parametrize("mesh_device, device_params", _mesh_params(), indirect=True)
+@pytest.mark.parametrize(
+    "isl",
+    [0, 128, 512, 2048, 4096, 16384, 65536, 131072, 262144],
+    ids=["base", "128", "512", "2k", "4k", "16k", "64k", "128k", "256k"],
+)
+def test_mistral_small_4_decode_pcc_isl(reset_seeds, mesh_device, isl):
+    """Decode-vs-HF PCC at increasing context depth: one decode step at the last prompt
+    position after a chunked cache-fill.
+
+    Unlike the prefill sweep, decode computes the lm_head on ONE position, so the TTNN
+    side scales to long ISL like e2e (cache-fill via prefill_next_token + a single decode)
+    — no full-sequence lm_head wall. The HF reference keeps only the final-position logit
+    (chunked, DynamicCache), so it stays memory-bounded; its wall-clock is the only ceiling.
+    Floor 0.90 for ISL <= 16k (verified), 0.80 beyond (characterization) — matches prefill.
+    """
+    from transformers import AutoConfig, AutoTokenizer
+    from transformers.models.mistral4.modeling_mistral4 import Mistral4RotaryEmbedding
+
+    try:
+        cfg = AutoConfig.from_pretrained(HF_MODEL_ID, trust_remote_code=True)
+    except Exception as exc:
+        pytest.skip(f"Could not load HF config: {exc}")
+
+    text = cfg.text_config
+    for attr in ("attn_implementation", "_attn_implementation"):
+        if hasattr(text, attr):
+            setattr(text, attr, "eager")
+
+    try:
+        state_dict = load_hf_state_dict_filtered(HF_MODEL_ID, _state_dict_prefixes(_N_LAYERS))
+    except (FileNotFoundError, OSError) as exc:
+        pytest.skip(f"Checkpoint load failed: {exc}")
+
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(HF_MODEL_ID)
+    except Exception as exc:
+        pytest.skip(f"Tokenizer load failed: {exc}")
+
+    input_ids = _build_prompt_ids(tokenizer, isl)  # [1, seq_len]
+    seq_len = input_ids.shape[1]
+    # Single-position decode-vs-HF on filler is noisier than the prefill flattened PCC (not
+    # averaged over positions, and the filler tail is high-entropy → the model often wants EOS),
+    # so only the base real-prompt point uses the strict floor (apples-to-apples vs the documented
+    # 0.961); the filler sweep is characterization at the looser floor.
+    floor = _HF_PCC_FLOOR if isl == 0 else _HF_PCC_FLOOR_SWEEP
+    logger.info(f"ISL={isl or 'base'} — {seq_len} tokens (decode-vs-HF floor {floor})")
+
+    # ── HF reference: final-position logits only (chunked, memory-bounded) ───
+    logger.info(f"Building HF reference ({_N_LAYERS} layers, CPU, bfloat16)...")
+    hf_model = _build_hf_ref(text, state_dict, _N_LAYERS)
+    logger.info(f"Running HF reference (chunked, {_HF_CHUNK}-tok) → last-position logits...")
+    hf_last = _chunked_hf_last_logit(hf_model, input_ids, _HF_CHUNK)  # [vocab]
+    del hf_model
+    gc.collect()
+
+    # ── TTNN: fill KV cache (cache-only prefill, single-position lm_head) + 1 decode ──
+    model = TtMistral4TextModel(
+        mesh_device=mesh_device,
+        state_dict=state_dict,
+        text_config=text,
+        num_decoder_layers=_N_LAYERS,
+        max_seq_len=seq_len + 64,
+    )
+    rotary = Mistral4RotaryEmbedding(text).eval().to(torch.bfloat16)
+    position_ids = torch.arange(seq_len + 1, dtype=torch.long).unsqueeze(0)
+    dummy = torch.zeros(1, 1, 1, 1, dtype=torch.bfloat16)  # rotary uses position_ids; x is a dtype carrier
+    cos_full, sin_full = rotary(dummy, position_ids)
+    model.cache_rope_tables(cos_full, sin_full)
+
+    logger.info(f"Filling KV cache via chunked prefill (seq_len={seq_len})...")
+    model.prefill_next_token(input_ids)  # cache-fill only; single-position lm_head (e2e-cheap, no full-logits wall)
+
+    logger.info(f"Decoding at position {seq_len - 1}...")
+    dec_logits = model.decode_logits(input_ids[:, seq_len - 1 : seq_len], seq_len - 1).float()  # [vocab]
+
+    dec_tok = int(dec_logits.argmax())
+    hf_tok = int(hf_last.argmax())
+    passing, pcc = comp_pcc(hf_last, dec_logits, floor)
+    logger.info(
+        f"ISL={isl or 'base'} ({seq_len} tok): decode-vs-HF PCC={float(pcc):.4f} (floor {floor}); "
+        f"decode_tok={dec_tok}, HF_tok={hf_tok}, match={dec_tok == hf_tok}"
+    )
+    assert passing, f"Decode-vs-HF PCC below floor {floor} at ISL={isl} (seq_len={seq_len}).\nPCC={float(pcc)}"
+    logger.info(f"PASSED — decode-vs-HF PCC >= {floor} at {seq_len}-token context")

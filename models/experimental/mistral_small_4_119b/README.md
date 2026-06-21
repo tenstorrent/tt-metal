@@ -129,6 +129,19 @@ MISTRAL4_MM_PCC=1      pytest models/experimental/mistral_small_4_119b/tests/tes
 | Text decode (self-consistency) | 36 | **0.992** | decode-vs-prefill logits at pos 4 — validates the decode path reads/uses the KV cache that prefill wrote |
 | Unified multimodal (vs HF) | 36 + 24 | **~0.855** | full vision → projector → language path (consistent with aggressive `bfloat4_b`/`bfloat8_b` weight quantization); PCC ≈ 0.839 / 0.842 at 4K / 16K context (**16K is the highest verified** — see below) |
 
+**Text prefill PCC — ISL sweep (prefill logits vs HF, full 36 layers).** `test_text_prefill_pcc.py` sweeps input sequence length — `base` (the 5-token prompt) plus coherent-filler prompts at 128 / 512 / 2K / 4K / 16K (select with `-k`, e.g. `-k 2k`). Both the TTNN prefill and the HF reference are chunked, so it scales past a single short prompt:
+
+| ISL (tokens) | Prefill flattened PCC | Greedy token match |
+|-------------:|----------------------:|-------------------:|
+| 5 (base) | 0.933 | 4/5 |
+| 127 | 0.951 | 115/127 |
+| 505 | 0.927 | 413/505 |
+| 2,017 | 0.914 | 1,499/2,017 |
+| 4,033 | 0.913 | 2,676/4,033 |
+| 16,045 | 0.905 | 7,885/16,045 |
+
+Flattened PCC stays ≥ 0.90 through 16K (asymptotes ~0.91); greedy match falls (91% → 49%) as longer filler adds high-entropy positions — the flattened PCC is the gate. Decode-vs-HF spot-checks: **0.961** (base) and **0.887** at 16K context (single-position, high-entropy tail). 16K is the verified ceiling; beyond it the HF CPU reference wall-clock is the limiter, not the device.
+
 The decode test runs **two** checks: decode-vs-HF (ground truth, 0.961) and decode-vs-prefill self-consistency (0.992). The self-consistency check isolates the decode path itself — in bfloat16, TTNN matmul kernels are shape-specific, so a 1-token decode kernel produces slightly different K/V at a position than the seq-len prefill kernel; the self-consistency PCC is free of that effect, while the HF PCC (floor 0.90, measured 0.961) folds it in on top of quantization loss.
 
 `test_multimodal_pcc_unified.py` loads vision (bf8) + text (bf16) co-resident on device, runs `encode_image` → `prefill_multimodal_full_logits`, and compares per-position + flattened logits against a chunked HF Torch reference (`MISTRAL4_MM_PREFILL_CHUNK`, default 2048; DynamicCache keeps attention memory at O(chunk × past)). It is parametrized over `(num_text_layers, num_vision_layers, max_text_tokens)` — ids `L1V1`, `L36V24`, `L36V24_4096`, `L36V24_16384`, `L36V24_65536`, `L36V24_131072`, `L36V24_262144` — selected with `-k` (e.g. `-k L36V24_16384`); `max_text_tokens` pads the prompt with coherent English filler up to that count (image tokens on top). The pass/fail gate is flattened-logits PCC ≥ 0.80; greedy token match is logged for diagnostics only. **16K context is the highest that completes verification** — `L36V24_65536` and larger are kept (marked `@pytest.mark.slow`) as a safeguard but in practice do not finish on a CPU host: a 64K run was killed after **> 1 h without completing**, bottlenecked on the chunked HF reference forward. On-device prefill/decode scale further (see the perf table) but are not PCC-verified past 16K.

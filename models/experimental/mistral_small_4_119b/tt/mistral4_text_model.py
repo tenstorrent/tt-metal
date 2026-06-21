@@ -523,17 +523,16 @@ class TtMistral4TextModel:
             logits: [1, seq_len, vocab_size] bfloat16 CPU tensor
         """
         seq_len = input_ids.shape[1]
-        cos_tt, sin_tt = self._rope_slice(0, seq_len)
 
         x = self._embed(input_ids)
         x = ttnn.reshape(x, [1, 1, seq_len, HIDDEN_SIZE])
         x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
 
-        for layer, kv_cache in zip(self.decoder_layers, self.kv_caches):
-            x = layer.forward_with_cache(x, cos_tt, sin_tt, kv_cache)
-
-        ttnn.deallocate(cos_tt)
-        ttnn.deallocate(sin_tt)
+        # Run the layers in bounded chunks so long prompts don't overflow L1 in the
+        # sharded rms-norm (the full-sequence single-pass path clashes at ~2K tokens).
+        # Numerically identical to single-pass for seq_len <= the prefill chunk; this
+        # is the same chunked path multimodal/e2e use to reach long contexts.
+        x = self._run_prefill_chunked(x, last_only=False)
 
         return self._to_logits(x)
 
