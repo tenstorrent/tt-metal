@@ -1,0 +1,37 @@
+export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
+export PI0_TP=8
+#export TT_VISIBLE_DEVICES=8,9,10,11
+#export PI0_TP=4
+#export TT_VISIBLE_DEVICES=8
+#unset PI0_TP
+
+export PI05_CHECKPOINT_DIR=../../../pi05_cache/pi05_libero_upstream
+export T=models/experimental/pi0_5/tests/pcc/test_pcc_tt_bh_glx_stages.py
+
+export PI0_TP4_ATTN_HEADPAR=1
+export PI0_VLM_MLP_BF8_OUT=1
+#export PI0_VLM_CHUNK_SIZE=1024
+export PI0_VLM_CHUNK_SIZE=768 # 1024 # 768
+export PI0_ROPE_FUSE_QK=1
+
+# MLP / CCL profile (pick one block; Tracy: fused ~4% less total device time)
+#
+# A) baseline — block-sharded gate/up/down on LN grid + RS+AG (~81 ms device)
+export PI0_MLP_BS=1
+export PI0_MLP_FUSED_RS=0
+#
+# B) fused down+RS — interleaved matmuls + matmul_reduce_scatter_async (~78 ms device)
+#export PI0_MLP_BS=0
+#export PI0_MLP_FUSED_RS=1
+
+# Experimental (slower with PI0_MLP_BS=1; keep off):
+#export PI0_MLP_STRIDED_RS=1
+#export PI0_CCL_MINIMAL_RS=1
+
+alias ptt='python -m tracy -p -v -r --op-support-count 8000 -m '
+alias ttp='tt-perf-report'
+
+source python_env/bin/activate
+ptt pytest -sq $T::test_prefill_tp4_pcc
+#ptt pytest -sq $T::test_prefill_tp4_pcc
+#ptt pytest -sq $T::test_prefill_tp1_pcc
