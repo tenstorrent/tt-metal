@@ -46,6 +46,12 @@
               (pkgs.writeShellScriptBin "clang++-20" ''
                 exec clang++ "$@"
               '')
+              (pkgs.writeShellScriptBin "clang-20-libcxx" ''
+                exec ${llvm.libcxxClang}/bin/clang "$@"
+              '')
+              (pkgs.writeShellScriptBin "clang++-20-libcxx" ''
+                exec ${llvm.libcxxClang}/bin/clang++ "$@"
+              '')
               (pkgs.writeShellScriptBin "ld.lld-20" ''
                 exec ld.lld "$@"
               '')
@@ -79,6 +85,7 @@
             llvm.clang-tools
             llvm.lld
             llvm.llvm
+            llvm.libcxx
             llvm20Compat
             gcc
             pythonEnv
@@ -93,6 +100,7 @@
             export LD=ld.lld
             export CMAKE_GENERATOR=Ninja
             export TT_METAL_DEV_SHELL=1
+            export SFPI_ROOT="${sfpi}/sfpi"
             export MPI_HOME="${pkgs.openmpi}"
             export MPI_ROOT="${pkgs.openmpi}"
             export MPI_C_COMPILER="${pkgs.openmpi}/bin/mpicc"
@@ -119,24 +127,11 @@
               ]
             }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-            repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-            sfpi_link="$repo_root/runtime/sfpi"
-            sfpi_target="${sfpi}/sfpi"
-
-            mkdir -p "$repo_root/runtime"
-            if [ -L "$sfpi_link" ]; then
-              ln -sfn "$sfpi_target" "$sfpi_link"
-            elif [ ! -e "$sfpi_link" ]; then
-              ln -s "$sfpi_target" "$sfpi_link"
-            else
-              echo "WARNING: $sfpi_link exists and is not a symlink; leaving it unchanged" >&2
-            fi
-
-            export PATH="$sfpi_target/compiler/bin:$PATH"
+            export PATH="$SFPI_ROOT/compiler/bin:$PATH"
 
             echo "TT-Metal dev shell active"
             echo "Compiler: $(command -v clang++-20)"
-            echo "SFPI:     $sfpi_target"
+            echo "SFPI:     $SFPI_ROOT"
             echo "MPI C:    $(command -v mpicc)"
             echo "Python:   $(command -v python)"
           '';
