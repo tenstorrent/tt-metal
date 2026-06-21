@@ -111,6 +111,11 @@ def _mlp_fused_rs_enabled() -> bool:
     return os.environ.get("PI0_MLP_FUSED_RS", "1").lower() not in ("0", "false", "no", "off")
 
 
+def _mlp_bs_enabled() -> bool:
+    """PI0_MLP_BS=0: s2i after post-attn LN → interleaved gate/up/down matmuls."""
+    return os.environ.get("PI0_MLP_BS", "1").lower() not in ("0", "false", "no", "off")
+
+
 def _is_2d_mcast_pcfg(pcfg) -> bool:
     return pcfg is not None and isinstance(pcfg, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig)
 
@@ -741,14 +746,14 @@ class _GemmaBlockTP4:
         normed = rms_norm_ttnn(
             hidden_states, self.post_attention_layernorm_weight, self.config.rms_norm_eps, sh_pc, sh_mc
         )
-        # Keep block-sharded for gate/up matmuls (same grid as sharded LN); down_proj converts to interleaved.
-        # if sh_pc is not None:
-        #     normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
+        use_mlp_bs = sh_pc is not None and _mlp_bs_enabled()
+        if sh_pc is not None and not use_mlp_bs:
+            normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         mlp_out = self.mlp.forward(
             normed,
-            bs_norm_factory=self._norm_memcfg_factory,
-            bs_grid=self._norm_bs_grid,
+            bs_norm_factory=self._norm_memcfg_factory if use_mlp_bs else None,
+            bs_grid=self._norm_bs_grid if use_mlp_bs else None,
         )
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_out, **_add_kw)
