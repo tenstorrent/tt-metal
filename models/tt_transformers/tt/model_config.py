@@ -4207,9 +4207,16 @@ class HfDecoderWrapper:
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
+        # transformers 5.x consolidated Gemma3 RoPE into a module that selects `{layer_type}_inv_freq`
+        # (layer_type=None -> AttributeError 'None_inv_freq'). Pass the matching layer_type when the
+        # rotary forward accepts it (global rotary -> full_attention, local -> sliding_attention);
+        # pre-5.x / non-Gemma3 rotaries don't take the kwarg.
         position_embeddings = None
         if self.rotary_emb is not None:
-            position_embeddings = self.rotary_emb(x, position_ids)
+            if "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
+                position_embeddings = self.rotary_emb(x, position_ids, layer_type="full_attention")
+            else:
+                position_embeddings = self.rotary_emb(x, position_ids)
 
         if mask is not None:
             while len(mask.shape) < 4:
@@ -4222,7 +4229,10 @@ class HfDecoderWrapper:
             else "past_key_value"
         )
         if self.rotary_emb_local is not None:
-            position_embeddings_local = self.rotary_emb_local(x, position_ids)
+            if "layer_type" in inspect.signature(self.rotary_emb_local.forward).parameters:
+                position_embeddings_local = self.rotary_emb_local(x, position_ids, layer_type="sliding_attention")
+            else:
+                position_embeddings_local = self.rotary_emb_local(x, position_ids)
             result = self.decoder.forward(
                 x,
                 position_embeddings_global=position_embeddings,

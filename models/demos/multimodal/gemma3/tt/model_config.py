@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import gc
+import inspect
 import os
 
 import torch
@@ -685,19 +686,33 @@ class HfGemmaDecoderWrapper:
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
         # TODO: Generalize for other HF models
 
-        position_embeddings_global = self.rotary_emb(x, position_ids)
-        position_embeddings_local = self.rotary_emb_local(x, position_ids)
+        # transformers 5.x consolidated Gemma3 RoPE into a module that selects `{layer_type}_inv_freq`
+        # (layer_type=None -> AttributeError 'None_inv_freq'). Pass the matching layer_type when the
+        # rotary forward accepts it; <5 rotaries don't take the kwarg.
+        _takes_layer_type = "layer_type" in inspect.signature(self.rotary_emb.forward).parameters
+        if _takes_layer_type:
+            position_embeddings_global = self.rotary_emb(x, position_ids, layer_type="full_attention")
+            position_embeddings_local = self.rotary_emb_local(x, position_ids, layer_type="sliding_attention")
+        else:
+            position_embeddings_global = self.rotary_emb(x, position_ids)
+            position_embeddings_local = self.rotary_emb_local(x, position_ids)
         if mask is not None:
             while len(mask.shape) < 4:
                 mask = mask.unsqueeze(0)
+        # transformers 5.x renamed the decoder cache kwarg past_key_value -> past_key_values.
+        cache_kw = (
+            "past_key_values"
+            if "past_key_values" in inspect.signature(self.decoder.forward).parameters
+            else "past_key_value"
+        )
         result = self.decoder.forward(
             x,
             position_embeddings_global=position_embeddings_global,
             position_embeddings_local=position_embeddings_local,
-            past_key_value=self.past_key_values,
             use_cache=True,
             position_ids=position_ids,
             attention_mask=mask,
+            **{cache_kw: self.past_key_values},
         )
         output = result[0]
         return output
