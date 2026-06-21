@@ -75,6 +75,38 @@ class TtnnGridSampleCrossBEVAttention:
         out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
         return ttnn.reshape(out, (B, Ho, Wo, self._vp_cout))
 
+    def _dev(self, q_tt, traj_points: torch.Tensor, bev_feature: torch.Tensor, spatial_shape):
+        """Device-in/device-out core: ``q_tt`` is a device (B,K,D) tile tensor and the
+        result stays on device (no to_torch).  ``traj_points``/``bev_feature`` are the
+        per-step torch loop inputs (grid coords + BEV map); only the grid normalisation
+        and the value_proj input crossing are on host, as in ``__call__``."""
+        ref = self._ref
+        bs, num_queries, num_points, _ = traj_points.shape
+
+        # host: normalise waypoints into the [-1,1] sampling grid (API prep)
+        norm = traj_points.clone()
+        norm[..., 0] = norm[..., 0] / ref.config.lidar_max_y
+        norm[..., 1] = norm[..., 1] / ref.config.lidar_max_x
+        norm = norm[..., [1, 0]]  # swap x↔y
+        grid = norm.view(bs, num_queries, num_points, 2).contiguous()
+
+        value_nhwc = self._value_proj(bev_feature)  # ROW_MAJOR (B,H,W,256)
+        g_tt = ttnn.from_torch(grid, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
+        sampled = ttnn.grid_sample(value_nhwc, g_tt)  # (B,K,T,256) ROW_MAJOR
+
+        attn_w = ttnn.linear(q_tt, self._aw_w, bias=self._aw_b)  # (B,K,T)
+        attn_w = ttnn.softmax(attn_w, dim=-1)
+
+        # weighted aggregation out[b,k,:] = Σ_t w[b,k,t]·sampled[b,k,t,:] via batched matmul
+        sampled = ttnn.to_layout(ttnn.reshape(sampled, (bs * num_queries, num_points, self._vp_cout)), ttnn.TILE_LAYOUT)
+        aw = ttnn.reshape(attn_w, (bs * num_queries, 1, num_points))
+        out = ttnn.matmul(aw, sampled)  # (B*K, 1, 256)
+        out = ttnn.reshape(out, (bs, num_queries, self._vp_cout))
+
+        # output_proj + residual (dropout is identity at eval)
+        out = ttnn.linear(out, self._op_w, bias=self._op_b)
+        return ttnn.add(out, q_tt)
+
     def __call__(
         self,
         queries: torch.Tensor,
@@ -82,35 +114,7 @@ class TtnnGridSampleCrossBEVAttention:
         bev_feature: torch.Tensor,
         spatial_shape,
     ) -> torch.Tensor:
-        ref = self._ref
-        bs, num_queries, num_points, _ = traj_points.shape
-        D = queries.shape[-1]
-
-        # --- host: normalise waypoints into the [-1,1] sampling grid (API prep) ---
-        norm = traj_points.clone()
-        norm[..., 0] = norm[..., 0] / ref.config.lidar_max_y
-        norm[..., 1] = norm[..., 1] / ref.config.lidar_max_x
-        norm = norm[..., [1, 0]]  # swap x↔y
-        grid = norm.view(bs, num_queries, num_points, 2).contiguous()
-
-        # --- device: value_proj conv+relu, then grid_sample ---
-        value_nhwc = self._value_proj(bev_feature)  # ROW_MAJOR (B,H,W,256)
-        g_tt = ttnn.from_torch(grid, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=self._device)
-        sampled = ttnn.grid_sample(value_nhwc, g_tt)  # (B,K,T,256) ROW_MAJOR
-
-        # --- device: attention weights + softmax ---
+        bs, num_queries, D = queries.shape
         q_tt = ttnn.from_torch(queries.to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=self._device)
-        attn_w = ttnn.linear(q_tt, self._aw_w, bias=self._aw_b)  # (B,K,T)
-        attn_w = ttnn.softmax(attn_w, dim=-1)
-
-        # --- device: weighted aggregation  out[b,k,:] = Σ_t w[b,k,t] · sampled[b,k,t,:] ---
-        # Express as a batched (1×T)@(T×256) matmul per (b,k).
-        sampled = ttnn.to_layout(ttnn.reshape(sampled, (bs * num_queries, num_points, self._vp_cout)), ttnn.TILE_LAYOUT)
-        aw = ttnn.reshape(attn_w, (bs * num_queries, 1, num_points))
-        out = ttnn.matmul(aw, sampled)  # (B*K, 1, 256)
-        out = ttnn.reshape(out, (bs, num_queries, self._vp_cout))
-
-        # --- device: output_proj + residual (dropout is identity at eval) ---
-        out = ttnn.linear(out, self._op_w, bias=self._op_b)
-        out = ttnn.add(out, q_tt)
+        out = self._dev(q_tt, traj_points, bev_feature, spatial_shape)
         return ttnn.to_torch(out).reshape(bs, num_queries, D).float()

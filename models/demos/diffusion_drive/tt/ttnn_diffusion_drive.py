@@ -58,6 +58,8 @@ class TtnnDiffusionDriveModel:
         self._model = reference_model.eval()
         self._config = config
         self._device = device
+        # Stage 4: consolidated on-device perception forward (set by build_stage4)
+        self._perception = None
 
     # ------------------------------------------------------------------
     # Stage 2: install TTNN backbone
@@ -196,7 +198,47 @@ class TtnnDiffusionDriveModel:
         return self
 
     # ------------------------------------------------------------------
-    # Forward (Stage 1 / Stage 2 / Stage 3)
+    # Stage 4: single-graph consolidation — perception path
+    # ------------------------------------------------------------------
+
+    def build_stage4(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Single-graph consolidation — collapse the per-drop-in host round-trips.
+
+        Two consolidations:
+          1. **Perception** (``DiffusionDriveModel.forward`` lines 955–984) into one
+             on-device graph, running the ``concat_cross_bev`` bilinear interpolate
+             (``reference/model.py:974`` — the last non-glue PyTorch compute op) on
+             device via ``ttnn.upsample``.  ``__call__`` then routes through
+             ``_forward_ttnn``.
+          2. **Diffusion decoder** — replace the Stage-3.5 ``CustomTransformerDecoder``
+             with ``TtnnDiffDecoder``, which keeps ``traj_feature`` on device across
+             each layer (the ~9 per-drop-in round-trips collapse to one layer
+             boundary).
+
+        Requires ``build_stage3_4`` (perception drop-ins) and ``build_stage3_5``
+        (trajectory drop-ins) — their prepared weights are reused.  Valid only at
+        production resolution (bev 8×8 → 64×64).  Chainable.  Returns self.
+        """
+        from models.demos.diffusion_drive.tt.ttnn_consolidated import TtnnPerceptionForward
+        from models.demos.diffusion_drive.tt.ttnn_perception import TtnnConv1x1
+        from models.demos.diffusion_drive.tt.ttnn_trajectory import TtnnSequentialMLP, install_ttnn_diff_decoder
+
+        m = self._model
+        if not isinstance(m._bev_downscale, TtnnConv1x1):
+            raise RuntimeError("build_stage4 requires build_stage3_4 to be called first")
+
+        # 1. perception path
+        self._perception = TtnnPerceptionForward(m, device)
+
+        # 2. diffusion decoder (requires the Stage-3.5 per-layer drop-ins)
+        th = m._trajectory_head
+        if not isinstance(th.diff_decoder.layers[0].ffn, TtnnSequentialMLP):
+            raise RuntimeError("build_stage4 requires build_stage3_5 to be called first")
+        install_ttnn_diff_decoder(th, device)
+        return self
+
+    # ------------------------------------------------------------------
+    # Forward (Stage 1 / Stage 2 / Stage 3 / Stage 4)
     # ------------------------------------------------------------------
 
     def __call__(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
@@ -205,9 +247,36 @@ class TtnnDiffusionDriveModel:
         Stage 1 (before build_stage2): runs entirely on CPU via PyTorch.
         Stage 2+ (after build_stage2): ResNet-34 BasicBlock stages run on
         the TTNN device; everything else stays on CPU.
+        Stage 4 (after build_stage4): the perception path runs as one on-device
+        graph via ``_forward_ttnn``.
         """
         with torch.no_grad():
+            if self._perception is not None:
+                return self._forward_ttnn(features)
             return self._model(features)
+
+    def _forward_ttnn(self, features: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """Consolidated forward: backbone → on-device perception → trajectory/agent heads.
+
+        Mirrors ``DiffusionDriveModel.forward`` but replaces lines 955–984 (the
+        perception pre-decoder block, incl. the ``concat_cross_bev`` interpolate)
+        with the single-graph ``TtnnPerceptionForward``.  The trajectory and agent
+        heads are the existing Stage-3.5/3.7 drop-ins, called as in the reference.
+        """
+        m = self._model
+        camera = features["camera_feature"]
+        lidar = features["lidar_feature"]
+        status = features["status_feature"]
+
+        bev_upscale, bev_feature, _ = m._backbone(camera, lidar)
+        bev_spatial_shape = bev_upscale.shape[2:]
+
+        traj_query, agents_query, cross_bev_feature, status_enc = self._perception(bev_upscale, bev_feature, status)
+
+        output = m._trajectory_head(traj_query, agents_query, cross_bev_feature, bev_spatial_shape, status_enc)
+        agents = m._agent_head(agents_query)
+        output.update(agents)
+        return output
 
     # ------------------------------------------------------------------
     # Convenience: load from checkpoint
