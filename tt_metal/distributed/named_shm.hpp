@@ -39,6 +39,19 @@ public:
     static NamedShm create(const std::string& name, size_t size);
 
     /**
+     * @brief Create an anonymous shared memory region using MAP_ANONYMOUS|MAP_SHARED.
+     *
+     * Unlike create(), this does not use shm_open() — the backing memory is anonymous
+     * (not file-backed tmpfs). Anonymous pages can be DMA-pinned with CONTIGUOUS flag
+     * on systems without IOMMU (e.g. Blackhole P150). The region is zero-initialized
+     * by the kernel. There is no name; the region cannot be opened by another process.
+     *
+     * @param size Size of the region in bytes.
+     * @return NamedShm owning the anonymous mapping. name() returns "".
+     */
+    static NamedShm create_anonymous(size_t size);
+
+    /**
      * @brief Open and map an existing named shared memory region.
      *
      * Opens the shm object via shm_open(O_RDWR) and maps it with mmap(MAP_SHARED).
@@ -65,6 +78,7 @@ public:
     size_t size() const { return size_; }
     const std::string& name() const { return name_; }
     bool is_open() const { return ptr_ != nullptr; }
+    bool is_named() const { return !name_.empty(); }
 
 private:
     NamedShm(const std::string& name, void* ptr, size_t size);

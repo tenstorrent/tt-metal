@@ -41,12 +41,20 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_bytes_acked_buffer(
     TT_FATAL(
         page_size >= connector_state_offset_ + sizeof(HDSocketConnectorState),
         "System page size too small to host HDSocketConnectorState.");
-    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, page_size));
+    // Without IOMMU the TT driver uses TENSTORRENT_PIN_PAGES_CONTIGUOUS (0x1), which
+    // the kernel rejects for file-backed (shm_open/tmpfs) pages. Use anonymous mmap
+    // in that case so the pages satisfy the contiguous constraint.
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_iommu_enabled()) {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, page_size));
+    } else {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create_anonymous(page_size));
+    }
     void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: Bytes_acked buffer must be aligned to the PCIe alignment.");
-    // NamedShm::create zero-initializes the region; no explicit memset needed.
+    // Named regions are zero-initialized by create(); anonymous by the kernel.
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     tt::tt_metal::HostBuffer bytes_acked_buffer_view(
         tt::stl::Span<uint32_t>(host_buffer_.get(), 1), tt::tt_metal::MemoryPin(host_buffer_));
@@ -79,7 +87,15 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
     // only [data | bytes_acked], so the device never touches the state struct.
     connector_state_offset_ = align(host_buffer_size_bytes, alignof(HDSocketConnectorState));
     size_t alloc_size = align(connector_state_offset_ + sizeof(HDSocketConnectorState), page_size);
-    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+    // Without IOMMU the TT driver uses TENSTORRENT_PIN_PAGES_CONTIGUOUS (0x1), which
+    // the kernel rejects for file-backed (shm_open/tmpfs) pages. Use anonymous mmap
+    // in that case so the pages satisfy the contiguous constraint.
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_iommu_enabled()) {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+    } else {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create_anonymous(alloc_size));
+    }
     void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
@@ -614,6 +630,11 @@ HDSocketDescriptor H2DSocket::populate_descriptor() const {
 }
 
 std::string H2DSocket::export_descriptor(const std::string& socket_id) {
+    TT_FATAL(
+        shm_->is_named(),
+        "H2D cross-process export requires IOMMU-enabled hardware. On systems without IOMMU (e.g. Blackhole "
+        "without IOMMU) the DMA buffer is allocated as anonymous memory which cannot be mapped by name in a "
+        "connector process. Enable IOMMU or use single-process H2D sockets on this hardware.");
     auto desc = populate_descriptor();
     descriptor_path_ = descriptor_path_for_socket("h2d", socket_id);
     desc.write_to_file(descriptor_path_);

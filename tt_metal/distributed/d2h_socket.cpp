@@ -61,12 +61,23 @@ D2HSocket::PinnedBufferInfo D2HSocket::init_host_buffer(
     connector_state_offset_ = align(total_buffer_size_bytes, alignof(HDSocketConnectorState));
     size_t alloc_size = align(connector_state_offset_ + sizeof(HDSocketConnectorState), page_size);
 
-    shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+    // Without IOMMU the TT driver pins pages with TENSTORRENT_PIN_PAGES_CONTIGUOUS
+    // (flag 0x1), which the kernel rejects for file-backed (shm_open/tmpfs) memory.
+    // Use anonymous mmap in that case — anonymous pages satisfy the contiguous
+    // constraint. Named shm is retained when IOMMU is present so that cross-process
+    // socket export (export_descriptor) continues to work on those systems.
+    const auto& cluster = MetalContext::instance().get_cluster();
+    if (cluster.is_iommu_enabled()) {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create(shm_name, alloc_size));
+    } else {
+        shm_ = std::make_unique<NamedShm>(NamedShm::create_anonymous(alloc_size));
+    }
     void* aligned_ptr = shm_->ptr();
     TT_FATAL(
         reinterpret_cast<uintptr_t>(aligned_ptr) % pcie_alignment == 0,
         "System Memory Allocation Error: D2H socket buffer must be aligned to the PCIe alignment.");
-    // NamedShm::create zero-initializes the region; no explicit memset needed.
+    // NamedShm::create zero-initializes named regions; MAP_ANONYMOUS pages are
+    // zero-initialized by the kernel. Either way no explicit memset needed.
     host_buffer_ = std::shared_ptr<uint32_t[]>(static_cast<uint32_t*>(aligned_ptr), [](uint32_t*) {});
     bytes_sent_ptr_ = host_buffer_.get() + (fifo_size_ / sizeof(uint32_t));
 
@@ -543,6 +554,11 @@ MeshDevice* D2HSocket::get_mesh_device() const { return mesh_device_; }
 std::string D2HSocket::export_descriptor(const std::string& socket_id) {
     TT_FATAL(is_owner_, "Only the owner process can export a socket descriptor.");
     TT_FATAL(shm_ && shm_->is_open(), "Cannot export descriptor: shared memory is not initialized.");
+    TT_FATAL(
+        shm_->is_named(),
+        "D2H cross-process export requires IOMMU-enabled hardware. On systems without IOMMU (e.g. Blackhole "
+        "without IOMMU) the DMA buffer is allocated as anonymous memory which cannot be mapped by name in a "
+        "connector process. Enable IOMMU or use single-process D2H sockets on this hardware.");
 
     HDSocketDescriptor desc;
     desc.populate_from_owner("d2h", *shm_, fifo_size_, config_buffer_address_, mesh_device_, sender_core_);
