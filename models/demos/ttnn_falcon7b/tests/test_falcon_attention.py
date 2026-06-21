@@ -40,6 +40,10 @@ def torch_model():
     filtered_state_dict = strip_state_dict_prefix(state_dict, get_model_prefix())
 
     configuration = transformers.FalconConfig.from_pretrained(PRETRAINED_MODEL_NAME)
+    # transformers 5.x indexes FALCON_ATTENTION_CLASSES[config._attn_implementation] when a Falcon
+    # attention/decoder layer is built standalone from a bare config; from_pretrained on a *config*
+    # leaves _attn_implementation=None -> KeyError(None). Pin it to eager (what the TT model emulates).
+    configuration._attn_implementation = "eager"
     torch_model = (
         transformers.models.falcon.modeling_falcon.FalconAttention(configuration, layer_idx=0).eval().to(torch.float32)
     )
