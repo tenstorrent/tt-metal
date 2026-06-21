@@ -23,12 +23,18 @@ from typing import Dict, List, Optional, Tuple
 import torch
 import ttnn
 
+# Rows of the compute grid reserved below the down-proj matmul for fused RS workers.
+_RS_GRID_ROWS = 2
+
 from models.experimental.pi0_5.common.configs import GemmaConfig, Pi0_5ModelConfig
 from models.experimental.pi0_5.tt.ttnn_common import get_ln_weight_memory_config
 from models.experimental.pi0_5.tt.ttnn_gemma import (
     GemmaAttentionTTNN,
+    build_bs_matmul_pcfg,
     build_matmul_pcfg,
     build_sharded_norm_pcfg,
+    bs_matmul_divisible,
+    make_bs_memcfg,
     precompute_freqs_cis_meta_format,
     rms_norm_ttnn,
 )
@@ -36,6 +42,124 @@ from models.experimental.pi0_5.tt.ttnn_gemma import (
 from . import stages
 
 _TP = 4  # tensor-parallel degree
+
+
+def _all_reduce_scatter_dim(shape: tuple, tp: int) -> int:
+    """Mirror all_reduce_async finding_scatter_dim for TILE tensors."""
+    dims = list(shape)
+    if len(dims) >= 2:
+        dims[-1] //= 32
+        dims[-2] //= 32
+    for d in range(len(dims) - 1, -1, -1):
+        if dims[d] % tp == 0:
+            return d
+    raise RuntimeError(f"no all_reduce scatter dim for shape={shape} tp={tp}")
+
+
+def _ccl_int_env(name: str, default: int) -> int:
+    v = os.environ.get(name, "").strip()
+    return int(v) if v.isdigit() else default
+
+
+def _ccl_base(tp: int) -> dict:
+    kw = {
+        "num_links": _ccl_int_env("PI0_CCL_NUM_LINKS", 2),
+        "memory_config": ttnn.L1_MEMORY_CONFIG,
+        "num_buffers_per_channel": 2,
+    }
+    if tp == 8:
+        kw["topology"] = ttnn.Topology.Ring
+    return kw
+
+
+def _rs_kwargs(tp: int) -> dict:
+    """Reduce-scatter: 2 links × 2 workers/link → 12 CCL cores (2 dir × (2 workers + 1 mux))."""
+    kw = _ccl_base(tp)
+    kw["num_workers_per_link"] = _ccl_int_env("PI0_CCL_RS_WORKERS", 2)
+    return kw
+
+
+def _ag_kwargs(tp: int) -> dict:
+    """All-gather: 2 links × 4 workers/link → 20 CCL cores on TP=8 ring."""
+    kw = _ccl_base(tp)
+    default_workers = 4 if tp >= 8 else 2
+    kw["num_workers_per_link"] = _ccl_int_env("PI0_CCL_AG_WORKERS", default_workers)
+    return kw
+
+
+def _ccl_kwargs(tp: int) -> dict:
+    """Shared kwargs (reduce_scatter path); all_gather uses _ag_kwargs."""
+    return _rs_kwargs(tp)
+
+
+def _tp_all_gather(x: ttnn.Tensor, dim: int, tp: int) -> ttnn.Tensor:
+    """Gather scattered shards across the 1×tp mesh (second half of all_reduce)."""
+    return ttnn.all_gather(x, dim, **_ag_kwargs(tp))
+
+
+def _tp_all_reduce(x: ttnn.Tensor, tp: int) -> ttnn.Tensor:
+    """Sum-replicate partials across the 1×tp mesh (RS + AG)."""
+    dim = _all_reduce_scatter_dim(tuple(x.shape), tp)
+    scattered = ttnn.reduce_scatter(x, dim, **_rs_kwargs(tp))
+    out = _tp_all_gather(scattered, dim, tp)
+    ttnn.deallocate(scattered)
+    return out
+
+
+def _mlp_fused_rs_enabled() -> bool:
+    """PI0_MLP_FUSED_RS=0: unfused down_proj linear + separate reduce_scatter."""
+    return os.environ.get("PI0_MLP_FUSED_RS", "1").lower() not in ("0", "false", "no", "off")
+
+
+def _is_2d_mcast_pcfg(pcfg) -> bool:
+    return pcfg is not None and isinstance(pcfg, ttnn.MatmulMultiCoreReuseMultiCastProgramConfig)
+
+
+# Tuned (m_tiles, k_tiles, n_tiles) → (grid_x, mm_grid_y, in0_block_w) for fused down+RS.
+# mm_grid_y is the matmul row count; RS workers occupy the next _RS_GRID_ROWS rows.
+# in0_block_w=16 cuts K-loop iterations vs the default 8 on these 1/TP-width shapes.
+_FUSED_DOWN_PCFG: Dict[Tuple[int, int, int], Tuple[int, int, int]] = {
+    (32, 64, 64): (12, 8, 16),  # TP=8, seq chunk 1024
+    (32, 128, 64): (12, 8, 16),  # TP=4, seq chunk 1024
+}
+
+
+def _build_fused_down_pcfg(
+    m_tiles: int,
+    k_tiles: int,
+    n_tiles: int,
+    default_grid: Tuple[int, int],
+) -> Optional[ttnn.MatmulMultiCoreReuseMultiCastProgramConfig]:
+    tuned = _FUSED_DOWN_PCFG.get((m_tiles, k_tiles, n_tiles))
+    if tuned is not None:
+        grid_x, mm_grid_y, in0_block_w = tuned
+    else:
+        grid_x, grid_y = default_grid
+        mm_grid_y = grid_y - _RS_GRID_ROWS
+        in0_block_w = 16 if k_tiles >= 64 else None
+    pcfg = build_matmul_pcfg(
+        m_tiles,
+        k_tiles,
+        n_tiles,
+        grid_x,
+        mm_grid_y,
+        dst_budget=8,
+        in0_block_w=in0_block_w,
+    )
+    return pcfg if _is_2d_mcast_pcfg(pcfg) else None
+
+
+class _ChunkPcfgs:
+    __slots__ = ("gate", "up", "down", "use_fused_down", "bs_gate", "bs_up", "bs_down")
+
+    def __init__(self, gate, up, down, use_fused_down: bool, bs_gate=None, bs_up=None, bs_down=None):
+        self.gate = gate
+        self.up = up
+        self.down = down
+        self.use_fused_down = use_fused_down
+        self.bs_gate = bs_gate
+        self.bs_up = bs_up
+        self.bs_down = bs_down
 
 
 # ─────────────────────────── Weight loading ───────────────────────────────────
@@ -182,7 +306,8 @@ class GemmaMLPTP4:
     """GeGLU MLP with TP=4 column+row parallelism and AllReduce.
 
     Each chip holds mlp_dim/_TP columns of gate/up and mlp_dim/_TP rows of down.
-    AllReduce after down_proj sums the partial hidden-size outputs across chips.
+    down_proj matmul is fused with reduce_scatter (matmul_reduce_scatter_async);
+    all_gather completes the AllReduce. Gate/up stay unfused column-parallel matmuls.
     Input and output activations are replicated on all chips.
     """
 
@@ -224,8 +349,166 @@ class GemmaMLPTP4:
         else:
             self._pcfg_grid = (8, 8)
 
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """x is replicated on all chips, shape [B, seq, hidden] or [B, 1, seq, hidden]."""
+        self._fused_rs = self.tp > 1 and _mlp_fused_rs_enabled()
+        self._rs_buffer_cache: Dict[Tuple[int, int], Tuple[ttnn.Tensor, ttnn.Tensor]] = {}
+        self._pcfg_by_m: Dict[Tuple[int, Optional[Tuple[int, int]]], _ChunkPcfgs] = {}
+        self._local_mlp = self.intermediate_size // self.tp
+        self._bs_gate_up_compute_config = ttnn.init_device_compute_kernel_config(
+            mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        self._rs_semaphores: Optional[List[ttnn.Tensor]] = None
+        self._rs_barrier_semaphore = None
+        self._rs_core_offset: Optional[ttnn.CoreCoord] = None
+        self._compute_kernel_config = None
+        self._k_in_tiles = self.hidden_size // 32
+        self._k_local_tiles = self.intermediate_size // self.tp // 32
+        self._n_out_tiles = self.hidden_size // 32
+        self._max_padded = ((self.chunk_size + 31) // 32) * 32
+        import os as _os_bf4
+
+        self._down_dtype = (
+            ttnn.bfloat4_b
+            if _os_bf4.environ.get("PI0_DOWN_BF4", "").lower() in ("1", "true", "yes", "on")
+            else ttnn.bfloat8_b
+        )
+        if self._fused_rs:
+            self._init_fused_rs()
+            self._get_fused_rs_buffers(1, self._max_padded, self._down_dtype)
+        self._get_chunk_pcfs(self._max_padded // 32, bs_grid=None)
+
+    def _get_chunk_pcfs(self, m_tiles: int, bs_grid: Optional[Tuple[int, int]] = None) -> _ChunkPcfgs:
+        key = (m_tiles, bs_grid)
+        cached = self._pcfg_by_m.get(key)
+        if cached is not None:
+            return cached
+        gate = build_matmul_pcfg(
+            m_tiles, self._k_in_tiles, self._k_local_tiles, *self._pcfg_grid, activation=(ttnn.UnaryOpType.GELU, True)
+        )
+        up = build_matmul_pcfg(m_tiles, self._k_in_tiles, self._k_local_tiles, *self._pcfg_grid)
+        bs_gate = bs_up = bs_down = None
+        if bs_grid is not None:
+            gx, gy = bs_grid
+            if bs_matmul_divisible(m_tiles, self._k_in_tiles, self._k_local_tiles, gx, gy):
+                bs_gate = build_bs_matmul_pcfg(
+                    m_tiles,
+                    self._k_in_tiles,
+                    self._k_local_tiles,
+                    gx,
+                    gy,
+                    activation=(ttnn.UnaryOpType.GELU, True),
+                )
+                bs_up = build_bs_matmul_pcfg(m_tiles, self._k_in_tiles, self._k_local_tiles, gx, gy)
+            if bs_matmul_divisible(m_tiles, self._k_local_tiles, self._n_out_tiles, gx, gy):
+                bs_down = build_bs_matmul_pcfg(m_tiles, self._k_local_tiles, self._n_out_tiles, gx, gy)
+        use_fused_down = False
+        down = build_matmul_pcfg(m_tiles, self._k_local_tiles, self._n_out_tiles, *self._pcfg_grid)
+        if self._fused_rs and bs_down is None:
+            fused_down = _build_fused_down_pcfg(m_tiles, self._k_local_tiles, self._n_out_tiles, self._pcfg_grid)
+            if fused_down is not None:
+                down = fused_down
+                use_fused_down = True
+        cached = _ChunkPcfgs(gate, up, down, use_fused_down, bs_gate, bs_up, bs_down)
+        self._pcfg_by_m[key] = cached
+        return cached
+
+    def _init_fused_rs(self) -> None:
+        """Semaphores + core offset for matmul_reduce_scatter_async on down_proj."""
+        g = self.mesh_device.compute_with_storage_grid_size()
+        ccl_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(g.x - 1, g.y - 1))})
+        self._rs_semaphores = [ttnn.create_global_semaphore(self.mesh_device, ccl_cores, 0) for _ in range(3)]
+        self._rs_barrier_semaphore = ttnn.create_global_semaphore(self.mesh_device, ccl_cores, 0)
+        tuned = _FUSED_DOWN_PCFG.get((self._max_padded // 32, self._k_local_tiles, self._n_out_tiles))
+        mm_grid_y = tuned[1] if tuned is not None else self._pcfg_grid[1] - _RS_GRID_ROWS
+        self._rs_core_offset = ttnn.CoreCoord(0, mm_grid_y)
+        # Match unfused ttnn.linear defaults (bf8 matmul); fp32 dest would halve subblock budget.
+        self._compute_kernel_config = ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+
+    def _get_fused_rs_buffers(self, batch: int, padded: int, dtype) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+        key = (batch, padded)
+        cached = self._rs_buffer_cache.get(key)
+        if cached is not None:
+            return cached
+        replicate = ttnn.ReplicateTensorToMesh(self.mesh_device)
+        mem = ttnn.L1_MEMORY_CONFIG
+        hid = self.hidden_size
+        inter = ttnn.from_torch(
+            torch.zeros(batch, 1, padded, hid),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+            memory_config=mem,
+        )
+        out = ttnn.from_torch(
+            torch.zeros(batch, 1, padded, hid // self.tp),
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=replicate,
+            memory_config=mem,
+        )
+        self._rs_buffer_cache[key] = (inter, out)
+        return inter, out
+
+    def _down_proj_fused_rs(
+        self,
+        hidden: ttnn.Tensor,
+        down_pcfg,
+        down_dtype,
+        batch: int,
+        padded: int,
+    ) -> ttnn.Tensor:
+        """Row-parallel down_proj + reduce_scatter in one fused op, then all_gather."""
+        ccl = _ccl_kwargs(self.tp)
+        topology = ccl.get("topology", ttnn.Topology.Ring)
+        persistent_intermediate, persistent_output = self._get_fused_rs_buffers(batch, padded, down_dtype)
+        mm_out, scattered = ttnn.experimental.matmul_reduce_scatter_async(
+            hidden,
+            self.down_proj,
+            persistent_intermediate,
+            persistent_output,
+            3,
+            self._rs_semaphores,
+            self._rs_core_offset,
+            barrier_semaphore=self._rs_barrier_semaphore,
+            num_links=ccl["num_links"],
+            memory_config_rs=ccl["memory_config"],
+            intermediate_memory_config_rs=ccl["memory_config"],
+            memory_config_mm=ttnn.L1_MEMORY_CONFIG,
+            topology=topology,
+            dtype=down_dtype,
+            program_config=down_pcfg,
+            compute_kernel_config=self._compute_kernel_config,
+        )
+        ttnn.deallocate(hidden)
+        ttnn.deallocate(mm_out)
+        oc = _tp_all_gather(scattered, 3, self.tp)
+        ttnn.deallocate(scattered)
+        return oc
+
+    def forward(
+        self,
+        x: ttnn.Tensor,
+        *,
+        bs_norm_factory=None,
+        bs_grid: Optional[Tuple[int, int]] = None,
+    ) -> ttnn.Tensor:
+        """x is replicated on all chips, shape [B, seq, hidden] or [B, 1, seq, hidden].
+
+        When bs_norm_factory + bs_grid are set, gate/up/down matmuls and GeGLU multiply
+        stay block-sharded on the LN grid; sharded_to_interleaved runs only before all_reduce.
+        """
+        use_bs = bs_norm_factory is not None and bs_grid is not None
         batch = x.shape[0]
         was_3d = len(x.shape) == 3
         if was_3d:
@@ -233,7 +516,9 @@ class GemmaMLPTP4:
 
         seq = x.shape[2]
         hid = x.shape[3]
-        local_mlp = self.intermediate_size // self.tp  # mlp_dim per chip (4096 @TP=4, 2048 @TP=8)
+        gx = gy = None
+        if use_bs:
+            gx, gy = bs_grid
 
         num_chunks = (seq + self.chunk_size - 1) // self.chunk_size
         out_chunks: List[ttnn.Tensor] = []
@@ -247,60 +532,76 @@ class GemmaMLPTP4:
 
             xc = ttnn.slice(x, [0, 0, start, 0], [batch, 1, end, hid])
             if needs_pad:
-                xc = ttnn.to_memory_config(xc, ttnn.DRAM_MEMORY_CONFIG)
-                xc = ttnn.pad(xc, padding=((0, 0), (0, 0), (0, padded - actual), (0, 0)), value=0.0)
+                if use_bs:
+                    bs_mc_hidden = bs_norm_factory(batch, actual, padded, hid)
+                    xc = ttnn.pad(xc, padding=((0, 0), (0, 0), (0, padded - actual), (0, 0)), value=0.0)
+                    xc = ttnn.to_memory_config(xc, bs_mc_hidden)
+                else:
+                    xc = ttnn.to_memory_config(xc, ttnn.DRAM_MEMORY_CONFIG)
+                    xc = ttnn.pad(xc, padding=((0, 0), (0, 0), (0, padded - actual), (0, 0)), value=0.0)
+            elif use_bs:
+                bs_mc_hidden = bs_norm_factory(batch, actual, padded, hid)
+                xc = ttnn.to_memory_config(xc, bs_mc_hidden)
 
             m = padded // 32
-            k_in = self.hidden_size // 32  # 2048/32 = 64
-            n_local = local_mlp // 32  # 4096/32 = 128  (was 512 single-chip)
-            k_local = local_mlp // 32  # 4096/32 = 128  (was 512 single-chip)
-            n_out = self.hidden_size // 32  # 2048/32 = 64
+            m_tiles = (batch * padded) // 32
+            pcfs = self._get_chunk_pcfs(m_tiles, bs_grid if use_bs else None)
+            gate_pcfg, up_pcfg, down_pcfg, use_fused_down = pcfs.gate, pcfs.up, pcfs.down, pcfs.use_fused_down
+            use_bs_chunk = use_bs and pcfs.bs_gate is not None and pcfs.bs_up is not None and pcfs.bs_down is not None
+            if use_bs and not use_bs_chunk:
+                xc = ttnn.sharded_to_interleaved(xc, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            gate_pcfg = build_matmul_pcfg(m, k_in, n_local, *self._pcfg_grid, activation=(ttnn.UnaryOpType.GELU, True))
-            up_pcfg = build_matmul_pcfg(m, k_in, n_local, *self._pcfg_grid)
-            down_pcfg = build_matmul_pcfg(m, k_local, n_out, *self._pcfg_grid)
-
-            # bf8 gate/up/down matmul outputs (default). Halves the GeGLU intermediate L1
-            # AND the down-proj partial that feeds all_reduce — the bf8 partial moves half
-            # the bytes through the bandwidth-bound CCL (AllGather −600 µs). ~1.2 ms/chip
-            # @TP=4, ~1.0 ms @TP=8, PCC ≥ 0.993. (minimal_matmul regresses the 1/TP-width
-            # gate/up, so it's intentionally not used here.)
             common = dict(dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-            if gate_pcfg is not None:
-                gate = ttnn.linear(xc, self.gate_proj, program_config=gate_pcfg, **common)
+            if use_bs_chunk:
+                bs_mc_inter = make_bs_memcfg(batch, padded, self._local_mlp, gx, gy)
+                bs_common = dict(
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=bs_mc_inter,
+                    compute_kernel_config=self._bs_gate_up_compute_config,
+                )
+                gate = ttnn.linear(xc, self.gate_proj, program_config=pcfs.bs_gate, **bs_common)
+                up = ttnn.linear(xc, self.up_proj, program_config=pcfs.bs_up, **bs_common)
             else:
-                gate = ttnn.linear(xc, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common)
+                if gate_pcfg is not None:
+                    gate = ttnn.linear(xc, self.gate_proj, program_config=gate_pcfg, **common)
+                else:
+                    gate = ttnn.linear(xc, self.gate_proj, core_grid=self.core_grid, activation="gelu", **common)
 
-            if up_pcfg is not None:
-                up = ttnn.linear(xc, self.up_proj, program_config=up_pcfg, **common)
-            else:
-                up = ttnn.linear(xc, self.up_proj, core_grid=self.core_grid, **common)
+                if up_pcfg is not None:
+                    up = ttnn.linear(xc, self.up_proj, program_config=up_pcfg, **common)
+                else:
+                    up = ttnn.linear(xc, self.up_proj, core_grid=self.core_grid, **common)
             ttnn.deallocate(xc)
 
-            # Local GeGLU: [B, 1, padded, local_mlp] per chip
-            hidden = ttnn.multiply(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
+            if use_bs_chunk:
+                hidden = ttnn.multiply(gate, up, memory_config=bs_mc_inter)
+            else:
+                hidden = ttnn.multiply(gate, up, memory_config=ttnn.L1_MEMORY_CONFIG)
             ttnn.deallocate(gate)
             ttnn.deallocate(up)
 
-            # Row-parallel down → partial sum [B, 1, padded, hidden] per chip
-            # EXPERIMENT (PI0_DOWN_BF4): bf4 down-proj output halves the all_reduce
-            # payload again vs bf8. Standalone CCL timing is unreliable here, so this
-            # is gated to measure the real-model effect (perf + PCC).
-            import os as _os_bf4
-            _down_dtype = ttnn.bfloat4_b if _os_bf4.environ.get("PI0_DOWN_BF4", "").lower() in ("1", "true", "yes", "on") else ttnn.bfloat8_b
-            down_common = dict(dtype=_down_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
-            if down_pcfg is not None:
-                partial = ttnn.linear(hidden, self.down_proj, program_config=down_pcfg, **down_common)
+            if use_bs_chunk:
+                down_common = dict(
+                    dtype=self._down_dtype,
+                    memory_config=bs_mc_hidden,
+                    compute_kernel_config=self._bs_gate_up_compute_config,
+                )
+                partial = ttnn.linear(hidden, self.down_proj, program_config=pcfs.bs_down, **down_common)
+                ttnn.deallocate(hidden)
+                partial = ttnn.sharded_to_interleaved(partial, memory_config=ttnn.L1_MEMORY_CONFIG)
+                oc = _tp_all_reduce(partial, self.tp)
+                ttnn.deallocate(partial)
+            elif use_fused_down:
+                oc = self._down_proj_fused_rs(hidden, down_pcfg, self._down_dtype, batch, padded)
             else:
-                partial = ttnn.linear(hidden, self.down_proj, core_grid=self.core_grid, **down_common)
-            ttnn.deallocate(hidden)
-
-            # AllReduce: sum partial outputs across all 4 chips → replicated [B, 1, padded, hidden].
-            # all_reduce already lowers to reduce_scatter + all_gather internally on the 1xTP line;
-            # num_links=2 (the hardware max — 2 eth channels per hop) ~1.67x's the collective.
-            oc = ttnn.all_reduce(partial, num_links=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(partial)
+                down_common = dict(dtype=self._down_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
+                if down_pcfg is not None:
+                    partial = ttnn.linear(hidden, self.down_proj, program_config=down_pcfg, **down_common)
+                else:
+                    partial = ttnn.linear(hidden, self.down_proj, core_grid=self.core_grid, **down_common)
+                ttnn.deallocate(hidden)
+                oc = _tp_all_reduce(partial, self.tp)
+                ttnn.deallocate(partial)
 
             if needs_pad:
                 oc = ttnn.slice(oc, [0, 0, 0, 0], [batch, 1, actual, hid])
@@ -369,6 +670,8 @@ class _GemmaBlockTP4:
         self._rms_norm_sharded_pcfg = None
         self._rms_norm_sharded_memcfg = None
         self._rms_norm_sharded_m_padded = 0
+        self._norm_memcfg_factory = None
+        self._norm_bs_grid: Optional[Tuple[int, int]] = None
 
     def _get_sharded_norm(self, m_padded: int):
         if self._rms_norm_sharded_pcfg is None or self._rms_norm_sharded_m_padded != m_padded:
@@ -377,15 +680,19 @@ class _GemmaBlockTP4:
             disable_small_m = (
                 os.environ.get("PI0_LN_INTERLEAVED_SMALL_M", "").lower() in ("1", "true", "yes", "on") and m_tiles == 1
             )
+            self._norm_memcfg_factory = None
+            self._norm_bs_grid = None
             if not disable_small_m:
                 norm_cfg = build_sharded_norm_pcfg(
                     m_tiles, hidden_tiles, max_grid_x=8, max_grid_y=min(8, max(1, m_tiles))
                 )
                 if norm_cfg is not None:
-                    pc, memcfg_factory, _ = norm_cfg
+                    pc, memcfg_factory, grid = norm_cfg
                     self._rms_norm_sharded_pcfg = pc
                     self._rms_norm_sharded_memcfg = memcfg_factory(1, m_padded, m_padded, self.config.width)
                     self._rms_norm_sharded_m_padded = m_padded
+                    self._norm_memcfg_factory = memcfg_factory
+                    self._norm_bs_grid = (grid.x, grid.y)
         return self._rms_norm_sharded_pcfg, self._rms_norm_sharded_memcfg
 
     def forward(
@@ -400,20 +707,30 @@ class _GemmaBlockTP4:
         sh_pc, sh_mc = self._get_sharded_norm(m_padded)
 
         normed = rms_norm_ttnn(hidden_states, self.input_layernorm_weight, self.config.rms_norm_eps, sh_pc, sh_mc)
-        if sh_pc is not None:
-            normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Keep block-sharded for fused QKV matmul (same grid as sharded LN).
+        # if sh_pc is not None:
+        #     normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         attn_out, new_cache = self.attention.forward(
-            normed, cos_override, sin_override, attention_mask, position_ids, None, use_cache=True
+            normed,
+            cos_override,
+            sin_override,
+            attention_mask,
+            position_ids,
+            None,
+            use_cache=True,
+            bs_norm_factory=self._norm_memcfg_factory if sh_pc is not None else None,
+            bs_grid=self._norm_bs_grid if sh_pc is not None else None,
         )
         ttnn.deallocate(normed)
         if self._attn_headpar:
             # Head-parallel: attn_out is a per-chip partial (this chip's Q-heads' contribution
             # to o_proj). Sum across chips → replicated, same as the MLP all_reduce.
-            attn_out = ttnn.all_reduce(attn_out, num_links=2, memory_config=ttnn.L1_MEMORY_CONFIG)
+            attn_out = _tp_all_reduce(attn_out, self.device.get_num_devices())
         # EXPERIMENT (PI0_RESID_BF8): carry the residual stream in bf8 — halves the
         # residual-add bytes, but accumulates quantization over 18 layers (PCC risk).
         import os as _os_resid
+
         _resid_bf8 = _os_resid.environ.get("PI0_RESID_BF8", "").lower() in ("1", "true", "yes", "on")
         _add_kw = dict(memory_config=ttnn.L1_MEMORY_CONFIG)
         if _resid_bf8:
@@ -424,10 +741,15 @@ class _GemmaBlockTP4:
         normed = rms_norm_ttnn(
             hidden_states, self.post_attention_layernorm_weight, self.config.rms_norm_eps, sh_pc, sh_mc
         )
-        if sh_pc is not None:
-            normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # Keep block-sharded for gate/up matmuls (same grid as sharded LN); down_proj converts to interleaved.
+        # if sh_pc is not None:
+        #     normed = ttnn.sharded_to_interleaved(normed, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        mlp_out = self.mlp.forward(normed)
+        mlp_out = self.mlp.forward(
+            normed,
+            bs_norm_factory=self._norm_memcfg_factory,
+            bs_grid=self._norm_bs_grid,
+        )
         ttnn.deallocate(normed)
         hidden_states = ttnn.add(hidden_states, mlp_out, **_add_kw)
         ttnn.deallocate(mlp_out)
