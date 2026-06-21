@@ -47,8 +47,7 @@ ProgramDescriptor RepeatProgramFactoryLastDim::create_descriptor(
     Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
     TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
-    // Find how many input pages each core is responsible for so that we always start at the beginning of a read and
-    // write page Since the logical volumes match, we are guaranteed that the very last page is aligned
+    // Per-core page count so read/write start on page boundaries.
     const uint32_t number_of_pages = input_log_shape[-2];
     const uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
     const uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + (source_page_size_bytes & 0xF) == 0 ? source_page_size_bytes
@@ -58,6 +57,11 @@ ProgramDescriptor RepeatProgramFactoryLastDim::create_descriptor(
                                                                          : source_page_size_bytes * 16;
     constexpr uint32_t src0_cb_index = 0;
     constexpr uint32_t src1_cb_index = 1;
+
+    // RM sharded -> rm_sharded; RM interleaved -> rm_interleaved (TILE uses higher-dim factory).
+    const bool src_sharded = src_buffer->buffer_distribution_spec().has_value();
+    const bool dst_sharded = dst_buffer->buffer_distribution_spec().has_value();
+    const bool needs_alignment_cb = !src_sharded && !dst_sharded;
 
     ProgramDescriptor desc;
 
@@ -71,26 +75,44 @@ ProgramDescriptor RepeatProgramFactoryLastDim::create_descriptor(
         }}},
     });
 
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb_size_bytes,
-        .core_ranges = total_core_ranges,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src1_cb_index,
-            .data_format = cb_data_format,
-            .page_size = cb_size_bytes,
-        }}},
-    });
+    // Second CB only for interleaved RM.
+    if (needs_alignment_cb) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = cb_size_bytes,
+            .core_ranges = total_core_ranges,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = src1_cb_index,
+                .data_format = cb_data_format,
+                .page_size = cb_size_bytes,
+            }}},
+        });
+    }
 
-    std::vector<uint32_t> compile_time_args = {
-        (std::uint32_t)source_page_size_bytes, (std::uint32_t)num_repeats, src0_cb_index, src1_cb_index};
-    TensorAccessorArgs(*src_buffer).append_to(compile_time_args);
-    TensorAccessorArgs(*dst_buffer).append_to(compile_time_args);
+    const char* kernel_source = nullptr;
+    std::vector<uint32_t> compile_time_args;
+    if (src_sharded || dst_sharded) {
+        kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_last_dim_rm_sharded.cpp";
+        compile_time_args = {(std::uint32_t)source_page_size_bytes, (std::uint32_t)num_repeats, src0_cb_index};
+    } else {
+        kernel_source =
+            "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_last_dim_rm_interleaved.cpp";
+        compile_time_args = {
+            (std::uint32_t)source_page_size_bytes, (std::uint32_t)num_repeats, src0_cb_index, src1_cb_index};
+    }
+
+    std::vector<uint32_t> common_runtime_args;
+    // RuntimeTensorShape: safe for interleaved; sharded moves shape to runtime args.
+    TensorAccessorArgs(*src_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(compile_time_args, common_runtime_args);
+    TensorAccessorArgs(*dst_buffer, tensor_accessor::ArgConfig::RuntimeTensorShape)
+        .append_to(compile_time_args, common_runtime_args);
 
     KernelDescriptor reader_desc;
-    reader_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/repeat/device/kernels/repeat_last_dim_rm.cpp";
+    reader_desc.kernel_source = kernel_source;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = total_core_ranges;
     reader_desc.compile_time_args = std::move(compile_time_args);
+    reader_desc.common_runtime_args = std::move(common_runtime_args);
     reader_desc.config = ReaderConfigDescriptor{};
 
     uint32_t done = 0;
@@ -98,8 +120,7 @@ ProgramDescriptor RepeatProgramFactoryLastDim::create_descriptor(
         for (uint32_t core_y = 0; core_y < num_cores_y; core_y++) {
             const CoreCoord core = {core_x, core_y};
             if (done == 1) {
-                // Buffer* args trigger BufferBinding entries; the framework patches their
-                // addresses on cache hits without rebuilding the descriptor.
+                // Idle core: early exit.
                 reader_desc.emplace_runtime_args(core, {src_buffer, dst_buffer, uint32_t{0}, uint32_t{0}, uint32_t{1}});
             } else {
                 const uint32_t start_of_read = read_start_page;
