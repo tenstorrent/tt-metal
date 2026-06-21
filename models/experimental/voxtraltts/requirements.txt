@@ -10,8 +10,10 @@ scipy==1.15.3
 # Quality metrics for tests/pcc/test_voxtral_e2e_quality_metrics.py (UTMOS-v2, ECAPA-TDNN, Whisper WER).
 # tt-metal dev env uses CPU torch (see tt_metal/python_env/requirements-dev.txt); speechbrain
 # otherwise pulls default PyPI torchaudio which links libcudart and fails to load _torchaudio.abi3.so.
-torchaudio==2.11.0+cpu
+# The +cpu wheel is only on the PyTorch CPU index (x86_64 CI / dev hosts; see requirements-dev.txt).
+--extra-index-url https://download.pytorch.org/whl/cpu
+torchaudio==2.11.0+cpu ; platform_machine == "x86_64"
 speechbrain==1.1.0
 librosa==0.10.2
-utmosv2 @ git+https://github.com/sarulab-speech/UTMOSv2.git
+git+https://github.com/sarulab-speech/UTMOSv2.git
 websockets==16.0
