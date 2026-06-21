@@ -960,7 +960,7 @@ def test_qwen36_demo_batch32(bh_glx_mesh):
     _blocks_per_user = (_T_PREFILL + STEPS + _block_size - 1) // _block_size + 2
     _max_num_blocks = max(_blocks_per_user * MAX_BATCH, 64)
     # Round up to multiple of MAX_BATCH for page_table reshape.
-    _max_num_blocks = int(math.ceil(_max_num_blocks / MAX_BATCH) * MAX_BATCH)
+    _max_num_blocks = ((_max_num_blocks + MAX_BATCH - 1) // MAX_BATCH) * MAX_BATCH
     paged_attention_config = PagedAttentionConfig(block_size=_block_size, max_num_blocks=_max_num_blocks)
 
     state_dict = _load_full_state_dict(_SNAPSHOT)
@@ -988,10 +988,20 @@ def test_qwen36_demo_batch32(bh_glx_mesh):
     generator._disable_prefill_tracing = True
     generator.prefill_warmup_completed = True
 
-    # ---- Sequential prefill: one user at a time ----
+    # ---- Sequential prefill: one user at a time, with a mode-switch cycle between
+    # users to reset prefill CCL state — matching how the vLLM server handles
+    # consecutive requests (each prefill is separated by a decode→prefill transition
+    # which calls rebuild_prefill_persistent_buffers). This is why consecutive
+    # batch-1 requests never hang even though they reuse the same CCL addresses.
+    print(f"[b32] prefilling {N_USERS} users (one at a time, server pattern) ...")
     first_tokens = []
     for uid in range(N_USERS):
-        print(f"[b32] prefilling user {uid}/{N_USERS} ...")
+        if uid > 0:
+            # Mode cycle resets prefill CCL state (rebuild_prefill_persistent_buffers)
+            # exactly as the server does between consecutive requests.
+            model.switch_mode("decode")
+            model.switch_mode("prefill")
+        print(f"[b32]   prefilling user {uid} ...")
         prefill_logits = generator.prefill_forward_text(
             real_tokens,
             page_table=page_table,

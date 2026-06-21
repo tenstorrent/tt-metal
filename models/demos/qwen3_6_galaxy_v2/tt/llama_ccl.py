@@ -173,6 +173,49 @@ class TT_CCL:
         self.reduce_scatter_buffer_idx = [0, 0]
         self.barrier_semaphore_idx = [0, 0]
 
+    def reinit_semaphores(self):
+        """Recreate all CCL semaphores at fresh L1 addresses.
+
+        ttnn.synchronize_device drains the worker dispatch queue but does NOT
+        clear the ETH fabric's internal ring-buffer / fetch-queue state, which
+        is keyed on the L1 semaphore address. Reusing the same addresses on the
+        next user's prefill collective causes the ETH ring to see stale state and
+        hang. Allocating NEW semaphores at NEW L1 addresses sidesteps this —
+        identical to the vision-CCL fix (manager.py _init_semaphores).
+        """
+        self.barrier_semaphore_handles = [[], []]
+        if self.mode == "prefill":
+            self.from_semaphore_handles = [[], []]
+            self.to_semaphore_handles = [[], []]
+            self.reduce_semaphore_handles = [[], []]
+        self.gather_semaphore_handles = [[], []]
+        for i in range(2):
+            for _ in range(self.num_cbs):
+                self.barrier_semaphore_handles[i].append(
+                    ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                )
+                if self.use_ring_ag_prefill:
+                    self.gather_semaphore_handles[i].append(
+                        [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
+                    )
+                else:
+                    self.gather_semaphore_handles[i].append(
+                        ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                    )
+                if self.mode == "prefill":
+                    if self.use_ring_rs_prefill:
+                        self.reduce_semaphore_handles[i].append(
+                            [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
+                        )
+                    else:
+                        self.from_semaphore_handles[i].append(
+                            ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                        )
+                        self.to_semaphore_handles[i].append(
+                            ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)
+                        )
+        self.reset_gather_and_buffer_idx()
+
     # ------------------------------------------------------------------
     # qwen3.6 dual-dtype persistent-buffer selectors
     # ------------------------------------------------------------------
