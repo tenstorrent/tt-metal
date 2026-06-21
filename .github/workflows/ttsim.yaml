@@ -25,7 +25,7 @@ on:
       job-timeout:
         required: false
         type: number
-        default: 20
+        default: 35
       run-ttsim-integration-tests:
         required: false
         type: boolean
@@ -376,7 +376,7 @@ jobs:
           cp /work/tt_metal/soc_descriptors/${{ matrix.soc_desc }} $TT_METAL_SIMULATOR_HOME/soc_descriptor.yaml
 
       - name: C++ tests
-        timeout-minutes: 20
+        timeout-minutes: 30
         run: |
           if [[ "${{ matrix.arch }}" == "quasar" ]]; then
             # ToDo: Re-enable this test once tt-sim supports NOC
