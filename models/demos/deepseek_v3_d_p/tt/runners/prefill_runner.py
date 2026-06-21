@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
+from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_after_prefill
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     build_h2d_service,
     get_variant,
@@ -71,7 +72,6 @@ GATE_FALLBACK_MODE = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.defaul
 # When on (default), the last transformer layer runs kv-only: it fills the KV
 # cache for migration and skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
-PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
 # Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
 # L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
 # requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
@@ -87,6 +87,19 @@ def _handle_sigterm(signum, frame):
 
 
 os.environ.setdefault("PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)
+
+# PREFILL_MIGRATE=burst|prefix|pairwise seeds the per-mode migration env vars (via setdefault, so
+# each stays overridable). burst/pairwise validate src->dst vs golden; prefix uses per-slot PCC.
+_MIGRATE_MODE = os.environ.get("PREFILL_MIGRATE", "").strip().lower()
+if _MIGRATE_MODE:
+    if _MIGRATE_MODE not in ("burst", "prefix", "pairwise"):
+        raise ValueError(f"PREFILL_MIGRATE must be one of burst|prefix|pairwise (got {_MIGRATE_MODE!r})")
+    os.environ.setdefault("PREFILL_ENABLE_MIGRATION", "1")
+    os.environ.setdefault("PREFILL_REQUEST_LOOP_PCC", "1")
+    if _MIGRATE_MODE in ("burst", "pairwise"):
+        os.environ.setdefault("PREFILL_VALIDATE_MIGRATION", "1")
+    if _MIGRATE_MODE == "pairwise":
+        os.environ.setdefault("PREFILL_MIGRATE_PAIRWISE", "1")
 
 
 def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
@@ -125,7 +138,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         token_ids = load_trace_token_ids(trace_dir)
     task_id = 0
     actual_isl = len(token_ids)
-    slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % cfg.num_users
+    slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0"))
 
     # Chunk count: explicit env override, else round the prompt up to whole chunks. Pad/trim the
     # token list to exactly n_chunks * chunk_size (chunked prefill requires full chunks).
@@ -197,13 +210,27 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     """
     import time as _time
 
+    # PCC mode (PREFILL_REQUEST_LOOP_PCC=1): exit after NCHUNKS chunks, then validate KV vs golden.
+    pcc_mode = os.environ.get("PREFILL_REQUEST_LOOP_PCC", "0") == "1"
+    expected_chunks = int(os.environ.get("PREFILL_STANDALONE_CHUNKED_NCHUNKS", "11")) if pcc_mode else None
+
     logger.info(
         "[request] entering request loop — blocks on h2d_socket_sync for each push, "
-        "runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
+        + (
+            f"runs for {expected_chunks} chunks then PCC-checks the KV cache (PREFILL_REQUEST_LOOP_PCC=1)."
+            if pcc_mode
+            else "runs until SIGTERM/SIGINT (Ctrl-C). Drive it with prefill_h2d_producer.py / the scheduler."
+        )
     )
+
+    chunks_per_slot: dict[int, int] = {}  # per-slot chunk count
+    real_end_per_slot: dict[int, int] = {}  # per-slot real prompt len (excludes pad)
 
     i = 0
     while not _shutdown:
+        if expected_chunks is not None and i >= expected_chunks:
+            logger.info(f"[request] received all {expected_chunks} expected chunks; exiting loop for PCC check")
+            break
         # Device-side sync: workers block on data_ready_sem (set by the service
         # core after a producer push lands), copy backing -> fresh output, ack
         # consumed_counter. Returns tensors independent of the backing. This call
@@ -215,10 +242,13 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         )
         # Decode per-iter PrefillMetadata (replicated across the mesh — first device view).
         meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
-        slot_id = int(meta_host[0])
+        slot_id = int(meta_host[0])  # bounds-checked in pipeline.prefill
+        chunks_per_slot[slot_id] = chunks_per_slot.get(slot_id, 0) + 1
         actual_start = int(meta_host[1])
         actual_end = int(meta_host[2])
         actual_isl = actual_end - actual_start
+        # real prompt len for this slot (last chunk's actual_end); bounds the KV-PCC compare
+        real_end_per_slot[slot_id] = max(real_end_per_slot.get(slot_id, 0), actual_end)
         logger.info(
             f"[request] iter={i} metadata: slot_id={slot_id} "
             f"actual_start={actual_start} actual_end={actual_end} actual_isl={actual_isl}"
@@ -235,6 +265,15 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         logger.info(f"[request] iter={i} chunk slot={slot_id} [{actual_start},{actual_end}) prefill = {_dt_ms:.2f} ms")
         i += 1
     logger.info(f"[request] loop exited after {i} requests")
+
+    if pcc_mode:
+        validate_after_prefill(
+            pipeline,
+            chunks_per_slot=chunks_per_slot,
+            real_end_per_slot=real_end_per_slot,
+            num_users=NUM_USERS,
+            total_chunks=i,
+        )
 
 
 def _print_config() -> None:
@@ -320,18 +359,20 @@ def main() -> None:
 
     ack_channel = None
     if enable_migration:
-        # Standalone-worker model: build the KV chunk address table from the device
-        # KV layout and serialize it to a .pb file. The inference server / orchestrator
-        # forwards this path to the migration_worker via
-        # MigrationLayerClient.send_kv_chunk_table(path). The runner owns the device,
-        # so only it knows the KV cache NoC addresses; it has no IPC with the worker.
-        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
-            build_and_serialize_kv_chunk_table,
-            send_kv_chunk_table,
-        )
+        # Clear a stale DONE sentinel from a prior run so the validator can't read its pairs
+        # (launch order endpoint->runner->driver guarantees we clear before this run writes).
+        _done_file = os.environ.get("MIGRATION_DONE_FILE", "/tmp/migration_done.sentinel")
+        if os.path.exists(_done_file):
+            logger.warning(f"[migration] removing stale DONE sentinel {_done_file} from a prior run")
+            os.remove(_done_file)
+
+        # Full migration bring-up: publish the KV chunk table + device map, then block on
+        # WORKER_READY before the request loop opens (the worker gates on SetTable + AssignDevMap).
+        from models.demos.deepseek_v3_d_p.tt.runners.kv_migration_setup import publish_kv_chunk_table_and_wait_ready
 
         table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-        build_and_serialize_kv_chunk_table(
+        wait_ready_ms = int(os.environ.get("PREFILL_MIGRATION_WAIT_READY_MS", "120000"))
+        publish_kv_chunk_table_and_wait_ready(
             mesh_device=mesh_device,
             kvpe_cache=pipeline.kvpe_cache,
             seq_len=MAX_SEQ_LEN,
@@ -339,9 +380,10 @@ def main() -> None:
             mesh_shape=GLOBAL_MESH_SHAPE,
             sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
             num_users=NUM_USERS,
+            chunk_size_global=CHUNK_SIZE,  # block-cyclic period (prefill chunk size)
             path=table_path,
+            wait_ready_timeout_ms=wait_ready_ms,
         )
-        send_kv_chunk_table(table_path)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
