@@ -17,7 +17,7 @@
 
 ---
 
-## 0. Status (living) — last updated 2026-06-19
+## 0. Status (living) — last updated 2026-06-21
 
 ### 0.1 What we inherit (validated MiniMax-M2.7 base — the foundation we convert)
 Everything below was validated on a real Blackhole Galaxy (32 chips) for **M2.7** and
@@ -68,6 +68,22 @@ paths unvalidated); random weights (not real); composite/non-fused expert FFN (n
   later perf task — copy+modify).
 - ✅ MoE (sparse) decoder layer.
 
+### 0.2c Full model + MULTI-CARD — VALIDATED 2026-06-21 (functional bring-up COMPLETE)
+The dev box is a **32-chip Blackhole Galaxy** (`get_num_devices()==32`), so multi-card was validated
+locally (not deferred). All vs self-authored torch refs, random weights, full-GQA placeholder (S<2048).
+- ✅ **Full model assembly, single-card** (#9, `test_model_vs_ref.py`): embedding → hybrid layer stack
+  → final gemma norm → lm_head → logits, PCC 0.983 + last-token argmax match.
+- ✅ **TP=4 multi-card** (#10) on `(8,4)` [stock single_bh_galaxy MGD; tp=cols=4, rows replicate]:
+  attention o_proj reduce-scatter/all-gather (0.9993) + dense-MLP down all-reduce (0.9998). TP=4 is
+  M3's tensor-parallel factor (forced by 4 KV heads; TP=8 impossible).
+- ✅ **EP=32 MoE** (#11, `test_ep_moe_vs_ref.py`) on `(8,4)`: 128 experts/top-4 → 4/device, via
+  `CompositeRoutedExpert` (clamped swigluoai = ttnn matmuls + apply_swiglu, reusing deepseek
+  dispatch/combine/extract/insert). PCC 0.9831. (Fused-kernel rewrite = later perf, see §7.)
+- ✅ **Functional MULTI-CARD WHOLE MODEL** (#12, `test_model_ep_vs_ref.py`) on `(8,4)` = **TP=4 +
+  EP=32 + DP=8** (8 prompts, one/row): real prefill I/O (prepare_inputs_prefill → ttnn_prefill_forward
+  use_ep_moe → per-row TP-sharded logits gather), all 8 prompts PCC ~0.98.
+- Run commands: see `TESTING.md`.
+
 ### 0.4 ⓘ HF oracle — it EXISTS upstream (correction)
 Earlier drafts said "no HF modeling code." **Correction:** native `transformers` **main** has
 `minimax_m3_vl` (full modeling; `MiniMaxM3VLRMSNorm`/attention/MLP), and **vLLM** has
@@ -78,22 +94,25 @@ bring a **branch-local** transformers (git main) at full-model assembly to PCC a
 swigluoai against this source.
 
 ### 0.3 ⚠️ GAPS — what is NOT done (read before assuming "it works")
-- **Per-module arch deltas DONE (§0.2b)** but only at **TP=1, random weights, vs self-authored ref**.
-  NOT yet: real weights, multi-card (TP>1/CCL), full-model assembly.
-- **`ModelArgs` model-level config plumbing** — Phase 0 tail (§0.2): nested `text_config` unwrap +
-  dummy-config path + `load_state_dict` real path (strip `language_model.`, skip `mtp`/`nextn`).
-  Blocks full-model assembly + real weights.
-- **Full 60-layer model** — not assembled/run. Plan: full-GQA-everywhere placeholder (exact for
-  prompts ≤~2K tokens, since MSA selects all blocks then), reduced-config smoke test first
-  (real 60L×128E won't fit on one card with random weights).
-- **Real weights** — 869 GB bf16 not downloaded; first-token vs reference not run.
+- **Everything in §0.2b/§0.2c is vs SELF-AUTHORED refs + random weights** (we wrote both sides). The
+  independent check — **real weights → first token** — is NOT done yet (see below). Also reduced
+  configs (2 layers, small experts/vocab), not the full 60L×128E.
+- **`ModelArgs` model-level config plumbing** — the remaining Phase-0/real-weights tail: nested
+  `text_config` unwrap + `load_state_dict` real path (strip `language_model.`, skip `mtp`/`nextn`).
+  Pure code; blocks real weights. (Step "A" — the agreed next move.)
+- **Real weights** — 869 GB bf16 not downloaded; first-token vs reference not run. Needs: A (config
+  plumbing) + the download + a branch-local `transformers minimax_m3_vl` oracle (§0.4).
+- **Full 60-layer depth** — validated assembly at reduced depth (2-layer hybrid); 60L×128E real run
+  comes with real weights. Full-GQA placeholder is exact for prompts ≤~2K tokens.
 - **MSA sparse attention:** GQA torch golden delivered (`reference/sparse_gqa_prefill.py`, verified);
   the on-device GQA `sparse_sdpa` kernel + indexer/topk wiring are NOT done (external dep). Parallel
   track; only matters for >~2K context.
 - **KV cache:** current code runs **full non-cached SDPA on fresh Q/K/V**. Target is **chunked KV**
   (DeepSeek-style, §5), NOT vLLM paged. Chunked KV not wired yet.
 - **Fused MoE expert kernel** for clamped swigluoai — perf task (copy+modify; activation ≠ M2/DS).
-- **Parallelism** for M3 (TP=4 + SP) not decided/implemented (§6).
+  Functional EP uses the composite per-expert loop (§0.2c #11), correct but slower.
+- **Parallelism:** TP=4 (#10) + EP=32 (#11/#12) VALIDATED. **SP=8** NOT done — only needed once MSA
+  unlocks >2K context (at S<2048 the sequence fits one chip, so SP buys nothing yet).
 - **Runner / pipeline / scheduler / KV migration** — still scaffold (inherited from M2.7).
 - **Multimodal** — out of scope for now.
 
@@ -367,9 +386,10 @@ from-scratch kernel.
     bracket (§6.4); layers 0–2 stay full attention.
   - **Leave `# M3-TODO:` comments at each seam** describing the intended final shape + deps,
     and keep §3/§4/§5 of this doc extended as we learn.
-- **Phase 4 — Full 60-layer integration + Galaxy bring-up.** Assemble, re-tune TP/EP/SP, real-
-  weights first-token vs HF (same playbook that worked for M2.7). **Comment heavily, here and
-  in this doc, so context transfers cleanly on the BH Galaxy box.**
+- **Phase 4 — Full integration + Galaxy bring-up.** ✅ *Functional multi-card DONE 2026-06-21*
+  (§0.2c): full model on (8,4) = TP=4 + EP=32 + DP=8, PCC vs self-authored ref. **Remaining:**
+  `ModelArgs` config plumbing (step A) → 869 GB download → real-weights first-token vs the
+  `minimax_m3_vl` oracle (same playbook that worked for M2.7) → full 60-layer depth.
 - **Phase 5 — Multimodal. SKIPPED for now.**
 
 ```
