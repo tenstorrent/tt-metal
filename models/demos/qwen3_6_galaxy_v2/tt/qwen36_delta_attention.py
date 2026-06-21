@@ -366,19 +366,21 @@ class TtQwen36DeltaAttention(LightweightModule):
         # for one head per launch; readout (q @ state_new) is external. Only
         # constructed when the flag is on so the safe path stays free.
         self._recurrent_kernel_state = None
-        if self.use_tt_lang_recurrent:
+        if self.use_tt_lang_recurrent and self.max_batch_size == 1:
             self._recurrent_kernel_state = self._build_recurrent_kernel_state()
 
         # V2-17b: multi-head V3 kernel state (24-core, fused readout).
         self._recurrent_v2_kernel_state = None
-        if self.use_tt_lang_recurrent_v2:
+        if self.use_tt_lang_recurrent_v2 and self.max_batch_size == 1:
             self._recurrent_v2_kernel_state = self._build_recurrent_v2_kernel_state()
 
         # V2-17d: V3 multi-head batched kernel state. Persistent per-head
         # broadcast tiles (ones_per_head [1, H=6, 32, 32]) live in DRAM so
         # they don't compete for L1 with the dn_state_buffer.
+        # All tt-lang recurrent kernels require B=1; at max_batch_size > 1 the
+        # pure-TTNN fp32 path handles arbitrary B without kernel changes.
         self._recurrent_v3_kernel_state = None
-        if self.use_tt_lang_recurrent_v3:
+        if self.use_tt_lang_recurrent_v3 and self.max_batch_size == 1:
             self._recurrent_v3_kernel_state = self._build_recurrent_v3_kernel_state()
 
     # ------------------------------------------------------------------

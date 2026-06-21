@@ -907,6 +907,153 @@ def test_qwen36_demo_generator_batch1(bh_glx_mesh):
     assert n_alpha >= 5, f"generated text has <5 alpha chars (incoherent decode): {text_full!r}"
 
 
+@pytest.mark.hardware
+def test_qwen36_demo_batch32(bh_glx_mesh):
+    """Batch-32 decode throughput test: sequential prefill per user, single M=32 decode pass.
+
+    Model is built with max_batch_size=32 (QWEN36_MAX_BATCH=32).  N_USERS users are
+    prefilled sequentially; then all 32 decode rows are stepped together in one
+    decode_forward call.  Active users (0..N_USERS-1) should produce coherent output;
+    remaining rows are padding and can produce anything.
+
+    Env overrides:
+      QWEN36_B32_N_USERS  — number of users to prefill (default 4)
+      QWEN36_B32_STEPS    — decode steps per user (default 32)
+      QWEN36_PERF_T_PREFILL — prefill ISL (default 128)
+    """
+    import time as _time
+
+    from transformers import AutoTokenizer
+
+    from models.common.sampling import SamplingParams
+    from models.demos.llama3_70b_galaxy.tt.llama_common import PagedAttentionConfig
+    from models.demos.qwen3_6_galaxy_v2.tt.generator import Generator
+    from models.demos.qwen3_6_galaxy_v2.tt.generator_vllm import allocate_vllm_kv_cache
+
+    MAX_BATCH = 32
+    N_USERS = int(os.environ.get("QWEN36_B32_N_USERS", "4"))
+    STEPS = int(os.environ.get("QWEN36_B32_STEPS", "32"))
+    assert 1 <= N_USERS <= MAX_BATCH, f"QWEN36_B32_N_USERS={N_USERS} must be 1..{MAX_BATCH}"
+
+    for _k, _v in {
+        "QWEN36_FORCE_SWITCH_DECODE": "1",
+        "QWEN36_DECODE_L1_RESIDUAL": "1",
+        "QWEN36_RESIDUAL_BUF_BF16": "1",
+        "QWEN36_LM_HEAD_PLAIN_DECODE": "1",
+        "QWEN36_SEQ_CORES_PER_HEAD": "4",
+        "QWEN36_FULLATTN_WO_TUNED": "1",
+        "QWEN36_DELTA_OP_TUNED": "1",
+        "QWEN36_CCL_NUM_LINKS_DELTA": "2",
+        "QWEN36_MAX_BATCH": str(MAX_BATCH),
+    }.items():
+        os.environ.setdefault(_k, _v)
+
+    tok = AutoTokenizer.from_pretrained(str(_SNAPSHOT), trust_remote_code=True)
+    prompt = _load_prompt_for_isl(_T_PREFILL)
+    ids = tok(prompt, return_tensors="pt").input_ids
+    T_prompt = min(int(ids.shape[-1]), _T_PREFILL)
+    real_tokens = ids[:, :T_prompt].to(torch.long)  # [1, T_prompt]
+    print(f"[b32] ISL={_T_PREFILL}  T_prompt={T_prompt}  N_USERS={N_USERS}  STEPS={STEPS}")
+
+    # KV cache sizing: enough blocks for MAX_BATCH users × (ISL + STEPS) tokens.
+    _block_size = _PAGED_BLOCK_SIZE
+    _blocks_per_user = (_T_PREFILL + STEPS + _block_size - 1) // _block_size + 2
+    _max_num_blocks = max(_blocks_per_user * MAX_BATCH, 64)
+    # Round up to multiple of MAX_BATCH for page_table reshape.
+    _max_num_blocks = int(math.ceil(_max_num_blocks / MAX_BATCH) * MAX_BATCH)
+    paged_attention_config = PagedAttentionConfig(block_size=_block_size, max_num_blocks=_max_num_blocks)
+
+    state_dict = _load_full_state_dict(_SNAPSHOT)
+    model, args = _build_tt_model_paged_kv(
+        bh_glx_mesh, state_dict, _PATTERN, _N_LAYERS, paged_attention_config, max_batch_size=MAX_BATCH
+    )
+    assert args.max_batch_size == MAX_BATCH, f"model built with wrong max_batch_size {args.max_batch_size}"
+
+    permutation = torch.randperm(paged_attention_config.max_num_blocks)
+    reverse_permutation = torch.argsort(permutation)
+    page_table = reverse_permutation.reshape(
+        args.max_batch_size, paged_attention_config.max_num_blocks // args.max_batch_size
+    )
+    _kv_shape = (
+        paged_attention_config.max_num_blocks,
+        1,
+        paged_attention_config.block_size,
+        args.head_dim,
+    )
+    tt_kv_cache = allocate_vllm_kv_cache(
+        _kv_shape, torch.bfloat16, args.n_layers, model, args.weight_cache_path(ttnn.bfloat8_b)
+    )
+
+    generator = Generator(model, args, bh_glx_mesh, tokenizer=tok)
+    generator._disable_prefill_tracing = True
+    generator.prefill_warmup_completed = True
+
+    # ---- Sequential prefill: one user at a time ----
+    first_tokens = []
+    for uid in range(N_USERS):
+        print(f"[b32] prefilling user {uid}/{N_USERS} ...")
+        prefill_logits = generator.prefill_forward_text(
+            real_tokens,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            prompt_lens=[T_prompt],
+            enable_trace=False,
+            sampling_params=None,
+            empty_slots=[uid],
+        )
+        _l = torch.as_tensor(prefill_logits).float().reshape(-1)[: args.vocab_size]
+        first_tokens.append(int(_l.argmax().item()))
+        print(f"[b32]   user {uid} first token = {first_tokens[-1]} ({tok.decode([first_tokens[-1]])!r})")
+
+    # ---- Batched decode: all MAX_BATCH rows in one forward ----
+    # Build M=32 token tensor and position tensor.
+    decode_tokens = torch.zeros(MAX_BATCH, 1, dtype=torch.long)
+    decode_pos = torch.zeros(MAX_BATCH, dtype=torch.long)
+    for uid in range(N_USERS):
+        decode_tokens[uid, 0] = first_tokens[uid]
+        decode_pos[uid] = T_prompt
+
+    sampling_params = SamplingParams(temperature=1.0, top_k=20, top_p=0.95)
+
+    generated = [[] for _ in range(N_USERS)]
+    t0_decode = _time.perf_counter()
+    for step in range(STEPS):
+        out = generator.decode_forward(
+            decode_tokens,
+            decode_pos,
+            page_table=page_table,
+            kv_cache=tt_kv_cache,
+            enable_trace=True,
+            read_from_device=True,
+            sampling_params=sampling_params,
+            batch_size=MAX_BATCH,
+        )
+        # out is [MAX_BATCH] next token ids
+        next_toks = torch.as_tensor(out).reshape(MAX_BATCH)
+        for uid in range(N_USERS):
+            generated[uid].append(int(next_toks[uid].item()))
+        decode_tokens[:, 0] = next_toks
+        decode_pos += 1
+    t_decode = _time.perf_counter() - t0_decode
+
+    toks_per_sec = (STEPS * MAX_BATCH) / t_decode
+    print(f"\n[b32] decode: {STEPS} steps × {MAX_BATCH} users = {STEPS*MAX_BATCH} tokens in {t_decode:.2f}s")
+    print(f"[b32] effective throughput: {toks_per_sec:.1f} tok/s ({toks_per_sec/MAX_BATCH:.1f} tok/s per user)")
+    for uid in range(N_USERS):
+        text = tok.decode(first_tokens[uid : uid + 1] + generated[uid])
+        print(f"[b32] user {uid}: {text!r}")
+
+    # Coherence checks on active users.
+    for uid in range(N_USERS):
+        all_ids = first_tokens[uid : uid + 1] + generated[uid]
+        n_alpha = sum(c.isalpha() for c in tok.decode(all_ids))
+        assert n_alpha >= 5, f"user {uid} incoherent: {tok.decode(all_ids)!r}"
+        assert len(set(all_ids)) > 1, f"user {uid} all-same tokens (degenerate): {all_ids}"
+
+    assert toks_per_sec > 15 * MAX_BATCH * 0.5, f"throughput too low: {toks_per_sec:.1f} tok/s"
+    print(f"[b32] PASS — {toks_per_sec:.1f} tok/s effective throughput")
+
+
 def test_qwen36_xreq_prefill_probe(bh_glx_mesh):
     """CROSS-REQUEST contamination probe (server model-reuse repro).
 

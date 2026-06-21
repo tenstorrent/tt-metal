@@ -91,10 +91,12 @@ class TtQwen36ModelArgs(TtModelArgs):
         mesh_device,
         instruct=False,
         dummy_weights=False,
-        max_batch_size=1,
+        max_batch_size=None,
         max_seq_len=128 * 1024,
         optimizations=LlamaOptimizations.accuracy,
     ):
+        if max_batch_size is None:
+            max_batch_size = int(os.environ.get("QWEN36_MAX_BATCH", "1"))
         # --- Base / mesh ---
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device
