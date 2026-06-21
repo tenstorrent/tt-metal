@@ -270,8 +270,13 @@ class TtQwen36VllmModel(LightweightModule):
         if _dump:
             _acts.append(("embed", mesh_to_torch(hidden_states).float().reshape(1, L, -1).clone()))
 
+        _prof = _os.environ.get("QWEN36_PREFILL_PROF")
+        import time as _t
+        _acc = {"full_attention": 0.0, "linear_attention": 0.0}
         for i, layer in enumerate(self.layers):
             lt = self.config.layer_types[i]
+            if _prof:
+                ttnn.synchronize_device(self.device); _t0 = _t.perf_counter()
             if lt == "full_attention":
                 hidden_states, _ = layer(
                     hidden_states, deltanet_state=temp, cos=cos, sin=sin, kv_cache=None,
@@ -279,6 +284,8 @@ class TtQwen36VllmModel(LightweightModule):
                     cache_batch=getattr(self, "_vllm_max_batch", 1))
             else:
                 hidden_states, _ = layer(hidden_states, deltanet_state=temp, mode="prefill")
+            if _prof:
+                ttnn.synchronize_device(self.device); _acc[lt] += (_t.perf_counter() - _t0) * 1000
             if _dump:
                 _acts.append((f"layer{i}:{lt}", mesh_to_torch(hidden_states).float().reshape(1, L, -1).clone()))
 
@@ -300,6 +307,12 @@ class TtQwen36VllmModel(LightweightModule):
                         "states": states}, _dump)
             print(f"[val] dumped {len(_acts)} TT activation tensors -> {_dump}", flush=True)
 
+        if _prof:
+            n_full = sum(1 for x in self.config.layer_types[:len(self.layers)] if x == "full_attention")
+            n_lin = len(self.layers) - n_full
+            print(f"[prof] prefill L={L}: full_attn(CPU) {_acc['full_attention']:.0f}ms ({n_full} layers, "
+                  f"{_acc['full_attention']/max(1,n_full):.1f}/layer) | deltanet {_acc['linear_attention']:.0f}ms "
+                  f"({n_lin} layers, {_acc['linear_attention']/max(1,n_lin):.1f}/layer)", flush=True)
         last = mesh_to_torch(hidden_states)[:, :, -1:, :]
         mapper = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
         last_tt = ttnn.from_torch(last, dtype=self.dtype, layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=mapper)

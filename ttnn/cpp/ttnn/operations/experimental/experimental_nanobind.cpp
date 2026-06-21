@@ -51,6 +51,7 @@
 #include "ttnn/operations/experimental/deltanet/deltanet_decode_nanobind.hpp"
 #include "ttnn/operations/experimental/deltanet/deltanet_decode_full_nanobind.hpp"
 #include "ttnn/operations/experimental/deltanet/deltanet_prefill_full_nanobind.hpp"
+#include "ttnn/operations/experimental/deltanet/deltanet_prefill_chunked_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
@@ -142,6 +143,7 @@ void py_module(nb::module_& mod) {
     deltanet::detail::bind_deltanet_decode(mod);
     deltanet::detail::bind_deltanet_decode_full(mod);
     deltanet::detail::bind_deltanet_prefill_full(mod);
+    deltanet::detail::bind_deltanet_prefill_chunked(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     reshape::detail::bind_view(mod);
 

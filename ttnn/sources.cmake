@@ -175,6 +175,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deltanet/deltanet_decode_nanobind.cpp
     cpp/ttnn/operations/experimental/deltanet/deltanet_decode_full_nanobind.cpp
     cpp/ttnn/operations/experimental/deltanet/deltanet_prefill_full_nanobind.cpp
+    cpp/ttnn/operations/experimental/deltanet/deltanet_prefill_chunked_nanobind.cpp
     cpp/ttnn/operations/experimental/dropout/dropout_nanobind.cpp
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
     cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp

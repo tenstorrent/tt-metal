@@ -902,6 +902,229 @@ class TtGatedDeltaNet(LightweightModule):
 
         return self._out_proj(out_tile)
 
+    def _prefill_chunked(self, hidden_states, deltanet_state, C=32):
+        """Chunked-parallel gated delta-rule prefill via batched ttnn ops (no
+        custom kernel). Conv1d+SiLU+L2norm + factored-form scalings done host-side
+        (cheap, O(S)); the recurrence — the 91% prefill bottleneck — runs on device
+        as matmuls batched over all 48 v-heads, S/C chunk steps. Math verified in
+        chunked_prefill_pipeline_test.py (fp32 PCC=1.0, bf16 0.99999)."""
+        Hk, Hv, Dk, Dv = self.num_k_heads, self.num_v_heads, self.head_k_dim, self.head_v_dim
+        kd, vd = self.key_dim, self.value_dim
+        ck = self.conv_kernel_size
+        conv_dim = kd * 2 + vd
+        S = hidden_states.shape[2]
+
+        # ---- projections (reuse the fused path's gather) ----
+        qkv_all = self._tp_gather(ttnn.linear(hidden_states, self.in_proj_qkv_w))
+        z_all = self._tp_gather(ttnn.linear(hidden_states, self.in_proj_z_w))
+        b_all = ttnn.linear(hidden_states, self.in_proj_b_w)
+        a_all = ttnn.linear(hidden_states, self.in_proj_a_w)
+        beta_all, decay_all = self._precompute_beta_decay(b_all, a_all)
+
+        # ---- host: conv1d(causal) + silu + l2norm(+q scale) + head-expand ----
+        qkv = mesh_to_torch(qkv_all).float().reshape(S, conv_dim)
+        ttnn.deallocate(qkv_all)
+        w = self.conv1d_weight.float()  # [conv_dim, ck]
+        xpad = torch.cat([torch.zeros(ck - 1, conv_dim), qkv], 0)
+        conv = sum(w[:, j] * xpad[j:j + S] for j in range(ck))
+        conv = torch.nn.functional.silu(conv)
+        q, k, v = torch.split(conv, [kd, kd, vd], dim=-1)
+        q = self._l2norm_cpu(q.reshape(S, Hk, Dk)) * self.scale
+        k = self._l2norm_cpu(k.reshape(S, Hk, Dk))
+        v = v.reshape(S, Hv, Dv)
+        q = q.repeat_interleave(Hv // Hk, dim=1).permute(1, 0, 2).contiguous()  # [Hv,S,Dk]
+        k = k.repeat_interleave(Hv // Hk, dim=1).permute(1, 0, 2).contiguous()
+        v = v.permute(1, 0, 2).contiguous()                                     # [Hv,S,Dv]
+        z = mesh_to_torch(z_all).float().reshape(S, Hv, Dv).permute(1, 0, 2).contiguous()
+        ttnn.deallocate(z_all)
+        beta = mesh_to_torch(beta_all).float().reshape(S, Hv).T.contiguous()    # [Hv,S]
+        decay = mesh_to_torch(decay_all).float().reshape(S, Hv).T.contiguous()
+
+        # ---- host: pad S to multiple of C; factored per-token scalings ----
+        Sp = ((S + C - 1) // C) * C
+        nC = Sp // C
+        def pad(t):  # [Hv,S,*] -> [Hv,Sp,*]
+            return torch.nn.functional.pad(t, (0, 0, 0, Sp - S)) if t.dim() == 3 else \
+                   torch.nn.functional.pad(t, (0, Sp - S))
+        q, k, v, z = pad(q), pad(k), pad(v), pad(z)
+        beta = pad(beta); decay = torch.nn.functional.pad(decay, (0, Sp - S), value=1.0)
+        d = torch.cumprod(decay.reshape(Hv, nC, C), dim=2).reshape(Hv, Sp)      # chunk-reset
+        dinv = 1.0 / d
+        Kdec = (beta * d).unsqueeze(-1) * k     # [Hv,Sp,Dk]
+        Kinv = dinv.unsqueeze(-1) * k
+        Qd = d.unsqueeze(-1) * q
+        rep = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
+        up = lambda t: ttnn.from_torch(t.to(torch.bfloat16), dtype=ttnn.bfloat16,
+                                       layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        # HiFi4 + fp32 accumulation: the factored form amplifies by 1/d, so the
+        # chained Neumann/recurrence matmuls need fp32 accumulation (device bf16
+        # LoFi accumulation degrades later tokens; CPU ref accumulates in fp32).
+        mmcfg = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False,
+            fp32_dest_acc_en=True, packer_l1_acc=True)
+        mm = lambda a, b: ttnn.matmul(a, b, compute_kernel_config=mmcfg)
+        # custom fused kernel path: one op runs the whole per-head chunk loop on-device
+        # (no per-chunk host dispatch). Pre-scaled inputs match the kernel contract.
+        if os.environ.get("QWEN36_CHUNKED_KERNEL"):
+            Sp2 = Sp
+            r3 = lambda t: t.reshape(Hv * Sp2, -1)                       # [Hv,Sp,D]->[Hv*Sp,D]
+            d_exp = d.unsqueeze(-1).expand(-1, -1, Dv)
+            beta_exp = beta.unsqueeze(-1).expand(-1, -1, Dv)
+            dlast_per = d.reshape(Hv, nC, C)[:, :, -1]                   # [Hv,nC]
+            dlast_full = dlast_per[:, :, None, None].expand(Hv, nC, C, Dv).reshape(Hv, Sp2, Dv)
+            KiT_h = Kinv.transpose(-2, -1).reshape(Hv * Dk, Sp2)         # [Hv*Dk, Sp]
+            ttup = lambda t: ttnn.from_torch(t.to(torch.bfloat16).contiguous(), dtype=ttnn.bfloat16,
+                                             layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+            S0k = deltanet_state.get_recurrent_state(self.layer_idx)     # [1,Hv,Dk,Dv]
+            res = ttnn.experimental.deltanet_prefill_chunked(
+                ttup(r3(k)), ttup(r3(q)), ttup(r3(v)), ttup(r3(z)),
+                ttup(r3(Kdec)), ttup(KiT_h), ttup(r3(Qd)),
+                ttup(r3(d_exp)), ttup(r3(beta_exp)), ttup(r3(dlast_full)),
+                S0k, self.norm_weight,
+                num_heads=Hv, k_head_dim=Dk, v_head_dim=Dv, chunk=C, n_chunks=nC, seq_len=S)
+            okernel, new_state = res[0], res[1]
+            deltanet_state.set_recurrent_state(self.layer_idx, new_state)
+            # output [Hv*Sp,Dv] -> [Hv,Sp,Dv] -> [:S] -> [S,Hv,Dv] -> [1,1,S,Hv*Dv]
+            o = ttnn.reshape(okernel, [Hv, Sp2, Dv])
+            o = ttnn.to_layout(o, ttnn.ROW_MAJOR_LAYOUT)
+            o = ttnn.slice(o, [0, 0, 0], [Hv, S, Dv]) if Sp2 != S else o
+            o = ttnn.permute(o, [1, 0, 2])
+            o = ttnn.reshape(o, [1, 1, S, Hv * Dv])
+            o = ttnn.to_layout(o, ttnn.TILE_LAYOUT)
+            return self._out_proj(o)
+
+        # const masks uploaded once; per-chunk inputs streamed inside the loop so the
+        # full-S [Hv,S,D] tensors (~19GB at 256K) never materialize on-device.
+        ones = torch.ones(C, C)
+        tident = up(torch.eye(C).reshape(1, C, C).expand(Hv, C, C).contiguous())
+        ttrils = up(torch.tril(ones, -1).reshape(1, C, C).expand(Hv, C, C).contiguous())
+        ttrili = up(torch.tril(ones, 0).reshape(1, C, C).expand(Hv, C, C).contiguous())
+        d_exp = d.unsqueeze(-1).expand(-1, -1, Dv)                              # host views
+        beta_exp = beta.unsqueeze(-1).expand(-1, -1, Dv)
+
+        S0 = deltanet_state.get_recurrent_state(self.layer_idx)  # [1,Hv,Dk,Dv] (zeros for temp)
+        S0 = ttnn.reshape(S0, [Hv, Dk, Dv])
+
+        # ---- device: chunked recurrence, batched over Hv, per-chunk streamed ----
+        O_chunks = []
+        for c in range(nC):
+            sl = slice(c * C, (c + 1) * C)
+            kc, qc, vc = up(k[:, sl]), up(q[:, sl]), up(v[:, sl])
+            Kdc, Kic, Qdc = up(Kdec[:, sl]), up(Kinv[:, sl]), up(Qd[:, sl])
+            dc, bc = up(d_exp[:, sl].contiguous()), up(beta_exp[:, sl].contiguous())  # [Hv,C,Dv]
+            KiT = ttnn.transpose(Kic, -2, -1)                                  # [Hv,Dk,C]
+            kS0 = mm(kc, S0)                                                    # [Hv,C,Dv]
+            qS0 = mm(qc, S0)
+            A = ttnn.mul(mm(Kdc, KiT), ttrils)                                 # [Hv,C,C]
+            # Neumann inverse: inv=(I-A); P=A; 4x: P=P@P; inv=inv@(I+P)
+            inv = ttnn.sub(tident, A)
+            P = A
+            for _ in range(4):
+                P = mm(P, ttnn.clone(P))   # avoid self-aliased matmul operands
+                inv = mm(inv, ttnn.add(tident, P))
+            rhs = ttnn.mul(bc, ttnn.sub(vc, ttnn.mul(dc, kS0)))                # [Hv,C,Dv]
+            U = mm(inv, rhs)
+            M = ttnn.mul(mm(Qdc, KiT), ttrili)
+            Oc = ttnn.add(ttnn.mul(dc, qS0), mm(M, U))                         # [Hv,C,Dv]
+            O_chunks.append(Oc)
+            if os.environ.get("QWEN36_CHUNKED_DEBUG") and self.layer_idx == 0 and c == 0:
+                self._dbg = {n: mesh_to_torch(t).float() for n, t in
+                             [("A", A), ("KiT", KiT), ("inv", inv), ("U", U), ("kS0", kS0)]}
+            dlast = dc[:, C - 1:C]  # [Hv,1,Dv] last token's chunk-cumprod decay
+            S0 = ttnn.mul(dlast, ttnn.add(S0, mm(KiT, U)))
+            for t in (kc, qc, vc, Kdc, Kic, Qdc, dc, bc, KiT, kS0, qS0, A, inv, rhs, U, M):
+                ttnn.deallocate(t)
+        deltanet_state.set_recurrent_state(self.layer_idx, ttnn.reshape(S0, [1, Hv, Dk, Dv]))
+
+        O = ttnn.concat(O_chunks, dim=1)[:, :S]                                # [Hv,S,Dv]
+        # ---- device: gated RMSNorm ----
+        var = ttnn.mean(ttnn.mul(O, O), dim=-1, keepdim=True)
+        On = ttnn.mul(O, ttnn.rsqrt(ttnn.add(var, 1e-6)))
+        On = ttnn.mul(On, self.norm_weight)  # [Dv] broadcast
+        z_dev = ttnn.from_torch(z[:, :S].to(torch.bfloat16).contiguous(), dtype=ttnn.bfloat16,
+                                layout=ttnn.TILE_LAYOUT, device=self.device, mesh_mapper=rep)
+        out = ttnn.mul(On, ttnn.silu(z_dev))                                   # [Hv,S,Dv] (maybe rank-4)
+        # ---- reshape [Hv,S,Dv] -> [1,1,S,Hv*Dv] (token-major, head-concat) ----
+        out = ttnn.reshape(out, [Hv, S, Dv])                                   # ensure rank-3
+        # permute+merge(Hv,Dv) in ROW_MAJOR: TILE-layout reshape scrambles heads
+        # across tile boundaries (same gotcha as _l2norm_per_head_dev).
+        out = ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        out = ttnn.permute(out, [1, 0, 2])                                     # [S,Hv,Dv]
+        out = ttnn.reshape(out, [1, 1, S, Hv * Dv])
+        out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+        if os.environ.get("QWEN36_CHUNKED_DEBUG") and self.layer_idx == 0:
+            self._chunked_debug_pcc(out, q, k, v, z, beta, decay, S, Sp, C, Hv, Dk, Dv)
+        return self._out_proj(out)
+
+    def _chunked_debug_pcc(self, out, q, k, v, z, beta, decay, S, Sp, C, Hv, Dk, Dv):
+        import torch as _t
+        Oref = _t.zeros(Hv, Sp, Dv)
+        for h in range(Hv):
+            Sm = _t.zeros(Dk, Dv)
+            for c0 in range(0, Sp, C):
+                qc, kc, vc = q[h, c0:c0 + C], k[h, c0:c0 + C], v[h, c0:c0 + C]
+                bcv, gcv = beta[h, c0:c0 + C], decay[h, c0:c0 + C]
+                dd = _t.cumprod(gcv, 0); di = 1.0 / dd
+                A = _t.tril(((bcv * dd)[:, None] * kc) @ (di[:, None] * kc).T, -1)
+                kS = kc @ Sm
+                U = _t.linalg.solve(_t.eye(C) + A, bcv[:, None] * (vc - dd[:, None] * kS))
+                M = _t.tril((dd[:, None] * qc) @ (di[:, None] * kc).T, 0)
+                Oref[h, c0:c0 + C] = dd[:, None] * (qc @ Sm) + M @ U
+                Sm = dd[-1] * Sm + dd[-1] * ((di[:, None] * kc).T @ U)
+        # localize: compare device A/KiT/inv/U (chunk0) vs host for head 0
+        if hasattr(self, "_dbg"):
+            h = 0
+            qc, kc, vc = q[h, :C], k[h, :C], v[h, :C]
+            bcv, gcv = beta[h, :C], decay[h, :C]
+            dd = _t.cumprod(gcv, 0); di = 1.0 / dd
+            KiT_h = (di[:, None] * kc).T                       # [Dk,C]
+            A_h = _t.tril(((bcv * dd)[:, None] * kc) @ (di[:, None] * kc).T, -1)
+            invm = _t.eye(C) - A_h; P = A_h
+            for _ in range(4):
+                P = P @ P; invm = invm @ (_t.eye(C) + P)
+            U_h = invm @ (bcv[:, None] * (vc - dd[:, None] * (kc @ _t.zeros(self.head_k_dim, Dv))))
+            def _p(a, b):
+                return _t.corrcoef(_t.stack([a.flatten().double(), b.flatten().double()]))[0, 1].item()
+            print(f"[chunkdbg] head0 A PCC={_p(A_h, self._dbg['A'][h]):.5f} "
+                  f"KiT PCC={_p(KiT_h, self._dbg['KiT'][h]):.5f} inv PCC={_p(invm, self._dbg['inv'][h]):.5f} "
+                  f"U PCC={_p(U_h, self._dbg['U'][h]):.5f}", flush=True)
+            print(f"[chunkdbg]  A_h[2,:3]={A_h[2,:3].tolist()} dev={self._dbg['A'][h][2,:3].tolist()}", flush=True)
+            print(f"[chunkdbg]  inv_h[3,:4]={invm[3,:4].tolist()} dev={self._dbg['inv'][h][3,:4].tolist()}", flush=True)
+            del self._dbg
+        nw = self.norm_weight_cpu.float()
+        On = Oref * _t.rsqrt((Oref * Oref).mean(-1, keepdim=True) + 1e-6) * nw
+        Oref = (On * _t.nn.functional.silu(z))[:, :S].permute(1, 0, 2).reshape(S, Hv * Dv)
+        dev = mesh_to_torch(out).float().reshape(S, Hv * Dv)
+        def _pcc(a, b):
+            return _t.corrcoef(_t.stack([a.flatten().double(), b.flatten().double()]))[0, 1].item()
+        refh = Oref.reshape(S, Hv, Dv); devh = dev.reshape(S, Hv, Dv)
+        print(f"[chunkdbg] overall PCC={_pcc(Oref, dev):.5f}", flush=True)
+        for h in [0, 1, 2, 24, 47]:
+            print(f"[chunkdbg]  head {h:2d} PCC={_pcc(refh[:, h], devh[:, h]):.5f}", flush=True)
+        for tk in range(min(S, 6)):
+            print(f"[chunkdbg]  token {tk} PCC={_pcc(refh[tk], devh[tk]):.5f} "
+                  f"dev[{tk},h0,:3]={devh[tk,0,:3].tolist()} ref={refh[tk,0,:3].tolist()}", flush=True)
+
+    def _chunked_decay_vectors(self, decay_all, beta_all, C=32):
+        """Host precompute for chunked prefill (factored form): from the per-token
+        gate scalars decay/beta [1,1,S,H] produce d = chunk-reset cumprod(decay)
+        and dinv = 1/d as [1,1,S,H] tensors. d resets to 1 at each chunk boundary
+        (every C tokens), matching the kernel's per-chunk entering state S0.
+        bd = beta*d is recomputed in the reader (cheap multiply). Validated:
+        chunked_prefill_pipeline_test.py (fp32 PCC=1.0, bf16 0.99999)."""
+        dec = mesh_to_torch(decay_all).float().reshape(-1, self.num_v_heads)  # [S,H]
+        S = dec.shape[0]
+        d = torch.empty_like(dec)
+        for c0 in range(0, S, C):
+            c1 = min(c0 + C, S)
+            d[c0:c1] = torch.cumprod(dec[c0:c1], dim=0)
+        dinv = 1.0 / d
+        rep = ttnn.ReplicateTensorToMesh(self.device) if self.dense_tp else None
+        mk = lambda t: ttnn.from_torch(t.reshape(1, 1, S, self.num_v_heads).to(torch.bfloat16),
+                                       dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
+                                       device=self.device, mesh_mapper=rep)
+        return mk(d), mk(dinv)
+
     def forward(self, hidden_states, deltanet_state, mode="decode"):
         if mode == "decode":
             if USE_FULL_FUSED_KERNEL:
@@ -913,6 +1136,8 @@ class TtGatedDeltaNet(LightweightModule):
                 "(set DISABLE_* envs unset). The CPU fallback is not wired for the TP path."
             )
         else:
+            if os.environ.get("QWEN36_CHUNKED_PREFILL"):
+                return self._prefill_chunked(hidden_states, deltanet_state)
             if USE_PREFILL_FUSED_KERNEL:
                 return self._prefill_fused(hidden_states, deltanet_state)
             raise RuntimeError(
