@@ -847,8 +847,12 @@ static std::function<void()> jit_compile_kernel(
 
     // 7. Compile — output to disk cache path if provided, else temp dir
     std::string so_path = disk_cache_so_path_arg.empty() ? (dir + "/kernel.so") : disk_cache_so_path_arg;
+    // Debug hook: TT_EMULE_JIT_DEBUG swaps -O2 for -g -O0 -fno-omit-frame-pointer so a
+    // kernel crash resolves to a source line under gdb. Behavior-neutral; off by default.
+    const char* jit_opt = std::getenv("TT_EMULE_JIT_DEBUG") ? "-g -O0 -fno-omit-frame-pointer" : "-O2";
     std::ostringstream cmd;
-    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared -O2 -Wno-c++11-narrowing"
+    cmd << TT_EMULE_CXX_COMPILER << " -std=c++" << TT_EMULE_CXX_STANDARD << " -fPIC -shared " << jit_opt
+        << " -Wno-c++11-narrowing"
         << " -I\"" << jit_inc << "\""
         << " -I\"" << parent_inc << "\""
         << " -I\"" << kernel_dir << "\"";
