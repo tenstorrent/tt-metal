@@ -15,11 +15,20 @@
         "aarch64-linux"
       ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
+      packageFor =
+        system:
+        let
+          pkgs = import nixpkgs { inherit system; };
+        in
+        {
+          sfpi = pkgs.callPackage ./nix/sfpi.nix { };
+        };
       mkDevShell =
         system:
         let
           pkgs = import nixpkgs { inherit system; };
           llvm = pkgs.llvmPackages_20;
+          sfpi = (packageFor system).sfpi;
           python = pkgs.python311;
           pythonEnv = python.withPackages (
             ps: with ps; [
@@ -42,56 +51,40 @@
               '')
             ];
           };
-          sfpiPackages = with pkgs; [
-            autoconf
-            automake
-            bison
-            expect
-            flex
-            gawk
-            patchutils
-            texinfo
-            gmp
-            libmpc
-            mpfr
-            expat
-          ];
         in
         pkgs.mkShell {
-          packages =
-            with pkgs;
-            [
-              git
-              cmake
-              ninja
-              pkg-config
-              pandoc
-              xz
-              zstd
-              zlib
-              openssl
-              wget
-              curl
-              jq
-              vim
-              gnumake
-              gmp
+          packages = with pkgs; [
+            git
+            cmake
+            ninja
+            pkg-config
+            pandoc
+            xz
+            zstd
+            zlib
+            openssl
+            wget
+            curl
+            jq
+            vim
+            gnumake
+            gmp
 
-              numactl
-              hwloc
-              tbb
-              capstone
-              openmpi
-              llvm.clang
-              llvm.clang-tools
-              llvm.lld
-              llvm.llvm
-              llvm20Compat
-              gcc
-              pythonEnv
-              uv
-            ]
-            ++ sfpiPackages;
+            numactl
+            hwloc
+            tbb
+            capstone
+            openmpi
+            llvm.clang
+            llvm.clang-tools
+            llvm.lld
+            llvm.llvm
+            llvm20Compat
+            gcc
+            pythonEnv
+            sfpi
+            uv
+          ];
 
           shellHook = ''
             export PATH="${llvm20Compat}/bin:$PATH"
@@ -126,20 +119,38 @@
               ]
             }''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
-            if [ -d "$PWD/runtime/sfpi/compiler/bin" ]; then
-              export PATH="$PWD/runtime/sfpi/compiler/bin:$PATH"
-            elif [ -d /opt/tenstorrent/sfpi/compiler/bin ]; then
-              export PATH="/opt/tenstorrent/sfpi/compiler/bin:$PATH"
+            repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+            sfpi_link="$repo_root/runtime/sfpi"
+            sfpi_target="${sfpi}/sfpi"
+
+            mkdir -p "$repo_root/runtime"
+            if [ -L "$sfpi_link" ]; then
+              ln -sfn "$sfpi_target" "$sfpi_link"
+            elif [ ! -e "$sfpi_link" ]; then
+              ln -s "$sfpi_target" "$sfpi_link"
+            else
+              echo "WARNING: $sfpi_link exists and is not a symlink; leaving it unchanged" >&2
             fi
+
+            export PATH="$sfpi_target/compiler/bin:$PATH"
 
             echo "TT-Metal dev shell active"
             echo "Compiler: $(command -v clang++-20)"
+            echo "SFPI:     $sfpi_target"
             echo "MPI C:    $(command -v mpicc)"
             echo "Python:   $(command -v python)"
           '';
         };
     in
     {
+      packages = forAllSystems (
+        system:
+        let
+          packages = packageFor system;
+        in
+        packages // { default = packages.sfpi; }
+      );
+
       devShells = forAllSystems (system: {
         default = mkDevShell system;
       });
