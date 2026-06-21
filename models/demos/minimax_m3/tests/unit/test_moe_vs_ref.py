@@ -63,7 +63,9 @@ def _torch_moe(x, gate_w, bias, experts, shared):
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 def test_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
-    """Full M3 MoE block (router + routed experts + shared + routed_scaling) vs torch ref, TP=1."""
+    """Full M3 MoE block (router + routed experts + shared + routed_scaling) vs torch ref, TP=1.
+    NOTE: multi-card MoE uses the expert-parallel (EP) path (>1 device auto-switches to throughput
+    experts, which require num_experts % num_devices == 0) — validated separately as EP=32, not here."""
     torch.manual_seed(0)
     x = torch.randn(1, 1, seq_len, H) * 0.1
 

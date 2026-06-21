@@ -80,10 +80,14 @@ def _torch_attention(x, w, cos, sin):
     return out @ w["o"].t()
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (8, 4)], linear_fabric=True)
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
 def test_attention_prefill_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
-    """Full M3 GQA attention block vs self-authored torch reference, random weights, TP=1."""
+    """Full M3 GQA attention block vs self-authored torch reference, random weights.
+
+    (1,1) = TP=1. (8,4) = TP=4 (M3's KV-head-limited tensor-parallel), exercising the o_proj
+    reduce-scatter/all-gather CCL; attention output is full-hidden replicated post-allreduce, so
+    device[0] holds the full result. Needs TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy ([8,4])."""
     torch.manual_seed(0)
     x = torch.randn(1, seq_len, HIDDEN) * 0.1
 

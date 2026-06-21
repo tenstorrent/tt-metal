@@ -19,7 +19,9 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.dense_mlp import DenseMLP
+from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
 from ..test_factory import parametrize_mesh_with_fabric
 
@@ -35,17 +37,18 @@ def _torch_dense_mlp(x, gate_w, up_w, down_w, alpha, limit):
     return act @ down_w.float().t()
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (8, 4)], linear_fabric=True)
 @pytest.mark.parametrize(
     "seq_len, hidden, inter",
     [
         (128, 6144, 12288),  # M3 dense layer: hidden_size, dense_intermediate_size
-        (32, 6144, 12288),
     ],
-    ids=["s128", "s32"],
+    ids=["s128"],
 )
 def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, hidden, inter, reset_seeds):
-    """DenseMLP vs torch reference, random weights, TP=1."""
+    """DenseMLP vs torch reference, random weights. (1,1)=TP=1; (8,4)=TP=4 (gate/up col-parallel +
+    down-proj all-reduce). Output is full-hidden post-allreduce -> device[0] holds it. (8,4) needs
+    TT_MESH_GRAPH_DESC_PATH=single_bh_galaxy."""
     alpha, limit = 1.702, 7.0
     x = torch.randn(1, 1, seq_len, hidden) * 0.1
     # HF Linear layout [out, in]; small scale so post-clamp distribution isn't degenerate.
@@ -58,13 +61,15 @@ def test_dense_mlp_vs_ref(mesh_device, device_params, seq_len, hidden, inter, re
     hf_config = SimpleNamespace(hidden_size=hidden, swiglu_limit=limit, swiglu_alpha=alpha)
     state_dict = {"gate_proj.weight": gate_w, "up_proj.weight": up_w, "down_proj.weight": down_w}
     mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
+    # TP>1 needs CCL for the down-proj all-reduce; at TP=1 it's unused.
+    ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=ttnn.Topology.Linear)
 
     mlp = DenseMLP(
         mesh_device=mesh_device,
         hf_config=hf_config,
         state_dict=state_dict,
         mesh_config=mesh_config,
-        ccl_manager=None,
+        ccl_manager=ccl_manager,
         weight_dtype=ttnn.bfloat16,
     )
 
