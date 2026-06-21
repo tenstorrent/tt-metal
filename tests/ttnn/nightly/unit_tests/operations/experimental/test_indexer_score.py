@@ -228,6 +228,238 @@ def test_indexer_score_shapes(device, heads, dim, sq, t, chunk_start, q_chunk, k
     _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
 
 
+# Indexed KV cache: k is a shared [B, 1, T, D] cache and cache_batch_idx selects the batch slot to score.
+# The slot is excluded from the program hash, so switching slots reuses one cached program (no recompile);
+# k may also be ND-sharded across DRAM banks; invalid inputs the hash does not pin are re-checked on a warm
+# cache (validate_on_program_cache_hit).
+IDX_CACHE = dict(heads=64, dim=128, sq=64, t=256, chunk_start=128)  # small all-resident shape, B slots
+
+
+def _indexed_inputs(num_slots, seed=11):
+    """q [1,Hi,Sq,D], a shared k cache [B,1,T,D], weights [1,Hi,Sq,1], all bf16. Slots differ so a
+    wrong-slot read would change the scores (and fail the per-slot reference)."""
+    c = IDX_CACHE
+    g = torch.Generator().manual_seed(seed)
+    q = torch.randn(1, c["heads"], c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, c["heads"], c["sq"], 1, generator=g, dtype=torch.bfloat16)
+    k_cache = torch.randn(num_slots, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
+    return q, w, k_cache
+
+
+def _check_slot(out, q, k_cache, w, b):
+    """Compare a slot's device output against the reference computed on that [1,1,T,D] slice."""
+    c = IDX_CACHE
+    ref = indexer_score_ref(q, k_cache[b : b + 1], w, c["chunk_start"])
+    assert_indexer_match(out, ref, c["sq"], c["t"], check_neg=True)
+
+
+def _nd_sharded_dram_config(device, rows_per_shard):
+    """ND-shard a [.., T, D] cache across DRAM banks: each [1, 1, rows_per_shard, D] block is one shard,
+    round-robin over the banks."""
+    dim = IDX_CACHE["dim"]
+    num_banks = device.dram_grid_size().x
+    cores = [ttnn.CoreRange(ttnn.CoreCoord(b, 0), ttnn.CoreCoord(b, 0)) for b in range(num_banks)]
+    spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, rows_per_shard, dim],
+        grid=ttnn.CoreRangeSet(cores),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=spec)
+
+
+def test_indexer_score_indexed_cache(device):
+    """cache_batch_idx selects a slot of a shared [B,1,T,D] cache; every slot scores correctly AND
+    switching slots on the same cache tensor does not recompile (the slot is excluded from the hash)."""
+    c = IDX_CACHE
+    B = 3
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    q, w, k_cache = _indexed_inputs(B)
+    q_dev, w_dev = to_device(q, device), to_device(w, device)
+    k_dev = to_device(k_cache, device)  # tiled [B,1,T,D], DRAM interleaved
+
+    def run(b):
+        return ttnn.to_torch(
+            ttnn.experimental.indexer_score(
+                q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=b
+            )
+        )
+
+    _check_slot(run(0), q, k_cache, w, 0)
+    entries_after_first = device.num_program_cache_entries()  # one program now cached for this shape/cfg
+    for b in range(1, B):
+        _check_slot(run(b), q, k_cache, w, b)
+    # Switching the indexed slot must NOT add a program (cache_batch_idx is a runtime arg, not in the hash).
+    assert device.num_program_cache_entries() == entries_after_first, "switching cache_batch_idx recompiled"
+
+
+def test_indexer_score_indexed_cache_nd_sharded_k(device):
+    """The indexed k cache may be ND-sharded across DRAM banks (each [1,1,T,D] slot is one shard); the
+    reader resolves it through a TensorAccessor, so every slot still scores correctly."""
+    c = IDX_CACHE
+    B = 2
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    q, w, k_cache = _indexed_inputs(B)
+    q_dev, w_dev = to_device(q, device), to_device(w, device)
+    k_mem = _nd_sharded_dram_config(device, rows_per_shard=c["t"])  # each [1,1,T,D] slot is one shard
+    k_dev = ttnn.from_torch(k_cache, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=k_mem)
+    assert k_dev.memory_config().is_sharded()
+
+    for b in range(B):
+        out = ttnn.to_torch(
+            ttnn.experimental.indexer_score(
+                q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=b
+            )
+        )
+        _check_slot(out, q, k_cache, w, b)
+
+
+def test_indexer_score_indexed_cache_rejects_oob(device):
+    """An out-of-range cache_batch_idx (>= B) is rejected -- including on a warm program cache, since the
+    slot is re-validated on a cache hit (validate_on_program_cache_hit), not only at miss time."""
+    c = IDX_CACHE
+    B = 2
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    q, w, k_cache = _indexed_inputs(B)
+    q_dev, w_dev = to_device(q, device), to_device(w, device)
+    k_dev = to_device(k_cache, device)
+
+    # Warm the program cache with a valid slot; an OOB slot then hits the SAME program (same hash) and must
+    # still be rejected by the cache-hit validation.
+    ttnn.experimental.indexer_score(
+        q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=0
+    )
+    with pytest.raises(RuntimeError, match="cache_batch_idx"):
+        ttnn.experimental.indexer_score(
+            q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=B
+        )
+
+
+def test_indexer_score_indexed_cache_requires_idx_for_multislot(device):
+    """A multi-slot [B,1,T,D] k cache with NO cache_batch_idx is ambiguous (which slot?) and must be
+    rejected -- the non-indexed batch guard in validate_non_hashed. Pairs with the OOB-slot rejection to
+    cover the indexed-cache batch invariants the program hash does not pin."""
+    c = IDX_CACHE
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    q, w, k_cache = _indexed_inputs(2)  # B=2 slots, but no cache_batch_idx supplied below
+    q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k_cache, device)
+    with pytest.raises(RuntimeError, match="batch must be 1"):
+        ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
+
+
+def test_indexer_score_rejects_sharded_q(device):
+    """Only k may be sharded; q (and weights) must stay interleaved. A sharded q is refused by the input
+    validation (validate_non_hashed)."""
+    c = IDX_CACHE
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    q, w, k_cache = _indexed_inputs(1)
+    q_mem = _nd_sharded_dram_config(device, rows_per_shard=32)  # shard q -> must be rejected (q stays interleaved)
+    q_dev = ttnn.from_torch(q, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=q_mem)
+    w_dev, k_dev = to_device(w, device), to_device(k_cache, device)
+    with pytest.raises(RuntimeError, match="interleaved"):
+        ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
+
+
+def test_indexer_score_nd_sharded_k_multi_T(device):
+    """ND-sharded k at two cache lengths with one FIXED shard shape. indexer_score scores all T keys, so T
+    is always hashed -- both T values build their own program -- but each must still read the sharded banks
+    correctly."""
+    c = IDX_CACHE
+    heads, dim, sq, chunk_start = c["heads"], c["dim"], c["sq"], c["chunk_start"]
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    k_mem = _nd_sharded_dram_config(device, rows_per_shard=128)  # fixed shard shape, independent of T
+    device.clear_program_cache()
+    for t in (256, 512):  # multiples of 128: same shard spec, different T (different shard count)
+        q, k, w = make_inputs(heads, dim, sq, t)
+        q_dev, w_dev = to_device(q, device), to_device(w, device)
+        k_dev = ttnn.from_torch(k, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=k_mem)
+        out = ttnn.to_torch(
+            ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=chunk_start, program_config=cfg)
+        )
+        assert_indexer_match(out, indexer_score_ref(q, k, w, chunk_start), sq, t, check_neg=True)
+    assert device.num_program_cache_entries() == 2, "two distinct T must build two programs (T is hashed)"
+
+
+# Runtime KV length / oversized persistent cache: k is allocated at its full T (the persistent buffer,
+# which stays hashed -- it pins the grid/work-split) and kv_len selects the valid key prefix this dispatch.
+# kv_len is excluded from the program hash, so a serving loop growing kv_len (<= T) reuses one program -- no
+# recompile. Only output columns [0, kv_len) are written; the stale tail is sliced off.
+KV_LEN = dict(heads=64, dim=128, sq=64, t=512, chunk_start=0)  # oversized T=512 buffer, Sq=2 tiles
+
+
+def _kv_len_inputs(seed=23):
+    """q [1,Hi,Sq,D], an oversized k buffer [1,1,T,D], weights [1,Hi,Sq,1], all bf16."""
+    c = KV_LEN
+    g = torch.Generator().manual_seed(seed)
+    q = torch.randn(1, c["heads"], c["sq"], c["dim"], generator=g, dtype=torch.bfloat16)
+    w = torch.randn(1, c["heads"], c["sq"], 1, generator=g, dtype=torch.bfloat16)
+    k = torch.randn(1, 1, c["t"], c["dim"], generator=g, dtype=torch.bfloat16)
+    return q, w, k
+
+
+def _check_kv_len(out, q, k, w, kv_len):
+    """Only columns [0, kv_len) are valid; compare them to the reference on the first kv_len keys (the rest
+    of the [1,1,Sq,T] output is the stale tail and is sliced off)."""
+    c = KV_LEN
+    assert out.shape == (1, 1, c["sq"], c["t"])
+    ref = indexer_score_ref(q, k[:, :, :kv_len, :], w, c["chunk_start"])  # [1,1,Sq,kv_len]
+    assert_indexer_match(out[:, :, :, :kv_len], ref, c["sq"], kv_len, check_neg=True)
+
+
+@pytest.mark.parametrize(
+    "q_chunk, k_chunk, head_group",
+    [
+        (32, 32, 0),  # all heads resident, single-tile k chunks (the full-strip path)
+        (32, 32, 8),  # head streaming in groups of 8 (the per-column accumulate_row_streaming path)
+        (32, 128, 0),  # KC=4 chunked k: kv_len can land mid-chunk and zero whole trailing chunks
+        (64, 32, 16),  # QC=2 multi-row group, HB=16 of 64 resident
+    ],
+    ids=["resident", "stream", "chunked_k", "qc2"],
+)
+def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
+    """One oversized k buffer (T=512) scored at several kv_len <= T: each writes only [0, kv_len) and
+    matches the reference on the first kv_len keys, and growing kv_len on the SAME buffer does NOT recompile
+    (kv_len is a runtime arg excluded from the hash). This is the persistent-cache serving loop, swept over
+    the kernel paths (resident / head-streaming / chunked-k / multi-row group)."""
+    c = KV_LEN
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=q_chunk, k_chunk_size=k_chunk, head_group_size=head_group)
+    q, w, k = _kv_len_inputs()
+    q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k, device)
+
+    def run(kv_len):
+        return ttnn.to_torch(
+            ttnn.experimental.indexer_score(
+                q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=kv_len
+            )
+        )
+
+    _check_kv_len(run(64), q, k, w, 64)  # only the first 2 k-tiles valid; most work units are fully past kv_len
+    entries_after_first = device.num_program_cache_entries()
+    for kv_len in (128, 256, 512):  # grow the valid prefix within the same T=512 buffer
+        _check_kv_len(run(kv_len), q, k, w, kv_len)
+    assert device.num_program_cache_entries() == entries_after_first, "changing kv_len recompiled"
+
+
+def test_indexer_score_rejects_bad_kv_len(device):
+    """kv_len must be tile-aligned, within (0, T], and leave room for the causal window
+    (chunk_start + Sq <= kv_len). Each violation is rejected -- on a WARM cache too, since kv_len is excluded
+    from the hash and re-validated on a program-cache hit (validate_on_program_cache_hit)."""
+    c = KV_LEN
+    cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
+    q, w, k = _kv_len_inputs()
+    q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k, device)
+
+    # Warm the program cache with a valid kv_len; each bad one then hits the SAME program and must still fail.
+    ttnn.experimental.indexer_score(
+        q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=128
+    )
+    for bad, why in [(c["t"] + 32, "above T"), (100, "not tile-aligned"), (32, "causal window > kv_len")]:
+        with pytest.raises(RuntimeError, match="kv_len"):
+            ttnn.experimental.indexer_score(
+                q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=bad
+            )
+
+
 @pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
 def test_indexer_score_determinism(device, case_id, heads):
     """Determinism on the production deployments (GLM5.1 8h, DSv32 16h, GLX chunked-prefill knobs at

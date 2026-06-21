@@ -59,20 +59,28 @@ inline uint32_t row_valid_prefix(uint32_t q_row_abs, uint32_t k_tile_start, uint
 /** (group, band) cell cursor. The generalized scheduler maps groups -> grid rows and k-bands ->
  *  grid columns; each core walks its own (group-phase x band) rectangle and sets the cursor per cell.
  *  group = absolute q-row-group index; band = absolute k-band index. The per-cell accessors below feed
- *  every per-unit body (matmul / mask / untilize) identically, independent of how the grid was tiled. */
+ *  every per-unit body (matmul / mask / untilize) identically, independent of how the grid was tiled.
+ *
+ *  The grid (bands per column, the host deal) stays keyed on the COMPILE-TIME k_len_tiles (the allocated
+ *  buffer), so it is fixed. valid_k_len_tiles (runtime, <= k_len_tiles, defaults to the full buffer) only
+ *  narrows the valid-column count per cell: bands entirely past it score nothing (k_tiles() == 0). */
 struct WorkUnitSpan {
     uint32_t group = 0;
     uint32_t band = 0;
+    uint32_t valid_k_len_tiles = k_len_tiles;  // populated key prefix this dispatch; default = full buffer
 
     void set(uint32_t g, uint32_t b) {
         group = g;
         band = b;
     }
+    /** Set the runtime valid KV length (in tiles). Pass kv_len/32, or k_len_tiles for the full buffer. */
+    void set_valid_k_len_tiles(uint32_t tiles) { valid_k_len_tiles = tiles; }
 
     uint32_t q_tile_start() const { return group * q_tiles_per_unit; }  // first q-tile-row of this cell
     uint32_t k_tile_start() const { return band * k_tiles_per_unit; }   // first k-tile of this cell
-    uint32_t k_tiles() const {                                          // valid k-tiles (< full on the edge band)
-        uint32_t left = k_len_tiles - k_tile_start();
+    uint32_t k_tiles() const {  // valid k-tiles in this cell: < full on the edge, 0 entirely past kv_len
+        const uint32_t start = k_tile_start();
+        const uint32_t left = valid_k_len_tiles > start ? valid_k_len_tiles - start : 0;
         return left < k_tiles_per_unit ? left : k_tiles_per_unit;
     }
 };

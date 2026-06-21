@@ -22,12 +22,16 @@ struct IndexerScoreDeviceOperation {
     using tensor_return_value_t = indexer_score::tensor_return_value_t;
     using program_factory_t = std::variant<program::IndexerScoreProgramFactory>;
 
-    // No custom compute_program_hash: operation_attributes_t (chunk_start_idx + every config field)
-    // is a reflectable aggregate, so the default reflection hash already keys distinct programs on all
-    // fields. Do not add a hand-rolled hash that drops fields.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
+    // Custom hash so the cache_batch_idx / kv_len values do NOT recompile (only their has_value() is hashed);
+    // everything else keys as usual. See the definition for details.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    // Re-checks the non-hashed invariants (placement/layout, slot < B, kv_len bounds) since the slot/kv_len
+    // values can change on a hit. See validate_non_hashed.
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 
@@ -43,7 +47,9 @@ struct IndexerScoreDeviceOperation {
         const Tensor& weights,
         uint32_t chunk_start_idx,
         const IndexerScoreProgramConfig& program_config,
-        const DeviceComputeKernelConfig& compute_kernel_config);
+        const DeviceComputeKernelConfig& compute_kernel_config,
+        std::optional<uint32_t> cache_batch_idx,
+        std::optional<uint32_t> kv_len);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -54,12 +60,22 @@ namespace ttnn::experimental {
 //   score[b, s, t] = sum_h relu(q[b,h,s,:] . k[b,t,:]) * weights[b,h,s]
 // q [B, Hi, Sq, D], k [B, 1, T, D], weights [B, Hi, Sq, 1] -> score [B, 1, Sq, T] (row-major bf16).
 // Causality from chunk_start_idx: key t visible to query s iff t <= chunk_start_idx + s.
+//
+// cache_batch_idx: when set, k is a shared [B, 1, T, D] cache and this selects the batch slot to score
+// against (k may then also be ND-sharded across DRAM banks).
+// kv_len: when set, only the first kv_len key positions of k are valid this dispatch (rest masked out);
+// must be tile-aligned, in (0, T], with chunk_start_idx + Sq <= kv_len. Output is still [B, 1, Sq, T] with
+// only columns [0, kv_len) written.
+// Both values are re-applied each dispatch and excluded from the program hash, so switching slot or growing
+// kv_len reuses ONE program -- no recompile.
 ttnn::Tensor indexer_score(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
     uint32_t chunk_start_idx = 0,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    std::optional<uint32_t> cache_batch_idx = std::nullopt,
+    std::optional<uint32_t> kv_len = std::nullopt);
 
 }  // namespace ttnn::experimental
