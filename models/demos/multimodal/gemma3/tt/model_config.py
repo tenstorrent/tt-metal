@@ -647,14 +647,27 @@ class ModelArgs(TTModelArgs):
         model = self.reference_transformer(wrap=False)
         layer = model.model.layers[0].self_attn
         use_position_embeddings = layer.__class__.__name__ in ("Gemma3Attention",)
+        rope_layer_type = None
         if "gemma-3" in self.model_name:
             if rope_embeddings == "local":
                 rotary_emb = model.model.rotary_emb_local
+                rope_layer_type = "sliding_attention"
             else:
                 rotary_emb = model.model.rotary_emb
+                rope_layer_type = "full_attention"
         else:
             rotary_emb = model.model.rotary_emb
-        wrapper = HfAttentionWrapper(layer, self.head_dim, rotary_emb if use_position_embeddings else None)
+        # transformers 5.x Gemma3 consolidated RoPE into one module that selects `{layer_type}_inv_freq`.
+        # Layer 0 is a sliding (local) layer, so the attention's own layer_type would force LOCAL rope,
+        # but this unit test compares against the explicitly requested rope module (global by default)
+        # and the TT RotarySetup uses the global rope_theta. Pin the layer_type to the chosen module so
+        # reference and TT use the same rope (matches the pre-5.x behavior).
+        wrapper = HfAttentionWrapper(
+            layer,
+            self.head_dim,
+            rotary_emb if use_position_embeddings else None,
+            rope_layer_type=rope_layer_type,
+        )
         return wrapper
 
 

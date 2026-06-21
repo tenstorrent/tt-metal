@@ -4090,7 +4090,7 @@ class ModelArgs:
 
 
 class HfAttentionWrapper:
-    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False):
+    def __init__(self, attention, head_dim, rotary_emb, use_hf_rope=False, rope_layer_type=None):
         from transformers import DynamicCache
 
         super().__init__()
@@ -4099,6 +4099,10 @@ class HfAttentionWrapper:
         self.head_dim = head_dim
         self.rotary_emb = rotary_emb
         self.use_hf_rope = use_hf_rope
+        # transformers 5.x Gemma3 rotary picks `{layer_type}_inv_freq`. When the caller chose a
+        # specific rope module (e.g. global vs local), pin the layer_type to match it instead of
+        # the attention layer's own type; otherwise fall back to the attention's layer_type.
+        self.rope_layer_type = rope_layer_type
 
     def forward(self, x, start_pos, freqs_cis_i, mask=None):
         position_ids = torch.tensor([list(range(start_pos, start_pos + x.shape[1]))] * x.shape[0])
@@ -4120,7 +4124,11 @@ class HfAttentionWrapper:
             # `layer_type` and selects `{layer_type}_inv_freq` (layer_type=None -> AttributeError
             # 'None_inv_freq'). Pass the wrapped attention's own layer_type when the rotary accepts
             # it (the authoritative type for this layer); <5 / non-Gemma3 rotaries don't take it.
-            _layer_type = getattr(self.attention, "layer_type", None)
+            _layer_type = (
+                self.rope_layer_type
+                if self.rope_layer_type is not None
+                else getattr(self.attention, "layer_type", None)
+            )
             if _layer_type is not None and "layer_type" in inspect.signature(self.rotary_emb.forward).parameters:
                 position_embeddings = self.rotary_emb(x, position_ids, layer_type=_layer_type)
             else:
