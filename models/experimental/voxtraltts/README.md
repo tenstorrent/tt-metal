@@ -538,11 +538,57 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 
 ### 6.4 Performance Verification
 
+Verified using `demo/demo.py`
+
 #### P150 (1×1)
 
-| ISL (text tokens / audio tokens) | Latency (ms) | RTF | Throughput (char/s) |
-|:----------------------------------|-------------:|----:|--------------------:|
-| 513 chars / 377 audio tokens | 21407 | 0.7098 | 23.96 |
+##### Trace enabled + 2CQ
+
+###### `casual_male`
+
+| text_max_seq_len | ISL (text chars / audio tokens) | Latency (ms) | RTF    | Throughput (char/s) |
+|:-----------------|:--------------------------------|-------------:|-------:|--------------------:|
+| 512              | 255 chars / 209 audio tokens    | 13649.12     | 0.8163 | 18.68               |
+| 1024             | 514 chars / 392 audio tokens    | 21914.94     | 0.6988 | 23.45               |
+| 4096             | 514 chars / 392 audio tokens    | 22015.82     | 0.7020 | 23.35               |
+| 16384            | 514 chars / 392 audio tokens    | 22416.36     | 0.7148 | 22.93               |
+| 64000            | 514 chars / 392 audio tokens    | 22037.20     | 0.7027 | 23.32               |
+| 65536            | 514 chars / 392 audio tokens    | 21793.18     | 0.6949 | 23.59               |
+
+###### `cheerful_female`
+
+| text_max_seq_len | ISL (text chars / audio tokens) | Latency (ms) | RTF    | Throughput (char/s) |
+|:-----------------|:--------------------------------|-------------:|-------:|--------------------:|
+| 512              | 255 chars / 299 audio tokens    | 16818.59     | 0.7031 | 15.16               |
+| 1024             | 514 chars / 458 audio tokens    | 24115.93     | 0.6582 | 21.31               |
+| 4096             | 514 chars / 458 audio tokens    | 24585.80     | 0.6710 | 20.91               |
+| 16384            | 514 chars / 458 audio tokens    | 24200.32     | 0.6605 | 21.24               |
+| 64000            | 514 chars / 458 audio tokens    | 24301.64     | 0.6633 | 21.15               |
+| 65536            | 514 chars / 458 audio tokens    | 23972.96     | 0.6543 | 21.44               |
+
+##### Trace disabled (`--no-decode-trace`)
+
+###### `casual_male`
+
+| text_max_seq_len | ISL (text chars / audio tokens) | Latency (ms) | RTF    | Throughput (char/s) |
+|:-----------------|:--------------------------------|-------------:|-------:|--------------------:|
+| 512              | 255 chars / 209 audio tokens    | 49246.43     | 2.2884 | 5.18                |
+| 1024             | 514 chars / 392 audio tokens    | 93779.61     | 1.8231 | 5.48                |
+| 4096             | 514 chars / 392 audio tokens    | 93246.17     | 1.8127 | 5.51                |
+| 16384            | 514 chars / 392 audio tokens    | 92940.25     | 1.8068 | 5.53                |
+| 64000            | 514 chars / 392 audio tokens    | 92422.65     | 1.7967 | 5.56                |
+| 65536            | 514 chars / 392 audio tokens    | 93695.71     | 1.8215 | 5.49                |
+
+###### `cheerful_female`
+
+| text_max_seq_len | ISL (text chars / audio tokens) | Latency (ms) | RTF    | Throughput (char/s) |
+|:-----------------|:--------------------------------|-------------:|-------:|--------------------:|
+| 512              | 255 chars / 299 audio tokens    | 52755.37     | 1.7968 | 4.83                |
+| 1024             | 514 chars / 458 audio tokens    | 93998.24     | 1.6030 | 5.47                |
+| 4096             | 514 chars / 458 audio tokens    | 96404.77     | 1.6440 | 5.33                |
+| 16384            | 514 chars / 458 audio tokens    | 94806.01     | 1.6167 | 5.42                |
+| 64000            | 514 chars / 458 audio tokens    | 92893.81     | 1.5841 | 5.53                |
+| 65536            | 514 chars / 458 audio tokens    | 94664.92     | 1.6143 | 5.43                |
 
 #### BH QB2 (1×4)
 
