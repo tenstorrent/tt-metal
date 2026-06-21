@@ -345,7 +345,7 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const auto address = tensor.address();
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
-        "TensorParameter '{}' base address {} exceeds uint32_t max",
+        "Tensor argument for TensorParameter '{}' base address exceeds uint32_t max",
         handle.tensor_parameter_name,
         address);
     emit(static_cast<uint32_t>(address));
@@ -358,7 +358,7 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const tt::tt_metal::Buffer* buffer = tensor.mesh_buffer().get_reference_buffer();
     TT_FATAL(
         buffer != nullptr,
-        "Tensor binding '{}' has runtime accessor field CRTA words but no backing Buffer to "
+        "Tensor argument for TensorParameter '{}' has runtime accessor field CRTA words but no backing Buffer to "
         "source them from.",
         handle.tensor_parameter_name);
 
@@ -371,7 +371,7 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
         const auto aligned_page_size = buffer->aligned_page_size();
         TT_FATAL(
             aligned_page_size <= std::numeric_limits<uint32_t>::max(),
-            "Tensor binding '{}' aligned page size {} exceeds uint32_t max",
+            "Internal error: Tensor argument for TensorParameter '{}' aligned page size {} exceeds uint32_t max",
             handle.tensor_parameter_name,
             aligned_page_size);
         emit(static_cast<uint32_t>(aligned_page_size));
@@ -382,14 +382,12 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const auto& bds_opt = buffer->buffer_distribution_spec();
     TT_FATAL(
         bds_opt.has_value(),
-        "Tensor binding '{}' has runtime accessor field CRTA words but its bound MeshTensor's "
-        "buffer has no BufferDistributionSpec. dynamic_tensor_shape currently requires a sharded "
-        "TensorParameter.",
+        "Tensor argument for TensorParameter '{}' has no BufferDistributionSpec.",
         handle.tensor_parameter_name);
     const auto& tensor_shape = bds_opt->tensor_shape_in_pages();
     TT_FATAL(
         tensor_shape.rank() == handle.num_runtime_field_crta_words,
-        "Tensor binding '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
+        "Tensor argument for TensorParameter '{}' supplied a MeshTensor whose shape rank ({}) differs from the rank "
         "({}) reserved at ProgramSpec resolution time. Rank must remain constant across binds; "
         "only the per-dim shape values may vary.",
         handle.tensor_parameter_name,

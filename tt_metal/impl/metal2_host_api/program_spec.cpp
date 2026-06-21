@@ -2042,11 +2042,17 @@ KernelRiscMaskMap BuildGen1KernelRiscMasks(const ProgramSpec& spec) {
 // page-size word). The two are mutually exclusive per binding -- see runtime_field_is_page_size.
 struct ResolvedTensorParameter {
     std::vector<uint32_t> cta_payload;
+
+    // How many CRTA words (beyond the base address) does this binding consume?
+    // This is only used if TensorParameter relaxations have been requested.
     uint32_t extra_crta_words = 0;
-    // Discriminates which runtime accessor field the extra_crta_words hold: the sharded
-    // dynamic_tensor_shape shape words (false), or the single interleaved row-major
-    // page-size word (true). The emitter needs this because an interleaved tensor has no
-    // BufferDistributionSpec to source a shape from -- it must take the page-size path instead.
+
+    // What info the runtime field CRTA words actually contain depends on the relaxation.
+    // Currently, there are only two mutually exclusive possibilities (though more may be added):
+    //  1. The interleaved row-major page-size (one CRTA only)
+    //  2. The sharded dynamic_tensor_shape shape (one CRTA per tensor dim)
+    // For now, since there are only two mutually exclusive possibilities, it's sufficient to
+    // distinguish them with a boolean.
     bool runtime_field_is_page_size = false;
 };
 
@@ -2121,24 +2127,28 @@ ResolvedTensorParameter ResolveTensorParameterStaticCTAs(
 
     // Common header (always emitted, sharded or not):
     cta_payload.push_back(args_config.raw());
+    // If the page size is static, it rides as a CTA.
+    // (If it's dynamic, it will live in a CRTA word instead.)
     if (!dyn_page) {
         cta_payload.push_back(static_cast<uint32_t>(aligned_page_size));
-    }
-    // else: when dyn_page the page size lives in a CRTA word (filled per-dispatch from the bound
-    // buffer), not a CTA -- omit the slot (A-collapse), matching the device-side TensorAccessorArgs
-    // layout where the RuntimePageSize bit drops the same word.
+    } else {
+        TT_FATAL(!is_sharded, "Internal error: dynamic page size should not occur on a sharded tensor parameter");
 
+        // One runtime field: the page size, re-derived from the bound buffer each dispatch
+        // and emitted immediately after the base-address word (see EmitBindingCrtaValues).
+        result.extra_crta_words = 1;
+        result.runtime_field_is_page_size = true;
+    }
+
+    // The rest of the logic in this function pertains to sharded tensors only.
+    // Early return for a non-sharded tensor.
     if (!is_sharded) {
-        if (dyn_page) {
-            // One runtime field: the page size, re-derived from the bound buffer each dispatch
-            // and emitted immediately after the base-address word (see EmitBindingCrtaValues).
-            result.extra_crta_words = 1;
-            result.runtime_field_is_page_size = true;
-        }
-        // Interleaved tensors otherwise don't carry shape / bank-coord data: the device-side
-        // accessor computes addresses from page id + num_banks alone.
         return result;
     }
+
+    //////////////////////////////////
+    // Sharded tensor handling
+    //////////////////////////////////
 
     // Sharded: emit rank, num_banks, tensor_shape_in_pages (CTA only when static),
     // shard_shape_in_pages, bank_coords.
