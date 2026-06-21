@@ -45,7 +45,9 @@ def test_demo_batch_7(batch, input_path, model_location_generator, device):
         return s.rstrip(", ")
 
     for i in range(batch):
-        assert _norm(expected_answers[i]) == _norm(answers[i]), f"answer[{i}]: {answers[i]!r} != {expected_answers[i]!r}"
+        assert _norm(expected_answers[i]) == _norm(
+            answers[i]
+        ), f"answer[{i}]: {answers[i]!r} != {expected_answers[i]!r}"
 
 
 @pytest.mark.parametrize("batch", (12,), ids=["batch_12"])
@@ -83,7 +85,9 @@ def test_demo_batch_12(batch, input_path, model_location_generator, device):
         return s.rstrip(", ")
 
     for i in range(batch):
-        assert _norm(expected_answers[i]) == _norm(answers[i]), f"answer[{i}]: {answers[i]!r} != {expected_answers[i]!r}"
+        assert _norm(expected_answers[i]) == _norm(
+            answers[i]
+        ), f"answer[{i}]: {answers[i]!r} != {expected_answers[i]!r}"
 
 
 @pytest.mark.skipif(is_blackhole(), reason="#7525: Not functional on BH yet")
