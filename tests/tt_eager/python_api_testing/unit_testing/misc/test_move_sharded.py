@@ -267,7 +267,7 @@ def test_move_sharded_to_interleaved_rejected(device, expect_error):
     )
 
     # Attempt to move to interleaved layout should fail
-    with expect_error(RuntimeError, match="Expected output tensor memory config to be sharded"):
+    with expect_error(RuntimeError, "Expected output tensor memory config to be sharded"):
         ttnn.move(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
