@@ -86,8 +86,13 @@ class TtPrefillRuntime:
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config
-        # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
+        # Per-layer LayerAck callback, built once in set_layer_ack_channel() or
+        # set_layer_completion_sink() after compile.
         self._on_layer_complete = None
+        # Index of the chunk currently being prefilled. The driver sets this per chunk
+        # (see _compute_and_send) so the pipelined layer-completion sink can build a
+        # globally-dense ordering key: seq = current_chunk_idx * NUM_LAYERS + layer_idx.
+        self.current_chunk_idx = 0
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -299,3 +304,23 @@ class TtPrefillRuntime:
             layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined (multi-rank) prefill.
+
+        Single-rank uses set_layer_ack_channel(): the runtime owns the scheduler's
+        counter channel directly and inject()s it per layer. In a pipeline each rank
+        owns only a layer slice, so a rank cannot inject the scheduler channel directly
+        (only the master rank may, and only in global layer order). Instead `sink` is
+        called as sink(layer_idx) — with the GLOBAL layer index (MLA fires
+        on_layer_complete(self.layer_idx), and self.layer_idx is global on a sliced
+        runtime) — and pushes a full {seq, source_rank, layer_idx, request_id}
+        completion into the host-local LayerCompletionQueue. The LayerCompletionRouter
+        forwards it to the master rank, which re-emits completions strictly in seq
+        order into the same InterProcessCounterChannel the scheduler already connects to.
+
+        Mutually exclusive with set_layer_ack_channel() (both set _on_layer_complete);
+        the driver picks one based on num_ranks.
+        """
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._on_layer_complete = sink

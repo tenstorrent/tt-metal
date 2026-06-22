@@ -34,6 +34,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.runners.d2d_socket_push_op import d2d_socket_push
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
+from models.demos.deepseek_v3_d_p.tt.runners.layer_completion_sink import build_layer_completion_sink
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     build_h2d_service,
     get_variant,
@@ -296,6 +297,9 @@ def _compute_and_send(runtime: TtPrefillRuntime, rank: int, c: int, inp, meta: d
     """Run one chunk: prefill, forward the output downstream (non-last rank) and grant the outbound
     sender so it ships over fabric, log CHUNK_START. Returns the compute-start epoch (NTP-comparable)."""
     t_start = time.time()
+    # Record the chunk index so the pipelined layer-completion sink (if registered) can
+    # build its globally-dense seq = c * NUM_LAYERS + global_layer_idx. No-op otherwise.
+    runtime.current_chunk_idx = c
     out = runtime.prefill(
         inp, slot_id=meta["slot_id"], actual_start=meta["actual_start"], actual_end=meta["actual_end"]
     )
@@ -584,9 +588,11 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
     mechanics as standalone (num_ranks 1..N over D2D); the only difference is the trigger (H2D input)
     and that it runs forever.
 
-    Migration (KV-chunk-table publish) + per-layer LayerAck are wired for the single-rank case only;
-    they are disabled for num_ranks>1 (pipelined migration is future work). Shutdown for num_ranks>1 is
-    rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on teardown / SIGKILL."""
+    Per-layer LayerAck: single-rank inject()s the scheduler counter channel directly; num_ranks>1
+    routes per-rank completions to the master via ttnn.layer_completion (see the LayerAck block below).
+    KV-chunk-table publish stays single-rank only (per-rank/merged table is future work). Shutdown for
+    num_ranks>1 is rough: downstream ranks block in D2D recv when rank 0 stops, so they exit on
+    teardown / SIGKILL — clean cross-rank router teardown is future work."""
     single_rank = num_ranks == 1
 
     ttnn.distributed_context_barrier()  # warm-up: all ranks finish compile before chunks flow
@@ -618,41 +624,87 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
 
-    # Migration KV-chunk-table + LayerAck: single-rank only (disabled for the pipeline for now).
+    # Per-layer LayerAck -> scheduler-driven migration. Two wirings by topology:
+    #   * single-rank: the runtime owns the scheduler's counter channel and inject()s it
+    #     directly (the original path).
+    #   * pipeline (num_ranks > 1): each rank owns only a layer slice, so it cannot inject
+    #     the scheduler channel directly. Every rank pushes full {seq, source_rank, layer_idx,
+    #     request_id} completions into a host-local LayerCompletionQueue; a per-host
+    #     LayerCompletionRouter forwards them to the master rank, which re-emits them in
+    #     global seq order into the SAME counter channel the scheduler connects to. See
+    #     layer_completion_sink.py and ttnn.layer_completion.
+    service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
+    ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+    master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
     ack_channel = None
+    router = None
+    producer = None
+
+    def _unlink_stale_shm(name: str) -> None:
+        # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
+        path = f"/dev/shm/{name.lstrip('/')}"
+        if os.path.exists(path):
+            logger.warning(f"[migration] removing stale shm {path} from a prior run")
+            os.remove(path)
+
+    # KV-chunk-table publish stays single-rank for now: a pipeline rank only knows its own
+    # slice's KV NoC addresses, so the per-rank/merged table is future work.
+    if single_rank and os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
+        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
+            build_and_serialize_kv_chunk_table,
+            send_kv_chunk_table,
+        )
+
+        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+        build_and_serialize_kv_chunk_table(
+            mesh_device=mesh_device,
+            kvpe_cache=runtime.kvpe_cache,
+            seq_len=MAX_SEQ_LEN,
+            num_layers=NUM_LAYERS,
+            mesh_shape=GLOBAL_MESH_SHAPE,
+            sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
+            num_users=NUM_USERS,
+            path=table_path,
+        )
+        send_kv_chunk_table(table_path)
+
     if single_rank:
-        service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
-        if os.environ.get("PREFILL_ENABLE_MIGRATION", "0") == "1":
-            # Only the runner knows the KV NoC addresses, so it builds + serializes the chunk table the
-            # orchestrator forwards to the migration_worker.
-            from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
-                build_and_serialize_kv_chunk_table,
-                send_kv_chunk_table,
-            )
-
-            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-            build_and_serialize_kv_chunk_table(
-                mesh_device=mesh_device,
-                kvpe_cache=runtime.kvpe_cache,
-                seq_len=MAX_SEQ_LEN,
-                num_layers=NUM_LAYERS,
-                mesh_shape=GLOBAL_MESH_SHAPE,
-                sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
-                num_users=NUM_USERS,
-                path=table_path,
-            )
-            send_kv_chunk_table(table_path)
-
-        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler reads the delta.
-        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
-        _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
-        if os.path.exists(_stale_ack_shm):
-            # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
-            logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
-            os.remove(_stale_ack_shm)
+        # Direct path: the runtime owns + inject()s the scheduler counter channel.
+        _unlink_stale_shm(ack_shm_name)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+    else:
+        # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
+        ring_shm_name = os.environ.get("PREFILL_LAYER_COMPLETION_RING", f"/tt_prefill_layer_completion_ring_{rank}")
+        _unlink_stale_shm(ring_shm_name)
+        if rank == master_rank:
+            _unlink_stale_shm(ack_shm_name)
+        # The router owns the host-local ring (and, on the master, the scheduler counter channel,
+        # which it inject()s in order). Subordinate ranks MPI-forward completions to the master.
+        router = ttnn.layer_completion.LayerCompletionRouter(
+            rank=rank,
+            world_size=num_ranks,
+            master_rank=master_rank,
+            ring_shm_name=ring_shm_name,
+            scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+        )
+        producer = ttnn.layer_completion.LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+        # seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this rank's slice; the layer_idx
+        # arriving at the sink is already global; the chunk index is set per chunk in _compute_and_send.
+        runtime.set_layer_completion_sink(
+            build_layer_completion_sink(
+                producer,
+                source_rank=rank,
+                num_layers=NUM_LAYERS,
+                get_request_id=lambda: runtime.current_chunk_idx,
+            )
+        )
+        logger.info(
+            f"[migration] pipelined layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
+            f"ring={ring_shm_name} "
+            + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
+        )
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
     run_request_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
@@ -663,6 +715,13 @@ def _serve_request(runtime, mesh_device, hf_config, rank: int, num_ranks: int, i
 
     h2d_service = d2d_in = d2d_out = None
     gc.collect()
+    # Teardown. NOTE: for num_ranks>1 the request loop only returns on a clean _shutdown; the known
+    # rough-shutdown path (downstream ranks block in D2D recv, exit on SIGKILL) can bypass this. Clean
+    # cross-rank teardown (barrier + wait()-after-cancel + end-of-request sentinel) is joint future work.
+    if producer is not None:
+        producer.shutdown()
+    if router is not None:
+        router.stop()  # joins the listener; on the master, unlinks the scheduler counter channel
     if ack_channel is not None:
         ack_channel.shutdown()  # munmap + shm_unlink
         ack_channel = None
