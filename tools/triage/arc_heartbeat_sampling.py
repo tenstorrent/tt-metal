@@ -5,10 +5,10 @@
 
 """
 Usage:
-    heartbeat_samples
+    arc_heartbeat_sampling
 
 Description:
-    Data provider script that collects a baseline ARC heartbeat sample for each device.
+    Data provider script that takes inital snapshot of ARC heartbeat sample for each device and allows taking new snapshots.
 
 Owner:
     adjordjevic-TT
