@@ -356,6 +356,9 @@ class WanPipeline(PipelineAPIMixin):
         self._scheduler = UniPCMultistepScheduler.from_pretrained(
             self.checkpoint_name, subfolder="scheduler", flow_shift=12.0
         )
+        # Construction-time default, restored whenever a call omits flow_shift so a
+        # per-request value never persists into a later request (see __call__).
+        self._default_flow_shift = self._scheduler.config.flow_shift
         self._solver = UniPCSolver(
             order=self._scheduler.config.solver_order,
             variant=UniPCVariant(self._scheduler.config.solver_type),
@@ -590,9 +593,10 @@ class WanPipeline(PipelineAPIMixin):
         # 4. Prepare schedule
         # flow_shift is host-side only (it reshapes the sigma schedule); set it on the
         # scheduler config before set_timesteps so the new schedule is recomputed. No
-        # captured trace depends on it.
-        if flow_shift is not None:
-            self._scheduler.config.flow_shift = flow_shift
+        # captured trace depends on it. Always assign so a per-request value never
+        # persists into a later request — fall back to the construction-time default
+        # when omitted, mirroring effective_boundary_ratio above.
+        self._scheduler.config.flow_shift = flow_shift if flow_shift is not None else self._default_flow_shift
         self._scheduler.set_timesteps(num_inference_steps)
         self._solver.set_schedule(self._scheduler.sigmas.tolist())
         timesteps = self._scheduler.timesteps
