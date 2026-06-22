@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
 
