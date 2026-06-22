@@ -165,7 +165,7 @@ def test_sampling_greedy_batch32(mesh_device, reset_seeds):
         winners.append(winner)
         logits_cpu[0, 0, u, winner] = 50.0
 
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     logits_tt = _shard_logits(logits_cpu, mesh_device)
     tt_tokens, _ = sampling.sample(logits_tt, enable_trace=False)
     tokens = _extract_tokens(tt_tokens, BATCH_SIZE)
@@ -192,7 +192,7 @@ def test_sampling_top_k_constrained(mesh_device, reset_seeds):
     logits_cpu, hot_tokens = _make_hot_logits(BATCH_SIZE, mesh_device, num_hot=num_hot)
     expected_set = set(hot_tokens[:top_k])
 
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(SamplingParams(temperature=1.0, top_k=top_k, top_p=1.0, seed=42), BATCH_SIZE)
     sampling.reset_sampling_params(params)
     sampling.seed_manager.reset_seed([42] * BATCH_SIZE, list(range(BATCH_SIZE)))
@@ -238,7 +238,7 @@ def test_sampling_top_p_constrained(mesh_device, reset_seeds):
     nucleus_rank = (cumprob < top_p).sum().item() + 1  # include the boundary token
     nucleus_set = {hot_tokens[i.item()] for i in sorted_indices[:nucleus_rank]}
 
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(SamplingParams(temperature=1.0, top_k=num_hot, top_p=top_p, seed=43), BATCH_SIZE)
     sampling.reset_sampling_params(params)
     sampling.seed_manager.reset_seed([43] * BATCH_SIZE, list(range(BATCH_SIZE)))
@@ -292,7 +292,7 @@ def test_sampling_log_probs_pcc(mesh_device, reset_seeds, request):
     if args.padded_vocab_size > VOCAB_SIZE:
         logits_cpu[:, :, :, VOCAB_SIZE:] = -1e9
 
-    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None, enable_internal_trace=False)
+    sampling = SamplingGenerator(args=args, mesh_device=mesh_device, tt_ccl=None)
     params = format_sampling_params(
         # temperature=0 → top_k clamped to 1 and temperature set to 1.0 by
         # format_sampling_params; this gives deterministic greedy sampling
