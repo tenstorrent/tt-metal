@@ -107,15 +107,17 @@ void kernel_main() {
                 cb_wait_front(cb_in_id, block_ct_dim);
                 cb_reserve_back(cb_abs_id, block_ct_dim);
                 abs_tile_init();
+                tile_regs_acquire();
                 for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                    tile_regs_acquire();
-                    copy_tile(cb_in_id, k, IDST0);
-                    abs_tile(IDST0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(IDST0, cb_abs_id);
-                    tile_regs_release();
+                    copy_tile(cb_in_id, k, k);
+                    abs_tile(k);
                 }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                    pack_tile(k, cb_abs_id);
+                }
+                tile_regs_release();
                 cb_push_back(cb_abs_id, block_ct_dim);
 
                 // ----- 2. REDUCE_ROW max -> per-token amax -> clamp -> *1/448 -> scale; recip -> 1/scale -----
@@ -155,14 +157,16 @@ void kernel_main() {
                 mul_bcast_cols_init_short(cb_in_id, cb_inv_scale_tiles_id);
                 cb_wait_front(cb_inv_scale_tiles_id, 1);
                 cb_reserve_back(cb_out_tile_id, block_ct_dim);
+                tile_regs_acquire();
                 for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                    tile_regs_acquire();
-                    mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_tiles_id, k, 0, IDST0);
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    pack_tile(IDST0, cb_out_tile_id);
-                    tile_regs_release();
+                    mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_tiles_id, k, 0, k);
                 }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                    pack_tile(k, cb_out_tile_id);
+                }
+                tile_regs_release();
                 cb_push_back(cb_out_tile_id, block_ct_dim);
                 cb_pop_front(cb_in_id, block_ct_dim);
                 cb_pop_front(cb_inv_scale_tiles_id, 1);
