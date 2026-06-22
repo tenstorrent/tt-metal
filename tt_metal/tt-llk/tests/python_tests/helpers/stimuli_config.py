@@ -50,6 +50,21 @@ class StimuliConfig:
     STIMULI_L1_ADDRESS_PERF = 0x21000
     STIMULI_L1_ADDRESS_DEBUG = 0x70000
 
+    # Optional L1 buffers between B and Res, in layout order.
+    _OPTIONAL_OPERAND_SPECS = (
+        ("S", "buffer_S", "stimuli_S_format", "tile_count_S"),
+        ("T", "buffer_T", "stimuli_T_format", "tile_count_T"),
+        ("C", "buffer_C", "stimuli_C_format", "tile_count_C"),
+    )
+
+    _CACHE_BUFFER_ATTRS = (
+        "buffer_A",
+        "buffer_B",
+        "buffer_S",
+        "buffer_T",
+        "buffer_C",
+    )
+
     WITH_COVERAGE: ClassVar[bool] = False
 
     OFFSET_DICT: ClassVar[dict[str, list[int]]]
@@ -133,6 +148,63 @@ class StimuliConfig:
             return operand in self.srcs_layout_operands
         return self.use_srcs
 
+    @staticmethod
+    def _buf_addr_attr(name: str) -> str:
+        return f"buf_{name.lower()}_addr"
+
+    @staticmethod
+    def _tile_size_attr(name: str) -> str:
+        return f"tile_size_{name}_bytes"
+
+    def _active_optional_operands(self):
+        for name, buf_attr, fmt_attr, cnt_attr in self._OPTIONAL_OPERAND_SPECS:
+            if getattr(self, buf_attr) is not None:
+                yield {
+                    "name": name,
+                    "buffer": getattr(self, buf_attr),
+                    "format": getattr(self, fmt_attr),
+                    "tile_count": getattr(self, cnt_attr),
+                }
+
+    def _operand_addr(self, name: str) -> int:
+        return getattr(self, self._buf_addr_attr(name))
+
+    def _operand_tile_size_bytes(self, name: str) -> int:
+        return getattr(self, self._tile_size_attr(name))
+
+    def _write_optional_operand(self, op, location: str, *, dense: bool):
+        pack_function = StimuliConfig.get_packer(op["format"])
+        if not pack_function:
+            raise ValueError(
+                f"Unsupported data format for operand {op['name']}: {op['format'].name}"
+            )
+
+        name = op["name"]
+        common_args = (
+            op["buffer"],
+            op["tile_count"],
+            pack_function,
+            self._operand_addr(name),
+            self._operand_tile_size_bytes(name),
+            self.num_faces,
+            self.face_r_dim,
+            location,
+        )
+        if dense:
+            StimuliConfig.write_matrix_w_tile_dimensions(
+                *common_args,
+                self.tile_dimensions,
+                use_srcs=self._operand_use_srcs(name),
+                twos_complement=self.twos_complement,
+            )
+        else:
+            StimuliConfig.write_matrix(
+                *common_args,
+                self.write_full_tiles,
+                use_srcs=self._operand_use_srcs(name),
+                twos_complement=self.twos_complement,
+            )
+
     def _calculate_tile_sizes(self):
         """Compute tile sizes and L1 buffer addresses from current flags."""
         self.tile_size_A_bytes = calculate_tile_size_bytes(
@@ -158,44 +230,21 @@ class StimuliConfig:
 
         next_addr = self.buf_b_addr + self.tile_size_B_bytes * self.tile_count_B
 
-        if self.buffer_S is not None:
-            self.tile_size_S_bytes = calculate_tile_size_bytes(
-                self.stimuli_S_format,
+        for op in self._active_optional_operands():
+            tile_size = calculate_tile_size_bytes(
+                op["format"],
                 self.tile_dimensions,
                 format_tile_sizes,
-                use_srcs=self._operand_use_srcs("S"),
+                use_srcs=self._operand_use_srcs(op["name"]),
             )
-            self.buf_s_addr = next_addr
-            next_addr = self.buf_s_addr + self.tile_size_S_bytes * self.tile_count_S
-        else:
-            self.tile_size_S_bytes = 0
-            self.buf_s_addr = 0
+            setattr(self, self._tile_size_attr(op["name"]), tile_size)
+            setattr(self, self._buf_addr_attr(op["name"]), next_addr)
+            next_addr += tile_size * op["tile_count"]
 
-        if self.buffer_T is not None:
-            self.tile_size_T_bytes = calculate_tile_size_bytes(
-                self.stimuli_T_format,
-                self.tile_dimensions,
-                format_tile_sizes,
-                use_srcs=self._operand_use_srcs("T"),
-            )
-            self.buf_t_addr = next_addr
-            next_addr = self.buf_t_addr + self.tile_size_T_bytes * self.tile_count_T
-        else:
-            self.tile_size_T_bytes = 0
-            self.buf_t_addr = 0
-
-        if self.buffer_C is not None:
-            self.tile_size_C_bytes = calculate_tile_size_bytes(
-                self.stimuli_C_format,
-                self.tile_dimensions,
-                format_tile_sizes,
-                use_srcs=self._operand_use_srcs("C"),
-            )
-            self.buf_c_addr = next_addr
-            next_addr = self.buf_c_addr + self.tile_size_C_bytes * self.tile_count_C
-        else:
-            self.tile_size_C_bytes = 0
-            self.buf_c_addr = 0
+        for name, buf_attr, _, _ in self._OPTIONAL_OPERAND_SPECS:
+            if getattr(self, buf_attr) is None:
+                setattr(self, self._tile_size_attr(name), 0)
+                setattr(self, self._buf_addr_attr(name), 0)
 
         self.buf_res_addr = next_addr
 
@@ -256,12 +305,11 @@ class StimuliConfig:
             f"  buf_b_addr: 0x{self.buf_b_addr:08X}"
             f"  buf_res_addr: 0x{self.buf_res_addr:08X}"
         )
-        if self.buffer_C is not None:
-            lines += f"  buf_c_addr: 0x{self.buf_c_addr:08X}"
-        if self.buffer_S is not None:
-            lines += f"  buf_s_addr: 0x{self.buf_s_addr:08X}"
-        if self.buffer_T is not None:
-            lines += f"  buf_t_addr: 0x{self.buf_t_addr:08X}"
+        for op in self._active_optional_operands():
+            lines += (
+                f"  {self._buf_addr_attr(op['name'])}:"
+                f" 0x{self._operand_addr(op['name']):08X}"
+            )
         return lines
 
     def generate_runtime_operands_values(self) -> list:
@@ -272,11 +320,14 @@ class StimuliConfig:
             self.tile_size_B_bytes,
         ]
 
-        if self.buffer_S is not None:
-            values.extend([self.buf_s_addr, self.tile_size_S_bytes])
-
-        if self.buffer_T is not None:
-            values.extend([self.buf_t_addr, self.tile_size_T_bytes])
+        for op in self._active_optional_operands():
+            if op["name"] in ("S", "T"):
+                values.extend(
+                    [
+                        self._operand_addr(op["name"]),
+                        self._operand_tile_size_bytes(op["name"]),
+                    ]
+                )
 
         values.extend(
             [
@@ -297,13 +348,10 @@ class StimuliConfig:
         ]
         pack_formats = "IIII"
 
-        if self.buffer_S is not None:
-            lines.append("Operand buffer_S;")
-            pack_formats += "II"
-
-        if self.buffer_T is not None:
-            lines.append("Operand buffer_T;")
-            pack_formats += "II"
+        for op in self._active_optional_operands():
+            if op["name"] in ("S", "T"):
+                lines.append(f"Operand buffer_{op['name']};")
+                pack_formats += "II"
 
         lines.append("Operand buffer_Res;")
         pack_formats += "II"
@@ -320,15 +368,13 @@ class StimuliConfig:
             f"constexpr Operand buffer_B({hex(self.buf_b_addr)}, {self.tile_size_B_bytes});",
         ]
 
-        if self.buffer_S is not None:
-            lines.append(
-                f"constexpr Operand buffer_S({hex(self.buf_s_addr)}, {self.tile_size_S_bytes});"
-            )
-
-        if self.buffer_T is not None:
-            lines.append(
-                f"constexpr Operand buffer_T({hex(self.buf_t_addr)}, {self.tile_size_T_bytes});"
-            )
+        for op in self._active_optional_operands():
+            if op["name"] in ("S", "T"):
+                lines.append(
+                    f"constexpr Operand buffer_{op['name']}("
+                    f"{hex(self._operand_addr(op['name']))}, "
+                    f"{self._operand_tile_size_bytes(op['name'])});"
+                )
 
         lines.append(
             f"constexpr Operand buffer_Res({hex(self.buf_res_addr)}, {self.buf_res_tile_size});"
@@ -508,17 +554,12 @@ class StimuliConfig:
             f"  {_CYAN}A    0x{self.buf_a_addr:08X}{_RST}  {_DIM}{self.tile_count_A} × {self.tile_size_A_bytes} B{_RST}",
             f"  {_YELLOW}B    0x{self.buf_b_addr:08X}{_RST}  {_DIM}{self.tile_count_B} × {self.tile_size_B_bytes} B{_RST}",
         ]
-        if self.buffer_S is not None:
+        _operand_row_colors = {"C": _MAGENTA}
+        for op in self._active_optional_operands():
+            color = _operand_row_colors.get(op["name"], "")
             rows.append(
-                f"  S    0x{self.buf_s_addr:08X}  {_DIM}{self.tile_count_S} × {self.tile_size_S_bytes} B{_RST}"
-            )
-        if self.buffer_T is not None:
-            rows.append(
-                f"  T    0x{self.buf_t_addr:08X}  {_DIM}{self.tile_count_T} × {self.tile_size_T_bytes} B{_RST}"
-            )
-        if self.buffer_C is not None:
-            rows.append(
-                f"  {_MAGENTA}C    0x{self.buf_c_addr:08X}{_RST}  {_DIM}{self.tile_count_C} × {self.tile_size_C_bytes} B{_RST}"
+                f"  {color}{op['name']}    0x{self._operand_addr(op['name']):08X}{_RST}"
+                f"  {_DIM}{op['tile_count']} × {self._operand_tile_size_bytes(op['name'])} B{_RST}"
             )
         rows.append(f"  {_GREEN}Res  0x{self.buf_res_addr:08X}{_RST}")
         logger.debug(
@@ -578,65 +619,8 @@ class StimuliConfig:
             twos_complement=self.twos_complement,
         )
 
-        if self.buffer_S is not None:
-            pack_function_S = StimuliConfig.get_packer(self.stimuli_S_format)
-            if not pack_function_S:
-                raise ValueError(
-                    f"Unsupported data format for operand S: {self.stimuli_S_format.name}"
-                )
-            StimuliConfig.write_matrix(
-                self.buffer_S,
-                self.tile_count_S,
-                pack_function_S,
-                self.buf_s_addr,
-                self.tile_size_S_bytes,
-                self.num_faces,
-                self.face_r_dim,
-                location,
-                self.write_full_tiles,
-                use_srcs=self._operand_use_srcs("S"),
-                twos_complement=self.twos_complement,
-            )
-
-        if self.buffer_T is not None:
-            pack_function_T = StimuliConfig.get_packer(self.stimuli_T_format)
-            if not pack_function_T:
-                raise ValueError(
-                    f"Unsupported data format for operand T: {self.stimuli_T_format.name}"
-                )
-            StimuliConfig.write_matrix(
-                self.buffer_T,
-                self.tile_count_T,
-                pack_function_T,
-                self.buf_t_addr,
-                self.tile_size_T_bytes,
-                self.num_faces,
-                self.face_r_dim,
-                location,
-                self.write_full_tiles,
-                use_srcs=self._operand_use_srcs("T"),
-                twos_complement=self.twos_complement,
-            )
-
-        if self.buffer_C is not None:
-            pack_function_C = StimuliConfig.get_packer(self.stimuli_C_format)
-            if not pack_function_C:
-                raise ValueError(
-                    f"Unsupported data format for operand C: srcA({self.stimuli_C_format.name})"
-                )
-            StimuliConfig.write_matrix(
-                self.buffer_C,
-                self.tile_count_C,
-                pack_function_C,
-                self.buf_c_addr,
-                self.tile_size_C_bytes,
-                self.num_faces,
-                self.face_r_dim,
-                location,
-                self.write_full_tiles,
-                use_srcs=self._operand_use_srcs("C"),
-                twos_complement=self.twos_complement,
-            )
+        for op in self._active_optional_operands():
+            self._write_optional_operand(op, location, dense=False)
 
     def _write_dense_tile_dimensions(self, location: str = "0,0"):
         """
@@ -679,65 +663,8 @@ class StimuliConfig:
             twos_complement=self.twos_complement,
         )
 
-        if self.buffer_S is not None:
-            pack_function_S = StimuliConfig.get_packer(self.stimuli_S_format)
-            if not pack_function_S:
-                raise ValueError(
-                    f"Unsupported data format for operand S: {self.stimuli_S_format.name}"
-                )
-            StimuliConfig.write_matrix_w_tile_dimensions(
-                self.buffer_S,
-                self.tile_count_S,
-                pack_function_S,
-                self.buf_s_addr,
-                self.tile_size_S_bytes,
-                self.num_faces,
-                self.face_r_dim,
-                self.tile_dimensions,
-                location,
-                use_srcs=self._operand_use_srcs("S"),
-                twos_complement=self.twos_complement,
-            )
-
-        if self.buffer_T is not None:
-            pack_function_T = StimuliConfig.get_packer(self.stimuli_T_format)
-            if not pack_function_T:
-                raise ValueError(
-                    f"Unsupported data format for operand T: {self.stimuli_T_format.name}"
-                )
-            StimuliConfig.write_matrix_w_tile_dimensions(
-                self.buffer_T,
-                self.tile_count_T,
-                pack_function_T,
-                self.buf_t_addr,
-                self.tile_size_T_bytes,
-                self.num_faces,
-                self.face_r_dim,
-                self.tile_dimensions,
-                location,
-                use_srcs=self._operand_use_srcs("T"),
-                twos_complement=self.twos_complement,
-            )
-
-        if self.buffer_C is not None:
-            pack_function_C = StimuliConfig.get_packer(self.stimuli_C_format)
-            if not pack_function_C:
-                raise ValueError(
-                    f"Unsupported data format for operand C: srcA({self.stimuli_C_format.name})"
-                )
-            StimuliConfig.write_matrix_w_tile_dimensions(
-                self.buffer_C,
-                self.tile_count_C,
-                pack_function_C,
-                self.buf_c_addr,
-                self.tile_size_C_bytes,
-                self.num_faces,
-                self.face_r_dim,
-                self.tile_dimensions,
-                location,
-                use_srcs=self._operand_use_srcs("C"),
-                twos_complement=self.twos_complement,
-            )
+        for op in self._active_optional_operands():
+            self._write_optional_operand(op, location, dense=True)
 
     def _collect_operand_tiles(
         self,
@@ -826,40 +753,15 @@ class StimuliConfig:
         ).hexdigest()
         os.makedirs(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id, exist_ok=True)
 
-        if self.buffer_A is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt")
-            torch.save(
-                self.buffer_A,
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt",
+        for buf_attr in self._CACHE_BUFFER_ATTRS:
+            buffer = getattr(self, buf_attr)
+            if buffer is None:
+                continue
+            cache_path = (
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / f"{buf_attr}.pt"
             )
-
-        if self.buffer_B is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt")
-            torch.save(
-                self.buffer_B,
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt",
-            )
-
-        if self.buffer_S is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_S.pt")
-            torch.save(
-                self.buffer_S,
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_S.pt",
-            )
-
-        if self.buffer_T is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_T.pt")
-            torch.save(
-                self.buffer_T,
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_T.pt",
-            )
-
-        if self.buffer_C is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt")
-            torch.save(
-                self.buffer_C,
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt",
-            )
+            logger.debug(cache_path)
+            torch.save(buffer, cache_path)
 
         if GeneratorProxy.TEMP_RESULT is not None:
             logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "golden.pt")
@@ -872,32 +774,11 @@ class StimuliConfig:
         stimuli_id = sha256(
             os.environ.get("PYTEST_CURRENT_TEST", "").encode()
         ).hexdigest()
-        if self.buffer_A is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt")
-            self.buffer_A = torch.load(
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_A.pt"
+        for buf_attr in self._CACHE_BUFFER_ATTRS:
+            if getattr(self, buf_attr) is None:
+                continue
+            cache_path = (
+                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / f"{buf_attr}.pt"
             )
-
-        if self.buffer_B is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt")
-            self.buffer_B = torch.load(
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_B.pt"
-            )
-
-        if self.buffer_S is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_S.pt")
-            self.buffer_S = torch.load(
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_S.pt"
-            )
-
-        if self.buffer_T is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_T.pt")
-            self.buffer_T = torch.load(
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_T.pt"
-            )
-
-        if self.buffer_C is not None:
-            logger.debug(StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt")
-            self.buffer_C = torch.load(
-                StimuliConfig.STIMULI_CACHE_ROOT / stimuli_id / "buffer_C.pt"
-            )
+            logger.debug(cache_path)
+            setattr(self, buf_attr, torch.load(cache_path))

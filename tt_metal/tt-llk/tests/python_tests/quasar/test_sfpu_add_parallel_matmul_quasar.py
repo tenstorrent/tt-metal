@@ -30,6 +30,7 @@ from helpers.llk_params import (
 )
 from helpers.matmul_sweep import generate_tile_dims
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
     generate_sfpu_format_dest_acc_combinations,
     input_output_formats,
     parametrize,
@@ -57,10 +58,13 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.utils import passed_test
 
-ADD_INPUT_DIMENSIONS = [32, 32]
-MATMUL_A_DIMENSIONS = [32, 32]
-MATMUL_B_DIMENSIONS = [32, 32]
+# (ADD_INPUT_DIMENSIONS, MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS)
+DIMENSION_PROFILES = (
+    ([32, 32], [32, 32], [32, 32]),
+    ([32, 256], [64, 64], [64, 128]),
+)
 
+# Caps each add operand at 45% of format max so |a|+|b| stays <= 90% with rounding headroom.
 ADD_RANGE_SAFETY_FACTOR = 0.45
 
 SFPU_ADD_FORMATS = input_output_formats(
@@ -74,6 +78,18 @@ SFPU_ADD_FORMATS = input_output_formats(
 )
 
 
+def _matmul_output_fits_dest(
+    MATMUL_A_DIMENSIONS: list[int],
+    MATMUL_B_DIMENSIONS: list[int],
+    dest_acc: DestAccumulation,
+    dest_sync: DestSync,
+) -> bool:
+    matmul_dims = generate_tile_dims((MATMUL_A_DIMENSIONS, MATMUL_B_DIMENSIONS))
+    capacity_divisor = 2 if dest_acc == DestAccumulation.Yes else 1
+    max_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // capacity_divisor
+    return matmul_dims.output_tile_cnt <= max_tiles
+
+
 def generate_parallel_matmul_add_combinations(formats_list):
     combinations = []
     for fmt, dest_acc in generate_sfpu_format_dest_acc_combinations(formats_list):
@@ -84,7 +100,29 @@ def generate_parallel_matmul_add_combinations(formats_list):
                 ImpliedMathFormat.No,
                 ImpliedMathFormat.Yes,
             ):
-                combinations.append((fmt, dest_acc, dest_sync, implied_math_format))
+                for (
+                    ADD_INPUT_DIMENSIONS,
+                    MATMUL_A_DIMENSIONS,
+                    MATMUL_B_DIMENSIONS,
+                ) in DIMENSION_PROFILES:
+                    if not _matmul_output_fits_dest(
+                        MATMUL_A_DIMENSIONS,
+                        MATMUL_B_DIMENSIONS,
+                        dest_acc,
+                        dest_sync,
+                    ):
+                        continue
+                    combinations.append(
+                        (
+                            fmt,
+                            dest_acc,
+                            dest_sync,
+                            implied_math_format,
+                            ADD_INPUT_DIMENSIONS,
+                            MATMUL_A_DIMENSIONS,
+                            MATMUL_B_DIMENSIONS,
+                        )
+                    )
     return combinations
 
 
@@ -98,9 +136,15 @@ PARALLEL_MATMUL_ADD_COMBINATIONS = generate_parallel_matmul_add_combinations(
     format_dest_acc_sync_implied_math=PARALLEL_MATMUL_ADD_COMBINATIONS,
 )
 def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
-    (formats, dest_acc, dest_sync, implied_math_format) = (
-        format_dest_acc_sync_implied_math[0]
-    )
+    (
+        formats,
+        dest_acc,
+        dest_sync,
+        implied_math_format,
+        ADD_INPUT_DIMENSIONS,
+        MATMUL_A_DIMENSIONS,
+        MATMUL_B_DIMENSIONS,
+    ) = format_dest_acc_sync_implied_math[0]
 
     matmul_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -270,7 +314,7 @@ def test_sfpu_add_parallel_matmul_quasar(format_dest_acc_sync_implied_math):
     res_add = torch.tensor(outcome.result, dtype=torch_format)
     res_matmul = torch.tensor(stimuli.collect_buffer_c_results(), dtype=torch_format)
 
-    assert len(res_add) == len(golden_add)
-    assert len(res_matmul) == len(golden_matmul)
-    assert passed_test(golden_add, res_add, formats.output_format)
-    assert passed_test(golden_matmul, res_matmul, formats.output_format)
+    assert len(res_add) == len(golden_add), "add"
+    assert len(res_matmul) == len(golden_matmul), "matmul"
+    assert passed_test(golden_add, res_add, formats.output_format), "add"
+    assert passed_test(golden_matmul, res_matmul, formats.output_format), "matmul"
