@@ -280,7 +280,13 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
     )
 
     expected_shape = [num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]
-    tt_kvpe_cache = ttnn.empty(
+    # MUST zero-init. ring_mla pads the K chunk up to the SDPA chunk granularity and reads those
+    # padding tiles from the cache, neutralizing them with an ADDITIVE attention mask (score + -inf).
+    # That cancels any FINITE leftover value, but NOT NaN/Inf (NaN + -inf = NaN -> the softmax row
+    # normalizes to NaN -> garbage output). ttnn.empty leaves uninitialized DRAM, which as bfloat8_b
+    # routinely decodes to NaN/Inf, so it fails whenever a chunk's logical length isn't chunk-aligned
+    # (e.g. the maxedge iter2). ttnn.zeros guarantees a finite (0) fill on-device with no host tensor.
+    tt_kvpe_cache = ttnn.zeros(
         shape=expected_shape,
         dtype=ttnn.bfloat8_b,
         layout=ttnn.TILE_LAYOUT,
