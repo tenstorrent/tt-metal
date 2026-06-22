@@ -426,13 +426,42 @@ def test_conv2d_method2_approach2_dram_bottleneck(
 
     # reshape [N,H/K,W,C*K] → [1,1,packed_sp,C*K]: view of tt_nhwc's buffer
     tt_flat = ttnn.reshape(tt_nhwc, (batch, 1, packed_spatial, packed_ic))
-    # tilize — consumes the view; deallocate tt_nhwc AFTER to_layout finishes
-    tt_tile = ttnn.to_layout(tt_flat, layout=ttnn.TILE_LAYOUT, memory_config=dram_interleaved)
-    ttnn.deallocate(tt_nhwc)  # safe: to_layout has read tt_flat (view of tt_nhwc)
+    ttnn.deallocate(tt_nhwc)
+
+    # Tweak 1 — HEIGHT_SHARDED tilize: reads 17.7 MB DRAM ROW_MAJOR, writes to L1 per-core
+    # shards directly. No separate InterleavedToShardedDeviceOperation needed.
+    # Each core shard: (packed_spatial/64) rows × packed_ic cols.
+    sharded_l1 = ttnn.create_sharded_memory_config(
+        shape=(packed_spatial, packed_ic),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_tile = ttnn.to_layout(tt_flat, ttnn.TILE_LAYOUT, memory_config=sharded_l1)
     ttnn.deallocate(tt_flat)
 
-    # Step 6: single matmul — reads only 17.7 MB (vs 188.7 MB baseline)
-    tt_out_packed = ttnn.linear(tt_tile, tt_weight, bias=tt_bias, memory_config=dram_interleaved)
+    # Tweak 2 — LoFi compute config: fewer precision steps in the matmul FPU pipeline.
+    # Tweak 3 — L1 HEIGHT_SHARDED linear output: each core writes result to local L1,
+    # avoiding a DRAM round-trip before untilize.
+    linear_compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        fp32_dest_acc_en=False,
+        math_approx_mode=True,
+    )
+    out_sharded_l1 = ttnn.create_sharded_memory_config(
+        shape=(packed_spatial, packed_oc),
+        core_grid=ttnn.CoreGrid(y=8, x=8),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    tt_out_packed = ttnn.linear(
+        tt_tile,
+        tt_weight,
+        bias=tt_bias,
+        memory_config=out_sharded_l1,
+        compute_kernel_config=linear_compute_config,
+    )
     ttnn.deallocate(tt_tile)
     ttnn.deallocate(tt_weight)
     ttnn.deallocate(tt_bias)
@@ -440,13 +469,13 @@ def test_conv2d_method2_approach2_dram_bottleneck(
     # Unpack on device — full on-device pipeline.
     # Key fix: ttnn.reshape on ROW_MAJOR returns a VIEW sharing the same buffer.
     # Never deallocate the reshape source before the view is consumed by the next op.
-    #   [1,1,packed_sp,OC*K] TILE
-    #     → untilize ROW_MAJOR                           (17.7 MB)
+    #   [1,1,packed_sp,OC*K] TILE  L1_HEIGHT_SHARDED
+    #     → untilize ROW_MAJOR DRAM  (reads L1, writes DRAM — higher effective BW)
     #     → reshape  [N,H/K,W,OC*K]    ROW_MAJOR view   (deallocate AFTER permute)
     #     → permute  [N,OC*K,H/K,W]    ROW_MAJOR        (14.2 MB)
     #     → reshape  [N,OC,H,W]        ROW_MAJOR view
 
-    # Step 7: untilize
+    # Step 7: untilize from L1 to DRAM ROW_MAJOR
     tt_out_rm = ttnn.to_layout(tt_out_packed, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=dram_interleaved)
     ttnn.deallocate(tt_out_packed)
 
