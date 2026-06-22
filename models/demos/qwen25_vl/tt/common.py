@@ -156,7 +156,15 @@ def multimodal_rope_from_hf(
     # Qwen2_5_VLModel.forward:
     cos, sin = reference_model.model.language_model.rotary_emb(input_embeds, position_ids)
     # apply_multimodal_rotary_pos_emb:
-    mrope_section = reference_model.config.rope_scaling["mrope_section"] * 2
+    # transformers 5.x normalizes the rope kwargs into `rope_parameters` on the *text* config; the
+    # top-level Qwen2_5_VLConfig.rope_scaling property delegates to a `rope_parameters` attr it does
+    # not have (-> AttributeError). Read mrope_section from the text config's rope_parameters, falling
+    # back to the top-level rope_scaling dict for transformers <5.x.
+    _text_cfg = getattr(reference_model.config, "text_config", reference_model.config)
+    _rope_params = (
+        getattr(_text_cfg, "rope_parameters", None) or getattr(reference_model.config, "rope_scaling", None) or {}
+    )
+    mrope_section = _rope_params["mrope_section"] * 2
     unsqueeze_dim = 1
     cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
     sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(unsqueeze_dim)
