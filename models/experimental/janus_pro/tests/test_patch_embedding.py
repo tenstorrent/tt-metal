@@ -48,7 +48,7 @@ def test_conv2d_inference(
     }
     num_devices = model_args.num_devices
 
-    B, NCH, H, W = (1, 3, model_args.vision_chunk_size, model_args.vision_chunk_size)
+    B, NCH, H, W = (1, model_args.vision_in_channels, model_args.vision_chunk_size, model_args.vision_chunk_size)
     in_channels, out_channels, kernel_size, stride, bias = (
         model_args.vision_in_channels,
         model_args.vision_dim,
