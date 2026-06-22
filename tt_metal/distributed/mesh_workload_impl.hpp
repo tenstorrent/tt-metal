@@ -69,17 +69,13 @@ private:
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
-    // Cached service-vs-normal classification (see EnqueueMeshWorkload) that skips the per-op
-    // O(programs*coords*cores) no-mixing scan. `gen` stamps the ServiceCoreManager generation it was
-    // computed at; a mismatch forces reclassification. nullopt = not yet classified. Correct because the
-    // only inputs are the program set (frozen at first enqueue via finalize_offsets()/finalized_) and the
-    // claimed-core set (changes only via claim()/release(), which bump the generation). If post-enqueue
-    // program mutation becomes supported, invalidate this cache there too.
-    struct ServiceClassification {
-        bool is_service;
-        uint64_t gen;
-    };
-    std::optional<ServiceClassification> service_classification_cache_;
+    // Cached service-vs-normal classification (see EnqueueMeshWorkload), computed once and reused so
+    // steady-state re-enqueues skip the O(programs*coords*cores) no-mixing scan. nullopt = not yet
+    // classified. Classify-once is correct: a normal workload's worker-grid cores can never become
+    // service cores (disjoint dispatch-column pool), and a service workload is only ever re-enqueued
+    // onto still-claimed cores, so a workload's classification cannot legitimately change between
+    // enqueues.
+    std::optional<bool> is_service_workload_;
 
     friend uint32_t program_dispatch::program_base_addr_on_core(
         MeshWorkloadImpl&, ::tt::tt_metal::distributed::MeshDevice*, HalProgrammableCoreType);

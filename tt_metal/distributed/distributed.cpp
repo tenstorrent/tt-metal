@@ -36,14 +36,11 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto& programs = mesh_workload.impl().get_programs();
     if (svc.impl().has_any_claims()) {
-        // Classify the workload as service vs normal and cache it on the workload, stamped with the
-        // ServiceCoreManager generation. Reclassify only when the generation changes (a claim/release
-        // happened since), so steady-state re-enqueues skip the O(programs*coords*cores) scan. The stamp
-        // exists to catch a re-enqueue after a claim/release changed the claim state of this workload's
-        // cores: it forces reclassification, which then re-routes or hits the mixing TT_FATAL below.
-        auto& cache = mesh_workload.impl().service_classification_cache_;
-        const uint64_t svc_gen = svc.impl().generation();
-        if (!cache.has_value() || cache->gen != svc_gen) {
+        // Classify the workload as service vs normal once and cache it on the workload, so steady-state
+        // re-enqueues skip the O(programs*coords*cores) scan (see is_service_workload_ for why
+        // classify-once stays correct across re-enqueues).
+        auto& is_service_workload = mesh_workload.impl().is_service_workload_;
+        if (!is_service_workload.has_value()) {
             bool saw_service = false;
             bool saw_normal = false;
             for (auto& [device_range, program] : programs) {
@@ -82,10 +79,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                     "MeshWorkload mixes service and normal programs. A workload must be entirely service (all "
                     "programs on claimed service cores) or entirely normal (all on the worker grid).");
             }
-            cache = MeshWorkloadImpl::ServiceClassification{.is_service = saw_service, .gen = svc_gen};
+            is_service_workload = saw_service;
         }
 
-        if (cache->is_service) {
+        if (is_service_workload.value()) {
             // Service workload: every core is claimed (checked above), so mark launch-once and
             // dispatch each program via SD, bypassing FD. Re-enqueue TT_FATALs in mark_launched.
             for (auto& [device_range, program] : programs) {
