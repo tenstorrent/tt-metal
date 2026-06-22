@@ -163,5 +163,6 @@ enum class SfpuType {
     lgamma,
     polygamma,
     mish,
+    tanhshrink,
     ne,
 };
