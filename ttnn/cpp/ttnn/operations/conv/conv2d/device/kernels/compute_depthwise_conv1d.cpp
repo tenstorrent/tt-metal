@@ -8,6 +8,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/conv1d_depthwise_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // Compute one block (one kernel-tap slice) of a 1D depthwise conv.
@@ -37,33 +38,10 @@ inline void mul_and_accumulate_block(
         in1_cb.wait_front(1);
         in0_cb.wait_front(1);
 
-        tile_regs_acquire();
-        // mul: srcA = in0 (bf16), srcB = in1 (bf8/bf16) -> dst[0]
-        reconfig_data_format_srcb(in1_cb_id);
-        mul_tiles_init(in0_cb_id, in1_cb_id);
-        mul_tiles(in0_cb_id, in1_cb_id, 0, 0, 0);
-
-        if (idx != 0) {
-            // dest-reuse add: dst[0] += out_cb. srcA gets out_cb (cfg52 must match out_cb fmt);
-            // srcB is filled from dst[0] by the dest-reuse path.
-            reconfig_data_format_srca(out_cb_id);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                out_cb_id);
-            out_cb.wait_front(1);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(
-                out_cb_id, 0, 0);
-            out_cb.pop_front(1);
-
-            // Restore srcA to in0's format for the next iteration's mul unpack.
-            reconfig_data_format_srca(in0_cb_id);
-        }
-        tile_regs_commit();
-
-        out_cb.reserve_back(1);
-        tile_regs_wait();
-        pack_tile(0, out_cb_id);
-        out_cb.push_back(1);
-        tile_regs_release();
+        // Per-channel weight tiles are streamed through in1 (one per output tile, index 0). The
+        // mul -> idx>0 dest-reuse add -> single pack is the shared depthwise_fir_mac_tile body;
+        // it leaves srcA/srcB reconfigured, which the next iteration's mul resets.
+        compute_kernel_lib::depthwise_fir_mac_tile(in0_cb_id, 0, in1_cb_id, 0, out_cb_id, idx == 0);
 
         in0_cb.pop_front(1);
         in1_cb.pop_front(1);

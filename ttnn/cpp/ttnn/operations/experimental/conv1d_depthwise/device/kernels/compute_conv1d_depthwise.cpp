@@ -9,37 +9,17 @@
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/conv1d_depthwise_helpers.hpp"
 
 // Accumulate one tap-block into out_cb: out[i] = tilized[i] * scalar (+ prior partial when tap>0).
-// `scalar_cb` holds a single resident tile (= taps[tap]) reused for every tile in the block.
+// `scalar_cb` holds the K resident tap tiles (filled once); read tile `tap`, never popped. The
+// per-tile mul -> tap>0 dest-reuse add -> single pack is the shared depthwise_fir_mac_tile body.
 template <uint32_t block_num_tiles>
 inline void mul_and_accumulate(uint32_t tilized_cb, uint32_t scalar_cb, uint32_t out_cb, uint32_t tap) {
     cb_wait_front(tilized_cb, block_num_tiles);
-    // scalar_cb holds the K resident tap tiles (filled once); read tile `tap`, never popped.
-
     for (uint32_t i = 0; i < block_num_tiles; ++i) {
-        tile_regs_acquire();
-        reconfig_data_format_srca(tilized_cb);
-        reconfig_data_format_srcb(scalar_cb);
-        mul_tiles_init(tilized_cb, scalar_cb);
-        mul_tiles(tilized_cb, scalar_cb, i, tap, 0);
-
-        if (tap != 0) {
-            reconfig_data_format_srca(out_cb);
-            binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(out_cb);
-            cb_wait_front(out_cb, 1);
-            binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCB>(out_cb, 0, 0);
-            cb_pop_front(out_cb, 1);
-        }
-        tile_regs_commit();
-
-        cb_reserve_back(out_cb, 1);
-        tile_regs_wait();
-        pack_tile(0, out_cb);
-        cb_push_back(out_cb, 1);
-        tile_regs_release();
+        compute_kernel_lib::depthwise_fir_mac_tile(tilized_cb, i, scalar_cb, tap, out_cb, tap == 0);
     }
-
     cb_pop_front(tilized_cb, block_num_tiles);
 }
 
