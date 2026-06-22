@@ -63,7 +63,7 @@ def check_binary_integrity(
                 log_check_risc(
                     risc_name,
                     location,
-                    read_data == section.data,
+                    memoryview(read_data) == section.data,
                     f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.firmware_path}.",
                 )
 
@@ -96,13 +96,13 @@ def check_binary_integrity(
                         f"Kernel offset not set for ELF file {dispatcher_core_data.kernel_xip_path}.",
                     )
                 else:
-                    address: int = dispatcher_core_data.kernel_offset
+                    address = dispatcher_core_data.kernel_offset
                     read_data = bytearray(len(section.data))
                     l1_mem_access.read(address, read_data)
                     log_check_risc(
                         risc_name,
                         location,
-                        read_data == section.data,
+                        memoryview(read_data) == section.data,
                         f"Data mismatch in section {section_name} at address 0x{address:08x} in ELF file {dispatcher_core_data.kernel_xip_path}.",
                     )
 

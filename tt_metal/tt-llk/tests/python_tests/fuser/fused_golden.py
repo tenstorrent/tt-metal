@@ -44,6 +44,7 @@ class FusedGolden:
             print_pcc=True,
             custom_atol=0.1,
             custom_rtol=0.1,
+            tile_shape=output.tile_shape,
         )
 
         logger.info(
@@ -58,6 +59,7 @@ class FusedGolden:
             custom_atol=output.acc_atol,
             custom_rtol=output.acc_rtol,
             custom_pcc_threshold=output.acc_pcc,
+            tile_shape=output.tile_shape,
         )
 
         return l1_passed and master_passed

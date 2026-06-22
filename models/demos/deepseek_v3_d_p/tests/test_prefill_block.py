@@ -11,6 +11,7 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -20,7 +21,7 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import is_blackhole, profiler
+from models.common.utility_functions import hf_cache_layer_kv, is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
@@ -125,7 +126,13 @@ def run_model(
 
     # --- Cache setup ---
     is_dense = layer_idx < config.first_k_dense_replace
-    cache_dir = Path(f"/tmp/{variant.name}_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
+    cache_root = os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp")
+    balanced_tag = "balanced" if is_balanced else "non_balanced"
+    gate_tag = gate_fallback_mode.value if gate_fallback_mode else "no_gate_fallback"
+    cache_dir = Path(
+        f"{cache_root}/{variant.name}_prefill_block/"
+        f"{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl_{balanced_tag}_{gate_tag}"
+    )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     init_checker(cache_dir)
@@ -204,7 +211,7 @@ def run_model(
             torch_output = layer_out[0]
         logger.info(f"Torch reference output shape: {torch_output.shape}")
         if ref_cache is not None:
-            ref_kvpe = ref_cache.key_cache[layer_idx]
+            ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
             logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
         profiler.end("torch_reference")
 
