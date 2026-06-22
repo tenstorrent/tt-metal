@@ -1296,10 +1296,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     // Set runtime args for untilizer cores (both layouts — reader_untilize kernel).
     // Layout: counter_ready_sem, dispatched_buffer_addr, expert_start, expert_end,
-    //         dispatched_metadata_addr.
+    //         dispatched_metadata_addr, routed_expert_sem_addr.
     // Sender NOC coords and per-sender data_ready/start semaphores are now consumed by
     // writer_untilize on the same core (which owns the untilized-data send).  The compute
     // kernel exists only in TILE_LAYOUT, so its runtime args are set under that guard below.
+    //
+    // routed_expert_sem_addr: absolute L1 address of the routed-expert global semaphore used to
+    // overlap the routed expert with the combine.
+    uint32_t routed_expert_sem_addr = operation_attributes.global_semaphore.has_value()
+                                          ? static_cast<uint32_t>(operation_attributes.global_semaphore->address())
+                                          : 0u;
     {
         for (uint32_t j = 0; j < num_untilizer_cores; j++) {
             uint32_t s = untilizer_sender_map[j];
@@ -1317,9 +1323,10 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                     local_core_id++;
                 }
             }
-            // Reader_untilize RT args (7):
+            // Reader_untilize RT args (8):
             //   [0]: counter_ready_sem, [1]: dispatched_buffer*, [2]: expert_start,
-            //   [3]: expert_end,        [4]: dispatched_metadata*, [5]: sender_idx, [6]: num_senders.
+            //   [3]: expert_end,        [4]: dispatched_metadata*, [5]: untilizer_global_pos,
+            //   [6]: total_untilizers (G), [7]: routed_expert_sem_addr.
             // Buffers pushed as Buffer* so the framework records BufferBindings for the
             // cache-hit fast path.
             tt::tt_metal::KernelDescriptor::RTArgList untilizer_rt_args;
@@ -1330,6 +1337,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilizer_rt_args.push_back(dispatched_metadata.buffer());
             untilizer_rt_args.push_back(untilizer_global_pos[j]);  // global batch start
             untilizer_rt_args.push_back(num_untilizer_cores);      // global batch stride (G)
+            // Absolute L1 address of the routed-expert global semaphore for the combine/routed-expert
+            // overlap. 0 when no semaphore was provided — reader_untilize then skips the wait.
+            untilizer_rt_args.push_back(routed_expert_sem_addr);
             desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
                 untilizer_row_cores[j], untilizer_rt_args);
 

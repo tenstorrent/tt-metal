@@ -374,6 +374,7 @@ class TtMoe(LightweightModule):
             topology=self.row_topology,
             init_zeros=False,
             subdevice_id=self.dm_sd_id,
+            global_semaphore=self.routed_expert_global_semaphore,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
