@@ -10,6 +10,7 @@ import transformers.models.qwen2_5_vl.modeling_qwen2_5_vl
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_for_wormhole_b0
 
 from ....encoders.qwen25vl.encoder_pair import Qwen25VlTokenizerEncoderPair
 from ....encoders.qwen25vl.model_qwen25vl import (
@@ -209,6 +210,7 @@ def test_qwen25vl_text_encoder(
         assert_quality(prompt_embeds, tt_prompt_embeds_torch, pcc=0.991, relative_rmse=0.14)
 
 
+@skip_for_wormhole_b0("PCC regression on wh_llmbox T3000, see GH issue")
 @pytest.mark.parametrize(
     "mesh_device , submesh_shape",
     [[(2, 4), (1, 4)], [(4, 8), (1, 4)]],
