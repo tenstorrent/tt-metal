@@ -203,6 +203,9 @@ void kernel_main() {
 
     //  WRITER
     const auto s = TensorAccessor(out_args, out_tensor_addr);
+    // `s` is only consumed inside the `#ifndef OUT_SHARDED` write path below; mark it used so
+    // sharded builds don't warn (-Wunused-but-set-variable).
+    (void)s;
 
     // sparsity accessor
     constexpr uint32_t cb_id_sparsity = get_named_compile_time_arg_val("cb_sparsity");
