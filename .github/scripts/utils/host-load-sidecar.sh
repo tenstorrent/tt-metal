@@ -531,7 +531,11 @@ emit_summary() {
 
     cat "$summary_tmp" >&2
     if [[ -n "$summary_file" ]]; then
-        cat "$summary_tmp" >> "$summary_file"
+        {
+            printf '\n```\n'
+            cat "$summary_tmp"
+            printf '```\n'
+        } >> "$summary_file"
     fi
 }
 
