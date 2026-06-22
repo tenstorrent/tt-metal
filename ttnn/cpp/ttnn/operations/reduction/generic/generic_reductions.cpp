@@ -9,6 +9,7 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -121,6 +122,41 @@ Tensor adjust_shape(
     return output_tensor;
 }
 
+// LLK workaround (keeps ckernel_sfpu_reduce.h untouched): the int32 SFPU within-tile
+// min/max reduce leaks the pad sentinel when the reduced tile-row extent is small (real
+// data confined to the top face) — a regression introduced by PR #46231. Non-height/width
+// (outer) reductions always hit that small-extent case after being transposed into the H
+// position, so reduce such an axis by folding its slices with binary min/max instead, which
+// never invokes the within-tile reduce. Returns a keepdim result (size 1 at `axis`).
+template <reduction_common::ReduceType reduce_type>
+static Tensor fold_axis_min_max(const Tensor& in, int axis, const MemoryConfig& memory_config) {
+    const auto shape = in.logical_shape();
+    const int rank = static_cast<int>(shape.rank());
+    const int ax = axis < 0 ? axis + rank : axis;
+    const uint32_t extent = shape[ax];
+
+    auto slice_at = [&](uint32_t idx) {
+        ttnn::SmallVector<uint32_t> begins(rank, 0), ends(rank), steps(rank, 1);
+        for (int i = 0; i < rank; i++) {
+            ends[i] = shape[i];
+        }
+        begins[ax] = idx;
+        ends[ax] = idx + 1;
+        return ttnn::slice(in, begins, ends, steps, memory_config);
+    };
+
+    Tensor acc = slice_at(0);
+    for (uint32_t i = 1; i < extent; i++) {
+        Tensor cur = slice_at(i);
+        if constexpr (reduce_type == reduction_common::ReduceType::Max) {
+            acc = ttnn::maximum(acc, cur, std::nullopt, memory_config);
+        } else {
+            acc = ttnn::minimum(acc, cur, std::nullopt, memory_config);
+        }
+    }
+    return acc;
+}
+
 template <reduction_common::ReduceType reduce_type>
 static Tensor reduce_impl(
     const Tensor& input_tensor_arg,
@@ -177,6 +213,21 @@ static Tensor reduce_impl(
 
                     bool transpose = i_dim < rank - 2;
                     int reduce_dim = i_dim;
+
+                    // See fold_axis_min_max: the int32 within-tile min/max reduce is buggy for the
+                    // small reduced extent that transposing an outer axis into H always produces, so
+                    // fold this axis with binary min/max instead. Unscaled only (scalar handling stays
+                    // on the standard path); float dtypes are unaffected and keep the transpose path.
+                    if constexpr (
+                        reduce_type == reduction_common::ReduceType::Max ||
+                        reduce_type == reduction_common::ReduceType::Min) {
+                        if (transpose && output_tensor.dtype() == tt::tt_metal::DataType::INT32 &&
+                            effective_scalar == 1.0f) {
+                            output_tensor = fold_axis_min_max<reduce_type>(output_tensor, i_dim, memory_config);
+                            continue;
+                        }
+                    }
+
                     if (transpose) {
                         output_tensor = ttnn::transpose(output_tensor, i_dim, -2, memory_config, pad_value);
                         reduce_dim = rank - 2;
