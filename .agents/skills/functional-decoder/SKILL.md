@@ -111,7 +111,9 @@ Use this reference while bringing up a TTNN decoder layer. It folds in relevant 
 
 ## Prefill And Decode Shapes
 
-- Prefill commonly uses `(1, batch=1, seq_len, hidden)` style tensor shapes; decode commonly uses `(1, seq_len=1, batch, hidden)`.
+- Prefill commonly uses `(1, batch, seq_len, hidden)` style tensor shapes; decode commonly uses `(1, seq_len=1, batch, hidden)`.
+- Use batch 1 as the first smoke/performance target, but do not hard-code batch 1 into masks, page tables, current positions, cache indexing, residual shapes, or output handling.
+- After batch-1 PCC passes, add at least one batch >1 prefill/decode correctness test. Test up to batch 32 when the target hardware, memory, and harness allow it. If batch 32 cannot run, record the largest tested batch and the hard limit.
 - The target sequence/context length is the full value advertised by the HF config, usually `max_position_embeddings` or the model's equivalent field. Do not create a smaller model config. Do not hide a smaller implementation behind a smaller `max_model_len`.
 - Do not reduce the advertised model capability to make bringup, tests, profiling, or serving easier. A reduction is acceptable only when a hard physical device limit prevents the advertised capability from fitting or running, such as device DRAM capacity for weights + KV/cache/state + required persistent buffers. If reduced, record the byte calculation or failed capacity probe, the largest feasible supported value, and the exact construction/serving setting that uses it.
 - Decode tests must include the full supported context length unless measured KV-cache DRAM capacity forces a reduction. If reduced, record the attempted full-length or capacity-probe command, log, failure signature or byte calculation, and largest feasible tested context.

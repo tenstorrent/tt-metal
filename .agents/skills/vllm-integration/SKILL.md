@@ -30,6 +30,8 @@ Before writing adapter code, load the datatype-sweep selection and confirm the g
 
 Load `models/autoports/<model>/doc/context_contract.json` and serve the recorded supported context. The default target is the HF-advertised context. Do not lower `--max-model-len`, model config context, benchmark context, API context, or any other advertised serving capability to work around a model bug. A smaller value is valid only when the context contract records evidence that a hard physical device limit prevents the advertised capability from fitting or running and that the selected value is the largest feasible one.
 
+Preserve larger-batch serving capability. The headline performance target is still batch-1 single-user latency, but the adapter must not assume `max_num_seqs=1` or batch size 1 in cache allocation, page tables, scheduler inputs, sampling, async decode, or output formatting. Test serving up to 32 concurrent sequences when the target hardware, memory, and harness allow it. If 32 cannot run, record the largest tested value and the hard physical limit.
+
 ## vLLM Adapter
 
 `tt/generator_vllm.py` should delegate to the existing generator's low-level methods. Keep adapter-only code limited to vLLM interface translation.
@@ -63,6 +65,14 @@ Only set `tt_async_decode_allows_overlap = True` after a focused overlap test pr
 If the vLLM plugin or harness is being changed, prefer the same safety rule there: overlap should default to false unless the model declares this proof-backed capability. Leaving overlap disabled may cost a few tokens/sec/user; letting it default on can silently corrupt generation.
 
 The traced serving decode path reuses the full-model generator's canonical split-sampling path and replays via `ttnn.execute_trace(..., blocking=False)`. For `sample_on_device_mode=all`, serving has no new sampling strategy, host greedy/top-1 argmax, full-logits readback, generic top-k fallback for greedy, or Python readback/writeback token-feedback loop. If the full-model generator lacks split sampling, stop and fix `$full-model`; do not complete vLLM by patching sampling in the adapter. Do not copy a full page table every token when it is unchanged. Reduce token/current-position/page-table refresh to actual scheduler state changes, then prove both changed and unchanged cases with stale-input tests.
+
+## Minimum-Surface Bring-Up Loop
+
+Do not debug vLLM by repeatedly launching the complete all-layer model. First make the adapter work on the smallest representative serving target: the same generator, same `generator_vllm.py`, same plugin registration, same cache/page-table shapes, same terminal norm/LM head/sampling path, same trace behavior, and one real layer of each unique layer kind. Use that reduced target to make server launch, trace capture/replay, async split, vLLM cache ownership, on-device sampling, token/current-position/page-table refresh, and stale-input tests pass. Include a multi-request smoke test after the batch-1 path works, so batch/cache/page-table bugs are caught before the all-layer run.
+
+The reduced target is only an inner-loop tool. It is not final serving evidence, and it must not be reported as the model's accuracy or performance. After the reduced target passes, run the complete all-layer model for the final accuracy, qualitative, sampling, and benchmark evidence.
+
+Run checks from smallest to largest. If a vLLM pytest, prompt, request, or benchmark shape fails, rerun that failing item directly against a live server while debugging; do not rerun the whole suite after every edit. If a check suite is slow, run `--sampling-profile smoke` or a single targeted request first, then rerun the full profile once the issue is fixed.
 
 ## Plugin Registration
 
@@ -126,16 +136,16 @@ Check stages:
 
 - `sampling`: runs the canonical TT plugin pytest suite against the live server. `--sampling-profile full` runs the whole suite; `--sampling-profile smoke` runs a small integration sanity subset for slow bring-up loops.
 - `qualitative`: saves greedy and sampled completions for prompts from `models/common/readiness_check/vllm_prompts.txt`; read the outputs and judge coherence, topic, repetition, gibberish, and wrong-language drift. See `Output-Quality Verdicts Need A Control` below before classifying any problem as model-intrinsic.
-- `benchmark`: runs the primary single-user decode profile by default: 128-token input, 128-token output, one prompt, `--max-concurrency 1`, `ignore_eos`, percentile metrics `ttft,tpot,itl,e2el`, and a completed-prompt gate. Use `vllm_benchmark.json` for headline decode t/s/u and comparisons to full-model or older agentic/custom-benchmark reports.
-- `benchmark`: also runs the vLLM-nightly-shaped CI serving-burst profile by default: 100-token inputs, 100-token outputs, 32 prompts, no explicit `--max-concurrency`, `ignore_eos`, and the same metric set. Use `vllm_ci_serving_benchmark.json` for vLLM-nightly parity and serving-capacity context. Do not use it as the headline decode t/s/u because burst admission and chunked prefill can affect TPOT. The readiness runner passes `--temperature 0.0` by default so both benchmark profiles are greedy. Use `--benchmark-use-server-generation-config` only when intentionally reproducing exact nightly/server-generation-config behavior, and label those numbers as sampled/default-generation-config rather than greedy single-user t/s/u.
+- `benchmark`: runs the primary single-user decode profile by default: 128-token input, 128-token output, one prompt, `--max-concurrency 1`, `ignore_eos`, percentile metrics `ttft,tpot,itl,e2el`, and a completed-prompt gate. Use `vllm_benchmark.json` for headline decode t/s/u and comparisons to full-model or older agentic/custom-benchmark reports. This is the primary optimization target.
+- `benchmark`: also runs the vLLM-nightly-shaped CI serving-burst profile by default: 100-token inputs, 100-token outputs, 32 prompts, no explicit `--max-concurrency`, `ignore_eos`, and the same metric set. Use `vllm_ci_serving_benchmark.json` for vLLM-nightly parity, serving-capacity context, and larger-batch/concurrency coverage. Do not use it as the headline decode t/s/u because burst admission and chunked prefill can affect TPOT. The readiness runner passes `--temperature 0.0` by default so both benchmark profiles are greedy. Use `--benchmark-use-server-generation-config` only when intentionally reproducing exact nightly/server-generation-config behavior, and label those numbers as sampled/default-generation-config rather than greedy single-user t/s/u.
 
 When optimizing decode serving overhead, benchmark with the exact same runner, prompt/output lengths, `max_num_seqs`, model length, mesh, TT config, and sampling mode as the primary or previous comparison. Report raw vLLM `median_ttft_ms`/`p99_ttft_ms`, `mean_tpot_ms`/`p99_tpot_ms`, `median_itl_ms`/`p99_itl_ms`, `output_throughput`, and TPOT-derived decode t/s/u (`1000 / mean_tpot_ms`) before/after. Compare primary single-user 128/128/1 against primary single-user 128/128/1, and compare CI serving-burst 100/100/32 against CI serving-burst 100/100/32; do not treat those two workload shapes as direct perf verdicts against each other.
 
 Keep teacher-forcing and serving performance separate. A readiness/PERF teacher-forcing number is useful as a decoder/generator lower bound; vLLM throughput includes serving orchestration, sampling, token feedback, request handling, and readback. If serving is much slower than teacher forcing, remove avoidable serving-specific overhead before retuning the decoder stack: fallback sampling, stale-input refreshes, per-token page-table copies, blocking trace replay, synchronizations, readbacks, and adapter-side reconstruction.
 
-`--max-num-seqs` is passed to both server launch and sampling pytest (`--tt-max-num-seqs`).
+`--max-num-seqs` is passed to both server launch and sampling pytest (`--tt-max-num-seqs`). Do not leave it at 1 except for the primary single-user benchmark or a focused debugging run. Final serving evidence should include a larger value, normally up to 32, unless hardware or memory capacity prevents it.
 
-For final vLLM-integration evidence, use `--sampling-profile full`. Use `--sampling-profile smoke` only for faster inner-loop iteration. For batch-1 MoE bring-up loops where the full profile is impractical, record the final status as `smoke-gated`; do not present it as equivalent to the full sampling gate unless the project owner explicitly accepts that coverage.
+For final vLLM-integration evidence, use `--sampling-profile full`. The normal debugging order is smoke first, then full: use `--sampling-profile smoke` for faster inner-loop iteration, rerun only failing pytest node ids or targeted requests while fixing failures, and run `--sampling-profile full` after the smoke and targeted checks pass. For MoE bring-up loops where the full profile is impractical, record the final status as `smoke-gated`; do not present it as equivalent to the full sampling gate unless the project owner explicitly accepts that coverage.
 
 When determinism tests fail in vLLM, validate that logits output by the model for a given prompt are reproducible across runs and batch positions. Check both standalone model and running through vllm.
 
@@ -176,6 +186,7 @@ Done means all of these are true and recorded:
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
 - Served max context, matching `doc/context_contract.json`, with any hard-physical-limit reduction evidence.
+- Served batch/concurrency coverage, including the largest tested `max_num_seqs` up to 32 and any hard-physical-limit reduction evidence.
 - Capability flags with evidence: no unproven `supports_async_decode=True`, explicit `tt_async_decode_allows_overlap` value with proof if true, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
 - Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
 - Logit-determinism evidence through vLLM, with run-to-run and cross-batch-position reproducibility checks and standalone baseline comparison.
