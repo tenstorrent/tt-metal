@@ -17,7 +17,7 @@ Owner:
 from dataclasses import dataclass
 from triage import ScriptConfig, ScriptPriority, triage_field, hex_serializer, log_check_device, run_script
 from run_checks import run as get_run_checks
-from heartbeat_samples import run as get_heartbeat_samples, HeartbeatSample
+from arc_heartbeat_sampling import run as get_arc_heartbeat_sampling, ArcHeartbeatSampling
 from datetime import timedelta
 import time
 from ttexalens.coordinate import OnChipCoordinate
@@ -28,11 +28,13 @@ from ttexalens.tt_exalens_lib import read_arc_telemetry_entry
 import utils
 
 script_config = ScriptConfig(
-    depends=["run_checks", "heartbeat_samples"],
+    depends=["run_checks", "arc_heartbeat_sampling"],
+    # We want this script to run as late as possible so more time passes and we have more precise hb/s estimation.
     priority=ScriptPriority.LOW,
 )
 
 MINIMAL_WAIT_SECONDS = 2
+HEARTBEAT_INTERVAL_SECONDS = 0.1
 
 
 @dataclass
@@ -44,16 +46,15 @@ class ArcCheckData:
     heartbeats_per_second: float = triage_field("Heartbeats/s")
 
 
-def check_arc_block(arc: NocBlock, postcode: int | None, heartbeat_sample: HeartbeatSample) -> ArcCheckData:
+def check_arc_block(arc: NocBlock, postcode: int | None, arc_heartbeat_sampling: ArcHeartbeatSampling) -> ArcCheckData:
     device = arc.location.device
     device_id = arc.location.device_id
     # Heartbeat must be increasing
-    current_heartbeat_sample = HeartbeatSample(
-        heartbeat=read_arc_telemetry_entry(device_id, "TIMER_HEARTBEAT"), timestamp=time.monotonic()
-    )
+    current_heartbeat_sample = arc_heartbeat_sampling.get_heartbeat_sample(device)
+    initial_heartbeat_sample = arc_heartbeat_sampling.get_initial_heartbeat_sample(device)
     arcclk_mhz = read_arc_telemetry_entry(device_id, "ARCCLK")
-    heartbeats_per_second = (current_heartbeat_sample.heartbeat - heartbeat_sample.heartbeat) / (
-        current_heartbeat_sample.timestamp - heartbeat_sample.timestamp
+    heartbeats_per_second = (current_heartbeat_sample.heartbeat - initial_heartbeat_sample.heartbeat) / (
+        current_heartbeat_sample.timestamp - initial_heartbeat_sample.timestamp
     )
 
     # We do this in order to support all firmware versions
@@ -79,8 +80,7 @@ def check_arc_block(arc: NocBlock, postcode: int | None, heartbeat_sample: Heart
         f"ARC heartbeat is too high: [error]{heartbeats_per_second}[/]hb/s. Expected at most [info]{heartbeats_per_second_upper_bound}[/]hb/s",
     )
 
-    heartbeat_interval = 0.1  # seconds
-    uptime_seconds = (current_heartbeat_sample.heartbeat - heartbeat_offset) * heartbeat_interval
+    uptime_seconds = (current_heartbeat_sample.heartbeat - heartbeat_offset) * HEARTBEAT_INTERVAL_SECONDS
 
     return ArcCheckData(
         location=arc.location,
@@ -91,7 +91,7 @@ def check_arc_block(arc: NocBlock, postcode: int | None, heartbeat_sample: Heart
     )
 
 
-def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
+def check_arc(device: Device, arc_heartbeat_sampling: ArcHeartbeatSampling):
     arc = device.arc_block
     # We skip postcode check for blackhole devices due to https://github.com/tenstorrent/tt-exalens/issues/535
     if device.is_blackhole():
@@ -104,22 +104,22 @@ def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
             f"ARC postcode: [error]0x{postcode:08x}[/]. Expected [info]0xc0de____[/]",
         )
     if device.is_wormhole() or device.is_blackhole():
-        return check_arc_block(arc, postcode, heartbeat_sample)
+        return check_arc_block(arc, postcode, arc_heartbeat_sampling)
     else:
         utils.DEBUG(f"Unsupported architecture for check_arc: {device._arch}")
 
 
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
-    heartbeat_samples = get_heartbeat_samples(args, context)
+    arc_heartbeat_sampling = get_arc_heartbeat_sampling(args, context)
 
     # Ensuring that we wait at least MINIMAL_WAIT_SECONDS to ensure hb/s prediction is precise.
-    latest_timestamp = max(sample.timestamp for sample in heartbeat_samples.values())
+    latest_timestamp = max(sample.timestamp for sample in arc_heartbeat_sampling.initial_samples.values())
     smallest_wait = time.monotonic() - latest_timestamp
     if smallest_wait < MINIMAL_WAIT_SECONDS:
         time.sleep(MINIMAL_WAIT_SECONDS - smallest_wait)
 
-    return run_checks.run_per_device_check(lambda device: check_arc(device, heartbeat_samples[device]))
+    return run_checks.run_per_device_check(lambda device: check_arc(device, arc_heartbeat_sampling))
 
 
 if __name__ == "__main__":
