@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.janus_pro.tt.janus_conv2d_patch import TtJanusConv2dPatch
+from models.experimental.janus_pro.tt.janus_pro_conv2d_patch import TtJanusConv2dPatch
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
 
