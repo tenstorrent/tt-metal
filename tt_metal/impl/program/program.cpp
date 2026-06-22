@@ -55,6 +55,7 @@
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include "jit_build/depend.hpp"
+#include "profiler_paths.hpp"
 #include <tt_stl/enum.hpp>
 #include "jit_build/jit_build_options.hpp"
 #include "kernel_types.hpp"
@@ -201,6 +202,82 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
     return true;
 }
 
+// Harvest profiler zone-source locations from a preprocessed (.ii) translation unit and append them
+// to the profiler's zone-source-location log.
+//
+// The device profiler stores only a 16-bit hash per zone; the host rebuilds the
+// hash -> (zone_name, file, line) table by grepping the compiler's `#pragma message(...,KERNEL_PROFILER)`
+// notes out of *.o.log (see jit_build/build.cpp). That harvest runs only on the LOCAL compile path, so
+// kernels compiled on the JIT server never contribute their zones and `DEVICE KERNEL DURATION [ns]`
+// reads 0 for every test.
+//
+// In preprocess-and-ship the `_Pragma(message(...))` survives `-E` as a literal
+// `#pragma message("zone" "," "file" "," "line" ",KERNEL_PROFILER")` directive in the shipped .ii.
+// Reconstruct the same string the device hashed (mirroring C++ string-literal concatenation) and append
+// it, in the exact shape profiler.cpp::populateZoneSrcLocations parses, to the zone-source log. The host
+// dedupes by zone string, so re-appending an already-seen zone is harmless. Best-effort: profiler
+// bookkeeping must never block kernel compilation.
+void harvest_zone_src_locations_from_ii(const std::vector<std::uint8_t>& ii_content) {
+    const auto concat_pragma_literals = [](const std::string& line, std::size_t open_paren) {
+        std::string zone;
+        bool in_str = false;
+        for (std::size_t i = open_paren + 1; i < line.size(); ++i) {
+            const char c = line[i];
+            if (in_str) {
+                if (c == '\\' && i + 1 < line.size()) {
+                    zone.push_back(line[++i]);  // keep the escaped character verbatim
+                } else if (c == '"') {
+                    in_str = false;
+                } else {
+                    zone.push_back(c);
+                }
+            } else if (c == '"') {
+                in_str = true;
+            } else if (c == ')') {
+                break;  // end of message(...) argument list
+            }
+        }
+        return zone;
+    };
+
+    std::ofstream log_file;
+    const char* data = reinterpret_cast<const char*>(ii_content.data());
+    const std::size_t n = ii_content.size();
+    std::size_t pos = 0;
+    while (pos < n) {
+        std::size_t eol = pos;
+        while (eol < n && data[eol] != '\n') {
+            ++eol;
+        }
+        const std::string line(data + pos, eol - pos);
+        pos = eol + 1;
+
+        if (line.find("#pragma message(") == std::string::npos || line.find("KERNEL_PROFILER") == std::string::npos) {
+            continue;
+        }
+        const std::size_t open_paren = line.find('(');
+        if (open_paren == std::string::npos) {
+            continue;
+        }
+        const std::string zone = concat_pragma_literals(line, open_paren);
+        if (zone.empty()) {
+            continue;
+        }
+        if (!log_file.is_open()) {
+            std::error_code ec;
+            std::filesystem::create_directories(
+                std::filesystem::path(NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).parent_path(), ec);
+            log_file.open(NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG, std::ios::app);
+            if (!log_file.is_open()) {
+                return;  // best-effort: never block compilation on profiler bookkeeping
+            }
+        }
+        // populateZoneSrcLocations() locates the delimiter "'#pragma message: " and strips the final
+        // character of the line, so wrap the zone string in a trailing sentinel quote to match.
+        log_file << "'#pragma message: " << zone << "'\n";
+    }
+}
+
 // Build a KernelCompileDescriptor to be submitted to RemoteCompileCoordinator.
 KernelCompileDescriptor build_kernel_descriptor(
     IDevice* device,
@@ -241,6 +318,9 @@ KernelCompileDescriptor build_kernel_descriptor(
     // required: the .ii is referenced as a sibling of the target output dir ("../<name>").
     static const bool preprocess_and_ship = std::getenv("TT_METAL_JIT_PREPROCESS") != nullptr;
     if (preprocess_and_ship) {
+        // When the device profiler is on, the remotely-compiled kernels' zone-source locations are
+        // never harvested locally (the compiler ran on the server), so recover them from each .ii below.
+        const bool profiler_enabled = MetalContext::instance().rtoptions().get_profiler_enabled();
         for (std::size_t t = 0; t < desc.request.targets.size(); ++t) {
             auto& target = desc.request.targets[t];
             const std::string client_out_dir = std::filesystem::path(desc.expected_elf_paths[t]).parent_path().string();
@@ -267,6 +347,9 @@ KernelCompileDescriptor build_kernel_descriptor(
                     TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
                 }
                 const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                if (profiler_enabled) {
+                    harvest_zone_src_locations_from_ii(bytes);
+                }
                 tt::jit_build::GeneratedFile gf;
                 gf.name = ii_name;
                 gf.content.assign(bytes.begin(), bytes.end());
