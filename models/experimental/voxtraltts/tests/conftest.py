@@ -24,7 +24,7 @@ def _reset_voxtral_decode_trace_config():
 
 @pytest.fixture(scope="function")
 def device(request, device_params):
-    """P150: single device. QB2: 1×4 host mesh; compute is 1×1 submesh unless ``VOXTRAL_COMPUTE_MESH_SHAPE=1,4``."""
+    """P150: single device. QB2: 1×4 host mesh; compute is 1×1 submesh unless ``MESH_DEVICE=P150x4``."""
     physical_device_id = voxtral_resolve_physical_device_id(request.config.getoption("device_id"))
     runtime = open_voxtral_runtime_mesh(device_params, device_id=physical_device_id)
     request.node.pci_ids = runtime.physical_device_ids

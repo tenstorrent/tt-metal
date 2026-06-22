@@ -21,7 +21,11 @@ from scipy.io import wavfile
 import ttnn
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
-from models.experimental.voxtraltts.tests.common import close_voxtral_runtime_mesh, open_voxtral_runtime_mesh
+from models.experimental.voxtraltts.tests.common import (
+    VOXTRAL_STANDARD_CHAR_TEXT,
+    close_voxtral_runtime_mesh,
+    open_voxtral_runtime_mesh,
+)
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     voxtral_text_default_optimizations,
@@ -37,6 +41,17 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
 # A. Argument groups  (Llama DemoArgs pattern: model / tt / data)
 # ---------------------------------------------------------------------------
 
+# Shared standard prompt (same as PCC / perf tests in ``tests/common.py``).
+DEMO_DEFAULT_TEXT = VOXTRAL_STANDARD_CHAR_TEXT
+DEMO_DEFAULT_VOICE = "cheerful_female"
+DEMO_DEFAULT_TEXT_MAX_SEQ_LEN = 4096
+DEMO_DEFAULT_MAX_SPEECH_TOKENS = 5000
+DEMO_DEFAULT_OUTPUT_DIR = "models/experimental/voxtraltts/voxtraltts_demo_output"
+
+
+def _is_ci_run() -> bool:
+    return os.environ.get("CI", "").strip().lower() in ("1", "true", "yes")
+
 
 @dataclass
 class ModelArgs:
@@ -45,7 +60,7 @@ class ModelArgs:
 
 @dataclass
 class TTArgs:
-    text_max_seq_len: int = 4096
+    text_max_seq_len: int = DEMO_DEFAULT_TEXT_MAX_SEQ_LEN
     text_dtype: str = "bfloat16"
     acoustic_dtype: str = "bfloat16"
     tokenizer_dtype: str = "bfloat16"
@@ -59,15 +74,15 @@ class TTArgs:
 
 @dataclass
 class DataArgs:
-    output_dir: str = "generated/voxtraltts_demo"
+    output_dir: str = DEMO_DEFAULT_OUTPUT_DIR
     mode: str = "text"
     # Upper bound on AR acoustic steps. The demo auto-raises this per-prompt when the
     # word count implies more tokens are needed (see _min_speech_tokens). Use a small
     # value like 64 for quick smoke tests; leave at 0 to always use the auto-estimate.
-    max_speech_tokens: int = 5000
+    max_speech_tokens: int = DEMO_DEFAULT_MAX_SPEECH_TOKENS
     seed: int = 0
-    default_voice: str = "casual_male"
-    warmup_iters: int = 1
+    default_voice: str = DEMO_DEFAULT_VOICE
+    warmup_iters: int = 0 if _is_ci_run() else 1
     inline_texts: list[str] | None = None
     voice: str | None = None
     codes_path: str | None = None
@@ -98,11 +113,12 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         nargs="+",
         action="append",
         default=None,
-        help="Inline text prompt (text mode). Quotes are optional; repeat --text for multiple prompts.",
+        help="Inline text prompt (text mode). Quotes are optional; repeat --text for multiple prompts. "
+        f"Default: shared standard prompt (``VOXTRAL_STANDARD_CHAR_TEXT``).",
     )
-    p.add_argument("--output-dir", type=str, default=DataArgs.output_dir)
+    p.add_argument("--output-dir", type=str, default=DEMO_DEFAULT_OUTPUT_DIR)
     p.add_argument("--mode", type=str, choices=("text", "codes", "latents"), default="text")
-    p.add_argument("--text-max-seq-len", type=int, default=4096)
+    p.add_argument("--text-max-seq-len", type=int, default=DEMO_DEFAULT_TEXT_MAX_SEQ_LEN)
     p.add_argument(
         "--max-speech-tokens",
         type=int,
@@ -112,8 +128,13 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         "~1500 words; use 0 or a small value for quick smoke tests.",
     )
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--warmup-iters", type=int, default=1, help="Untimed warmup passes before the measured run.")
-    p.add_argument("--default-voice", type=str, default="casual_male")
+    p.add_argument(
+        "--warmup-iters",
+        type=int,
+        default=0 if _is_ci_run() else 1,
+        help="Untimed warmup passes before the measured run (default 0 when CI=true, else 1).",
+    )
+    p.add_argument("--default-voice", type=str, default=DEMO_DEFAULT_VOICE)
     p.add_argument(
         "--voice", type=str, default=None, help="Voice for inline --text prompts (overrides --default-voice)."
     )
@@ -173,7 +194,7 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     inline_texts = [" ".join(parts).strip() for parts in ns.text] if ns.text else None
     if ns.mode == "text":
         if not inline_texts:
-            p.error("--text is required when --mode text")
+            inline_texts = [DEMO_DEFAULT_TEXT]
     elif ns.mode == "codes":
         if not ns.codes_path:
             p.error("--codes-path is required when --mode codes")
@@ -445,9 +466,9 @@ def _chunk_token_budget(n_words: int) -> int:
 def _is_multi_device_mesh() -> bool:
     """True only for multi-device compute meshes (e.g. 1×4 TP). 1×1 returns False so the
     sentence-chunking workaround for TP autoregressive drift never touches the single-device path."""
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+    from models.experimental.voxtraltts.utils.mesh import voxtral_mesh_device_compute_shape
 
-    return tuple(voxtral_requested_compute_mesh_shape()) != (1, 1)
+    return tuple(voxtral_mesh_device_compute_shape()) != (1, 1)
 
 
 def _tp_trace_chunk_max_words() -> int:
@@ -1024,11 +1045,11 @@ def run_demo(args: DemoArgs) -> None:
         decode_trace_2cq_enabled,
         decode_trace_enabled,
     )
-    from models.experimental.voxtraltts.tests.common import voxtral_requested_compute_mesh_shape
+    from models.experimental.voxtraltts.utils.mesh import voxtral_mesh_device_compute_shape
 
     configure_decode_trace(decode_trace=args.tt.decode_trace, decode_trace_2cq=args.tt.decode_trace_2cq)
 
-    if voxtral_requested_compute_mesh_shape() != (1, 1) and not decode_trace_enabled():
+    if voxtral_mesh_device_compute_shape() != (1, 1) and not decode_trace_enabled():
         logger.warning(
             "[demo] Multi-device mesh with trace disabled → slower direct forward per AR step "
             "(chunking unchanged). Use default trace for best RTF."
