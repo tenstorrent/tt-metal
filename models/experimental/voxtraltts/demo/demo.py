@@ -21,7 +21,7 @@ from scipy.io import wavfile
 import ttnn
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
-from models.experimental.voxtraltts.tests.common import (
+from models.experimental.voxtraltts.utils.test_common import (
     VOXTRAL_STANDARD_CHAR_TEXT,
     close_voxtral_runtime_mesh,
     open_voxtral_runtime_mesh,
@@ -41,7 +41,7 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
 # A. Argument groups  (Llama DemoArgs pattern: model / tt / data)
 # ---------------------------------------------------------------------------
 
-# Shared standard prompt (same as PCC / perf tests in ``tests/common.py``).
+# Shared standard prompt (same as PCC / perf tests in ``utils/test_common.py``).
 DEMO_DEFAULT_TEXT = VOXTRAL_STANDARD_CHAR_TEXT
 DEMO_DEFAULT_VOICE = "cheerful_female"
 DEMO_DEFAULT_TEXT_MAX_SEQ_LEN = 4096

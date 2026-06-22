@@ -50,7 +50,7 @@ configure_decode_trace(decode_trace=True, decode_trace_2cq=True)
 from models.experimental.voxtraltts.reference.voxtral_config import (  # noqa: E402
     DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
 )
-from models.experimental.voxtraltts.tests.common import (  # noqa: E402
+from models.experimental.voxtraltts.utils.test_common import (  # noqa: E402
     VOXTRAL_STANDARD_CHAR_TEXT,
     resolve_voxtral_model_name_or_skip,
     speech_prompt_seq_len,

@@ -50,7 +50,7 @@ configure_decode_trace(decode_trace=True, decode_trace_2cq=True)
 from models.experimental.voxtraltts.reference.voxtral_config import (  # noqa: E402
     DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
 )
-from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip  # noqa: E402
+from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip  # noqa: E402
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline  # noqa: E402
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler  # noqa: E402
 from models.perf.perf_utils import prep_perf_report  # noqa: E402

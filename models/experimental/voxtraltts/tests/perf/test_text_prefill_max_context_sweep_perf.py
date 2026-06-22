@@ -37,7 +37,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
-from models.experimental.voxtraltts.tests.common import (
+from models.experimental.voxtraltts.utils.test_common import (
     build_voxtral_text_page_table_tt,
     create_real_voxtral_text_model_or_skip,
     tale_continuation_tokens,
