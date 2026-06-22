@@ -7,58 +7,53 @@
 #include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 
 #include <tt-metalium/shape2d.hpp>
+#include <memory>
 #include <numeric>
+
+#include "impl/tensor/spec/layout/page_config_impl.hpp"
 
 namespace tt::tt_metal {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-size_t rm_element_size_bytes(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B:
-            // To store block floats in RowMajor layout, we use a fallback and store full floats instead
-            return sizeof(float);
-
-        default: TT_THROW("Unsupported data type!");
-    }
-}
-
-// Maximum possible device memory alignment for all devices and buffer types.
-constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
-
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
-
-PageConfig::PageConfig(const Config& config) : config_(config) {}
+PageConfig::PageConfig(const Config& config) : impl_(std::make_unique<PageConfigImpl>(config)) {}
 
 PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
-PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) {
-    if (layout == Layout::ROW_MAJOR) {
-        // TODO: add TT_FATAL(!tile.has_value(), "Specifying tile shape for a row major layout is not supported")
-        config_ = RowMajorPageConfig(tile.value_or(Tile()));
-    } else {
-        config_ = TilePageConfig(tile.value_or(Tile()));
+PageConfig::PageConfig(Layout layout, const std::optional<Tile>& tile) :
+    impl_(std::make_unique<PageConfigImpl>(layout, tile)) {}
+
+PageConfig::~PageConfig() = default;
+
+PageConfig::PageConfig(const PageConfig& other) :
+    impl_(other.impl_ ? std::make_unique<PageConfigImpl>(*other.impl_) : nullptr) {}
+
+PageConfig& PageConfig::operator=(const PageConfig& other) {
+    if (this == &other) {
+        return *this;
     }
+    impl_ = other.impl_ ? std::make_unique<PageConfigImpl>(*other.impl_) : nullptr;
+    return *this;
+}
+
+PageConfig::PageConfig(PageConfig&& other) noexcept = default;
+PageConfig& PageConfig::operator=(PageConfig&& other) noexcept = default;
+
+PageConfigImpl& PageConfig::impl() {
+    TT_FATAL(impl_ != nullptr, "PageConfig is in a moved-from state.");
+    return *impl_;
+}
+
+const PageConfigImpl& PageConfig::impl() const {
+    TT_FATAL(impl_ != nullptr, "PageConfig is in a moved-from state.");
+    return *impl_;
 }
 
 Alignment PageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
-    return std::visit(
-        [&](const auto& config) constexpr { return config.create_default_alignment(dtype, memory_config); }, config_);
+    return impl().create_default_alignment(dtype, memory_config);
 }
 
 void PageConfig::validate_alignment(
     const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
-    std::visit(
-        [&](const auto& config) constexpr { config.validate_alignment(alignment, dtype, memory_config); }, config_);
+    impl().validate_alignment(alignment, dtype, memory_config);
 }
 
 Shape2D PageConfig::get_page_shape(
@@ -66,37 +61,28 @@ Shape2D PageConfig::get_page_shape(
     DataType dtype,
     const MemoryConfig& memory_config,
     const std::optional<Shape2D>& physical_shard_size) const {
-    return std::visit(
-        [&](const auto& config) constexpr {
-            return config.get_page_shape(physical_size, dtype, memory_config, physical_shard_size);
-        },
-        config_);
+    return impl().get_page_shape(physical_size, dtype, memory_config, physical_shard_size);
 }
 
 size_t PageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
-    return std::visit(
-        [&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, config_);
+    return impl().get_page_size_bytes(page_shape, dtype);
 }
 
-Layout PageConfig::get_layout() const {
-    if (std::holds_alternative<RowMajorPageConfig>(config_)) {
-        return Layout::ROW_MAJOR;
-    }
-    return Layout::TILE;
-}
+Layout PageConfig::get_layout() const { return impl().get_layout(); }
 
-Tile PageConfig::get_tile() const {
-    return std::visit([&](const auto& config) { return config.get_tile(); }, config_);
-}
+Tile PageConfig::get_tile() const { return impl().get_tile(); }
 
-Alignment PageConfig::get_required_shard_shape_alignment() const {
-    return std::visit(
-        [&](const auto& config) constexpr { return config.get_required_shard_shape_alignment(); }, config_);
-}
+Alignment PageConfig::get_required_shard_shape_alignment() const { return impl().get_required_shard_shape_alignment(); }
 
 Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
-    return std::visit(
-        [&](const auto& config) constexpr { return config.get_recommended_shard_shape_alignment(dtype); }, config_);
+    return impl().get_recommended_shard_shape_alignment(dtype);
+}
+
+bool PageConfig::operator==(const PageConfig& other) const { return impl().config() == other.impl().config(); }
+bool PageConfig::operator!=(const PageConfig& other) const { return !(*this == other); }
+
+std::tuple<const PageConfig::Config&> PageConfig::attribute_values() const {
+    return std::forward_as_tuple(impl().config());
 }
 
 TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
