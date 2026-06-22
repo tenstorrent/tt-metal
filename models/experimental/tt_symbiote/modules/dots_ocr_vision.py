@@ -193,6 +193,18 @@ def _vision_tp_gate_up_program_config(
             pinned = tp4_mlp_gate_up_pc(device)
             if pinned is not None and int(l1_resident_bytes_per_core) <= 0:
                 return pinned
+        # TP=2 gate/up (N=I/TP=2112) is NOT in the TP4 sweep, so wh_tp4_matmul_pc
+        # below returns the conservative obh=4 fallback (~20-23% FLOPs in the TP=2
+        # vision trace). The generic 2D-mcast config is better for this shape (same
+        # root cause + fix as the MLP-down V1), so prefer it at TP=2 before the
+        # swept fallback; TP=4 keeps the pinned/swept path.
+        _vshape = tuple(int(x) for x in device.shape) if (device is not None and hasattr(device, "shape")) else ()
+        if len(_vshape) == 2 and _vshape[-1] == 2:
+            generic = _vision_matmul_program_config(
+                device, m_dim, k_dim, n_dim, l1_resident_bytes_per_core=int(l1_resident_bytes_per_core)
+            )
+            if generic is not None:
+                return generic
         pc = wh_tp4_matmul_pc(
             device,
             m_dim,
@@ -1298,6 +1310,17 @@ class TTNNDotsVisionMLP(TTNNModule):
         """
         if not _tp4_prefill_vision_enabled(self.device):
             return _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+        # The hardware-swept tp4 down config (tp4_mlp_down_pc) was tuned for TP=4
+        # (itp = intermediate/4). At TP=2 the contraction shard ``itp`` is 2x larger
+        # and is not in the sweep, so the swept/fallback config runs the down
+        # under-utilized (TP=2 vision trace: 11264x2112x1536 @ ~17% FLOPs / 48 cores).
+        # The generic 2D-mcast config hits ~48% FLOPs for this MLP-down shape on WH
+        # (8x8 grid, 352 m-tiles % 8 == 0, per_core_n=6 -> DST area 8), so prefer it
+        # at TP=2; keep the swept config for the proven TP=4 hot path.
+        if self._mlp_tp_num_devices() == 2:
+            generic = _vision_matmul_program_config(self.device, m_dim, k_dim, n_dim)
+            if generic is not None:
+                return generic
         cached = getattr(self, "_tp_down_pc", None)
         if cached is not None and m_dim == 11264 and k_dim == int(getattr(self, "_tp_down_k", k_dim)):
             return cached

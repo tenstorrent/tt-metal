@@ -43,6 +43,56 @@ except ImportError:
 _O_PROJ_COL_DRAM_SHARDED_GRID = (6, 1)
 
 
+def _dots_ocr_tp2_decode_mcast1d_program_config(device, input_shape, weight_shape):
+    """TP2 head_parallel / col_parallel decode 1D-mcast matmuls for dots.ocr.
+
+    The generic ``_dp_decode_matmul_program_config`` in0_block_w cap of 4 leaves
+    these K-heavy GEMV-shaped decodes overhead-bound on the 1D-mcast (TP=2
+    single-layer trace: down 44us @27% DRAM, QKV 18us @31%, o_proj 10us @21%).
+    A larger K-block cuts mcast inner-loop iterations, same as the TP4 k=2240
+    case in ``linear.py``. N (per_core_N=1: 48/32/24 active cores) and the
+    weight CB stay unchanged. K-blocks chosen to divide K_tiles exactly:
+      down  K=8960/2=4480 -> 140 tiles / 14 = 10 blocks
+      QKV   K=1536        ->  48 tiles /  8 =  6 blocks (N=2048/2=1024)
+      o_proj K=1536       ->  48 tiles /  8 =  6 blocks (N=hidden/2=768)
+    """
+    if int(input_shape[-2]) > ttnn.TILE_SIZE:
+        return None
+
+    grid = device.compute_with_storage_grid_size()
+    grid_x, grid_y = int(grid.x), int(grid.y)
+    k_dim = int(weight_shape[-2])
+    n_dim = int(weight_shape[-1])
+
+    in0_block_w = None
+    if k_dim == 4480 and n_dim == 1536:
+        in0_block_w = 14
+    elif k_dim == 1536 and n_dim in (1024, 768):
+        in0_block_w = 8
+    if in0_block_w is None:
+        return None
+
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=False,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
+def _dots_ocr_decode_matmul_program_config(device, input_shape, weight_shape):
+    """dots.ocr decode matmul PC: TP2-tuned 1D-mcast, then generic fallback."""
+    pc = _dots_ocr_tp2_decode_mcast1d_program_config(device, input_shape, weight_shape)
+    if pc is not None:
+        return pc
+    return _dp_matmul_program_config(device, input_shape, weight_shape)
+
+
 def _decode_o_proj_col_dram_sharded_program_config(k_per_dev: int, n_per_dev: int, num_cores: int):
     """DRAM-sharded decode config for the per-device COLUMN-PARALLEL o_proj.
 
@@ -375,7 +425,7 @@ class _TTNNDotsOCRQKVColParallel(TTNNLinearLLamaIReplicatedWColSharded):
             dtype=ttnn.bfloat16,
             memory_config=_decode_linear_output_memory_config(self.device, input_shape),
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            program_config=_dots_ocr_decode_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         tt_output = ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
         # Re-assemble the full fused-QKV on every device. The all_gather

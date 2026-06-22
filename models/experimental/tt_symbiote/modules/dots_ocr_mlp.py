@@ -11,6 +11,7 @@ from models.experimental.tt_symbiote.core.module import (
     run_on_devices,
     SHARDED_COLLECTIVE_LINEAR_DEVICE_ARCHS,
 )
+from models.experimental.tt_symbiote.modules.dots_ocr_attention import _dots_ocr_decode_matmul_program_config
 from models.experimental.tt_symbiote.modules.linear import (
     TTNNLinearLLamaIColShardedWAllReducedFusedGateUp,
     TTNNLinearLLamaIColShardedWRowSharded,
@@ -22,7 +23,6 @@ from models.experimental.tt_symbiote.modules.linear import (
     _decode_gate_up_col_dram_sharded_program_config,
     _decode_linear_output_memory_config,
     _l1_width_sharded_mem_config,
-    _dp_matmul_program_config,
     _dram_sharded_mem_config_2d,
     _tp_requires_ccl,
     _tp_mesh_mapper,
@@ -170,7 +170,7 @@ class TTNNDotsOCRFusedGateUpRowSharded(TTNNLinearLLamaIColShardedWAllReducedFuse
             dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
             compute_kernel_config=prefill_compute_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            program_config=_dots_ocr_decode_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if needs_ccl:
             tt_output = ttnn.reduce_scatter(
@@ -342,7 +342,7 @@ class TTNNDotsOCRRowShardedNoAllGather(TTNNLinearLLamaIColShardedWRowSharded):
             dtype=ttnn.bfloat8_b,
             memory_config=matmul_mc,
             compute_kernel_config=self.compute_kernel_config,
-            program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+            program_config=_dots_ocr_decode_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
         )
         if needs_ccl:
             tt_output = ttnn.reduce_scatter(
@@ -643,7 +643,7 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
                 bias=self.tt_bias,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 compute_kernel_config=self.compute_kernel_config,
-                program_config=_dp_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
+                program_config=_dots_ocr_decode_matmul_program_config(self.device, input_shape, self.tt_weight.shape),
             )
             return ttnn.reshape(tt_output, input_tensor_shape[:-1] + [-1])
 

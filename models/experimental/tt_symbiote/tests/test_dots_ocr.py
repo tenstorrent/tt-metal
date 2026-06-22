@@ -19,7 +19,11 @@ from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
     TTNNDotsOCRDecoderLayer,
     TTNNDotsOCRLayerStack,
 )
-from models.experimental.tt_symbiote.modules.dots_ocr_vision import TTNNDotsOCRVisionTower
+from models.experimental.tt_symbiote.modules.dots_ocr_vision import (
+    TTNNDotsOCRVisionTower,
+    _tp4_prefill_vision_enabled,
+    _tp4_prefill_vision_l1_activations_enabled,
+)
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
 
@@ -221,6 +225,17 @@ def _vision_block_token_shape(seq_len: int, hidden_size: int) -> list[int]:
 
 def _vision_head_shape(seq_len: int, num_heads: int, head_dim: int) -> list[int]:
     return [1, num_heads, seq_len, head_dim]
+
+
+def _vision_attn_tp_ndev(mesh_device, num_heads: int) -> int:
+    """Mirror ``TTNNDotsVisionAttention._attn_tp_ndev`` for test expectations."""
+    if mesh_device is None or not hasattr(mesh_device, "shape"):
+        return 1
+    shape = [int(x) for x in mesh_device.shape]
+    n = int(shape[-1]) if shape and int(shape[-1]) > 1 else 1
+    if n > 1 and num_heads % n == 0:
+        return n
+    return 1
 
 
 def _dots_ocr_vision_one_layer_block_counts() -> list[int]:
@@ -907,8 +922,22 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
     hidden_size = int(vision_tower.hidden_size)
     num_heads = int(vision_tower.num_heads)
     head_dim = int(vision_tower.head_dim)
+    tp_ndev = _vision_attn_tp_ndev(mesh_device, num_heads)
+    heads_per_dev = num_heads // tp_ndev
+    qkv_out_dim = hidden_size * 3 // tp_ndev
+    ctx_token_shape = _vision_block_token_shape(seq_len, hidden_size // tp_ndev)
     token_shape = _vision_block_token_shape(seq_len, hidden_size)
-    head_shape = _vision_head_shape(seq_len, num_heads, head_dim)
+    head_shape = _vision_head_shape(seq_len, heads_per_dev, head_dim)
+    use_tp4_prefill = _tp4_prefill_vision_enabled(mesh_device)
+    use_l1_activations = _tp4_prefill_vision_l1_activations_enabled(mesh_device)
+    mlp_module = vision_tower.blocks[0].mlp
+    mlp_tp = mlp_module._mlp_use_tp()
+    attn_out_dtype = ttnn.bfloat8_b if (tp_ndev == 1 or use_tp4_prefill) else ttnn.bfloat16
+    attn_out_buffer = ttnn.BufferType.L1 if (tp_ndev == 1 or use_tp4_prefill) else ttnn.BufferType.DRAM
+    attn_out_sharded = tp_ndev == 1
+    norm2_out_buffer = ttnn.BufferType.L1 if (use_l1_activations or tp_ndev == 1) else ttnn.BufferType.DRAM
+    mlp_out_dtype = ttnn.bfloat8_b if (not mlp_tp or use_tp4_prefill) else ttnn.bfloat16
+    mlp_out_buffer = ttnn.BufferType.L1 if (not mlp_tp or use_tp4_prefill) else ttnn.BufferType.DRAM
 
     hidden_states = ttnn.from_torch(
         torch.randn(1, 1, seq_len, hidden_size, dtype=torch.bfloat16),
@@ -964,9 +993,9 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
                 output,
                 "vision attention output",
                 shape=token_shape,
-                dtype=ttnn.bfloat8_b,
-                buffer_type=ttnn.BufferType.L1,
-                sharded=True,
+                dtype=attn_out_dtype,
+                buffer_type=attn_out_buffer,
+                sharded=attn_out_sharded,
             )
             seen["attn"] += 1
             return output
@@ -986,7 +1015,7 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
                 "vision norm2 output",
                 shape=token_shape,
                 dtype=ttnn.bfloat8_b,
-                buffer_type=ttnn.BufferType.L1,
+                buffer_type=norm2_out_buffer,
                 sharded=False,
             )
             seen["norm2"] += 1
@@ -998,7 +1027,7 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
                 "vision MLP input",
                 shape=token_shape,
                 dtype=ttnn.bfloat8_b,
-                buffer_type=ttnn.BufferType.L1,
+                buffer_type=norm2_out_buffer,
                 sharded=False,
             )
             output = original_mlp_forward(hidden_states, *args, **kwargs)
@@ -1006,8 +1035,8 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
                 output,
                 "vision MLP output",
                 shape=token_shape,
-                dtype=ttnn.bfloat4_b,
-                buffer_type=ttnn.BufferType.L1,
+                dtype=mlp_out_dtype,
+                buffer_type=mlp_out_buffer,
                 sharded=False,
             )
             seen["mlp"] += 1
@@ -1048,7 +1077,7 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
         _assert_vision_tensor_spec(
             qkv,
             "nlp_create_qkv_heads input",
-            shape=[1, 1, seq_len, hidden_size * 3],
+            shape=[1, 1, seq_len, qkv_out_dim],
             dtype=ttnn.bfloat8_b,
             buffer_type=ttnn.BufferType.DRAM,
             sharded=False,
@@ -1098,7 +1127,7 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
         _assert_vision_tensor_spec(
             out,
             "nlp_concat_heads output",
-            shape=token_shape,
+            shape=ctx_token_shape if tp_ndev > 1 else token_shape,
             dtype=ttnn.bfloat8_b,
             buffer_type=ttnn.BufferType.L1,
             sharded=False,
@@ -1118,7 +1147,7 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
             k,
             "sdpa K",
             shape=head_shape,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat4_b,
             buffer_type=ttnn.BufferType.DRAM,
             sharded=False,
         )
@@ -1183,17 +1212,25 @@ def test_dots_ocr_vision_one_layer(mesh_device, num_vision_blocks):
         "mlp": num_vision_blocks,
     }
 
-    intermediate_size = int(vision_tower.blocks[0].mlp.tt_fc1_weight.shape[-1])
+    intermediate_size = int(mlp_module.tt_fc1_weight.shape[-1])
+    if mlp_tp:
+        gate_n = intermediate_size
+        down_k = int(mlp_module.tt_fc2_weight.shape[-2])
+    else:
+        gate_n = intermediate_size
+        down_k = intermediate_size
     per_block_matmuls = [
-        (seq_len, hidden_size, hidden_size * 3, ttnn.bfloat8_b),  # qkv
-        (seq_len, hidden_size, hidden_size, ttnn.bfloat8_b),  # o_proj
-        (seq_len, hidden_size, intermediate_size, ttnn.bfloat8_b),  # gate
-        (seq_len, hidden_size, intermediate_size, ttnn.bfloat4_b),  # up
-        (seq_len, intermediate_size, hidden_size, ttnn.bfloat4_b),  # down
+        (seq_len, hidden_size, qkv_out_dim, ttnn.bfloat8_b),  # qkv
+        (seq_len, hidden_size, hidden_size, ttnn.bfloat8_b),  # o_proj (ctx gathered to full H on TP)
+        (seq_len, hidden_size, gate_n, ttnn.bfloat8_b),  # gate
+        (seq_len, hidden_size, gate_n, ttnn.bfloat4_b),  # up
+        (seq_len, down_k, hidden_size, mlp_out_dtype),  # down
     ]
     expected_matmuls = per_block_matmuls * num_vision_blocks
     assert matmul_calls == expected_matmuls, f"matmul shapes/dtypes: got {matmul_calls}"
-    assert typecast_calls == [(ttnn.bfloat8_b, ttnn.bfloat4_b)] * num_vision_blocks, f"V typecast: got {typecast_calls}"
+    assert typecast_calls == [(ttnn.bfloat8_b, ttnn.bfloat4_b)] * (
+        2 * num_vision_blocks
+    ), f"K/V typecasts: got {typecast_calls}"
     assert len(mul_calls) == num_vision_blocks, f"expected {num_vision_blocks} silu*mul, got {mul_calls}"
     for gate_dtype, up_dtype, out_dtype in mul_calls:
         assert gate_dtype == ttnn.bfloat8_b
