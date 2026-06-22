@@ -638,15 +638,15 @@ class DispatcherData:
                             if self._is_2_erisc_mode
                             else kernel.path + "/active_erisc/active_erisc.elf"
                         )
+                    else:
+                        raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for kernel path.")
                 else:
-                    raise TTTriageError(f"Unsupported active ETH processor '{proc_name}' for kernel path.")
-            else:
-                if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
-                    kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
-                elif proc_name.lower() == "erisc1":
-                    kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
-                else:
-                    kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
+                    if proc_name.lower() == "erisc" or proc_name.lower() == "erisc0":
+                        kernel_path = kernel.path + "/idle_erisc/idle_erisc.elf"
+                    elif proc_name.lower() == "erisc1":
+                        kernel_path = kernel.path + "/subordinate_idle_erisc/subordinate_idle_erisc.elf"
+                    else:
+                        kernel_path = kernel.path + f"/{proc_name.lower()}/{proc_name.lower()}.elf"
             kernel_path = os.path.realpath(kernel_path) if kernel_path else None
             # For NCRISC we don't have XIP ELF file
             kernel_xip_path = (
