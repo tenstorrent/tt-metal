@@ -50,8 +50,8 @@ public:
 
     /**
      * @brief   Get the version of the dispatch telemetry API. This may mismatch with the version
-     *          present on the device. If so, read_info will return an empty vector and an error will be
-     *          logged.
+     *          present on the device. If so, read_info will return an empty optional and an error
+     *          will be logged.
      *
      * @return  The version of the dispatch telemetry API.
      */

@@ -34,8 +34,8 @@ constexpr uint32_t MAX_SUB_DEVICES = DISPATCH_MAX_MESSAGE_ENTRIES;
 constexpr uint32_t RESERVED_SUB_DEVICE_SPACE = 8;
 static_assert(
     MAX_SUB_DEVICES <= RESERVED_SUB_DEVICE_SPACE,
-    "If MAX_SUB_DEVICES exceeds RESERVED_SUB_DEVICE_SPACE, then the reserved space must manually be"
-    "increased and the version must be incremented as this struct will no longer be backwards"
+    "If MAX_SUB_DEVICES exceeds RESERVED_SUB_DEVICE_SPACE, then the reserved space must manually be "
+    "increased and the version must be incremented as this struct will no longer be backwards "
     "compatible");
 
 struct __attribute__((packed, aligned(4))) PrefetchCoreTelemetry {

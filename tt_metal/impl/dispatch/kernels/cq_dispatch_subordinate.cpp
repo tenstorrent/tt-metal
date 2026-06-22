@@ -599,7 +599,7 @@ void kernel_main() {
             case CQ_DISPATCH_SET_NUM_WORKER_SEMS: set_num_worker_sems(); break;
             case CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA: set_go_signal_noc_data(); break;
             case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
-                cmd_ptr = set_sub_device_worker_counts<telemetry_enabled>(
+                cmd_ptr += set_sub_device_worker_counts<telemetry_enabled>(
                     cmd_ptr,
                     workers_per_sub_device,
                     &dispatch_telemetry_control->sub_device_worker_counts_update,

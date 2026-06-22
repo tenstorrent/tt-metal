@@ -607,7 +607,7 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchSubDeviceUtilizationIsEmptyWhenWork
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
-    // Read telemetry info and verify core efficiency does not have a value.
+    // Read telemetry info and verify sub device utilization is empty.
     auto info = telemetry.read_info();
     ASSERT_TRUE(info.has_value());
     for (const auto& cq_info : info->info_cqs) {

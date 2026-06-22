@@ -2992,7 +2992,9 @@ void set_num_worker_sems_on_dispatch(
     TT_ASSERT(num_worker_sems <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES);
     TT_ASSERT(workers_per_sub_device.size() == num_worker_sems);
     tt::tt_metal::DeviceCommandCalculator calculator;
-    calculator.add_dispatch_set_num_worker_sems();
+    if (MetalContext::instance().get_dispatch_query_manager().dispatch_s_enabled()) {
+        calculator.add_dispatch_set_num_worker_sems();
+    }
     calculator.add_dispatch_set_sub_device_worker_counts(num_worker_sems);
     const uint32_t cmd_sequence_sizeB = calculator.write_offset_bytes();
     void* cmd_region = manager.issue_queue_reserve(cmd_sequence_sizeB, cq_id);

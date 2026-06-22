@@ -680,7 +680,7 @@ FORCE_INLINE void careful_copy_from_l1_to_local_cache(
 }
 
 template <bool telemetry_enabled, size_t max_num_worker_sems>
-FORCE_INLINE uintptr_t set_sub_device_worker_counts(
+FORCE_INLINE uint32_t set_sub_device_worker_counts(
     uintptr_t cmd_ptr,
     std::array<uint32_t, max_num_worker_sems>& workers_per_sub_device,
     volatile tt_l1_ptr uint32_t* sub_device_worker_counts_update,
@@ -713,5 +713,6 @@ FORCE_INLINE uintptr_t set_sub_device_worker_counts(
     }
 
     *sub_device_worker_counts_update = ++local_sub_device_worker_counts_update;
-    return round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
+    uint32_t command_size = sizeof(CQDispatchCmd) + num_sub_devices * sizeof(uint32_t);
+    return round_up_pow2(command_size, L1_ALIGNMENT);
 }

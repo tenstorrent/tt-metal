@@ -1324,8 +1324,8 @@ re_run_command:
         case CQ_DISPATCH_SET_SUB_DEVICE_WORKER_COUNTS:
             // DPRINT("cmd_set_sub_device_worker_counts\n");
             ASSERT(!dispatch_s_enabled);
-            cmd_ptr = set_sub_device_worker_counts<telemetry_enabled>(
-                cmd_ptr,
+            cmd_ptr += set_sub_device_worker_counts<telemetry_enabled>(
+                l1_uncached_addr(cmd_ptr),
                 workers_per_sub_device,
                 &dispatch_telemetry_control->sub_device_worker_counts_update,
                 dispatch_telemetry_base);

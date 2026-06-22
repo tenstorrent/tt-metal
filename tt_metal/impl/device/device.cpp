@@ -380,7 +380,9 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
     // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     const CoreCoord compute_grid_size = compute_with_storage_grid_size();
-    std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), compute_grid_size.x * compute_grid_size.y);
+    const uint32_t default_sub_device_worker_count =
+        compute_grid_size.x * compute_grid_size.y + static_cast<uint32_t>(active_eth_cores.size());
+    std::vector<uint32_t> workers_per_sub_device(num_sub_devices(), default_sub_device_worker_count);
     for (auto& command_queue : command_queues_) {
         command_queue->set_go_signal_noc_data_and_dispatch_sems(
             num_sub_devices(), noc_mcast_unicast_data, workers_per_sub_device);
