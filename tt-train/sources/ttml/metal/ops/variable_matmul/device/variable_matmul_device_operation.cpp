@@ -84,11 +84,10 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
             K_w_tiles <= K_in_tiles, "variable_matmul K_w tiles {} exceeds input K tiles {}", K_w_tiles, K_in_tiles);
     }
     TT_FATAL(M > 0 && K_w > 0, "variable_matmul dimensions must be positive");
-    // Non-tile-aligned matmul-M is supported (matches minimal_matmul / ttnn::matmul): the
-    // tensor's TILE-layout physical storage rounds up to a multiple of TILE_HEIGHT, the
-    // kernel operates on padded tiles, and the dataflow writer's `if (i >= logical_d0)
-    // break;` clips writes at the logical tile boundary. The last (partial) M tile's
-    // padded rows are zero on input → zero on output, so they're harmless.
+    // Non-tile-aligned matmul-M is supported (like minimal_matmul / ttnn::matmul): TILE storage
+    // rounds M up to TILE_HEIGHT, the kernel works on padded tiles, and the writer's
+    // `if (i >= logical_d0) break;` clips at the logical boundary. The last tile's pad rows are
+    // zero in → zero out, so they're harmless.
     const uint32_t M_tiles_ceil = tt::div_up(M, TILE_HEIGHT);
     TT_FATAL(
         M_tiles_ceil <= M_parent_tiles,
@@ -131,7 +130,6 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const uint32_t max_dest_volume = get_dest_reg_count(operation_attributes.compute_kernel_config);
     TT_FATAL(cfg.subblock_h * cfg.subblock_w <= max_dest_volume, "subblock_h * subblock_w must be <= max_dest_volume");
 
-    // Write-at-offset validation
     if (tensor_args.output_tensor.has_value()) {
         const auto& out = tensor_args.output_tensor.value();
         check_on_device(out, "output tensor");
