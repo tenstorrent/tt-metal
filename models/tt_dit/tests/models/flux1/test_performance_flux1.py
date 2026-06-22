@@ -47,8 +47,16 @@ PERF_TEST_DEVICE_PARAMS = [
     }
 ]
 
+PERF_TEST_MODEL_VARIANTS = [
+    pytest.param("schnell", id="flux_schnell"),
+    pytest.param("dev", id="flux_dev"),
+]
 
-# TODO: Factor out commonalities with sd35
+
+@pytest.mark.parametrize(
+    "model_variant",
+    PERF_TEST_MODEL_VARIANTS,
+)
 @pytest.mark.parametrize(
     "image_w, image_h, guidance_scale, num_inference_steps",
     PERF_TEST_IMAGE_PARAMS,
@@ -76,11 +84,12 @@ def test_flux1_pipeline_performance_speed(
     vae_tp,
     topology,
     num_links,
+    model_variant,
     model_location_generator,
     is_ci_env,
     galaxy_type,
 ) -> None:
-    """Performance test for Flux.1 pipeline with detailed timing analysis. We use the dev variant"""
+    """Performance test for Flux.1 pipeline with detailed timing analysis."""
 
     benchmark_profiler = BenchmarkProfiler()
 
@@ -114,7 +123,7 @@ def test_flux1_pipeline_performance_speed(
             num_links=num_links,
             width=image_w,
             height=image_h,
-            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev"),
+            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
         ),
     )
 
@@ -126,7 +135,7 @@ def test_flux1_pipeline_performance_speed(
                 prompt=TEST_PROMPTS[0],
                 num_inference_steps=num_inference_steps,
             )
-        images[0].save(f"flux1_dev_{image_w}_{image_h}_warmup_{i}.png")
+        images[0].save(f"flux1_{model_variant}_{image_w}_{image_h}_warmup_{i}.png")
         logger.info(f"Warmup completed in {benchmark_profiler.get_duration('run', 0):.2f}s")
 
     # Performance measurement runs
@@ -156,7 +165,7 @@ def test_flux1_pipeline_performance_speed(
                     num_inference_steps=num_inference_steps,
                     on_event=profiler_event_callback(benchmark_profiler, i),
                 )
-            images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
+            images[0].save(f"flux1_{model_variant}_{image_w}_{image_h}_perf_run{i}.png")
 
             # Collect timing data
             logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
@@ -189,9 +198,9 @@ def test_flux1_pipeline_performance_speed(
     vae_tp_factor = vae_tp[0]  # pipeline.vae_parallel_config.tensor_parallel.factor
 
     print("\n" + "=" * 80)
-    print("FLUX.1 DEV PIPELINE PERFORMANCE RESULTS")
+    print(f"FLUX.1 {model_variant.upper()} PIPELINE PERFORMANCE RESULTS")
     print("=" * 80)
-    print(f"Model: FLUX.1-dev")
+    print(f"Model: FLUX.1-{model_variant}")
     print(f"Image Size: {image_w}x{image_h}")
     print(f"Guidance Scale: {guidance_scale}")
     print(f"Inference Steps: {num_inference_steps}")
@@ -331,7 +340,7 @@ def test_flux1_pipeline_performance_speed(
         benchmark_data.save_partial_run_json(
             benchmark_profiler,
             run_type=device_name_map[tuple(mesh_device.shape)],
-            ml_model_name="Flux1Dev",
+            ml_model_name=f"Flux1{model_variant.capitalize()}",
             batch_size=1,
             config_params={
                 "width": image_w,
@@ -364,6 +373,10 @@ def test_flux1_pipeline_performance_speed(
 
 
 @pytest.mark.parametrize(
+    "model_variant",
+    PERF_TEST_MODEL_VARIANTS,
+)
+@pytest.mark.parametrize(
     "image_w, image_h, guidance_scale, num_inference_steps",
     PERF_TEST_IMAGE_PARAMS,
 )
@@ -390,6 +403,7 @@ def test_flux1_pipeline_performance_accuracy(
     vae_tp,
     topology,
     num_links,
+    model_variant,
     model_location_generator,
     is_ci_env,
     galaxy_type,
@@ -405,7 +419,7 @@ def test_flux1_pipeline_performance_accuracy(
             num_links=num_links,
             width=image_w,
             height=image_h,
-            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev"),
+            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
         ),
     )
 
@@ -423,7 +437,7 @@ def test_flux1_pipeline_performance_accuracy(
             prompt=TEST_PROMPTS[i],
             num_inference_steps=num_inference_steps,
         )
-        images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
+        images[0].save(f"flux1_{model_variant}_{image_w}_{image_h}_perf_run{i}.png")
         output_images.append(images[0])
 
     clip = CLIPEncoder()
@@ -441,6 +455,10 @@ def test_flux1_pipeline_performance_accuracy(
         assert score > 29.0
 
 
+@pytest.mark.parametrize(
+    "model_variant",
+    PERF_TEST_MODEL_VARIANTS,
+)
 @pytest.mark.parametrize(
     "image_w, image_h, guidance_scale, num_inference_steps",
     PERF_TEST_IMAGE_PARAMS,
@@ -468,6 +486,7 @@ def test_flux1_pipeline_performance_determinism(
     vae_tp,
     topology,
     num_links,
+    model_variant,
     model_location_generator,
     is_ci_env,
     galaxy_type,
@@ -483,7 +502,7 @@ def test_flux1_pipeline_performance_determinism(
             num_links=num_links,
             width=image_w,
             height=image_h,
-            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-dev"),
+            checkpoint_name=model_location_generator(f"black-forest-labs/FLUX.1-{model_variant}"),
         ),
     )
 
@@ -495,7 +514,7 @@ def test_flux1_pipeline_performance_determinism(
             prompt=TEST_PROMPTS[0],
             num_inference_steps=num_inference_steps,
         )
-        images[0].save(f"flux1_dev_{image_w}_{image_h}_perf_run{i}.png")
+        images[0].save(f"flux1_{model_variant}_{image_w}_{image_h}_perf_run{i}.png")
         clip_scores.append(100 * clip.get_clip_score(TEST_PROMPTS[0], images[0]).item())
 
     assert all(score == clip_scores[0] for score in clip_scores)
