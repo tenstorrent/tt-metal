@@ -21,8 +21,6 @@ namespace ckernel
 namespace sfpu
 {
 
-// Try re-evaluating with latest op sequence and record larger sequences
-
 constexpr std::uint32_t dst_tile_offset = 64; // 1 tile x 64 rows per tile
 constexpr std::uint32_t scores_offset   = 0;
 constexpr std::uint32_t indices_offset  = scores_offset + dst_tile_offset;
@@ -771,10 +769,10 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _init_generalized_moe_gate_topk()
 {
-    // Note: For BH there is no conflict with reg usage between the gate and reciprocal
-    // For WH, since we use reg 14 to broadcast, this would overwrite the recip value, so we init within the top8 fn
-    // instead of ahead of time
-    // sfpu_reciprocal_init<APPROXIMATION_MODE>();
+    // Intentional no-op: reciprocal is initialized inside top8 / finalize_ungrouped (not here). The gate
+    // uses reg 14 to broadcast, which would clobber the reciprocal constants if they were initialized ahead
+    // of time, so both WH and BH set them up within those fns. Kept (empty) because the topk_init wrapper
+    // chain calls it on both arches.
 }
 
 } // namespace sfpu

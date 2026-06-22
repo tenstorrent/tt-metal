@@ -21,9 +21,6 @@ namespace ckernel
 namespace sfpu
 {
 
-// TODO: Initial evaluation of using replay buffers here did not show any performance improvement
-// Try re-evaluating with latest op sequence and record larger sequences
-
 constexpr std::uint32_t dst_tile_offset = 64; // 1 tile x 64 rows per tile
 constexpr std::uint32_t scores_offset   = 0;
 constexpr std::uint32_t indices_offset  = scores_offset + dst_tile_offset;
@@ -217,28 +214,24 @@ inline void bitonic_top8_ph0_to_ph3()
     {
         constexpr bool start_transpose   = true;
         constexpr bool end_transpose     = false;
-        constexpr int phase_replay_count = 2 + (int)start_transpose + (int)end_transpose;
         bitonic_topk_ph0_st1_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 1
     {
         constexpr bool start_transpose   = false;
         constexpr bool end_transpose     = true;
-        constexpr int phase_replay_count = 4 + (int)start_transpose + (int)end_transpose;
         // Odd Columns
         bitonic_topk_ph1_st2_to_1_single_face<start_transpose, end_transpose>();
     }
     // Phase 2
     {
-        constexpr bool end_transpose     = true;
-        constexpr int phase_replay_count = 7 + (int)end_transpose;
+        constexpr bool end_transpose = true;
         // Even Columns
         bitonic_topk_ph2_st3_to_1_single_face<end_transpose>();
     }
     // Modified Phase 3 for top8
     {
-        constexpr bool end_transpose     = true;
-        constexpr int phase_replay_count = 8 + (int)end_transpose;
+        constexpr bool end_transpose = true;
         bitonic_top8_ph3_st4_to_1<idir, end_transpose>();
     }
 }
@@ -403,13 +396,13 @@ inline void _generalized_moe_gate_top8(std::uint32_t eps, std::uint32_t scale)
     // Store the value in lreg0 and reload later since the following instructions overwrite it
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     // Technically we only need to reprogram a single constant here, instead of all 3 used by reciprocal init
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
     l0                              = l0 + eps_value;
-    l0                              = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(l0);
+    l0                              = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
     sfpi::vFloat scale_value        = Converter::as_float(scale);
     l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
@@ -644,6 +637,13 @@ inline void _gmg_merge16_to_run()
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, std::uint32_t topk = 8, bool output_softmax = false>
 inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uint32_t scale)
 {
+    // topk is restricted to {4, 6, 8}: the rank-mask below is correct only for these. topk 1-3 fall into the
+    // `topk <= 4` branch, which drops the offset-4 half but does NOT mask within offset-0, so they would
+    // silently keep 4 ranks; topk 5/7 take the masked branch but are untested. The metal path already guards
+    // this (host TT_FATAL + the unified kernel static_assert), but a direct LLK caller has no other gate --
+    // fail loudly here too rather than emit silently-wrong output.
+    static_assert(topk == 4 || topk == 6 || topk == 8, "topk must be one of {4, 6, 8} (rank-mask is correct only for these)");
+
     // Final combine: merge the two runs at {0,2}+{4,6} -> global top-8 (sorted DESCENDING), then normalize.
     // (For 256 the two runs are topA/topB; for >256 they are the last two block/subtree runs of the tree.)
     _gmg_merge16_core<APPROXIMATION_MODE, is_fp32_dest_acc_en>();
@@ -746,13 +746,13 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
     TTI_SFPADD(p_sfpu::LREG0, p_sfpu::LCONST_1, p_sfpu::LREG2, p_sfpu::LREG0, 0);
     TTI_SFPNOP;
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
-    _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    sfpu_reciprocal_init<APPROXIMATION_MODE>();
     TTI_SFPCONFIG(0, 0xF, 1);
     TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_3, interm_offset + 0);
     sfpi::vFloat l0                 = sfpi::l_reg[sfpi::LRegs::LReg0];
     sfpi::vFloat eps_value          = Converter::as_float(eps);
     l0                              = l0 + eps_value;
-    l0                              = _sfpu_reciprocal_<APPROXIMATION_MODE ? 0 : 2>(l0);
+    l0                              = sfpu_reciprocal<APPROXIMATION_MODE>(l0);
     sfpi::vFloat scale_value        = Converter::as_float(scale);
     l0                              = l0 * scale_value;
     sfpi::l_reg[sfpi::LRegs::LReg0] = l0;
@@ -769,10 +769,10 @@ inline void _generalized_moe_gate_finalize_ungrouped(std::uint32_t eps, std::uin
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 inline void _init_generalized_moe_gate_topk()
 {
-    // Note: For BH there is no conflict with reg usage between the gate and reciprocal
-    // For WH, since we use reg 14 to broadcast, this would overwrite the recip value, so we init within the top8 fn
-    // instead of ahead of time
-    // _init_sfpu_reciprocal_<APPROXIMATION_MODE>();
+    // Intentional no-op: reciprocal is initialized inside top8 / finalize_ungrouped (not here). The gate
+    // uses reg 14 to broadcast, which would clobber the reciprocal constants if they were initialized ahead
+    // of time, so both WH and BH set them up within those fns. Kept (empty) because the topk_init wrapper
+    // chain calls it on both arches.
 }
 
 } // namespace sfpu

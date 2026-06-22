@@ -6,7 +6,7 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
+#include "sfpu/experimental/ckernel_sfpu_generalized_moe_gate_topk_single_face.h"
 
 using namespace sfpi;
 
