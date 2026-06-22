@@ -90,8 +90,13 @@ class TtPrefillRuntime:
         self.mesh_device = mesh_device
         self.hf_config = hf_config
         self.config = config
-        # Per-layer LayerAck callback, built once in set_layer_ack_channel() after compile.
+        # Per-layer LayerAck callback, built once in set_layer_ack_channel() or
+        # set_layer_completion_sink() after compile.
         self._on_layer_complete = None
+        # Index of the chunk currently being prefilled. The driver sets this per chunk
+        # (see _compute_and_send) so the pipelined layer-completion sink can build a
+        # globally-dense ordering key: seq = current_chunk_idx * NUM_LAYERS + layer_idx.
+        self.current_chunk_idx = 0
 
         assert (
             config.max_seq_len % config.chunk_size == 0
@@ -304,3 +309,18 @@ class TtPrefillRuntime:
             layer_ack_channel.inject(1)
 
         self._on_layer_complete = on_layer_complete
+
+    def set_layer_completion_sink(self, sink) -> None:
+        """Register a per-layer completion sink for pipelined prefill.
+
+        `sink` is called once per layer as `sink(layer_idx)` (the global
+        layer index). It replaces the direct counter-channel inject used in
+        single-host mode: instead of bumping a counter, the runner pushes a
+        full completion {seq, source_rank, layer_idx, request_id} into the
+        host-local LayerCompletionQueue, and the LayerCompletionRouter
+        routes it to the master host and re-emits it (in seq order) into the
+        scheduler-facing counter channel. See
+        docs/superpowers/plans/2026-06-19-pipelined-prefill-layer-completion-routing.md.
+        """
+        assert self.compiled, "Call compile() before set_layer_completion_sink()"
+        self._on_layer_complete = sink
