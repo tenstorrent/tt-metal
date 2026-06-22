@@ -6,6 +6,10 @@
 
 #include "tensor_shape_coverage.h"
 
+// TensorShape coverage hooks for pack LLKs. Pack probes are not currently
+// defined, so the validation helper returns false until pack TensorShape
+// coverage tables are added.
+//
 // Match tensor_shape_coverage.h's gate so production kernel builds do not see this table.
 #if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
 
