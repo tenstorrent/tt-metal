@@ -22,6 +22,7 @@ class FeedForward(Module):
         inner_dim=None,
         bias: bool = True,
         mesh_device=None,
+        fuse_swiglu: bool = False,
     ):
         super().__init__()
 
@@ -35,7 +36,9 @@ class FeedForward(Module):
         self.activation_fn = activation_fn
         self.bias = bias
 
-        self.ff1 = Linear(dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn)
+        self.ff1 = Linear(
+            dim, inner_dim, bias=bias, mesh_device=mesh_device, activation_fn=activation_fn, fuse_swiglu=fuse_swiglu
+        )
         self.ff2 = Linear(inner_dim, dim_out, bias=bias, mesh_device=mesh_device)
 
     def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:

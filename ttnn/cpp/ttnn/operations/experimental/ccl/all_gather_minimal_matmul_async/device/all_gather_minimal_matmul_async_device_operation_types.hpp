@@ -43,6 +43,11 @@ struct AllGatherMinimalMatmulAsyncParams {
     bool using_persistent_weight_buffer = false;
     ttnn::ccl::Topology fsdp_topology;
 
+    // Fused SwiGLU: weight is a tile-pair-interleaved [gate|up] matrix of width 2N; the op
+    // emits silu(gate)*up of width N in a single matmul. Mutually exclusive with
+    // fused_activation / ternary.
+    bool fuse_swiglu = false;
+
     AllGatherMinimalMatmulAsyncParams(
         std::optional<const MinimalMatmulConfig> config,
         std::optional<ttnn::operations::unary::UnaryWithParam> fused_activation,
@@ -66,7 +71,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         uint32_t fsdp_ring_size,
         std::vector<GlobalSemaphore> fsdp_semaphore,
         bool using_persistent_weight_buffer,
-        ttnn::ccl::Topology fsdp_topology) :
+        ttnn::ccl::Topology fsdp_topology,
+        bool fuse_swiglu = false) :
         config(config),
         fused_activation(fused_activation),
         output_mem_config(output_mem_config),
@@ -89,7 +95,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         fsdp_ring_size(fsdp_ring_size),
         fsdp_semaphore(std::move(fsdp_semaphore)),
         using_persistent_weight_buffer(using_persistent_weight_buffer),
-        fsdp_topology(fsdp_topology) {}
+        fsdp_topology(fsdp_topology),
+        fuse_swiglu(fuse_swiglu) {}
 
     static constexpr auto attribute_names = std::make_tuple(
         "num_links",
@@ -108,7 +115,8 @@ struct AllGatherMinimalMatmulAsyncParams {
         "fsdp_ring_size",
         "fsdp_semaphore",
         "using_persistent_weight_buffer",
-        "fsdp_topology");
+        "fsdp_topology",
+        "fuse_swiglu");
 
     auto attribute_values() const {
         return std::forward_as_tuple(
@@ -128,7 +136,8 @@ struct AllGatherMinimalMatmulAsyncParams {
             this->fsdp_ring_size,
             this->fsdp_semaphore,
             this->using_persistent_weight_buffer,
-            this->fsdp_topology);
+            this->fsdp_topology,
+            this->fuse_swiglu);
     }
 };
 

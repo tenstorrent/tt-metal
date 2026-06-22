@@ -112,7 +112,8 @@ void bind_minimal_matmul_split(nb::module_& mod) {
         nb::arg("config") = nb::none(),
         nb::arg("memory_config") = nb::none(),
         nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("fuse_swiglu") = false);
 }
 
 }  // namespace ttnn::operations::experimental::minimal_matmul::detail

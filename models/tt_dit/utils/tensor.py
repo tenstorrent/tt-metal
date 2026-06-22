@@ -17,6 +17,35 @@ if TYPE_CHECKING:
     from types import EllipsisType
 
 
+def interleave_swiglu_tiles(tensor: torch.Tensor, ndev: int, tile_width: int = 32) -> torch.Tensor:
+    """Reorder a packed [.., 2N] SwiGLU weight/bias for the fused matmul kernel.
+
+    Input columns are torch order ``[first (N) | second (N)]`` where the activation is
+    ``first * silu(second)`` (torch ``x, gate = chunk(.,2,-1); x * silu(gate)``), column-
+    parallel sharded into ``ndev`` contiguous blocks. The fused kernel emits
+    ``silu(even_tile) * odd_tile`` per pair, so each device's local block is laid out as
+    tile-pairs ``[second_t0, first_t0, second_t1, first_t1, ...]`` (32-col tiles): the silu'd
+    half (``second``) goes to the even slot, the multiplicand (``first``) to the odd slot.
+
+    This subsumes the old "[first_d | second_d] contiguous per device" permute: it additionally
+    interleaves the two halves at tile granularity (and orders them silu-half-first) within
+    each device block.
+    """
+    rows = tensor.shape[0]
+    two_N = tensor.shape[-1]
+    N = two_N // 2
+    assert (
+        N % (ndev * tile_width) == 0
+    ), f"SwiGLU half-width N={N} must be divisible by ndev*tile_width={ndev * tile_width}"
+    tiles_per_dev = N // ndev // tile_width
+    # [rows, half=2, d=ndev, t=tiles_per_dev, c=tile_width] -> [rows, d, t, half, c]
+    t = tensor.reshape(rows, 2, ndev, tiles_per_dev, tile_width)
+    t = t.permute(0, 2, 3, 1, 4)
+    # flip the half axis so each pair is [second (silu'd), first] -> even slot is silu'd
+    t = t.flip(3)
+    return t.reshape(rows, two_N)
+
+
 def typed_tensor(
     x: torch.Tensor,
     dtype: ttnn.DataType,

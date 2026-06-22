@@ -46,7 +46,8 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config,
     std::optional<ttnn::experimental::ccl::MinimalMatmulFusedOpSignaler>& fused_op_signaler,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler);
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler>& srs_fused_op_signaler,
+    bool fuse_swiglu = false);
 
 // Shared implementation for variable number of output tensors (used by both minimal_matmul and minimal_matmul_split)
 // Unlike minimal_matmul_factory_helper, this function takes a number of output tensors as an argument (N_chunks) and
@@ -65,6 +66,7 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<const Tensor>& fused_ternary_input_b = std::nullopt,
-    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler = std::nullopt);
+    std::optional<ttnn::experimental::ccl::StridedReduceScatterFusedOpSignaler> srs_fused_op_signaler = std::nullopt,
+    bool fuse_swiglu = false);
 
 }  // namespace ttnn::experimental::prim
