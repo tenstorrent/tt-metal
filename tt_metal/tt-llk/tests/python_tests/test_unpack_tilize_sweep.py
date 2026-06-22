@@ -27,6 +27,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_WITHIN_FACE,
     generate_input_dim,
 )
+from helpers.tile_constants import DEFAULT_TILE_R_DIM, FACE_C_DIM
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
@@ -46,7 +47,7 @@ def _narrow_path(
         .flatten()
         .to(torch_format)
     )
-    num_narrow_tiles = input_dimensions[0] // 32
+    num_narrow_tiles = input_dimensions[0] // tile_dimensions[0]
     input_dim_runtime = INPUT_DIMENSIONS(
         full_rt_dim=num_narrow_tiles,
         full_ct_dim=1,
@@ -79,6 +80,8 @@ def _regular_path(src_A, input_dimensions, formats, num_faces, torch_format):
 # BH narrow_tile unimplemented for non-8-bit formats (tt-llk#1281).
 @parametrize(
     # Int32 is Int32→Int32 only (unpacker constraint); concatenated via same=True.
+    # Intentionally added to both narrow and non-narrow sweeps to exercise the
+    # Int32 unpack_to_dest tilize path in each.
     formats=lambda narrow_tile: (
         input_output_formats(
             [DataFormat.Float32, DataFormat.Float16, DataFormat.Float16_b]
@@ -124,16 +127,6 @@ def test_unpack_tilize_comprehensive(
     if narrow_tile == NarrowTile.Yes and arch == ChipArchitecture.BLACKHOLE:
         pytest.skip("BH narrow_tile unimplemented for non-8-bit formats (tt-llk#1281)")
 
-    # Wormhole unpack_tilize has 0-loop for num_faces=1
-    # File: tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h:220
-    # num_loops = num_faces / 2 → when num_faces=1, this is 1/2=0 (integer division)
-    # Result: for (n=0; n<0; n++) never executes, no data unpacked, packer timeout
-    if arch == ChipArchitecture.WORMHOLE and num_faces == 1:
-        pytest.skip(
-            "Wormhole LLK: num_loops = num_faces/2 = 0 when num_faces=1 "
-            "(tt_llk_wormhole_b0/llk_lib/llk_unpack_tilize.h:220)"
-        )
-
     # BFP8_b input format not supported by tilize unpacker
     # Tilize unpacker cannot correctly read row-major BFP8_b data with shared exponents
     # Note: BFP8_b input works in regular unpack mode (test_eltwise_unary_datacopy with tilize_en=false)
@@ -172,7 +165,8 @@ def test_unpack_tilize_comprehensive(
         pytest.skip("StochasticRounding does not apply to Int32")
 
     is_narrow = narrow_tile == NarrowTile.Yes
-    tile_dimensions = [32, 16] if is_narrow else None
+    # Narrow tile: 2 vertical 16x16 faces (num_faces=2).
+    tile_dimensions = [DEFAULT_TILE_R_DIM, FACE_C_DIM] if is_narrow else None
 
     stimuli_kwargs = {"tile_dimensions": tile_dimensions} if is_narrow else {}
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
