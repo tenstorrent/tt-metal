@@ -24,6 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.blackhole.qwen3_5_9b.tests.test_factory import compute_pcc
 from models.demos.blackhole.qwen3_5_9b.tt.rope import Qwen35RoPESetup, compute_rope_freqs
 
 pytestmark = run_for_blackhole()
@@ -36,17 +37,6 @@ ROPE_THETA = 10_000_000.0
 MAX_SEQ_LEN = 8192
 PCC_THRESHOLD = 0.99
 MAX_ABS_DIFF = 0.05  # bf16 cos/sin round-trip slack
-
-
-def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Pearson correlation coefficient between two tensors."""
-    a_flat = a.float().flatten()
-    b_flat = b.float().flatten()
-    a_centered = a_flat - a_flat.mean()
-    b_centered = b_flat - b_flat.mean()
-    num = (a_centered * b_centered).sum()
-    denom = (a_centered.norm() * b_centered.norm()) + 1e-8
-    return (num / denom).item()
 
 
 @pytest.fixture(scope="module")

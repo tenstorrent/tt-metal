@@ -24,21 +24,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
+from models.demos.blackhole.qwen3_5_9b.tests.test_factory import compute_pcc
 from models.demos.blackhole.qwen3_5_9b.tt.rms_norm import rms_norm_ttnn
 
 pytestmark = run_for_blackhole()
 EPS = 1e-6
-PCC_THRESHOLD = 0.98
-
-
-def compute_pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a_flat = a.float().flatten()
-    b_flat = b.float().flatten()
-    a_centered = a_flat - a_flat.mean()
-    b_centered = b_flat - b_flat.mean()
-    num = (a_centered * b_centered).sum()
-    denom = (a_centered.norm() * b_centered.norm()) + 1e-8
-    return (num / denom).item()
+PCC_THRESHOLD = 0.999  # measured ~0.99999 across all shapes on Blackhole
 
 
 def torch_rms_norm(x: torch.Tensor, stored_weight: torch.Tensor, eps: float = EPS) -> torch.Tensor:

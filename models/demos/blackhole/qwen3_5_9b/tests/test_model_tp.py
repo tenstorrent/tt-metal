@@ -1,19 +1,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""TDD: the TP vLLM-contract path (allocate_kv_caches + prefill_paged + decode contract)
-must produce the SAME next tokens as the validated bespoke prefill_tp/decode_tp path (B=1).
+"""TP full-model contract validation (Qwen3.5/3.6).
 
-Truncated to 8 layers (covers full-attn layers 3 & 7 + GDN) for speed. The bespoke
-TP path (concat KV) is the oracle; the contract path (paged KV + Generator decode
-chain incl. the rope_tp seam) must match it.
+The vLLM-contract path (allocate_kv_caches + prefill_paged + decode contract) must
+produce the SAME next tokens as the validated bespoke prefill_tp/decode_tp path
+(B=1). Truncated to 8 layers (covers full-attn layers 3 & 7 + GDN) for speed. The
+bespoke TP path (concat KV) is the oracle; the contract path (paged KV + Generator
+decode chain incl. the rope_tp seam) must match it.
+
+* ``test_model_tp_contract``            — short prompt: per-step logits PCC for the
+  paged+decode chain, plus the masked fixed-bucket prefill path.
+* ``test_model_tp_long_prefill``        — >2048 chunk-outer eager prefill (cross-chunk
+  GDN/conv state carry).
+* ``test_model_tp_long_prefill_traced`` — >2048 prefill via the captured chunk-outer
+  trace (the path vLLM serves at long ISL).
 
 Run:
-  source python_env/bin/activate
   MESH_DEVICE=P150x4 HF_MODEL=Qwen/Qwen3.6-27B \
-    pytest -svq models/demos/blackhole/qwen3_5_9b/tests/test_model_tp_contract.py
+    pytest -svq models/demos/blackhole/qwen3_5_9b/tests/test_model_tp.py
 """
 import math
-import os
 
 import pytest
 import torch
@@ -21,16 +27,12 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.blackhole.qwen3_5_9b.tests.test_factory import parametrize_mesh_tp
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
 
 @torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
-    indirect=True,
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@parametrize_mesh_tp()
 def test_model_tp_contract(mesh_device, reset_seeds, ensure_gc):
     nd = mesh_device.get_num_devices()
     assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
@@ -95,12 +97,7 @@ def test_model_tp_contract(mesh_device, reset_seeds, ensure_gc):
 
 
 @torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
-    indirect=True,
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@parametrize_mesh_tp()
 def test_model_tp_long_prefill(mesh_device, reset_seeds, ensure_gc):
     """TP long-prompt (>2048) prefill: the chunk-outer eager path must carry GDN recurrent +
     conv state across the chunk boundary to match the bespoke single-pass prefill. T=2304 =>
@@ -135,12 +132,7 @@ def test_model_tp_long_prefill(mesh_device, reset_seeds, ensure_gc):
 
 
 @torch.no_grad()
-@pytest.mark.parametrize(
-    "mesh_device",
-    [{"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, min(len(ttnn.get_device_ids()), 4)))],
-    indirect=True,
-)
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@parametrize_mesh_tp()
 @pytest.mark.parametrize("T", [4096, 4352], ids=["exact_2chunks", "2chunks_plus_tail"])
 def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     """TP long-prompt (>2048) prefill via the CAPTURED chunk-outer trace — the path vLLM serves
