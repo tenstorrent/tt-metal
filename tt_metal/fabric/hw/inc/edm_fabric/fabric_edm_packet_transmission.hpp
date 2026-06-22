@@ -126,6 +126,22 @@ FORCE_INLINE void flush_write_to_noc_pipeline(uint8_t rx_channel_id) {
 // Shifts the chunk encoding in a scatter write packet to the next chunk
 FORCE_INLINE void shift_to_next_chunk(uint8_t& chunk_encodings) { chunk_encodings >>= 2; }
 
+// ===========================================================================================
+// EXPERIMENT (do NOT check in): fake-out the receiver eRisc -> local DRAM payload write.
+//
+// When enabled, the actual NoC data transaction from the receiving eRisc into this chip's
+// local DRAM is skipped. ALL surrounding control flow is preserved: trid bookkeeping,
+// semaphore increments, flushes, channel acks. Because local-write completion is tracked
+// per transaction-id (ncrisc_noc_nonposted_write_with_transaction_id_flushed), a trid with
+// no issued write flushes immediately -> the slot frees and acks the sender as if the write
+// had completed. Result: DRAM contents are garbage (expected), but the pipeline does not hang.
+//
+// Blackhole-only so Wormhole builds are untouched; this is the BH-LB profiling experiment.
+// ===========================================================================================
+#if defined(ARCH_BLACKHOLE)
+#define FABRIC_SKIP_LOCAL_DRAM_WRITE 1
+#endif
+
 // Core implementation of unicast-to-local-chip dispatch.
 // Accepts pre-resolved payload_size_bytes and noc_send_type to avoid redundant uncached L1 reads
 // when the caller has already loaded these (e.g. via a packed 4B load).
@@ -145,12 +161,20 @@ FORCE_INLINE
 
     constexpr bool update_counter = false;
 
+#if defined(FABRIC_SKIP_LOCAL_DRAM_WRITE)
+    // Some of these may go fully unused once the data writes are compiled out below.
+    (void)payload_start_address;
+    (void)transaction_id;
+    (void)update_counter;
+#endif
+
     channel_trimming_usage_recorder.set_noc_send_type_used(rx_channel_id, noc_send_type);
     if (noc_send_type > tt::tt_fabric::NocSendType::NOC_SEND_TYPE_LAST) {
         __builtin_unreachable();
     }
     switch (noc_send_type) {
         case tt::tt_fabric::NocSendType::NOC_UNICAST_WRITE: {
+#if !defined(FABRIC_SKIP_LOCAL_DRAM_WRITE)
             const auto dest_address = header.command_fields.unicast_write.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
@@ -160,6 +184,7 @@ FORCE_INLINE
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
+#endif
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
@@ -188,6 +213,7 @@ FORCE_INLINE
         } break;
 
         case tt::tt_fabric::NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC: {
+#if !defined(FABRIC_SKIP_LOCAL_DRAM_WRITE)
             const auto dest_address = header.command_fields.unicast_seminc_fused.noc_address;
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address,
@@ -197,6 +223,7 @@ FORCE_INLINE
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc,
                 tt::tt_fabric::forward_and_local_write_noc_vc);
+#endif
 
             const uint64_t semaphore_dest_address = header.command_fields.unicast_seminc_fused.semaphore_noc_address;
             const auto increment = header.command_fields.unicast_seminc_fused.val;
@@ -227,6 +254,7 @@ FORCE_INLINE
             // 2. 2 unicast writes followed by a semaphore increment
             // First chunk is guaranteed to be a unicast write
             uint16_t chunk_size = scatter.chunk_size[0];
+#if !defined(FABRIC_SKIP_LOCAL_DRAM_WRITE)
             noc_async_write_one_packet_with_trid<update_counter, false>(
                 payload_start_address + offset,
                 scatter.noc_address[0],
@@ -234,12 +262,14 @@ FORCE_INLINE
                 transaction_id,
                 tt::tt_fabric::local_chip_data_cmd_buf,
                 tt::tt_fabric::edm_to_local_chip_noc);
+#endif
             offset += chunk_size;
             shift_to_next_chunk(packet_encoding);
 
             if (chunk_count > 2) {
                 // Second chunk is guaranteed to be a unicast write
                 chunk_size = scatter.chunk_size[1];
+#if !defined(FABRIC_SKIP_LOCAL_DRAM_WRITE)
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
                     scatter.noc_address[1],
@@ -247,12 +277,14 @@ FORCE_INLINE
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc);
+#endif
                 offset += chunk_size;
                 shift_to_next_chunk(packet_encoding);
 
                 if (chunk_count == 4) [[likely]] {
                     // If there are 4 chunks, the third chunk is guaranteed to be a unicast write
                     chunk_size = scatter.chunk_size[2];
+#if !defined(FABRIC_SKIP_LOCAL_DRAM_WRITE)
                     noc_async_write_one_packet_with_trid<update_counter, false>(
                         payload_start_address + offset,
                         scatter.noc_address[2],
@@ -260,6 +292,7 @@ FORCE_INLINE
                         transaction_id,
                         tt::tt_fabric::local_chip_data_cmd_buf,
                         tt::tt_fabric::edm_to_local_chip_noc);
+#endif
                     offset += chunk_size;
                     shift_to_next_chunk(packet_encoding);
                 }
@@ -270,6 +303,7 @@ FORCE_INLINE
             const ChunkEncoding chunk_encoding = static_cast<ChunkEncoding>(packet_encoding & CHUNK_ENCODING_MASK);
             const uint64_t final_destination_noc_address = scatter.noc_address[last_chunk_index];
             if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_UNICAST_WRITE) {
+#if !defined(FABRIC_SKIP_LOCAL_DRAM_WRITE)
                 const uint16_t final_chunk_size = static_cast<uint16_t>(payload_size_bytes - offset);
                 noc_async_write_one_packet_with_trid<update_counter, false>(
                     payload_start_address + offset,
@@ -278,6 +312,7 @@ FORCE_INLINE
                     transaction_id,
                     tt::tt_fabric::local_chip_data_cmd_buf,
                     tt::tt_fabric::edm_to_local_chip_noc);
+#endif
             } else if (chunk_encoding != ChunkEncoding::CHUNK_ENCODING_NOP) {
                 if (chunk_encoding == ChunkEncoding::CHUNK_ENCODING_SEMINC_FLUSH) {
                     flush_write_to_noc_pipeline(rx_channel_id);
