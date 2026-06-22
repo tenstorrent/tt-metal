@@ -84,7 +84,6 @@ def test_ccl_ddr_smoke_test_1x16(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,

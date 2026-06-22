@@ -28,7 +28,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 )
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("num_iters", [10])
-@pytest.mark.parametrize("use_semaphore_free_all_gather_impl", [True])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -54,7 +53,6 @@ def test_all_gather_2d_fabric(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
-    use_semaphore_free_all_gather_impl,
     function_level_defaults,
 ):
     # On bh-llmbox (4,1 mesh), use 2 devices to avoid fabric routing issues
@@ -70,7 +68,6 @@ def test_all_gather_2d_fabric(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -86,5 +83,4 @@ def test_all_gather_2d_fabric(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
-        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )

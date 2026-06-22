@@ -69,7 +69,6 @@ def test_all_gather_2d_fabric_linear(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,

@@ -114,7 +114,6 @@ def test_all_gather_async(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -202,7 +201,6 @@ def test_all_gather_deepseek(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(submesh_shape))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -236,7 +234,6 @@ def test_all_gather_async_broadcast_without_explicit_subdevice(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
     run_all_gather_impl(
         submesh_device,
-        num_devices=4,
         ag_output_shape=[1, 1, 32, 1024],
         dim=3,
         num_links=1,
@@ -250,6 +247,7 @@ def test_all_gather_async_broadcast_without_explicit_subdevice(
         cluster_axis=1,
         use_broadcast=True,
         use_explicit_subdevice_id=False,
+        all_gather_function=ttnn.experimental.all_gather_async,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
 
@@ -267,16 +265,16 @@ def test_all_gather_async_broadcast_without_explicit_subdevice(
 def test_all_gather_async_broadcast_rejects_noncontiguous_width_gather(
     mesh_device,
     all_gather_topology,
+    expect_error,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
     try:
-        with pytest.raises(
+        with expect_error(
             RuntimeError,
-            match="Broadcast all-gather currently only supports gather dims whose preceding page-ordered dimensions are singleton",
+            "Broadcast all-gather currently only supports gather dims whose preceding page-ordered dimensions are singleton",
         ):
             run_all_gather_impl(
                 submesh_device,
-                num_devices=4,
                 ag_output_shape=[1, 1, 64, 1024],
                 dim=3,
                 num_links=1,
@@ -290,6 +288,7 @@ def test_all_gather_async_broadcast_rejects_noncontiguous_width_gather(
                 cluster_axis=1,
                 use_broadcast=True,
                 use_explicit_subdevice_id=False,
+                all_gather_function=ttnn.experimental.all_gather_async,
             )
     finally:
         submesh_device.reset_sub_device_stall_group()
@@ -360,7 +359,6 @@ def test_all_gather_async_big_mesh(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -439,7 +437,6 @@ def test_all_gather_async_quad_host_mesh(
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape(shape))
     run_all_gather_impl(
         submesh_device,
-        submesh_device.shape[cluster_axis],
         ag_output_shape,
         dim,
         num_links,
@@ -891,7 +888,6 @@ def test_all_gather_llama70b_decode_mlp(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -990,7 +986,6 @@ def test_all_gather_llama70b_prefill_sdpa(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -1090,7 +1085,6 @@ def test_all_gather_llama70b_prefill_mlp(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -1187,7 +1181,6 @@ def test_all_gather_llama70b_prefill_layernorm(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -1288,7 +1281,6 @@ def test_all_gather_llama70b_batch_head_coverage(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -1385,7 +1377,6 @@ def test_all_gather_llama70b_cluster_axis0(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,

@@ -27,7 +27,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 )
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("num_iters", [3])
-@pytest.mark.parametrize("use_semaphore_free_all_gather_impl", [True])
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
@@ -53,7 +52,6 @@ def test_all_gather_async_training_shapes(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
-    use_semaphore_free_all_gather_impl,
 ):
     num_devices = bh_2d_mesh_device.shape[0]
     cluster_axis = 0
@@ -63,7 +61,6 @@ def test_all_gather_async_training_shapes(
 
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -79,5 +76,4 @@ def test_all_gather_async_training_shapes(
         num_workers_per_link=num_workers_per_link,
         num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
-        use_semaphore_free_all_gather_impl=use_semaphore_free_all_gather_impl,
     )

@@ -210,23 +210,13 @@ def run(
             device,
         )
 
-        compute_grid_size = device.compute_with_storage_grid_size()
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-        )
-        semaphores = [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
-
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
-                tt_out_tensor = ttnn.experimental.all_gather_async(
+                tt_out_tensor = ttnn.all_gather(
                     tt_input,
                     dim,
                     cluster_axis=cluster_axis,
-                    mesh_device=device,
-                    topology=topology,
-                    multi_device_global_semaphore=semaphores,
-                    num_links=num_links,
                     memory_config=output_memory_config,
                 )
                 e2e_perf = stop_measuring_time(start_time)

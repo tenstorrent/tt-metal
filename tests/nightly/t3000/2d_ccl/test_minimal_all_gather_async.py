@@ -85,7 +85,6 @@ def test_all_gather_async_training_shapes(
 ):
     run_all_gather_impl(
         mesh_device,
-        mesh_device.get_num_devices(),
         ag_output_shape,
         dim,
         num_links,
@@ -98,5 +97,4 @@ def test_all_gather_async_training_shapes(
         num_iters=num_iters,
         use_barrier=True,
         use_persistent_buffers=False,
-        use_semaphore_free_all_gather_impl=True,
     )

@@ -110,7 +110,6 @@ def test_all_gather_linear_2D_nightly(
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -209,7 +208,6 @@ def test_all_gather_linear_4D_nightly(
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -307,7 +305,6 @@ def test_all_gather_ring_nightly(
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -423,7 +420,6 @@ def test_all_gather_broken(
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,

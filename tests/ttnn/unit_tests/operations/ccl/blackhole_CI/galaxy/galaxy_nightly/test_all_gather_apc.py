@@ -88,7 +88,6 @@ def test_all_gather_2D_line(
     cluster_axis = 0
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -175,7 +174,6 @@ def test_all_gather_4D_line(
     cluster_axis = 0
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,
@@ -266,7 +264,6 @@ def test_all_gather_everything_ring(
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
-        num_devices,
         ag_output_shape,
         dim,
         num_links,

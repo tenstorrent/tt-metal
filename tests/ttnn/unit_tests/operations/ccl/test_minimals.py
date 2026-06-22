@@ -52,15 +52,11 @@ def run_allgather_only_with_trace(
 ):
     # Compile Run
     logger.info("Compiling model")
-    tt_out_tensor = ttnn.experimental.all_gather_async(
+    tt_out_tensor = ttnn.all_gather(
         input_tensor_mesh,
         dim,
-        multi_device_global_semaphore=[ccl_semaphore_handles[0], ccl_semaphore_handles[1]],
-        num_links=num_links,
         memory_config=output_mem_config,
-        topology=all_gather_topology,
         subdevice_id=subdevice_id,
-        barrier_semaphore=barrier_semaphore_handles[0] if use_barrier else None,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -69,30 +65,22 @@ def run_allgather_only_with_trace(
     if warmup_iters > 0:
         trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
         for i in range(warmup_iters):
-            tt_out_tensor = ttnn.experimental.all_gather_async(
+            tt_out_tensor = ttnn.all_gather(
                 input_tensor_mesh,
                 dim,
-                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
-                num_links=num_links,
                 memory_config=output_mem_config,
-                topology=all_gather_topology,
                 subdevice_id=subdevice_id,
-                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
             )
             tt_out_tensor.deallocate(True)
         ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
         ttnn.synchronize_device(mesh_device)
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
     for i in range(num_iter):
-        tt_out_tensor = ttnn.experimental.all_gather_async(
+        tt_out_tensor = ttnn.all_gather(
             input_tensor_mesh,
             dim,
-            multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
-            num_links=num_links,
             memory_config=output_mem_config,
-            topology=all_gather_topology,
             subdevice_id=subdevice_id,
-            barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
         )
         if i != num_iter - 1:
             tt_out_tensor.deallocate(True)
@@ -268,15 +256,11 @@ def run_all_gather_impl(
         tt_out_tensor_list.append(tt_out_tensor)
     else:
         for i in range(num_iters):
-            tt_out_tensor = ttnn.experimental.all_gather_async(
+            tt_out_tensor = ttnn.all_gather(
                 input_tensor_mesh_list[i],
                 dim,
-                multi_device_global_semaphore=[ccl_semaphore_handles[2 * i], ccl_semaphore_handles[2 * i + 1]],
-                num_links=num_links,
                 memory_config=output_mem_config,
-                topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
-                barrier_semaphore=barrier_semaphore_handles[i % 2] if use_barrier else None,
             )
             tt_out_tensor_list.append(tt_out_tensor)
 
