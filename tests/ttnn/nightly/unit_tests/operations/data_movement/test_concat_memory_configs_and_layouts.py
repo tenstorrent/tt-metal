@@ -1335,12 +1335,12 @@ class TestSubCoreGridsConcat:
 class TestUnsupportedCases:
     """Tests that validate known unsupported configurations raise errors."""
 
-    def test_empty_tensor_list(self, device):
+    def test_empty_tensor_list(self, device, expect_error):
         """Empty input list should raise."""
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "expected a non-empty list of Tensors"):
             ttnn.concat([], dim=0)
 
-    def test_block_sharded_non_tile_aligned_shard(self, device):
+    def test_block_sharded_non_tile_aligned_shard(self, device, expect_error):
         """Non-tile-aligned shard dims are rejected by the infrastructure at tensor creation."""
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
         shape = (1, 1, 48, 48)
@@ -1355,12 +1355,12 @@ class TestUnsupportedCases:
 
         torch_a = random_torch_tensor(ttnn.bfloat16, shape)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "shard"):
             ttnn.from_torch(
                 torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=block_mem
             )
 
-    def test_block_sharded_unsupported_dim(self, device):
+    def test_block_sharded_unsupported_dim(self, device, expect_error):
         """Block-sharded concat only supports dim=2 and dim=3; dim=0 should raise."""
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
         shape = (1, 1, 64, 64)
@@ -1377,10 +1377,10 @@ class TestUnsupportedCases:
         ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
         ttnn_a = ttnn.to_memory_config(ttnn_a, block_mem)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "Number of shards along height"):
             ttnn.concat([ttnn_a, ttnn_a], dim=0, memory_config=block_mem)
 
-    def test_block_sharded_non_rectangular_grid(self, device):
+    def test_block_sharded_non_rectangular_grid(self, device, expect_error):
         """Non-rectangular CoreRangeSet is rejected by the infrastructure at tensor creation."""
         shard_grid = ttnn.CoreRangeSet(
             {
@@ -1400,12 +1400,12 @@ class TestUnsupportedCases:
 
         torch_a = random_torch_tensor(ttnn.bfloat16, shape)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "shard"):
             ttnn.from_torch(
                 torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=block_mem
             )
 
-    def test_mismatched_ranks(self, device):
+    def test_mismatched_ranks(self, device, expect_error):
         """Tensors with different ranks should raise."""
         torch_a = random_torch_tensor(ttnn.bfloat16, (1, 1, 32, 64))
         torch_b = random_torch_tensor(ttnn.bfloat16, (1, 32, 64))
@@ -1413,10 +1413,10 @@ class TestUnsupportedCases:
         ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
         ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "index out of range"):
             ttnn.concat([ttnn_a, ttnn_b], dim=0)
 
-    def test_mismatched_non_concat_dims(self, device):
+    def test_mismatched_non_concat_dims(self, device, expect_error):
         """Tensors with different non-concat dimensions should raise."""
         torch_a = random_torch_tensor(ttnn.bfloat16, (1, 1, 32, 64))
         torch_b = random_torch_tensor(ttnn.bfloat16, (1, 1, 64, 128))
@@ -1424,19 +1424,22 @@ class TestUnsupportedCases:
         ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
         ttnn_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(
+            RuntimeError,
+            "All dimensions must be the same size except for the dimension along which the contenation is taking place.",
+        ):
             ttnn.concat([ttnn_a, ttnn_b], dim=3)
 
-    def test_dim_out_of_range(self, device):
+    def test_dim_out_of_range(self, device, expect_error):
         """Dimension out of range should raise."""
         shape = (1, 1, 32, 64)
         torch_t = random_torch_tensor(ttnn.bfloat16, shape)
         ttnn_t = ttnn.from_torch(torch_t, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "Index is out of bounds for the rank"):
             ttnn.concat([ttnn_t, ttnn_t], dim=4)
 
-    def test_optional_output_tensor_unsupported(self, device):
+    def test_optional_output_tensor_unsupported(self, device, expect_error):
         """Preallocated output tensor is currently unsupported."""
         shape = (1, 1, 32, 64)
         torch_t = random_torch_tensor(ttnn.bfloat16, shape)
@@ -1448,10 +1451,10 @@ class TestUnsupportedCases:
             dtype=ttnn.bfloat16,
         )
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "output_tensor"):
             ttnn.concat([ttnn_t, ttnn_t], dim=2, output_tensor=out_t)
 
-    def test_sharded_height_concat_on_height_sharded_not_supported(self, device):
+    def test_sharded_height_concat_on_height_sharded_not_supported(self, device, expect_error):
         """Height concat (dim=-2) on height-sharded tensors is not supported.
         Only width concat (dim=-1) is valid for height-sharded."""
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))})
@@ -1476,10 +1479,10 @@ class TestUnsupportedCases:
         ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
         ttnn_a = ttnn.to_memory_config(ttnn_a, input_mem)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "Only support height concat on width-sharded or block-sharded tensors"):
             ttnn.concat([ttnn_a, ttnn_a], dim=2, memory_config=output_mem)
 
-    def test_width_concat_on_width_sharded_not_supported(self, device):
+    def test_width_concat_on_width_sharded_not_supported(self, device, expect_error):
         """Width concat (dim=-1) on width-sharded tensors is not supported.
         Only height concat (dim=-2) is valid for width-sharded."""
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))})
@@ -1504,5 +1507,5 @@ class TestUnsupportedCases:
         ttnn_a = ttnn.from_torch(torch_a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, dtype=ttnn.bfloat16)
         ttnn_a = ttnn.to_memory_config(ttnn_a, input_mem)
 
-        with pytest.raises(RuntimeError):
+        with expect_error(RuntimeError, "Only support width concat on height-sharded or block-sharded tensors"):
             ttnn.concat([ttnn_a, ttnn_a], dim=3, memory_config=output_mem)
