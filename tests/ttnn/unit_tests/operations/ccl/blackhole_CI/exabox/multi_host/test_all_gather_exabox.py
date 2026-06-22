@@ -91,11 +91,8 @@ def _run_all_gather_test(
 
     all_gather_kwargs = dict(
         cluster_axis=cluster_axis,
-        topology=topology,
         memory_config=output_mem_config,
     )
-    if num_links is not None:
-        all_gather_kwargs["num_links"] = num_links
 
     def run_op():
         return ttnn.all_gather(tt_input, dim, **all_gather_kwargs)

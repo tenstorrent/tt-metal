@@ -573,7 +573,7 @@ def test_all_gather_async_broadcast(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
@@ -653,7 +653,7 @@ def test_ttnn_all_gather(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
@@ -743,7 +743,7 @@ def test_all_gather_subgrid(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
@@ -774,7 +774,6 @@ def test_all_gather_async_training_shapes(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        use_barrier=True,
         use_persistent_buffers=False,
     )
 
@@ -848,7 +847,7 @@ def test_all_gather_async_training_shapes(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
@@ -953,7 +952,7 @@ def test_all_gather_async_sharded_to_sharded(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
@@ -1049,7 +1048,7 @@ def test_all_gather_async_sharded_to_interleaved(
 @pytest.mark.parametrize(
     "device_params, all_gather_topology",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
     ],
     indirect=["device_params"],
@@ -1158,7 +1157,6 @@ def test_all_gather_async_2x4(
         all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
-        use_barrier=True,
         use_persistent_buffers=False,
         cluster_axis=1,
     )
@@ -1208,8 +1206,7 @@ NUM_ITERS = 2
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3, 4, 5])
 @pytest.mark.parametrize("cluster_axis", [1])
-@pytest.mark.parametrize("topology", [ttnn.Topology.Linear])
-def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, topology):
+def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config):
     if dim >= len(input_shape):
         pytest.skip("Invalid gather dim")
 
@@ -1251,7 +1248,6 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config, t
             tt_input,
             dim,
             cluster_axis=cluster_axis,
-            topology=topology,
         )
 
         tt_output_tensor = torch.cat([ttnn.to_torch(t) for t in ttnn.get_device_tensors(tt_out_tensor)])

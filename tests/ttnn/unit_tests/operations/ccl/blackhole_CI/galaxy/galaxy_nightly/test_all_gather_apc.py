@@ -64,9 +64,6 @@ from models.common.utility_functions import (
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_2D_line(
     bh_2d_mesh_device,
     num_devices,
@@ -80,9 +77,6 @@ def test_all_gather_2D_line(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -99,9 +93,6 @@ def test_all_gather_2D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -150,9 +141,6 @@ def test_all_gather_2D_line(
     indirect=["device_params"],
     ids=["fabric_1d_linear"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_4D_line(
     bh_2d_mesh_device,
     num_devices,
@@ -166,9 +154,6 @@ def test_all_gather_4D_line(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -185,9 +170,6 @@ def test_all_gather_4D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -237,9 +219,6 @@ def test_all_gather_4D_line(
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_everything_ring(
     bh_2d_mesh_device,
     num_devices,
@@ -253,9 +232,6 @@ def test_all_gather_everything_ring(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
     cluster_axis,
 ):
     if cluster_axis == 0:
@@ -275,9 +251,6 @@ def test_all_gather_everything_ring(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

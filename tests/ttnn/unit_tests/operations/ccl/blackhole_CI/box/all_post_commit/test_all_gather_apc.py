@@ -77,9 +77,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
         ),
     ),
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_subcore_grid(
     bh_2d_mesh_device,
     num_devices,
@@ -93,9 +90,6 @@ def test_all_gather_subcore_grid(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
     sub_core_grids,
 ):
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
@@ -115,9 +109,6 @@ def test_all_gather_subcore_grid(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
         sub_core_grids=sub_core_grids,
     )
@@ -175,9 +166,6 @@ def test_all_gather_subcore_grid(
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_2D_line(
     bh_2d_mesh_device,
     num_devices,
@@ -191,9 +179,6 @@ def test_all_gather_2D_line(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
 
@@ -212,9 +197,6 @@ def test_all_gather_2D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -264,9 +246,6 @@ def test_all_gather_2D_line(
     indirect=["device_params"],
     ids=["fabric_1d_linear"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_4D_line(
     bh_2d_mesh_device,
     num_devices,
@@ -280,9 +259,6 @@ def test_all_gather_4D_line(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -300,9 +276,6 @@ def test_all_gather_4D_line(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -351,9 +324,6 @@ def test_all_gather_4D_line(
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_ring(
     bh_1d_mesh_device,
     ag_output_shape,
@@ -366,9 +336,6 @@ def test_all_gather_ring(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
     validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
@@ -388,9 +355,6 @@ def test_all_gather_ring(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -438,9 +402,6 @@ def test_all_gather_ring(
     ],
     indirect=["device_params"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_8D_vertical(
     bh_2d_mesh_device,
     num_devices,
@@ -454,9 +415,6 @@ def test_all_gather_8D_vertical(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 1)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
@@ -474,9 +432,6 @@ def test_all_gather_8D_vertical(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -535,9 +490,6 @@ def test_all_gather_8D_vertical(
     indirect=["device_params"],
     ids=["fabric_linear"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_all_gather_failing_shapes(
     bh_1d_mesh_device,
     num_devices,
@@ -551,9 +503,6 @@ def test_all_gather_failing_shapes(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -571,9 +520,6 @@ def test_all_gather_failing_shapes(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)

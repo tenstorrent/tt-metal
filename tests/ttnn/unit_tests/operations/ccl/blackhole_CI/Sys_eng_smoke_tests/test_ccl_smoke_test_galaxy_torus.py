@@ -61,9 +61,6 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
     indirect=["device_params"],
     ids=["fabric"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_ddr_smoke_test(
     bh_2d_mesh_device,
     num_devices,
@@ -78,9 +75,6 @@ def test_ccl_ddr_smoke_test(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
     # Check all the rows and columns independently within the device
@@ -101,9 +95,6 @@ def test_ccl_ddr_smoke_test(
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
-        chunks_per_sync=chunks_per_sync,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
         allowed_pcc=0.9999,
     )
     ttnn.ReadDeviceProfiler(submesh_device)
@@ -160,9 +151,6 @@ def test_ccl_ddr_smoke_test(
     indirect=["device_params"],
     ids=["fabric"],
 )
-@pytest.mark.parametrize("chunks_per_sync", [20])
-@pytest.mark.parametrize("num_workers_per_link", [2])
-@pytest.mark.parametrize("num_buffers_per_channel", [2])
 def test_ccl_other_smoke_test(
     bh_2d_mesh_device,
     num_devices,
@@ -177,9 +165,6 @@ def test_ccl_other_smoke_test(
     enable_trace,
     all_gather_topology,
     num_iters,
-    chunks_per_sync,
-    num_workers_per_link,
-    num_buffers_per_channel,
 ):
     validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
     for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
@@ -204,9 +189,6 @@ def test_ccl_other_smoke_test(
             enable_trace=enable_trace,
             num_iters=num_iters,
             cluster_axis=cluster_axis,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
             allowed_pcc=0.9999,
             num_l1_banks=110,
         )
