@@ -19,7 +19,7 @@ constexpr uint32_t flt_min = 0x00800000u;        //  FLT_MIN
 constexpr uint32_t one_minus_eps = 0x3F7FFFFFu;  //  A float value that does not exceed 1.0f
 
 template <bool EmitZ2>
-inline void generate_standard_normal_tiles(CircularBuffer& cb_dst, uint32_t dst_cb_id) {
+inline void generate_standard_normal_tiles(CircularBuffer cb_dst) {
     constexpr uint32_t num_out_tiles = EmitZ2 ? 2 : 1;
 
     cb_dst.reserve_back(num_out_tiles);
@@ -70,12 +70,12 @@ inline void generate_standard_normal_tiles(CircularBuffer& cb_dst, uint32_t dst_
     tile_regs_commit();
     tile_regs_wait();
 
-    pack_reconfig_data_format(dst_cb_id);
+    pack_reconfig_data_format(cb_dst.get_cb_id());
     // pack Z1(reg3)
-    pack_tile(3, dst_cb_id);
+    pack_tile(3, cb_dst.get_cb_id());
     if constexpr (EmitZ2) {
         // pack Z2(reg1)
-        pack_tile(1, dst_cb_id);
+        pack_tile(1, cb_dst.get_cb_id());
     }
 
     tile_regs_release();
@@ -111,9 +111,9 @@ void kernel_main() {
     init_sfpu(dst_cb_id, dst_cb_id);
     rand_tile_init(seed);
     for (uint32_t p = 0; p < num_pairs; p++) {
-        generate_standard_normal_tiles<true>(cb_dst, dst_cb_id);
+        generate_standard_normal_tiles<true>(cb_dst);
     }
     if (is_odd) {
-        generate_standard_normal_tiles<false>(cb_dst, dst_cb_id);
+        generate_standard_normal_tiles<false>(cb_dst);
     }
 }  // void kernel_main()
