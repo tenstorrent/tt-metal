@@ -1,6 +1,12 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
+
+// Metal 2.0 fork of untilize.cpp. Identical compute logic; the CB indices and
+// loop counts are sourced from Metal 2.0 named bindings (dfb::in / dfb::out) and
+// named compile-time args instead of positional CTAs. The legacy untilize.cpp is
+// retained for the not-yet-ported sharded factory; delete this fork's twin (or the
+// legacy copy) once all factories that instantiate untilize.cpp are on Metal 2.0.
 
 #include <cstdint>
 
@@ -8,15 +14,7 @@
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
-
-    // For uneven nd-sharding, the host assigns 0 blocks to cores that fall outside
-    // the populated shard set. The kernel_lib untilize asserts num_blocks > 0,
-    // so we early-return on those idle cores.
-    if (per_core_block_cnt == 0) {
-        return;
-    }
-
+    constexpr uint32_t per_core_block_cnt = get_arg(args::per_core_block_cnt);
     constexpr uint32_t per_core_block_tile_cnt = get_arg(args::per_core_block_tile_cnt);
 
     compute_kernel_hw_startup(dfb::in, dfb::out);
