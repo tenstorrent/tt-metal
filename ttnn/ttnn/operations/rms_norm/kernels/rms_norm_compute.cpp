@@ -44,7 +44,6 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
-#include "api/debug/device_print.h"
 
 namespace ckl = compute_kernel_lib;
 
@@ -321,11 +320,6 @@ void kernel_main() {
         }
 
         // ---------- FINALIZE: rsqrt(sum * inv_W + eps) ----------
-        if constexpr (num_partials > 1) {
-            cb_wait_front(cb_partial_sumsq, 1);
-            DEVICE_PRINT("DBG is_root={} PARTIAL_SUMSQ col0:\n", (uint32_t)is_root);
-            DEVICE_PRINT("{}\n", TSLICE(cb_partial_sumsq, 0, SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1}));
-        }
         {
             DeviceZoneScopedN("CMP-finalize");
             ckl::eltwise_chain(

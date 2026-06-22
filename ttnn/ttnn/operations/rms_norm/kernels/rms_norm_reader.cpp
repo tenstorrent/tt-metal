@@ -37,6 +37,28 @@ FORCE_INLINE void zero_l1(uint32_t addr, uint32_t nbytes) {
         p[i] = 0;
     }
 }
+
+// Advance ONLY this RISC's local CB read/write pointer by `num_pages`, mirroring the
+// pointer arithmetic of cb_pop_front / cb_push_back (same page stride + fifo wrap) but
+// WITHOUT touching the shared pages_acked / pages_received counters. Used by the mode-2
+// (TRANSPORT_REDUCE_BCAST) reader to re-sync its local cb_partial_sumsq pointer with the
+// compute RISC, which advanced its own copy of the pointer via a cb_pop_front the reader
+// never participated in (CB pointers are per-RISC local — see dataflow_api.h
+// get_local_cb_interface). Pure pointer move => it cannot perturb producer/consumer counts.
+FORCE_INLINE void advance_local_rd_ptr(uint32_t operand, uint32_t num_pages) {
+    auto& iface = get_local_cb_interface(operand);
+    iface.fifo_rd_ptr += num_pages * iface.fifo_page_size;
+    if (iface.fifo_rd_ptr >= iface.fifo_limit) {
+        iface.fifo_rd_ptr -= iface.fifo_size;
+    }
+}
+FORCE_INLINE void advance_local_wr_ptr(uint32_t operand, uint32_t num_pages) {
+    auto& iface = get_local_cb_interface(operand);
+    iface.fifo_wr_ptr += num_pages * iface.fifo_page_size;
+    if (iface.fifo_wr_ptr >= iface.fifo_limit) {
+        iface.fifo_wr_ptr -= iface.fifo_size;
+    }
+}
 }  // namespace
 
 void kernel_main() {
@@ -289,10 +311,20 @@ void kernel_main() {
                 // tile. Do NOT pop cb_partial_sumsq — root compute's FINALIZE (CopyTile) pops it.
                 // cb_partial_sumsq is double-buffered (size 2), so a future row's push cannot
                 // overwrite this tile's L1 while the mcast send reads it.
+                //
+                // POINTER SYNC (Refinement 9 Part D fix): cb_partial_sumsq is produced and
+                // consumed ENTIRELY by compute on this core (PASS-1 push -> copy pop ->
+                // combine push). The reader never participated in the copy's `cb_pop_front`,
+                // so the reader's LOCAL fifo_rd_ptr (which get_read_ptr returns; see
+                // dataflow_api.h get_local_cb_interface) is still anchored at slot 0 — the
+                // STALE PASS-1 local Σx². cb_wait_front only syncs the shared page COUNT, not
+                // the per-RISC read pointer position. Advance the reader's local rd_ptr by the
+                // one page compute popped so it references the LIVE combine output (slot 1),
+                // exactly where compute's FINALIZE reads it. Pure local-pointer move: it does
+                // NOT touch pages_acked, so it cannot starve compute's FINALIZE cb_wait_front.
                 cb_wait_front(cb_partial_sumsq, 1);
+                advance_local_rd_ptr(cb_partial_sumsq, 1);
                 const uint32_t reduced_l1 = get_read_ptr(cb_partial_sumsq);
-                volatile tt_l1_ptr uint32_t* rp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduced_l1);
-                DEVICE_PRINT("ROOT send dst_l1={} word0={:x} tilebytes={}\n", reduced_l1, rp[0], get_tile_size(cb_partial_sumsq));
                 // The mode-2 broadcast moves a cb_partial_sumsq tile (the global Σx²), so stride
                 // with THAT CB's tile size — decoupled from cb_partials_gathered (both carry the
                 // intermediate format today, but never assume they match).
@@ -311,19 +343,19 @@ void kernel_main() {
                 // FINALIZE reads this cb_partial_sumsq tile.
                 produced.up(noc, root_x, root_y, 1);
                 cb_pop_front(cb_local_sumsq, 1);
+                // POINTER SYNC (mirror of the root, opposite direction): the peer's compute
+                // already consumed slot 0 of cb_partial_sumsq (PASS-1 push -> copy pop), so its
+                // FINALIZE reads the LIVE slot 1. But the reader never pushed/reserved
+                // cb_partial_sumsq, so its LOCAL fifo_wr_ptr is still anchored at slot 0.
+                // cb_reserve_back only syncs the free-space COUNT, not the per-RISC write
+                // pointer. Advance the reader's local wr_ptr by the one page compute popped so
+                // the received global Σx² lands in slot 1 — exactly where the peer's FINALIZE
+                // reads it. Pure local-pointer move; does not touch pages_received.
                 cb_reserve_back(cb_partial_sumsq, 1);
-                const uint32_t peer_wptr = get_write_ptr(cb_partial_sumsq);
-                volatile tt_l1_ptr uint32_t* pre = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_wptr);
-                DEVICE_PRINT("PEER rank={} reserve wptr={} PRE word0={:x}\n", my_rank, peer_wptr, pre[0]);
+                advance_local_wr_ptr(cb_partial_sumsq, 1);
                 ReceiverPipe<data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true> receiver(
                     noc);
                 receiver.receive(root_x, root_y);
-                volatile tt_l1_ptr uint32_t* post = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_wptr);
-                DEVICE_PRINT("PEER rank={} POST receive word0={:x} word1={:x}\n", my_rank, post[0], post[1]);
-                noc_async_read_barrier();
-                noc_async_write_barrier();
-                volatile tt_l1_ptr uint32_t* post2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_wptr);
-                DEVICE_PRINT("PEER rank={} POST-barrier word0={:x}\n", my_rank, post2[0]);
                 cb_push_back(cb_partial_sumsq, 1);
             }
         } else if constexpr (transport_mode == 1) {
