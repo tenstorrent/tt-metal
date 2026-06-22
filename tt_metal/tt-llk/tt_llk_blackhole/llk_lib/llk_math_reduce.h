@@ -35,7 +35,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape);
 template <bool is_int_fpu_en>
 inline void reduce_row_perform_transpose()
 {
-    // The MOVB2D/MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
+    // The MOVD2B/ELWADD below read the Src zero substitution flag (FlushDenormals = !flag).
     // A datum whose low byte is zero (e.g. bf16 0x4400 = 768.0) would be flushed to 0 mid-reduction,
     // corrupting the sum. Disable the flag (via the math state tracker) around the transpose+add, then
     // return it to the operand driven baseline. WH does the same in its fp32 transpose.
@@ -110,7 +110,7 @@ inline void reduce_pool_op()
  *
  * @tparam type: Pooling op, values = <SUM/AVG/MAX>
  * @tparam high_fidelity: Run the multi-phase fidelity MOP instead of a single GAPOOL.
- * @param num_faces_c_dim: Number of column-faces in the row.
+ * @param num_faces_c_dim: Number of column faces in the row.
  */
 template <PoolType type, bool high_fidelity>
 inline void reduce_row_pool_all_faces(const std::uint32_t num_faces_c_dim)
@@ -154,6 +154,9 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 
     if constexpr (dim == ReduceDim::REDUCE_ROW && type != PoolType::MAX)
     {
+        // MVMUL multiplies the scaler column (SrcA) by each data face (SrcB), accumulating the
+        // reduced column directly in dest. The replay buffer records all column faces so a single
+        // replay covers one row of faces; the MOP outer loop repeats it for each row.
         constexpr std::uint32_t fid_count  = (math_fidelity == MathFidelity::LoFi) ? 1 : to_underlying(math_fidelity);
         const std::uint32_t replay_buf_len = tensor_shape.num_faces_c_dim * 2 * fid_count;
 
@@ -166,28 +169,33 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
             {
                 for (std::uint32_t faces_remaining = tensor_shape.num_faces_c_dim; faces_remaining > 0; faces_remaining--)
                 {
+                    // Top half of face (dst=0): run fidelity phases, last phase advances SrcB by 8 rows
                     for (std::uint32_t p = 0; p < fid_count - 1; p++)
                     {
                         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 0);
                     }
                     TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, 0);
 
+                    // Bottom half of face (dst=8): run fidelity phases, last phase resets SrcB
                     for (std::uint32_t p = 0; p < fid_count - 1; p++)
                     {
                         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, 8);
                     }
                     if (faces_remaining == 1)
                     {
+                        // Last face in row: reset SrcB, advance dest to next row
                         TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_3, 8);
                     }
                     else
                     {
+                        // More faces remain: reset SrcB, clear sources for next face
                         TTI_MVMUL(p_setrwc::CLR_AB, 0, ADDR_MOD_2, 8);
                     }
                 }
             });
 
         const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
+        // Outer loop = num_faces_r_dim: replay the column face reduction for each row
         ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
         tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
         tmp.program();
@@ -207,7 +215,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 /**
  * @brief Perform a reduction on the math thread, pooling faces into the destination register.
  *
- * REDUCE_ROW SUM/AVG uses MVMUL to multiply each face row by a column-scaler in SrcB, producing the reduced
+ * REDUCE_ROW SUM/AVG uses MVMUL to multiply each face row by a column-scaler in SrcA, producing the reduced
  * column directly in dest; MAX pools each face row then transposes the result into dest via SrcB.
  * REDUCE_COL pools down rows of faces; REDUCE_SCALAR pools all faces then transposes the partial result
  * into a single column for a final pool.

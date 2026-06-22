@@ -107,12 +107,12 @@ inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor
  * @tparam reduce_dim: Dimension along which to reduce, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param tensor_shape: Shape of the tensor, including face_r_dim and num_faces.
  *
- * @note For SUM/AVG REDUCE_ROW, operands are swapped: scaler→SrcA, data→SrcB (no haloize transpose).
+ * @note For SUM/AVG REDUCE_ROW, operands are swapped: scaler→SrcA, data→SrcB.
  * @note For MAX REDUCE_ROW, original layout is kept: data→SrcA (transposed via haloize), scaler→SrcB.
  * @note For REDUCE_COL/REDUCE_SCALAR: Unpacker 0 (SrcA) reads face_r_dim*FACE_R_DIM datums,
  *       Unpacker 1 (SrcB) reads one row (FACE_R_DIM datums).
  * @ref _llk_unpack_AB_reduce_ is the matching execute call.
- * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler-operand unpack pairing).
+ * @ref _llk_math_reduce_init_ is the matching init on the math thread (this is the scaler operand unpack pairing).
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
 inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape)
