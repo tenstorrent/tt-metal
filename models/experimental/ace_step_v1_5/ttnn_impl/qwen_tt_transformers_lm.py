@@ -436,7 +436,7 @@ class QwenModelTtTransformers:
         page_table_for_prefill = self._page_table_torch[:, :n_blocks].contiguous()
 
         # ``prepare_inputs_prefill`` runs the Embedding lookup and slices the prefill RoPE caches.
-        # Output: (tokens_embd, rot_mats_global, rot_mats_local, page_table_tt, chunk_page_table_tt).
+        # Output: (tokens_embd, rot_mats_global, rot_mats_local, page_table_tt, chunk_page_table_tt, chunk_start_idx_tt).
         inputs = self.tt_model.prepare_inputs_prefill(
             padded_tokens,
             page_table=page_table_for_prefill,
@@ -535,20 +535,15 @@ class QwenModelTtTransformers:
             host_tuple = (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5])
 
             device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
-            (
-                x_embd,
-                tt_page_table,
-                tt_chunk_page_table,
-                tt_chunk_start_idx,
-            ) = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
+            transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
             with self._prefill_l1_op_context():
                 warm = self.tt_model.ttnn_prefill_forward(
-                    x_embd,
+                    transformed[0],
                     rot_mats_global=tt_rot_global,
                     rot_mats_local=tt_rot_local,
-                    page_table=tt_page_table,
-                    chunk_page_table=tt_chunk_page_table,
-                    chunk_start_idx=tt_chunk_start_idx,
+                    page_table=transformed[1],
+                    chunk_page_table=transformed[2],
+                    chunk_start_idx=transformed[3],
                     kv_cache=self.tt_kv_cache,
                     get_last_token=get_last_token,
                 )
@@ -560,20 +555,15 @@ class QwenModelTtTransformers:
 
             device_inputs = copy_host_to_device(host_tuple, mesh_device=self.device)
             trace_id = ttnn.begin_trace_capture(self.device, cq_id=0)
-            (
-                x_embd,
-                tt_page_table,
-                tt_chunk_page_table,
-                tt_chunk_start_idx,
-            ) = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
+            transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_inputs)
             with self._prefill_l1_op_context():
                 _ = self.tt_model.ttnn_prefill_forward(
-                    x_embd,
+                    transformed[0],
                     rot_mats_global=tt_rot_global,
                     rot_mats_local=tt_rot_local,
-                    page_table=tt_page_table,
-                    chunk_page_table=tt_chunk_page_table,
-                    chunk_start_idx=tt_chunk_start_idx,
+                    page_table=transformed[1],
+                    chunk_page_table=transformed[2],
+                    chunk_start_idx=transformed[3],
                     kv_cache=self.tt_kv_cache,
                     get_last_token=get_last_token,
                 )

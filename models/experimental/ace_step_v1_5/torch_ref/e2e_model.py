@@ -4,12 +4,10 @@
 
 """End-to-end ACE-Step v1.5 model (PyTorch reference): text encoder → DiT → VAE decoder.
 
-Pure-PyTorch counterpart of ``ttnn_impl/e2e_model.py``.  Every stage runs on
-the host via PyTorch so the output can be compared against the TTNN
-implementation for PCC validation.
-
-Standalone functions :func:`run_torch_denoise_loop` and :func:`decode_with_vae`
-are exported for reuse by other scripts (e.g. the prompt-to-wav demo).
+Default denoise path uses the **official** Hugging Face ``AutoModel.generate_audio()`` sampler
+(same as ACE-Step-1.5). Set ``use_dit_ref_sampler=True`` on :class:`E2EConfig` for the lightweight
+:class:`~models.experimental.ace_step_v1_5.torch_ref.full_pipeline.AceStepV15TorchPipeline`
+(TTNN PCC / module parity only).
 """
 
 from __future__ import annotations
@@ -22,6 +20,14 @@ import numpy as np
 import torch
 
 from .full_pipeline import AceStepV15TorchPipeline
+from .hf_generate import (
+    build_t_schedule,
+    default_guidance_scale,
+    ensure_hf_modeling_ready,
+    load_hf_ace_model,
+    prepare_silence_and_masks,
+    run_hf_generate_audio,
+)
 
 
 @dataclass
@@ -33,36 +39,30 @@ class E2EConfig:
     text_model_dir: str
     silence_latent_path: str
 
+    variant: str = "acestep-v15-turbo"
+    ace_step_repo_root: Optional[str] = None
+    use_dit_ref_sampler: bool = False
+
     duration_sec: float = 10.0
     infer_steps: int = 50
     shift: float = 1.0
     guidance_scale: float = 7.0
     cfg_interval_start: float = 0.0
     cfg_interval_end: float = 1.0
-    use_adg: bool = True
+    use_adg: Optional[bool] = None
     seed: int = 0
     sample_rate: int = 48000
     qwen_safetensors_path: Optional[str] = None
     vae_chunk_latents: int = 32
     vae_overlap_latents: int = 4
 
-
-def _build_t_schedule(
-    *,
-    shift: float,
-    infer_steps: int,
-) -> List[float]:
-    """Build the diffusion timestep schedule."""
-    t = [float(i) / float(infer_steps) for i in range(infer_steps, -1, -1)]
-    if shift != 1.0:
-        s = float(shift)
-        t = [s * x / (1.0 + (s - 1.0) * x) for x in t]
-    return t
-
-
-# ---------------------------------------------------------------------------
-# Standalone helpers – importable by demo scripts to avoid code duplication.
-# ---------------------------------------------------------------------------
+    dcw_enabled: bool = True
+    dcw_mode: str = "double"
+    dcw_scaler: float = 0.05
+    dcw_high_scaler: float = 0.02
+    dcw_wavelet: str = "haar"
+    sampler_mode: str = "euler"
+    infer_method: str = "ode"
 
 
 def run_torch_denoise_loop(
@@ -77,26 +77,7 @@ def run_torch_denoise_loop(
     cfg_fn: Optional[Callable[[int, float, torch.Tensor, torch.Tensor, torch.Tensor], torch.Tensor]] = None,
     progress_fn: Optional[Callable[[int, int, float, float], None]] = None,
 ) -> torch.Tensor:
-    """Run the PyTorch DiT denoising loop.
-
-    Args:
-        pipe: PyTorch pipeline instance.
-        t_schedule: Descending timestep floats.  The function Euler-steps
-            toward ``t = 0`` after the last entry.
-        frames: Temporal frame count.
-        enc_hs: Encoder hidden states ``[B, S, D]``.
-        ctx_lat: Context latents ``[B, T, 128]``.
-        null_emb: Null-condition embedding for CFG (broadcastable to *enc_hs*).
-            Falls back to zeros when ``None`` and *do_cfg* is ``True``.
-        do_cfg: Whether classifier-free guidance is active (batch doubles).
-        seed: RNG seed for initial noise.
-        cfg_fn: ``(step_idx, t_curr, xt, vt_cond, vt_uncond) -> vt`` guidance
-            combiner.  Defaults to returning *vt_cond* unchanged.
-        progress_fn: ``(step_idx, num_steps, t_curr, dt)`` called after each step.
-
-    Returns:
-        Denoised latents ``[B, frames, 64]`` on CPU float32.
-    """
+    """Run the lightweight DiT ref denoising loop (TTNN PCC only — not HF parity)."""
     num_steps = len(t_schedule)
 
     torch.manual_seed(seed)
@@ -156,16 +137,7 @@ def decode_with_vae(
     pred_latents: torch.Tensor,
     torch_dev: torch.device,
 ) -> torch.Tensor:
-    """Decode DiT latents to a waveform via the Oobleck VAE.
-
-    Args:
-        vae: Loaded ``AutoencoderOobleck`` instance.
-        pred_latents: ``[B, frames, 64]`` latents from the denoising loop.
-        torch_dev: Device for the VAE forward pass.
-
-    Returns:
-        Waveform ``[B, channels, samples]`` normalized to ``[-1, 1]``.
-    """
+    """Decode DiT latents to a waveform via the Oobleck VAE."""
     with torch.inference_mode():
         lat = pred_latents.transpose(1, 2).contiguous().to(device=torch_dev, dtype=next(vae.parameters()).dtype)
         wav = vae.decode(lat).sample.float().cpu()
@@ -175,14 +147,7 @@ def decode_with_vae(
 
 
 class AceStepE2EModelTorch:
-    """End-to-end ACE-Step v1.5 in pure PyTorch: text → DiT → VAE → waveform.
-
-    Stages:
-        1. Text encoding (Qwen3-Embedding on host)
-        2. Condition preparation (silence latent, masking)
-        3. PyTorch DiT denoising loop
-        4. VAE decode (AutoencoderOobleck on host)
-    """
+    """End-to-end ACE-Step v1.5 in PyTorch: text → DiT → VAE → waveform."""
 
     def __init__(
         self,
@@ -193,23 +158,49 @@ class AceStepE2EModelTorch:
         self.config = config
         self.torch_dev = torch.device(torch_device or "cpu")
         self.dtype = dtype
+        self.model_dir = Path(config.checkpoint_safetensors_path).parent
+
+        ckpt_dir = self.model_dir.parent
+        self._ref_root = ensure_hf_modeling_ready(
+            ckpt_dir=str(ckpt_dir),
+            ace_step_repo_root=config.ace_step_repo_root,
+        )
 
         self._load_text_encoder()
-        self._load_silence_latent()
+        self.frames = int(round(config.duration_sec * 25.0))
+        self.silence_latent, self.src_latents, self.chunk_masks = prepare_silence_and_masks(
+            config.silence_latent_path,
+            frames=self.frames,
+        )
 
-        self.t_schedule = _build_t_schedule(
+        self.gs = default_guidance_scale(variant=config.variant, guidance_scale=config.guidance_scale)
+        self.t_schedule = build_t_schedule(
             shift=config.shift,
             infer_steps=config.infer_steps,
+            variant=config.variant,
         )
         self.timesteps_host = np.asarray(self.t_schedule + [0.0], dtype=np.float32)
-        self.frames = int(round(config.duration_sec * 25.0))
 
-        self.pipe = AceStepV15TorchPipeline(
-            checkpoint_safetensors_path=config.checkpoint_safetensors_path,
-            timesteps_host=self.timesteps_host,
-            device=self.torch_dev,
-            dtype=dtype,
-        )
+        self.ace_model = None
+        self.pipe = None
+        self.null_emb = None
+
+        if config.use_dit_ref_sampler:
+            self.pipe = AceStepV15TorchPipeline(
+                checkpoint_safetensors_path=config.checkpoint_safetensors_path,
+                timesteps_host=self.timesteps_host,
+                device=self.torch_dev,
+                dtype=dtype,
+            )
+        else:
+            self.ace_model = load_hf_ace_model(self.model_dir, device=self.torch_dev, dtype=dtype)
+            nc = getattr(self.ace_model, "null_condition_emb", None)
+            if nc is None:
+                inner = getattr(self.ace_model, "model", None)
+                if inner is not None:
+                    nc = getattr(inner, "null_condition_emb", None)
+            if nc is not None:
+                self.null_emb = nc.float().cpu()
 
         self._load_vae()
 
@@ -219,29 +210,13 @@ class AceStepE2EModelTorch:
         self.tokenizer = AutoTokenizer.from_pretrained(self.config.text_model_dir)
         self.text_model = AutoModel.from_pretrained(self.config.text_model_dir).eval().to(self.torch_dev)
 
-    def _load_silence_latent(self) -> None:
-        silence = torch.load(self.config.silence_latent_path, map_location="cpu").to(torch.float32)
-        if silence.ndim != 3:
-            raise RuntimeError(f"Unexpected silence_latent rank: {tuple(silence.shape)}")
-        if int(silence.shape[-1]) == 64:
-            pass
-        elif int(silence.shape[1]) == 64:
-            silence = silence.transpose(1, 2).contiguous()
-        else:
-            raise RuntimeError(f"Unexpected silence_latent shape: {tuple(silence.shape)}")
-        self.silence_latent = silence
-
     def _load_vae(self) -> None:
         from diffusers.models import AutoencoderOobleck
 
         self.vae = AutoencoderOobleck.from_pretrained(self.config.vae_dir).eval().to(self.torch_dev)
 
     def encode_text(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encode a text prompt into hidden states and attention mask.
-
-        Returns:
-            (text_hidden_states [1, S, D], attention_mask [1, S] bool)
-        """
+        """Encode a text prompt into hidden states and attention mask."""
         dit_instruction = "Fill the audio semantic mask based on the given conditions:"
         metas = {"caption": prompt, "duration": self.config.duration_sec, "language": "en"}
         text_prompt = f"""# Instruction
@@ -261,37 +236,72 @@ class AceStepE2EModelTorch:
             text_hidden_states = text_out.last_hidden_state
         return text_hidden_states, attn_mask
 
-    def prepare_condition(
+    def denoise_hf(
+        self,
+        text_hidden_states: torch.Tensor,
+        attn_mask: torch.Tensor,
+        *,
+        precomputed_lm_hints_25Hz: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Official HF ``generate_audio()`` denoise (matches ACE-Step-1.5)."""
+        if self.ace_model is None:
+            raise RuntimeError("HF model not loaded (use_dit_ref_sampler=True?)")
+        return run_hf_generate_audio(
+            self.ace_model,
+            text_hidden_states=text_hidden_states,
+            text_attention_mask=attn_mask,
+            src_latents=self.src_latents,
+            silence_latent=self.silence_latent,
+            chunk_masks=self.chunk_masks,
+            device=self.torch_dev,
+            seed=self.config.seed,
+            infer_steps=self.config.infer_steps,
+            guidance_scale=self.gs,
+            shift=self.config.shift,
+            variant=self.config.variant,
+            cfg_interval_start=self.config.cfg_interval_start,
+            cfg_interval_end=self.config.cfg_interval_end,
+            use_adg=self.config.use_adg,
+            precomputed_lm_hints_25Hz=precomputed_lm_hints_25Hz,
+            dcw_enabled=self.config.dcw_enabled,
+            dcw_mode=self.config.dcw_mode,
+            dcw_scaler=self.config.dcw_scaler,
+            dcw_high_scaler=self.config.dcw_high_scaler,
+            dcw_wavelet=self.config.dcw_wavelet,
+            sampler_mode=self.config.sampler_mode,
+            infer_method=self.config.infer_method,
+        )
+
+    def denoise_ref(
+        self,
+        enc_hs: torch.Tensor,
+        ctx_lat: torch.Tensor,
+    ) -> torch.Tensor:
+        """Lightweight ref DiT denoise (TTNN PCC only)."""
+        if self.pipe is None or self.null_emb is None:
+            raise RuntimeError("Ref pipeline not loaded (use_dit_ref_sampler=False?)")
+        return run_torch_denoise_loop(
+            pipe=self.pipe,
+            t_schedule=self.t_schedule,
+            frames=self.frames,
+            enc_hs=enc_hs,
+            ctx_lat=ctx_lat,
+            null_emb=self.null_emb,
+            do_cfg=self.gs > 1.0 + 1e-6,
+            seed=self.config.seed,
+        )
+
+    def prepare_condition_ref(
         self,
         text_hidden_states: torch.Tensor,
         attn_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Build conditioning tensors for the DiT.
-
-        Returns:
-            (enc_hs [1, S, D], enc_mask [1, S], ctx_lat [1, T, 128])
-        """
-        from transformers import AutoModel
-
-        frames = self.frames
-        silence = self.silence_latent
-        src_latents = silence[:, :frames, :].contiguous()
-        if src_latents.shape[1] < frames:
-            rep = (frames + src_latents.shape[1] - 1) // src_latents.shape[1]
-            src_latents = src_latents.repeat(1, rep, 1)[:, :frames, :].contiguous()
-
-        chunk_masks = torch.ones((1, frames, 64), dtype=torch.float32)
-
-        ace = (
-            AutoModel.from_pretrained(
-                str(Path(self.config.checkpoint_safetensors_path).parent),
-                trust_remote_code=True,
-            )
-            .eval()
-            .to(self.torch_dev)
-        )
+        """HF ``prepare_condition`` for ref-sampler path only."""
+        if self.ace_model is None:
+            self.ace_model = load_hf_ace_model(self.model_dir, device=self.torch_dev, dtype=self.dtype)
 
         B = 1
+        frames = self.frames
         lyric_dim = int(text_hidden_states.shape[-1])
         lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=self.torch_dev)
         lyric_attention_mask = torch.ones((B, 1), dtype=torch.bool, device=self.torch_dev)
@@ -300,82 +310,53 @@ class AceStepE2EModelTorch:
         latent_attention_mask = torch.ones((B, frames), dtype=torch.float32, device=self.torch_dev)
 
         with torch.inference_mode():
-            enc_hs, enc_mask, ctx_lat = ace.prepare_condition(
+            enc_hs, enc_mask, ctx_lat = self.ace_model.prepare_condition(
                 text_hidden_states=text_hidden_states.to(dtype=torch.float32),
                 text_attention_mask=attn_mask,
                 lyric_hidden_states=lyric_hidden_states,
                 lyric_attention_mask=lyric_attention_mask,
                 refer_audio_acoustic_hidden_states_packed=refer_audio,
                 refer_audio_order_mask=refer_order,
-                hidden_states=src_latents.to(device=self.torch_dev, dtype=torch.float32),
+                hidden_states=self.src_latents.to(device=self.torch_dev, dtype=torch.float32),
                 attention_mask=latent_attention_mask,
-                silence_latent=silence.to(device=self.torch_dev, dtype=torch.float32),
-                src_latents=src_latents.to(device=self.torch_dev, dtype=torch.float32),
-                chunk_masks=chunk_masks.to(device=self.torch_dev, dtype=torch.float32),
+                silence_latent=self.silence_latent.to(device=self.torch_dev, dtype=torch.float32),
+                src_latents=self.src_latents.to(device=self.torch_dev, dtype=torch.float32),
+                chunk_masks=self.chunk_masks.to(device=self.torch_dev, dtype=torch.float32),
                 is_covers=torch.zeros((B,), dtype=torch.bool, device=self.torch_dev),
                 precomputed_lm_hints_25Hz=None,
             )
 
-        enc_hs = enc_hs.float().cpu()
-        enc_mask = enc_mask.float().cpu()
-        ctx_lat = ctx_lat.float().cpu()
+        nc = getattr(self.ace_model, "null_condition_emb", None)
+        if nc is not None:
+            self.null_emb = nc.float().cpu()
 
-        nc = getattr(ace, "null_condition_emb", None)
-        if nc is None:
-            inner = getattr(ace, "model", None)
-            if inner is not None:
-                nc = getattr(inner, "null_condition_emb", None)
-        if nc is None:
-            raise RuntimeError("Could not find null_condition_emb on ACE-Step model.")
-        self.null_emb = nc.float().cpu()
-
-        del ace
-        return enc_hs, enc_mask, ctx_lat
+        return enc_hs.float().cpu(), enc_mask.float().cpu(), ctx_lat.float().cpu()
 
     def denoise(
         self,
-        enc_hs: torch.Tensor,
-        enc_mask: torch.Tensor,
-        ctx_lat: torch.Tensor,
+        text_hidden_states: torch.Tensor | None = None,
+        attn_mask: torch.Tensor | None = None,
+        enc_hs: torch.Tensor | None = None,
+        enc_mask: torch.Tensor | None = None,
+        ctx_lat: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Run the PyTorch DiT denoising loop.
+        """Run denoise: HF ``generate_audio`` by default, ref sampler if configured."""
+        if self.config.use_dit_ref_sampler:
+            if enc_hs is None or ctx_lat is None:
+                if text_hidden_states is None or attn_mask is None:
+                    raise ValueError("ref sampler requires text_hidden_states+attn_mask or enc_hs+ctx_lat")
+                enc_hs, enc_mask, ctx_lat = self.prepare_condition_ref(text_hidden_states, attn_mask)
+            return self.denoise_ref(enc_hs, ctx_lat)
 
-        Returns:
-            pred_latents [1, frames, 64] on CPU.
-        """
-        return run_torch_denoise_loop(
-            pipe=self.pipe,
-            t_schedule=self.t_schedule,
-            frames=self.frames,
-            enc_hs=enc_hs,
-            ctx_lat=ctx_lat,
-            null_emb=self.null_emb,
-            do_cfg=self.config.guidance_scale > 1.0 + 1e-6,
-            seed=self.config.seed,
-        )
+        if text_hidden_states is None or attn_mask is None:
+            raise ValueError("HF denoise requires text_hidden_states and attn_mask")
+        return self.denoise_hf(text_hidden_states, attn_mask)
 
     def decode_vae(self, pred_latents: torch.Tensor) -> torch.Tensor:
-        """Decode latents to waveform via the Oobleck VAE.
-
-        Args:
-            pred_latents: [1, frames, 64]
-
-        Returns:
-            waveform [1, channels, samples] normalized to [-1, 1].
-        """
         return decode_with_vae(self.vae, pred_latents, self.torch_dev)
 
     def generate(self, prompt: str) -> torch.Tensor:
-        """Full end-to-end: text prompt → waveform tensor.
-
-        Args:
-            prompt: text description of the music.
-
-        Returns:
-            waveform [1, channels, samples] normalized to [-1, 1].
-        """
+        """Full end-to-end: text prompt → waveform tensor."""
         text_hs, attn_mask = self.encode_text(prompt)
-        enc_hs, enc_mask, ctx_lat = self.prepare_condition(text_hs, attn_mask)
-        pred_latents = self.denoise(enc_hs, enc_mask, ctx_lat)
-        wav = self.decode_vae(pred_latents)
-        return wav
+        pred_latents = self.denoise(text_hidden_states=text_hs, attn_mask=attn_mask)
+        return self.decode_vae(pred_latents)

@@ -7,129 +7,29 @@ from typing import Optional
 
 import numpy as np
 import torch
+from loguru import logger
 
 from models.experimental.ace_step_v1_5.torch_ref.e2e_model import decode_with_vae, run_torch_denoise_loop
 from models.experimental.ace_step_v1_5.torch_ref.full_pipeline import AceStepV15TorchPipeline
+from models.experimental.ace_step_v1_5.torch_ref.hf_generate import (
+    build_t_schedule,
+    default_guidance_scale,
+    ensure_hf_modeling_ready,
+    load_hf_ace_model,
+    prepare_silence_and_masks,
+    resolve_ace_step_repo_root,
+    run_hf_generate_audio,
+)
 
-# Turbo discrete timesteps (aligned with acestep turbo modeling).
-_VALID_TIMESTEPS = [
-    1.0,
-    0.9545454545454546,
-    0.9333333333333333,
-    0.9,
-    0.875,
-    0.8571428571428571,
-    0.8333333333333334,
-    0.7692307692307693,
-    0.75,
-    0.6666666666666666,
-    0.6428571428571429,
-    0.625,
-    0.5454545454545454,
-    0.5,
-    0.4,
-    0.375,
-    0.3,
-    0.25,
-    0.2222222222222222,
-    0.125,
-]
-
-_SHIFT_TIMESTEPS: dict[float, list[float]] = {
-    1.0: [1.0, 0.875, 0.75, 0.625, 0.5, 0.375, 0.25, 0.125],
-    2.0: [
-        1.0,
-        0.9333333333333333,
-        0.8571428571428571,
-        0.7692307692307693,
-        0.6666666666666666,
-        0.5454545454545454,
-        0.4,
-        0.2222222222222222,
-    ],
-    3.0: [1.0, 0.9545454545454546, 0.9, 0.8333333333333334, 0.75, 0.6428571428571429, 0.5, 0.3],
-}
+_build_t_schedule = build_t_schedule
+_resolve_ace_step_repo_root = resolve_ace_step_repo_root
 
 
-def _build_t_schedule(*, shift: float, infer_steps: int, timesteps: str | None, variant: str) -> list[float]:
-    """Inference timestep schedule (t_curr per step; terminal 0 is appended separately for the ref pipeline)."""
-    variant_l = (variant or "").lower()
-    is_turbo = "turbo" in variant_l
-
-    if timesteps:
-        raw = [float(x.strip()) for x in timesteps.split(",") if x.strip()]
-        while raw and raw[-1] == 0.0:
-            raw.pop()
-        if not raw:
-            raise ValueError("--timesteps provided but empty after removing zeros")
-        if is_turbo:
-            mapped = [min(_VALID_TIMESTEPS, key=lambda v, t=t: abs(v - t)) for t in raw]
-            out: list[float] = []
-            for t in mapped:
-                if not out or out[-1] != t:
-                    out.append(t)
-            return out
-        return raw
-
-    infer_steps = int(infer_steps)
-    if infer_steps <= 1:
-        raise ValueError("--infer_steps must be >= 2")
-
-    if is_turbo:
-        s = min(_SHIFT_TIMESTEPS.keys(), key=lambda v: abs(v - float(shift)))
-        if infer_steps == 8:
-            return list(_SHIFT_TIMESTEPS[float(s)])
-        lin = [1.0 - (i / float(infer_steps - 1)) for i in range(infer_steps)]
-        mapped = [min(_VALID_TIMESTEPS, key=lambda v, t=t: abs(v - t)) for t in lin]
-        out = []
-        for t in mapped:
-            if not out or out[-1] != t:
-                out.append(t)
-        return sorted(out, reverse=True)
-
-    t = [1.0 - (i / float(infer_steps)) for i in range(infer_steps)]
-    if float(shift) != 1.0:
-        s = float(shift)
-        t = [s * x / (1.0 + (s - 1.0) * x) for x in t]
-    return t
-
-
-_VENDORED_ACESTEP_ROOT = Path(__file__).resolve().parent / "_vendored_acestep"
-
-
-def _resolve_ace_step_repo_root(*, ckpt_dir: str | None, ace_step_repo_root: str | None) -> Path | None:
-    """
-    Directory that contains the ``acestep/`` package (clone of ACE-Step-1.5), for ``trust_remote_code``.
-
-    Order: explicit ``ace_step_repo_root`` → env ``ACE_STEP_REPO_ROOT`` → vendored copy under
-    ``torch_ref/_vendored_acestep/`` → walk parents of ``ckpt_dir``.
-    """
-
-    candidates: list[Path] = []
-    if ace_step_repo_root:
-        candidates.append(Path(ace_step_repo_root).expanduser().resolve())
-    env = os.environ.get("ACE_STEP_REPO_ROOT")
-    if env:
-        candidates.append(Path(env).expanduser().resolve())
-    candidates.append(_VENDORED_ACESTEP_ROOT)
-
-    if ckpt_dir:
-        cur = Path(ckpt_dir).expanduser().resolve()
-        for _ in range(8):
-            candidates.append(cur)
-            if cur.parent == cur:
-                break
-            cur = cur.parent
-
-    seen: set[str] = set()
-    for c in candidates:
-        key = str(c)
-        if key in seen:
-            continue
-        seen.add(key)
-        if (c / "acestep" / "__init__.py").is_file():
-            return c
-    return None
+def _log_pipeline_banner(mode: str, *, details: str = "") -> None:
+    msg = f"[ace_step_v1_5.torch_ref] pipeline={mode}"
+    if details:
+        msg = f"{msg} — {details}"
+    logger.info(msg)
 
 
 def _save_wav_fallback(wav: torch.Tensor, out_path: Path, sample_rate: int = 48000) -> None:
@@ -275,102 +175,71 @@ def run_prompt_to_wav(
     if frames <= 0:
         raise ValueError("duration_sec must be > 0")
 
-    silence = torch.load(str(silence_latent_path), map_location="cpu").to(torch.float32)
-    if silence.ndim != 3:
-        raise RuntimeError(f"Unexpected silence_latent rank: {tuple(silence.shape)}")
-    if int(silence.shape[-1]) == 64:
-        pass
-    elif int(silence.shape[1]) == 64:
-        silence = silence.transpose(1, 2).contiguous()
-    else:
-        raise RuntimeError(f"Unexpected silence_latent shape: {tuple(silence.shape)}")
-
-    src_latents = silence[:, :frames, :].contiguous()
-    if src_latents.shape[1] < frames:
-        rep = (frames + src_latents.shape[1] - 1) // src_latents.shape[1]
-        src_latents = src_latents.repeat(1, rep, 1)[:, :frames, :].contiguous()
-
-    chunk_masks = torch.ones((1, frames, 64), dtype=torch.float32)
+    silence, src_latents, chunk_masks = prepare_silence_and_masks(silence_latent_path, frames=frames)
     context_latents = torch.cat([src_latents, chunk_masks], dim=-1)
 
     if infer_steps is None:
         infer_steps = 8 if "turbo" in str(variant).lower() else 50
 
-    gs = float(guidance_scale) if guidance_scale is not None else (1.0 if "turbo" in str(variant).lower() else 7.0)
+    gs = default_guidance_scale(variant=str(variant), guidance_scale=guidance_scale)
 
     pred_latents: torch.Tensor | None = None
     use_hf_generate = bool(hf_prepare_condition and not use_dit_ref_sampler)
 
     if use_hf_generate:
+        _log_pipeline_banner(
+            "caption-only",
+            details="Qwen caption embed + HF generate_audio(); no 5Hz LM (use default official path for HF parity)",
+        )
         try:
-            ref_root = _resolve_ace_step_repo_root(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
-            if ref_root is not None:
-                from models.experimental.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
-
-                ensure_acestep_repo_on_path(ref_root)
-            else:
-                print(
-                    "[ace_step_v1_5.torch_ref] Hint: set --ace-step-repo-root or ACE_STEP_REPO_ROOT to the "
-                    "ACE-Step-1.5 repo (folder containing `acestep/`) so HF generate_audio() can import acestep.",
-                    flush=True,
+            ref_root = ensure_hf_modeling_ready(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
+            if ref_root is None:
+                logger.warning(
+                    "Set --ace-step-repo-root or ACE_STEP_REPO_ROOT to the ACE-Step-1.5 repo "
+                    "(folder containing `acestep/`) so HF generate_audio() can import acestep."
                 )
 
-            from transformers import AutoModel as _AutoModel
-
-            ace = _AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(dev)
-
-            B = int(src_latents.shape[0])
-            lyric_dim = int(text_hidden_states.shape[-1])
-            lyric_hidden_states = torch.zeros((B, 1, lyric_dim), dtype=torch.float32, device=dev)
-            lyric_attention_mask = torch.ones((B, 1), dtype=torch.bool, device=dev)
-            refer_audio_acoustic_hidden_states_packed = torch.zeros((B, 1, 64), dtype=torch.float32, device=dev)
-            refer_audio_order_mask = torch.zeros((B,), dtype=torch.long, device=dev)
-            latent_attention_mask = torch.ones((B, int(src_latents.shape[1])), dtype=torch.float32, device=dev)
-
-            timesteps_tensor = None
-            if timesteps:
-                t_sched = _build_t_schedule(
-                    shift=float(shift),
-                    infer_steps=int(infer_steps),
-                    timesteps=timesteps,
-                    variant=str(variant),
-                )
-                timesteps_tensor = torch.tensor(t_sched + [0.0], device=dev, dtype=torch.float32)
-
-            use_adg = "base" in str(variant).lower() and "turbo" not in str(variant).lower()
-
-            with torch.inference_mode():
-                gen_out = ace.generate_audio(
-                    text_hidden_states=text_hidden_states.to(device=dev, dtype=torch.float32),
-                    text_attention_mask=attn_mask,
-                    lyric_hidden_states=lyric_hidden_states,
-                    lyric_attention_mask=lyric_attention_mask,
-                    refer_audio_acoustic_hidden_states_packed=refer_audio_acoustic_hidden_states_packed,
-                    refer_audio_order_mask=refer_audio_order_mask,
-                    src_latents=src_latents.to(device=dev, dtype=torch.float32),
-                    chunk_masks=chunk_masks.to(device=dev, dtype=torch.float32),
-                    is_covers=torch.zeros((B,), dtype=torch.bool, device=dev),
-                    silence_latent=silence.to(device=dev, dtype=torch.float32),
-                    attention_mask=latent_attention_mask,
-                    seed=int(seed),
-                    infer_steps=int(infer_steps),
-                    diffusion_guidance_scale=gs,
-                    use_adg=use_adg,
-                    shift=float(shift),
-                    timesteps=timesteps_tensor,
-                    use_progress_bar=False,
-                    infer_method="ode",
-                    sampler_mode="euler",
-                    cfg_interval_start=float(cfg_interval_start),
-                    cfg_interval_end=float(cfg_interval_end),
-                    precomputed_lm_hints_25Hz=None,
-                )
-            pred_latents = gen_out["target_latents"].float().cpu()
+            logger.info("Loading HF AutoModel from {}", model_dir)
+            ace = load_hf_ace_model(model_dir, device=dev, dtype=decoder_dtype)
+            logger.info(
+                "Running HF generate_audio (steps={}, guidance_scale={}, shift={})",
+                infer_steps,
+                gs,
+                shift,
+            )
+            pred_latents = run_hf_generate_audio(
+                ace,
+                text_hidden_states=text_hidden_states,
+                text_attention_mask=attn_mask,
+                src_latents=src_latents,
+                silence_latent=silence,
+                chunk_masks=chunk_masks,
+                device=dev,
+                seed=int(seed),
+                infer_steps=int(infer_steps),
+                guidance_scale=gs,
+                shift=float(shift),
+                variant=str(variant),
+                timesteps=timesteps,
+                cfg_interval_start=float(cfg_interval_start),
+                cfg_interval_end=float(cfg_interval_end),
+            )
         except Exception as e:
-            print(
-                f"[ace_step_v1_5.torch_ref] WARNING: HF generate_audio() unavailable ({type(e).__name__}: {e}). "
-                "Falling back to DiT ref sampler.",
-                flush=True,
+            allow_fallback = os.environ.get("ACE_STEP_ALLOW_DIT_REF_FALLBACK", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if not allow_fallback:
+                raise RuntimeError(
+                    f"HF generate_audio() failed ({type(e).__name__}: {e}). "
+                    "Run without --caption-only for the full official pipeline, or set "
+                    "ACE_STEP_ALLOW_DIT_REF_FALLBACK=1 to fall back to the DiT ref sampler."
+                ) from e
+            logger.warning(
+                "HF generate_audio() unavailable ({}: {}). Falling back to DiT ref sampler.",
+                type(e).__name__,
+                e,
             )
             pred_latents = None
 
@@ -379,25 +248,23 @@ def run_prompt_to_wav(
     context_latents_final: torch.Tensor
 
     if pred_latents is None:
+        _log_pipeline_banner(
+            "dit-ref-sampler",
+            details="AceStepV15TorchPipeline Euler loop (TTNN PCC only; not HF parity)",
+        )
         context_latents_final = context_latents
 
         if hf_prepare_condition:
             try:
-                ref_root = _resolve_ace_step_repo_root(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
-                if ref_root is not None:
-                    from models.experimental.ace_step_v1_5.demo.ref_decoder_compare import ensure_acestep_repo_on_path
-
-                    ensure_acestep_repo_on_path(ref_root)
-                else:
+                ref_root = ensure_hf_modeling_ready(ckpt_dir=ckpt_dir, ace_step_repo_root=ace_step_repo_root)
+                if ref_root is None:
                     print(
                         "[ace_step_v1_5.torch_ref] Hint: set --ace-step-repo-root or ACE_STEP_REPO_ROOT to the "
                         "ACE-Step-1.5 repo (folder containing `acestep/`) so prepare_condition() can import acestep.",
                         flush=True,
                     )
 
-                from transformers import AutoModel as _AutoModel
-
-                ace = _AutoModel.from_pretrained(str(model_dir), trust_remote_code=True).eval().to(dev)
+                ace = load_hf_ace_model(model_dir, device=dev, dtype=decoder_dtype)
                 hidden_size = int(getattr(getattr(ace, "config", None), "hidden_size", 0) or 0)
                 if hidden_size <= 0:
                     hidden_size = int(sd_torch["decoder.condition_embedder.weight"].shape[0])
@@ -557,12 +424,17 @@ def main() -> None:
         help="5 Hz LM variant for --use-official-acestep (default: acestep-5Hz-lm-1.7B).",
     )
     ap.add_argument(
-        "--use-official-acestep",
+        "--caption-only",
         action="store_true",
         help=(
-            "Use ACE-Step's official Torch pipeline (LLMHandler + AceStepHandler + generate_music). "
-            "Runs entirely on PyTorch (CPU/CUDA); does not open a TTNN device."
+            "Caption-only shortcut: Qwen text encoder + HF generate_audio() without 5Hz LM or handler "
+            "preprocess. Lower quality than the default official pipeline; not HF profile parity."
         ),
+    )
+    ap.add_argument(
+        "--use-official-acestep",
+        action="store_true",
+        help=argparse.SUPPRESS,
     )
     ap.add_argument("--assets-repo-id", type=str, default="ACE-Step/Ace-Step1.5")
     ap.add_argument("--duration_sec", type=float, default=10.0)
@@ -614,11 +486,55 @@ def main() -> None:
             "If omitted, uses ACE_STEP_REPO_ROOT or walks parents of --ckpt_dir."
         ),
     )
+    ap.add_argument(
+        "--thinking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable 5Hz LM Chain-of-Thought (default: on; matches profile_inference --thinking).",
+    )
+    ap.add_argument(
+        "--use-cot-metas",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Let 5Hz LM infer BPM/key/etc. via CoT (default: on).",
+    )
+    ap.add_argument(
+        "--use-cot-caption",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Let 5Hz LM rewrite the caption via CoT (default: off; keep user prompt).",
+    )
+    ap.add_argument(
+        "--use-cot-language",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Let 5Hz LM detect vocal language via CoT (default: on).",
+    )
+    ap.add_argument(
+        "--lyrics",
+        type=str,
+        default="[Instrumental]",
+        help='Lyrics text (default: "[Instrumental]").',
+    )
+    ap.add_argument(
+        "--instrumental",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Generate instrumental audio (default: on).",
+    )
     args = ap.parse_args()
     if args.infer_steps is None:
         args.infer_steps = 8 if "turbo" in str(args.variant).lower() else 50
 
+    from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import configure_acestep_logging
+
+    configure_acestep_logging(level=os.environ.get("ACE_STEP_LOG_LEVEL", "INFO"))
+
+    use_official = not args.caption_only and not args.use_dit_ref_sampler
     if args.use_official_acestep:
+        use_official = True
+
+    if use_official:
         from models.experimental.ace_step_v1_5.demo.run_prompt_to_wav import _DEFAULT_CKPT_DIR, _ensure_variant
         from models.experimental.ace_step_v1_5.torch_ref.transformers_cache_compat import (
             apply_transformers_cache_compat,
@@ -644,10 +560,16 @@ def main() -> None:
         # PyTorch-only LM (no TTNN device). ttnn_impl.five_hz_lm defaults to use_ttnn_causal_lm=True.
         from models.experimental.ace_step_v1_5.torch_ref.five_hz_lm import LocalFiveHzLMHandler
 
+        _log_pipeline_banner(
+            "official",
+            details="AceStepHandler + 5Hz LM + generate_music (HF profile parity)",
+        )
+
         dit_handler = AceStepHandler()
         llm_handler = LocalFiveHzLMHandler()
 
-        device = args.device if args.device else "cpu"
+        device = args.device if args.device else ("cuda" if torch.cuda.is_available() else "cpu")
+        logger.info("Torch device: {}", device)
         for name in (args.variant, "vae", "Qwen3-Embedding-0.6B", args.lm_variant):
             _ensure_variant(name, ckpt_dir)
 
@@ -657,7 +579,7 @@ def main() -> None:
             device=device,
             use_flash_attention=False,
         )
-        print(status, flush=True)
+        logger.info(status)
         if not ok:
             raise RuntimeError("AceStepHandler.initialize_service failed")
 
@@ -667,21 +589,45 @@ def main() -> None:
             backend="pt",
             device=device,
         )
-        print(status, flush=True)
+        logger.info(status)
         if not ok:
             raise RuntimeError("5 Hz LM (local HF) initialize failed")
+
+        gs = args.guidance_scale
+        if gs is None:
+            gs = 1.0 if "turbo" in str(args.variant).lower() else 7.0
 
         params = GenerationParams(
             task_type="text2music",
             caption=args.prompt,
-            lyrics="[Instrumental]",
-            instrumental=True,
+            lyrics=args.lyrics,
+            instrumental=bool(args.instrumental),
             reference_audio=None,
             duration=float(args.duration_sec),
             inference_steps=int(args.infer_steps),
-            thinking=True,
+            guidance_scale=float(gs),
+            shift=float(args.shift),
+            seed=int(args.seed),
+            thinking=bool(args.thinking),
+            use_cot_metas=bool(args.use_cot_metas),
+            use_cot_caption=bool(args.use_cot_caption),
+            use_cot_language=bool(args.use_cot_language),
             use_constrained_decoding=True,
             use_adg=("base" in str(args.variant).lower() and "turbo" not in str(args.variant).lower()),
+            cfg_interval_start=float(args.cfg_interval_start),
+            cfg_interval_end=float(args.cfg_interval_end),
+        )
+        logger.info(
+            "GenerationParams: variant={} duration={}s steps={} guidance_scale={} thinking={} "
+            "cot_metas={} cot_caption={} cot_language={}",
+            args.variant,
+            args.duration_sec,
+            args.infer_steps,
+            gs,
+            args.thinking,
+            args.use_cot_metas,
+            args.use_cot_caption,
+            args.use_cot_language,
         )
         config = GenerationConfig(batch_size=1, use_random_seed=False, seeds=[int(args.seed)], audio_format="wav")
         out_dir = Path(args.out).resolve().parent
@@ -693,7 +639,7 @@ def main() -> None:
         dst = Path(args.out).resolve()
         if first != dst:
             dst.write_bytes(first.read_bytes())
-        print(f"Wrote: {dst}", flush=True)
+        logger.info("Wrote: {}", dst)
         return
 
     run_prompt_to_wav(

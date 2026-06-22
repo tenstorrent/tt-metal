@@ -1263,6 +1263,10 @@ def main() -> None:
         return
 
     condition_tensors_on_device = False
+    enc_hs: Any = None
+    ctx_lat: Any = None
+    null_emb: Any = None
+    enc_mask: Any = None
     enc_hs_nc: Any | None = None
     ctx_lat_nc: Any | None = None
     enc_mask_nc: Any | None = None
@@ -1981,7 +1985,23 @@ def main() -> None:
         c_lat = 64
         xt_tt: Any = None
 
+        def _readback_host_condition_if_needed() -> None:
+            nonlocal enc_hs, ctx_lat, null_emb
+            if enc_hs is not None and ctx_lat is not None:
+                return
+            if enc_hs_tt_one is None or ctx_tt_one is None:
+                raise RuntimeError(
+                    "Host condition tensors (enc_hs, ctx_lat) are required but were not produced by preprocess. "
+                    "For PyTorch DiT on mesh, avoid device-only condition handoff without host readback."
+                )
+            with perf.timed("condition_readback_for_host_dit", device=dev):
+                enc_hs = ace_step_ttnn_to_torch(enc_hs_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                ctx_lat = ace_step_ttnn_to_torch(ctx_tt_one, mesh_device=dev, dtype=torch.float32).cpu()
+                if null_emb is None and null_emb_tt is not None:
+                    null_emb = ace_step_ttnn_to_torch(null_emb_tt, mesh_device=dev, dtype=torch.float32).cpu()
+
         if use_pytorch_dit:
+            _readback_host_condition_if_needed()
             pred_latents = _run_pytorch_dit_denoise_mesh(
                 demo_session=demo_session,
                 safetensors_path=str(safetensors_path),
@@ -2046,6 +2066,9 @@ def main() -> None:
             if ace_step_device_num_chips(dev) > 1:
                 ace_step_synchronize_device(ttnn, dev)
             print("[ace_step_v1_5] staging encoder/context tensors on device …", flush=True)
+
+            if not condition_tensors_on_device:
+                _readback_host_condition_if_needed()
 
             if condition_tensors_on_device:
                 if enc_hs_tt_one is None or ctx_tt_one is None:

@@ -567,7 +567,8 @@ class AceStepQwen3Encoder:
         )
         rot_g, rot_l = host_inputs[1], host_inputs[2]
         device_payload = copy_host_to_device(
-            (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5]), mesh_device=self.device
+            (host_inputs[0], host_inputs[3], host_inputs[4], host_inputs[5]),
+            mesh_device=self.device,
         )
         transformed = self.tt_model.transform_and_embed_prefill_inputs_device(*device_payload)
         with ace_step_qwen_prefill_l1_op_context():
