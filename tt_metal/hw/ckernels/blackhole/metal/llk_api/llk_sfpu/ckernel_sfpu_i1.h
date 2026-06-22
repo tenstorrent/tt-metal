@@ -137,7 +137,7 @@ inline void calculate_i1() {
         v_if(abs_x > I1_THRESHOLD) { val = calculate_i1_asymptotic_(abs_x, x); }
         v_endif;
 #ifndef INP_FLOAT32
-        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::NearestEven);
+        val = sfpi::convert<sfpi::vFloat16b>(val, sfpi::RoundMode::Nearest);
 #endif
         sfpi::dst_reg[0] = val;
 

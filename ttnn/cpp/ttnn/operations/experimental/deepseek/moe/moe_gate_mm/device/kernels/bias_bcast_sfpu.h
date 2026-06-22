@@ -7,6 +7,10 @@
 #include <cstdint>
 #include "api/compute/common_globals.h"
 
+#ifdef TRISC_MATH
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#endif
+
 /**
  * @brief Broadcasts a 1-row bias and adds it element-wise to all 32 rows of a tile.
  *
@@ -27,8 +31,6 @@
 namespace ckernel {
 
 #ifdef TRISC_MATH
-#include "llk_math_eltwise_unary_sfpu_init.h"
-#include "llk_math_eltwise_unary_sfpu_params.h"
 #include "ckernel.h"
 #include "ckernel_addrmod.h"
 #include "lltt.h"
@@ -138,7 +140,7 @@ inline void _llk_math_add_bias_init_() {
 }
 
 inline void _llk_math_add_bias_(uint32_t input_index) {
-    _llk_math_eltwise_unary_sfpu_params_(ckernel::sfpu::_add_bias_, input_index, VectorMode::RC_custom);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, _add_bias_, input_index, VectorMode::RC_custom);
 }
 
 #endif

@@ -50,9 +50,10 @@ ttnn::Tensor tilize(
     uint32_t output_single_tile_size =
         output_dtype.has_value() ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(output_dtype.value()))
                                  : input_single_tile_size;
-
-    uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
-    uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();
+    tt::tt_metal::Tile tile =
+        (input_tensor.layout() == Layout::TILE) ? input_tensor.tensor_spec().tile() : tt::tt_metal::Tile();
+    uint32_t input_tile_width = tile.get_width();
+    uint32_t input_tile_height = tile.get_height();
 
     uint32_t num_tiles_per_row = input_tensor.padded_shape()[-1] / input_tile_width;
     uint32_t num_tiles_per_col = input_tensor.padded_shape()[-1] / input_tile_height;

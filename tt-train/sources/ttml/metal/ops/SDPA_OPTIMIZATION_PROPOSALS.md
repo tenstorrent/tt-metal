@@ -842,7 +842,7 @@ same approximation in backward (B2). If `P_forward = approx_exp(x)` but
 ### F3. recip_tile_first_column
 
 > **Status: DONE** (Phase A PR) — Implemented as custom SFPU intrinsic in
-> `sdpa_compute_utils.hpp`. Uses `_sfpu_reciprocal_` with `VectorMode::C` (2 faces)
+> `sdpa_compute_utils.hpp`. Uses `sfpu_reciprocal_iter` with `VectorMode::C` (2 faces)
 > and 4 iterations per face with stride-2 access. Handles `DST_ACCUM_MODE` for FP32 DST.
 > Replaces `recip_tile` in `recip_tile_inplace` via `MATH((recip_tile_first_column(dst_idx)))`.
 

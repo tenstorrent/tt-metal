@@ -4,6 +4,7 @@
 
 #include "unified_routed_expert_ffn_program_factory.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <unordered_map>
@@ -42,6 +43,10 @@ constexpr uint32_t CB_IN0_DOWN_FULL = tt::CBIndex::c_12;
 // partials_up (up matmul) using the SAME shared x K-block — one x read
 // per K-block feeds both matmuls instead of two.
 constexpr uint32_t CB_PARTIALS_UP = tt::CBIndex::c_13;
+// Writer-only scratch for the device-side `start` (expert_region_offsets)
+// page in direct-write mode. Allocated unconditionally (negligible L1) so
+// the CB-index layout is stable across both write modes.
+constexpr uint32_t CB_START_SCRATCH = tt::CBIndex::c_14;
 }  // namespace
 
 UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnProgramFactory::create(
@@ -202,6 +207,19 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     auto* idx_buffer = t.global_expert_idx_table.buffer();
     auto* out_buffer = tensor_return_value.buffer();
 
+    // Direct-write mode: when expert_region_offsets is supplied, the writer
+    // writes this expert's output straight into the shared output buffer at
+    // start[global_id]/TILE tile-rows (fusing ttnn::insert). Otherwise the
+    // writer targets tile row 0 of a per-expert buffer. The `start` accessor
+    // is appended unconditionally so the writer's CT-arg layout is stable;
+    // when not in direct-write mode it points at out_buffer and is never read.
+    const bool direct_write = t.expert_region_offsets.has_value();
+    auto* start_buffer = direct_write ? t.expert_region_offsets->buffer() : out_buffer;
+    // dst_M_tiles bounds destination writes. Equals M_tiles_full when the
+    // output matches x's shape; is the shared buffer's tile-row count in
+    // direct-write mode.
+    const uint32_t dst_M_tiles = tensor_return_value.padded_shape()[-2] / TILE;
+
     // -------------------------- semaphores --------------------------------
     // Weight-multicast semaphores for in1 (gate/up/down). Pattern: per
     // N-col group (gx fixed, gy=0..GRID_Y-1), one sender at gy=0 reads the
@@ -289,23 +307,58 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         /*tiles=*/d_in0_block_num_tiles * 2,
         intermed_tile_size);
 
-    // Scratch CBs for the device-side count lookup. One page each, sized to
-    // the corresponding tensor's aligned page size so noc_async_read_page
-    // can land them.
-    const uint32_t counts_page_size = counts_buffer->aligned_page_size();
-    const uint32_t idx_page_size = idx_buffer->aligned_page_size();
+    // Scratch CBs for the device-side count lookup. The reader does a single
+    // noc_async_read_page(page=0, ...) of each tensor and then indexes
+    // counts[global_expert_id] / idx[local_expert_id]. Both indices stay within
+    // the tensor's own length (counts: [0, num_global_experts); idx:
+    // [0, idx_len)), and the reader's page-0 read contract requires the entire
+    // vector to live in page 0 — i.e. aligned_page_size already covers every
+    // index the reader can produce. So aligned_page_size is the exact capacity
+    // the scratch needs; we keep a num_entries*4B floor purely as a defensive
+    // guard in case a future layout reports a sub-row page.
+    //
+    // Previously this floored to MAX_GLOBAL_EXPERTS * 4B (a fixed 4 KB), which
+    // over-allocated ~3 KB/core for the 256-expert DS-V3 path and ~2.5 KB for
+    // Kimi (384). That slack is what tipped the mesh-4x2 perf-256 program over
+    // the L1 ceiling once MEM_MAILBOX_SIZE grew 256 B (#46526). Sizing to the
+    // real per-call requirement reclaims it (~6 KB/core across both scratches)
+    // — far more than the 192 B overlap — and still scales correctly up to the
+    // host-side-validated MAX_GLOBAL_EXPERTS limit.
+    const uint32_t counts_num_entries = static_cast<uint32_t>(t.counts.logical_shape()[-1]);
+    const uint32_t idx_num_entries = static_cast<uint32_t>(t.global_expert_idx_table.logical_shape()[-1]);
+    const uint32_t counts_scratch_bytes = std::max<uint32_t>(
+        static_cast<uint32_t>(counts_buffer->aligned_page_size()),
+        counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    const uint32_t idx_scratch_bytes = std::max<uint32_t>(
+        static_cast<uint32_t>(idx_buffer->aligned_page_size()),
+        idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     tt::tt_metal::CircularBufferConfig counts_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(counts_page_size, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_COUNTS_SCRATCH, counts_page_size);
+        tt::tt_metal::CircularBufferConfig(counts_scratch_bytes, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_COUNTS_SCRATCH, counts_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, counts_cb_cfg);
     // CB_IDX_SCRATCH holds the device-side global_expert_idx_table page so
     // reader/compute/writer can resolve `global_expert_id =
-    // idx_table[local_expert_id]` without re-reading DRAM. One page sized
-    // to the table's aligned page size.
+    // idx_table[local_expert_id]` without re-reading DRAM. Sized the same way:
+    // a single-chip deployment can place all experts locally, so the idx table
+    // may itself be up to MAX_GLOBAL_EXPERTS entries.
     tt::tt_metal::CircularBufferConfig idx_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(idx_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_IDX_SCRATCH, idx_page_size);
+        tt::tt_metal::CircularBufferConfig(idx_scratch_bytes, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_IDX_SCRATCH, idx_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, idx_cb_cfg);
+
+    // CB_START_SCRATCH holds the device-side `start` (expert_region_offsets)
+    // page for the writer in direct-write mode. Same sizing rationale as the
+    // counts scratch: expert_region_offsets is validated to have the same
+    // length as counts, so size it to the real per-call requirement (lands the
+    // tensor's page and holds every region-offset entry) rather than the old
+    // fixed MAX_GLOBAL_EXPERTS floor.
+    const uint32_t start_scratch_bytes = std::max<uint32_t>(
+        static_cast<uint32_t>(start_buffer->aligned_page_size()),
+        counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    tt::tt_metal::CircularBufferConfig start_cb_cfg =
+        tt::tt_metal::CircularBufferConfig(start_scratch_bytes, {{CB_START_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_START_SCRATCH, start_scratch_bytes);
+    tt::tt_metal::CreateCircularBuffer(program, core_range_set, start_cb_cfg);
 
     // -------------------------- kernel build ------------------------------
     // Reader compile-time args. Order must exactly match the layout the reader
@@ -381,8 +434,16 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // chunk_M_tiles rows per core, of which only those < M_tiles_full
         // correspond to real output rows in the tensor.
         M_tiles_full,  // 16
+        // direct_write: 1 -> writer adds start[global_id]/TILE tile-rows and
+        // targets the shared output buffer (fuses ttnn::insert).
+        static_cast<uint32_t>(direct_write),  // 17
+        // dst_M_tiles: tile-row count of the destination buffer (= M_tiles_full
+        // for the per-expert output; the shared buffer's rows in direct mode).
+        dst_M_tiles,       // 18
+        CB_START_SCRATCH,  // 19
     };
     tt::tt_metal::TensorAccessorArgs(out_buffer).append_to(writer_ct_args);
+    tt::tt_metal::TensorAccessorArgs(start_buffer).append_to(writer_ct_args);
 
     auto writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -585,10 +646,13 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         //   0: output_addr
         //   1: my_mt
         //   2: my_nt_d
+        //   3: start_addr (expert_region_offsets in direct-write mode; else
+        //      out_buffer, unused by the kernel)
         std::vector<uint32_t> writer_args = {
             out_buffer->address(),
             my_mt,
             my_nt_d,
+            start_buffer->address(),
         };
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_args);
     }
@@ -619,6 +683,8 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
     const uint32_t counts_addr = t.counts.buffer()->address();
     const uint32_t idx_addr = t.global_expert_idx_table.buffer()->address();
     const uint32_t out_addr = tensor_return_value.buffer()->address();
+    const uint32_t start_addr =
+        t.expert_region_offsets.has_value() ? t.expert_region_offsets->buffer()->address() : out_addr;
 
     for (const auto& core : cores) {
         auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, reader_id, core);
@@ -631,6 +697,7 @@ void UnifiedRoutedExpertFfnProgramFactory::override_runtime_arguments(
 
         auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, writer_id, core);
         writer_args[0] = out_addr;
+        writer_args[3] = start_addr;
     }
 }
 

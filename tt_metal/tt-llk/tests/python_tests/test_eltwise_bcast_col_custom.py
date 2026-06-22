@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 import pytest
 import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat
 from helpers.golden_generators import (
     BroadcastGolden,
@@ -54,7 +55,7 @@ class CT_DIM(TemplateParameter):
             DataFormat.Float16_b,
         ]
     ),
-    mathop=[MathOperation.Elwsub],
+    mathop=[MathOperation.Elwsub, MathOperation.Elwmul],
     dest_acc=[DestAccumulation.No],
     math_fidelity=[
         MathFidelity.LoFi,
@@ -78,6 +79,13 @@ def test_eltwise_bcast_col_custom(
 ):
     if mathop != MathOperation.Elwmul and math_fidelity != MathFidelity.LoFi:
         pytest.skip("Fidelity does not affect Elwadd and Elwsub operations")
+    # The MUL instantiation of the blocked bcast-col reuse scaffold exists only on Blackhole
+    # (Wormhole has just the SUB-named wrapper).
+    if (
+        mathop == MathOperation.Elwmul
+        and get_chip_architecture() != ChipArchitecture.BLACKHOLE
+    ):
+        pytest.skip("MUL bcast-col reuse scaffold is Blackhole-only")
 
     ct_dim = input_dimensions_A[1] // 32
     logger.info(
@@ -160,7 +168,7 @@ def test_eltwise_bcast_col_custom(
     torch_format = format_dict[formats.output_format]
     res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
 
-    # Spot-check: log a few elements per tile to verify srcA - bcast(srcB)
+    # Spot-check: log a few elements per tile to verify srcA <op> bcast(srcB)
     for t in range(ct_dim):
         tile_start = t * 32 * 32
         a_sample = src_A[tile_start : tile_start + 4].tolist()

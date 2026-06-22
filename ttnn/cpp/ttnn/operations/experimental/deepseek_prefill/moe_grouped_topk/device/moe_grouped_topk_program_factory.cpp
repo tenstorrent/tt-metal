@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "moe_grouped_topk_device_operation.hpp"
+#include <algorithm>
+#include <cmath>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/cb_utils.hpp"
@@ -90,56 +92,72 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
     tt::tt_metal::create_cb(
         cb_biased_scores, program, all_cores, scores.buffer()->page_size(), width_tiles, scores_data_format);
 
+    // Group-routing CBs (c_6, c_7, c_9..c_14) are used only on the grouped path; on the single-group
+    // (n_groups == 1) path the compute/writer group code is compiled out, so skip allocating them to
+    // keep the gate's L1 footprint small. cb_expert_index_template (c_8) is shared and always created.
+    const bool grouped = operation_attributes.n_groups != 1;
     auto cb_sorted_group_scores = tt::CBIndex::c_6;
     auto cb_sorted_expert_indices_temp = tt::CBIndex::c_7;
     auto cb_expert_index_template = tt::CBIndex::c_8;
-    tt::tt_metal::create_cb(
-        cb_sorted_group_scores, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_sorted_expert_indices_temp, program, all_cores, uint16_page_size, 2, tt::DataFormat::UInt16);
+    if (grouped) {
+        tt::tt_metal::create_cb(
+            cb_sorted_group_scores, program, all_cores, scores.buffer()->page_size(), 2, scores_data_format);
+        tt::tt_metal::create_cb(
+            cb_sorted_expert_indices_temp, program, all_cores, uint16_page_size, 2, tt::DataFormat::UInt16);
+    }
     tt::tt_metal::create_cb(
         cb_expert_index_template, program, all_cores, uint16_page_size, width_tiles, tt::DataFormat::UInt16);
 
     uint32_t num_group_tiles = tt::div_up(operation_attributes.n_groups, 32);
+    // Clamp group CB depths to >= 1 so degenerate topk_groups / summed_experts_per_group never create
+    // empty CBs (only relevant on the grouped path).
+    uint32_t summed_experts_per_group_cb = std::max<uint32_t>(operation_attributes.summed_experts_per_group, 1);
+    uint32_t topk_groups_cb = std::max<uint32_t>(operation_attributes.topk_groups, 1);
     auto cb_group_index_template = tt::CBIndex::c_9;
     auto cb_group_summed_scores = tt::CBIndex::c_10;
     auto cb_top_experts_per_group = tt::CBIndex::c_11;
     auto cb_sorted_group_order = tt::CBIndex::c_12;
-    tt::tt_metal::create_cb(
-        cb_group_index_template, program, all_cores, uint16_page_size, num_group_tiles, tt::DataFormat::UInt16);
-    tt::tt_metal::create_cb(
-        cb_top_experts_per_group,
-        program,
-        all_cores,
-        scores.buffer()->page_size(),
-        operation_attributes.summed_experts_per_group,
-        scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_group_summed_scores, program, all_cores, scores.buffer()->page_size(), num_group_tiles, scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_sorted_group_order,
-        program,
-        all_cores,
-        output_indices.buffer()->page_size(),
-        num_group_tiles,
-        tt::DataFormat::UInt16);
-
     auto cb_winning_group_scores = tt::CBIndex::c_13;
     auto cb_winning_group_indices = tt::CBIndex::c_14;
-    tt::tt_metal::create_cb(
-        cb_winning_group_scores,
-        program,
-        all_cores,
-        scores.buffer()->page_size(),
-        operation_attributes.topk_groups,
-        scores_data_format);
-    tt::tt_metal::create_cb(
-        cb_winning_group_indices,
-        program,
-        all_cores,
-        output_indices.buffer()->page_size(),
-        operation_attributes.topk_groups,
-        tt::DataFormat::UInt16);
+    if (grouped) {
+        tt::tt_metal::create_cb(
+            cb_group_index_template, program, all_cores, uint16_page_size, num_group_tiles, tt::DataFormat::UInt16);
+        tt::tt_metal::create_cb(
+            cb_top_experts_per_group,
+            program,
+            all_cores,
+            scores.buffer()->page_size(),
+            summed_experts_per_group_cb,
+            scores_data_format);
+        tt::tt_metal::create_cb(
+            cb_group_summed_scores,
+            program,
+            all_cores,
+            scores.buffer()->page_size(),
+            num_group_tiles,
+            scores_data_format);
+        tt::tt_metal::create_cb(
+            cb_sorted_group_order,
+            program,
+            all_cores,
+            output_indices.buffer()->page_size(),
+            num_group_tiles,
+            tt::DataFormat::UInt16);
+        tt::tt_metal::create_cb(
+            cb_winning_group_scores,
+            program,
+            all_cores,
+            scores.buffer()->page_size(),
+            topk_groups_cb,
+            scores_data_format);
+        tt::tt_metal::create_cb(
+            cb_winning_group_indices,
+            program,
+            all_cores,
+            output_indices.buffer()->page_size(),
+            topk_groups_cb,
+            tt::DataFormat::UInt16);
+    }
 
     auto cb_reduce_intermediate = tt::CBIndex::c_15;
     auto cb_final_indices_transposed = tt::CBIndex::c_16;
@@ -242,6 +260,9 @@ MoeGroupedTopkDeviceOperation::ProgramFactory::cached_program_t MoeGroupedTopkDe
         {"n_groups", operation_attributes.n_groups},
         {"log_topk_groups", std::log2(operation_attributes.topk_groups)},
         {"log_n_groups", std::log2(operation_attributes.n_groups)},
+        // Used only by the single-group (n_groups == 1) plain top-k path, which sorts across all
+        // width_tiles directly. blocks::topk only reads log_tiles when tiles <= 2, so a ceil-log2 is safe.
+        {"log_width_tiles", static_cast<uint32_t>(std::ceil(std::log2(static_cast<double>(width_tiles))))},
         {"cb_winning_group_scores", cb_winning_group_scores},
         {"cb_winning_group_indices", cb_winning_group_indices},
         {"num_group_tiles", num_group_tiles},

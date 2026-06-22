@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark: DRAM-core prefetcher vs worker-core prefetcher on Blackhole.
+"""Benchmark: Tensor prefetcher vs worker-core prefetcher on Blackhole.
 
 Parametrized over Llama-3.2-1B, Llama-3.2-3B, Llama-3.1-8B, Llama-3.3-70B production
 prefetcher matmuls (QKV / WO / FF1 / FF2). For models that need multi-device tensor
@@ -14,7 +14,7 @@ Both paths share the same gather_in0 matmul kernels and the same production scat
 receiver layout / receiver sub-device / stall group setup. The only difference is
 which prefetcher is used:
 - DRAM-core: DRISC kernel on DRAM cores, started once via
-  `start_dram_core_prefetcher(num_layers=N+1)` before the trace, stopped after.
+  `start_tensor_prefetcher(num_layers=N+1)` before the trace, stopped after.
 - Worker-core: BRISC+NCRISC kernels on worker cores, dispatched once via
   `ttnn.dram_prefetcher(num_layers=N+1)` before the trace.
 
@@ -28,7 +28,7 @@ parametrize values for ad-hoc runs. `BENCH_TRACE_REPEATS` (default 100) controls
 trace replay length for both paths. All shapes use ring=64 (8 banks × 8
 receivers/bank) and bfloat8_b.
 
-Per-shape results: see `docs/dram_core_prefetcher_bench_results.md`. The
+Per-shape results: see `docs/tensor_prefetcher_bench_results.md`. The
 table there was measured with the previous worker-core trace shape and is
 pending re-measurement after the move to N discrete `ttnn.linear` launches.
 
@@ -50,16 +50,20 @@ from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.prefetcher_common import round_up as _round_up
+from tests.ttnn.unit_tests.operations.prefetcher_common import (
+    round_up as _round_up,
+    ring_grid_cols as _ring_grid_cols,
+    make_recv_contig_weight as _make_recv_contig_weight,
+)
 
 
-pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
-def _require_dram_core_prefetcher(device):
+def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
@@ -274,7 +278,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     num_dram_banks = _select_num_dram_banks(device.dram_grid_size().x)
     num_receivers_per_bank = _select_num_receivers_per_bank(num_dram_banks)
     ring_size = num_dram_banks * num_receivers_per_bank
-    ring_cols = max(c for c in range(min(_NUM_DRAM_BANKS, ring_size), 0, -1) if ring_size % c == 0)
+    ring_cols = _ring_grid_cols(_NUM_DRAM_BANKS, ring_size)
     ring_rows = ring_size // ring_cols
     k_padded = _round_up(_K, ring_size * ttnn.TILE_SIZE)
     if num_dram_banks != _NUM_DRAM_BANKS or num_receivers_per_bank != _NUM_RECV_PER_BANK:
@@ -396,7 +400,8 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
@@ -426,8 +431,8 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         )
 
     # One long-lived DRISC stream: 1 warmup/correctness layer + trace_repeats traced layers.
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, ring_size)] * num_prefetch_layers,
         global_cb=gcb,
@@ -456,7 +461,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     elapsed = time.perf_counter() - t0
     ttnn.release_trace(device, bench_trace)
 
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     per_matmul_us = elapsed / trace_repeats * 1e6
     # Use unpadded K in the TFLOP/s formula so it's comparable across paths (worker-core uses
@@ -465,6 +470,216 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     logger.info(
         f"[dram_core][{op_name}] trace_elapsed={elapsed * 1e3:.2f}ms repeats={trace_repeats} "
         f"per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "trace_region_size": 23887872}],
+    indirect=True,
+)
+@pytest.mark.parametrize("op_name,shape", LLAMA_SHAPES)
+def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
+    """Same matmul trace-replay bench as test_bench_dram_core_repeats, but the weight
+    is in **receiver-contiguous** DRAM layout (NdShardSpec, num_shards = ring_size).
+
+    Why this is matmul-correct: in a gather_in0 matmul, ring core r computes output
+    N-cols [r*per_core_N, (r+1)*per_core_N) and therefore needs weight[all K, those
+    N-cols] = recv-contig shard r, streamed as ring_size K-blocks in order. The
+    recv-contig prefetcher delivers exactly that. The only wiring difference vs the
+    K-row-major bench:
+      - Weight allocated via NdShardSpec(Shape([K_padded, n_per_recv]), ROUND_ROBIN_1D).
+      - bank_to_receivers is the STRIDED transpose of the row-grouping: bank b feeds
+        ring positions [b, b+num_banks, b+2*num_banks, ...]. Under BDS round-robin,
+        bank b's slab s == shard (b + s*num_banks), so this delivers shard r to ring
+        position r (PCC-verified below).
+      - GCB built via create_global_circular_buffer_with_dram_senders (the _for_matmul_1d
+        wrapper asserts a K-row-major single-wide-shard-per-bank layout, which recv-contig
+        is not; the underlying GCB object is identical).
+    """
+    _apply_shape(shape)
+
+    trace_repeats = int(os.environ.get("BENCH_TRACE_REPEATS", "100"))
+    num_prefetch_layers = trace_repeats + 1
+    if device.dram_grid_size().x != 8:
+        pytest.skip("Production receiver layout requires 8 unharvested DRAM banks")
+    num_dram_banks = _select_num_dram_banks(device.dram_grid_size().x)
+    num_receivers_per_bank = _select_num_receivers_per_bank(num_dram_banks)
+    ring_size = num_dram_banks * num_receivers_per_bank
+    ring_cols = _ring_grid_cols(_NUM_DRAM_BANKS, ring_size)
+    ring_rows = ring_size // ring_cols
+    k_padded = _round_up(_K, ring_size * ttnn.TILE_SIZE)
+    if num_dram_banks != _NUM_DRAM_BANKS or num_receivers_per_bank != _NUM_RECV_PER_BANK:
+        pytest.skip(
+            f"Production receiver layout requires {_NUM_DRAM_BANKS} banks x {_NUM_RECV_PER_BANK} recv/bank, "
+            f"got {num_dram_banks} x {num_receivers_per_bank}"
+        )
+
+    # Production scattered receiver layout (identical to the K-row-major bench) so the
+    # matmul receiver/in0-gather NoC paths match exactly.
+    from models.tt_transformers.tt.prefetcher import generate_sender_receiver_mapping, ARCH_CONFIG
+
+    bh_cfg = ARCH_CONFIG["blackhole"]
+    raw_mapping = generate_sender_receiver_mapping(num_receivers_per_sender=num_receivers_per_bank)
+    left_y = bh_cfg["bank_ordered_y_coords"]["left"]
+    right_y = bh_cfg["bank_ordered_y_coords"]["right"]
+    left_col = bh_cfg["sender_cols"]["left"]
+    right_col = bh_cfg["sender_cols"]["right"]
+    ordered_senders = [(left_col, y) for y in left_y] + [(right_col, y) for y in right_y]
+    receivers_by_y: dict = {}
+    for sx, sy in ordered_senders:
+        receivers_by_y.setdefault(sy, []).extend(raw_mapping[(sx, sy)])
+    sorted_ys = sorted(receivers_by_y.keys())
+    assert len(sorted_ys) == num_dram_banks, f"want {num_dram_banks} y-rows, got {len(sorted_ys)}"
+    receivers_per_y = [sorted(receivers_by_y[y]) for y in sorted_ys]  # row-major-sortable
+    # Flattened row-major == ring position order (ring pos r = receivers_per_y[r//rpb][r%rpb]).
+    receiver_core_range_set = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(rx, ry), ttnn.CoreCoord(rx, ry)) for row in receivers_per_y for rx, ry in row]
+    )
+
+    receiver_sub_device = ttnn.SubDevice([receiver_core_range_set])
+    sub_device_manager = device.create_sub_device_manager([receiver_sub_device], 0)
+    device.load_sub_device_manager(sub_device_manager)
+    receiver_sub_device_id = ttnn.SubDeviceId(0)
+    device.set_sub_device_stall_group([receiver_sub_device_id])
+
+    torch.manual_seed(0xBE7)
+    pt_weight = torch.zeros(1, 1, k_padded, _N)
+    pt_weight[:, :, :_K, :] = torch.randn(1, 1, _K, _N)
+    pt_act = torch.zeros(1, 1, _M, k_padded)
+    pt_act[:, :, :, :_K] = torch.randn(1, 1, _M, _K)
+
+    # Receiver-contiguous weight: NdShardSpec, num_shards = ring_size, each shard (K_padded, n_per_recv).
+    n_per_recv = _N // ring_size
+    tt_weight = _make_recv_contig_weight(device, pt_weight, num_dram_banks, ring_size, _DTYPE)
+
+    K_per_shard = k_padded // ring_size
+    act_mem_config = ttnn.create_sharded_memory_config(
+        shape=(_M, K_per_shard),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_act = ttnn.from_torch(
+        pt_act, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=act_mem_config
+    )
+
+    block_size_bytes = int((k_padded * n_per_recv) * _DTYPE_BYTES)
+    gcb_size = _gcb_size_capped(block_size_bytes, k=k_padded, ring_size=ring_size, max_buffered_blocks=1)
+
+    cc_program_config = _build_program_config(
+        ring_size=ring_size,
+        ring_cols=ring_cols,
+        ring_rows=ring_rows,
+        num_global_cb_receivers=num_receivers_per_bank,
+    )
+
+    # STRIDED bank_to_receivers: bank b feeds ring positions [b, b+num_banks, ...], i.e. the
+    # b-th receiver of each sorted y-row (column b of receivers_per_y). This matches the BDS
+    # round-robin placement so ring position r receives shard r (full K, N-cols [r*npr,...)).
+    bank_to_receivers = [
+        (
+            b,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(*receivers_per_y[s][b]),
+                        ttnn.CoreCoord(*receivers_per_y[s][b]),
+                    )
+                    for s in range(num_receivers_per_bank)
+                ]
+            ),
+        )
+        for b in range(num_dram_banks)
+    ]
+    dual_senders = os.environ.get("BENCH_DUAL_SENDERS", "0") == "1"
+    # Centralized recv-contig GCB builder: validates the (program_config, weight, bank_to_receivers)
+    # triple (num_shards == ring_size, K % ring_size == 0, per_core_N == per-receiver N) and sizes/builds
+    # the GCB in one place.
+    gcb = ttnn.experimental.create_global_circular_buffer_for_matmul_1d_recv_contig(
+        device,
+        [cc_program_config],
+        [tt_weight],
+        bank_to_receivers,
+        gcb_size,
+        dual_senders_per_bank=dual_senders,
+    )
+    output_mem_config = ttnn.create_sharded_memory_config(
+        shape=(_M, _N // ring_size),
+        core_grid=receiver_core_range_set,
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+        dst_full_sync_en=True,
+    )
+
+    optional_output_tensor = ttnn.from_torch(
+        torch.zeros(1, 1, _M, _N),
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=output_mem_config,
+    )
+
+    def single_linear():
+        return ttnn.linear(
+            tt_act,
+            tt_weight,
+            program_config=cc_program_config,
+            memory_config=output_mem_config,
+            compute_kernel_config=compute_kernel_config,
+            dtype=ttnn.bfloat16,
+            global_cb=gcb,
+            optional_output_tensor=optional_output_tensor,
+            sub_device_id=receiver_sub_device_id,
+        )
+
+    # Centralized recv-contig param + cross-check: returns the validated block_count
+    # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
+    block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
+    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device,
+        [(tt_weight, block_count)] * num_prefetch_layers,
+        global_cb=gcb,
+    )
+
+    # Correctness + program-cache warmup: one real one-matmul launch.
+    cc_out = single_linear()
+    cc_torch = ttnn.to_torch(cc_out)
+    expected = pt_act.float() @ pt_weight.float()
+    passing, output_str = comp_pcc(expected, cc_torch, 0.99)
+    logger.info(f"[dram_core_rc] PCC: {output_str}")
+    assert passing, f"[dram_core_rc] PCC failed: {output_str}"
+
+    bench_trace = ttnn.begin_trace_capture(device, cq_id=0)
+    bench_output = None
+    for _ in range(trace_repeats):
+        bench_output = single_linear()
+    ttnn.end_trace_capture(device, bench_trace, cq_id=0)
+    assert bench_output is not None
+
+    t0 = time.perf_counter()
+    ttnn.execute_trace(device, bench_trace, cq_id=0, blocking=False)
+    ttnn.synchronize_device(device)
+    elapsed = time.perf_counter() - t0
+    ttnn.release_trace(device, bench_trace)
+
+    ttnn.experimental.stop_tensor_prefetcher(device)
+
+    per_matmul_us = elapsed / trace_repeats * 1e6
+    tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
+    logger.info(
+        f"[dram_core_rc][{op_name}] dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
+        f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s"
     )
 
 
@@ -610,7 +825,8 @@ def test_bench_workercore_repeats(device, op_name, shape):
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=True,
@@ -631,7 +847,7 @@ def test_bench_workercore_repeats(device, op_name, shape):
         )
 
     # One bulk dram_prefetcher dispatch before the trace, mirroring the DRAM-core path's
-    # start_dram_core_prefetcher call. The kernel runs async on device and pushes
+    # start_tensor_prefetcher call. The kernel runs async on device and pushes
     # num_prefetch_layers worth of pages; the warmup matmul + N traced matmul launches
     # drain them as they arrive (GCB credit gates the producer/consumer pipeline).
     ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_prefetch_layers, global_cb=gcb)

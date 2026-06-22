@@ -127,25 +127,6 @@ struct ReluConfig
         return threshold;
     }
 
-    // Encoding written to the HW STACC_RELU_ApplyRelu (RELU_MODE) field.
-    // ZERO_RELU is folded into MIN_THRESHOLD_RELU (HW mode 2) with whatever threshold the
-    // ReluConfig was constructed with (always 0 via the public ::zero() factory). HW does
-    // support apply_relu=1 (sign-bit-exact ZERO_RELU) directly, but tt-sim does not yet
-    // model that path; see tenstorrent/ttsim#9 and tt-metal#45720 for the follow-up to
-    // route ZERO_RELU through HW mode 1 once tt-sim supports it.
-    constexpr std::uint32_t get_hw_mode() const
-    {
-        switch (mode)
-        {
-            case ReluType::NO_RELU:
-                return 0;
-            case ReluType::MAX_THRESHOLD_RELU:
-                return 3;
-            default:
-                return 2;
-        }
-    }
-
 private:
     constexpr ReluConfig(ReluType m, std::uint32_t t = 0) : mode(m), threshold(t)
     {
@@ -235,7 +216,7 @@ constexpr std::uint32_t operator|(InstrModLoadStore mod, std::uint32_t bits)
     return operator|(bits, mod);
 }
 
-template <DataFormat format>
+template <DataFormat format, bool is_fp32_dest_acc_en = false>
 constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
 {
     switch (format)
@@ -243,7 +224,9 @@ constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
         case DataFormat::Float32:
             return InstrModLoadStore::FP32; // spec value 3: fp32 format
         case DataFormat::Float16:
-            return InstrModLoadStore::FP16A; // spec value 1: fp16_a format
+            // With 32-bit (fp32) dest accumulation the datum is stored as full fp32 in the dest word, so
+            // SFPLOAD/SFPSTORE must use FP32 access; otherwise the narrow fp16_a format applies.
+            return is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16A; // spec value 1: fp16_a format
         case DataFormat::Bfp8:
             return InstrModLoadStore::DEFAULT; // spec value 0: default format
         case DataFormat::Bfp4:
@@ -251,7 +234,9 @@ constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
         case DataFormat::Bfp2:
             return InstrModLoadStore::DEFAULT; // spec value 0: default format
         case DataFormat::Float16_b:
-            return InstrModLoadStore::FP16B; // spec value 2: bfloat/fp16_b
+            // With 32-bit (fp32) dest accumulation the datum is stored as full fp32 in the dest word, so
+            // SFPLOAD/SFPSTORE must use FP32 access; otherwise the narrow fp16_b format applies.
+            return is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::FP16B; // spec value 2: bfloat/fp16_b
         case DataFormat::Bfp8_b:
             return InstrModLoadStore::DEFAULT; // spec value 0: default format
         case DataFormat::Bfp4_b:
@@ -265,7 +250,9 @@ constexpr InstrModLoadStore GetSfpLoadStoreInstrMod()
         case DataFormat::UInt8:
             return InstrModLoadStore::INT8; // spec value 5: int8 format
         case DataFormat::UInt16:
-            return InstrModLoadStore::LO16; // spec value 6: unsigned int16 format
+            // With 32-bit (fp32) dest accumulation the UInt16 datum is written into the lower 16 bits of a
+            // 32-bit dest word (high bits are garbage), so SFPLOAD/SFPSTORE must use full-width INT32 access.
+            return is_fp32_dest_acc_en ? InstrModLoadStore::INT32 : InstrModLoadStore::LO16; // spec value 6: unsigned int16 format
         case DataFormat::Int32:
             return InstrModLoadStore::INT32; // spec value 4: int32 format
         case DataFormat::UInt32:

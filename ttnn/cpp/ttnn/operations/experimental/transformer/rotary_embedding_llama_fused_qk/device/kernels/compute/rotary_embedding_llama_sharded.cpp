@@ -8,10 +8,17 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/dataflow/circular_buffer.h"
 
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
+ALWI void ACQ() {
+    tile_regs_acquire();
+    tile_regs_wait();
+}
+ALWI void REL() {
+    tile_regs_commit();
+    tile_regs_release();
+}
 
 void kernel_main() {
     // TODO: Add back early return? Currently, running out of code size in TRISC2 by 4B
@@ -58,24 +65,9 @@ void kernel_main() {
     CircularBuffer cos_interm_cb_obj(cos_interm_cb);
     CircularBuffer sin_interm_cb_obj(sin_interm_cb);
 
-    mm_init(in_cb, trans_mat_cb, out_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in_cb, trans_mat_cb, out_cb);
+    matmul_init(in_cb, trans_mat_cb);
     binary_op_init_common(rotated_in_interm_cb, sin_cb, sin_interm_cb);  // General Init for all binary ops
-
-    /* Unnecessary CB APIs (comment out for code size)
-    // Get the trans_mat
-    constexpr uint32_t onetile = 1;
-    cb_reserve_back(trans_mat_cb, onetile);
-    cb_push_back(trans_mat_cb, onetile);
-    cb_wait_front(trans_mat_cb, onetile);
-
-    // Get the sin/cos matrices
-    // TODO: To parallelize across multiple batch, this should be in a batch loop
-    cb_reserve_back(sin_cb, Wt);
-    cb_reserve_back(cos_cb, Wt);
-
-    cb_push_back(sin_cb, Wt);
-    cb_push_back(cos_cb, Wt);
-    */
 
     for (uint32_t ht = 0; ht < Ht; ht++) {  // Over n_heads_t dimension
         rotated_in_interm_cb_obj.reserve_back(Wt);
@@ -91,7 +83,7 @@ void kernel_main() {
         // Do the computation
 
         // rotated = x @ trans_mat
-        mm_init_short(in_cb, trans_mat_cb);
+        matmul_init(in_cb, trans_mat_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             matmul_tiles(in_cb, trans_mat_cb, j, 0, j);
@@ -136,13 +128,4 @@ void kernel_main() {
         sin_interm_cb_obj.pop_front(Wt);
         cos_interm_cb_obj.pop_front(Wt);
     }
-
-    /* Unnecessary CB APIs (comment out for code size)
-    // Done with the sin/cos matrices, so remove from CB
-    cb_pop_front(sin_cb, Wt);
-    cb_pop_front(cos_cb, Wt);
-
-    // Done with the transformation matrix, so remove from CB
-    cb_pop_front(trans_mat_cb, onetile);
-    */
 }

@@ -1043,10 +1043,14 @@ static void process_wait() {
             neg_sem_val << REMOTE_DEST_BUF_WORDS_FREE_INC);
     }
     if (notify_prefetch) {
+#ifdef ARCH_QUASAR
+        Semaphore<fd_core_type>(upstream_sync_sem).up(1);
+#else
         noc_semaphore_inc(
             get_noc_addr_helper(upstream_noc_xy, get_semaphore<fd_core_type>(upstream_sync_sem)),
             1,
             upstream_noc_index);
+#endif
     }
 
     cmd_ptr += sizeof(CQDispatchCmd);
@@ -1183,12 +1187,11 @@ void set_go_signal_noc_data() {
         reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
-    volatile tt_l1_ptr uint32_t* data_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd)));
+    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
+    cmd_ptr = round_up_pow2(l1_cached_addr(reinterpret_cast<uintptr_t>(data_ptr)), L1_ALIGNMENT);
 }
 
 static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {
@@ -1465,9 +1468,7 @@ void publish_dispatch_d_noc_count(const NocCounterSnapshot& snapshot) {
     set_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(
         upstream_noc_index, posted_writes_delta);
 
-    volatile tt_l1_ptr uint32_t* shutdown_sem_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-        l1_uncached_addr(get_semaphore<fd_core_type>(dispatch_d_shutdown_sem_id)));
-    *shutdown_sem_addr = 1;
+    Semaphore<fd_core_type>(dispatch_d_shutdown_sem_id).set(1);
 }
 
 void kernel_main() {

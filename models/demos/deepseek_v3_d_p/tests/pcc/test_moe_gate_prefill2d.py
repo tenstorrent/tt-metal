@@ -29,6 +29,11 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_validation_results
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
+
+# First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
+# trace stores its gate input as post_attn_norm_layer_3.
+_MOE_LAYER_IDX = 3
 
 _DEFAULT_HF_REPO = "deepseek-ai/DeepSeek-V3"
 _LOCAL_FALLBACKS = (
@@ -66,29 +71,22 @@ def _try_load_real_gate_weights(n_routed_experts: int, dim: int) -> dict | None:
 
 
 def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None:
-    """Try to load a saved gate input tensor; return None on failure."""
-    gate_input_cache = os.environ.get("DEEPSEEK_V3_GATE_INPUT_CACHE")
-    moe_dir = Path(gate_input_cache) if gate_input_cache else Path(__file__).parent.parent.parent / "tt" / "moe"
+    """Try to load the gate input from the golden GPU prefill trace; return None on failure.
 
-    for name in ("gate_input_layer3_seq100000.pt", "gate_input_layer3.pt"):
-        path = moe_dir / name
-        if path.exists():
-            saved = torch.load(path, weights_only=True)
-            real_input = saved["gate_input"].squeeze(0).to(torch.bfloat16)
-            if real_input.shape[0] >= max_seq_len:
-                result = real_input[:max_seq_len, :dim]
-            else:
-                repeats = (max_seq_len + real_input.shape[0] - 1) // real_input.shape[0]
-                result = real_input.repeat(repeats, 1)[:max_seq_len, :dim]
-            logger.info(f"Loaded real gate input from {path} (raw {real_input.shape}, sliced to {result.shape})")
-            return result
-
-    return None
+    Mirrors test_ttnn_moe / test_prefill_transformer: the gate input is the
+    post-attention RMSNorm output (``post_attn_norm_layer_{i}``) of the first MoE
+    layer in the bit_sculpt golden trace. ``DEEPSEEK_V3_GATE_INPUT_CACHE`` may
+    override the trace directory. Returns ``None`` when the trace is unavailable
+    so the caller can fall back to synthetic input.
+    """
+    trace_dir_env = os.environ.get("DEEPSEEK_V3_GATE_INPUT_CACHE")
+    trace_dir = Path(trace_dir_env) if trace_dir_env else GOLDEN_LONGBOOK_TRACE
+    return load_trace_gate_input(trace_dir, layer_idx=_MOE_LAYER_IDX, max_seq_len=max_seq_len, dim=dim)
 
 
 @pytest.mark.parametrize(
     "gate_fallback_mode",
-    [GateComputeMode.DEVICE, GateComputeMode.DEVICE_FP32],
+    [GateComputeMode.HOST_ALL, GateComputeMode.DEVICE_FP32],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -105,6 +103,18 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
             id="mesh-2x2",
         ),
         pytest.param(
+            (2, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-mesh-2x2",
+        ),
+        pytest.param(
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -114,6 +124,18 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
             ttnn.Topology.Linear,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
             id="mesh-4x2",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=get_max_payload_size()),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
         ),
         pytest.param(
             (2, 4),
@@ -140,17 +162,22 @@ def _try_load_real_gate_input(max_seq_len: int, dim: int) -> torch.Tensor | None
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("variant", ["deepseek_v3_d_p", "kimi_k2_6"], indirect=True, ids=["deepseek_v3", "kimi"])
 def test_forward_pass(
+    variant,
     mesh_device,
     num_links,
     topology,
     gate_fallback_mode,
 ):
+    """Gate PCC for both model variants. The gate itself picks grouped vs plain
+    top-k routing from n_expert_groups (Kimi has one group), so the test just
+    passes the model config and the compute mode."""
     random.seed(42)
     torch.manual_seed(42)
 
-    # Create reference gate
-    config = TtMoEGateConfig()
+    # Build the gate config from the variant's HF dimension constants.
+    config = TtMoEGateConfig.from_model_cfg(variant.model_config)
     config.ccl_config["NUM_LINKS"] = num_links
     adjust_shapes_for_testing(config, mesh_device)
 
@@ -167,7 +194,11 @@ def test_forward_pass(
     )
     reference_model = ReferenceMoEGate(ref_config, use_bitonic_sort=True)
 
-    gate_w = _try_load_real_gate_weights(config.n_routed_experts, config.dim)
+    # Real DeepSeek gate weights (256 experts) can't be reshaped to other expert
+    # counts, so only attempt the real-weight/input load for the 256-expert path.
+    gate_w = (
+        _try_load_real_gate_weights(config.n_routed_experts, config.dim) if config.n_routed_experts == 256 else None
+    )
     if gate_w is None:
         gate_w = create_gate_weights(config.n_routed_experts, config.dim)
     reference_model.weight.data = gate_w["weight"]
@@ -175,7 +206,7 @@ def test_forward_pass(
 
     n_sp_devices = mesh_device.shape[0]
     total_seq_len = config.sp_dim * n_sp_devices
-    torch_input = _try_load_real_gate_input(total_seq_len, config.dim)
+    torch_input = _try_load_real_gate_input(total_seq_len, config.dim) if config.n_routed_experts == 256 else None
     if torch_input is None:
         torch_input = (
             torch.randn(total_seq_len, config.dim, dtype=torch.bfloat16) * 0.1147 * (7168 / config.dim)
@@ -222,9 +253,9 @@ def test_forward_pass(
         logits_pcc_threshold = 0.997
         scores_pcc_threshold = 0.99
     else:
-        recall_threshold = 0.70
-        logits_pcc_threshold = 0.70
-        scores_pcc_threshold = 0.70
+        recall_threshold = 0.95
+        logits_pcc_threshold = 0.997
+        scores_pcc_threshold = 0.93
 
     seq_len_per_device = reference_logits.shape[0] // mesh_device.shape[0]
     sp_composer = get_sp_mesh_composer(mesh_device)

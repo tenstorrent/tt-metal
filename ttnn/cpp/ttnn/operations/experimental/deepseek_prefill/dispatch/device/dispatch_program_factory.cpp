@@ -37,9 +37,9 @@ uint32_t get_num_rows(const ttnn::Tensor& tensor) {
 }
 
 // ProgramDescriptor-flavored helper.  Pushes a CBDescriptor onto the desc
-// instead of calling CreateCircularBuffer.  Mirrors the legacy data_format
-// rewrite for the FP8 dispatch path (UINT8 dispatch buffers reinterpret as
-// Fp8_e4m3 in the CB until FP8 gets a dedicated dtype).
+// instead of calling CreateCircularBuffer.  The FP8 dispatch path allocates its
+// buffer as DataType::FP8_E4M3, which datatype_to_dataformat_converter maps
+// straight to tt::DataFormat::Fp8_e4m3 — no special-casing needed here.
 void create_tensor_cb(
     tt::tt_metal::ProgramDescriptor& desc,
     const CoreRangeSet& core_range_set,
@@ -51,11 +51,6 @@ void create_tensor_cb(
     auto num_pages = detail::get_num_pages(tensor);
     auto aligned_page_size = get_aligned_page_size(tensor);
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor.dtype());
-    if (data_format == tt::DataFormat::UInt8) {
-        // TODO: remove once FP8 has a dedicated dtype. In this op, UINT8 tensors only appear
-        // on the FP8 dispatch path (DRAM is allocated as UINT8 but content is Fp8_e4m3).
-        data_format = tt::DataFormat::Fp8_e4m3;
-    }
 
     uint32_t cb_size = buffering_factor * aligned_page_size;
 
@@ -226,6 +221,14 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     uint32_t total_batches = (tokens_per_device + read_batch_size - 1) / read_batch_size;
 
+    // Largest divisor of (hidden_size / 32) that is <= 8.  Mirrors the combine program factory.
+    // Avoids the static_assert in llk_pack_untilize when full_ct_dim is not divisible by 8
+    const uint32_t full_ct_dim_dispatch = static_cast<uint32_t>(hidden_size) / 32u;
+    uint32_t block_ct_dim_dispatch = 8;
+    while (full_ct_dim_dispatch % block_ct_dim_dispatch != 0) {
+        --block_ct_dim_dispatch;
+    }
+
     // ==================== Semaphores ====================
     // Per-entry credit, each kept on the consumer's L1 (producer NOC-incs):
     //   data_avail  (sender L1, init=0):                untilize → sender, "entry ready".
@@ -251,11 +254,14 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // ==================== Circular Buffers for untilize cores ====================
     // Routing decisions and offsets[] live on the untilize core — sender is fabric-only.
     // c_0: tiled input stripe (reader → compute)
+    // buffering_factor MUST be a multiple of block_ct_dim_dispatch (the reader's per-chunk push
+    // size) so untilize blocks never straddle the CB ring wrap.  2 * block_ct_dim gives double
+    // buffering (=16 for the common block_ct_dim=8 case, unchanged).
     detail::create_tensor_cb(
         desc,
         untilize_core_grid,
         input_tensor,
-        /*buffering_factor=*/16,
+        /*buffering_factor=*/2 * block_ct_dim_dispatch,
         /*cb_id=*/tt::CBIndex::c_0,
         "untilize_input_scratch");
     // c_1: indices scratch (untilize reader does per-batch DRAM reads)
@@ -422,6 +428,15 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
+    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
+    // multicast handshake) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
+    // per-direction array connection. INVARIANT: this is_2d_fabric gate (derived from GetFabricConfig())
+    // must agree with the kernel's FABRIC_2D #ifdef, which append_routing_plane_connection_manager_rt_args
+    // injects based on the control plane's is_2D_routing_enabled(). If the two ever diverge, the host
+    // pushes 2D-shaped args while the kernel compiles the 1D #else branch (or vice-versa) and arg
+    // parsing corrupts.
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+
     // c_8: packet header CB for fabric sends (sender-only)
     if (operation_attributes.num_links > 0) {
         constexpr uint32_t num_packet_headers = 2;
@@ -582,6 +597,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     std::vector<tt::tt_metal::KernelHandle> writer_untilize_kernel_ids;
     reader_untilize_kernel_ids.reserve(num_untilize_cores);
     writer_untilize_kernel_ids.reserve(num_untilize_cores);
+
+    // block_ct_dim_dispatch is derived once above (shared with c_0 sizing and the compute kernel).
     for (uint32_t j = 0; j < num_untilize_cores; j++) {
         uint32_t s = untilize_sender_map[j];
         // Each sender owns num_untilizers cores; they split batches round-robin by local_core_id
@@ -620,6 +637,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             mesh_view.num_cols(),                                  // 26
             linearized_mesh_coord,                                 // 27
             static_cast<uint32_t>(topology),                       // 28
+            block_ct_dim_dispatch,                                 // 29: must match the compute kernel
         };
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(untilize_reader_compile_args);
@@ -682,6 +700,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
 
     // Compute kernel on untilize cores
     {
+        // block_ct_dim_dispatch is derived once above (shared with the reader kernel).
         tt::tt_metal::KernelDescriptor untilize_compute_kd;
         untilize_compute_kd.kernel_source =
             "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/compute/"
@@ -694,16 +713,17 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             static_cast<uint32_t>(tt::CBIndex::c_0),   // cb_in_id
             (uint32_t)hidden_size,
             read_batch_size,
+            block_ct_dim_dispatch,  // block_ct_dim
         };
         untilize_compute_kd.config = tt::tt_metal::ComputeConfigDescriptor{
             .math_fidelity = MathFidelity::HiFi4,
             // Blackhole requires the DEST register in 32-bit mode whenever any CB on the core uses
-            // an 8-bit float format (Fp8_e4m3). The FP8 dispatch path reinterprets UINT8 CBs as
-            // Fp8_e4m3, so fp32_dest_acc_en must be enabled there.
+            // an 8-bit float format (Fp8_e4m3). The FP8 dispatch path emits Fp8_e4m3 output, so
+            // fp32_dest_acc_en must be enabled there.
             .fp32_dest_acc_en = operation_attributes.use_fp8_dispatch,
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
-            // tiles, but pack_untilize_block uses block_ct_dim=8. Full-sync 32-bit restores the
-            // 8-tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
+            // tiles, but pack_untilize_block uses block_ct_dim. Full-sync 32-bit restores the
+            // full tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
             .dst_full_sync_en = operation_attributes.use_fp8_dispatch,
         };
         desc.kernels.push_back(std::move(untilize_compute_kd));
@@ -789,30 +809,44 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         }
 
         if (operation_attributes.num_links > 0) {
-            uint32_t core_link = core_idx % num_links;
+            // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
                 if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
                     continue;
                 }
-
-                log_debug(
-                    tt::LogOp,
-                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} link {}",
-                    mesh_coordinate[0],
-                    mesh_coordinate[1],
-                    neighbor_coordinate[0],
-                    neighbor_coordinate[1],
-                    sender_core,
-                    core_link);
-                // ProgramDescriptor specialization: appends fabric-routing args
-                // onto writer_runtime_args and patches desc-side bookkeeping.
-                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            }
+            const uint32_t core_link = core_idx % num_links;
+            if (is_2d_fabric) {
+                // Portable RoutingPlaneConnectionManager path: one connection per dispatch-axis neighbor
+                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
+                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
+                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
+                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
+                // this sender core's connections, spreading sender cores across links (matches the
+                // FABRIC_1D path & broadcast).
+                writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
+                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
-                    mesh_device->get_fabric_node_id(neighbor_coordinate),
-                    core_link,
+                    dst_nodes,
+                    {core_link},
                     desc,
+                    writer_kernel_id,
                     sender_core,
                     writer_runtime_args);
+                log_debug(
+                    tt::LogOp,
+                    "FABRIC_2D dispatch writer (tile): src={} num_connections={} core_link={}",
+                    src_fabric_node_id,
+                    dst_nodes.size(),
+                    core_link);
+            } else {
+                // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
+                for (const auto& dst_node : dst_nodes) {
+                    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args);
+                }
             }
         }
 
@@ -1038,6 +1072,15 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
 
+    // FABRIC_2D uses the portable RoutingPlaneConnectionManager (per-destination connection +
+    // multicast handshake) so dispatch-axis traffic forwards multi-hop; FABRIC_1D keeps the legacy
+    // per-direction array connection. INVARIANT: this is_2d_fabric gate (derived from GetFabricConfig())
+    // must agree with the kernel's FABRIC_2D #ifdef, which append_routing_plane_connection_manager_rt_args
+    // injects based on the control plane's is_2D_routing_enabled(). If the two ever diverge, the host
+    // pushes 2D-shaped args while the kernel compiles the 1D #else branch (or vice-versa) and arg
+    // parsing corrupts.
+    const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig());
+
     // c_8: packet header CB for fabric sends (writer-only)
     if (operation_attributes.num_links > 0) {
         constexpr uint32_t num_packet_headers = 2;
@@ -1253,28 +1296,44 @@ tt::tt_metal::ProgramDescriptor create_at_row_major(
         writer_runtime_args.push_back((uint32_t)exit_semaphore.address());
 
         if (operation_attributes.num_links > 0) {
-            uint32_t core_link = core_idx % num_links;
+            // Dispatch-axis neighbors (each a distinct fabric direction) as fabric nodes.
+            std::vector<tt::tt_fabric::FabricNodeId> dst_nodes;
             for (const auto& neighbor_coordinate : neighbors) {
                 if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
                     continue;
                 }
-
-                log_debug(
-                    tt::LogOp,
-                    "Connection between mesh coord ({}, {}) and ({}, {}) at core {} link {}",
-                    mesh_coordinate[0],
-                    mesh_coordinate[1],
-                    neighbor_coordinate[0],
-                    neighbor_coordinate[1],
-                    sender_core,
-                    core_link);
-                tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                dst_nodes.push_back(mesh_device->get_fabric_node_id(neighbor_coordinate));
+            }
+            const uint32_t core_link = core_idx % num_links;
+            if (is_2d_fabric) {
+                // Portable RoutingPlaneConnectionManager path: one connection per dispatch-axis neighbor
+                // so traffic forwards across MULTIPLE hops (the legacy fixed-link array connection only
+                // forwards a single hop, deadlocking multi-hop FABRIC_2D — e.g. the 4-device column of a
+                // 4x2 mesh). The writer reads num_connections first, then builds the manager from the
+                // appended args. {core_link} (= core_idx % num_links) is one link index applied to all of
+                // this sender core's connections, spreading sender cores across links (matches the
+                // FABRIC_1D path & broadcast).
+                writer_runtime_args.push_back(static_cast<uint32_t>(dst_nodes.size()));
+                tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
                     src_fabric_node_id,
-                    mesh_device->get_fabric_node_id(neighbor_coordinate),
-                    core_link,
+                    dst_nodes,
+                    {core_link},
                     desc,
+                    writer_kernel_id,
                     sender_core,
                     writer_runtime_args);
+                log_debug(
+                    tt::LogOp,
+                    "FABRIC_2D dispatch writer (row-major): src={} num_connections={} core_link={}",
+                    src_fabric_node_id,
+                    dst_nodes.size(),
+                    core_link);
+            } else {
+                // Legacy per-direction array connection (FABRIC_1D linear/ring — never deadlocked).
+                for (const auto& dst_node : dst_nodes) {
+                    tt::tt_fabric::append_fabric_connection_rt_args<tt::tt_metal::ProgramDescriptor>(
+                        src_fabric_node_id, dst_node, core_link, desc, sender_core, writer_runtime_args);
+                }
             }
         }
 
@@ -1321,12 +1380,6 @@ tt::tt_metal::WorkloadDescriptor DispatchProgramFactory::create_workload_descrip
 
     const bool is_tile_layout = tensor_args.input_tensor.layout() == tt::tt_metal::Layout::TILE;
     log_info(tt::LogOp, "Prefill dispatch: input tensor is {} layout", is_tile_layout ? "TILE" : "ROW_MAJOR");
-    if (operation_attributes.use_fp8_dispatch) {
-        log_warning(
-            tt::LogOp,
-            "Prefill dispatch: FP8 path — output buffer is allocated as UINT8 but content is Fp8_e4m3. "
-            "CBs reinterpret UINT8 tensors as Fp8_e4m3 (temporary, until FP8 has a dedicated dtype).");
-    }
 
     // Dispatch is mesh-coord-dependent (fabric routing + linearized mesh
     // coordinate are baked into kernel compile-time args), so we cannot

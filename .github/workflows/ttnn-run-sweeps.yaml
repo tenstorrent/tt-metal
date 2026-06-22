@@ -619,7 +619,6 @@ on:
           - P150b
           - n300-llmbox
           - topology-6u
-          - BH-LLMBox
           - BH-LoudBox
         default: "N150"
       log-level:
@@ -688,6 +687,7 @@ jobs:
       runner-label: ${{ steps.resolve.outputs.runner-label }}
       log-level: ${{ steps.resolve.outputs.log-level }}
       mesh-shape: ${{ steps.resolve.outputs.mesh-shape }}
+      fail-on-test-failure: ${{ steps.resolve.outputs.fail-on-test-failure }}
       platform: ${{ steps.resolve.outputs.platform }}
       build-type: ${{ steps.resolve.outputs.build-type }}
       enable-lto: ${{ steps.resolve.outputs.enable-lto }}
@@ -741,6 +741,14 @@ jobs:
           echo "runner-label=${{ github.event.inputs['runner-label'] || 'N150' }}" >> $GITHUB_OUTPUT
           echo "log-level=${{ github.event.inputs['log-level'] || 'INFO' }}" >> $GITHUB_OUTPUT
           echo "mesh-shape=${{ github.event.inputs.mesh_shape || '' }}" >> $GITHUB_OUTPUT
+
+          # Fail sweep jobs on test failures for Lead Models and Model Traced suites
+          if [[ "$SWEEP_NAME" == *"Lead Models"* ]] || [[ "$SWEEP_NAME" == *"Model Traced"* ]]; then
+            echo "fail-on-test-failure=true" >> $GITHUB_OUTPUT
+          else
+            echo "fail-on-test-failure=false" >> $GITHUB_OUTPUT
+          fi
+
           echo "platform=${{ github.event.inputs.platform || 'Ubuntu 22.04' }}" >> $GITHUB_OUTPUT
           echo "build-type=${{ github.event.inputs['build-type'] || 'Release' }}" >> $GITHUB_OUTPUT
           echo "enable-lto=${{ github.event.inputs['enable-lto'] || 'false' }}" >> $GITHUB_OUTPUT
@@ -819,7 +827,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
       - name: Install dependencies
@@ -879,7 +887,7 @@ jobs:
     timeout-minutes: 30
     runs-on: >-
       ${{
-        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LLMBox' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
+        (needs.resolve-inputs.outputs.runner-label == 'topology-6u' || needs.resolve-inputs.outputs.runner-label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', needs.resolve-inputs.outputs.runner-label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', needs.resolve-inputs.outputs.runner-label)
       }}
     steps:
@@ -1026,7 +1034,7 @@ jobs:
     timeout-minutes: 720
     runs-on: >-
       ${{
-        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LLMBox' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
+        (matrix.test-group.runner_label == 'topology-6u' || matrix.test-group.runner_label == 'BH-LoudBox') && fromJSON(format('["{0}", "in-service", "bare-metal"]', matrix.test-group.runner_label))
         || format('tt-ubuntu-2204-{0}-viommu-stable', matrix.test-group.runner_label)
       }}
     steps:
@@ -1148,6 +1156,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-n300:
@@ -1171,6 +1180,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-p150b:
@@ -1194,6 +1204,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-t3k:
@@ -1217,6 +1228,7 @@ jobs:
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
 
   ttnn-sweeps-galaxy:
@@ -1238,6 +1250,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       skip-on-timeout: ${{ needs.resolve-inputs.outputs.skip-on-timeout }}
       measure-device-perf: ${{ needs.resolve-inputs.outputs.measure-device-perf }}
+      fail-on-test-failure: ${{ needs.resolve-inputs.outputs.fail-on-test-failure }}
       measure-e2e-perf: ${{ needs.resolve-inputs.outputs.measure-e2e-perf }}
       measure-memory: ${{ needs.resolve-inputs.outputs.measure-memory }}
       mesh-shape: ${{ needs.resolve-inputs.outputs.mesh-shape }}
@@ -1255,7 +1268,7 @@ jobs:
     if: |
       always() &&
       !cancelled() &&
-      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'success')
+      (needs.ttnn-sweeps-n150.result == 'success' || needs.ttnn-sweeps-n150.result == 'failure' || needs.ttnn-sweeps-n300.result == 'success' || needs.ttnn-sweeps-n300.result == 'failure' || needs.ttnn-sweeps-p150b.result == 'success' || needs.ttnn-sweeps-p150b.result == 'failure' || needs.ttnn-sweeps-t3k.result == 'success' || needs.ttnn-sweeps-t3k.result == 'failure' || needs.ttnn-sweeps-galaxy.result == 'success' || needs.ttnn-sweeps-galaxy.result == 'failure')
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:

@@ -23,9 +23,7 @@ test_suite_bh_single_pcie_metal_unit_tests() {
 # Function test run BH UMD tests, should be any topology
 test_suite_bh_umd_unit_tests() {
     ./build/test/umd/blackhole/unit_tests
-    # Filter out the test that is failing due to local YAML files, see: https://github.com/tenstorrent/tt-metal/issues/24359
-    gtest_filter="-TestTTVisibleDevices.DifferentConstructors"
-    ./build/test/umd/api/api_tests --gtest_filter="$gtest_filter"
+    ./build/test/umd/api/api_tests
 }
 
 # Function to run BH single PCIe small ML model tests
@@ -84,7 +82,7 @@ test_suite_bh_single_pcie_llama_demo_tests() {
 }
 
 test_suite_bh_multi_pcie_metal_unit_tests() {
-    echo "[upstream-tests] Running BH LLMBox metal unit tests"
+    echo "[upstream-tests] Running BH multi-PCIe metal unit tests"
 
     # Health check loop. Needed due to the following issues:
     # https://tenstorrent.atlassian.net/browse/SYS-1634
@@ -106,9 +104,7 @@ test_suite_bh_multi_pcie_metal_unit_tests() {
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*:-*ChannelTrimming*"
 
     ./build/test/tt_metal/unit_tests_eth
-    if [[ "$hw_topology" == "blackhole_llmbox" ]]; then
-        pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb.py
-    elif [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
+    if [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_qb_ge.py
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/Sys_eng_smoke_tests/test_ccl_smoke_test_lb.py
@@ -122,7 +118,7 @@ test_suite_bh_multi_pcie_llama_demo_tests() {
 
     if [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
-    elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
+    elif [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
@@ -141,7 +137,7 @@ test_suite_bh_multi_pcie_llama_stress_tests() {
 
     if [[ "$hw_topology" == "blackhole_p300" ]]; then
         local data_parallel_devices="2"
-    elif [[ "$hw_topology" == "blackhole_llmbox" ]] || [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
+    elif [[ "$hw_topology" == "blackhole_qb_ge" ]]; then
         local data_parallel_devices="4"
     elif [[ "$hw_topology" == "blackhole_loudbox" ]]; then
         local data_parallel_devices="8"
@@ -165,7 +161,7 @@ test_suite_wh_6u_metal_unit_tests() {
 test_suite_wh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on WH 6U"
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
-    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_deadlock_stability_6U_galaxy.yaml
 }
 
 test_suite_wh_6u_model_unit_tests() {
@@ -180,10 +176,14 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+    # llama3 70b test disabled due to hang, see: https://github.com/tenstorrent/tt-metal/issues/46704
+    # FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
+
+    CI=true pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
@@ -208,9 +208,9 @@ test_suite_bh_6u_metal_unit_tests() {
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*:-*ChannelTrimming*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*:-*ChannelTrimming*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
-    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_common.yaml
+    RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
     # Deadlock stability tests - These validate 2D Torus (QSFP Link) stability
-    RELIABILITY_MODE=relaxed TT_METAL_CLEAR_L1=1 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
+    RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_deadlock_stability_bh_6U_galaxy.yaml
 
     # Dispatch
     build/test/tt_metal/unit_tests_eth --gtest_filter=UnitMeshCQMultiDeviceProgramFixture.ActiveEthKernelsSendInterleavedBufferAllConnectedChips
@@ -235,7 +235,7 @@ UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 test_suite_bh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on BH 6U Galaxy"
     ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic --num-iterations 1
-    ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_short_running.yaml
+    ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_short_running.yaml
 }
 
 test_suite_bh_6u_python_unit_tests() {
@@ -278,11 +278,6 @@ test_suite_bh_umd_unit_tests
 test_suite_bh_pcie_didt_tests
 test_suite_bh_single_pcie_python_unit_tests
 test_suite_bh_single_pcie_metal_unit_tests"
-
-hw_topology_test_suites["blackhole_llmbox"]="
-test_suite_bh_multi_pcie_metal_unit_tests
-test_suite_bh_pcie_didt_tests
-test_suite_bh_multi_pcie_llama_demo_tests"
 
 hw_topology_test_suites["blackhole_loudbox"]="
 test_suite_bh_multi_pcie_metal_unit_tests

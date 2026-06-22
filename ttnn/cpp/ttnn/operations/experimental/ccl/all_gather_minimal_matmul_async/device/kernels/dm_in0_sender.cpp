@@ -147,15 +147,26 @@ void kernel_main() {
     uint32_t backward_in0_core_order_index = in0_core_order_size - 2;
     uint32_t forward_in0_core_order_index = in0_core_order_size - 1;
 
-    auto mux_backward =
-        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
-            argidx, in0_core_order_index, backward_in0_core_order_index);
-    auto mux_forward =
-        parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
-            argidx, in0_core_order_index, forward_in0_core_order_index);
-
-    auto* mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
-    auto* mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
+    // Each fabric-sender core only parses + connects the SINGLE direction it actually uses.
+    // The program factory pushes RT args for exactly one direction per core, so argidx alignment
+    // stays correct. The unused-direction mux/handle is default-initialized (connection_valid=false)
+    // so close_mux below skips it.
+    MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> mux_backward{};
+    MuxConnection<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes> mux_forward{};
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle_backward =
+        nullptr;
+    tt::tt_fabric::WorkerToFabricMuxSender<fabric_mux_num_buffers_per_channel>* mux_connection_handle_forward = nullptr;
+    if (in0_core_order_index == backward_in0_core_order_index) {
+        mux_backward =
+            parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+                argidx, in0_core_order_index, backward_in0_core_order_index);
+        mux_connection_handle_backward = mux_backward.build_and_connect(fabric_mux_status_address);
+    } else if (in0_core_order_index == forward_in0_core_order_index) {
+        mux_forward =
+            parse_mux_connection_args<fabric_mux_num_buffers_per_channel, fabric_mux_channel_buffer_size_bytes>(
+                argidx, in0_core_order_index, forward_in0_core_order_index);
+        mux_connection_handle_forward = mux_forward.build_and_connect(fabric_mux_status_address);
+    }
 #endif
 
 #ifdef FUSE_BIAS
@@ -631,7 +642,7 @@ void kernel_main() {
             mux_connection_handle_backward,
             mux_backward.is_termination_master,
             mux_backward.termination_sync_address,
-            num_mux_clients,
+            mux_backward.num_mux_clients,
             mux_backward.fabric_mux_x,
             mux_backward.fabric_mux_y,
             fabric_mux_termination_signal_address,
@@ -643,7 +654,7 @@ void kernel_main() {
             mux_connection_handle_forward,
             mux_forward.is_termination_master,
             mux_forward.termination_sync_address,
-            num_mux_clients,
+            mux_forward.num_mux_clients,
             mux_forward.fabric_mux_x,
             mux_forward.fabric_mux_y,
             fabric_mux_termination_signal_address,

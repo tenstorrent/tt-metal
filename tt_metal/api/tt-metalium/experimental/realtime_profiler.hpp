@@ -6,19 +6,21 @@
 
 #include <cstdint>
 #include <functional>
-#include <string>
-#include <vector>
+#include <span>
+#include <string_view>
 
 namespace tt::tt_metal::experimental {
 
 // Record passed to registered callbacks when real-time profiler data arrives from a device.
 struct ProgramRealtimeRecord {
-    uint32_t program_id;                      // Runtime program ID
-    uint64_t start_timestamp;                 // Device start timestamp (raw ticks)
-    uint64_t end_timestamp;                   // Device end timestamp (raw ticks)
-    double frequency;                         // Device clock frequency (cycles per ns)
-    uint32_t chip_id;                         // Device chip ID
-    std::vector<std::string> kernel_sources;  // Kernel source paths for this program
+    uint32_t runtime_id;                               // Runtime ID. Currently truncated to 16 bits;
+                                                       // widening tracked in #46103.
+    uint32_t chip_id;                                  // Device chip ID
+    uint64_t start_timestamp;                          // Device start timestamp (raw ticks)
+    uint64_t end_timestamp;                            // Device end timestamp (raw ticks)
+    double frequency;                                  // Device clock frequency (cycles per ns)
+    std::span<const std::string_view> kernel_sources;  // Kernel source paths; valid until
+                                                       // MetalContext teardown or reinitialization.
 };
 
 // Callback type for real-time profiler data.

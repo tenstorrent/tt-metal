@@ -136,6 +136,13 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
 }
 
 void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
+    if (h2d_mode_ != H2DMode::HOST_PUSH) {
+        // DEVICE_PULL: data FIFO lives in pinned host memory; no device-side L1
+        // allocation needed.
+        write_ptr_ = 0;
+        return;
+    }
+
     auto& svc = tt::tt_metal::MetalContext::instance().get_service_core_manager();
     auto* recv_device = mesh_device->get_device(recv_core_.device_coord);
     if (svc.claimed_cores(recv_device->id()).contains(recv_core_.core_coord)) {
@@ -514,14 +521,18 @@ void H2DSocket::set_page_size(uint32_t page_size) {
 }
 
 void H2DSocket::barrier(std::optional<uint32_t> timeout_ms) {
-    // Sync bytes_sent_ from SHM so a separate connector process's pushes are visible.
-    if (connector_state_) {
-        tt_driver_atomics::mfence();
-        bytes_sent_ = connector_state_->bytes_sent;
-    }
+    // Re-sync bytes_sent_ from connector SHM each iteration (mirrors D2HSocket::barrier).
+    auto refresh_connector_write_state = [this]() {
+        if (connector_state_) {
+            tt_driver_atomics::mfence();
+            bytes_sent_ = connector_state_->bytes_sent;
+        }
+    };
+    refresh_connector_write_state();
     volatile uint32_t bytes_acked_value = bytes_acked_ptr_[0];
     auto start_time = std::chrono::high_resolution_clock::now();
     while (bytes_sent_ - bytes_acked_value != 0) {
+        refresh_connector_write_state();
         tt_driver_atomics::mfence();
         bytes_acked_value = bytes_acked_ptr_[0];
         if (timeout_ms.has_value()) {
