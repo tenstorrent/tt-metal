@@ -15,6 +15,7 @@ import struct
 
 import pytest
 import torch
+from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, skip_for_slow_dispatch
@@ -55,6 +56,10 @@ def test_h2d_socket_sync_single_device(mesh_device):
         worker_cores=worker_cores,
         metadata_size_bytes=_METADATA_SIZE_BYTES,
     )
+    logger.info(
+        f"[h2d_socket_sync] service built: mesh={tuple(mesh_device.shape)}, isl={_ISL}, "
+        f"per_row_bytes={per_row_bytes}, metadata_size_bytes={_METADATA_SIZE_BYTES}, iters={_NUM_ITERS}"
+    )
 
     op_cache_delta = []
     for i in range(_NUM_ITERS):
@@ -76,8 +81,18 @@ def test_h2d_socket_sync_single_device(mesh_device):
         meta_vals = ttnn.to_torch(ttnn.get_device_tensors(tt_meta)[0]).view(-1).to(torch.int64)[:3].tolist()
         assert meta_vals == [i, 0, _ISL], f"iter {i}: metadata mismatch {meta_vals}"
 
+        logger.info(
+            f"[h2d_socket_sync] iter {i}: synced {per_row_bytes} B/row, tokens byte-exact, "
+            f"metadata={meta_vals}, program_cache_delta={op_cache_delta[i]}"
+        )
+
     assert op_cache_delta[0] >= 1, f"expected a program-cache entry on the first call: {op_cache_delta}"
     assert all(d == 0 for d in op_cache_delta[1:]), f"op recompiled instead of cache-hitting: {op_cache_delta}"
+
+    logger.info(
+        f"[h2d_socket_sync] PASS: {_NUM_ITERS} iters byte-exact + metadata round-trip, "
+        f"program-cached (deltas={op_cache_delta})"
+    )
 
     service.barrier()
     del service
