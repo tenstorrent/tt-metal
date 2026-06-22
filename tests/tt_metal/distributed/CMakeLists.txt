@@ -15,6 +15,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_hd_sockets.cpp
     test_layer_completion_layout.cpp
     test_layer_completion_queue.cpp
+    test_layer_completion_queue_mpsc.cpp
     test_mesh_sub_device.cpp
     test_mesh_allocator.cpp
     test_mesh_events.cpp
