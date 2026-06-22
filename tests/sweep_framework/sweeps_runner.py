@@ -602,6 +602,7 @@ def _execute_vector_with_retry(
                 p = None
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(result.get("message", "DEVICE HANG"))
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 reset_util.reset()
                 if child_mode:
                     p = Process(target=run, args=(module_name, input_queue, output_queue, config))
