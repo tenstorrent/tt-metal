@@ -23,7 +23,15 @@ import psutil
 import torch
 from loguru import logger
 from transformers import DynamicCache
-from transformers.modeling_utils import no_init_weights
+
+from models.common.utility_functions import hf_cache_layer_kv
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 
@@ -648,7 +656,7 @@ def load_and_compute_layer_by_layer(
 
     # Extract KVPE if computed reference
     if compute_reference:
-        ref_kvpe_list = [ref_cache.key_cache[i] for i in range(num_layers)]
+        ref_kvpe_list = [hf_cache_layer_kv(ref_cache, i)[0] for i in range(num_layers)]
 
     # --- Process Norm ---
     logger.info("Processing norm...")
