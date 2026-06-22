@@ -98,9 +98,11 @@ struct ExpRingJointSDPAInputs {
     Tensor input_q;
     Tensor input_k;
     Tensor input_v;
-    Tensor joint_q;
-    Tensor joint_k;
-    Tensor joint_v;
+    // Optional: absent for self-attention. When absent they aren't enumerated as op inputs, avoiding
+    // the duplicate-Buffer* footgun that freezes cache-hit addresses (#45452 / #45391). Mirrors ring_joint.
+    std::optional<Tensor> joint_q;
+    std::optional<Tensor> joint_k;
+    std::optional<Tensor> joint_v;
     Tensor gathered_k;
     Tensor gathered_v;
 };

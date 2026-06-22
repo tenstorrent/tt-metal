@@ -78,8 +78,9 @@ void kernel_main() {
     noc_async_atomic_barrier();
 #endif
 
-#if IS_TILE_LAYOUT
-    // ===== Untilized-data send path =====
+    // ===== Untilized-data send path (runs for both TILE_LAYOUT and ROW_MAJOR) =====
+    // cb_untilize_id (c_2) is filled by the compute kernel in TILE_LAYOUT or directly by
+    // reader_untilize in ROW_MAJOR; either way this kernel forwards each row to the sender.
     //
     // Compile-time args (appended after the output-zeroing TensorAccessorArgs block):
     //   +0: cb_untilize_id                        - CB into which compute pushes untilized batches
@@ -318,5 +319,4 @@ void kernel_main() {
     noc_semaphore_inc(sender_data_ready_noc_addr, 1);
     noc_async_atomic_barrier();
     cb_pop_front(cb_experts_tok_counter_id, cb_counter_total_pages);
-#endif
 }

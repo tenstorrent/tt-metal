@@ -19,7 +19,7 @@ PREFILL_CHUNK_OUTPUT_TOKENS = 5 * 1024
 
 
 def create_kv_chunk_address_table_ds(
-    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes
+    config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users=1
 ):
     """
     Create and populate a KV chunk address table for disaggregation.
@@ -32,10 +32,13 @@ def create_kv_chunk_address_table_ds(
         sp_axis: Sequence parallel axis
         tt_kvpe_cache: Initialized KVPE cache on device
         chunk_size_bytes: Size of each chunk in bytes
+        num_users: number of per-user cache slots (multi-user balanced layout is a follow-up;
+            only num_users == 1 is supported here)
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
     """
+    assert num_users == 1, "create_kv_chunk_address_table_ds (balanced) supports only num_users == 1"
     lookup_table = ttnn.experimental.disaggregation.KvChunkAddressTable(config)
 
     host_name = socket.gethostname()

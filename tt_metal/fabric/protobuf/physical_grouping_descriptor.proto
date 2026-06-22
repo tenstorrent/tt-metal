@@ -39,13 +39,13 @@ package tt.tt_fabric.proto;
 //     Mixing ASIC locations and grouping references across instances in the same Grouping is invalid.
 //
 // Example textproto:
-//   # Using predefined keywords (preset_type)
+//   # Tray as a custom grouping; tray_id only inside location { ... }
 //   groupings {
-//     name: "tray_1_cluster_0"
-//     preset_type: TRAY_1
+//     name: "tray_1"
+//     custom_type: "tray_1"
 //     instances: [
-//       { id: 0 asic_location: ASIC_LOCATION_0 },
-//       { id: 1 asic_location: ASIC_LOCATION_1 },
+//       { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } },
+//       { id: 1 location { asic_location: ASIC_LOCATION_2 tray_id: TRAY_1 } },
 //       # ... through ASIC_LOCATION_8
 //     ]
 //   }
@@ -53,8 +53,8 @@ package tt.tt_fabric.proto;
 //     name: "mesh_16x8_quad"
 //     preset_type: MESH
 //     instances: [
-//       { id: 0 grouping_ref { preset_type: TRAY_1 } },
-//       { id: 1 grouping_ref { preset_type: TRAY_2 } }
+//       { id: 0 grouping_ref { custom_type: "tray_1" } },
+//       { id: 1 grouping_ref { custom_type: "tray_2" } }
 //     ]
     //     row_major_mesh {
     //       dims: [2, 1]
@@ -129,13 +129,19 @@ enum AsicLocation {
     ASIC_LOCATION_UNSPECIFIED = 256;
 }
 
-// Predefined grouping keywords - special reserved names for preset groups
-enum GroupingKeyword {
-    GROUPING_KEYWORD_UNSPECIFIED = 0;
+// Tray identifier for instances (optional on Instance; default is UNSET when omitted).
+enum TrayId {
+    TRAY_ID_UNSET = 0;
     TRAY_1 = 1;
     TRAY_2 = 2;
     TRAY_3 = 3;
     TRAY_4 = 4;
+}
+
+// Predefined grouping keywords - special reserved names for preset groups
+enum GroupingKeyword {
+    GROUPING_KEYWORD_UNSPECIFIED = 0;
+    reserved 1, 2, 3, 4;  // formerly TRAY_1 .. TRAY_4 preset grouping types
     HOSTS = 5;
     MESH = 6;
 }
@@ -148,12 +154,21 @@ message GroupingReference {
     // VALIDATION: Must match at least one Grouping.type in PhysicalGroupings.groupings
     // Forward references are allowed (can reference a grouping defined later in the file)
     oneof grouping_type {
-        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
+        // Predefined keyword (HOSTS, MESH)
         GroupingKeyword preset_type = 1;
 
         // Custom grouping type (e.g., "hosts", "meshes", "pods", "superpods", "halftray")
         string custom_type = 2;
     }
+}
+
+// Physical ASIC slot: board location within a tray plus optional tray constraint.
+message Location {
+    // ASIC position within the tray (ASIC_LOCATION_1 .. ASIC_LOCATION_8, or UNSPECIFIED).
+    AsicLocation asic_location = 1;
+
+    // Optional tray constraint. Defaults to TRAY_ID_UNSET when omitted (no tray constraint for this node).
+    optional TrayId tray_id = 2;
 }
 
 // A single instance in a grouping - represents one unit
@@ -165,10 +180,10 @@ message Instance {
 
     // Instance type - EXACTLY ONE must be set (enforced by oneof)
     oneof instance_type {
-        // Single ASIC location enum value
-        AsicLocation asic_location = 2;
+        // Physical ASIC slot (asic_location + optional tray_id)
+        Location location = 2;
 
-        // Reference to another grouping
+        // Reference to another grouping (e.g. custom_type: "tray_1")
         GroupingReference grouping_ref = 3;
     }
 }
@@ -232,7 +247,7 @@ message Grouping {
     //   - Multiple Grouping messages can have the same type (allowed for custom groupings)
     //   - Examples: preset_type: MESH, custom_type: "pods", custom_type: "superpods"
     oneof type {
-        // Predefined keyword (TRAY_1, TRAY_2, TRAY_3, TRAY_4, MESH)
+        // Predefined keyword (HOSTS, MESH)
         GroupingKeyword preset_type = 2;
 
         // Custom grouping type (e.g., "meshes", "pods", "superpods", "clusters", "halftray", "trays", "hosts")
@@ -246,7 +261,7 @@ message Grouping {
     //   - Each instance must have a unique id within this grouping
     //   - Each instance must have exactly one of: asic_location or grouping_ref (enforced by oneof)
     //   - At least 1 instance required
-    // Example for trays: [Instance { id: 0 asic_location: ASIC_LOCATION_1 }, ...]
+    // Example for trays: [Instance { id: 0 location { asic_location: ASIC_LOCATION_1 tray_id: TRAY_1 } }, ...]
     // Example for meshes: [Instance { id: 0 grouping_ref { custom_type: "hosts" } }, ...]
     // Example for pods: [Instance { id: 0 grouping_ref { custom_type: "meshes" } }, Instance { id: 1 grouping_ref { custom_type: "meshes" } }]
     repeated Instance instances = 4;

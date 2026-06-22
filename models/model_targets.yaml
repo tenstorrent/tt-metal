@@ -1027,10 +1027,12 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
-            # decode_t/s/u is run-to-run unstable (observed 14.4–18.3 across runs);
-            # target the midpoint with a wide tolerance. See issue #46214.
+            # decode_t/s/u is run-to-run unstable (see issue #46214). Recent
+            # scheduled runs have shifted up (measured 20.6-21.9 across the last
+            # week), so center raised 16.0 -> 20.0 while keeping the wide 0.2
+            # tolerance ([16, 24]) to absorb the run-to-run swing.
             perf:
-              decode_t/s/u: 16.0
+              decode_t/s/u: 20.0
               decode_t_s_u_tolerance: 0.2
               prefill_time_to_first_token: 105
             accuracy: {}
@@ -1050,8 +1052,10 @@ targets:
               # gross regressions without flaking on the swing.
               prefill_time_to_first_token: 351
               prefill_time_to_first_token_tolerance: 0.4
-              decode_t/s/u: 19.9
-              decode_t/s: 19.9
+              # decode raised 19.9 -> 23.8: 4/4 recent scheduled runs measured
+              # 23.1-24.4 t/s/u on wh_llmbox_perf (consistently above old target).
+              decode_t/s/u: 23.8
+              decode_t/s: 23.8
             accuracy: {}
             owner_id: U07RY6B5FLJ # Gongyu Wang
             team: models
@@ -1110,11 +1114,15 @@ targets:
           - batch_size: 32
             seq_len: 686
             status: active
+            # Targets raised to match sustained perf on bh_quietbox_2 (p300x2):
+            # 6/6 recent scheduled runs measured decode_t/s ~680-703, t/s/u ~21.8,
+            # TTFT ~86-88ms (old targets 278 / 18.7 / 207 were stale). decode_t/s
+            # = batch_size * decode_t/s/u (32 * 21.6 ~= 691).
             perf:
-              prefill_time_to_first_token: 207
+              prefill_time_to_first_token: 87
               prefill_time_to_first_token_tolerance: 0.2
-              decode_t/s/u: 18.7
-              decode_t/s: 278
+              decode_t/s/u: 21.6
+              decode_t/s: 691
             accuracy: {}
             owner_id: U03PUAKE719 # Miguel Tairum Cruz
             team: models

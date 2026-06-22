@@ -5,7 +5,6 @@
 #include "permute.hpp"
 
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
 #include <tt-metalium/hal.hpp>
@@ -26,15 +25,6 @@ inline bool is_rm_block_or_width_sharded(const ttnn::Tensor& t) {
            ml == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
 }
 
-inline bool is_block_or_width_sharded_mc(const std::optional<MemoryConfig>& mc) {
-    if (!mc.has_value() || !mc->is_sharded()) {
-        return false;
-    }
-    auto ml = mc->memory_layout();
-    return ml == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
-           ml == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED;
-}
-
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
@@ -42,27 +32,17 @@ ttnn::Tensor permute_impl(
     float pad_value = 0.0f) {
     uint32_t rank = a.logical_shape().rank();
 
-    // RM width/block sharded rows span multiple cores; unshard first, then
-    // permute on interleaved data and reshard if needed.
-    const bool in_bad = is_rm_block_or_width_sharded(a);
-    const bool out_bad = a.layout() == Layout::ROW_MAJOR && is_block_or_width_sharded_mc(output_mem_config);
-    if (in_bad || out_bad) {
+    // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
+    // Input-side guard only; irregular output shapes are safe (writers emit full rows, compute_output_specs synthesises
+    // a valid spec).
+    const auto& input_logical = a.logical_shape();
+    const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
+                                                            input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
+    if (is_rm_block_or_width_sharded(a) && irregular_hw) {
         const auto interleaved_l1 =
             MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
-        auto x = in_bad ? ttnn::to_memory_config(a, interleaved_l1, std::nullopt) : a;
-        auto intermediate_mc = out_bad ? std::optional<MemoryConfig>(interleaved_l1) : output_mem_config;
-        // Safe: x is interleaved and intermediate_mc is interleaved, so re-entry skips this block.
-        auto result = permute_impl(x, dims, intermediate_mc, pad_value);
-        if (out_bad) {
-            MemoryConfig final_mc = output_mem_config.value();
-            if (!final_mc.shard_spec().has_value()) {
-                auto shard_spec =
-                    transpose::generate_transpose_shard_spec(result, result.padded_shape(), final_mc.memory_layout());
-                final_mc = final_mc.with_shard_spec(shard_spec);
-            }
-            result = ttnn::to_memory_config(result, final_mc, std::nullopt);
-        }
-        return result;
+        auto x = ttnn::to_memory_config(a, interleaved_l1, std::nullopt);
+        return permute_impl(x, dims, output_mem_config, pad_value);
     }
 
     auto prim_permute = [&](const ttnn::Tensor& input) -> ttnn::Tensor {

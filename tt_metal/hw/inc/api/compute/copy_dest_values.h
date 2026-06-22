@@ -73,6 +73,6 @@ ALWI void copy_dest_values(uint32_t idst_in, uint32_t idst_out) {
         VectorMode::RC)));
 }
 
-ALWI void copy_dest_values_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::copy_dest_value_init))); }
+ALWI void copy_dest_values_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(unused, sfpu::copy_dest_value_init))); }
 
 }  // namespace ckernel

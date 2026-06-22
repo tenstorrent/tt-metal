@@ -10,6 +10,7 @@
 #include "ckernel_include.h"
 #include "ckernel_ops.h"
 #include "cmath_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel::math;
 
@@ -66,6 +67,9 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
 template <bool is_fp32_dest_acc_en = false>
 inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    // LLK sanitizer hooks
+    llk::san::math_operand_configure(srca_data_format, srcb_data_format);
+
     // Configure ZEROACC to auto-detect destination bank (non-legacy mode).
     cfg_reg_rmw_tensix<DEST_ACCESS_CFG_zeroacc_absolute_tile_mode_RMW>(0);
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH);
@@ -78,16 +82,8 @@ inline void _llk_math_hw_configure_(const std::uint32_t srca_data_format, const 
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
     cfg_reg_rmw_tensix<ALU_ACC_CTRL_SFPU_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
 
-    // Workaround for HW bugs:
-    // budabackend#1948: int32 dest and movd2a/b with int8 srcA/B
-    // budabackend#1948: fp32 dest and movd2a/b with UInt16 srcA/B
-    bool uint16_with_fp32_dest = is_fp32_dest_acc_en && ((srca_data_format == ckernel::to_underlying(DataFormat::UInt16)) ||
-                                                         (srcb_data_format == ckernel::to_underlying(DataFormat::UInt16)));
-
-    if (int8_math_enabled || uint16_with_fp32_dest)
-    {
-        _llk_math_dbg_feature_disable_();
-    }
+    // Establish the operand-driven baseline for the Src zero-substitution flag.
+    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 
 /**
@@ -192,6 +188,8 @@ inline void _llk_math_pack_sync_init_()
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_format)
 {
+    llk::san::math_operand_configure<true>(srca_data_format, llk::san::IGNORE);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
@@ -200,6 +198,9 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
                                           (srca_data_format == ckernel::to_underlying(DataFormat::Int32));
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcA format.
+    _configure_default_zero_flag_state_(srca_data_format, src_zero_flag_srcb_fmt);
 }
 
 /**
@@ -215,6 +216,8 @@ inline void _llk_math_reconfig_data_format_srca_(const std::uint32_t srca_data_f
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_format)
 {
+    llk::san::math_operand_configure<true>(llk::san::IGNORE, srcb_data_format);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
@@ -223,6 +226,9 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
                                           (srcb_data_format == ckernel::to_underlying(DataFormat::Int32));
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new SrcB format.
+    _configure_default_zero_flag_state_(src_zero_flag_srca_fmt, srcb_data_format);
 }
 
 /**
@@ -240,6 +246,8 @@ inline void _llk_math_reconfig_data_format_srcb_(const std::uint32_t srcb_data_f
 template <bool is_fp32_dest_acc_en, bool to_from_int8 = false>
 inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format, const std::uint32_t srcb_data_format)
 {
+    llk::san::math_operand_configure<true>(srca_data_format, srcb_data_format);
+
     if constexpr (to_from_int8)
     {
         static_assert(is_fp32_dest_acc_en, "Reconfiguring math to/from Int8 formats requires FP32 Dest mode enabled");
@@ -250,6 +258,9 @@ inline void _llk_math_reconfig_data_format_(const std::uint32_t srca_data_format
                                           (srcb_data_format == ckernel::to_underlying(DataFormat::Int32));
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_INT8_math_enabled_RMW>(int8_math_enabled);
     }
+
+    // Re-establish the operand-driven baseline (clears stale op-state) for the new formats.
+    _configure_default_zero_flag_state_(srca_data_format, srcb_data_format);
 }
 
 /**

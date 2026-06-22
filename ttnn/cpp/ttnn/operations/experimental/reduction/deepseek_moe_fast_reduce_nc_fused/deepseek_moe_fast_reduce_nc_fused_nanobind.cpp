@@ -44,6 +44,19 @@ void bind_deepseek_moe_fast_reduce_nc_fused(nb::module_& mod) {
                 ROW_MAJOR layout, DRAM. If omitted, calls :func:`~ttnn.experimental.deepseek_moe_fast_reduce_nc`
                 instead (no fused multiply by scores). The expert_indices_tensor /
                 expert_mapping_tensor / cluster_axis arguments are ignored on that fallback path.
+            num_shared_experts (int, optional): number of shared experts occupying the trailing
+                slots of the reduce dimension, whose size is
+                ``reduction_dim_size = num_routed_experts + num_shared_experts``. The leading
+                ``num_routed_experts`` slots are scaled by per-token ``scores_tensor`` values; the
+                trailing shared-expert slots are scaled by the constant ``shared_expert_scale``
+                instead. The ``scores_tensor`` last dim must equal ``num_routed_experts``
+                (``= reduction_dim_size - num_shared_experts``). This is the *logical* shared-expert
+                count — matching the all_to_all_dispatch / ``select_experts_k + num_shared_experts``
+                layout — NOT the per-device ``num_shared_experts_per_device`` used by
+                ``ttnn.experimental.moe_compute``. Defaults to 0.
+            shared_expert_scale (float, optional): constant scale applied to each shared expert's
+                contribution inside the reduce loop, used in place of the per-token scores that
+                exist only for routed experts. Defaults to 1.0.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig): optional compute config.
 
         Returns:
