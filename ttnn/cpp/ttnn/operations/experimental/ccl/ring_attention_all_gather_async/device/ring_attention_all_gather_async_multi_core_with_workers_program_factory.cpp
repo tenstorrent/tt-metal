@@ -124,7 +124,8 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     const CoreCoord core_grid_offset,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
-    std::optional<uint32_t> input_batch_slice_idx) {
+    std::optional<uint32_t> input_batch_slice_idx,
+    std::optional<uint32_t> gather_valid_Ht) {
     using tt::tt_metal::CBDescriptor;
     using tt::tt_metal::CBFormatDescriptor;
     using tt::tt_metal::KernelDescriptor;
@@ -451,9 +452,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
 
             const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
             const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
-            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_HEIGHT;
             TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
             TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
 
@@ -481,6 +482,15 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             tensor_descriptor_args.push_back(input_tile_id_start);  // 5 == input_tile_id_start
             tensor_descriptor_args.push_back(input_tile_id_end);    // 6 == input_tile_id_end
             tensor_descriptor_args.push_back(input_batch_base);     // 7 == input_batch_base (phase-1 input page offset)
+            // 8 == valid pages per (batch,head) to gather. Default: full input slab (no clamp). When
+            // gather_valid_Ht is set (fused ring_joint_sdpa with an oversized cache), bound it to the
+            // first gather_valid_Ht tile-rows so only kv_actual-sized data moves. The fused path also
+            // re-patches this per dispatch on cache hits (apply_ring_joint_scalar_runtime_args); setting
+            // it here makes the cache-miss (first) dispatch bounded too.
+            const uint32_t valid_pages_per_batch_head =
+                gather_valid_Ht.has_value() ? std::min(*gather_valid_Ht, input_tensor_Ht) * input_tensor_Wt
+                                            : single_batch_head_num_pages;
+            tensor_descriptor_args.push_back(valid_pages_per_batch_head);  // 8 == valid_pages_per_batch_head
         }
 
         KernelDescriptor::RTArgList reader_forward_rt_args;
