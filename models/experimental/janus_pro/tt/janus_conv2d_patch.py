@@ -1,7 +1,10 @@
 """
-This is the Conv2dPath of Janus-Pro-7B
-We have reused the exisiting Conv2dPath of TtLlamaConv2dPath with few modifications.
-We have added a check for weight to convert 4D to 2D
+Conv2d patch-embedding for the Janus-Pro-7B vision model.
+
+The convolution weight is folded into a 2D matrix so the patch projection runs
+as a single ttnn.linear over the unfolded input. A 4D conv weight is reshaped to
+(out_channels, in_channels * kernel_size**2); its inner dimension is zero-padded
+to a tile multiple.
 """
 
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
