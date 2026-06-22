@@ -101,42 +101,6 @@ jobs:
           # if ccache does not forward |endpoint_url=... as CRSH_ATTR_* (defensive belt-and-suspenders).
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
-      - name: Fetch ccache-storage-s3 helper for the manylinux container
-        # The pre-built manylinux image only copies /usr/local/bin/ccache from the
-        # ccache tool layer — it drops /usr/local/libexec, which is where the
-        # ccache-storage-s3 helper lives. The ccache binary derives the helper name
-        # from the s3:// scheme and looks it up in its baked-in libexecdir
-        # (/usr/local/libexec); when the helper is absent the first compile fails with
-        # "ccache: error: unknown remote storage scheme: s3". dockerfile/Dockerfile.manylinux
-        # now copies libexec too, but pre-built images on older tags still lack it, so we
-        # download the helper on the HOST runner (which has proxy egress to GitHub) and
-        # volume-mount it into the cibuildwheel container at the path ccache searches.
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
-        env:
-          # Keep in sync with STORAGE_HELPER_VERSION/SHA256 in dockerfile/scripts/install-ccache.sh
-          STORAGE_HELPER_VERSION: "0.1.7"
-          STORAGE_HELPER_SHA256: "3ac52edbcbda895c5514f13eac39e6d9a9e2550234b331c8e14050a94b79854c"
-        run: |
-          set -euo pipefail
-          HELPER_DIR="${RUNNER_TEMP}/ccache-helper"
-          mkdir -p "${HELPER_DIR}"
-          URL="https://github.com/blozano-tt/ccache-storage-s3-go/releases/download/v${STORAGE_HELPER_VERSION}/ccache-storage-s3-go-${STORAGE_HELPER_VERSION}-linux-amd64.tar.gz"
-          TARBALL="${HELPER_DIR}/helper.tar.gz"
-          curl -fsSL -o "${TARBALL}" "${URL}"
-          echo "${STORAGE_HELPER_SHA256}  ${TARBALL}" | sha256sum -c -
-          tar -xzf "${TARBALL}" -C "${HELPER_DIR}"
-          rm -f "${TARBALL}"
-          BIN=$(find "${HELPER_DIR}" -type f -name 'ccache-storage-s3*' | head -n 1)
-          if [ -z "${BIN}" ]; then
-            echo "ERROR: ccache-storage-s3 binary not found in tarball" >&2
-            exit 1
-          fi
-          # Land it at a stable path the build step mounts into the container.
-          TARGET="${HELPER_DIR}/ccache-storage-s3.bin"
-          install -m 0755 "${BIN}" "${TARGET}"
-          echo "CCACHE_S3_HELPER_PATH=${TARGET}" >> "$GITHUB_ENV"
-          echo "Fetched ccache-storage-s3 helper to ${TARGET}"
-
       # NOTE: build-artifact.yaml has a curl-based "Verify S3 connectivity" probe, but we do
       # NOT replicate it here. That probe relies on `curl --aws-sigv4` sending the
       # X-Amz-Content-Sha256 header, which Garage requires. The Ubuntu CI image used by
@@ -184,14 +148,6 @@ jobs:
           CIBW_BUILD: "cp${{ steps.format_python_version.outputs.python_version_nodot }}-manylinux_x86_64*"
           CIBW_SKIP: "*-musllinux_*"
           CIBW_BUILD_FRONTEND: build
-          # Mount the ccache-storage-s3 helper (fetched on the host above) into the
-          # container at ccache's baked-in libexecdir so the s3:// remote-storage scheme
-          # resolves. Without this the manylinux image's ccache (which only has bin/ccache,
-          # not libexec/ccache-storage-s3) aborts every compile with
-          # "unknown remote storage scheme: s3". Empty when the helper wasn't fetched
-          # (forks): cibuildwheel ignores an empty CIBW_CONTAINER_ENGINE and CCACHE_REMOTE_ONLY
-          # keeps a missing helper non-fatal so the build still proceeds.
-          CIBW_CONTAINER_ENGINE: "${{ env.CCACHE_S3_HELPER_PATH && format('docker; create_args: --volume {0}:/usr/local/libexec/ccache-storage-s3:ro', env.CCACHE_S3_HELPER_PATH) || '' }}"
           CIBW_ENVIRONMENT: >-
             CCACHE_REMOTE_ONLY=true
             CCACHE_TEMPDIR=/tmp/ccache
