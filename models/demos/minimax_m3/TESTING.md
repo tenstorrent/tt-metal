@@ -80,6 +80,23 @@ grep -iE "ep-moe|pcc|PASS|FAIL" /tmp/ep_moe.log
 
 ---
 
+## 3. Numerical oracle — correctness vs the real `minimax_m3_vl` (no device, no download)
+
+Our `*_vs_ref` tests compare TTNN against *self-authored* torch refs (we wrote both sides). This
+script closes the loop by checking those refs against the **upstream `transformers minimax_m3_vl`**
+(needs transformers ≥5.12, which our ttnn venv doesn't have). It runs in an **ephemeral env** — no
+touch to `python_env`, no checkpoint, CPU only:
+
+```bash
+uv run --no-project --with "transformers>=5.12" --with "torch" --python 3.10 \
+    python models/demos/minimax_m3/tests/oracle_minimax_m3_vl_pcc.py
+```
+
+Expect `PCC = 1.000000` on RMSNorm / DenseMLP / SparseMoeBlock / Attention (both fp32, same random
+weights). Together with the device tests: `TTNN ==(device PCC)== our refs ==(this, exact)== real M3`.
+
+---
+
 ## Notes / gotchas
 
 - **Why `(8,4)` for TP=4 and not `(1,4)`:** the stock MGD is `[8,4]`; `(8,4)` gives tp=4 with the 8
