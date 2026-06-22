@@ -1,0 +1,68 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16",
+      "FLOAT32",
+      "BFLOAT8_B"
+    ],
+    "layout": [
+      "TILE",
+      "ROW_MAJOR"
+    ],
+    "alignment": [
+      "tile_aligned",
+      "w_non_aligned",
+      "h_non_aligned"
+    ],
+    "rank": [
+      2,
+      3,
+      4
+    ],
+    "fp32_dest_acc_en": [
+      true,
+      false
+    ],
+    "gamma_mode": [
+      "gamma",
+      "no_gamma"
+    ],
+    "gamma_dtype": [
+      "BFLOAT16",
+      "FLOAT32",
+      "BFLOAT8_B"
+    ],
+    "gamma_layout": [
+      "TILE",
+      "ROW_MAJOR"
+    ]
+  },
+  "exclusions": [
+    {
+      "dtype": "FLOAT32",
+      "fp32_dest_acc_en": false
+    }
+  ],
+  "invalid": [
+    {
+      "dtype": "BFLOAT8_B",
+      "layout": "ROW_MAJOR"
+    },
+    {
+      "gamma_dtype": "BFLOAT8_B",
+      "gamma_layout": "ROW_MAJOR"
+    },
+    {
+      "gamma_mode": "no_gamma",
+      "gamma_dtype": "BFLOAT16"
+    },
+    {
+      "gamma_mode": "no_gamma",
+      "gamma_dtype": "BFLOAT8_B"
+    },
+    {
+      "gamma_mode": "no_gamma",
+      "gamma_layout": "ROW_MAJOR"
+    }
+  ]
+}

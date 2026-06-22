@@ -1,0 +1,38 @@
+{
+  "dtype": [
+    "FLOAT32",
+    "BFLOAT16",
+    "BFLOAT8_B"
+  ],
+  "fp32_dest_acc_en": [
+    true,
+    false
+  ],
+  "layout": [
+    "TILE",
+    "ROW_MAJOR"
+  ],
+  "alignment": [
+    "tile_aligned",
+    "w_non_aligned",
+    "h_non_aligned"
+  ],
+  "rank": [
+    2,
+    3,
+    4
+  ],
+  "gamma_mode": [
+    "gamma",
+    "no_gamma"
+  ],
+  "gamma_dtype": [
+    "FLOAT32",
+    "BFLOAT16",
+    "BFLOAT8_B"
+  ],
+  "gamma_layout": [
+    "TILE",
+    "ROW_MAJOR"
+  ]
+}

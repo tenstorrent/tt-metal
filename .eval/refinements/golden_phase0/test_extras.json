@@ -1,0 +1,5 @@
+{
+  "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[1x1x32x16384-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]": {},
+  "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[1x1x32x32768-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]": {},
+  "eval/golden_tests/rms_norm/test_golden.py::test_op_loose[1x1x64x12288-alignment=tile_aligned-dtype=BFLOAT16-fp32_dest_acc_en=True-gamma_dtype=BFLOAT16-gamma_layout=TILE-gamma_mode=gamma-layout=TILE-rank=4]": {}
+}

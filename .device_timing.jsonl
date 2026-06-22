@@ -86,3 +86,10 @@
 {"source":"run_safe_pytest","pid":3010812,"started_at_ms":1781893169294,"wait_ms":2,"run_ms":24744,"test_path":"eval/golden_tests/rms_norm/test_regression.py","exit_code":0}
 {"source":"run_safe_pytest","pid":3011483,"started_at_ms":1781893199580,"wait_ms":2,"run_ms":412987,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_regime_b.py","exit_code":0}
 {"source":"run_safe_pytest","pid":3023482,"started_at_ms":1781893652325,"wait_ms":3,"run_ms":63877,"test_path":"tests/ttnn/unit_tests/operations/rms_norm/test_rms_norm_layout_matrix.py","exit_code":0}
+{"event": "phase", "phase": "refinement_3", "state": "end", "at_ms": 1781893813073}
+{"event": "phase", "phase": "refinement_3_golden", "state": "start", "at_ms": 1781893813364}
+{"source":"eval_test_runner","pid":3029886,"started_at_ms":1781893813367,"wait_ms":3827,"run_ms":349580,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
+{"event": "phase", "phase": "refinement_3_golden", "state": "end", "at_ms": 1781894166776}
+{"event": "phase", "phase": "golden", "state": "start", "at_ms": 1781894171663}
+{"source":"eval_test_runner","pid":3044435,"started_at_ms":1781894171666,"wait_ms":3731,"run_ms":152093,"test_path":"eval/golden_tests/rms_norm/","exit_code":0}
+{"event": "phase", "phase": "golden", "state": "end", "at_ms": 1781894327492}
