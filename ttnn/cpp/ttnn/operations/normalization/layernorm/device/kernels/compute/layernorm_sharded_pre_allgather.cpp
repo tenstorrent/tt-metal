@@ -218,6 +218,7 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
+        reconfig_data_format(cb_ex_external2_id, cb_scaler_global_id);
         CircularBuffer(cb_reduction_out)
             .push_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
     }

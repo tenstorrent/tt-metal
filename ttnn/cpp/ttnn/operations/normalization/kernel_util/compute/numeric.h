@@ -104,6 +104,7 @@ inline void accumulate_compute_loop(
     }
 
     reduce_uninit<FLOAT32_REDUCTION>();
+    reconfig_data_format(cb_in.get_cb_id(), cb_scalar.get_cb_id());
 }
 
 }  // namespace detail

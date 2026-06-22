@@ -729,6 +729,7 @@ ALWI void reduce(
         PACK((llk_pack_reduce_mask_clear()));
     } else if constexpr (!use_matmul) {
         reduce_uninit<>();
+        reconfig_data_format(input_dfb_id, scaler_dfb_id);
     }
 }
 

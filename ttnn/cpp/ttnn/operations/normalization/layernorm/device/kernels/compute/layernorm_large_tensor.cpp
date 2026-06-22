@@ -210,6 +210,7 @@ void kernel_main() {
             }
 
             reduce_uninit<FLOAT32_REDUCTION>();
+            reconfig_data_format(cb_xmm2_id, cb_scaler_id);
             tile_regs_commit();
             tile_regs_wait();
 
