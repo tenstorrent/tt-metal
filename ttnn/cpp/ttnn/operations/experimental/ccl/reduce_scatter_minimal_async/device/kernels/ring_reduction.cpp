@@ -63,15 +63,18 @@ void kernel_main() {
                 uint32_t tiles_read = start_tiles_read;
                 uint32_t total_tiles_to_read = start_tiles_to_read;
 
-                bool is_even_chunk = true;
                 while (tiles_read < total_tiles_to_read) {
-                    uint32_t tiles_to_read = 0;
-                    uint32_t tiles_remaining = total_tiles_to_read - tiles_read;
-                    if (is_even_chunk) {
-                        tiles_to_read = std::min(tiles_remaining / 2, tile_granularity);
-                    } else {
-                        tiles_to_read = std::min(tiles_remaining, tile_granularity);
-                    }
+                    // Batch-invariant chunking: a tile's even/odd (forward/backward) direction must
+                    // depend only on its GLOBAL position in the output channel, never on M or on how
+                    // the channel is split across links/workers. tiles_read is that global index, so
+                    // derive parity from its tile_granularity-block and clip each chunk to the block
+                    // boundary (parity is then uniform within a chunk). The old local toggle starting
+                    // at `true` from each worker's start_tiles_read flipped a tile's direction when
+                    // num_links*num_workers_per_direction > 1, reversing the per-element ring-reduction
+                    // order at different prefill batch sizes (tt-metal#47238).
+                    bool is_even_chunk = ((tiles_read / tile_granularity) % 2) == 0;
+                    uint32_t next_boundary = ((tiles_read / tile_granularity) + 1) * tile_granularity;
+                    uint32_t tiles_to_read = std::min(next_boundary, total_tiles_to_read) - tiles_read;
 
                     if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
                         // Skip this chunk
@@ -121,8 +124,6 @@ void kernel_main() {
                         tiles_read += tiles_to_read;
 
                     }  // if skip or process
-
-                    is_even_chunk = !is_even_chunk;
                 }  // while total_tiles_to_read
             }  // for slice_C
         }  // for num_iters

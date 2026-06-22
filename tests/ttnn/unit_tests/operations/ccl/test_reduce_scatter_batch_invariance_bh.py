@@ -36,12 +36,13 @@ Run (4-chip Blackhole, e.g. P150x4 / P300x2):
 import pytest
 import torch
 from loguru import logger
+import random
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 # Mirrors the Qwen3-32B / P150x4 wo reduce-scatter exactly:
-NUM_DEVICES = 4
+NUM_DEVICES = 8
 PER_DEVICE_N = 5120  # self.dim for Qwen3-32B; global hidden = 5120 * 4 = 20480
 DIM = 3  # scatter dim (hidden)
 M_BIG = 1024  # batched prefill: 8 users x 128 tokens packed
@@ -63,6 +64,7 @@ def _run_reduce_scatter(mesh_device, global_input, dtype, topology, sub_device_i
     ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     rs_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_crs, 0) for _ in range(3)]
     barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_crs, 0)
+    mesh_shape = tuple(mesh_device.shape)
 
     # Per-device input is [1,1,M,PER_DEVICE_N]: replicate on axis 0, shard DIM across axis 1.
     input_mesh = ttnn.from_torch(
@@ -73,9 +75,7 @@ def _run_reduce_scatter(mesh_device, global_input, dtype, topology, sub_device_i
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(
             mesh_device,
-            ttnn.MeshMapperConfig(
-                [ttnn.PlacementReplicate(), ttnn.PlacementShard(DIM)], ttnn.MeshShape(1, NUM_DEVICES)
-            ),
+            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(DIM)], ttnn.MeshShape(*mesh_shape)),
         ),
     )
 
@@ -108,16 +108,28 @@ def _run_reduce_scatter(mesh_device, global_input, dtype, topology, sub_device_i
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
 @pytest.mark.parametrize(
-    "device_params, topology",
+    "mesh_device",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1171456}, ttnn.Topology.Ring),
+        pytest.param((1, 8)),
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
-def test_reduce_scatter_batch_invariance(bh_1d_mesh_device, dtype, topology, num_links):
-    mesh_device = bh_1d_mesh_device
-    if NUM_DEVICES not in list(mesh_device.shape):
-        pytest.skip(f"needs a {NUM_DEVICES}-chip mesh, got shape {list(mesh_device.shape)}")
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "trace_region_size": 500_000,
+        }
+    ],
+    ids=["fabric_1D_ring"],
+    indirect=True,
+)
+def test_reduce_scatter_batch_invariance(mesh_device, dtype, num_links):
+    #    if NUM_DEVICES not in list(mesh_device.shape):
+    #        pytest.skip(f"needs a {NUM_DEVICES}-chip mesh, got shape {list(mesh_device.shape)}")
+
+    topology = ttnn.Topology.Ring
 
     grid = mesh_device.compute_with_storage_grid_size()
     ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
@@ -128,6 +140,9 @@ def test_reduce_scatter_batch_invariance(bh_1d_mesh_device, dtype, topology, num
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_stall_group)
 
+    torch.manual_seed(2005)
+    random.seed(2005)
+
     try:
         torch.manual_seed(0)
         # ONE global tensor at M=1024; the M=128 input is its first 128 rows (bit-identical).
@@ -137,9 +152,13 @@ def test_reduce_scatter_batch_invariance(bh_1d_mesh_device, dtype, topology, num
         out_big, ref_big = _run_reduce_scatter(
             mesh_device, global_big, dtype, topology, sub_device_id, sub_stall_group, num_links
         )
+        print(f"{out_big.shape=} {ref_big.shape=}")
+
         out_small, ref_small = _run_reduce_scatter(
             mesh_device, global_small, dtype, topology, sub_device_id, sub_stall_group, num_links
         )
+
+        print(f"{out_small.shape=} {ref_small.shape=}")
 
         # Each individually matches the torch reference (NOT a correctness bug):
         _, pcc_big = comp_pcc(out_big, ref_big)
@@ -147,12 +166,16 @@ def test_reduce_scatter_batch_invariance(bh_1d_mesh_device, dtype, topology, num
         logger.info(f"[{dtype} {num_links}link] PCC vs torch  M=1024: {pcc_big}   M=128: {pcc_small}")
 
         big_slice = out_big[:, :, :M_SMALL, :]
-        max_abs_diff = (big_slice - out_small).abs().max().item()
+        diff = torch.abs(big_slice - out_small)
+        max_abs_diff = diff.max().item()
+        max_idx = diff.argmax()
+        val = big_slice.view(-1)[max_idx].item()
+
         num_diff = (big_slice != out_small).sum().item()
         total = out_small.numel()
         logger.warning(
             f"[{dtype} {num_links}link] BATCH-VARIANCE: max|out(M=1024)[:128] - out(M=128)| = "
-            f"{max_abs_diff:.3e}  ({num_diff}/{total} elements differ)"
+            f"{max_abs_diff:.3e} {val=} ({num_diff}/{total} elements differ)"
         )
 
         assert max_abs_diff == 0.0, (
