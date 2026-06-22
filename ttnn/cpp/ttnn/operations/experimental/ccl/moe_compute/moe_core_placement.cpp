@@ -157,16 +157,6 @@ std::vector<CoreCoord> pick_tilize_cores_from_2x2_legacy_order(const CoreRange& 
     return std::vector<CoreCoord>(legacy_order.begin(), legacy_order.begin() + num_cores);
 }
 
-CoreCoordPairSet build_moe_compute_avoid_set(
-    const CoreCoordPairSet& matmul_avoid_set, const CoreRangeSet& mux_core_range_set) {
-    CoreCoordPairSet avoid_set = matmul_avoid_set;
-    if (!mux_core_range_set.empty()) {
-        const auto mux_pairs = core_coords_to_pair_set(corerange_to_cores(mux_core_range_set));
-        avoid_set.insert(mux_pairs.begin(), mux_pairs.end());
-    }
-    return avoid_set;
-}
-
 uint32_t compute_moe_compute_tilize_num_cores(uint32_t hidden_tiles) {
     uint32_t num_cores = std::min(kMoEComputeMaxTilizeCores, hidden_tiles);
     while (num_cores > 1 && hidden_tiles % num_cores != 0) {
@@ -174,6 +164,196 @@ uint32_t compute_moe_compute_tilize_num_cores(uint32_t hidden_tiles) {
     }
     return std::max(1u, num_cores);
 }
+
+namespace {
+
+// All worker-core selection happens in LOGICAL coordinates. worker_core_from_logical_core() returns
+// VIRTUAL (translated) coordinates, which are contiguous regardless of harvesting, so a logical
+// bounding box always maps to a contiguous NoC multicast rectangle. Selection is therefore
+// harvesting-agnostic as long as we (a) bound it by compute_with_storage_grid_size() (which already
+// accounts for harvesting) and (b) keep the per-group bounding boxes mutually disjoint.
+
+// Insert every cell of a logical rectangle into an avoid set. Avoiding the whole matmul bounding box
+// (not just the matmul cores) is what guarantees the tilize/combine rectangles stay disjoint from it:
+// the tilize drain multicasts metadata/data to the matmul bbox rectangle, so any tilize/combine core
+// inside that rectangle would be spuriously signalled or have its L1 corrupted.
+void add_bbox_cells(CoreCoordPairSet& avoid, const CoreRange& bbox) {
+    for (uint32_t y = bbox.start_coord.y; y <= bbox.end_coord.y; ++y) {
+        for (uint32_t x = bbox.start_coord.x; x <= bbox.end_coord.x; ++x) {
+            avoid.insert({x, y});
+        }
+    }
+}
+
+// Matmul ring placement. The base set is the optimal DRAM-bank -> worker assignment (WH: 12 == ring
+// size; BH: 8 banks). When the ring is larger than the bank count (BH N=12/16), pad with extra cores
+// INSIDE the base bounding box so the bbox does not grow (keeping room for tilize/combine elsewhere).
+// Extras prefer the existing DRAM-adjacent columns (better locality for dm0's weight reads), then any
+// free cell inside the bbox; extras route around mux cells when possible.
+//
+// This builds the PREFERRED (DRAM-bank-adjacent) ring. dm0's weight reads are DRAM-bank-id based
+// (get_noc_addr_from_bank_id), so the ring is functionally correct from any cores, but this placement
+// gives the best locality. When it collides with mux or leaves no disjoint combine/tilize room, the
+// caller relocates matmul to build_compact_matmul_cores() instead (see its note: the compact ring must
+// stay column-0-anchored, established experimentally — [3,0]-[9,1] hangs while [0,0]-[9,1] passes).
+std::vector<CoreCoord> build_matmul_ring_cores(
+    ttnn::MeshDevice* mesh_device, uint32_t ring_size, const CoreCoordPairSet& mux_pairs) {
+    auto cores = mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+    const uint32_t num_banks = static_cast<uint32_t>(cores.size());
+
+    if (num_banks >= ring_size) {
+        cores.resize(ring_size);
+        return cores;
+    }
+
+    CoreCoordPairSet used = core_coords_to_pair_set(cores);
+    const CoreRange base_bbox = CoreRangeSet(cores).bounding_box();
+
+    std::set<uint32_t> matmul_cols;
+    for (const auto& c : cores) {
+        matmul_cols.insert(c.x);
+    }
+
+    const auto try_add = [&](uint32_t x, uint32_t y) {
+        const std::pair<uint32_t, uint32_t> p{x, y};
+        if (!used.contains(p) && !mux_pairs.contains(p)) {
+            cores.push_back(CoreCoord(x, y));
+            used.insert(p);
+        }
+    };
+
+    // Pass 1: extend the DRAM-adjacent columns at free rows (round-robin keeps banks balanced).
+    for (uint32_t y = base_bbox.start_coord.y; y <= base_bbox.end_coord.y && cores.size() < ring_size; ++y) {
+        for (uint32_t x : matmul_cols) {
+            if (cores.size() >= ring_size) {
+                break;
+            }
+            try_add(x, y);
+        }
+    }
+    // Pass 2: any remaining free cell inside the base bbox.
+    for (uint32_t y = base_bbox.start_coord.y; y <= base_bbox.end_coord.y && cores.size() < ring_size; ++y) {
+        for (uint32_t x = base_bbox.start_coord.x; x <= base_bbox.end_coord.x && cores.size() < ring_size; ++x) {
+            try_add(x, y);
+        }
+    }
+
+    return cores;
+}
+
+// Column-0-anchored compact matmul placement. Used as a FALLBACK when the DRAM-bank-adjacent ring
+// cannot be used: either it collides with user mux cores, or its bounding box spans the grid so no
+// disjoint combine/tilize layout exists (the WH ROW-dispatch case, where the DRAM-adjacent workers
+// occupy the full compute grid). Packs the ring row-major into the lower-left, reserving the eastern
+// combine strip and the top two tilize rows so combine/tilize have room.
+//
+// CRITICAL (established experimentally, not assumed): the compact block MUST stay anchored at column
+// x=0. A compact ring whose bbox starts at x>0 hangs / corrupts on device (observed: logical
+// [3,0]-[9,1] hangs, while [0,0]-[9,1] and [0,3]-[9,4] pass). We therefore only use rows whose
+// leftmost (x=0) cell is mux-free (skipping a whole row otherwise); mux cells in non-leftmost columns
+// are left as gaps inside the bbox (mux inside the matmul bbox is benign, verified).
+std::vector<CoreCoord> build_compact_matmul_cores(
+    const CoreCoord& worker_grid, uint32_t ring_size, const CoreCoordPairSet& mux_pairs) {
+    std::vector<CoreCoord> cores;
+    cores.reserve(ring_size);
+
+    const uint32_t x_limit = worker_grid.x > kMoEComputeCombineStripWidth
+                                 ? static_cast<uint32_t>(worker_grid.x) - kMoEComputeCombineStripWidth
+                                 : static_cast<uint32_t>(worker_grid.x);
+    const uint32_t y_limit =
+        worker_grid.y > 2 ? static_cast<uint32_t>(worker_grid.y) - 2 : static_cast<uint32_t>(worker_grid.y);
+
+    for (uint32_t y = 0; y < y_limit && cores.size() < ring_size; ++y) {
+        // Anchor at column 0: a row may only contribute if its leftmost cell is mux-free, otherwise
+        // the block would start at x>0 (a placement that deadlocks on device).
+        if (mux_pairs.contains({0, y})) {
+            continue;
+        }
+        for (uint32_t x = 0; x < x_limit && cores.size() < ring_size; ++x) {
+            if (!mux_pairs.contains({x, y})) {
+                cores.push_back(CoreCoord(x, y));
+            }
+        }
+    }
+
+    return cores;
+}
+
+struct PlacedWorkers {
+    std::vector<CoreCoord> combine_cores;
+    std::vector<CoreCoord> tilize_cores;
+    CoreRange combine_bounding_box;
+    CoreRange tilize_bounding_box;
+};
+
+// Place combine (dense 2-wide strip) and tilize (2x2 block on the top two rows) so that all three
+// bounding boxes (matmul, combine, tilize) are mutually disjoint and avoid the mux region. Returns
+// nullopt if no disjoint layout exists for the given matmul bounding box. The caller first tries this
+// with the DRAM-adjacent matmul bbox; on nullopt it retries with the compact matmul bbox, and only
+// raises a hard error if that also fails. The top two rows are reserved for tilize
+// (drain == tilize_cores[0]); combine takes the rows below.
+std::optional<PlacedWorkers> place_combine_and_tilize(
+    const CoreCoord& worker_grid,
+    const CoreRange& matmul_bounding_box,
+    const CoreCoordPairSet& mux_pairs,
+    uint32_t num_combine_cores,
+    uint32_t target_tilize_num_cores) {
+    CoreCoordPairSet base_avoid = mux_pairs;
+    add_bbox_cells(base_avoid, matmul_bounding_box);
+
+    const uint32_t combine_max_y =
+        worker_grid.y >= 3 ? static_cast<uint32_t>(worker_grid.y) - 3 : static_cast<uint32_t>(worker_grid.y) - 1;
+    const uint32_t tilize_min_y =
+        worker_grid.y >= 2 ? static_cast<uint32_t>(worker_grid.y) - 2 : static_cast<uint32_t>(worker_grid.y) - 1;
+
+    const uint32_t combine_strip_height =
+        (num_combine_cores + kMoEComputeCombineStripWidth - 1) / kMoEComputeCombineStripWidth;
+
+    std::vector<CoreCoord> combine_cores;
+    const auto combine_strip_opt =
+        find_combine_strip_avoiding(base_avoid, worker_grid, combine_strip_height, combine_max_y);
+    if (combine_strip_opt.has_value()) {
+        combine_cores = pick_combine_cores_from_strip(combine_strip_opt.value(), num_combine_cores);
+    } else {
+        combine_cores = pick_worker_cores_row_major_avoiding(base_avoid, worker_grid, num_combine_cores, combine_max_y);
+    }
+    if (combine_cores.size() != num_combine_cores) {
+        return std::nullopt;
+    }
+    const CoreRange combine_bounding_box = CoreRangeSet(combine_cores).bounding_box();
+    if (combine_bounding_box.intersects(matmul_bounding_box)) {
+        return std::nullopt;
+    }
+
+    CoreCoordPairSet tilize_avoid = base_avoid;
+    add_bbox_cells(tilize_avoid, combine_bounding_box);
+
+    for (uint32_t tilize_num_cores = target_tilize_num_cores; tilize_num_cores >= 1; --tilize_num_cores) {
+        std::vector<CoreCoord> tilize_cores;
+        const auto tilize_block_opt = find_tilize_2x2_block_avoiding(tilize_avoid, worker_grid);
+        if (tilize_block_opt.has_value()) {
+            tilize_cores = pick_tilize_cores_from_2x2_legacy_order(tilize_block_opt.value(), tilize_num_cores);
+        } else {
+            tilize_cores = pick_tilize_cores_in_upper_rows(tilize_avoid, worker_grid, tilize_num_cores, tilize_min_y);
+        }
+        if (tilize_cores.size() != tilize_num_cores) {
+            continue;
+        }
+        const CoreRange tilize_bounding_box = CoreRangeSet(tilize_cores).bounding_box();
+        if (tilize_bounding_box.intersects(combine_bounding_box) ||
+            tilize_bounding_box.intersects(matmul_bounding_box)) {
+            continue;
+        }
+        return PlacedWorkers{
+            .combine_cores = std::move(combine_cores),
+            .tilize_cores = std::move(tilize_cores),
+            .combine_bounding_box = combine_bounding_box,
+            .tilize_bounding_box = tilize_bounding_box};
+    }
+    return std::nullopt;
+}
+
+}  // namespace
 
 MoEComputeCoreSelection select_moe_compute_cores(
     ttnn::MeshDevice* mesh_device,
@@ -183,216 +363,167 @@ MoEComputeCoreSelection select_moe_compute_cores(
     const CoreRangeSet& mux_core_range_set,
     uint32_t bh_ring_size) {
     /*
-     * - First tilize core is the drain sync
-     * - First ((total_tilize_cores + 1) / 2) tilize cores are primary mcast group
-     * - Remaining cores are secondary mcast group (with the first of them being the secondary mcaster)
+     * Core-selection strategy (all in LOGICAL coordinates; harvesting is transparent because
+     * worker_core_from_logical_core() maps logical -> contiguous VIRTUAL coords for multicast):
+     *
+     *   1. matmul (preferred): DRAM-bank-adjacent workers (perf), padded inside their bbox for ring
+     *      N > banks. Used when it does NOT collide with mux AND leaves room for a disjoint
+     *      combine/tilize layout.
+     *   2. matmul (fallback): a COMPACT, column-0-anchored ring packed into the lower-left of the
+     *      grid. Required because:
+     *        - On WH ROW dispatch the DRAM-bank-adjacent workers span the full compute grid, so the
+     *          matmul bbox becomes the entire grid and no disjoint combine/tilize layout exists ->
+     *          hang/crash. Compacting the ring shrinks its bbox so tilize/combine fit.
+     *        - When user mux cores land on the DRAM-adjacent ring, we relocate matmul instead of the
+     *          ring (the ring is what the user can query and route mux around).
+     *   3. combine + tilize: placed in the region NOT spanned by the (chosen) matmul bounding box,
+     *      avoiding the mux region, as dense rectangles with mutually disjoint bounding boxes.
+     *
+     * Why disjoint bounding boxes are required among the THREE worker groups (from the kernels, not
+     * comments): the tilize drain multicasts metadata/data/counts to the tilize bbox and
+     * metadata_ready to the matmul bbox (metadata_ready is shared on tilize ∪ matmul). The combine
+     * reader/writer multicast to the combine bbox. So a *worker* core of one group sitting inside
+     * another group's bbox is spuriously signalled / has its L1 corrupted. tilize_cores[0] is the
+     * drain; tilize_cores[T/2] the secondary mcaster.
+     *
+     * CRITICAL constraint on the compact ring (established experimentally, not assumed): it MUST stay
+     * anchored at column x=0. A compact ring whose bbox starts at x>0 deadlocks / corrupts on device
+     * (observed: logical [3,0]-[9,1] hangs, while [0,0]-[9,1] and [0,3]-[9,4] pass). build_compact_*
+     * therefore only uses rows whose leftmost (x=0) cell is mux-free.
+     *
+     * MUX cores (user-provided, run tt_fabric_mux in the separate combine program): the only enforced
+     * constraint is CORE-LEVEL disjointness from every worker core (two concurrent programs cannot
+     * share a core's RISCs). Mux is NOT required to be outside the worker bounding boxes — the moe
+     * per-expert/metadata multicasts that geometrically cover mux cells inside the matmul/all-worker
+     * bbox are benign in practice (verified: mux={(1,1)-(3,3)} and {(0,4)-(2,6)} lie inside the BH
+     * matmul bbox x=0..7 and pass). So mux is treated as an avoid-set of cells: every worker group
+     * (matmul ring, tilize, combine) is placed to dodge the mux cells, and combine/tilize are placed
+     * after the matmul ring so they also route around the matmul bbox.
      */
     constexpr uint32_t tile_width = 32;
     const uint32_t hidden_tiles = hidden_size / tile_width;
 
-    // matmul cores come from the DRAM-bank-to-worker assignment: WH returns 12, BH returns 8.
-    // WH instantiates the N=12 ring; BH instantiates the N=bh_ring_size ring (per-call value
-    // resolved from the op kwarg; supported {8, 12, 16}, default 12).
-    //   - N=8 (BH): keep only the 8 DRAM-adjacent cores; weights HEIGHT_SHARDED 1:1 with banks.
-    //   - N=12/16 (BH): append extras inside the matmul mcast bbox ({0,0},{7,9}); weights still
-    //     HEIGHT_SHARDED with 8 shards, but each ring core's slice spans 1-2 banks → dm0.cpp
-    //     walks the slice via the bank-run loop, set_state'ing once per bank crossing.
-    auto matmul_cores =
-        mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-
-    // BH-specific matmul core padding for ring sizes > 8
+    const uint32_t ring_size = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size : 12u;
     if (mesh_device->arch() == tt::ARCH::BLACKHOLE) {
-        // BH 8 DRAM-adjacent cores at x=0,7 (first 4 cols x=0; next 4 cols x=7).
-        // BH DRAM-adjacent positions: (0,0)(0,3)(0,7)(0,9)(7,1)(7,4)(7,6)(7,9). Extras must avoid
-        // these, stay inside x=0..7,y=0..9 (matmul bbox), and not extend the bbox (so tilize/
-        // combine bboxes at x=9,10 remain non-overlapping). The first 4 entries reach N=12; the
-        // next 4 reach N=16. Append in order so growing N strictly extends the previous set.
-        constexpr std::array<CoreCoord, 8> kBhMatmulExtras = {{
-            // First 4 (used at N=12): free y in x=0 col {5, 8}; free y in x=7 col {3, 8}.
-            {0, 5},
-            {0, 8},
-            {7, 3},
-            {7, 8},
-            // Next 4 (used at N=16): free y in x=0 col {1, 2}; free y in x=7 col {0, 2}.
-            {0, 1},
-            {0, 2},
-            {7, 0},
-            {7, 2},
-        }};
-        const uint32_t n = bh_ring_size;
         TT_FATAL(
-            n == 8 || n == 12 || n == 16,
+            ring_size == 8 || ring_size == 12 || ring_size == 16,
             "moe_compute: unsupported BH ring size N={}, supported values are {{8, 12, 16}}",
-            n);
-        // N=8: no extras (the 8 DRAM-adjacent cores are exactly the ring). N>8: pad up.
-        if (n > 8) {
-            const uint32_t num_extras = n - 8;
-            TT_FATAL(num_extras <= kBhMatmulExtras.size(), "moe_compute: not enough BH extras for N={}", n);
-            for (uint32_t i = 0; i < num_extras; ++i) {
-                matmul_cores.push_back(kBhMatmulExtras[i]);
-            }
-        }
+            ring_size);
     }
-    const uint32_t expected_n = (mesh_device->arch() == tt::ARCH::BLACKHOLE) ? bh_ring_size : 12u;
-    TT_FATAL(
-        matmul_cores.size() == expected_n,
-        "moe_compute: expected {} matmul cores after padding (got {})",
-        expected_n,
-        matmul_cores.size());
 
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
+    const uint32_t num_combine_cores = combine_token_parallel_cores * combine_data_parallel_cores;
+    const uint32_t target_tilize_num_cores = compute_moe_compute_tilize_num_cores(hidden_tiles);
 
-    // Compute tilize_min_y early so the fallback check below can reference it.
-    const uint32_t tilize_min_y_pre =
-        worker_grid.y >= 2 ? static_cast<uint32_t>(worker_grid.y) - 2 : static_cast<uint32_t>(worker_grid.y) - 1;
+    CoreCoordPairSet mux_pairs;
+    if (!mux_core_range_set.empty()) {
+        mux_pairs = core_coords_to_pair_set(corerange_to_cores(mux_core_range_set));
+    }
 
-    // On WH, the tilize drain kernel broadcasts to the entire matmul bounding box via
-    // noc_semaphore_set_multicast(metadata_ready, matmul_bbox).  Every core inside that
-    // rectangle receives the write — including non-drain tilize cores, which share the same
-    // metadata_ready semaphore ID.
-    //
-    // When get_optimal_dram_bank_to_logical_worker_assignment returns 12 cores that span the
-    // full grid width (ROW dispatch, 8-column grid), the matmul bbox covers all 8 columns
-    // including the tilize rows (y = worker_grid.y - 2 and y = worker_grid.y - 1).  The
-    // non-drain tilize cores land inside that bbox and receive a spurious metadata_ready
-    // signal.  They advance past their synchronisation barrier before data is ready and
-    // deadlock the pipeline.
-    //
-    // This does NOT happen on COL dispatch (7-column grid) because the DRAM-adjacent cores
-    // only span columns 0-4; tilize lands at column 6, outside the bbox.
-    //
-    // Fix: when the bbox spans the full grid width and reaches the tilize rows, replace the
-    // DRAM-adjacent placement with a compact 12-core block at (0,4)→(5,5).  That block fits
-    // entirely below the tilize rows (y < tilize_min_y for all supported grid heights).
-    if (mesh_device->arch() == tt::ARCH::WORMHOLE_B0) {
-        const CoreRange mm_prelim_bbox = CoreRangeSet(matmul_cores).bounding_box();
-        const bool bbox_spans_full_width = mm_prelim_bbox.end_coord.x + 1u >= static_cast<uint32_t>(worker_grid.x);
-        const bool bbox_reaches_tilize_rows = mm_prelim_bbox.end_coord.y >= tilize_min_y_pre;
-        if (bbox_spans_full_width && bbox_reaches_tilize_rows) {
-            // 6×2 block: rows 4-5, columns 0-5.
-            // Fits below tilize rows (y ≥ 7 on a 9-row grid, y ≥ 8 on a 10-row grid).
-            static const std::vector<CoreCoord> kWHMatmulCompactCores = {
-                {0, 4},
-                {1, 4},
-                {2, 4},
-                {3, 4},
-                {4, 4},
-                {5, 4},
-                {0, 5},
-                {1, 5},
-                {2, 5},
-                {3, 5},
-                {4, 5},
-                {5, 5},
-            };
-            TT_FATAL(
-                kWHMatmulCompactCores.size() == expected_n,
-                "moe_compute: WH compact fallback has {} cores but N={} expected",
-                kWHMatmulCompactCores.size(),
-                expected_n);
-            matmul_cores = kWHMatmulCompactCores;
-            log_info(
-                tt::LogOp,
-                "moe_compute: matmul bbox spans full grid width into tilize rows; "
-                "switching to compact placement at (0,4)→(5,5)");
+    // Prefer the DRAM-bank-adjacent ring; fall back to a column-0-anchored compact ring when it
+    // collides with mux or leaves no disjoint combine/tilize room (WH ROW dispatch spans the grid).
+    std::vector<CoreCoord> matmul_cores;
+    std::optional<PlacedWorkers> placed;
+    bool used_compact_matmul = false;
+
+    const std::vector<CoreCoord> dram_ring = build_matmul_ring_cores(mesh_device, ring_size, mux_pairs);
+    bool dram_ring_hits_mux = false;
+    for (const auto& c : dram_ring) {
+        if (mux_pairs.contains({c.x, c.y})) {
+            dram_ring_hits_mux = true;
+            break;
+        }
+    }
+    if (dram_ring.size() == ring_size && !dram_ring_hits_mux) {
+        placed = place_combine_and_tilize(
+            worker_grid, CoreRangeSet(dram_ring).bounding_box(), mux_pairs, num_combine_cores, target_tilize_num_cores);
+        if (placed.has_value()) {
+            matmul_cores = dram_ring;
         }
     }
 
-    const CoreCoordPairSet matmul_avoid_set = core_coords_to_pair_set(matmul_cores);
-    const CoreCoordPairSet placement_avoid_set = build_moe_compute_avoid_set(matmul_avoid_set, mux_core_range_set);
+    if (!placed.has_value()) {
+        const std::vector<CoreCoord> compact_ring = build_compact_matmul_cores(worker_grid, ring_size, mux_pairs);
+        TT_FATAL(
+            compact_ring.size() == ring_size,
+            "moe_compute: could not build a {}-core column-0-anchored compact matmul ring on the {}x{} worker "
+            "grid (got {}); mux cores may be blocking too many leftmost columns/rows.",
+            ring_size,
+            worker_grid.x,
+            worker_grid.y,
+            compact_ring.size());
+        placed = place_combine_and_tilize(
+            worker_grid,
+            CoreRangeSet(compact_ring).bounding_box(),
+            mux_pairs,
+            num_combine_cores,
+            target_tilize_num_cores);
+        TT_FATAL(
+            placed.has_value(),
+            "moe_compute: could not place {} combine + {} tilize cores disjoint from the compact matmul bbox {} "
+            "and {} mux cores on the {}x{} worker grid",
+            num_combine_cores,
+            target_tilize_num_cores,
+            CoreRangeSet(compact_ring).bounding_box().str(),
+            mux_core_range_set.num_cores(),
+            worker_grid.x,
+            worker_grid.y);
+        matmul_cores = compact_ring;
+        used_compact_matmul = true;
+    }
+
+    std::vector<CoreCoord> combine_cores = std::move(placed->combine_cores);
+    std::vector<CoreCoord> tilize_cores = std::move(placed->tilize_cores);
+    const CoreRange combine_bounding_box = placed->combine_bounding_box;
+    const CoreRange tilize_bounding_box = placed->tilize_bounding_box;
+
     const CoreRangeSet matmul_core_range_set = CoreRangeSet(matmul_cores);
     const CoreRange matmul_bounding_box = matmul_core_range_set.bounding_box();
-
-    const uint32_t num_combine_cores = combine_token_parallel_cores * combine_data_parallel_cores;
-    const uint32_t combine_strip_height =
-        (num_combine_cores + kMoEComputeCombineStripWidth - 1) / kMoEComputeCombineStripWidth;
-
-    // Reserve the top two worker rows for tilize (legacy 2×2 pool) and the remainder for combine.
-    const uint32_t combine_max_y =
-        worker_grid.y >= 3 ? static_cast<uint32_t>(worker_grid.y) - 3 : static_cast<uint32_t>(worker_grid.y) - 1;
-    const uint32_t tilize_min_y =
-        worker_grid.y >= 2 ? static_cast<uint32_t>(worker_grid.y) - 2 : static_cast<uint32_t>(worker_grid.y) - 1;
-
-    // Combine placement depends only on placement_avoid_set and worker_grid — compute once.
-    std::vector<CoreCoord> combine_cores;
-    const auto combine_strip_opt =
-        find_combine_strip_avoiding(placement_avoid_set, worker_grid, combine_strip_height, combine_max_y);
-
-    if (combine_strip_opt.has_value()) {
-        combine_cores = pick_combine_cores_from_strip(combine_strip_opt.value(), num_combine_cores);
-    } else {
-        combine_cores =
-            pick_worker_cores_row_major_avoiding(placement_avoid_set, worker_grid, num_combine_cores, combine_max_y);
-    }
-
-    TT_FATAL(
-        combine_cores.size() == num_combine_cores,
-        "Could not find {} combine cores on {}x{} worker grid (matmul_cores={}, mux_cores={})",
-        num_combine_cores,
-        worker_grid.x,
-        worker_grid.y,
-        matmul_cores.size(),
-        mux_core_range_set.num_cores());
-
-    CoreCoordPairSet tilize_avoid_set = placement_avoid_set;
-    const auto combine_pairs = core_coords_to_pair_set(combine_cores);
-    tilize_avoid_set.insert(combine_pairs.begin(), combine_pairs.end());
-
-    const CoreRange combine_bounding_box = CoreRangeSet(combine_cores).bounding_box();
-
-    // Retry tilize placement with decreasing core count until we find a non-overlapping layout.
-    uint32_t target_tilize_num_cores = compute_moe_compute_tilize_num_cores(hidden_tiles);
-    std::vector<CoreCoord> tilize_cores;
-    CoreRange tilize_bounding_box({0, 0}, {0, 0});
-    bool found_placement = false;
-
-    for (uint32_t tilize_num_cores = target_tilize_num_cores; tilize_num_cores >= 1; --tilize_num_cores) {
-        const auto tilize_block_opt = find_tilize_2x2_block_avoiding(tilize_avoid_set, worker_grid);
-        if (tilize_block_opt.has_value()) {
-            tilize_cores = pick_tilize_cores_from_2x2_legacy_order(tilize_block_opt.value(), tilize_num_cores);
-        } else {
-            tilize_cores =
-                pick_tilize_cores_in_upper_rows(tilize_avoid_set, worker_grid, tilize_num_cores, tilize_min_y);
-        }
-        if (tilize_cores.size() != tilize_num_cores) {
-            continue;
-        }
-
-        const CoreRange trial_tilize_bounding_box = CoreRangeSet(tilize_cores).bounding_box();
-        if (trial_tilize_bounding_box.intersects(combine_bounding_box)) {
-            continue;
-        }
-
-        tilize_bounding_box = trial_tilize_bounding_box;
-        found_placement = true;
-        break;
-    }
-
-    TT_FATAL(
-        found_placement,
-        "Could not find moe_compute core placement (combine_cores={}, hidden_tiles={}, matmul_cores={})",
-        num_combine_cores,
-        hidden_tiles,
-        matmul_cores.size());
-
     const CoreRangeSet tilize_core_range_set = CoreRangeSet(tilize_cores);
     const CoreRangeSet combine_core_range_set = CoreRangeSet(combine_cores);
 
+    // Invariant: the three multicast rectangles must be mutually disjoint. Promoted to hard asserts so
+    // a bad layout fails loudly at program-build time instead of hanging on device.
+    TT_FATAL(!tilize_bounding_box.intersects(combine_bounding_box), "combine and tilize bounding boxes cannot overlap");
+    TT_FATAL(!tilize_bounding_box.intersects(matmul_bounding_box), "tilize and matmul bounding boxes cannot overlap");
+    TT_FATAL(!combine_bounding_box.intersects(matmul_bounding_box), "combine and matmul bounding boxes cannot overlap");
+
+    // Hard guard: every worker group is placed around mux (matmul: DRAM ring only used when it does
+    // not hit mux, else compact ring skips mux cells; combine/tilize routed around mux), so this should
+    // always hold — assert defensively so a bad layout fails loudly instead of hanging on device.
+    if (!mux_pairs.empty()) {
+        const auto assert_disjoint_from_mux = [&](const std::vector<CoreCoord>& cs, const char* group) {
+            for (const auto& c : cs) {
+                TT_FATAL(
+                    !mux_pairs.contains({c.x, c.y}),
+                    "moe_compute: {} core {} overlaps a user mux core; worker placement must avoid mux cores",
+                    group,
+                    c.str());
+            }
+        };
+        assert_disjoint_from_mux(matmul_cores, "matmul");
+        assert_disjoint_from_mux(combine_cores, "combine");
+        assert_disjoint_from_mux(tilize_cores, "tilize");
+    }
+
     log_info(
         tt::LogOp,
-        "moe_compute: selected tilize cores {}, combine cores {}, matmul cores {}",
+        "moe_compute: placement matmul_mode={} tilize={} {} combine={} {} matmul={} {} | bboxes tilize={} "
+        "combine={} matmul={}",
+        used_compact_matmul ? "compact" : "dram-adjacent",
         tilize_cores.size(),
+        CoreRangeSet(tilize_cores).str(),
         combine_cores.size(),
-        matmul_cores.size());
+        CoreRangeSet(combine_cores).str(),
+        matmul_cores.size(),
+        matmul_core_range_set.str(),
+        tilize_bounding_box.str(),
+        combine_bounding_box.str(),
+        matmul_bounding_box.str());
 
     const CoreRangeSet tilize_matmul_core_range_set = tilize_core_range_set.merge(matmul_core_range_set);
 
-    // Multicast rectangles for tilize/combine must stay disjoint. Matmul multicast already uses the
-    // DRAM-worker bounding box, which can overlap those rectangles geometrically on some grids even
-    // when worker cores are disjoint (same as the legacy hardcoded pools).
-    TT_FATAL(!tilize_bounding_box.intersects(combine_bounding_box), "combine and tilize bounding boxes cannot overlap");
-
-    // Stable x-major order matches legacy moe_compute combine core indexing.
+    // Stable x-major order matches the combine core indexing used by dm1's OUTPUT_SHARD_CORE_MAP.
     std::sort(combine_cores.begin(), combine_cores.end(), [](const auto& a, const auto& b) {
         return (a.x != b.x) ? a.x < b.x : a.y < b.y;
     });

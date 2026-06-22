@@ -46,14 +46,19 @@ void bind_moe_compute(nb::module_& mod) {
 
         **Hardware / device configuration**
 
-        - **Unharvested Wormhole chips.** The multi-device (6U/Galaxy) flow assumes the
-          full Wormhole compute grid: the WH worker layout hardcodes the drain tilize core
-          at logical ``(6, 9)`` and the combine cores at columns 5–6, so the ``y=9`` compute
-          row must be present. Harvested WH SKUs that drop that row are not supported on
-          this path (the single-card test path derives the drain core dynamically instead).
-        - **``DispatchCoreAxis.COL``.** The mesh device must be opened with
-          ``dispatch_core_axis=ttnn.DispatchCoreAxis.COL`` so dispatch cores occupy a column
-          edge and do not overlap the op's tilize/matmul/combine worker cores.
+        Tilize / matmul / combine worker cores are selected dynamically from the device's
+        ``compute_with_storage_grid_size()`` (which already excludes harvested rows/columns)
+        in logical coordinates, so placement is **harvesting-agnostic** and works on both
+        Wormhole and Blackhole. The matmul ring prefers the DRAM-bank-adjacent workers, but
+        relocates to a compact, column-0-anchored placement when that layout would overlap the
+        mux cores or its bounding box spans the whole compute grid (e.g. WH ROW dispatch, where
+        the DRAM-adjacent workers leave no disjoint room). Tilize and combine are then placed in
+        the remaining grid with mutually disjoint multicast bounding boxes.
+
+        The dispatch-core axis is **not** constrained by this op: both
+        ``DispatchCoreAxis.COL`` and ``DispatchCoreAxis.ROW`` are supported (the test matrix
+        exercises both). The axis only changes which grid edge the dispatch cores occupy,
+        which is already reflected in ``compute_with_storage_grid_size()``.
 
         See https://github.com/tenstorrent/tt-metal/issues/41132 for details.
 
@@ -162,7 +167,14 @@ void bind_moe_compute(nb::module_& mod) {
         - ``num_links`` (optional, default ``None``): Number of fabric links for the
           combine; auto-detected from the mesh and ``cluster_axis`` when ``None``.
         - ``mux_core_range_set`` (optional, default ``None`` ≡ empty): Cores assigned to
-          the fabric mux on the combine path.
+          the fabric mux on the combine path. Mux cores may be placed anywhere on the worker
+          grid — including inside the matmul/all-worker multicast bounding boxes — because the
+          op places every worker group (matmul, tilize, combine) to avoid the mux cells: the
+          matmul ring prefers the DRAM-bank-adjacent workers but relocates to a compact,
+          column-0-anchored placement if mux would overlap it (or if the DRAM-adjacent ring
+          spans the grid, e.g. WH ROW dispatch), and tilize/combine are placed after mux and
+          route around it. The op raises a clear error only if the grid is too small/blocked
+          to fit all groups disjointly.
         - ``output_memory_config`` (optional, default ``None`` ≡ ``DRAM_MEMORY_CONFIG``):
           Memory config for the combine output tensor.
         - ``optional_output_tensor`` (optional): Preallocated tensor to receive the
