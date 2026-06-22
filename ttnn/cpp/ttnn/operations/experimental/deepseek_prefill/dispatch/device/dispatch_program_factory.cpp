@@ -789,9 +789,12 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             // fp32_dest_acc_en must be enabled there.
             .fp32_dest_acc_en = operation_attributes.use_fp8_dispatch,
             // 32-bit DEST halves pack_untilize block capacity: half-sync 32-bit allows only 4
-            // tiles, but pack_untilize_block uses block_ct_dim. Full-sync 32-bit restores the
-            // full tile budget so the block still fits. Only needed on the FP8 (32-bit) path.
-            .dst_full_sync_en = operation_attributes.use_fp8_dispatch,
+            // tiles, but the reduce and pack_untilize_block use block_ct_dim tiles in DEST. Full-sync
+            // 32-bit restores the full 8-tile budget so larger blocks still fit, at the cost of
+            // math/pack overlap. Only enable it when block_ct_dim actually exceeds the 4-tile
+            // half-sync budget; with block_ct_dim <= 4 (e.g. 128-element FP8 scale block) half-sync
+            // already fits and keeps the overlap. Only relevant on the FP8 (32-bit) path.
+            .dst_full_sync_en = operation_attributes.use_fp8_dispatch && (block_ct_dim_dispatch > 4),
         };
         desc.kernels.push_back(std::move(untilize_compute_kd));
     }
