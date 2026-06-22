@@ -331,6 +331,7 @@ SHAPES = [
     # N=768 = 6144/TP8 (output sharded by TP8). use_case="to_out" (addcmul fused).
     # -----------------------------------------------------------------------
     (1152, 24576, 768, 12, 9, True, "to_out"),  # SNG_proj_out (xc merged, 1024 tokens)
+    (1152, 24576, 768, 12, 8, True, "to_out"),  # SNG_proj_out 12×8 grid variant
     (1024, 24576, 768, 12, 9, True, "to_out"),  # proj_out spatial-only (1024 tokens)
     # -----------------------------------------------------------------------
     # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_per_device = 6144/4 = 1536,
@@ -349,6 +350,15 @@ SHAPES = [
     (8192, 1536, 9216, 12, 9, True, "plain"),
     (8256, 1536, 9216, 12, 9, True, "plain"),
     (8192, 1536, 4608, 12, 9, True, "plain"),
+    # -----------------------------------------------------------------------
+    # Fused SwiGLU sweep — Flux2 1024-res TP8/SP4 (bh_4x8_sp0_tp1), 12×8 grid.
+    # proj_mlp (ff1) only: N=4608 = packed [gate|up], K=6144.
+    # N_block MUST be even (TT_FATAL for odd N under fuse_swiglu=True).
+    # Source: sweep_fused_gelu.md.  Ordered by prior plain trace time (highest first).
+    # -----------------------------------------------------------------------
+    (1152, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 xc-merged
+    (1024, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 spatial
+    (128, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 prompt
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]
@@ -385,6 +395,12 @@ USE_CASE_CONFIGS = {
         "chunks": 3,
         "math_approx_mode": True,
         "use_matmul_split": True,
+    },
+    # ff1 (proj_mlp) with fused SwiGLU — gate+up packed into N=4608 weight.
+    # fp32_dest_acc_en=True (always on), N_block MUST be even (pitfall 1).
+    # No fused_activation (incompatible with fuse_swiglu per TT_FATAL).
+    "ff1_swiglu": {
+        "fuse_swiglu": True,
     },
 }
 
@@ -561,12 +577,21 @@ def generate_subblock_combos(m_block, n_block, max_dest_volume=4):
 
 
 def generate_kn_combos(K_per_device, N_per_core, m_block=1, use_case="plain"):
-    """Generate (K_block, N_block) combos filtered by L1 budget."""
+    """Generate (K_block, N_block) combos filtered by L1 budget.
+
+    For fuse_swiglu use_cases, N_block MUST be even (TT_FATAL pitfall 1 from
+    sweep_fused_gelu.md: gate/up tile-pairs are interleaved along N, so a block
+    must never split a pair).  Odd N candidates are skipped pre-sweep to avoid
+    hard asserts that would abort the program.
+    """
     k_candidates = get_k_block_candidates(K_per_device)
     n_candidates = get_mn_block_candidates(N_per_core)
+    require_even_n = USE_CASE_CONFIGS.get(use_case, {}).get("fuse_swiglu", False)
     combos = []
     for k in k_candidates:
         for n in n_candidates:
+            if require_even_n and n % 2 != 0:
+                continue
             if estimate_l1_kb(m_block, k, n, use_case) <= L1_BUDGET_KB:
                 combos.append((k, n))
     return combos
@@ -723,6 +748,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
     )
 
     fused_activation = uc_cfg.get("fused_activation", None)
+    fuse_swiglu = uc_cfg.get("fuse_swiglu", False)
     chunks = uc_cfg.get("chunks", 1)
     scalar = uc_cfg.get("scalar", None)
     mesh_shape = tuple(mesh_device.shape)
@@ -821,6 +847,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 addcmul_input_tensor1=addcmul_tensor1,
                 addcmul_input_tensor2=addcmul_tensor2,
                 chunks=chunks,
+                fuse_swiglu=fuse_swiglu,
             )
             if sync:
                 ttnn.synchronize_device(mesh_device)
@@ -863,6 +890,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 fused_activation=fused_activation,
                 compute_kernel_config=compute_config,
                 config=cfg_obj,
+                fuse_swiglu=fuse_swiglu,
             )
         else:
             ttnn.experimental.minimal_matmul(
@@ -872,6 +900,7 @@ def _build_op_runner(cfg, mesh_device, M, K, N, dtype, is_agmm, uc_cfg, core_gri
                 config=cfg_obj,
                 fused_activation=fused_activation,
                 compute_kernel_config=compute_config,
+                fuse_swiglu=fuse_swiglu,
             )
         if sync:
             ttnn.synchronize_device(mesh_device)
@@ -1183,12 +1212,19 @@ def main():
         help="Filter to a single shape as M,K,N (e.g. 6144,5120,3456)",
     )
     parser.add_argument("--csv", type=str, default=CSV_FILE)
+    parser.add_argument(
+        "--use-case",
+        type=str,
+        default=None,
+        choices=list(USE_CASE_CONFIGS.keys()),
+        help="Restrict sweep to a single use_case (e.g. ff1_swiglu)",
+    )
     args = parser.parse_args()
 
     device_config = args.device_config
     cfg = resolve_config(device_config)
 
-    # Filter shapes
+    # Filter shapes by M,K,N then optionally by use_case
     if args.shape:
         m, k, n = [int(x) for x in args.shape.split(",")]
         shapes = [s for s in SHAPES if s[0] == m and s[1] == k and s[2] == n]
@@ -1197,6 +1233,12 @@ def main():
             return
     else:
         shapes = SHAPES
+
+    if args.use_case:
+        shapes = [s for s in shapes if s[6] == args.use_case]
+        if not shapes:
+            print(f"No shapes match use_case={args.use_case!r}")
+            return
 
     write_csv_header(args.csv)
     all_best = {}

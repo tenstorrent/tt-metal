@@ -10,6 +10,7 @@ import ttnn
 from models.common.utility_functions import is_blackhole
 
 from ..utils.matmul import get_1d_matmul_config, get_fused_mmrs_config, get_matmul_config, get_matmul_core_grid
+from ..utils.tensor import interleave_swiglu_tiles
 from .module import Module, Parameter
 
 MATH_FIDELITY = {
@@ -37,17 +38,28 @@ class Linear(Module):
     Linear layer with replicated weights
     """
 
-    def __init__(self, in_features, out_features, bias=True, activation_fn=None, dtype=ttnn.bfloat16, mesh_device=None):
+    def __init__(
+        self,
+        in_features,
+        out_features,
+        bias=True,
+        activation_fn=None,
+        dtype=ttnn.bfloat16,
+        mesh_device=None,
+    ):
         super().__init__()
 
         self.in_features = in_features
         self.out_features = out_features
-        if activation_fn == "swiglu":
-            # Double out features for fused swiglu activation
-            self.out_features = self.out_features * 2
         self.activation_fn = activation_fn
         self.fused_activation_fn = None
-        if self.activation_fn in _FUSED_GELU_VARIANTS:
+        self.fuse_swiglu = False
+        if self.activation_fn == "swiglu":
+            # Double out features for the packed [gate|up] swiglu weight.
+            self.out_features = self.out_features * 2
+            self.fuse_swiglu = True
+            self.activation_fn = None
+        elif self.activation_fn in _FUSED_GELU_VARIANTS:
             self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
         self.mesh_device = mesh_device
@@ -69,9 +81,15 @@ class Linear(Module):
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
-            state["weight"] = state["weight"].transpose(0, 1)
+            weight = state["weight"].transpose(0, 1)
+            if self.fuse_swiglu:
+                weight = interleave_swiglu_tiles(weight, ndev=1)
+            state["weight"] = weight
         if "bias" in state:
-            state["bias"] = state["bias"].reshape(1, -1)
+            bias = state["bias"].reshape(1, -1)
+            if self.fuse_swiglu:
+                bias = interleave_swiglu_tiles(bias, ndev=1)
+            state["bias"] = bias
 
     def forward(
         self, x: ttnn.Tensor, compute_kernel_config=None, dtype=None, default_block_size=None, use_1d_fallback=False
@@ -79,7 +97,8 @@ class Linear(Module):
         M, K, N = x.padded_shape[-2], x.padded_shape[-1], self.weight.data.padded_shape[-1]
         core_grid = get_matmul_core_grid(self.mesh_device)
 
-        if use_1d_fallback and M <= 64:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
+        # 1D fallback can't fuse swiglu (plain ttnn.linear), so skip it when fusing.
+        if use_1d_fallback and M <= 64 and not self.fuse_swiglu:  # TEMPORARY for FLUX2: 1D mcast_in0 for small M
             program_config = get_1d_matmul_config(M, K, N, core_grid)
             output = ttnn.linear(
                 x,
@@ -100,6 +119,7 @@ class Linear(Module):
                 fused_activation=self.fused_activation_fn,
                 compute_kernel_config=compute_kernel_config or self.compute_config,
                 dtype=dtype,
+                fuse_swiglu=self.fuse_swiglu,
             )
 
         return _apply_activation_fn(output, self.activation_fn)
@@ -142,14 +162,18 @@ class ColParallelLinear(Module):
         self.in_features = in_features
         self.out_features = out_features
         self.activation_fn = activation_fn
-        if activation_fn == "swiglu":
-            # Double out features for fused swiglu activation
-            self.out_features = self.out_features * 2
         self.fused_activation_fn = None
-        if self.activation_fn in _FUSED_GELU_VARIANTS:
+        self.fuse_swiglu = False
+        if self.activation_fn == "swiglu":
+            # Double out features for the packed [gate|up] swiglu weight.
+            self.out_features = self.out_features * 2
+            self.fuse_swiglu = True
+            self.activation_fn = None
+        elif self.activation_fn in _FUSED_GELU_VARIANTS:
             self.fused_activation_fn = _FUSED_GELU_VARIANTS[self.activation_fn]
             self.activation_fn = None
         self.mesh_device = mesh_device
+
         self.mesh_axis = mesh_axis
         self.fsdp_mesh_axis = fsdp_mesh_axis
         self.ccl_manager = ccl_manager
@@ -196,12 +220,16 @@ class ColParallelLinear(Module):
 
         if weight is not None:
             weight = weight.transpose(0, 1)
-            if self.activation_fn == "swiglu":
+            if self.fuse_swiglu:
+                weight = interleave_swiglu_tiles(weight, ndev=self._mesh_axis_size)
+            elif self.activation_fn == "swiglu":
                 weight = permute_for_swiglu(weight)
             state["weight"] = weight
         if bias is not None:
             bias = bias.reshape(1, -1)
-            if self.activation_fn == "swiglu":
+            if self.fuse_swiglu:
+                bias = interleave_swiglu_tiles(bias, ndev=self._mesh_axis_size)
+            elif self.activation_fn == "swiglu":
                 bias = permute_for_swiglu(bias)
             state["bias"] = bias
 
@@ -233,6 +261,7 @@ class ColParallelLinear(Module):
 
         parallel_config_tp = parallel_config.tensor_parallel.factor if parallel_config is not None else 1
         needs_gather = x.padded_shape[-1] != weight.padded_shape[-2]  # If gathered, switch to non fused AGMM
+
         if parallel_config_tp > 1 and self.ccl_manager.topology == ttnn.Topology.Ring and needs_gather:
             M, K, N = x.padded_shape[-2], weight.padded_shape[-2], weight.padded_shape[-1]
             full_grid = self.mesh_device.compute_with_storage_grid_size()
@@ -263,6 +292,7 @@ class ColParallelLinear(Module):
                 num_buffers_per_channel=48 if not is_blackhole() else 24,
                 chunks=self.chunks if self.chunks is not None else 1,
                 dtype=dtype,
+                fuse_swiglu=self.fuse_swiglu,
             )
 
             if self.chunks is not None and (self.chunks > 1):
@@ -291,10 +321,12 @@ class ColParallelLinear(Module):
                     compute_kernel_config=compute_kernel_config or self.compute_config,
                     config=matmul_config,
                     dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
                 )
                 return [_apply_activation_fn(o, self.activation_fn) for o in outputs]
 
-            if use_1d_fallback and M <= 128:  # TEMPORARY for FLUX2: Branch B: 1D mcast_in0 matmul for small-M shapes
+            # 1D fallback can't fuse swiglu (plain ttnn.linear), so skip it when fusing.
+            if use_1d_fallback and M <= 128 and not self.fuse_swiglu:  # TEMPORARY for FLUX2: 1D mcast_in0 for small M
                 program_config = get_1d_matmul_config(M, K, N, core_grid)
                 output = ttnn.linear(
                     x,
@@ -314,6 +346,7 @@ class ColParallelLinear(Module):
                     fused_activation=self.fused_activation_fn,
                     compute_kernel_config=compute_kernel_config or self.compute_config,
                     dtype=dtype,
+                    fuse_swiglu=self.fuse_swiglu,
                 )
 
         return _apply_activation_fn(output, self.activation_fn)

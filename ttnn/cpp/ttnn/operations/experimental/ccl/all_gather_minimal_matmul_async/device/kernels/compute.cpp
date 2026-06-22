@@ -15,6 +15,83 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
+#ifdef FUSE_SWIGLU
+// Fused SwiGLU output stage. The matmul produced an interleaved gate/up block in `in_cb`:
+// within each M row, column tile 2p is the silu'd half and 2p+1 the multiplicand (the weight
+// was tile-pair interleaved on the host). Each pair emits one output tile = silu(tile2p)*tile2p+1,
+// so the block shrinks from N_block_tiles to N_block_tiles/2 along N. No extra CB / DRAM
+// round-trip. N_block_tiles must be even (enforced host-side). silu and mul_binary are distinct
+// SFPU programs, so each is re-initialised right before use.
+void swiglu_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    reconfig_data_format_srca(in_cb);
+    pack_reconfig_data_format(out_cb);
+
+    constexpr uint32_t GATE_DST = 0;
+    constexpr uint32_t UP_DST = 1;
+    const uint32_t out_N_block_tiles = N_block_tiles >> 1;
+
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        const uint32_t row_base = m * N_block_tiles;
+        for (uint32_t p = 0; p < out_N_block_tiles; p++) {
+            const uint32_t gate_tile_id = row_base + (p << 1);
+            const uint32_t up_tile_id = gate_tile_id + 1;
+
+            tile_regs_acquire();
+            copy_tile_to_dst_init_short(in_cb);
+            copy_tile(in_cb, gate_tile_id, GATE_DST);
+            copy_tile(in_cb, up_tile_id, UP_DST);
+            silu_tile_init();
+            silu_tile(GATE_DST);
+            mul_binary_tile_init();
+            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(GATE_DST, out_cb);
+            tile_regs_release();
+        }
+        cb_push_back(out_cb, out_N_block_tiles);
+    }
+}
+
+// SwiGLU output stage with fused bias (interleaved identically to the weight):
+// out = silu(second + bias_second) * (first + bias_first).
+void swiglu_bias_block(
+    uint32_t in_cb, uint32_t bias_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
+    reconfig_data_format(in_cb, bias_cb);
+    pack_reconfig_data_format(out_cb);
+
+    constexpr uint32_t GATE_DST = 0;
+    constexpr uint32_t UP_DST = 1;
+    const uint32_t out_N_block_tiles = N_block_tiles >> 1;
+
+    for (uint32_t m = 0; m < M_block_tiles; m++) {
+        const uint32_t row_base = m * N_block_tiles;
+        for (uint32_t p = 0; p < out_N_block_tiles; p++) {
+            const uint32_t gate_n = p << 1;
+            const uint32_t up_n = gate_n + 1;
+            const uint32_t gate_tile_id = row_base + gate_n;
+            const uint32_t up_tile_id = gate_tile_id + 1;
+
+            tile_regs_acquire();
+            add_bcast_rows_init_short(in_cb, bias_cb);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, gate_tile_id, gate_n, GATE_DST);
+            add_tiles_bcast<BroadcastType::ROW>(in_cb, bias_cb, up_tile_id, up_n, UP_DST);
+            silu_tile_init();
+            silu_tile(GATE_DST);
+            mul_binary_tile_init();
+            mul_binary_tile(GATE_DST, UP_DST, GATE_DST);
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(GATE_DST, out_cb);
+            tile_regs_release();
+        }
+        cb_push_back(out_cb, out_N_block_tiles);
+    }
+}
+#endif  // FUSE_SWIGLU
+
 void copy_block(CircularBuffer& in_cb, CircularBuffer& out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
     copy_tile_to_dst_init_short(in_cb.get_cb_id());
     reconfig_data_format_srca(in_cb.get_cb_id());
@@ -469,8 +546,22 @@ void kernel_main() {
             intermediate_cb.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
+#ifdef FUSE_SWIGLU
+            // SwiGLU collapses the interleaved gate/up block to half its N width.
+            out_cb.reserve_back(out_block_num_tiles >> 1);
+            intermediate_cb.wait_front(out_block_num_tiles);
+#ifndef FUSE_BIAS
+            swiglu_block(intermediate_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+#else
+            in2_cb.wait_front(N_block_tiles);
+            swiglu_bias_block(
+                intermediate_cb.get_cb_id(), in2_cb.get_cb_id(), out_cb.get_cb_id(), M_block_tiles, N_block_tiles);
+            in2_cb.pop_front(N_block_tiles);
+#endif  // FUSE_BIAS
+            intermediate_cb.pop_front(out_block_num_tiles);
+
+#elif !defined(FUSE_TERNARY)
             out_cb.reserve_back(out_block_num_tiles);
-#ifndef FUSE_TERNARY
             intermediate_cb.wait_front(out_block_num_tiles);
 #ifndef FUSE_BIAS
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
@@ -482,6 +573,7 @@ void kernel_main() {
             intermediate_cb.pop_front(out_block_num_tiles);
 
 #else   // FUSE_TERNARY is set
+            out_cb.reserve_back(out_block_num_tiles);
             add_bias_and_addcmul_block(
                 intermediate_cb,
                 in2_cb,
