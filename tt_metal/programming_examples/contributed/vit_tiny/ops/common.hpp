@@ -14,6 +14,8 @@
 #include <tt-metalium/core_coord.hpp>
 
 #include <cstdint>
+#include <cstdlib>
+#include <cstdio>
 #include <memory>
 #include <vector>
 
@@ -31,9 +33,28 @@ inline uint32_t div_ceil(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
 inline uint32_t round_up_to_tile(uint32_t n) { return div_ceil(n, TILE_W) * TILE_W; }
 inline uint32_t num_tiles(uint32_t n) { return div_ceil(n, TILE_W); }
 
-// Find largest divisor of total that is <= max_cores
-inline uint32_t choose_num_cores(uint32_t total, uint32_t max_cores = 7) {
-    uint32_t n = std::min(total, max_cores);
+// Upper bound on Tensix cores used per op.
+// Default 7 (the example's design), overridable via env var VIT_TINY_MAX_CORES.
+// Evaluated once on first use.
+inline uint32_t vit_tiny_core_cap() {
+    static const uint32_t cap = []() -> uint32_t {
+        uint32_t c = 7;
+        if (const char* e = std::getenv("VIT_TINY_MAX_CORES")) {
+            int v = std::atoi(e);
+            if (v >= 1) {
+                c = static_cast<uint32_t>(v);
+            }
+        }
+        std::fprintf(stderr, "[vit_tiny] Tensix core cap per op = %u\n", c);
+        return c;
+    }();
+    return cap;
+}
+
+// Find largest divisor of total that is <= the core cap (max_cores=0 -> use env cap).
+inline uint32_t choose_num_cores(uint32_t total, uint32_t max_cores = 0) {
+    uint32_t cap = (max_cores == 0) ? vit_tiny_core_cap() : std::min(max_cores, vit_tiny_core_cap());
+    uint32_t n = std::min(total, cap);
     while (n > 1 && total % n != 0) n--;
     return n;
 }

@@ -2,13 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import torch
 import transformers
 from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
 
-core_grid = ttnn.CoreGrid(y=8, x=12)
+# Core grid used by all matmuls / softmax in this interleaved model.
+# Default y=8, x=12 (96 cores). Override the max core usage via env vars:
+#   VIT_GRID_Y, VIT_GRID_X  -> grid is y*x cores.
+# Examples: VIT_GRID_Y=8 VIT_GRID_X=4 -> 32 cores ; VIT_GRID_Y=4 VIT_GRID_X=4 -> 16 cores.
+_grid_y = int(os.environ.get("VIT_GRID_Y", "8"))
+_grid_x = int(os.environ.get("VIT_GRID_X", "12"))
+core_grid = ttnn.CoreGrid(y=_grid_y, x=_grid_x)
+print(f"[ttnn_vit] using core_grid y={_grid_y} x={_grid_x} -> {_grid_y * _grid_x} cores", flush=True)
 
 
 # https://github.com/huggingface/transformers/blob/v4.37.2/src/transformers/models/vit/modeling_vit.py
@@ -38,7 +47,7 @@ def vit_patch_embeddings(config, pixel_values, *, parameters, unittest_check=Fal
         bias=parameters.projection.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
     )
     # ttnn.deallocate(pixel_values)
 
@@ -89,7 +98,7 @@ def vit_layernorm_before(
         bias=parameters.layernorm_before.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         # program_config=program_configs["layernorm_program_config"],
     )
 
@@ -108,7 +117,7 @@ def vit_layernorm_after(
         bias=parameters.layernorm_after.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         # program_config=program_configs["layernorm_program_config"],
     )
 
@@ -131,7 +140,7 @@ def vit_attention(
         bias=parameters.attention.query_key_value.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         # program_config=program_configs["query_key_value_matmul_program_config"],
     )
 
@@ -151,7 +160,7 @@ def vit_attention(
         key,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         # program_config=program_configs["query_by_key_matmul_program_config"],
     )
     ttnn.deallocate(query)
@@ -169,7 +178,7 @@ def vit_attention(
         value,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         # program_config=program_configs["attention_probabilities_by_value_matmul_program_config"],
     )
     ttnn.deallocate(attention_probs)
@@ -186,7 +195,7 @@ def vit_attention(
         bias=parameters.output.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         # program_config=program_configs["self_output_matmul_program_config"],
     )
     ttnn.deallocate(context_layer)
@@ -206,7 +215,7 @@ def vit_intermediate(
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
         # program_config=program_configs["ff1_matmul_program_config"],
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         activation="gelu",
     )
     # ttnn.deallocate(hidden_states)
@@ -227,7 +236,7 @@ def vit_output(
         bias=parameters.dense.bias,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         dtype=ttnn.bfloat8_b,
-        core_grid=ttnn.CoreGrid(y=8, x=12),
+        core_grid=core_grid,
         # program_config=program_configs["ff2_matmul_program_config"],
     )
     ttnn.deallocate(hidden_states)
@@ -341,7 +350,7 @@ def vit(
         bias=parameters.vit.layernorm.bias,
         epsilon=config.layer_norm_eps,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        # core_grid=ttnn.CoreGrid(y=8, x=12),
+        # core_grid=core_grid,
     )
 
     # Classifier
@@ -351,7 +360,7 @@ def vit(
     #     bias=parameters.classifier.bias,
     #     memory_config=ttnn.L1_MEMORY_CONFIG,
     #     dtype=ttnn.bfloat8_b,
-    #     core_grid=ttnn.CoreGrid(y=8, x=12),
+    #     core_grid=core_grid,
     # )
     classifier_output = output @ parameters.classifier.weight
     classifier_output = classifier_output + parameters.classifier.bias

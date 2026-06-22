@@ -10,15 +10,13 @@ from transformers import AutoImageProcessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch2tt_tensor, torch_random
+from models.common.utility_functions import torch2tt_tensor, torch_random
 from models.demos.vision.classification.vit.common.common import load_torch_model
 from models.demos.vision.classification.vit.common.reference import torch_functional_vit
 from models.demos.vision.classification.vit.common.tt import ttnn_optimized_interleaved_vit
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
@@ -76,8 +74,6 @@ def test_vit_patch_embeddings(device, model_name, batch_size, image_size, image_
     assert_with_pcc(torch_output, output[0], 0.9999)
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
@@ -157,8 +153,6 @@ def test_vit_embeddings(device, model_name, batch_size, image_size, image_channe
     assert_with_pcc(torch_output, output[0], 0.9999)
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -204,8 +198,6 @@ def test_vit_attention(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, 0.9999)
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -234,8 +226,6 @@ def test_vit_intermediate(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9999)
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -268,8 +258,6 @@ def test_vit_output(device, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.9999)
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 197 to 224
@@ -328,8 +316,6 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     assert_with_pcc(torch_functional_output, output, 0.9999)
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("sequence_size", [224])  ## padded from 197 to 224
@@ -382,8 +368,6 @@ def test_vit_encoder(device, model_name, batch_size, sequence_size, model_locati
     assert_with_pcc(torch_output, output, 0.9999)
 
 
-@pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("model_name", ["google/vit-base-patch16-224"])
 @pytest.mark.parametrize("batch_size", [8])
 @pytest.mark.parametrize("image_size", [224])
