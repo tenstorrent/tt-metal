@@ -836,7 +836,7 @@ def main() -> None:
     mesh = build_mesh(device_cfg)
     ttml.open_device_mesh(mesh, tuple(device_cfg.device_ids) if device_cfg.device_ids else None)
     ttml.autograd.AutoContext.get_instance().get_device()
-    ttml.autograd.AutoContext.get_instance().set_seed(training_cfg.seed)
+    ttml.manual_seed(training_cfg.seed)
     np.random.seed(training_cfg.seed)
     random.seed(training_cfg.seed)  # Python RNG drives the per-token sampling seed in inference
 
