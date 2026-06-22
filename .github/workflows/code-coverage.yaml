@@ -43,14 +43,13 @@ jobs:
 
   run-ttnn-tests:
     needs: [check-harbor, build-artifact]
-    uses: ./.github/workflows/ttnn-post-commit.yaml
+    uses: ./.github/workflows/ttnn-sanity-tests-impl.yaml
     secrets: inherit
     with:
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build-artifact.outputs.ci-test-docker-image }}
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      merge-gate-call: false
       collect-coverage: true
 
   run-metal-runtime-tests:

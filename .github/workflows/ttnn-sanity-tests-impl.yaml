@@ -1,4 +1,4 @@
-name: "[internal] ttnn unit tests impl"
+name: "[internal] ttnn sanity tests impl"
 
 on:
   workflow_call:
@@ -31,15 +31,6 @@ on:
         required: false
         type: boolean
         default: false
-      merge-gate-call:
-        required: false
-        type: boolean
-        default: false
-      test-category:
-        required: false
-        type: string
-        default: sanity
-        description: "Time-budget workflow key passed to verify_time_budget.py (e.g. merge_gate for merge-gate, sanity for APC/post-commit)."
       ref:
         required: false
         type: string
@@ -60,9 +51,10 @@ jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix }}
+      matrix: ${{ steps.build-matrix.outputs.matrix }}
+      has-sim: ${{ steps.detect-sim.outputs.has-sim }}
     env:
-      TESTS_YAML_PATH: ${{ inputs.test-category == 'merge_gate' && './tests/pipeline_reorg/ttnn_merge_gate_tests.yaml' || './tests/pipeline_reorg/ttnn-tests.yaml' }}
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn_sanity_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -85,7 +77,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "${{ inputs.test-category }}"
+            "sanity"
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
@@ -95,27 +87,55 @@ jobs:
             "${{ inputs.enabled-skus }}" \
             ./.github/sku_config.yaml
 
-      - name: Filter matrix by merge_gate
-        id: filter-matrix
+      - name: Detect sim SKUs in matrix
+        id: detect-sim
         run: |
           matrix='${{ steps.build-matrix.outputs.matrix }}'
-          if [[ "${{ inputs.test-category }}" == "merge_gate" ]]; then
-            filtered="$matrix"
-          else
-            merge_gate="${{ inputs.merge-gate-call }}"
-            filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
-          fi
-          len=$(echo "$filtered" | jq 'length')
-          if [ "$len" -eq 0 ]; then
-            echo "::error::No tests left after filtering for merge_gate=$merge_gate"
-            exit 1
-          fi
-          echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
-          echo "$filtered" >> "$GITHUB_OUTPUT"
-          echo "EOF" >> "$GITHUB_OUTPUT"
+          has_sim=$(echo "$matrix" | jq -r 'any(.[]; .sku | startswith("sim_"))')
+          echo "has-sim=$has_sim" >> "$GITHUB_OUTPUT"
+
+  # Fetch ttsim simulator binaries once for the whole matrix; only needed when
+  # the resolved matrix contains sim_* SKUs. Consumed by setup-ttsim below.
+  fetch-ttsim:
+    needs: load-test-matrix
+    if: ${{ needs.load-test-matrix.outputs.has-sim == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+      - name: Read ttsim version
+        id: ttsim-version
+        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
+      - name: Download wormhole_b0 ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ steps.ttsim-version.outputs.version }}
+          fileName: libttsim_wh.so
+          out-file-path: /tmp/ttsim
+      - name: Download blackhole ttsim binary
+        uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
+        with:
+          repository: tenstorrent/ttsim
+          tag: ${{ steps.ttsim-version.outputs.version }}
+          fileName: libttsim_bh.so
+          out-file-path: /tmp/ttsim
+      - name: Upload ttsim binaries artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ttsim-binaries
+          path: /tmp/ttsim/
+          if-no-files-found: error
+          retention-days: 1
 
   ttnn:
-    needs: load-test-matrix
+    needs: [load-test-matrix, fetch-ttsim]
+    # fetch-ttsim is skipped when the matrix has no sim_* SKUs; allow that.
+    if: ${{ !cancelled() && (needs.fetch-ttsim.result == 'success' || needs.fetch-ttsim.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -124,7 +144,7 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ matrix.test-group.sku != 'bh_p100' && format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ (startsWith(matrix.test-group.sku, 'sim_') || matrix.test-group.sku == 'bh_p100') && (inputs.docker-image || 'docker-image-unresolved!') || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image) }}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
@@ -132,7 +152,7 @@ jobs:
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+      options: ${{ startsWith(matrix.test-group.sku, 'sim_') && '--label runner-mode=sim' || '--device /dev/tenstorrent -e TT_GH_CI_INFRA' }}
     defaults:
       run:
         shell: bash
@@ -160,6 +180,13 @@ jobs:
           redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}${{ vars.REDIS_CCACHE_IS_READONLY == 'true' && '|read-only=true' || '' }}
           auto-triage: ${{ !inputs.enable-watcher }}
 
+      - name: ⬇️  Setup TTSim
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
+        uses: ./docker-job/.github/actions/setup-ttsim
+        timeout-minutes: 5
+        with:
+          sku: ${{ matrix.test-group.sku }}
+
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
@@ -172,6 +199,7 @@ jobs:
           echo "LLVM_PROFILE_FILE=/work/coverage/%p-%m.profraw" >> "$GITHUB_ENV"
 
       - name: ${{ matrix.test-group.name }} tests
+        if: ${{ !startsWith(matrix.test-group.sku, 'sim_') }}
         timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
         run: |
           python3 tools/tt-power-sidecar/tt_power_sidecar.py \
@@ -179,8 +207,16 @@ jobs:
             --out /work/power_report.json \
             -- bash -c '${{ matrix.test-group.cmd }}'
 
+      # Simulator runs have no hardware power telemetry, so skip the power sidecar
+      # and run the test command directly under the ttsim env set by setup-ttsim.
+      - name: ${{ matrix.test-group.name }} tests (simulator)
+        if: ${{ startsWith(matrix.test-group.sku, 'sim_') }}
+        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        run: |
+          ${{ matrix.test-group.cmd }}
+
       - name: Upload power report
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && !startsWith(matrix.test-group.sku, 'sim_') }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-${{ matrix.test-group.name }}

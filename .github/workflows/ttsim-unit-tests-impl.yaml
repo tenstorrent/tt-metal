@@ -21,11 +21,6 @@ on:
         type: string
         default: ''
         description: "Comma-separated category filter. Keep only entries whose `category` field appears in this list."
-      ttsim-version:
-        required: false
-        type: string
-        default: "v1.4.6"
-        description: "Tag of the tenstorrent/ttsim release to download the libttsim_<arch>.so binary from."
       enable-llk-asserts:
         required: false
         type: boolean
@@ -80,18 +75,27 @@ jobs:
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout ttsim version
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+        with:
+          sparse-checkout: tt_metal/ttsim-version
+          sparse-checkout-cone-mode: false
+      - name: Read ttsim version
+        id: ttsim-version
+        run: echo "version=$(cat tt_metal/ttsim-version)" >> "$GITHUB_OUTPUT"
       - name: Download wormhole_b0 ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
+          tag: ${{ steps.ttsim-version.outputs.version }}
           fileName: libttsim_wh.so
           out-file-path: /tmp/ttsim
       - name: Download blackhole ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
           repository: tenstorrent/ttsim
-          tag: ${{ inputs.ttsim-version }}
+          tag: ${{ steps.ttsim-version.outputs.version }}
           fileName: libttsim_bh.so
           out-file-path: /tmp/ttsim
       - name: Upload ttsim binaries artifact
