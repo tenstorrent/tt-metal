@@ -92,7 +92,7 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         )
         tt_stats = torch2tt_tensor(
             stats_tiles,
-            tt_dtype=ttnn.bfloat16,
+            tt_dtype=input_dtype,
             tt_device=device,
             tt_layout=ttnn.TILE_LAYOUT,
             tt_memory_config=dram_memcfg,
@@ -170,6 +170,23 @@ def test_layernorm_part_2_with_program_cache(
     inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, fp32_enabled, device
 ):
     run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled)
+
+
+@pytest.mark.parametrize(
+    "inp_shape",
+    [
+        # FP32 doubles tile sizes vs bf16, so the 8192-wide shapes used above exceed L1 for
+        # layernorm (2 stats tiles + beta). Use a width that fits while still spanning n_devices.
+        (1, 1, 128, 2048),
+        (2, 1, 128, 2048),
+    ],
+)
+@pytest.mark.parametrize("n_devices", [4, 8])
+@pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
+def test_layernorm_part_2_fp32(inp_shape, n_devices, is_rmsnorm, device):
+    """FP32 input + FP32 stats on the post-all-gather op (issue #44650). FP32 requires
+    fp32_dest_acc_en=True so the unpacker preserves the full mantissa into DEST."""
+    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, ttnn.float32, ttnn.float32, device, fp32_enabled=True)
 
 
 @pytest.mark.parametrize(
