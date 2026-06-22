@@ -7,8 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_log.h"
 
 #include "ckernel_sfpu_piecewise_rational.h"
 
