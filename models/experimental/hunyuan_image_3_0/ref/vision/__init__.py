@@ -17,6 +17,7 @@ from .siglip2 import (
     load_aligner,
     load_siglip2_vision,
     prepare_4d_attention_mask,
+    forward_vision_with_aligner,
 )
 
 __all__ = [
@@ -33,6 +34,7 @@ __all__ = [
     "prepare_4d_attention_mask",
     "load_siglip2_vision",
     "load_aligner",
+    "forward_vision_with_aligner",
     "scatter_vit_image_tokens",
     "contiguous_image_mask",
     "IMAGE_TOKEN_ID",
