@@ -13,16 +13,15 @@ ids — the worker cannot reach WORKER_READY without both inputs.
 Bring-up order is fixed by the worker contract
 (``disaggregation/migration/src/worker/control_thread.cpp::maybe_emit_worker_ready``):
 
-    1. send_kv_chunk_table(table_path)       # SetTable on table_q
-    2. send_device_map(entries)              # AssignDevMap + N x DevMapEntry on table_q
-    3. wait_ready(timeout_ms)                # blocks on RespOpcode::WorkerReady
+    1. client.send_kv_chunk_table(table_path)   # SetTable on table_q
+    2. client.send_device_map(entries)          # AssignDevMap + N x DevMapEntry on table_q
+    3. client.wait_ready(timeout_ms)            # blocks on RespOpcode::WorkerReady
 
 Without step 2 the worker never opens UMD chips and never asserts WORKER_READY;
 without step 3 the runner enters its request loop before the scheduler can
 actually issue migrations. ``publish_kv_chunk_table_and_wait_ready()`` is the
-one entrypoint that does all three in order; the older split helpers
-(``build_and_serialize_kv_chunk_table`` and ``send_kv_chunk_table``) stay
-exported so tests can exercise the halves individually.
+one entrypoint that does all three in order; ``build_and_serialize_kv_chunk_table``
+stays exported so tests can build the table without publishing.
 
 Serialization uses the ttnn binding
 ``ttnn.experimental.disaggregation.export_to_protobuf_file`` (no separate
@@ -47,10 +46,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
 _CHUNK_SIZE_BYTES = 19584
-
-# Sentinel dst_slot the inference server sends when a request must NOT trigger
-# migration (e.g. warmup probes, scheduler-skipped requests).
-INVALID_SLOT_ID = 0xFFFFFFFF
 
 # Default shmem queue names. Overridable via PREFILL_MIGRATION_{CMD,TABLE,RESP}_QUEUE.
 _DEFAULT_CMD_QUEUE = "/prefill_mig_cmd_1"
@@ -77,13 +72,9 @@ def _resolve_queue_names() -> tuple[str, str, str]:
     )
 
 
-def _import_migration_client(strict: bool):
-    """Lazily import the tt-llm-engine ``_migration_client`` extension.
-
-    Returns the module on success. On import failure: if ``strict`` raises
-    ImportError; otherwise logs a warning and returns ``None`` (back-compat
-    path for callers that just want best-effort publish).
-    """
+def _import_migration_client():
+    """Lazily import the tt-llm-engine ``_migration_client`` extension. Raises
+    ImportError if it is not importable."""
     client_dir = os.environ.get("PREFILL_MIGRATION_CLIENT_DIR")
     if client_dir and client_dir not in sys.path:
         sys.path.insert(0, client_dir)
@@ -92,42 +83,27 @@ def _import_migration_client(strict: bool):
 
         return _migration_client
     except ImportError as e:
-        msg = (
+        raise ImportError(
             f"[migration] _migration_client not importable ({e}). "
             f"Set PREFILL_MIGRATION_CLIENT_DIR to the dir holding _migration_client*.so, "
             f"or add it to PYTHONPATH."
-        )
-        if strict:
-            raise ImportError(msg) from e
-        logger.warning(msg)
-        return None
+        ) from e
 
 
-def _attach_migration_client(strict: bool):
-    """Resolve queue names, import ``_migration_client``, and attach.
-
-    Returns (client, cmd_q, table_q, resp_q) on success. On failure with
-    ``strict=True`` raises RuntimeError (the runner has opted in and the
-    endpoint must be reachable). With ``strict=False`` returns ``(None, ...)``
-    and logs a warning, matching the legacy best-effort behavior of
-    ``send_kv_chunk_table``.
-    """
+def _attach_migration_client():
+    """Resolve queue names, import ``_migration_client``, and attach. Returns
+    (client, cmd_q, table_q, resp_q); raises RuntimeError if the endpoint's shmem
+    queues are not reachable (the orchestrator must launch migration_endpoint first)."""
     cmd_q, table_q, resp_q = _resolve_queue_names()
-    mod = _import_migration_client(strict=strict)
-    if mod is None:
-        return None, cmd_q, table_q, resp_q
+    mod = _import_migration_client()
     try:
         client = mod.MigrationLayerClient(cmd_q, table_q, resp_q)
     except RuntimeError as e:
-        msg = (
+        raise RuntimeError(
             f"[migration] could not attach MigrationLayerClient to queues "
             f"({cmd_q}, {table_q}, {resp_q}): {e}. The orchestrator / inference server "
             f"must launch migration_endpoint and create the shmem queues before the runner."
-        )
-        if strict:
-            raise RuntimeError(msg) from e
-        logger.warning(msg)
-        return None, cmd_q, table_q, resp_q
+        ) from e
     return client, cmd_q, table_q, resp_q
 
 
@@ -181,12 +157,15 @@ def build_and_serialize_kv_chunk_table(
     """Build the KV chunk address table from the device KV layout and serialize it to ``path``
     for the inference server to forward via SET_TABLE. Returns the path on success.
 
-    Uses the DeepSeek BLOCK-CYCLIC builder (create_kv_chunk_address_table_block_cyclic): the DeepSeek
-    non-balanced prefill cache stores positions block-cyclic across the SP shards (NOT the Kimi
-    contiguous-block layout), so each natural position must map to its true block-cyclic storage
-    chip + offset — otherwise a partial migration copies the wrong (un-prefilled) storage chunks
-    and the migrated KV fails its PCC check. ``chunk_size_global`` is the prefill chunk size (the
-    block-cyclic period; same value passed to blockcyclic_positions)."""
+    Uses the block-cyclic builder (create_kv_chunk_address_table_block_cyclic): chunked prefill
+    stores KV positions block-cyclic across the SP shards (every model variant), so the table must
+    map each natural position to its true block-cyclic storage chip + offset. The migration worker
+    copies the chunks the table lists for the migrated position range. A contiguous (wrong) table
+    still works for a blanket copy of the WHOLE cache — every chunk is copied regardless of its
+    label — but any sub-cache migration (a prefix copy of [0, N), or a prompt shorter than
+    max_seq_len) lists the wrong, block-cyclically-scattered chunks and copies mostly un-prefilled
+    storage, so the migrated KV fails its PCC check. ``chunk_size_global`` is the prefill chunk size
+    (the block-cyclic period; the same value passed to blockcyclic_positions)."""
     cfg = _disaggregation().KvChunkAddressTableConfig()
     cfg.num_layers = num_layers
     cfg.max_sequence_length = seq_len
@@ -207,31 +186,6 @@ def build_and_serialize_kv_chunk_table(
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
     return path
-
-
-def send_kv_chunk_table(table_path: str) -> bool:
-    """Forward the serialized table to the migration_worker via SET_TABLE only.
-
-    Best-effort, back-compat helper. Use ``publish_kv_chunk_table_and_wait_ready``
-    in production — by itself this call cannot bring the worker to WORKER_READY
-    (the worker also needs the device map; see module docstring).
-    """
-    client, cmd_q, table_q, resp_q = _attach_migration_client(strict=False)
-    if client is None:
-        logger.warning(
-            f"[migration] table written to {table_path} but NOT sent (no client). "
-            f"Use publish_kv_chunk_table_and_wait_ready for the full bring-up."
-        )
-        return False
-    client.send_kv_chunk_table(table_path)
-    logger.info(f"[migration] sent SET_TABLE({table_path}) via MigrationLayerClient on {table_q}")
-    if device_map is not None:
-        client.send_device_map(device_map)
-        logger.info(
-            f"[migration] sent device map ({len(device_map)} chips) via MigrationLayerClient on {table_q}; "
-            f"device-mode endpoint will open these chips and emit WORKER_READY"
-        )
-    return True
 
 
 def publish_kv_chunk_table_and_wait_ready(
@@ -263,9 +217,8 @@ def publish_kv_chunk_table_and_wait_ready(
     pattern we hit before the chunk_size_global plumbing landed).
 
     Strict-by-default: any failure to import the extension, attach to the
-    queues, or reach WORKER_READY raises. Callers that want best-effort
-    "publish-if-possible" semantics should use ``build_and_serialize_kv_chunk_table``
-    + ``send_kv_chunk_table`` directly.
+    queues, or reach WORKER_READY raises. Callers that only need the serialized
+    table (no publish) can use ``build_and_serialize_kv_chunk_table`` directly.
     """
     build_and_serialize_kv_chunk_table(
         mesh_device=mesh_device,
@@ -281,8 +234,7 @@ def publish_kv_chunk_table_and_wait_ready(
 
     device_map = _build_device_map(mesh_device, mesh_shape)
 
-    client, cmd_q, table_q, resp_q = _attach_migration_client(strict=True)
-    assert client is not None  # strict=True guarantees this
+    client, cmd_q, table_q, resp_q = _attach_migration_client()
 
     logger.info(
         f"[migration] publishing: table={path} devices={len(device_map)} "
@@ -292,5 +244,5 @@ def publish_kv_chunk_table_and_wait_ready(
     client.send_device_map(device_map)
     client.wait_ready(wait_ready_timeout_ms)
     logger.info(
-        f"[migration] WORKER_READY: layers={num_layers} slots={num_users} devices={len(device_map)} " f"table={path}"
+        f"[migration] WORKER_READY: layers={num_layers} slots={num_users} " f"devices={len(device_map)} table={path}"
     )

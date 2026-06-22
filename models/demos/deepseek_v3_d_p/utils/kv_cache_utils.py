@@ -245,21 +245,21 @@ def create_kv_chunk_address_table_kimi(
 def create_kv_chunk_address_table_block_cyclic(
     config, mesh_device, mesh_shape, seq_len, sp_axis, tt_kvpe_cache, chunk_size_bytes, num_users, chunk_size_global
 ):
-    """Block-cyclic-aware KV chunk address table for the DeepSeek non-balanced prefill cache.
+    """Block-cyclic-aware KV chunk address table for the non-balanced (chunked-prefill) KV cache.
 
-    The DeepSeek prefill KV cache stores positions in BLOCK-CYCLIC order across the SP shards
-    (see tt.mla.utils.blockcyclic_positions / update_padded_kv_cache): natural position P lives on
-    SP-row chip ``c = (P % chunk_size_global) // chunk_local`` at local row
+    Chunked prefill stores positions in BLOCK-CYCLIC order across the SP shards, for every model
+    variant (see tt.mla.utils.blockcyclic_positions / update_padded_kv_cache): natural position P
+    lives on SP-row chip ``c = (P % chunk_size_global) // chunk_local`` at local row
     ``lr = (P // chunk_size_global) * chunk_local + (P % chunk_size_global) % chunk_local``,
     where ``chunk_local = chunk_size_global // sp``.
 
-    The Kimi builder instead assumes a CONTIGUOUS-block layout (position P on chip
-    P // seq_len_local), which mismaps every position: a partial migration of natural range [0, N)
-    then copies contiguous storage chunk 0..N/32 — mostly UN-prefilled storage — instead of the
-    block-cyclic-scattered chunks that actually hold the first N tokens (observed: AFTER-migration
-    KV PCC ~0.35 because only ~1/sp of the data lands correctly). This builder maps each natural
-    position to its true block-cyclic storage chip + local DRAM-bank offset, reusing the same
-    ROUND_ROBIN_1D bank/offset math as init_kvpe_cache's NdShardSpec
+    The contiguous builder (create_kv_chunk_address_table_kimi) instead assumes a CONTIGUOUS-block
+    layout (position P on chip P // seq_len_local), which mismaps every position: a partial migration
+    of natural range [0, N) then copies contiguous storage chunk 0..N/32 — mostly UN-prefilled
+    storage — instead of the block-cyclic-scattered chunks that actually hold the first N tokens
+    (observed: AFTER-migration KV PCC ~0.35 because only ~1/sp of the data lands correctly). This
+    builder maps each natural position to its true block-cyclic storage chip + local DRAM-bank
+    offset, reusing the same ROUND_ROBIN_1D bank/offset math as init_kvpe_cache's NdShardSpec
     (linear = batch * chunks_per_layer_local + local_chunk; bank = linear % banks;
     offset = (linear // banks) * chunk_size_bytes), so a [0, N) migration moves exactly the
     prefilled KV. ``slot`` is the user index; cache batch index = slot * num_layers + layer.
@@ -321,7 +321,7 @@ def create_kv_chunk_address_table_block_cyclic(
                 lookup_table.set(layer, position, slot, location)
 
     logger.info(
-        f"[migration] DeepSeek block-cyclic KV chunk table: sp={sp} chunk_local={chunk_local} "
+        f"[migration] block-cyclic KV chunk table: sp={sp} chunk_local={chunk_local} "
         f"seq_len_local={seq_len_local} entries={lookup_table.total_entries()}"
     )
     return lookup_table
