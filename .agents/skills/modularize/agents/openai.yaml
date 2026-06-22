@@ -1,7 +1,0 @@
-interface:
-  display_name: "Modularize"
-  short_description: "Refactor to adopt existing TTTv2 modules and add new candidate modules"
-  default_prompt: "Use $modularize to refactor a model toward existing TTTv2 modules in models/common/modules, and create new candidate modules with accompanying tests when existing ones don't fit."
-
-policy:
-  allow_implicit_invocation: true
