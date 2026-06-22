@@ -45,14 +45,19 @@ Similarly, if you want to run a different input prompt file with different lengt
 
 For vLLM runs, you'll need to install [Tenstorrent's vLLM fork and TT plugin](https://github.com/tenstorrent/vllm/blob/dev/plugins/vllm-tt-plugin/README.md).
 
+Historical note: the measurements in this section were captured before the
+single-process Galaxy lane switch. The commands below reflect the current
+preferred launch configuration, but the numbers in the table have not yet been
+re-baselined for that path.
+
 vLLM offline run command:
 ```
-VLLM_RPC_TIMEOUT=100000 TT_LLAMA_TEXT_VER=llama3_70b_galaxy python plugins/vllm-tt-plugin/examples/offline_inference_tt.py  --model meta-llama/Llama-3.3-70B-Instruct --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}}' --greedy_sampling --num_repeat_prompts 2 --async_engine
+MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=100000 python plugins/vllm-tt-plugin/examples/offline_inference_tt.py --model meta-llama/Llama-3.3-70B-Instruct --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}}' --greedy_sampling --num_repeat_prompts 2 --async_engine
 ```
 
 vLLM server run command:
 ```
-TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 95693824}}'
+MESH_DEVICE=TG TT_LLAMA_TEXT_VER=llama3_70b_galaxy VLLM_RPC_TIMEOUT=900000 python plugins/vllm-tt-plugin/examples/server_example_tt.py --model "meta-llama/Llama-3.3-70B-Instruct" --data_parallel_size 4 --max_num_seqs 8 --async-scheduling --additional-config '{"tt": {"dispatch_core_axis": "col", "sample_on_device_mode": "all", "fabric_config": "FABRIC_1D_RING", "worker_l1_size": 1344544, "trace_region_size": 220000000}}'
 ```
 
 To send requests to vLLM the server, you will need [TT-Inference-Server](https://github.com/tenstorrent/tt-inference-server/tree/dev).
