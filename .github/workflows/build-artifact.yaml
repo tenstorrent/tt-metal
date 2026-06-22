@@ -368,16 +368,14 @@ jobs:
       ${{ needs.parse-platform.outputs.distro }}
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
-    # Cross-workflow compile mutex: one build at a time per unique compile configuration.
-    # Group spans across workflows (no github.workflow prefix) so pr-gate and merge-gate
-    # queue rather than duplicate when triggered simultaneously for the same PR/config.
-    # Protected branches use run_id so main is never blocked.
+    # Cross-workflow compile mutex: if two workflows (e.g. pr-gate + merge-gate) trigger
+    # builds for the same commit + config simultaneously, queue them so the second run
+    # gets a fully warm ccache instead of both racing with cold caches.
+    # Keyed purely on SHA + compile inputs — no branch/PR special-casing.
     concurrency:
       group: >-
         cmake-build-
-        ${{ (github.ref_protected && github.run_id) ||
-            github.event.pull_request.number ||
-            github.ref }}-
+        ${{ inputs.ref || github.sha }}-
         ${{ inputs.platform || 'Ubuntu 22.04' }}-
         ${{ inputs.build-type || 'Release' }}-
         ${{ inputs.toolchain || 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake' }}-
