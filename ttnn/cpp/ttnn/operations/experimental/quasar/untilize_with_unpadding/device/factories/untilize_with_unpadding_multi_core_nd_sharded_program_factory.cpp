@@ -127,7 +127,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reader_unary_nd_sharded_blocks.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/dataflow/"
+        "reader_unary_nd_sharded_blocks.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = compute_core_range;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
@@ -206,7 +207,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreNDShardedProgramFa
 
     // Compute kernel file
     const std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_variable_num_blocks.cpp");
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/"
+        "untilize_variable_num_blocks.cpp");
 
     // Compute compile-time args and kernel
     // Note: This condition is always true for sharded input

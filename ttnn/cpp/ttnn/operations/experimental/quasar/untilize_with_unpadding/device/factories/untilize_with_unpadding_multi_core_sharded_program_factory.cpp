@@ -137,7 +137,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/dataflow/"
+        "reader_unary_sharded.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_ct_args);
@@ -161,7 +162,9 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
              input_cb_data_format == tt::DataFormat::Int32),
             output_row_size};
         TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
-        writer_desc.kernel_source = "ttnn/cpp/ttnn/kernel/dataflow/writer_unary_stick_layout_interleaved_blocks.cpp";
+        writer_desc.kernel_source =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/dataflow/"
+            "writer_unary_stick_layout_interleaved_blocks.cpp";
         writer_desc.compile_time_args = std::move(writer_ct_args);
     }
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
@@ -187,10 +190,13 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreShardedProgramFact
     if (fp32_dest_acc_en) {
         unpack_to_dest_mode[tt::CBIndex::c_0] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
+    std::string compute_kernel(
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/untilize.cpp");
     if (unpad_tensor_w_16) {
         // Use copy compute kernel just for a potential data type conversion.
-        compute_kernel = "ttnn/cpp/ttnn/kernel/compute/eltwise_copy.cpp";
+        compute_kernel =
+            "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/"
+            "eltwise_copy.cpp";
         compute_args[0] = (uint32_t)num_input_tiles;  // per_core_tile_cnt
     }
 
