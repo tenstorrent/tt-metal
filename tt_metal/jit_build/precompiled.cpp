@@ -16,6 +16,7 @@ std::optional<std::string> find_precompiled_dir(const std::string& root, uint64_
     auto path = fmt::format("{}tt_metal/pre-compiled/{}/", root, hash);
     std::error_code ec;
     if (std::filesystem::is_directory(path, ec)) {
+        // TODO: validate the dir contains all binaries we need
         return path;
     }
     return std::nullopt;
