@@ -361,6 +361,19 @@ class LightProjector(nn.Module):
         return self.layers(x)
 
 
+def forward_vision_with_aligner(
+    vision_model: Siglip2VisionTransformer,
+    aligner: LightProjector,
+    pixel_values: torch.Tensor,
+    *,
+    spatial_shapes: torch.Tensor,
+    attention_mask: torch.Tensor,
+) -> torch.Tensor:
+    """SigLIP2 vision tower + aligner (upstream ``_forward_vision_encoder``)."""
+    image_embeds = vision_model(pixel_values, attention_mask, spatial_shapes)
+    return aligner(image_embeds)
+
+
 # ---------------------------------------------------------------------------
 # Checkpoint loaders (real HunyuanImage-3.0-Instruct weights)
 # ---------------------------------------------------------------------------

@@ -24,7 +24,23 @@
 #   tests/tokenizer/                   — CFG + host preprocess tests
 
 from .chat_template import ChatTemplateEncoder, TokenizerEncodeOutput
-from .gen_image_inputs import GenImageHostInputs, build_rope_image_info, prepare_gen_image_inputs, prepare_i2i_inputs
+from .gen_image_inputs import (
+    GenImageHostInputs,
+    build_attention_mask_for_bundle,
+    build_full_attn_slices,
+    build_i2i_cfg_conds,
+    build_i2i_inputs_embeds,
+    build_rope_image_info,
+    bundle_to_denoise_cond,
+    enrich_bundle_attention,
+    get_gen_image_grid,
+    get_gen_image_slice,
+    prepare_gen_image_inputs,
+    prepare_i2i_denoise_bundle,
+    prepare_i2i_inputs,
+    scatter_gen_timestep_embeds,
+    tokenizer_output_from_bundle,
+)
 from .hunyuan_tokenizer import (
     ASSETS_DIR,
     CONFIG_PATH,
@@ -54,12 +70,23 @@ __all__ = [
     "ResolutionGroup",
     "SpecialTokens",
     "TokenizerEncodeOutput",
+    "build_attention_mask_for_bundle",
+    "build_full_attn_slices",
     "build_gen_image_info",
+    "build_i2i_inputs_embeds",
+    "build_i2i_cfg_conds",
     "build_rope_image_info",
+    "bundle_to_denoise_cond",
     "build_special_tokens",
+    "enrich_bundle_attention",
+    "get_gen_image_grid",
+    "get_gen_image_slice",
     "load_config",
     "load_tokenizer",
     "prepare_gen_image_inputs",
+    "prepare_i2i_denoise_bundle",
     "prepare_i2i_inputs",
+    "scatter_gen_timestep_embeds",
+    "tokenizer_output_from_bundle",
     "validate_special_tokens",
 ]
