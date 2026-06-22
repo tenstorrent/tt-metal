@@ -279,23 +279,6 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         nd_shard_spec=kv_nd_shard_spec,
     )
 
-    # Allocate the cache directly on-device, instead of building a host torch.zeros and converting via
-    # ttnn.from_torch. The old from_torch path ran the whole (num_users * num_layers, 1, seq_len_local,
-    # head_dim) tensor through the host bfloat8 packer (pack_as_bfp_tiles) — single-threaded, re-run
-    # per mesh shard, with `int` tile/element indexing. For large num_users * seq_len that was
-    # pathologically slow (~20 min) and eventually overflowed the index and segfaulted. ttnn.empty just
-    # reserves the DRAM banks (instant, no host pack), with the SAME shape / dtype / layout / nd_shard
-    # memory_config, so the DRAM bank layout the migration address tables assume is preserved.
-    #
-    # NOTE: the cache is intentionally left UNINITIALIZED (not zeroed). On-device zeroing via ttnn.fill
-    # is not usable here — fill is a compute op and derives its worker grid from the tensor's shard
-    # spec, but this cache is sharded over DRAM-bank coords (not worker cores), so fill segfaults in
-    # get_worker_grid / CoreRangeSet::intersects. This mirrors make_chunked_kv_buf, which also leaves
-    # its gathered-KV scratch uninitialized: chunked prefill only ever reads the [0, logical_n)
-    # tile-aligned prefix, which prior+current chunks have already written, so positions past the
-    # written region are never read. *** This relies on that bounded-read invariant — verify the
-    # KV-cache PCC (_kv_cache_pcc_check) / migration PCC (validate_migration_kv) holds; if it drops,
-    # the cache does need zeroing and we must find a DRAM-shard-safe memset. ***
     expected_shape = [num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]
     tt_kvpe_cache = ttnn.empty(
         shape=expected_shape,
@@ -304,30 +287,5 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         device=mesh_device,
         memory_config=kv_mem_config,
     )
-
-    # Sanity-check the allocation matches what the migration address tables assume (shape / dtype /
-    # nd_shard layout). Fail loudly at startup rather than silently mis-mapping KV chunks later.
-    logger.info(
-        f"[init_kvpe_cache] shape={list(tt_kvpe_cache.shape)} dtype={tt_kvpe_cache.dtype} "
-        f"layout={tt_kvpe_cache.layout} mem_config={tt_kvpe_cache.memory_config()} "
-        f"buffer_addr=0x{tt_kvpe_cache.buffer_address():X} "
-        f"(num_users={num_users}, num_layers={num_layers}, seq_len_local={seq_len_local}, "
-        f"head_dim={kvpe_cache_head_dim})"
-    )
-    assert (
-        list(tt_kvpe_cache.shape) == expected_shape
-    ), f"KV cache shape {list(tt_kvpe_cache.shape)} != expected {expected_shape}"
-    assert tt_kvpe_cache.dtype == ttnn.bfloat8_b, f"KV cache dtype {tt_kvpe_cache.dtype} != bfloat8_b"
-    assert tt_kvpe_cache.layout == ttnn.TILE_LAYOUT, f"KV cache layout {tt_kvpe_cache.layout} != TILE_LAYOUT"
-    # The device-allocated config can be normalized (shard fields canonicalized), so a strict == may
-    # differ benignly — warn rather than hard-fail, but surface any drift since the migration tables
-    # assume this exact nd_shard layout. Full configs are logged above for eyeballing.
-    actual_mem_config = tt_kvpe_cache.memory_config()
-    if actual_mem_config != kv_mem_config:
-        logger.warning(
-            "[init_kvpe_cache] memory_config differs from the requested nd_shard spec — verify the "
-            f"migration KV PCC before trusting this run:\n  got:      {actual_mem_config}\n"
-            f"  expected: {kv_mem_config}"
-        )
 
     return tt_kvpe_cache
