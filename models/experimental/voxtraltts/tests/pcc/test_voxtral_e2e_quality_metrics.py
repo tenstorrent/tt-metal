@@ -17,7 +17,10 @@ from loguru import logger
 from scipy.io import wavfile
 
 from models.experimental.voxtraltts.demo.decode_trace_2cq import decode_trace_2cq_enabled, num_command_queues_for_decode
-from models.experimental.voxtraltts.tests.common import VOXTRAL_STANDARD_CHAR_TEXT, resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import (
+    VOXTRAL_STANDARD_CHAR_TEXT,
+    resolve_voxtral_model_name_or_skip,
+)
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_aligned_optimizations
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 

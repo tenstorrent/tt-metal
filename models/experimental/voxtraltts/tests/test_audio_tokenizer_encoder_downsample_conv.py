@@ -7,7 +7,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import causal_conv1d_left_pad_reference
-from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.audio_tokenizer.conv import (
     VoxtralTTAudioTokenizerEncoderDownsampleConv,
     resolve_encoder_block_strided_conv_weight,

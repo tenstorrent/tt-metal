@@ -26,7 +26,7 @@ except ImportError:
 
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
-from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_default_optimizations
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 

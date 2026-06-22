@@ -8,7 +8,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import decoder_blocks_stack_reference
 from models.experimental.voxtraltts.reference.voxtral_config import audio_tokenizer_latent_dim, load_voxtral_config
-from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
     VoxtralTTAudioTokenizer,
     extract_audio_tokenizer_state_dict,

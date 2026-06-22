@@ -24,7 +24,7 @@ from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import 
 )
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
-from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.acoustic_model import VoxtralTTAcousticModel
 from models.experimental.voxtraltts.tt.voxtral_tts import ACOUSTIC_CFG_ALPHA_DEFAULT
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
