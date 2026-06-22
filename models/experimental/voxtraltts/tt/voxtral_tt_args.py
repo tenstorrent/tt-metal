@@ -17,8 +17,8 @@ from models.experimental.voxtraltts.tt.text_decoder_layer import (
     permute_voxtral_text_qk_for_hf_rope,
     remap_voxtral_text_state_dict,
 )
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model_config import (
+from models.experimental.voxtraltts.tt.text_backbone.common import Mode
+from models.experimental.voxtraltts.tt.text_backbone.model_config import (
     DecodersPrecision,
     MathFidelitySetting,
     ModelArgs,
