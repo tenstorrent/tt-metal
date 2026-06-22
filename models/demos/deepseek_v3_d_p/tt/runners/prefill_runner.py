@@ -228,6 +228,8 @@ def run_request_loop(
         actual_end = int(meta_host[2])
         actual_isl = actual_end - actual_start
         if request_id_box is not None:
+            # Step 1: loop iteration index serves as request_id (chunk index in a push-driven loop
+            # with no multi-chunk request notion); feeds seq = request_id * num_layers + layer_idx.
             request_id_box["id"] = i
         logger.info(
             f"[request] iter={i} metadata: slot_id={slot_id} "
@@ -439,6 +441,14 @@ def main() -> None:
 
         request_id_box = None
         if pipelined:
+            if world_size > 1:
+                raise RuntimeError(
+                    "PREFILL_PIPELINED multi-host (world_size > 1) is not supported yet: "
+                    "completion seq values would collide across hosts because per-host layer "
+                    "sharding / completion merging is not wired (Step 1 is transport-only, "
+                    "single-host correct). Run with a single rank, or wait for the "
+                    "layer-sharding/merging step."
+                )
             # Pipelined prefill: push full completions into a host-local ring;
             # the router forwards them to the master rank, which re-emits them
             # in order into the scheduler counter channel (named ack_shm_name —
