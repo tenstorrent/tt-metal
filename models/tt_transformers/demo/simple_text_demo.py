@@ -869,6 +869,8 @@ def test_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
 
     test_id = request.node.callspec.id
+    if "ci-eval-32" in test_id and "performance" in test_id and is_wormhole_b0():
+        pytest.skip("Temporarily skipping ci-eval-32 performance on Wormhole due to ethernet timeout, refs #47126")
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
