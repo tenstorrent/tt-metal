@@ -8,6 +8,14 @@ num_routed_experts: 512
 num_shared_experts: 1
 has_bias: false
 
+# gate (routing front-end): n_group 1 = generalized op (ungrouped) / 8 = deepseek op (grouped top-8).
+# Qwen3.5 397B = linear → softmax(all) → top-10 → renormalize, no bias, no scale. UNSUPPORTED by the kernel
+# op (top-10 ∉ {4,6,8}, and 512 experts), so TTMoEGate takes the pure-ttnn FALLBACK (matmul → topk →
+# softmax-over-selected; softmax moved to the end, ≡ softmax-front + renorm since Z cancels), scale 1.0.
+n_group: 1
+score_func: softmax
+routed_scaling_factor: 1.0
+
 compute:
   intermediate_size: 1024
   activation_type: SILU
