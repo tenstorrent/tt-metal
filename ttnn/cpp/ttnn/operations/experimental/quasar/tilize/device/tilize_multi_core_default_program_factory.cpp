@@ -109,7 +109,8 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_ct_args);
@@ -128,7 +129,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     std::optional<KernelDescriptor> compute_desc;
     if (!core_range.ranges().empty()) {
         KernelDescriptor cd;
-        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+        cd.kernel_source = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
         cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
         cd.core_ranges = core_range;
         cd.compile_time_args = std::move(compute_args);
@@ -142,7 +143,7 @@ ProgramDescriptor TilizeMultiCoreDefaultProgramFactory::create_descriptor(
     std::optional<KernelDescriptor> compute_cliff_desc;
     if (!core_range_cliff.empty()) {
         KernelDescriptor cd;
-        cd.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+        cd.kernel_source = "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
         cd.source_type = KernelDescriptor::SourceType::FILE_PATH;
         cd.core_ranges = core_range_cliff;
         cd.compile_time_args = std::move(compute_args_cliff);

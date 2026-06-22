@@ -174,7 +174,8 @@ tt::tt_metal::ProgramDescriptor SliceTileTensorArgsProgramFactory::create_descri
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/slice/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = all_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);

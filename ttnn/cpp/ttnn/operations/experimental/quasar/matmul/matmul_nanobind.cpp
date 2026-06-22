@@ -644,7 +644,7 @@ void py_module(nb::module_& mod) {
             additional memory round-trips in DRAM-based operations.
         )doc");
 
-    ttnn::bind_function<"matmul">(
+    ttnn::bind_function<"matmul", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns the matrix product of two tensors.
@@ -809,7 +809,7 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function<"linear">(
+    ttnn::bind_function<"linear", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns the linear transformation of the inputs.
@@ -882,7 +882,7 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function<"matmul_batched_weights">(
+    ttnn::bind_function<"matmul_batched_weights", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         DEPRECATED: This is for experimental internal use and is not supported.
@@ -948,7 +948,7 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
-    ttnn::bind_function<"addmm">(
+    ttnn::bind_function<"addmm", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns a matrix products of tensors mat1_tensor and mat2_tensor. Tensor input_tensor is added to the final result.
@@ -1032,7 +1032,7 @@ void py_module(nb::module_& mod) {
             nb::arg("output_tile") = nb::none(),
             nb::arg("optional_output_tensor") = nb::none()));
 
-    ttnn::bind_function<"sparse_matmul">(
+    ttnn::bind_function<"sparse_matmul", "ttnn.experimental.quasar.">(
         mod,
         R"doc(
         Returns the matrix product of two tensors. Based on `is_input_a_sparse`, `is_input_b_sparse` and the sparsity tensor, some parts of the output computation is skipped.

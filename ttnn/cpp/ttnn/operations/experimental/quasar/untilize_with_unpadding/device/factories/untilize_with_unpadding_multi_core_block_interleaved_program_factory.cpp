@@ -185,7 +185,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/dataflow/"
+        "reader_unary_interleaved_wh_multicore.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
@@ -220,7 +221,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreBlockInterleavedPr
     }
 
     const std::string compute_kernel_path(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_wh.cpp");
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/untilize_wh.cpp");
 
     auto push_compute = [&](const CoreRangeSet& cr, std::initializer_list<uint32_t> compile_args) {
         KernelDescriptor compute_desc;
