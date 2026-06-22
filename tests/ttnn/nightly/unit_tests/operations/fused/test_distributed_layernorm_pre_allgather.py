@@ -942,10 +942,6 @@ def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offs
     ULP (~512) dwarfs the underlying randn variation (~1), so the variance signal is destroyed
     inside the add before welford runs.
     """
-    if use_residual:
-        pytest.xfail(
-            "FUSE_PRE_ADD TF32 floor on add_tiles: variance signal is destroyed inside the add before welford runs. Issue #45231."
-        )
 
     torch.manual_seed(0)
     torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset
