@@ -54,7 +54,7 @@ _TEST_PATH = "models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py"
         ),
         (
             f"pytest {_TEST_PATH} -k 'mesh-2x4-2link and layer3 and gate_device and no_ref and isl_6k4'",
-            58_750_603,  # Recalibrated 2026-06-10 on BH LoudBox 2x4; FABRIC_1D.
+            56_857_362,  # Recalibrated 2026-06-22 on BH LoudBox 2x4; FABRIC_1D. Direct-write FFN fusion (#46800) drops the per-expert insert DRAM round-trip (~3.2% faster).
             "deepseek_v3_prefill_block",
             "deepseek_v3_prefill_block_2x4_layer3_moe",
             1,

@@ -70,6 +70,12 @@ struct UnifiedRoutedExpertFfnInputs {
     Tensor counts;
     Tensor global_expert_idx_table;
     std::optional<Tensor> optional_output;
+    // Direct-write mode: per-global-expert region start offsets (UINT32, the
+    // same `start` tensor ttnn::insert consumes). When present, the writer
+    // places this expert's output directly into `optional_output` (the shared
+    // buffer) at start[global_id]/TILE tile-rows, fusing the ttnn::insert step.
+    // Requires optional_output to also be set.
+    std::optional<Tensor> expert_region_offsets;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
