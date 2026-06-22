@@ -19,6 +19,15 @@ MODEL_DIR = Path(
     )
 )
 
+# Instruct checkpoint for image editing (I2I). Falls back to bundled tokenizer assets when
+# the checkpoint dir has no tokenizer.json (same vocab as base).
+INSTRUCT_MODEL_DIR = Path(
+    os.environ.get(
+        "HUNYUAN_INSTRUCT_MODEL_DIR",
+        "/home/iguser/Christy/HunyuanImage-3-Instruct",
+    )
+)
+
 
 def load_tensors(model_dir: Path, keys: list[str]) -> dict[str, Tensor]:
     index_path = model_dir / "model.safetensors.index.json"
