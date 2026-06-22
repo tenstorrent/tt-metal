@@ -246,11 +246,14 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // in0 side: parent-K is K_in > K_matmul. K_matmul = K_w when in0 is parent, K_in when in1 is.
     const bool in1_parent_k_mode = K_w_tiles > K_in_tiles;
     const bool in0_parent_k_mode = !in1_parent_k_mode && K_in_tiles > K_w_tiles;
-    // InputAndWeightK overrides both in0 and in1 K-offsets at runtime; force both use_offset
-    // flags true so hash matches the program factory's CTA computation (otherwise the cached
-    // program's compile-time flags would diverge from what compute_program_hash predicted).
+    // The offsets role forces use_offset on (InputAndOutputRow → in0 row offset; InputAndWeightK →
+    // both in0+in1 K-offsets), so this MUST mirror the program factory's use_offset_in0 /
+    // use_offset_in1 exactly — otherwise the cached program's compile-time flags would diverge from
+    // what compute_program_hash predicted.
     const bool input_and_weight_k_active = operation_attributes.offsets_role == OffsetsRole::InputAndWeightK;
-    const bool use_offset = operation_attributes.expected_M_tiles > 0 || in0_parent_k_mode || input_and_weight_k_active;
+    const bool input_and_output_row_active = operation_attributes.offsets_role == OffsetsRole::InputAndOutputRow;
+    const bool use_offset = input_and_output_row_active || input_and_weight_k_active ||
+                            operation_attributes.expected_M_tiles > 0 || in0_parent_k_mode;
     const bool use_offset_in1 = in1_parent_k_mode || input_and_weight_k_active;
     // Mirror the program factory's transpose_core_grid decision exactly: use the caller's
     // expected_M_tiles when set (per-call M upper bound), else fall back to the input's

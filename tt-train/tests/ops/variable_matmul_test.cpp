@@ -262,6 +262,60 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow) corrupted untouched rows";
 }
 
+TEST_F(VariableMatmulTest, InputAndOutputRow_DefaultExpectedMTiles_ReadsCorrectRows) {
+    const uint32_t M_parent = 320, K = 128, N = 64;
+    auto* device = &ttml::autograd::ctx().get_device();
+
+    auto input = create_random_device_tensor(M_parent, K, device, /*seed=*/146U);
+    auto weight = create_random_device_tensor(K, N, device, /*seed=*/147U);
+    auto parent_out = create_random_device_tensor(M_parent, N, device, /*seed=*/148U);
+    const auto parent_orig_vec = ttml::core::to_vector<float>(parent_out);
+
+    // start_index=2 → rows [96, 160) → actual_M = 64. row_start=96>0 is what exposes the bug.
+    const std::vector<uint32_t> offsets_host = {0U, 32U, 96U, 160U, 224U, 288U};
+    auto offsets = make_offsets(offsets_host, device);
+    constexpr uint32_t kStart = 2U;
+    constexpr uint32_t m_lo = 96U;
+    constexpr uint32_t m_hi = 160U;
+    constexpr uint32_t actual_M = m_hi - m_lo;
+
+    ttml::metal::variable_matmul_into_rows(
+        /*input_tensor=*/input,
+        /*weight_tensor=*/weight,
+        /*config=*/kConfig,
+        /*offsets_tensor=*/offsets,
+        /*output_tensor=*/parent_out,
+        /*offsets_start_index=*/kStart,
+        /*expected_M_tiles=*/0U,  // default: must still read the right rows
+        /*transpose_a=*/false,
+        /*transpose_b=*/false);
+
+    auto input_slice = ttnn::slice(
+        input,
+        ttsl::SmallVector<uint32_t>{0U, 0U, m_lo, 0U},
+        ttsl::SmallVector<uint32_t>{1U, 1U, m_hi, K},
+        ttsl::SmallVector<uint32_t>{1U, 1U, 1U, 1U});
+    auto ref = minimal_matmul_hifi4(input_slice, weight, kConfig);
+    const auto ref_vec = ttml::core::to_vector<float>(ref);
+    const auto written_vec = ttml::core::to_vector<float>(parent_out);
+
+    EXPECT_EQ(subregion_max_abs_error(written_vec, ref_vec, m_lo, actual_M, N), 0.0F)
+        << "variable(InputAndOutputRow, expected_M_tiles=0) read the wrong input rows at [" << m_lo << "," << m_hi
+        << ")";
+
+    // Untouched rows of parent_out preserved exactly.
+    float untouched_err = 0.0F;
+    for (uint32_t m = 0; m < M_parent; ++m) {
+        if (m >= m_lo && m < m_hi) {
+            continue;
+        }
+        for (uint32_t n = 0; n < N; ++n) {
+            untouched_err = std::max(untouched_err, std::abs(written_vec[m * N + n] - parent_orig_vec[m * N + n]));
+        }
+    }
+    EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow, expected_M_tiles=0) corrupted untouched rows";
+}
+
 // InputAndOutputRow + transpose_b: the moe_ffn forward hot path (gate/up/down call with
 // transpose_b=true; weights stored [N, K], used as [K, N]). Kernel-level parity localizes a
 // regression vs the end-to-end MoE test. Reference transposes the weight to [K, N].

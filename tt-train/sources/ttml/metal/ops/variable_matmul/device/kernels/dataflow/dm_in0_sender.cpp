@@ -57,10 +57,10 @@ void kernel_main() {
     uint32_t M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 1);
     const uint32_t padded_M_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 2);
     uint32_t M_blocks_per_core = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 3);
-    // Read-at-offset support — only read the runtime args when the compile-time flag is set
-    // (avoids any potential register pressure / dead-code propagation issues on the no-offset
-    // hot path used by all backward calls). Row and K offsets are initialized to 0 here and
-    // overwritten below from offsets[start..start+2] when the role activates them.
+    // Read-at-offset support — the parent-stride runtime args are read only when use_offset is set
+    // (the if-constexpr keeps them out of the no-offset compile variant). Row and K offsets are
+    // initialized to 0 here and overwritten below from offsets[start..start+2] when the role
+    // activates them.
     uint32_t in0_row_offset_tiles = 0U;
     uint32_t out_row_offset_tiles = 0U;
     uint32_t in0_k_offset_tiles = 0U;

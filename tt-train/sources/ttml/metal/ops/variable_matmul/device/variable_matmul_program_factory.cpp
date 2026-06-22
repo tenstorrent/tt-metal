@@ -250,8 +250,12 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // the per-tile address. Computed once and shared across all four dm kernel CTA lists
     // (in0 sender + in0 receiver, in1 sender + in1 receiver). Sender and receiver MUST
     // agree on this flag — a mismatch makes one side read different runtime args than the other.
+    // The role drives use_offset_in0: OFFSET_ROW_MODE needs the in0 row offset, OFFSET_K_MODE the
+    // in0 K offset. NOT expected_M_tiles (that's only the transpose-orientation hint) — keying on
+    // it would drop the row offset whenever a caller left expected_M_tiles at its 0 default.
+    // Parent-K mode also needs the parent stride; expected_M_tiles>0 is kept as a legacy signal.
     const bool use_offset_in0 =
-        operation_attributes.expected_M_tiles > 0 || parent_K_tiles_in0 > K_tiles || offset_k_mode;
+        offset_row_mode || offset_k_mode || operation_attributes.expected_M_tiles > 0 || parent_K_tiles_in0 > K_tiles;
     const bool use_offset_in1 = parent_K_tiles_in1 > K_tiles || offset_k_mode;
     // Both dm kernels always read the offsets tensor (each one derives its own slice).
     // Compute reads its override values from cb_ctrl, not directly from offsets.
