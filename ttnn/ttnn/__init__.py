@@ -218,6 +218,8 @@ from ttnn._ttnn.counter_channel import (
     InterProcessCounterChannel,
 )
 
+from ttnn._ttnn import layer_completion
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
