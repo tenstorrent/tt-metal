@@ -15,3 +15,4 @@
 # shares. It can affect other tt_transformers models in the same Python environment. Prefer
 # a dedicated virtualenv for the Qwen3.5-9B model if you also run other models from this repo.
 transformers>=5.2.0
+qwen-vl-utils
