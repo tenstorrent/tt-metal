@@ -209,17 +209,7 @@ public:
 
 private:
     // Internal constructors. Use the from_buffer factories to build a HostTensor from a backing buffer.
-
-    /**
-     * Constructs a host tensor from a distributed host buffer.
-     */
     explicit HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopology topology);
-
-    /**
-     * Constructs a host tensor from a single device host buffer.
-     * The buffer occupies the 0x0 shard of the distributed host buffer.
-     */
-    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     // impl_ could be a nullptr if HostTensor is in a moved-from state.
     // Avoid using impl_ pointer directly, use the impl() accessor instead.
