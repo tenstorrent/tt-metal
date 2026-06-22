@@ -111,7 +111,7 @@ void kernel_main() {
         if constexpr (is_output_writer) {
             out_row_offset_tiles = row_start / 32U;
         }
-        // Per-core M split — mirrors host actual_M_tiles_per_core formula. M_blocks_per_core
+        // Per-core M split — mirrors host M_tiles_per_core formula. M_blocks_per_core
         // is UNIFORM across cores (avoids breaking the sender/receiver semaphore chain when
         // some cores have less M-work). Read/write bounds checks (m_tile >= shape.logical_d0)
         // clip out-of-range tiles for the tail cores.

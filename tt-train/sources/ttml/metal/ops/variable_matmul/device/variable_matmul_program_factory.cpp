@@ -64,7 +64,7 @@ CoreCoord clamped_next(const std::vector<CoreCoord>& order, uint32_t index) {
     return order.at(index >= last ? last : index + 1);
 }
 
-// Append tensor accessors for input + output (no bias/ternary/AG)
+// Append tensor accessors for input + output
 void append_accessors(std::vector<uint32_t>& args, const Tensor& main_tensor, const Tensor& output_tensor) {
     tt::tt_metal::TensorAccessorArgs(*main_tensor.buffer()).append_to(args);
     tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(args);
@@ -120,23 +120,21 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     // M extent of the input — independent of K offsets. parent_M is the input's stored M
     // dimension (matmul-M = stored inner when transpose_a, stored outer otherwise).
     const uint32_t parent_M = transpose_a ? in0_tensor_shape[-1] : in0_tensor_shape[-2];
-    // Non-tile-aligned logical M is supported (matches minimal_matmul / ttnn::matmul). The
-    // TILE-layout physical storage already rounds up to a multiple of TILE_HEIGHT; we
-    // ceil-div here so the partial last tile is counted in actual_M_tiles. The dataflow
-    // writer's per-tile bounds check clips writes back to the logical tile count.
+    // Non-tile-aligned logical M is supported (like minimal_matmul / ttnn::matmul): TILE storage
+    // already rounds up to TILE_HEIGHT, so we ceil-div to count the partial last tile; the
+    // dataflow writer's per-tile bounds check clips writes back to the logical tile count.
     const uint32_t parent_M_tiles = tt::div_up(parent_M, tt::constants::TILE_HEIGHT);
 
     // expected_M_tiles overrides for offset-read mode; otherwise process the whole input.
-    const uint32_t actual_M_tiles =
+    const uint32_t logical_M_tiles =
         (operation_attributes.expected_M_tiles > 0) ? operation_attributes.expected_M_tiles : parent_M_tiles;
-    const uint32_t actual_M = actual_M_tiles * tt::constants::TILE_HEIGHT;
+    const uint32_t logical_M = logical_M_tiles * tt::constants::TILE_HEIGHT;
 
-    // Pick the grid orientation based on the matmul-M extent the caller actually uses
-    // (expected_M_tiles when set, else parent_M_tiles). For EP shared-tensor callers
-    // (moe_ffn), parent_M = T_cap but actual_M_tiles is the per-call upper bound, so this
-    // gets the right orientation per shape instead of being skewed by T_cap. Stable across
-    // calls as long as the caller passes a stable expected_M_tiles value.
-    const bool transpose_core_grid = actual_M_tiles > N_tiles;
+    // Pick the grid orientation from the matmul-M extent the caller actually uses: logical_M_tiles
+    // is expected_M_tiles when the caller passes it (>0), else parent_M_tiles. For EP shared-tensor
+    // callers (moe_ffn) parent_M = T_cap, so using logical_M_tiles gets the right orientation per
+    // shape instead of being skewed by T_cap; stable as long as expected_M_tiles is stable.
+    const bool transpose_core_grid = logical_M_tiles > N_tiles;
 
     const uint32_t M_block_tiles = config.M_block_size;
     const uint32_t K_block_tiles = config.K_block_size;
@@ -157,14 +155,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const auto in1_risc = transpose_core_grid ? small_input_risc : large_input_risc;
     const uint32_t in1_parallel_axis_cores = transpose_core_grid ? grid_size.y : grid_size.x;
 
-    // ----- M tile counts (from actual_M — used for both compile-time and runtime args) -----
-    const uint32_t actual_padded_M_tiles = tt::round_up(actual_M_tiles, in0_parallel_axis_cores);
+    // ----- M tile counts (from logical_M — used for both compile-time and runtime args) -----
+    const uint32_t padded_M_tiles = tt::round_up(logical_M_tiles, in0_parallel_axis_cores);
     const uint32_t padded_N_tiles = tt::round_up(N_tiles, in1_parallel_axis_cores);
 
-    const uint32_t actual_M_tiles_per_core = actual_padded_M_tiles / in0_parallel_axis_cores;
+    const uint32_t M_tiles_per_core = padded_M_tiles / in0_parallel_axis_cores;
     const uint32_t N_tiles_per_core = padded_N_tiles / in1_parallel_axis_cores;
 
-    const uint32_t actual_M_blocks_per_core = tt::div_up(actual_M_tiles_per_core, M_block_tiles);
+    const uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, M_block_tiles);
     const uint32_t N_blocks_per_core = tt::div_up(N_tiles_per_core, N_block_tiles);
 
     // ----- CB sizing (depends only on block sizes from config, not on total M) -----
@@ -178,13 +176,10 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const uint32_t out_cb_num_tiles = out_block_num_tiles * double_buffer_factor;
     const uint32_t interm_cb_num_tiles = out_block_num_tiles;  // not double buffered
 
-    log_debug(tt::LogOp, "variable_matmul: actual_M={}, K={}, N={}", actual_M, K_w, N);
+    log_debug(tt::LogOp, "variable_matmul: logical_M={}, K={}, N={}", logical_M, K_w, N);
     log_debug(
-        tt::LogOp,
-        "variable_matmul: actual_M_tiles_per_core={}, actual_M_blocks_per_core={}",
-        actual_M_tiles_per_core,
-        actual_M_blocks_per_core);
-    log_debug(tt::LogOp, "variable_matmul: transpose_core_grid={} (from actual_M > N)", transpose_core_grid);
+        tt::LogOp, "variable_matmul: M_tiles_per_core={}, M_blocks_per_core={}", M_tiles_per_core, M_blocks_per_core);
+    log_debug(tt::LogOp, "variable_matmul: transpose_core_grid={} (from logical_M > N)", transpose_core_grid);
 
     // ----- Sender/receiver core ranges -----
     const auto core_0_0 = CoreCoord{0, 0};
@@ -294,7 +289,7 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
     const bool in0_is_output_writer = !transpose_core_grid;
     const bool in1_is_output_writer = transpose_core_grid;
 
-    // in0 sender compile-time args (22 fixed + tensor accessor args)
+    // in0 sender compile-time args (16 scalar + tensor accessor args)
     std::vector<uint32_t> in0_sender_compile_time_args = {
         N_tiles,                                                       // 0:  N_tiles
         padded_N_tiles,                                                // 1:  padded_N_tiles
@@ -509,9 +504,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         const auto in1_prev_core_physical = device->worker_core_from_logical_core(in1_prev_core);
         const auto in1_next_core_physical = device->worker_core_from_logical_core(in1_next_core);
 
-        // M tile ranges use actual_M (runtime), N tile ranges use padded_N (compile-time)
-        const uint32_t M_start_tile = actual_M_tiles_per_core * in0_idx;
-        const uint32_t M_end_tile = actual_M_tiles_per_core * (in0_idx + 1);
+        // M tile ranges use logical_M (runtime), N tile ranges use padded_N (compile-time)
+        const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
+        const uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
         const uint32_t N_start_tile = N_tiles_per_core * in1_idx;
         const uint32_t N_end_tile = N_tiles_per_core * (in1_idx + 1);
 
@@ -535,9 +530,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //  9: N_end_tile
         // 10: defer_write_k_block
         // 11: out_addr
-        // 12: actual_M_tiles            (= expected_M_tiles)
-        // 13: actual_padded_M_tiles
-        // 14: actual_M_blocks_per_core
+        // 12: logical_M_tiles            (= expected_M_tiles)
+        // 13: padded_M_tiles
+        // 14: M_blocks_per_core
         // 15: parent_M_tiles_stride     (parent M tile count; used as K-row stride for transpose_a)
         // 16: parent_K_tiles_stride     (parent K tile count; used as M-row stride for non-transpose)
         // 17: K_tiles                   (variable-K: matmul-K extent in tiles)
@@ -554,9 +549,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             N_end_tile,
             defer_write_k_block,
             out_addr,
-            actual_M_tiles,
-            actual_padded_M_tiles,
-            actual_M_blocks_per_core,
+            logical_M_tiles,
+            padded_M_tiles,
+            M_blocks_per_core,
             parent_M_tiles,
             parent_K_tiles_in0,
             K_tiles,
@@ -593,9 +588,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //  9: N_end_tile
         // 10: defer_write_k_block
         // 11: out_addr
-        // 12: actual_M_tiles
-        // 13: actual_padded_M_tiles
-        // 14: actual_M_blocks_per_core
+        // 12: logical_M_tiles
+        // 13: padded_M_tiles
+        // 14: M_blocks_per_core
         // 15: parent_K_tiles_in1    (parent K tile count; row stride for transpose_b)
         // 16: K_tiles               (variable-K: matmul-K extent in tiles)
         std::vector<uint32_t> in1_args = {
@@ -611,9 +606,9 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
             N_end_tile,
             defer_write_k_block,
             out_addr,
-            actual_M_tiles,
-            actual_padded_M_tiles,
-            actual_M_blocks_per_core,
+            logical_M_tiles,
+            padded_M_tiles,
+            M_blocks_per_core,
             parent_K_tiles_in1,
             K_tiles,
         };
@@ -640,14 +635,14 @@ VariableMatmulProgramFactory::cached_program_t VariableMatmulProgramFactory::cre
         //  1: M_end_tile
         //  2: N_start_tile
         //  3: N_end_tile
-        //  4: actual_M_blocks_per_core
+        //  4: M_blocks_per_core
         //  5: K_tiles (variable-K)
         std::vector<uint32_t> compute_runtime_args = {
             M_start_tile,
             M_end_tile,
             N_start_tile,
             N_end_tile,
-            actual_M_blocks_per_core,
+            M_blocks_per_core,
             K_tiles,
         };
         SetRuntimeArgs(program, compute_kernels_id, core, compute_runtime_args);
@@ -690,11 +685,11 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     const uint32_t parent_M_tiles = (transpose_a ? a_padded[-1] : a_padded[-2]) / tt::constants::TILE_HEIGHT;
     const uint32_t parent_K_tiles_in0 = (transpose_a ? a_padded[-2] : a_padded[-1]) / tt::constants::TILE_WIDTH;
     const uint32_t parent_K_tiles_in1 = (transpose_b ? w_padded[-1] : w_padded[-2]) / tt::constants::TILE_WIDTH;
-    const uint32_t actual_M_tiles =
+    const uint32_t logical_M_tiles =
         (operation_attributes.expected_M_tiles > 0) ? operation_attributes.expected_M_tiles : parent_M_tiles;
-    const uint32_t actual_padded_M_tiles = tt::round_up(actual_M_tiles, sv.in0_parallel_axis_cores);
-    const uint32_t actual_M_tiles_per_core = actual_padded_M_tiles / sv.in0_parallel_axis_cores;
-    const uint32_t actual_M_blocks_per_core = tt::div_up(actual_M_tiles_per_core, sv.M_block_tiles);
+    const uint32_t padded_M_tiles = tt::round_up(logical_M_tiles, sv.in0_parallel_axis_cores);
+    const uint32_t M_tiles_per_core = padded_M_tiles / sv.in0_parallel_axis_cores;
+    const uint32_t M_blocks_per_core = tt::div_up(M_tiles_per_core, sv.M_block_tiles);
 
     const uint32_t in0_addr = input_tensor.buffer()->address();
     const uint32_t in1_addr = tensor_args.weight_tensor.buffer()->address();
@@ -711,9 +706,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN0_M_START_IDX = 6;
     constexpr uint32_t IN0_M_END_IDX = 7;
     constexpr uint32_t IN0_OUT_ADDR_IDX = 11;
-    constexpr uint32_t IN0_ACTUAL_M_TILES_IDX = 12;
-    constexpr uint32_t IN0_ACTUAL_PADDED_M_TILES_IDX = 13;
-    constexpr uint32_t IN0_ACTUAL_M_BLOCKS_IDX = 14;
+    constexpr uint32_t IN0_LOGICAL_M_TILES_IDX = 12;
+    constexpr uint32_t IN0_PADDED_M_TILES_IDX = 13;
+    constexpr uint32_t IN0_M_BLOCKS_IDX = 14;
     constexpr uint32_t IN0_PARENT_M_TILES_STRIDE_IDX = 15;
     constexpr uint32_t IN0_PARENT_K_TILES_STRIDE_IDX = 16;
     constexpr uint32_t IN0_K_TILES_IDX = 17;
@@ -723,16 +718,16 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
     constexpr uint32_t IN1_M_START_IDX = 6;
     constexpr uint32_t IN1_M_END_IDX = 7;
     constexpr uint32_t IN1_OUT_ADDR_IDX = 11;
-    constexpr uint32_t IN1_ACTUAL_M_TILES_IDX = 12;
-    constexpr uint32_t IN1_ACTUAL_PADDED_M_TILES_IDX = 13;
-    constexpr uint32_t IN1_ACTUAL_M_BLOCKS_IDX = 14;
+    constexpr uint32_t IN1_LOGICAL_M_TILES_IDX = 12;
+    constexpr uint32_t IN1_PADDED_M_TILES_IDX = 13;
+    constexpr uint32_t IN1_M_BLOCKS_IDX = 14;
     constexpr uint32_t IN1_PARENT_K_TILES_STRIDE_IDX = 15;
     constexpr uint32_t IN1_K_TILES_IDX = 16;
 
     // Compute runtime arg indices
     constexpr uint32_t COMPUTE_M_START_IDX = 0;
     constexpr uint32_t COMPUTE_M_END_IDX = 1;
-    constexpr uint32_t COMPUTE_ACTUAL_M_BLOCKS_IDX = 4;
+    constexpr uint32_t COMPUTE_M_BLOCKS_IDX = 4;
     constexpr uint32_t COMPUTE_K_TILES_IDX = 5;
 
     // Recompute matmul-K. Mirror the create() derivation: in1 is parent when its K extent
@@ -767,9 +762,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         args[IN0_M_START_IDX] = M_start;
         args[IN0_M_END_IDX] = M_end;
         args[IN0_OUT_ADDR_IDX] = out_addr;
-        args[IN0_ACTUAL_M_TILES_IDX] = actual_M_tiles;
-        args[IN0_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
-        args[IN0_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
+        args[IN0_LOGICAL_M_TILES_IDX] = logical_M_tiles;
+        args[IN0_PADDED_M_TILES_IDX] = padded_M_tiles;
+        args[IN0_M_BLOCKS_IDX] = M_blocks_per_core;
         args[IN0_PARENT_M_TILES_STRIDE_IDX] = parent_M_tiles;
         args[IN0_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in0;
         args[IN0_K_TILES_IDX] = K_tiles_rt;
@@ -784,9 +779,9 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         args[IN1_M_START_IDX] = M_start;
         args[IN1_M_END_IDX] = M_end;
         args[IN1_OUT_ADDR_IDX] = out_addr;
-        args[IN1_ACTUAL_M_TILES_IDX] = actual_M_tiles;
-        args[IN1_ACTUAL_PADDED_M_TILES_IDX] = actual_padded_M_tiles;
-        args[IN1_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
+        args[IN1_LOGICAL_M_TILES_IDX] = logical_M_tiles;
+        args[IN1_PADDED_M_TILES_IDX] = padded_M_tiles;
+        args[IN1_M_BLOCKS_IDX] = M_blocks_per_core;
         args[IN1_PARENT_K_TILES_STRIDE_IDX] = parent_K_tiles_in1;
         args[IN1_K_TILES_IDX] = K_tiles_rt;
         args[IN1_DEFER_WRITE_K_BLOCK_IDX] = defer_write_k_block;
@@ -801,8 +796,8 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         const uint32_t in0_idx = sv.transpose_core_grid ? core.x : core.y;
         const uint32_t in1_idx = sv.transpose_core_grid ? core.y : core.x;
 
-        const uint32_t M_start_tile = actual_M_tiles_per_core * in0_idx;
-        const uint32_t M_end_tile = actual_M_tiles_per_core * (in0_idx + 1);
+        const uint32_t M_start_tile = M_tiles_per_core * in0_idx;
+        const uint32_t M_end_tile = M_tiles_per_core * (in0_idx + 1);
 
         // Kernel computes defer_write_k_block from runtime K_num_blocks (post K-axis offset
         // override) using Y_AXIS_CORES — just pass core.y.
@@ -823,7 +818,7 @@ void VariableMatmulProgramFactory::override_runtime_arguments(
         auto& cargs = compute_rt[core.x][core.y];
         cargs[COMPUTE_M_START_IDX] = M_start_tile;
         cargs[COMPUTE_M_END_IDX] = M_end_tile;
-        cargs[COMPUTE_ACTUAL_M_BLOCKS_IDX] = actual_M_blocks_per_core;
+        cargs[COMPUTE_M_BLOCKS_IDX] = M_blocks_per_core;
         cargs[COMPUTE_K_TILES_IDX] = K_tiles_rt;
     }
 }

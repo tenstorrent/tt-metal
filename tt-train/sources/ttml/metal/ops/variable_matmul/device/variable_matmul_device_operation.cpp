@@ -257,11 +257,11 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
     // full M dimension. Comparison in tile units.
     const uint32_t parent_M_for_hash = transpose_a ? a_padded[-1] : a_padded[-2];
     const uint32_t parent_M_tiles_for_hash = tt::div_up(parent_M_for_hash, tt::constants::TILE_HEIGHT);
-    const uint32_t actual_M_tiles_for_hash =
+    const uint32_t logical_M_tiles_for_hash =
         (operation_attributes.expected_M_tiles > 0) ? operation_attributes.expected_M_tiles : parent_M_tiles_for_hash;
     const uint32_t N = transpose_b ? w_padded[-2] : w_padded[-1];
     const uint32_t N_tiles_for_hash = N / tt::constants::TILE_WIDTH;
-    const bool transpose_core_grid = actual_M_tiles_for_hash > N_tiles_for_hash;
+    const bool transpose_core_grid = logical_M_tiles_for_hash > N_tiles_for_hash;
 
     // Variable-K: only N must be in the hash (matmul-K is RT-driven, fully variable). N is the
     // padded matmul-N (computed above) so the hash groups calls that share a compiled program.
