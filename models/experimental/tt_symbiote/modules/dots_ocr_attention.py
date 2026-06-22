@@ -30,7 +30,6 @@ from models.experimental.tt_symbiote.modules.linear import (
     _tp_num_shards,
     _tp_requires_ccl,
 )
-from models.experimental.tt_symbiote.modules.dots_ocr_mlp import TTNNDotsOCRRowShardedNoAllGather
 from models.experimental.tt_symbiote.modules.rope import BailingRotarySetup
 
 try:
@@ -582,19 +581,17 @@ class TTNNDotsOCRAttention(TTNNModule):
         else:
             new_attn.qkv_proj_prefill = _TTNNDotsOCRQKVPrefillLinear.from_torch(fused_linear_conv)
 
-        # O projection.
-        if new_attn._head_parallel:
-            # Row-parallel reduce_scatter-only o_proj: the local-head attention
-            # output is the hidden/TP K-shard, so the matmul partial-sum is
-            # reduce_scattered (no all_gather) back to a hidden/TP shard that adds
-            # straight onto the hidden-sharded residual. bfloat8_b weight to keep
-            # residual-stream PCC (the N-parallel decode path is drift-sensitive).
-            new_attn.o_proj = TTNNDotsOCRRowShardedNoAllGather.from_torch(hf_attn.o_proj).set_weight_dtype(
-                ttnn.bfloat8_b
-            )
-        else:
-            # Block-sharded tuned prefill matmul + decode DRAM-sharded fast path.
-            new_attn.o_proj = _TTNNDotsOCROProjPrefillLinear.from_torch(hf_attn.o_proj)
+        # O projection. head_parallel uses the SAME col-sharded full-contraction
+        # o_proj as col_parallel/2-head: the head-local SDPA produces a hidden/TP
+        # ctx shard, which the decode/prefill forwards all_gather to full ctx
+        # (1536) before this o_proj. That single full contraction (one BFP8 round,
+        # no cross-device sum) is bit-identical to the proven path. The earlier
+        # row-parallel reduce_scatter o_proj added an extra per-layer BFP8 rounding
+        # in the partial-sum reduction, which drifted long greedy table decode
+        # (correct headers, empty/nested table bodies) on this quantization-
+        # sensitive model -- while keeping single-layer PCC at 0.999.
+        # Block-sharded tuned prefill matmul + decode DRAM-sharded fast path.
+        new_attn.o_proj = _TTNNDotsOCROProjPrefillLinear.from_torch(hf_attn.o_proj)
 
         # Raw torch weights kept for the head-sharded TP prefill path (built in
         # move_weights_to_device_impl when the mesh is a CCL/TP mesh with heads
@@ -819,6 +816,8 @@ class TTNNDotsOCRAttention(TTNNModule):
         return qkv_states
 
     def _forward_prefill(self, hidden_states, attention_mask, past_key_values, cache_position):
+        if getattr(self, "_head_parallel", False) and getattr(self, "_tp_degree", 1) > 1:
+            return self._forward_prefill_head_parallel(hidden_states, attention_mask, past_key_values, cache_position)
         if getattr(self, "_tp_degree", 1) > 1:
             return self._forward_prefill_head_sharded(hidden_states, attention_mask, past_key_values, cache_position)
         batch_size, seq_length = hidden_states.shape[0], hidden_states.shape[1]
@@ -909,6 +908,108 @@ class TTNNDotsOCRAttention(TTNNModule):
         attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
         attn_output = ttnn.squeeze(attn_output, 1)
 
+        attn_output = self.o_proj(attn_output)
+        return attn_output, None
+
+    def _forward_prefill_head_parallel(self, hidden_states, attention_mask, past_key_values, cache_position):
+        """Head-parallel TP prefill using the same QKV/o_proj weights as decode.
+
+        Symbiote prefill delivers a column-sharded ``hidden/TP`` stream; gather to
+        full hidden before the head-local QKV matmul (matching decode). o_proj is
+        the row-parallel reduce_scatter path, returning ``hidden/TP`` for the
+        residual add. Avoids ``_forward_prefill_head_sharded``, which used a
+        different QKV permute and column-sharded o_proj and caused prefill/decode
+        cache drift on long OCR sequences.
+        """
+        _ = cache_position
+        batch_size, seq_length = int(hidden_states.shape[0]), int(hidden_states.shape[1])
+        hidden_dim = int(self.hidden_size)
+        hs = hidden_states
+        if hs.layout != ttnn.TILE_LAYOUT:
+            hs = ttnn.to_layout(hs, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if int(hs.shape[-1]) < hidden_dim and _tp_requires_ccl(self.device):
+            work = hs if len(hs.shape) == 4 else ttnn.reshape(hs, (batch_size, 1, seq_length, int(hs.shape[-1])))
+            full_hidden = ttnn.all_gather(
+                work,
+                dim=3,
+                num_links=_ccl_num_links(self.device),
+                cluster_axis=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
+            if work is not hs:
+                ttnn.deallocate(work)
+            hs = ttnn.reshape(full_hidden, (batch_size, seq_length, hidden_dim))
+            ttnn.deallocate(full_hidden)
+
+        n_heads, n_kv_heads = self._head_counts()
+        qkv_states = self._project_qkv_fused(hs, batch_size, seq_length, proj=self.qkv_proj)
+        query_states, key_states, value_states = ttnn.experimental.nlp_create_qkv_heads(
+            qkv_states,
+            num_heads=n_heads,
+            num_kv_heads=n_kv_heads,
+            transpose_k_heads=False,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(qkv_states)
+
+        seq_len = int(query_states.shape[2])
+        cos, sin = self._rotary_setup.get_cos_sin_for_prefill(seq_len)
+        query_states = ttnn.experimental.rotary_embedding(query_states, cos, sin)
+        key_states = ttnn.experimental.rotary_embedding(key_states, cos, sin)
+        if int(query_states.shape[2]) != seq_len:
+            query_states = query_states[:, :, :seq_len, :]
+        if int(key_states.shape[2]) != seq_len:
+            key_states = key_states[:, :, :seq_len, :]
+
+        use_paged = isinstance(past_key_values, TTNNPagedAttentionKVCache)
+        if past_key_values is not None and use_paged:
+            k_fill = (
+                key_states
+                if key_states.dtype == ttnn.bfloat16
+                else ttnn.typecast(key_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            )
+            v_fill = (
+                value_states
+                if value_states.dtype == ttnn.bfloat16
+                else ttnn.typecast(value_states, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            )
+            past_key_values.paged_fill_on_device(k_fill, v_fill, layer_idx=self.layer_idx, batch_idx=0)
+            if k_fill is not key_states:
+                ttnn.deallocate(k_fill)
+            if v_fill is not value_states:
+                ttnn.deallocate(v_fill)
+
+        self.sdpa.memory_config = ttnn.L1_MEMORY_CONFIG
+        attn_output = ttnn.transformer.scaled_dot_product_attention(
+            query_states,
+            key_states,
+            value_states,
+            is_causal=self.is_causal,
+            scale=self.scaling,
+            program_config=self.sdpa.program_config,
+            attn_mask=attention_mask,
+            compute_kernel_config=self.sdpa.compute_kernel_config,
+            memory_config=self.sdpa.memory_config,
+        )
+        ttnn.deallocate(query_states)
+        ttnn.deallocate(key_states)
+        ttnn.deallocate(value_states)
+
+        attn_output = ttnn.experimental.nlp_concat_heads(attn_output, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn_output = ttnn.squeeze(attn_output, 1)
+        # Gather local-head ctx -> full ctx (1536) for the col-sharded
+        # full-contraction o_proj (mirrors decode; matches col_parallel exactly).
+        if _linear_mesh_num_devices(self.device) > 1 and _tp_requires_ccl(self.device):
+            attn_output = ttnn.all_gather(
+                attn_output,
+                dim=len(attn_output.shape) - 1,
+                num_links=_ccl_num_links(self.device),
+                cluster_axis=1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
         attn_output = self.o_proj(attn_output)
         return attn_output, None
 
@@ -1190,6 +1291,24 @@ class TTNNDotsOCRAttention(TTNNModule):
         if batch_size < 32:
             attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
             attn_output = ttnn.slice(attn_output, [0, 0, 0, 0], [1, 1, batch_size, int(attn_output.shape[-1])])
+
+        # Head-local SDPA emitted this device's local-head ctx shard (hidden/TP).
+        # Gather to full ctx (1536, replicated) so the col-sharded o_proj runs the
+        # proven single full-contraction -- bit-identical to col_parallel/2-head,
+        # avoiding the row-parallel reduce_scatter's extra per-layer BFP8 rounding.
+        if (
+            getattr(self, "_head_parallel", False)
+            and _linear_mesh_num_devices(self.device) > 1
+            and _tp_requires_ccl(self.device)
+        ):
+            attn_output = ttnn.all_gather(
+                attn_output,
+                dim=len(attn_output.shape) - 1,
+                num_links=_ccl_num_links(self.device),
+                cluster_axis=1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
 
         attn_output = self.o_proj(attn_output)
         attn_output = ttnn.squeeze(attn_output, 1)

@@ -324,11 +324,12 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
         self.mlp = None
 
     @classmethod
-    def from_torch(cls, torch_layer, tp_decode_scheme: str = "row"):
+    def from_torch(cls, torch_layer, tp_decode_scheme: str = "row", head_parallel_local_kv: bool = True):
         new_layer = cls()
         new_layer._fallback_torch_layer = torch_layer
         new_layer.attention_type = getattr(torch_layer, "attention_type", "full_attention")
         new_layer.tp_decode_scheme = tp_decode_scheme
+        new_layer._head_parallel_local_kv = bool(head_parallel_local_kv)
         new_layer.input_layernorm = TTNNDotsOCRLocalShardRMSNorm.from_torch(torch_layer.input_layernorm)
         new_layer.post_attention_layernorm = TTNNDotsOCRLocalShardRMSNorm.from_torch(
             torch_layer.post_attention_layernorm
@@ -361,14 +362,17 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             # gather), head-local SDPA/cache, and a row-parallel reduce_scatter
             # o_proj that returns the hidden/TP shard. That output contract is
             # IDENTICAL to col_parallel (hidden-sharded residual), so the
-            # RMSNorm + MLP wiring is shared with col_parallel; the only deltas
-            # are head_parallel=True on the attention and that full hidden must be
-            # replicated into the attention QKV for PREFILL too (handled in
-            # forward via the n_parallel gather, which col_parallel only did for
-            # decode).
+            # RMSNorm + MLP wiring is shared with col_parallel.
+            #
+            # ``tp4_prefill`` hybrid OCR disables the local-KV path: replicated
+            # two-KV-head cache + N-parallel QKV matches col_parallel quality at
+            # the same token budget (local-KV drifts on long table HTML).
             new_layer._col_parallel_use_n_parallel_attn = True
             new_layer._head_parallel = True
-            new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, head_parallel=True)
+            if head_parallel_local_kv:
+                new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, head_parallel=True)
+            else:
+                new_layer.self_attn = TTNNDotsOCRAttention.from_torch(torch_layer.self_attn, qkv_n_parallel=True)
             new_layer.mlp = TTNNDotsOCRMLPColParallelFusedGateUp.from_torch(torch_layer.mlp, replicated_output=False)
             new_layer.mlp_prefill = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         else:

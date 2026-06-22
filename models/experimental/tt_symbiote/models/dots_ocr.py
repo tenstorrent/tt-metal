@@ -109,9 +109,10 @@ def _decode_tp_scheme_from_env(device=None) -> str:
     SDPA/cache, row-parallel reduce_scatter o_proj) remains available via
     ``DOTS_OCR_TP_DECODE_SCHEME=head_parallel`` but corrupts multimodal OCR when
     paired with the default ``symbiote`` prefill body; use ``tp4_prefill`` if
-    experimenting with head_parallel.
-    Set ``DOTS_OCR_TP_DECODE_SCHEME`` to one of {``row``, ``col_parallel``,
-    ``head_parallel``} to override.
+    ``head_parallel``} to override. On ``tp4_prefill`` hybrids the local-KV
+    cache path is disabled by default (replicated two-KV-head cache + N-parallel
+    QKV for OCR parity with ``col_parallel``); set
+    ``DOTS_OCR_HEAD_PARALLEL_LOCAL_KV_CACHE=1`` to force the legacy local path.
     """
     scheme = os.environ.get("DOTS_OCR_TP_DECODE_SCHEME")
     if scheme is not None:
@@ -161,6 +162,24 @@ def _text_body_from_env(device=None) -> str:
 
 def _tp4_prefill_body_enabled(device=None) -> bool:
     return _text_body_from_env(device) == "tp4_prefill"
+
+
+def _head_parallel_local_kv_cache_enabled(device=None) -> bool:
+    """Whether ``head_parallel`` uses per-chip local KV + head-local SDPA.
+
+    The ``tp4_prefill`` hybrid disables this by default: multimodal OCR matches
+    ``col_parallel`` when decode uses the replicated two-KV-head cache plus
+    N-parallel QKV (same as ``DOTS_OCR_COL_PARALLEL_USE_N_PARALLEL_ATTN=1``).
+    The legacy local-KV path diverges on long greedy decode (empty HTML tables
+    within 180 tokens). Set ``DOTS_OCR_HEAD_PARALLEL_LOCAL_KV_CACHE=1`` to
+    force the local-KV path for perf experiments.
+    """
+    override = os.environ.get("DOTS_OCR_HEAD_PARALLEL_LOCAL_KV_CACHE")
+    if override is not None:
+        return override.strip().lower() in {"1", "true", "yes", "on"}
+    if _tp4_prefill_body_enabled(device):
+        return False
+    return True
 
 
 def _tp_cluster_axis(device) -> int:
@@ -856,6 +875,54 @@ class _TP4PrefillDecodeCacheAdapter(TTNNPagedAttentionKVCache):
         self.decode_cache.reset()
 
 
+class _TP4PrefillHeadParallelDecodeCacheAdapter(TTNNPagedAttentionKVCache):
+    """Fill head-parallel decode cache from TP4/head-local prefill K/V.
+
+    TP4 prefill and head-parallel decode both keep exactly one local KV head per
+    chip (``num_key_value_heads // TP``). Unlike :class:`_TP4PrefillDecodeCacheAdapter`,
+    there is no all_gather relayout to a replicated two-head cache -- K/V tensors
+    from prefill are written to the decode cache as-is on each device.
+    """
+
+    def __init__(self, decode_cache: TTNNPagedAttentionKVCache, device):
+        self.decode_cache = decode_cache
+        self.device = device
+        self.num_layers = decode_cache.num_layers
+        self.num_kv_heads = decode_cache.num_kv_heads
+        self.head_dim = decode_cache.head_dim
+        self.config = decode_cache.config
+
+    def __getattr__(self, name):
+        return getattr(self.decode_cache, name)
+
+    def paged_fill_on_device(
+        self, key_states: ttnn.Tensor, value_states: ttnn.Tensor, layer_idx: int, batch_idx: int = 0
+    ):
+        local_heads = int(key_states.shape[1])
+        target_heads = int(self.decode_cache.num_kv_heads)
+        if local_heads != target_heads:
+            raise ValueError(
+                f"head_parallel cache fill: expected {target_heads} local KV head(s) per chip, "
+                f"got K.shape[1]={local_heads}"
+            )
+        self.decode_cache.paged_fill_on_device(key_states, value_states, layer_idx=layer_idx, batch_idx=batch_idx)
+
+    def paged_update_on_device(self, *args, **kwargs):
+        return self.decode_cache.paged_update_on_device(*args, **kwargs)
+
+    def paged_sdpa_decode(self, *args, **kwargs):
+        return self.decode_cache.paged_sdpa_decode(*args, **kwargs)
+
+    def update_seq_length(self, layer_idx: int, seq_len: int = 1) -> None:
+        self.decode_cache.update_seq_length(layer_idx=layer_idx, seq_len=seq_len)
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        return self.decode_cache.get_seq_length(layer_idx=layer_idx)
+
+    def reset(self) -> None:
+        self.decode_cache.reset()
+
+
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
@@ -988,10 +1055,18 @@ class TTNNDotsOCRPipeline(TTNNModule):
                     f"DOTS_OCR_TP_DECODE_SCHEME=col_parallel for this mesh"
                 )
 
+        head_parallel_local_kv = (
+            _head_parallel_local_kv_cache_enabled(device) if tp_decode_scheme == "head_parallel" else True
+        )
+
         def _build_symbiote_stack(norm_name: str = "model.norm"):
             decoder_layers = []
             for i, hf_layer in enumerate(hf_model.model.layers):
-                layer = TTNNDotsOCRDecoderLayer.from_torch(hf_layer, tp_decode_scheme=tp_decode_scheme)
+                layer = TTNNDotsOCRDecoderLayer.from_torch(
+                    hf_layer,
+                    tp_decode_scheme=tp_decode_scheme,
+                    head_parallel_local_kv=head_parallel_local_kv,
+                )
                 layer._unique_name = f"model.layers.{i}"
                 layer.override_children_module_names()
                 # Mixed-precision decode gate_up: the first DOTS_OCR_GATE_UP_BF4_LAYERS
@@ -1106,12 +1181,17 @@ class TTNNDotsOCRPipeline(TTNNModule):
 
             paged_cache = _create_tp4_paged_kv_cache(dots_cfg, device, batch_size=batch_size)
         elif use_tp4_prefill:
-            # Hybrid: TP4 prefill, symbiote two-KV-head decode. Decode reads only
-            # the symbiote cache; the TP4-layout cache would be write-only (the
-            # adapter docstring explains the dropped ~5.6% per-layer fill), so we
-            # allocate just the decode cache here.
-            decode_paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
-            paged_cache = _TP4PrefillDecodeCacheAdapter(decode_paged_cache, device)
+            # Hybrid: TP4 prefill body, symbiote decode stack. Cache layout depends
+            # on the decode TP scheme (col_parallel vs head_parallel).
+            if tp_decode_scheme == "head_parallel" and head_parallel_local_kv:
+                cache_kv_heads = hf_model.config.num_key_value_heads // _tp_degree(device)
+                decode_paged_cache = _create_paged_kv_cache(
+                    hf_model.config, device, batch_size, num_kv_heads=cache_kv_heads
+                )
+                paged_cache = _TP4PrefillHeadParallelDecodeCacheAdapter(decode_paged_cache, device)
+            else:
+                decode_paged_cache = _create_paged_kv_cache(hf_model.config, device, batch_size)
+                paged_cache = _TP4PrefillDecodeCacheAdapter(decode_paged_cache, device)
         else:
             # head_parallel stores only this device's LOCAL KV heads (1 at TP=2);
             # col_parallel / row store the full replicated KV-head set.
