@@ -196,7 +196,7 @@ inline void reduce_configure_mop(const ckernel::TensorShape& tensor_shape)
 
         const std::uint32_t replay_op = lltt::replay_insn(replay_start, replay_buf_len);
         // Outer loop = num_faces_r_dim: replay the column face reduction for each row
-        ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op);
+        ckernel_template tmp(tensor_shape.num_faces_r_dim, 1, replay_op, TT_OP_NOP);
         tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_B));
         tmp.program();
     }
