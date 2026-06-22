@@ -331,6 +331,7 @@ SHAPES = [
     # N=768 = 6144/TP8 (output sharded by TP8). use_case="to_out" (addcmul fused).
     # -----------------------------------------------------------------------
     (1152, 24576, 768, 12, 9, True, "to_out"),  # SNG_proj_out (xc merged, 1024 tokens)
+    (1152, 24576, 768, 12, 8, True, "to_out"),  # SNG_proj_out 12×8 grid variant
     (1024, 24576, 768, 12, 9, True, "to_out"),  # proj_out spatial-only (1024 tokens)
     # -----------------------------------------------------------------------
     # Flux2 BH 4×8 — TP4_SP8 (bh_4x8_sp1_tp0): K_per_device = 6144/4 = 1536,
@@ -349,6 +350,15 @@ SHAPES = [
     (8192, 1536, 9216, 12, 9, True, "plain"),
     (8256, 1536, 9216, 12, 9, True, "plain"),
     (8192, 1536, 4608, 12, 9, True, "plain"),
+    # -----------------------------------------------------------------------
+    # Fused SwiGLU sweep — Flux2 1024-res TP8/SP4 (bh_4x8_sp0_tp1), 12×8 grid.
+    # proj_mlp (ff1) only: N=4608 = packed [gate|up], K=6144.
+    # N_block MUST be even (TT_FATAL for odd N under fuse_swiglu=True).
+    # Source: sweep_fused_gelu.md.  Ordered by prior plain trace time (highest first).
+    # -----------------------------------------------------------------------
+    (1152, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 xc-merged
+    (1024, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 spatial
+    (128, 6144, 4608, 12, 8, True, "ff1_swiglu"),  # ff1 prompt
 ]
 
 SHAPE_IDS = [f"{M}_{K}_{N}_{cgx}x{cgy}_{'agmm' if agmm else 'mm'}_{uc}" for M, K, N, cgx, cgy, agmm, uc in SHAPES]

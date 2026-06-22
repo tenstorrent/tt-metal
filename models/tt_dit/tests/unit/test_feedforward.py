@@ -97,6 +97,63 @@ def test_feedforward(
 
 
 @pytest.mark.parametrize(
+    "mesh_device",
+    [(1, 1)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    ("B, seq, dim, inner_dim, dim_out, bias"),
+    [
+        (1, 256, 2048, 4096, 2048, False),  # square-ish swiglu FF, no bias
+        (1, 512, 1536, 4096, 1536, True),  # swiglu FF with bias
+        (1, 128, 3072, 8192, 3072, False),  # wide swiglu FF
+    ],
+    ids=["swiglu_2048_4096", "swiglu_bias_1536_4096", "swiglu_3072_8192"],
+)
+def test_feedforward_swiglu_fused(
+    mesh_device: ttnn.MeshDevice,
+    B: int,
+    seq: int,
+    dim: int,
+    inner_dim: int,
+    dim_out: int,
+    bias: bool,
+) -> None:
+    """FUSE_SWIGLU minimal_matmul path: silu(gate)*up fused into the matmul output stage.
+
+    Compares the fused FeedForward against the torch golden (a*silu(b)).
+    """
+    torch_dtype = torch.bfloat16
+    torch_model = TorchFeedForward(dim, dim_out, bias=bias, activation_fn="swiglu", inner_dim=inner_dim).to(
+        dtype=torch_dtype
+    )
+    torch_model.eval()
+
+    tt_model = FeedForward(
+        dim,
+        dim_out,
+        inner_dim=inner_dim,
+        bias=bias,
+        activation_fn="swiglu",
+        mesh_device=mesh_device,
+        fuse_swiglu=True,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    torch_input_tensor = torch.randn((1, B, seq, dim), dtype=torch_dtype)
+    tt_input_tensor = bf16_tensor(torch_input_tensor, device=mesh_device)
+
+    with torch.no_grad():
+        torch_output = torch_model(torch_input_tensor)
+
+    tt_output = tt_model(tt_input_tensor)
+
+    for t in ttnn.get_device_tensors(tt_output):
+        t = ttnn.to_torch(t)
+        assert_quality(torch_output, t, pcc=0.999_900)
+
+
+@pytest.mark.parametrize(
     "mesh_device, device_params",
     [
         (
