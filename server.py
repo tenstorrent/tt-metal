@@ -8,6 +8,7 @@ import uuid
 import time
 import json
 import queue
+import atexit
 import argparse
 import asyncio
 import multiprocessing as mp
@@ -280,6 +281,58 @@ progress_queue = None
 workers = []
 
 
+def shutdown_workers(graceful: bool = True):
+    """Terminate all worker processes, escalating to SIGKILL for wedged workers.
+
+    Idempotent and safe to call from the lifespan teardown, the warmup-failure
+    path, and the atexit handler. A worker stuck in a device syscall ignores
+    SIGTERM (terminate()), so survivors are escalated to SIGKILL (kill()) — this
+    is what prevents a failed warmup from orphaning a worker that keeps the
+    Tenstorrent boards locked.
+    """
+    global workers, task_queue
+    if not workers:
+        return
+
+    logger.info("Shutting down workers...")
+
+    # Happy path: let workers drain via the sentinel before we signal them.
+    if graceful and task_queue is not None:
+        for _ in range(len(workers)):
+            try:
+                task_queue.put_nowait(None)
+            except Exception:
+                pass
+        for worker in workers:
+            worker.join(timeout=10)
+
+    # SIGTERM anything still alive (warmup failure, or sentinel ignored).
+    for worker in workers:
+        if worker.is_alive():
+            worker.terminate()
+    for worker in workers:
+        worker.join(timeout=10)
+
+    # Escalate: wedged workers (uninterruptible device I/O) survive SIGTERM.
+    for worker in workers:
+        if worker.is_alive():
+            logger.warning(f"Worker pid={worker.pid} survived SIGTERM; sending SIGKILL")
+            try:
+                worker.kill()
+            except Exception:
+                pass
+            worker.join(timeout=10)
+
+    workers = []
+    logger.info("Server shutdown complete")
+
+
+# Backstop: reap workers even if the parent exits abnormally (e.g. lifespan
+# raises during warmup and uvicorn aborts startup). Without this the worker
+# processes are reparented to init and keep /dev/tenstorrent locked.
+atexit.register(lambda: shutdown_workers(graceful=False))
+
+
 # ---------------------------------------------------------------------------
 # Lifespan: start workers, wait for warmup, yield, shutdown
 # ---------------------------------------------------------------------------
@@ -329,84 +382,84 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"Starting {config.num_workers} worker(s) with overlapped initialization...")
 
-    for i in range(config.num_workers):
-        logger.info(f"Starting worker {i}...")
-        worker = mp.Process(
-            target=device_worker_process,
-            args=(
-                i,
-                task_queue,
-                result_queue,
-                warmup_signal_queue,
-                kernel_ready_queue,
-                error_queue,
-                config,
-                progress_queue,
-            ),
-            daemon=False,
-        )
-        worker.start()
-        workers.append(worker)
+    # Spawn workers and wait for warmup. If anything fails before the server is
+    # ready, reap the workers we started (escalating to SIGKILL) before
+    # re-raising — otherwise a half-initialized worker is orphaned and keeps the
+    # Tenstorrent boards locked, blocking every subsequent launch.
+    try:
+        for i in range(config.num_workers):
+            logger.info(f"Starting worker {i}...")
+            worker = mp.Process(
+                target=device_worker_process,
+                args=(
+                    i,
+                    task_queue,
+                    result_queue,
+                    warmup_signal_queue,
+                    kernel_ready_queue,
+                    error_queue,
+                    config,
+                    progress_queue,
+                ),
+                daemon=False,
+            )
+            worker.start()
+            workers.append(worker)
 
-        # Wait for kernel compilation before launching the next worker.
-        # For SD35 (num_workers=1) this loop body never executes (range(0)).
-        if i < config.num_workers - 1:
-            logger.info(f"Waiting for worker {i} kernel compilation before starting next worker...")
-            timeout = time.time() + 300  # 5-minute per-worker kernel compilation limit
-            kernel_ready_received = False
+            # Wait for kernel compilation before launching the next worker.
+            # For SD35 (num_workers=1) this loop body never executes (range(0)).
+            if i < config.num_workers - 1:
+                logger.info(f"Waiting for worker {i} kernel compilation before starting next worker...")
+                timeout = time.time() + 300  # 5-minute per-worker kernel compilation limit
+                kernel_ready_received = False
 
-            while time.time() < timeout:
-                try:
-                    worker_id = kernel_ready_queue.get(timeout=1)
-                    logger.info(f"Worker {worker_id} kernel compilation complete, starting next worker...")
-                    kernel_ready_received = True
-                    break
-                except Exception:
-                    if not worker.is_alive():
-                        logger.error(f"Worker {i} died during kernel compilation")
-                        raise RuntimeError(f"Worker {i} died during kernel compilation")
+                while time.time() < timeout:
+                    try:
+                        worker_id = kernel_ready_queue.get(timeout=1)
+                        logger.info(f"Worker {worker_id} kernel compilation complete, starting next worker...")
+                        kernel_ready_received = True
+                        break
+                    except Exception:
+                        if not worker.is_alive():
+                            logger.error(f"Worker {i} died during kernel compilation")
+                            raise RuntimeError(f"Worker {i} died during kernel compilation")
 
-            if not kernel_ready_received:
-                logger.error(f"Worker {i} kernel compilation timeout!")
-                raise RuntimeError(f"Worker {i} kernel compilation timeout")
+                if not kernel_ready_received:
+                    logger.error(f"Worker {i} kernel compilation timeout!")
+                    raise RuntimeError(f"Worker {i} kernel compilation timeout")
 
-    # Wait for ALL workers to complete full warmup (kernel compile + trace capture)
-    logger.info("All workers started. Waiting for warmup completion...")
-    warmups_received = 0
-    # 1200s = 20 min — SD35 trace capture can take ~10-15 min on cold start
-    timeout = time.time() + 1200
+        # Wait for ALL workers to complete full warmup (kernel compile + trace capture)
+        logger.info("All workers started. Waiting for warmup completion...")
+        warmups_received = 0
+        # 1200s = 20 min — SD35 trace capture can take ~10-15 min on cold start
+        timeout = time.time() + 1200
 
-    while warmups_received < config.num_workers and time.time() < timeout:
-        try:
-            worker_id = warmup_signal_queue.get(timeout=1)
-            warmups_received += 1
-            logger.info(f"Worker {worker_id} warmup complete ({warmups_received}/{config.num_workers})")
-        except Exception:
-            # Check for crashed workers
-            for idx, w in enumerate(workers):
-                if not w.is_alive():
-                    logger.error(f"Worker {idx} died during warmup")
-                    raise RuntimeError(f"Worker {idx} died during warmup")
+        while warmups_received < config.num_workers and time.time() < timeout:
+            try:
+                worker_id = warmup_signal_queue.get(timeout=1)
+                warmups_received += 1
+                logger.info(f"Worker {worker_id} warmup complete ({warmups_received}/{config.num_workers})")
+            except Exception:
+                # Check for crashed workers
+                for idx, w in enumerate(workers):
+                    if not w.is_alive():
+                        logger.error(f"Worker {idx} died during warmup")
+                        raise RuntimeError(f"Worker {idx} died during warmup")
 
-    if warmups_received < config.num_workers:
-        logger.error(f"Warmup timeout! Only {warmups_received}/{config.num_workers} workers ready")
-        raise RuntimeError("Warmup timeout")
+        if warmups_received < config.num_workers:
+            logger.error(f"Warmup timeout! Only {warmups_received}/{config.num_workers} workers ready")
+            raise RuntimeError("Warmup timeout")
+    except BaseException:
+        # Reap partially-started workers before propagating (prevents orphans).
+        shutdown_workers(graceful=False)
+        raise
 
     logger.info(f"All workers ready. {model_label} server is accepting requests.")
 
     yield
 
-    # Graceful shutdown: send None sentinel to each worker
-    logger.info("Shutting down workers...")
-    for _ in range(config.num_workers):
-        task_queue.put(None)
-
-    for worker in workers:
-        worker.join(timeout=10)
-        if worker.is_alive():
-            worker.terminate()
-
-    logger.info("Server shutdown complete")
+    # Graceful shutdown on normal server stop.
+    shutdown_workers(graceful=True)
 
 
 # ---------------------------------------------------------------------------
