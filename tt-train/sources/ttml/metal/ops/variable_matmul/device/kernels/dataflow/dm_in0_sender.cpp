@@ -45,7 +45,7 @@ void kernel_main() {
 
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output address comes next.
 
-    // Tensor accessors (scalar CTAs 0..15; tensor accessors start at 16: in0, then output).
+    // Tensor accessors (scalar CTAs 0..15; tensor accessors start at 16: in0, output, then offsets).
     constexpr auto in0_args = TensorAccessorArgs<16>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr, in0_tile_size);
 
@@ -242,14 +242,14 @@ void kernel_main() {
                         in0_k_offset_tiles,
                         parent_K_tiles_stride);
                 } else {
-                    // Get from previous device
+                    // Non-injector core: receive the block from the upstream sender core.
                     noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
                 }
 
-                // Critical to performance for sender to push data to compute before mcasting
-                // This frees sender to start next read earlier
+                // Critical to performance for the sender to push data to compute before forwarding.
+                // This frees the sender to start the next read earlier.
                 cb_push_back(cb_id_in0, in0_block_num_tiles);
 
                 if (!is_sink_core) {

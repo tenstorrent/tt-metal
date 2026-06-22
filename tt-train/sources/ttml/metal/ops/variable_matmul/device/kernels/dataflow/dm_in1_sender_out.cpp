@@ -45,7 +45,7 @@ void kernel_main() {
 
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output address comes next.
 
-    // Tensor accessors (scalar CTAs 0..15; tensor accessors start at 16: in1, then output).
+    // Tensor accessors (scalar CTAs 0..15; tensor accessors start at 16: in1, output, then offsets).
     constexpr auto in1_args = TensorAccessorArgs<16>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
@@ -216,8 +216,8 @@ void kernel_main() {
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
                 }
 
-                // Critical to performance for sender to push data to compute before mcasting
-                // This frees sender to start next read earlier
+                // Critical to performance for the sender to push data to compute before forwarding.
+                // This frees the sender to start the next read earlier.
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
                 if (!is_sink_core) {
