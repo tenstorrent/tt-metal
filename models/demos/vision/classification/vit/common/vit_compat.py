@@ -38,5 +38,9 @@ def run_vit_encoder_reference(model, hidden_states, head_mask=None):
         return vit.encoder(hidden_states, head_mask).last_hidden_state
     hidden = hidden_states
     for i, layer in enumerate(vit.layers):
-        hidden = layer(hidden, None if head_mask is None else head_mask[i])[0]
+        # transformers 5.x ViTLayer.forward returns a bare Tensor; <5 returned a (hidden_states, ...)
+        # tuple. Only unwrap [0] when it's actually a tuple, otherwise [0] slices off the batch dim
+        # (e.g. [batch, seq, dim] -> [seq, dim]).
+        layer_out = layer(hidden, None if head_mask is None else head_mask[i])
+        hidden = layer_out[0] if isinstance(layer_out, tuple) else layer_out
     return hidden
