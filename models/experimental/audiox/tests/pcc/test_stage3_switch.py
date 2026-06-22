@@ -31,6 +31,36 @@ def test_build_cases_defaults_to_synthetic_visual(tmp_path):
     assert cases[3]["video_prompt_tensor"] is True
 
 
+def test_parse_args_accepts_tt_runtime_knobs(tmp_path):
+    args = switch_mod._parse_args(
+        [
+            "--checkpoint",
+            "/tmp/fake.safetensors",
+            "--output-dir",
+            str(tmp_path),
+            "--tt-open-mode",
+            "direct",
+            "--tt-local-mesh-width",
+            "2",
+            "--tt-trace-region-size",
+            "1024",
+            "--tt-num-command-queues",
+            "2",
+            "--tt-conv-transpose-input-chunk",
+            "65536",
+            "--tt-conv1d-width-slices",
+            "4",
+        ]
+    )
+
+    assert args.tt_open_mode == "direct"
+    assert args.tt_local_mesh_width == 2
+    assert args.tt_trace_region_size == 1024
+    assert args.tt_num_command_queues == 2
+    assert args.tt_conv_transpose_input_chunk == 65536
+    assert args.tt_conv1d_width_slices == 4
+
+
 def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
     session_inits = []
     session_runs = []
@@ -108,6 +138,8 @@ def test_main_reuses_single_session_and_writes_summary(tmp_path, monkeypatch):
     monkeypatch.setattr(switch_mod, "_close_tt_device", fake_close_tt_device)
     monkeypatch.setattr(switch_mod, "_build_synthetic_video_prompt", fake_build_synthetic_video_prompt)
     monkeypatch.setattr(switch_mod.validate_mod, "_summarize_run_details", fake_summarize_run_details)
+    monkeypatch.setattr(switch_mod, "apply_tt_env_overrides", lambda **kwargs: {"_seen": kwargs})
+    monkeypatch.setattr(switch_mod, "restore_tt_env", lambda _previous: None)
 
     rc = switch_mod.main(
         [

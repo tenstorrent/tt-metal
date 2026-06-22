@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import array
+import wave
 from pathlib import Path
 
 import torch
@@ -97,6 +99,22 @@ def resample_output_audio(audio_bct: torch.Tensor, *, input_sample_rate: int, ou
     flat = audio_bct.reshape(batch * channels, samples)
     flat = torchaudio.functional.resample(flat, input_sample_rate, output_sample_rate)
     return flat.reshape(batch, channels, flat.shape[-1])
+
+
+def save_output_audio(path: Path, audio_ct: torch.Tensor, *, sample_rate: int) -> None:
+    if audio_ct.ndim != 2:
+        raise ValueError(f"expected [C, T] audio, got shape {tuple(audio_ct.shape)}")
+
+    channels, _samples = audio_ct.shape
+    pcm = audio_ct.detach().float().cpu().clamp(-1.0, 1.0)
+    pcm = (pcm.transpose(0, 1).contiguous() * 32767.0).round().to(torch.int16)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(channels)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(array.array("h", pcm.reshape(-1).tolist()).tobytes())
 
 
 def load_video_prompt(path: Path, *, target_frames: int, image_size: int = 224) -> torch.Tensor:

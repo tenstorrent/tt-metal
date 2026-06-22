@@ -10,6 +10,7 @@ on the text-to-audio path."""
 import torch
 
 from models.experimental.audiox.demo import demo as demo_mod
+from models.experimental.audiox.demo import tt_runtime as tt_runtime_mod
 
 
 def test_metadata_batch_zero_inputs_have_text_only_shapes():
@@ -105,3 +106,74 @@ def test_parse_args_accepts_duration_override():
         ["--checkpoint", "/tmp/fake.safetensors", "--prompt", "hello", "--duration-seconds", "30"]
     )
     assert args.duration_seconds == 30
+
+
+def test_tt_open_kwargs_read_optional_env(monkeypatch):
+    monkeypatch.setenv("AUDIOX_TT_L1_SMALL_SIZE", "0x4000")
+    monkeypatch.setenv("AUDIOX_TT_TRACE_REGION_SIZE", "0x800000")
+    monkeypatch.setenv("AUDIOX_TT_NUM_COMMAND_QUEUES", "2")
+    monkeypatch.setenv("AUDIOX_TT_WORKER_L1_SIZE", "983040")
+
+    kwargs = tt_runtime_mod.tt_open_kwargs_from_env()
+
+    assert kwargs == {
+        "l1_small_size": 0x4000,
+        "trace_region_size": 0x800000,
+        "num_command_queues": 2,
+        "worker_l1_size": 983040,
+    }
+
+
+def test_tt_runtime_apply_and_restore_env(monkeypatch):
+    monkeypatch.setenv("AUDIOX_TT_TRACE_REGION_SIZE", "123")
+
+    previous = tt_runtime_mod.apply_tt_env_overrides(
+        open_mode="direct",
+        local_mesh_width=2,
+        num_command_queues=2,
+        conv_transpose_input_chunk=65536,
+    )
+    try:
+        assert tt_runtime_mod.os.environ["AUDIOX_TT_OPEN_MODE"] == "direct"
+        assert tt_runtime_mod.os.environ["AUDIOX_TT_LOCAL_MESH_WIDTH"] == "2"
+        assert tt_runtime_mod.os.environ["AUDIOX_TT_NUM_COMMAND_QUEUES"] == "2"
+        assert tt_runtime_mod.os.environ["AUDIOX_TT_TRACE_REGION_SIZE"] == "123"
+        assert tt_runtime_mod.os.environ["AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK"] == "65536"
+    finally:
+        tt_runtime_mod.restore_tt_env(previous)
+
+    assert tt_runtime_mod.os.environ.get("AUDIOX_TT_TRACE_REGION_SIZE") == "123"
+    assert "AUDIOX_TT_OPEN_MODE" not in tt_runtime_mod.os.environ
+    assert "AUDIOX_TT_LOCAL_MESH_WIDTH" not in tt_runtime_mod.os.environ
+    assert "AUDIOX_TT_NUM_COMMAND_QUEUES" not in tt_runtime_mod.os.environ
+    assert "AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK" not in tt_runtime_mod.os.environ
+
+
+def test_tt_demo_main_uses_requested_device_id(monkeypatch, tmp_path):
+    from models.experimental.audiox.demo import tt_demo as tt_demo_mod
+
+    opened = []
+    closed = []
+
+    monkeypatch.setattr(tt_demo_mod, "apply_tt_env_overrides", lambda **_kwargs: {})
+    monkeypatch.setattr(tt_demo_mod, "restore_tt_env", lambda _previous: None)
+    monkeypatch.setattr(tt_demo_mod, "open_tt_device", lambda *, device_id: opened.append(device_id) or "device")
+    monkeypatch.setattr(tt_demo_mod, "close_tt_device", lambda device: closed.append(device))
+    monkeypatch.setattr(tt_demo_mod, "run_tt_demo", lambda **_kwargs: tmp_path / "out.wav")
+
+    rc = tt_demo_mod.main(
+        [
+            "--checkpoint",
+            "/tmp/fake.safetensors",
+            "--prompt",
+            "hello",
+            "--output",
+            str(tmp_path / "out.wav"),
+            "--tt-device-id",
+            "3",
+        ]
+    )
+
+    assert rc == 0
+    assert opened == [3]
+    assert closed == ["device"]

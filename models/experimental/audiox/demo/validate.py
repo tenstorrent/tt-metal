@@ -2,14 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import argparse
+import array
 import gc
 import json
 import sys
 import time
+import wave
 from pathlib import Path
 
 import torch
-import torchaudio
 
 from models.experimental.audiox.demo.demo import (
     _HF_CONFIG,
@@ -17,6 +18,21 @@ from models.experimental.audiox.demo.demo import (
     run_demo,
 )
 from models.experimental.audiox.demo.media import make_synthetic_video_prompt
+from models.experimental.audiox.demo.tt_runtime import apply_tt_env_overrides, restore_tt_env
+
+
+def _load_wav_audio(path: Path) -> tuple[torch.Tensor, int]:
+    with wave.open(str(path), "rb") as wav_file:
+        sample_rate = wav_file.getframerate()
+        num_channels = wav_file.getnchannels()
+        num_frames = wav_file.getnframes()
+        sample_width = wav_file.getsampwidth()
+        if sample_width != 2:
+            raise ValueError(f"expected 16-bit PCM WAV from {path}, got sample width {sample_width}")
+        pcm = array.array("h")
+        pcm.frombytes(wav_file.readframes(num_frames))
+    audio = torch.tensor(pcm, dtype=torch.float32).reshape(num_frames, num_channels).transpose(0, 1) / 32767.0
+    return audio, sample_rate
 
 
 def _infer_conditioning_mode(
@@ -41,15 +57,16 @@ def _infer_conditioning_mode(
 
 
 def _summarize_audio_file(path: Path) -> dict:
-    info = torchaudio.info(str(path))
-    duration_seconds = 0.0 if info.sample_rate == 0 else info.num_frames / info.sample_rate
+    audio, sample_rate = _load_wav_audio(path)
+    num_channels, num_frames = audio.shape
+    duration_seconds = 0.0 if sample_rate == 0 else num_frames / sample_rate
     return {
         "path": str(path),
-        "sample_rate": info.sample_rate,
-        "num_frames": info.num_frames,
-        "num_channels": info.num_channels,
+        "sample_rate": sample_rate,
+        "num_frames": num_frames,
+        "num_channels": num_channels,
         "duration_seconds": duration_seconds,
-        "valid_16khz": info.sample_rate == _HF_CONFIG["output_sample_rate"],
+        "valid_16khz": sample_rate == _HF_CONFIG["output_sample_rate"],
     }
 
 
@@ -99,8 +116,8 @@ def _compare_tensors(reference: torch.Tensor, candidate: torch.Tensor) -> dict:
 
 
 def _compare_audio_files(reference_path: Path, candidate_path: Path) -> dict:
-    ref_audio, ref_sample_rate = torchaudio.load(str(reference_path))
-    cand_audio, cand_sample_rate = torchaudio.load(str(candidate_path))
+    ref_audio, ref_sample_rate = _load_wav_audio(reference_path)
+    cand_audio, cand_sample_rate = _load_wav_audio(candidate_path)
     same_sample_rate = ref_sample_rate == cand_sample_rate
     same_shape = tuple(ref_audio.shape) == tuple(cand_audio.shape)
     if not same_sample_rate or not same_shape:
@@ -295,6 +312,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--tt-only", action="store_true", help="Skip CPU reference and run only the TT path")
     p.add_argument("--tt-device-id", type=int, default=0)
     p.add_argument("--tt-warm-runs", type=int, default=1, help="Optional number of additional warm TT runs")
+    p.add_argument("--tt-open-mode", choices=("mesh", "direct"))
+    p.add_argument("--tt-local-mesh-width", type=int)
+    p.add_argument("--tt-l1-small-size", type=int)
+    p.add_argument("--tt-trace-region-size", type=int)
+    p.add_argument("--tt-num-command-queues", type=int)
+    p.add_argument("--tt-worker-l1-size", type=int)
+    p.add_argument("--tt-conv-transpose-input-chunk", type=int)
+    p.add_argument("--tt-conv1d-width-slices", type=int)
+    p.add_argument("--tt-conv-transpose-height-slices", type=int)
+    p.add_argument("--tt-conv-transpose-stride2-act-block-h", type=int)
+    p.add_argument("--tt-conv-transpose-stride4-act-block-h", type=int)
     p.add_argument("--report-json", type=Path, help="Optional explicit report path")
     args = p.parse_args(argv)
     if args.synthetic_video and (args.video is not None or args.image is not None):
@@ -334,7 +362,23 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.tt:
         gc.collect()
-        report["tt"] = _run_tt_reference(args, tt_output, synthetic_video_prompt=synthetic_video_prompt)
+        previous_tt_env = apply_tt_env_overrides(
+            open_mode=args.tt_open_mode,
+            local_mesh_width=args.tt_local_mesh_width,
+            l1_small_size=args.tt_l1_small_size,
+            trace_region_size=args.tt_trace_region_size,
+            num_command_queues=args.tt_num_command_queues,
+            worker_l1_size=args.tt_worker_l1_size,
+            conv_transpose_input_chunk=args.tt_conv_transpose_input_chunk,
+            conv1d_width_slices=args.tt_conv1d_width_slices,
+            conv_transpose_height_slices=args.tt_conv_transpose_height_slices,
+            conv_transpose_stride2_act_block_h=args.tt_conv_transpose_stride2_act_block_h,
+            conv_transpose_stride4_act_block_h=args.tt_conv_transpose_stride4_act_block_h,
+        )
+        try:
+            report["tt"] = _run_tt_reference(args, tt_output, synthetic_video_prompt=synthetic_video_prompt)
+        finally:
+            restore_tt_env(previous_tt_env)
         if report["cpu"] is not None:
             report["comparison"] = _compare_audio_files(cpu_output, tt_output)
             report["latent_comparison"] = _compare_tensors(report["cpu"]["_latent"], report["tt"]["_latent"])
