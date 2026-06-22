@@ -151,8 +151,9 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     // matmul_num_cores must match the actual matmul ring size produced by program_factory:
     //   - WH: ring = num DRAM banks = 12 (1:1, no padding). args.bh_ring_size is forced to 12
     //     in invoke() for WH, so reading either source returns the same value.
-    //   - BH: ring = bh_ring_size (8 / 12 / 16). program_factory.cpp pads the 8 DRAM-adjacent
-    //     cores up to bh_ring_size via `kBhMatmulExtras` (see program_factory.cpp). Using the
+    //   - BH: ring = bh_ring_size (8 / 12 / 16). select_moe_compute_cores() pads the 8
+    //     DRAM-adjacent cores up to bh_ring_size inside build_matmul_ring_cores()
+    //     (moe_core_placement.cpp). Using the
     //     raw DRAM bank count here (=8 on BH always) would under-report and reject shapes
     //     whose width_shard_dim divides bh_ring_size but not 8 — e.g. GPT-OSS at hidden=2880
     //     forces output_width_shard_dim=3, valid at N=12 (12%3=0) but the early validate using
