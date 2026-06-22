@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for Qwen3.5-9B zero-centered RMSNorm (``tt/rms_norm.py``).
 
-Mirrors gemma4's dedicated ``test_rms_norm`` (Qwen previously only had a single
-hidden-dim RMSNorm case buried in ``test_component_pcc``). Qwen3.5 uses
-zero-centered RMSNorm for *every* norm:
+Qwen3.5 uses zero-centered RMSNorm for *every* norm:
 
     out = x * rsqrt(mean(x^2) + eps) * (1 + raw_weight)
 

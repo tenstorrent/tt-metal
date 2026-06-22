@@ -3,13 +3,13 @@
 
 """Pytest configuration for the Qwen3.5/Qwen3.6 demo test suite.
 
-Adds two CLI options (mirroring the gemma4 layout):
+Adds two CLI options:
 
 * ``--max-prefill`` — cap on the prefill length that routine runs exercise. Any
   parametrized case whose ``seq_len`` / ``actual_len`` / ``T`` exceeds the cap is
   auto-skipped, so the long-context tests (T=4096, 73728, …) don't run unless the
   cap is raised.
-* ``--test-modules`` — comma-separated module selector (kept for parity / future use).
+* ``--test-modules`` — comma-separated module selector (kept for future use).
 
 These layer on top of the repo-root ``conftest.py`` (which provides ``device``,
 ``mesh_device``, ``device_params``, ``reset_seeds``, ``ensure_gc``).

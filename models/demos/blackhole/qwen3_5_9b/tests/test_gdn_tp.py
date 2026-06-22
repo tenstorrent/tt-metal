@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """TP validation for Qwen3.5/3.6 Gated DeltaNet on a Blackhole mesh.
 
@@ -40,6 +40,11 @@ from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 @torch.no_grad()
 @parametrize_mesh_tp()
 def test_gdn_tp(mesh_device, reset_seeds, ensure_gc, request):
+    """Validate TP decode output against a hand-written PyTorch reference at pos0 (batch=32).
+
+    Checks PCC for the full GDN forward pass (QKV proj, conv tap, L2 norm, beta gating,
+    gated RMSNorm, output proj) and runs a second decode step to catch shape/NaN regressions.
+    """
     os.environ.setdefault("HF_MODEL", model_path())
     B = 32
     args = Qwen35ModelArgs(mesh_device, max_batch_size=B, max_seq_len=256)
@@ -100,6 +105,11 @@ def test_gdn_tp(mesh_device, reset_seeds, ensure_gc, request):
 @torch.no_grad()
 @parametrize_mesh_tp()
 def test_gdn_tp_prefill(mesh_device, reset_seeds, ensure_gc, request):
+    """Check that chunk-prefill and step-by-step decode agree on the same T=128 tokens.
+
+    Both paths start from zero state. No hand-written reference — this is a
+    self-consistency check between forward_prefill and forward_decode.
+    """
     os.environ.setdefault("HF_MODEL", model_path())
     T = 128
     args = Qwen35ModelArgs(mesh_device, max_batch_size=1, max_seq_len=256)

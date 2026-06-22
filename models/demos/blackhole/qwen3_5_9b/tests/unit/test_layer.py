@@ -3,9 +3,7 @@
 """Single-device decoder-block sanity checks (Qwen35DecoderLayer).
 
 Full layers run end-to-end without producing NaN/Inf (and, for the DeltaNet
-prefill block, a non-constant output). These are sanity checks — there is no
-torch PCC oracle for a full block yet (a follow-up could add one, à la gemma4's
-``test_layer_forward``).
+prefill block, a non-constant output). These are sanity checks.
 
 ``device`` and ``setup`` come from tests/unit/conftest.py.
 """
@@ -17,9 +15,9 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.layer import Qwen35DecoderLayer
 
-from .conftest import MODULE_DEVICE_PARAMS
+from .conftest import DEVICE_PARAMS
 
-pytestmark = [run_for_blackhole(), pytest.mark.use_module_device(MODULE_DEVICE_PARAMS)]
+pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)]
 
 # GDN chunk-seq prefill kernel supports exactly one chunk size (see Qwen35DecoderLayer.forward's
 # chunk_size default / its docstring). Using anything else (e.g. 64) raises a 64≠128 matmul mismatch.

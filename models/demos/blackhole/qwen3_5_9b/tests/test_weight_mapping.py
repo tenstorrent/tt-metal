@@ -1,8 +1,8 @@
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for Qwen3.5-9B HF→internal weight remapping."""
+"""Tests for Qwen3.5-9B HF -> internal weight remapping."""
 import pytest
 
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs

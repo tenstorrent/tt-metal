@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for Qwen3.5-9B RoPE (``tt/rope.py``).
 
-Mirrors the dedicated rope unit test that gpt-oss carries (``test_rope.py``):
-Qwen previously exercised rope only indirectly, inside the attention PCC test.
 This validates the rope module on its own — both the host-side frequency
 generator (``compute_rope_freqs``) and the on-device setup/lookup
 (``Qwen35RoPESetup``) against the analytic torch reference.

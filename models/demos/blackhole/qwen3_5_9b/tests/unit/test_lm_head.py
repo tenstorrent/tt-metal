@@ -13,9 +13,9 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tests.test_factory import compute_pcc, get_pcc_threshold
 
-from .conftest import MODULE_DEVICE_PARAMS
+from .conftest import DEVICE_PARAMS
 
-pytestmark = [run_for_blackhole(), pytest.mark.use_module_device(MODULE_DEVICE_PARAMS)]
+pytestmark = [run_for_blackhole(), pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)]
 
 
 def test_lm_head_precision(device, setup, request):

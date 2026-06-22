@@ -1,15 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Bespoke TP generation (``generate_tp``) functional check on the full model.
 
-Runs the complete 27B TP model on a real prompt through the BESPOKE stateful generate
+Runs the complete 27B TP model on a real prompt through the stateful generate
 loop: ``prefill_tp`` (fills the concat KV cache + GDN recurrent/conv state) then
 incremental ``decode_tp`` steps (non-traced). Asserts the continuation is correct
 (first token 'Paris') and non-degenerate — i.e. KV-cache + GDN state continuation is right.
 
 This is the *oracle* path, not the served path. The production/served path (chunk-outer
 traced prefill + paged traced decode, what vLLM and demo/text_demo.py run) is validated by
-test_model_tp.py (which proves the contract/paged/traced path matches this bespoke oracle
+test_model_tp.py (which proves the contract/paged/traced path matches this oracle
 per-step). This test anchors that oracle to a real expected answer on the full model.
 
 Run:
