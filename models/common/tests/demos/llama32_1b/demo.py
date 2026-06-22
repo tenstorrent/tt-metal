@@ -469,7 +469,6 @@ def _run_perf_benchmark(
     ``max_prefill_len`` is an optional clip cap for over-long prompts, never a pad-up target.
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
 
     traced_executor = TracedLlama32_1BExecutor(model, mesh_device)
     try:
