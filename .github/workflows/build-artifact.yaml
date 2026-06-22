@@ -375,7 +375,7 @@ jobs:
     concurrency:
       group: >-
         cmake-build-
-        ${{ inputs.ref || github.sha }}-
+        ${{ github.sha }}-
         ${{ inputs.platform }}-
         ${{ inputs.build-type }}-
         ${{ inputs.toolchain }}-
