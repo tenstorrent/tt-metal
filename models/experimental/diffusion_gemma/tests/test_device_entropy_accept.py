@@ -39,9 +39,15 @@ def _device_chain(device, entropy: torch.Tensor, budget: float) -> dict:
     sorted_vals, sorted_idx = ttnn.sort(ent, dim=-1)  # ascending: most-confident first; idx uint16
     cum = ttnn.cumsum(sorted_vals, dim=-1)
 
+    # EXCLUSIVE prefix (HF accept_canvas): position i accepts iff the sum over
+    # *strictly more confident* positions stays <= budget, i.e. (cum - sorted_vals).
+    # The most-confident position has an exclusive prefix of 0 -> always accepted.
+    # (Inclusive cum <= budget wrongly drops the element that crosses the budget.)
+    excl = ttnn.subtract(cum, sorted_vals)
+
     # tensor budget (unambiguous tensor-tensor compare; scalar overload misbehaved)
     budget_t = ttnn.full(list(entropy.shape), float(budget), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
-    accept_sorted = ttnn.le(cum, budget_t)  # cum <= budget -> 1 / 0
+    accept_sorted = ttnn.le(excl, budget_t)  # exclusive prefix <= budget -> 1 / 0
 
     # ttnn.scatter rejects fp32+TILE (scatter.cpp:109); bf16+uint16+TILE is supported
     # (test_scatter.py:92). Mask is 0/1 -> exact in bf16. L<256 dodges issue #23407.
