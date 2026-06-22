@@ -34,9 +34,7 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
 
     torch_parameters = preprocess_model_parameters(
         model_name=f"torch_{model_name}",
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name, torchscript=False
-        ).eval(),
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(model_name).eval(),
         convert_to_ttnn=lambda *_: False,
     )
 
@@ -53,9 +51,7 @@ def test_bert_for_question_answering(device, model_name, batch_size, sequence_si
 
     parameters = preprocess_model_parameters(
         model_name=tt_model_name,
-        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(
-            model_name, torchscript=False
-        ).eval(),
+        initialize_model=lambda: transformers.BertForQuestionAnswering.from_pretrained(model_name).eval(),
         custom_preprocessor=ttnn_optimized_sharded_bert.custom_preprocessor,
         device=device,
     )
