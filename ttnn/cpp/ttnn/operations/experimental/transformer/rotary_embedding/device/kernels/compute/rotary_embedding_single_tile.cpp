@@ -77,10 +77,6 @@ void kernel_main() {
 #endif
 
     cb_wait_front(trans_mat_cb, onetile);
-    mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
-    // Binary ops (mul, add) below need their own init path; without this the
-    // math-thread register routing stays in matmul mode and mixed-precision
-    // binaries (e.g. bf16 x bfp8) produce incorrect results.
     binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
@@ -88,7 +84,7 @@ void kernel_main() {
         cb_wait_front(in_cb, onetile);
         reconfig_data_format(in_cb, trans_mat_cb);
         pack_reconfig_data_format(rotated_in_interm_cb);
-        mm_init_short(in_cb, trans_mat_cb);
+        matmul_init(in_cb, trans_mat_cb);
 
         tile_regs_acquire();
         matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
