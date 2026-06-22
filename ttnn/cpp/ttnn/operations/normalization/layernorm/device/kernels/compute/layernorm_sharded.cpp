@@ -203,6 +203,7 @@ void kernel_main() {
         }
         reduce_uninit<FP32_DEST_ACC>();
         cb_ex.push_back(num_tiles_per_allgather_worker);
+        reconfig_data_format(cb_ex_external_id, cb_scaler_global_id);
         cb_ex.wait_front(num_tiles_per_allgather_worker);
     }
 
