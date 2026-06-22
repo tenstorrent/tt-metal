@@ -376,10 +376,10 @@ jobs:
       group: >-
         cmake-build-
         ${{ inputs.ref || github.sha }}-
-        ${{ inputs.platform || 'Ubuntu 22.04' }}-
-        ${{ inputs.build-type || 'Release' }}-
-        ${{ inputs.toolchain || 'cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake' }}-
-        ${{ inputs.architecture || 'amd64' }}-
+        ${{ inputs.platform }}-
+        ${{ inputs.build-type }}-
+        ${{ inputs.toolchain }}-
+        ${{ inputs.architecture }}-
         tracy:${{ inputs.tracy }}-
         dist:${{ inputs.distributed }}-
         lto:${{ inputs.enable-lto }}
