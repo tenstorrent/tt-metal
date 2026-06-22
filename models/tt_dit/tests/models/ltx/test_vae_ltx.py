@@ -847,3 +847,132 @@ def test_ltx_video_encoder(mesh_device: ttnn.MeshDevice, num_frames: int, height
     assert torch.isfinite(tt_out).all(), "NaN/Inf in TT encoder output"
     assert_quality(ref_out, tt_out, pcc=0.99)
     logger.info("PASSED: LTXVideoEncoder matches ltx_core VideoEncoder")
+
+
+# ---------------------------------------------------------------------------
+# Production encoder parity under sharding (regression for the I2V VAE-encoder bug)
+# ---------------------------------------------------------------------------
+# Full LTX-2.3 22B encoder block list (from the checkpoint config metadata). The two
+# ``compress_all_res`` blocks are NOT exercised by ``test_ltx_video_encoder`` above, and
+# only matter under spatial sharding — they fold a (2,2,2) patch into channels per device.
+_LTX_PROD_ENCODER_BLOCKS = [
+    ("res_x", {"num_layers": 4}),
+    ("compress_space_res", {"multiplier": 2}),
+    ("res_x", {"num_layers": 6}),
+    ("compress_time_res", {"multiplier": 2}),
+    ("res_x", {"num_layers": 4}),
+    ("compress_all_res", {"multiplier": 2}),
+    ("res_x", {"num_layers": 2}),
+    ("compress_all_res", {"multiplier": 1}),
+    ("res_x", {"num_layers": 2}),
+]
+
+
+def _run_ltx_encoder_parity(
+    mesh_device: ttnn.MeshDevice,
+    h_axis: int,
+    w_axis: int,
+    num_links: int,
+    num_frames: int,
+    height: int,
+    width: int,
+    *,
+    pcc: float = 0.99,
+):
+    """Build torch (ltx_core) + TT production encoders at ``(num_frames, height, width)`` and
+    assert numerical parity. The TT encoder shards H/W across the mesh exactly like the I2V
+    pipeline; this is the path that fails when a per-device spatial dim is not divisible by the
+    downsample stride (patch groups would straddle a shard boundary)."""
+    mods = _require_ltx_core_encoder()
+    VideoEncoder = mods["encoder"]
+
+    torch.manual_seed(42)
+    latent_channels = 128
+
+    ref = VideoEncoder(
+        in_channels=3,
+        out_channels=latent_channels,
+        encoder_blocks=_LTX_PROD_ENCODER_BLOCKS,
+        patch_size=4,
+        norm_layer=mods["NormLayerType"].PIXEL_NORM,
+        latent_log_var=mods["LogVarianceType"].UNIFORM,
+        encoder_spatial_padding_mode=mods["PaddingModeType"].ZEROS,
+    )
+    with torch.no_grad():
+        ref.per_channel_statistics.get_buffer("mean-of-means").copy_(torch.randn(latent_channels))
+        ref.per_channel_statistics.get_buffer("std-of-means").copy_(torch.rand(latent_channels) + 0.5)
+    ref.eval()
+
+    x = torch.randn(1, 3, num_frames, height, width, dtype=torch.float32)
+    with torch.no_grad():
+        ref_out = ref(x.clone())  # (1, 128, F', H', W')
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+    parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
+    )
+
+    tt_model = LTXVideoEncoder(
+        encoder_blocks=_LTX_PROD_ENCODER_BLOCKS,
+        in_channels=3,
+        out_channels=latent_channels,
+        patch_size=4,
+        mesh_device=mesh_device,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+    )
+    tt_model.load_torch_state_dict(ref.state_dict())
+
+    tt_out = _unwrap_tt_output(tt_model(x.clone()))
+
+    logger.info(f"prod encoder: ref out {tuple(ref_out.shape)}, TT out {tuple(tt_out.shape)}")
+    assert tt_out.shape == ref_out.shape, f"shape mismatch: TT {tt_out.shape} vs ref {ref_out.shape}"
+    assert torch.isfinite(tt_out).all(), "NaN/Inf in TT encoder output"
+    assert_quality(ref_out, tt_out, pcc=pcc)
+    logger.info("PASSED: production LTXVideoEncoder matches ltx_core VideoEncoder")
+
+
+# (num_frames, H, W). On a 4x8 mesh (H//4, W//8) the per-device spatial dim after patchify and
+# the early downsamples decides whether the last compress_all_res can fold locally:
+#   - "clean":    per-device dims stay even through every fold (fast local path).
+#   - "boundary": per-device dim becomes odd at the last compress_all_res, so the space-to-depth
+#                 patch would straddle a shard boundary — the case that corrupts the I2V latent.
+_LTX_ENCODER_PROD_SHAPE_PARAMS = [
+    pytest.param(1, 128, 256, id="1f_128x256_clean"),
+    pytest.param(1, 192, 384, id="1f_192x384_boundary"),
+    # The two real I2V conditioning-image resolutions (single frame): stage-0 (544x960 -> latent
+    # 17x30) and stage-1 (1088x1920 -> latent 34x60). Both put an odd per-device spatial dim into
+    # the last compress_all_res on 4x8 — this is the exact case that corrupted the I2V latent.
+    pytest.param(1, 544, 960, id="1f_544x960_stage0"),
+    pytest.param(1, 1088, 1920, id="1f_1088x1920_stage1"),
+]
+
+
+@pytest.mark.parametrize("num_frames, height, width", _LTX_ENCODER_PROD_SHAPE_PARAMS)
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis, num_links",
+    [((4, 8), 0, 1, 2)],
+    ids=["4x8_h0_w1"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", _LTX_VAE_FABRIC_DEVICE_PARAMS, indirect=True)
+def test_ltx_video_encoder_prod(
+    mesh_device: ttnn.MeshDevice,
+    num_frames: int,
+    height: int,
+    width: int,
+    h_axis: int,
+    w_axis: int,
+    num_links: int,
+):
+    """Production-config LTXVideoEncoder parity vs ltx_core, sharded like the I2V pipeline.
+
+    The "boundary" resolution reproduces the I2V conditioning-latent corruption (device-vs-host
+    PCC ~0.3): a per-device spatial dim becomes odd at the second ``compress_all_res``, so the
+    per-device space-to-depth folds a patch that should straddle two shards.
+    """
+    _run_ltx_encoder_parity(mesh_device, h_axis, w_axis, num_links, num_frames, height, width)
