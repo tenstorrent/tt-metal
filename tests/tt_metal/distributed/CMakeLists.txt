@@ -13,6 +13,7 @@ set(DISTRIBUTED_UNIT_TEST_SOURCES
     test_mesh_workload.cpp
     test_mesh_socket.cpp
     test_hd_sockets.cpp
+    test_layer_completion_layout.cpp
     test_mesh_sub_device.cpp
     test_mesh_allocator.cpp
     test_mesh_events.cpp
@@ -44,6 +45,7 @@ target_include_directories(
     PRIVATE
         "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
         ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}/tt_metal/distributed
 )
 
 set_target_properties(
