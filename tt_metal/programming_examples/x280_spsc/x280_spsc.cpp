@@ -153,6 +153,62 @@ static void verify_ring(IDevice* dev, const CoreCoord& core, uint32_t cells_to_d
            : (errors ? "FAIL: data loss/reorder detected" : "WARN: completed but backpressure not observed"));
 }
 
+// ---- STEP 4 host-side marker decoder (continuous profiler) ----
+// Drains the SPSC ring and decodes 8B markers (8 per flit), validating the
+// kernel_profiler-format fields the X280 consumer would otherwise process.
+static void verify_zones(IDevice* dev, const CoreCoord& core, uint32_t markers_to_drain) {
+    fmt::print("\n==================== VERIFY (continuous profiler zones) ====================\n");
+    fmt::print("host draining + decoding {} markers (8B each, 8 per flit) in order...\n", markers_to_drain);
+    uint32_t r = 0;  // next flit index to consume
+    uint64_t markers = 0, starts = 0, ends = 0, invalid = 0, ts_backwards = 0;
+    uint64_t last_ts = 0;
+    bool have_last = false;
+    const auto t0 = std::chrono::steady_clock::now();
+    while (markers < markers_to_drain) {
+        const uint32_t w = read_u32(dev, core, kWAddr);
+        if (w == r) {
+            continue;
+        }
+        for (; r < w && markers < markers_to_drain; r++) {
+            const uint32_t slot = r & (kRingCells - 1);
+            std::vector<uint32_t> flit;
+            detail::ReadFromDeviceL1(dev, core, kRingBase + slot * 64, 64, flit, tt::CoreType::WORKER);
+            for (uint32_t mslot = 0; mslot < 8; mslot++) {
+                const uint32_t w0 = flit[mslot * 2], w1 = flit[mslot * 2 + 1];
+                if ((w0 & 0x80000000u) == 0) {
+                    invalid++;
+                }
+                const uint32_t timer_id = (w0 >> 12) & 0x7FFFF;
+                const uint32_t type = (timer_id >> 16) & 0x7;
+                const uint64_t ts = (static_cast<uint64_t>(w0 & 0xFFF) << 32) | w1;
+                if (type == 0) {
+                    starts++;
+                } else if (type == 1) {
+                    ends++;
+                }
+                if (have_last && ts < last_ts) {
+                    ts_backwards++;
+                }
+                last_ts = ts;
+                have_last = true;
+                markers++;
+            }
+        }
+        write_u32(dev, core, kRAddr, r);
+    }
+    const auto dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const uint32_t blocked = read_u32(dev, core, kBlockAddr);
+    fmt::print("decoded {} markers in {:.2f} s ({:.0f} markers/s)\n", markers, dt, markers / dt);
+    fmt::print("  ZONE_START {} | ZONE_END {} (diff {})\n", starts, ends, static_cast<int64_t>(starts - ends));
+    fmt::print("  invalid (no valid bit): {} | timestamp-went-backwards: {}\n", invalid, ts_backwards);
+    fmt::print("  producer backpressure events: {}\n", blocked);
+    const bool ok = invalid == 0 && ts_backwards == 0 && (starts >= ends) && (starts - ends) <= 2;
+    fmt::print(
+        "{}\n",
+        ok ? "PASS: well-formed markers, monotonic timestamps, START/END balanced (lossless stream)"
+           : "FAIL: malformed markers / non-monotonic timestamps");
+}
+
 int main(int argc, char** argv) {
     const int device_id = argc > 1 ? std::atoi(argv[1]) : 0;
     const std::string mode = argc > 2 ? argv[2] : "run";
@@ -163,6 +219,59 @@ int main(int argc, char** argv) {
     Program program = CreateProgram();
     const CoreCoord producer_logical{0, 0};
     const CoreCoord noc0 = dev->worker_core_from_logical_core(producer_logical);
+
+    // ---- STEP 4: continuous-profiler ZONES -- DeviceZoneScopedN-style scopes
+    // whose ctor/dtor stream START/END markers into the SPSC ring (8 markers per
+    // 64B flit). `zoneverify` decodes the markers from the host; `zones` runs
+    // forever for the X280 consumer to drain.
+    if (mode == "zones" || mode == "zoneverify") {
+        const uint32_t work_cycles = (mode == "zones" && argc > 3) ? static_cast<uint32_t>(std::stoul(argv[3])) : 100u;
+        const uint32_t markers_to_drain =
+            (mode == "zoneverify") ? (argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : 32000u) : 0u;
+        CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "x280_spsc/kernels/zone_demo.cpp",
+            producer_logical,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .defines = {
+                    {"CP_RING_BASE", fmt::format("{:#x}", kRingBase)},
+                    {"CP_RING_CELLS", std::to_string(kRingCells)},
+                    {"CP_W_ADDR", fmt::format("{:#x}", kWAddr)},
+                    {"CP_R_ADDR", fmt::format("{:#x}", kRAddr)},
+                    {"CP_BLOCK_ADDR", fmt::format("{:#x}", kBlockAddr)},
+                    {"WORK_CYCLES", std::to_string(work_cycles)},
+                }});
+        fmt::print("\n==================== ZONES TARGET (for X280) ====================\n");
+        fmt::print(
+            "device {}: continuous-profiler kernel on BRISC of (0,0) = NOC0 ({},{})\n", device_id, noc0.x, noc0.y);
+        fmt::print(
+            "ring {:#x} ({} flits x 64B), W={:#x} R={:#x} BLK={:#x}; 8 markers (8B) per flit\n",
+            kRingBase,
+            kRingCells,
+            kWAddr,
+            kRAddr,
+            kBlockAddr);
+        fmt::print("marker: word0=0x80000000|((zone_id|type<<16)<<12)|wall_hi12, word1=wall_lo (type 0=START 1=END)\n");
+        fmt::print("=================================================================\n");
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        fmt::print("zone kernel launched (mode={})\n", mode);
+        std::fflush(stdout);
+        if (mode == "zoneverify") {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            verify_zones(dev, producer_logical, markers_to_drain);
+            return 0;
+        }
+        fmt::print("host sleeping (Ctrl-C to stop); attach the X280 consumer now\n");
+        std::fflush(stdout);
+        while (true) {
+            std::this_thread::sleep_for(std::chrono::seconds(60));
+        }
+        return 0;
+    }
 
     // ---- STEP 3: GRID mode -- ring producer on EVERY worker core ----
     // Each core runs an independent flit-ring in its own L1 (same fixed layout,
