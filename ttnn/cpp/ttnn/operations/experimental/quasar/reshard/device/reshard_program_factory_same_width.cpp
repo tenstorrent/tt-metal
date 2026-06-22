@@ -83,10 +83,10 @@ ProgramDescriptor ReshardSameWidthFactory<local_is_output>::create_descriptor(
         unaligned = true;
     }
     const uint32_t total_size = local_units_per_shard * unit_size;
-    const std::string kernel_name =
-        local_is_output
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_reader.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_width_writer.cpp";
+    const std::string kernel_name = local_is_output ? "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/"
+                                                      "kernels/dataflow/reshard_same_width_reader.cpp"
+                                                    : "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/"
+                                                      "kernels/dataflow/reshard_same_width_writer.cpp";
 
     bool interface_with_dram = (remote_core_type == tt::CoreType::DRAM);
     auto* local_buffer = local_tensor.buffer();

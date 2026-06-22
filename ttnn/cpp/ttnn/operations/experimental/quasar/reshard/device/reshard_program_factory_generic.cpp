@@ -698,11 +698,12 @@ ProgramDescriptor ReshardGenericFactory::create_descriptor(
         all_cores,
         /*bound_buffer=*/output_buffer);
 
-    const std::string kernel_source = input_buffer->page_size() != output_buffer->page_size()
-                                          ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                            "reshard_reader_diff_width.cpp"
-                                          : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/"
-                                            "reshard_reader.cpp";
+    const std::string kernel_source =
+        input_buffer->page_size() != output_buffer->page_size()
+            ? "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/dataflow/"
+              "reshard_reader_diff_width.cpp"
+            : "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/kernels/dataflow/"
+              "reshard_reader.cpp";
 
     std::vector<uint32_t> compile_args = {
         dst_cb_index, static_cast<uint32_t>(grid.x), static_cast<uint32_t>(grid.y), page_size, unit_size};

@@ -102,7 +102,8 @@ ProgramDescriptor PadTileCoreProgramFactory::create_descriptor(
     // Tilized reader
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/pad/device/kernels/dataflow/"
+        "reader_unary_interleaved_start_id.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core_ranges;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);

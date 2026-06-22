@@ -139,7 +139,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     // Tilized reader
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/dataflow/"
+        "reader_unary_interleaved_start_id.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = core;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
@@ -173,7 +174,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingSingleCoreProgramFactory::c
     }
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/untilize.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core;
     compute_desc.compile_time_args = std::move(compute_args);

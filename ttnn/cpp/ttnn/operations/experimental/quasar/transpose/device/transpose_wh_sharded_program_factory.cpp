@@ -82,7 +82,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/reader_unary_sharded.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = total_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
@@ -90,7 +90,7 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedProgramFactory::create_descrip
 
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/writer_unary_sharded.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/transpose/device/kernels/dataflow/writer_unary_sharded.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = total_cores;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
