@@ -85,6 +85,10 @@ struct __attribute__((packed, aligned(8))) DispatchCoreTelemetry {
     uint64_t current_sub_device_work_runtime[RESERVED_SUB_DEVICE_SPACE] = {0};
 
     // dispatch_s_compute writes
+    // Amount of time the sub device is running any work on any core.
+    uint64_t utilization_sub_device_work_runtime[RESERVED_SUB_DEVICE_SPACE] = {0};
+
+    // dispatch_s_compute writes
     uint32_t completion_count[RESERVED_SUB_DEVICE_SPACE] = {0};
 
     // dispatch_s writes

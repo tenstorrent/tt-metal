@@ -565,7 +565,7 @@ TEST_F(DispatchTelemetryReadApiTest, PrefetchCommandCountIncrementsAfterProgramR
     EXPECT_GE(after->info_cqs.front().prefetch_command_count_since_last_read, num_blank_programs);
 }
 
-TEST_F(DispatchTelemetryReadApiTest, DispatchUtilizationIsNulloptWhenWorkerDispatchDisabled) {
+TEST_F(DispatchTelemetryReadApiTest, DispatchCoreEfficiencyIsNulloptWhenWorkerDispatchDisabled) {
     if (worker_dispatch_enabled()) {
         GTEST_SKIP() << "Requires worker dispatch to be disabled";
     }
@@ -583,10 +583,36 @@ TEST_F(DispatchTelemetryReadApiTest, DispatchUtilizationIsNulloptWhenWorkerDispa
     distributed::EnqueueMeshWorkload(cq, workload, false);
     Finish(cq);
 
-    // Read telemetry info and verify utilization does not have a value.
+    // Read telemetry info and verify core efficiency does not have a value.
     auto info = telemetry.read_info();
     ASSERT_TRUE(info.has_value());
-    EXPECT_FALSE(info->utilization_since_last_read.has_value());
+    EXPECT_FALSE(info->device_core_efficiency_since_last_read.has_value());
+}
+
+TEST_F(DispatchTelemetryReadApiTest, DispatchSubDeviceUtilizationIsEmptyWhenWorkerDispatchDisabled) {
+    if (worker_dispatch_enabled()) {
+        GTEST_SKIP() << "Requires worker dispatch to be disabled";
+    }
+
+    // Create the device, single-core stream, blank program, and telemetry object.
+    IDevice* device = this->device();
+    auto& cq = devices_.at(0)->mesh_command_queue();
+    const CoreRangeSet worker_core{CoreRange(CoreCoord{0, 0})};
+    Program program = create_blank_program(worker_core);
+    DispatchTelemetry telemetry(*device);
+
+    // Run the blank program.
+    distributed::MeshWorkload workload;
+    workload.add_program(device_range_, std::move(program));
+    distributed::EnqueueMeshWorkload(cq, workload, false);
+    Finish(cq);
+
+    // Read telemetry info and verify core efficiency does not have a value.
+    auto info = telemetry.read_info();
+    ASSERT_TRUE(info.has_value());
+    for (const auto& cq_info : info->info_cqs) {
+        EXPECT_TRUE(cq_info.sub_device_utilization_since_last_read.empty());
+    }
 }
 
 TEST_F(DispatchTelemetryHostL1WaitTest, WorkerWaitReportsUpstreamBlockedState) {
@@ -1195,7 +1221,7 @@ TEST_F(DispatchTelemetryReadApiTest, InactiveWorkersIncrementCompleteSem) {
     mesh_device->remove_sub_device_manager(sub_device_manager);
 }
 
-TEST_F(DispatchTelemetryHostL1WaitTest, DispatchUtilization) {
+TEST_F(DispatchTelemetryHostL1WaitTest, DispatchCoreEfficiencyAndSubDeviceUtilization) {
     if (!worker_dispatch_enabled() || !dispatch_s_virtual_core().has_value()) {
         GTEST_SKIP() << "Requires worker dispatch and dispatch_s to be enabled";
     }
@@ -1235,12 +1261,15 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchUtilization) {
         loaded_first_sub_device_cores.num_cores() + loaded_second_sub_device_cores.num_cores(),
         total_worker_core_count);
 
-    // With no workload running, utilization since the last read should be idle.
+    // With no workload running, core efficiency and sub device utilization since the last read should be idle.
     {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
-        ASSERT_TRUE(info->utilization_since_last_read.has_value());
-        EXPECT_FLOAT_EQ(info->utilization_since_last_read.value(), 0.0f);
+        ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
+        EXPECT_FLOAT_EQ(info->device_core_efficiency_since_last_read.value(), 0.0f);
+        EXPECT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read.size(), 2);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[0], 0.0f);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[1], 0.0f);
     }
 
     // Run L1 blocking workloads across all cores in both sub-devices.
@@ -1268,46 +1297,90 @@ TEST_F(DispatchTelemetryHostL1WaitTest, DispatchUtilization) {
     ASSERT_TRUE(all_cores_started);
     mesh_device->reset_sub_device_stall_group();
 
-    // The transition into blocked work should report nonzero utilization since the last read.
+    // The transition into blocked work should report nonzero core efficiency since the last read.
     {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
-        ASSERT_TRUE(info->utilization_since_last_read.has_value());
-        EXPECT_GT(info->utilization_since_last_read.value(), 0.0f);
+        ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
+        EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.0f);
+        EXPECT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read.size(), 2);
+        EXPECT_GT(info->info_cqs.front().sub_device_utilization_since_last_read[0], 0.0f);
+        EXPECT_GT(info->info_cqs.front().sub_device_utilization_since_last_read[1], 0.0f);
     }
 
-    // Once all workers are blocked, utilization since the last read should be fully occupied.
+    // Once all workers are blocked, core efficiency since the last read should be fully occupied.
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
-        ASSERT_TRUE(info->utilization_since_last_read.has_value());
-        // Since we're only putting work on the tensix cores and not the eth cores, utilization will not be exactly 1.0
-        EXPECT_GT(info->utilization_since_last_read.value(), 0.9f);
+        ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
+        // Since we're only putting work on the tensix cores and not the eth cores, core efficiency will not be
+        // exactly 1.0
+        EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.9f);
+        EXPECT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read.size(), 2);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[0], 1.0f);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[1], 1.0f);
     }
 
-    // Release the L1 blocked workers.
+    // Release the L1 blocked workers for sub device 1
     release_worker(loaded_first_sub_device_cores);
+    Finish(cq, {{SubDeviceId{0}}});
+
+    // The release transition should still report nonzero sub device utilization since the last read.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    {
+        auto info = telemetry.read_info();
+        ASSERT_TRUE(info.has_value());
+        ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
+        EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.0f);
+        EXPECT_LT(info->device_core_efficiency_since_last_read.value(), 1.0f);
+        EXPECT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read.size(), 2);
+        EXPECT_GT(info->info_cqs.front().sub_device_utilization_since_last_read[0], 0.0f);
+        EXPECT_LT(info->info_cqs.front().sub_device_utilization_since_last_read[0], 1.0f);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[1], 1.0f);
+    }
+
+    // The first sub device should be idle now.
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    {
+        auto info = telemetry.read_info();
+        ASSERT_TRUE(info.has_value());
+        ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
+        EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.0f);
+        EXPECT_LT(info->device_core_efficiency_since_last_read.value(), 1.0f);
+        EXPECT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read.size(), 2);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[0], 0.0f);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[1], 1.0f);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+
     release_worker(loaded_second_sub_device_cores);
     Finish(cq);
 
-    // The release transition should still report nonzero utilization since the last read.
+    // The release transition should still report nonzero core efficiency since the last read.
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
-        ASSERT_TRUE(info->utilization_since_last_read.has_value());
-        EXPECT_GT(info->utilization_since_last_read.value(), 0.0f);
-        EXPECT_LT(info->utilization_since_last_read.value(), 1.0f);
+        ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
+        EXPECT_GT(info->device_core_efficiency_since_last_read.value(), 0.0f);
+        EXPECT_LT(info->device_core_efficiency_since_last_read.value(), 1.0f);
+        EXPECT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read.size(), 2);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[0], 0.0f);
+        EXPECT_GT(info->info_cqs.front().sub_device_utilization_since_last_read[1], 0.0f);
+        EXPECT_LT(info->info_cqs.front().sub_device_utilization_since_last_read[1], 1.0f);
     }
 
-    // After the released workload drains, utilization since the last read should return to idle.
+    // After the released workload drains, core efficiency since the last read should return to idle.
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     {
         auto info = telemetry.read_info();
         ASSERT_TRUE(info.has_value());
-        ASSERT_TRUE(info->utilization_since_last_read.has_value());
-        EXPECT_FLOAT_EQ(info->utilization_since_last_read.value(), 0.0f);
+        ASSERT_TRUE(info->device_core_efficiency_since_last_read.has_value());
+        EXPECT_FLOAT_EQ(info->device_core_efficiency_since_last_read.value(), 0.0f);
+        EXPECT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read.size(), 2);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[0], 0.0f);
+        EXPECT_FLOAT_EQ(info->info_cqs.front().sub_device_utilization_since_last_read[1], 0.0f);
     }
 
     mesh_device->clear_loaded_sub_device_manager();

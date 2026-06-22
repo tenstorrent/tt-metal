@@ -21,12 +21,25 @@ struct DispatchTelemetryCqInfo {
     uint32_t prefetch_blocked_count_since_last_read = 0;
     uint32_t dispatch_blocked_count_since_last_read = 0;
     uint32_t prefetch_command_count_since_last_read = 0;
+
+    /**
+     * @brief   Sub device utilization describes the percentage of time the sub device is actively executing any work.
+     * @note    sub_device_utilization = sub_device_runtime / uptime
+     * @note    Normalized utilization ratio: 1.0 = 100%, 0.0 = 0%
+     * @note    Requires worker dispatch
+     */
+    std::vector<float> sub_device_utilization_since_last_read;
 };
 
 struct DispatchTelemetryDeviceInfo {
-    // Normalized utilization ratio: 1.0 = 100%, 0.0 = 0%
-    // Requires worker dispatch
-    std::optional<float> utilization_since_last_read = std::nullopt;
+    /**
+     * @brief   Device core efficiency describes the percentage of time the cores are actively executing work.
+     * @note    core_efficiency = avg_core_runtime / uptime
+     * @note    Normalized utilization ratio: 1.0 = 100%, 0.0 = 0%
+     * @note    Requires worker dispatch
+     */
+    std::optional<float> device_core_efficiency_since_last_read = std::nullopt;
+
     std::vector<DispatchTelemetryCqInfo> info_cqs;
 };
 
@@ -36,19 +49,19 @@ public:
     ~DispatchTelemetry();
 
     /**
-     * @brief Get the version of the dispatch telemetry API. This may mismatch with the version
-     *        present on the device. If so, read_info will return an empty vector and an error will be
-     *        logged.
+     * @brief   Get the version of the dispatch telemetry API. This may mismatch with the version
+     *          present on the device. If so, read_info will return an empty vector and an error will be
+     *          logged.
      *
-     * @return The version of the dispatch telemetry API.
+     * @return  The version of the dispatch telemetry API.
      */
     uint32_t version() const;
 
     /**
-     * @brief Read device-wide dispatch telemetry derived from all command queues.
+     * @brief   Read device-wide dispatch telemetry derived from all command queues.
      *
-     * @return Device-wide telemetry info. If there is an issue reading telemetry from the device,
-     *         a warning is logged and an empty optional is returned.
+     * @return  Device-wide telemetry info. If there is an issue reading telemetry from the device,
+     *          a warning is logged and an empty optional is returned.
      */
     std::optional<DispatchTelemetryDeviceInfo> read_info();
 

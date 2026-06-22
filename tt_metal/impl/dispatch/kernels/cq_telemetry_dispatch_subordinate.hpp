@@ -44,6 +44,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
     uint64_t last_work_launch_timestamp[total_sub_devices] = {0};
     uint64_t avg_work_runtime_per_worker = 0;
     uint64_t current_sub_device_work_runtime[total_sub_devices] = {0};
+    uint64_t utilization_sub_device_work_runtime[total_sub_devices] = {0};
     uint32_t completion_count[total_sub_devices] = {0};
     uint32_t workers_per_sub_device[total_sub_devices] = {0};
 
@@ -86,10 +87,9 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
             for (uint32_t i = 0; i < total_sub_devices; ++i) {
                 if (completion_count[i] < workers_per_sub_device[i]) {
                     // Finish inflight work
+                    uint64_t current_timestamp = get_timestamp();
+                    uint64_t delta_work_runtime = current_timestamp - last_work_launch_timestamp[i];
                     while (completion_count[i] < workers_per_sub_device[i]) {
-                        uint64_t current_timestamp = get_timestamp();
-                        uint64_t delta_work_runtime = current_timestamp - last_work_launch_timestamp[i];
-
                         const bool will_overflow = UINT64_MAX - current_sub_device_work_runtime[i] < delta_work_runtime;
                         if (will_overflow) {
                             compress_work_runtime(
@@ -100,6 +100,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                         current_sub_device_work_runtime[i] += delta_work_runtime;
                         completion_count[i]++;
                     }
+                    utilization_sub_device_work_runtime[i] += delta_work_runtime;
                 }
 
                 if (sub_device_update) {
@@ -122,6 +123,7 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
 
                 completion_count[i] = workers_per_sub_device[i];  // triggers new workload check
                 dispatch_telemetry->completion_count[i] = completion_count[i];
+                dispatch_telemetry->utilization_sub_device_work_runtime[i] = utilization_sub_device_work_runtime[i];
             }
 
             dispatch_telemetry->avg_work_runtime_per_worker = avg_work_runtime_per_worker;
@@ -195,6 +197,12 @@ FORCE_INLINE void dispatch_subordinate_telemetry() {
                     current_sub_device_work_runtime[i] += delta_work_runtime;
                     completion_count[i]++;
                     delta_sem_count--;
+                }
+
+                // If the workload is complete, add the total work runtime to utilization
+                if (completion_count[i] == workers_per_sub_device[i]) {
+                    utilization_sub_device_work_runtime[i] += delta_work_runtime;
+                    dispatch_telemetry->utilization_sub_device_work_runtime[i] = utilization_sub_device_work_runtime[i];
                 }
 
                 local_stream_sem_counter[i] = curr_stream_sem_count - delta_sem_count;
