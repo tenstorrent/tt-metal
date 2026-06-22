@@ -28,7 +28,7 @@ void kernel_main() {
     const auto s0 = TensorAccessor(ta::input);
 
     DataflowBuffer cb_in0(dfb::in);
-    const uint32_t single_tile_size_bytes = cb_in0.get_tile_size();
+    const uint32_t single_tile_size_bytes = cb_in0.get_entry_size();
 
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     uint32_t l1_write_addr;

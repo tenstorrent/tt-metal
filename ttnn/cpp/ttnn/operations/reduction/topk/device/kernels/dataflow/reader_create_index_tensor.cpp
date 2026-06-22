@@ -38,9 +38,9 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer cb_in0(dfb::cb_in0);
     DataflowBuffer cb_index(dfb::cb_index);
-    const uint32_t tile_bytes_in0 = cb_in0.get_tile_size();
+    const uint32_t tile_bytes_in0 = cb_in0.get_entry_size();
 #if not GENERATE_INDICES
-    const uint32_t tile_bytes_index = cb_index.get_tile_size();
+    const uint32_t tile_bytes_index = cb_index.get_entry_size();
 #endif
 
     // Read data and generate indices
