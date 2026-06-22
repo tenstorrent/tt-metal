@@ -35,10 +35,12 @@
 //                                        for cb_wait_front on the multicasted CB
 //
 // Runtime args (per untilizer core):
-//   0: expert_start_idx                - first expert handled by the owning sender
-//   1: expert_end_idx                  - one past the last expert handled by the owning sender
+//   0: expert_start_idx                - first expert handled (now 0; every group handles all experts)
+//   1: expert_end_idx                  - one past the last expert handled (now experts_per_chip)
 //   2: core_id                         - local index in the owning sender's untilizer group (0..k_s-1)
 //   3: num_untilizer_cores                  - k_s, size of the owning sender's untilizer group
+//   4: sender_idx                      - owning-sender index; selects this group's batch-chunk per expert
+//   5: num_senders                     - number of senders (data chunks each expert is split into)
 void kernel_main() {
     constexpr uint32_t cb_untilize_id = get_compile_time_arg_val(0);
     constexpr uint32_t cb_in_id = get_compile_time_arg_val(1);
@@ -61,6 +63,8 @@ void kernel_main() {
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t core_id = get_arg_val<uint32_t>(rt_idx++);
     uint32_t num_untilizer_cores = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t sender_idx = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t num_senders = get_arg_val<uint32_t>(rt_idx++);
 
     compute_kernel_hw_startup(cb_in_id, cb_untilize_id);
     pack_untilize_init<block_ct_dim, full_ct_dim>(cb_in_id, cb_untilize_id);
@@ -99,9 +103,21 @@ void kernel_main() {
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        // Round-robin within the owning sender's untilizer group:
-        // this core handles batches {core_id, core_id + k_s, core_id + 2k_s, ...}.
-        for (uint32_t batch_idx = core_id; batch_idx < actual_batches; batch_idx += num_untilizer_cores) {
+        // Data split across senders: this group processes only its contiguous batch-chunk
+        // [sender_batch_start, sender_batch_end) of every expert (chunk sender_idx of num_senders).
+        // Must match reader_untilize / writer_untilize exactly so the c_0 / c_2 producer-consumer
+        // protocol stays in lockstep.
+        uint32_t batches_per_sender = (actual_batches + num_senders - 1) / num_senders;
+        uint32_t sender_batch_start = sender_idx * batches_per_sender;
+        uint32_t sender_batch_end = sender_batch_start + batches_per_sender;
+        if (sender_batch_end > actual_batches) {
+            sender_batch_end = actual_batches;
+        }
+
+        // Round-robin within the owning sender's untilizer group over the chunk's batches:
+        // this core handles {sender_batch_start + core_id, + k_s, + 2k_s, ...}.
+        for (uint32_t batch_idx = sender_batch_start + core_id; batch_idx < sender_batch_end;
+             batch_idx += num_untilizer_cores) {
             cb_reserve_back(cb_untilize_id, read_batch_size);
             for (uint32_t block = 0; block < num_blocks; block++) {
                 cb_wait_front(cb_in_id, block_ct_dim);

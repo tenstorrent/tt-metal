@@ -1101,8 +1101,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             {
                 uint32_t s = untilizer_sender_map[untilizer_idx];
                 uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
-                uint32_t expert_start = s * experts_per_core_range;
-                uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+                // Every sender now processes EVERY expert (full range); the per-expert work is
+                // split across senders by data instead — sender s handles batch-chunk s of each
+                // expert (see sender_idx / num_senders below).
+                uint32_t expert_start = 0;
+                uint32_t expert_end = operation_attributes.experts_per_chip;
                 // core_id = this untilizer core's local index within sender s's group (0..k_s-1).
                 uint32_t local_core_id = 0;
                 for (uint32_t j = 0; j < untilizer_idx; j++) {
@@ -1119,6 +1122,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 writer_untilize_runtime_args.push_back(k_s);           // num_untilizer_cores
                 writer_untilize_runtime_args.push_back(expert_start);  // expert_start_idx
                 writer_untilize_runtime_args.push_back(expert_end);    // expert_end_idx
+                writer_untilize_runtime_args.push_back(s);             // sender_idx (this group's data chunk)
+                writer_untilize_runtime_args.push_back(num_cores);     // num_senders (data chunks per expert)
             }
 
             desc.kernels[writer_untilize_kernel_id].emplace_runtime_args(
@@ -1128,8 +1133,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 
     uint32_t core_idx = 0;
     for (const auto& sender_core : sender_cores) {
-        uint32_t expert_start = core_idx * experts_per_core_range;
-        uint32_t expert_end = std::min((core_idx + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+        // Sender kernels (reader_combine / writer_combine) are expert-range agnostic — they only
+        // poll their untilizer group's receive_buf and fabric-forward whatever rows arrive — so
+        // they get the full expert range now that the per-expert split is by data, not by expert.
+        uint32_t expert_start = 0;
+        uint32_t expert_end = operation_attributes.experts_per_chip;
 
         // Reader RT args.  Tensor buffer addresses are pushed as Buffer* so the
         // framework records BufferBindings for the O(1) cache-hit fast path.
@@ -1269,8 +1277,11 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         for (uint32_t j = 0; j < num_untilizer_cores; j++) {
             uint32_t s = untilizer_sender_map[j];
             uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
-            uint32_t expert_start = s * experts_per_core_range;
-            uint32_t expert_end = std::min((s + 1) * experts_per_core_range, operation_attributes.experts_per_chip);
+            // Full expert range on every untilizer core; the per-expert work is split across
+            // senders by data — sender s's group handles batch-chunk s of each expert (sender_idx /
+            // num_senders below), then round-robins those batches across its k_s untilizer cores.
+            uint32_t expert_start = 0;
+            uint32_t expert_end = operation_attributes.experts_per_chip;
             // local_core_id: this untilizer's index within sender s's group, found by counting prior
             // untilizer_idxs that map to the same sender (untilizer_row_cores is grouped by sender).
             uint32_t local_core_id = 0;
@@ -1279,9 +1290,9 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                     local_core_id++;
                 }
             }
-            // Reader_untilize RT args (5):
+            // Reader_untilize RT args (7):
             //   [0]: counter_ready_sem, [1]: dispatched_buffer*, [2]: expert_start,
-            //   [3]: expert_end,        [4]: dispatched_metadata*.
+            //   [3]: expert_end,        [4]: dispatched_metadata*, [5]: sender_idx, [6]: num_senders.
             // Buffers pushed as Buffer* so the framework records BufferBindings for the
             // cache-hit fast path.
             tt::tt_metal::KernelDescriptor::RTArgList untilizer_rt_args;
@@ -1290,19 +1301,24 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilizer_rt_args.push_back(expert_start);
             untilizer_rt_args.push_back(expert_end);
             untilizer_rt_args.push_back(dispatched_metadata.buffer());
+            untilizer_rt_args.push_back(s);          // sender_idx (this group's data chunk)
+            untilizer_rt_args.push_back(num_cores);  // num_senders (data chunks per expert)
             desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
                 untilizer_row_cores[j], untilizer_rt_args);
 
             // Compute kernel walks the same expert/batch iteration as reader_untilize and
             // writer_untilize (no per-batch signal CB).  Per-sender k_s + local_core_id drive
-            // round-robin batch assignment within the group.  TILE_LAYOUT only — ROW_MAJOR has
-            // no compute kernel (reader_untilize writes rows straight into c_2).
+            // round-robin batch assignment within the group; sender_idx / num_senders select this
+            // group's data chunk within each expert.  TILE_LAYOUT only — ROW_MAJOR has no compute
+            // kernel (reader_untilize writes rows straight into c_2).
             if (is_tile_layout) {
                 tt::tt_metal::KernelDescriptor::RTArgList compute_rt_args;
                 compute_rt_args.push_back(expert_start);
                 compute_rt_args.push_back(expert_end);
                 compute_rt_args.push_back(local_core_id);
                 compute_rt_args.push_back(k_s);
+                compute_rt_args.push_back(s);          // sender_idx (this group's data chunk)
+                compute_rt_args.push_back(num_cores);  // num_senders (data chunks per expert)
                 desc.kernels[untilize_compute_kernel_id].emplace_runtime_args(untilizer_row_cores[j], compute_rt_args);
             }
         }
