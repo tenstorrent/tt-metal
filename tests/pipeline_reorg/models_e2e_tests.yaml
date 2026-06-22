@@ -658,7 +658,7 @@
     unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_performance_flux1.py -k flux_dev
-  model: flux.1-schnell
+  model: flux.1-dev
   skus:
     bh_quietbox_2:
       timeout: 20
