@@ -662,7 +662,7 @@
   model: flux.1-schnell
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 20
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -677,7 +677,7 @@
   model: flux.1-dev
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 20
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
