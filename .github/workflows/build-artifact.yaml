@@ -585,7 +585,6 @@ jobs:
             "--toolchain-path" "${{ env.TOOLCHAIN }}"
             ${args_fixme}
             "--enable-ccache"
-            "--disable-unity-builds"
             "--configure-only"
           )
 
