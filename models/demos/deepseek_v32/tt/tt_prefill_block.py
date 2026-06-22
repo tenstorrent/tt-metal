@@ -165,6 +165,7 @@ class TtPrefillBlock(LightweightModule):
                 mesh_device=mesh_device,
                 cache_path=cache_path,
                 cache_name_prefix=f"layer_{layer_idx}.ffn",
+                emb_dim=emb_dim,  # GLM=6144; TtFfn defaults to DeepSeek's 7168
             )
 
         logger.info(f"Cache built for layer {layer_idx}")
@@ -189,7 +190,11 @@ class TtPrefillBlock(LightweightModule):
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         weight_cache_path: Optional[Path] = None,
+        index_args=None,
     ):
+        # index_args: optional variant ModelArgs for the DSA indexer (heads/head_dim/rope theta +
+        # index_rope_interleave). None → ttMLA's default (DeepSeek-V3.2: 64 heads, non-interleaved).
+        # GLM-5.1 needs its own (32 heads, θ=1e6, interleaved rope) — pass _glm_model_args().
         super().__init__()
         self.mesh_device = mesh_device
         self.num_links = num_links
@@ -224,6 +229,7 @@ class TtPrefillBlock(LightweightModule):
             tp_axis=tp_axis,
             is_balanced=is_balanced,
             weight_cache_path=weight_cache_path,
+            index_args=index_args,
         )
 
         # --- FFN norm ---
@@ -263,6 +269,7 @@ class TtPrefillBlock(LightweightModule):
             self.ffn = TtFfn(
                 mesh_device=mesh_device,
                 torch_weights=state_dict.get("ffn_weights"),  # None if cache exists
+                emb_dim=emb_dim,  # GLM=6144; TtFfn defaults to DeepSeek's 7168
                 num_links=num_links,
                 topology=topology,
                 weight_cache_path=weight_cache_path,

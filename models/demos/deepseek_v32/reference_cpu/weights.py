@@ -193,3 +193,143 @@ def load_pretrained_hf(
     ``resolve_layer_shards`` + ``load_pretrained``.
     """
     load_pretrained(module, resolve_layer_shards(layer, repo, token, local_files_only), layer)
+
+
+# MoE / decoder-norm submodules of a layer — everything a transformer block needs
+# beyond ``self_attn.*`` (which ``load_attention_state_dict`` already covers).
+_MOE_KEY_PREFIXES = ("input_layernorm.", "post_attention_layernorm.", "mlp.")
+
+
+def resolve_layer_moe_shards(layer: int, repo: str = DEFAULT_REPO, token: str = None, local_files_only: bool = False):
+    """
+    Return local path(s) to the safetensors shard(s) that hold ``layer``'s MoE + decoder-norm
+    weights (input_layernorm, post_attention_layernorm, mlp.gate/experts/shared_experts). Missing
+    files are fetched just-in-time (cached). NOTE: a single MoE layer's 256 routed experts span
+    several multi-GB shards (~30 GB for DeepSeek-V3.2 / GLM-5.1) — far heavier than the MLA-only
+    download.
+    """
+    import json
+
+    from huggingface_hub import hf_hub_download, try_to_load_from_cache
+
+    index = hf_hub_download(repo, _INDEX_FILE, token=token, local_files_only=local_files_only)
+    weight_map = json.load(open(index))["weight_map"]
+    prefix = f"model.layers.{layer}."
+    keys = [k for k in weight_map if k.startswith(prefix) and k[len(prefix) :].startswith(_MOE_KEY_PREFIXES)]
+    shards = sorted({weight_map[k] for k in keys})
+    if not shards:
+        raise ValueError(f"No MoE/FFN tensors for layer {layer} in {repo} index (is it a dense layer?).")
+
+    if not local_files_only:
+        missing = [s for s in shards if not isinstance(try_to_load_from_cache(repo, s), str)]
+        if missing:
+            logger.warning(
+                f"Downloading {len(missing)} MoE shard(s) for layer {layer} from {repo} "
+                f"({', '.join(missing)}); ~6 GB each — a full MoE layer (256 experts) is ~30 GB."
+            )
+    return [hf_hub_download(repo, s, token=token, local_files_only=local_files_only) for s in shards]
+
+
+def _read_layer_ffn_tensors(layer: int, repo: str, token: str, local_files_only: bool) -> dict:
+    """Flat ``{stripped_key: tensor}`` of a layer's decoder norms + ``mlp.*`` (dense MLP *or* MoE
+    gate/experts/shared), read from the HF shard(s); fp8 → bf16, everything else passed through.
+    Shared by ``load_moe_block_weights`` (MoE layers) and ``load_dense_block_weights`` (dense layers)."""
+    from safetensors import safe_open
+
+    prefix = f"model.layers.{layer}."
+    flat = {}  # e.g. "mlp.experts.3.up_proj.weight" or "mlp.gate_proj.weight" -> tensor
+    for path in resolve_layer_moe_shards(layer, repo, token, local_files_only):
+        with safe_open(path, framework="pt", device="cpu") as f:
+            for k in f.keys():
+                if not k.startswith(prefix):
+                    continue
+                sub = k[len(prefix) :]
+                if not sub.startswith(_MOE_KEY_PREFIXES) or sub.endswith(".weight_scale_inv"):
+                    continue
+                t = f.get_tensor(k)
+                if t.dtype == torch.float8_e4m3fn:
+                    # fp8 tensors always end in ".weight"; slice (not str.replace) is occurrence-safe.
+                    t = _dequant_fp8(t, f.get_tensor(k[: -len(".weight")] + ".weight_scale_inv"))
+                flat[sub] = t
+    return flat
+
+
+def load_dense_block_weights(layer: int, repo: str = DEFAULT_REPO, token: str = None, local_files_only: bool = False):
+    """
+    Read a DENSE (non-MoE) layer's MLP (``mlp.gate_proj`` / ``up_proj`` / ``down_proj``) and the two
+    decoder RMSNorms, in the dict shape ``TtPrefillBlock`` expects for ``layer_idx < first_k_dense_replace``.
+    Raw HF ``[out, in]`` orientation (``TtFfn`` transposes internally); fp8 → bf16. Returns::
+
+        {"attn_norm_weight", "ffn_norm_weight", "ffn_weights": {"gate_proj","up_proj","down_proj"}}
+    """
+    flat = _read_layer_ffn_tensors(layer, repo, token, local_files_only)
+
+    def need(key: str) -> torch.Tensor:
+        if key not in flat:
+            raise ValueError(f"layer {layer}: missing dense-FFN tensor '{key}' in {repo} (is it a MoE layer?).")
+        return flat[key]
+
+    return {
+        "attn_norm_weight": need("input_layernorm.weight"),
+        "ffn_norm_weight": need("post_attention_layernorm.weight"),
+        "ffn_weights": {
+            "gate_proj": need("mlp.gate_proj.weight"),
+            "up_proj": need("mlp.up_proj.weight"),
+            "down_proj": need("mlp.down_proj.weight"),
+        },
+    }
+
+
+def load_moe_block_weights(layer: int, repo: str = DEFAULT_REPO, token: str = None, local_files_only: bool = False):
+    """
+    Read one MoE layer's gate / routed-expert / shared-expert and the two decoder RMSNorm
+    weights from the HF safetensors shard(s), in the dict shape ``TtPrefillBlock`` expects.
+
+    Tensors are returned in raw HF ``[out_features, in_features]`` orientation (the TT modules
+    transpose internally — do NOT pre-transpose); fp8 weights are dequantized to bf16, everything
+    else is passed through unchanged. Returns::
+
+        {"attn_norm_weight", "ffn_norm_weight",
+         "gate_weights": {"weight", "e_score_correction_bias"},
+         "routed_expert_weights": [ {"gate_proj","up_proj","down_proj"}, ... ],   # one per routed expert
+         "shared_expert_weights": {"gate_proj","up_proj","down_proj"}}
+    """
+    flat = _read_layer_ffn_tensors(layer, repo, token, local_files_only)
+
+    def need(key: str) -> torch.Tensor:
+        if key not in flat:
+            raise ValueError(f"layer {layer}: missing MoE tensor '{key}' in {repo}")
+        return flat[key]
+
+    expert_ids = sorted({int(s.split(".")[2]) for s in flat if s.startswith("mlp.experts.")})
+    if not expert_ids:
+        raise ValueError(f"layer {layer}: no routed experts found (is it a dense layer?).")
+    # Routed experts must be a contiguous 0..N-1 set; a gap means an MoE shard is missing/partial
+    # (the layer spans several multi-GB shards) — fail loud rather than build a misaligned list.
+    if expert_ids != list(range(len(expert_ids))):
+        raise ValueError(
+            f"layer {layer}: routed experts are not contiguous 0..N "
+            f"({len(expert_ids)} ids, max {expert_ids[-1]}) — an MoE shard is likely missing/partial."
+        )
+    routed = [
+        {
+            "gate_proj": need(f"mlp.experts.{j}.gate_proj.weight"),
+            "up_proj": need(f"mlp.experts.{j}.up_proj.weight"),
+            "down_proj": need(f"mlp.experts.{j}.down_proj.weight"),
+        }
+        for j in expert_ids
+    ]
+    return {
+        "attn_norm_weight": need("input_layernorm.weight"),
+        "ffn_norm_weight": need("post_attention_layernorm.weight"),
+        "gate_weights": {
+            "weight": need("mlp.gate.weight"),
+            "e_score_correction_bias": need("mlp.gate.e_score_correction_bias"),
+        },
+        "routed_expert_weights": routed,
+        "shared_expert_weights": {
+            "gate_proj": need("mlp.shared_experts.gate_proj.weight"),
+            "up_proj": need("mlp.shared_experts.up_proj.weight"),
+            "down_proj": need("mlp.shared_experts.down_proj.weight"),
+        },
+    }

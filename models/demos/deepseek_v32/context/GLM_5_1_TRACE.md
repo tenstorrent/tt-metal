@@ -115,7 +115,50 @@ python -m pytest $T -k "device and glm_5_1 and L30" -s                          
 #   only MLA output: -k "mla_output_device and glm_5_1"
 #   drop --ds-kpe-layout vllm to use the frame-invariant k_pe L2 check instead (see caveat)
 #   drop "and glm_5_1" to also run the DeepSeek-V3.2 cases (the file covers both models).
+
+# Phase 4 — WHOLE-LAYER block (MLA+DSA+MoE) vs trace. Parametrized over GLM_BLOCK_LAYERS (default [30, 60];
+# any MoE layer 3-77 works — just edit that list in the test). Layers 0-2 are dense (no MoE).
+#
+# The whole-layer decoder_io trace exists for ALL 78 layers but is git-LFS-pointer-only, so you must
+# MANUALLY `git lfs pull` each layer's two streams (L-1 = block input, L = block output) before its run:
+for L in 30 60; do
+  git -C bit_sculpt lfs pull --include="results/glm-51/decoder_io/decoder_output_layer_$((L-1))/*,results/glm-51/decoder_io/decoder_output_layer_$L/*"
+done
+# A layer whose trace isn't pulled AUTO-SKIPS (the skip message prints the exact pull cmd). The ~30 GB of
+# MoE expert weights per layer download AUTOMATICALLY (JIT) on first run — there is no manual weight step.
+#
+# LoudBox(8)/QuietBox(4) — box-adaptive, tp<=2 (the tp=4 mesh skips). Narrow with `and L60` / `and gate_device`:
+python -m pytest $T -k "block and glm_5_1 and not galaxy" -s
+# Galaxy(32, Wormhole) — tp<=2 shapes (8,2)[16 chips] / (16,2)[32 chips]; native (8,4) is tp=4 → unusable for GLM:
+python -m pytest $T -k "block and glm_5_1 and galaxy" -s
 ```
+
+## Whole-layer block test (Phase 4)
+`test_glm_block_device_vs_reference` (parametrized over `GLM_BLOCK_LAYERS`, default `[30, 60]`) runs the
+full GLM decoder block on device (`TtPrefillBlock`: input_layernorm → MLA+DSA → residual →
+post_attn_layernorm → MoE → residual) and PCC-compares layer L vs the trace's whole-layer output
+`decoder_io/decoder_output_layer_L`. Input is `decoder_io/decoder_output_layer_{L-1}` (the layer's
+pre-input_layernorm hidden; the block applies the norm internally). The block reuses `deepseek_v3_d_p`'s
+`TtMoe`; **GLM MoE = Kimi single-group routing** (`NUM_EXPERT_GROUPS=1`, top-8 of all 256 experts, sigmoid
++ `e_score_correction_bias`, route_scale 2.5).
+- **Layers / trace**: add any MoE layer (3–77) to `GLM_BLOCK_LAYERS`. Its `decoder_io` trace (streams
+  `L-1` + `L`) must be **`git lfs pull`-ed manually, per layer** (they're LFS pointers); an unpulled layer
+  **auto-skips** with the pull command in the message. MoE expert weights (~30 GB/layer) download JIT.
+- **Gate** is parametrized: `gate_host` (`HOST_ALL` — routing on host) and `gate_device` (`DEVICE_FP32`
+  — the on-device single-group gate kernel, Kimi path). Routed/shared experts + MLA + norms always run on
+  device. **Both verified at whole-layer PCC ≈ 0.9995 on LoudBox `sp4xtp2`** (32 experts/chip, layer 30).
+  Filter one: `-k "...and gate_device"`.
+- **Weights**: `reference_cpu.weights.load_moe_block_weights(layer)` pulls the layer's norms + `mlp.gate`
+  (+`e_score_correction_bias`) + 256 routed experts + shared expert (~30 GB across shards 00079–00083);
+  MLA weights come from the existing `WEIGHT_NAME_MAP`/MLACPU path. Fails loud if experts aren't a
+  contiguous 0..255 set (incomplete download).
+- **tp ≤ 2** (same MLA head constraint). Two tests share one body (`_run_glm_block`):
+  `test_glm_block_device_vs_reference` (box-adaptive, FABRIC_1D — LoudBox runs `sp8xtp1`+`sp4xtp2`,
+  skips `sp2xtp4`) and `test_glm_block_device_vs_reference_galaxy` (explicit `(8,2)`/`(16,2)`,
+  FABRIC_2D+RELAXED_INIT, `requires_mesh_topology` → auto-skips off a 16-/32-chip box). **Galaxy's
+  native `(8,4)` mesh is tp=4 → unusable for GLM**; `(32,1)` can't be opened on Galaxy so it's omitted.
+- Threshold `BLOCK_OUTPUT_PCC = 0.95` (bf16 MLA + `bfloat4_b` routed experts + host gate + DSA top-k
+  noise stack vs the fp8 GPU trace); bump `routed_expert_weights_dtype` for a cleaner comparison.
 
 ## Caveats (all expected, not bugs)
 - **topk overlap < 1.0** (~0.98 on high rows): bf16 ties at the top-2048 cutoff flip a few
@@ -136,3 +179,9 @@ python -m pytest $T -k "device and glm_5_1 and L30" -s                          
   `get_rot_transformation_mat` + `rotary_embedding_llama`) when `index_args.index_rope_interleave`,
   else the original non-interleaved `rotary_embedding_hf`. DS uses defaults → byte-identical path.
 - GLM dims come from `models/demos/deepseek_v3_d_p/reference/glm_5_1_config.py` (`GLM51Config`).
+- `tt/tt_prefill_block.py`: `TtPrefillBlock.__init__` gained an optional `index_args` kwarg that it
+  forwards to `ttMLA` (default `None` → ttMLA's DS default → byte-identical for DS). GLM passes
+  `_glm_model_args()` so the block's indexer is 32-head / interleaved / θ=1e6.
+- `reference_cpu/weights.py`: added `resolve_layer_moe_shards` + `load_moe_block_weights` (load a
+  layer's decoder norms + MoE gate/256-experts/shared from HF in raw `[out,in]` orientation). The
+  block (`TtPrefillBlock`) and MoE (`TtMoe`) themselves are reused unchanged from `deepseek_v3_d_p`.
