@@ -16,7 +16,8 @@ namespace {
 // All input invariants the program hash does NOT key on, so they can vary while hitting the same cached
 // program and must be re-checked on EVERY dispatch (miss AND hit). The hash keys only on q/indices shape+dtype
 // and kv dtype+memory_config — NOT on tensor layout, padding, q/indices buffer type/sharding, the kv logical
-// shape (its T rides on the accessor's runtime args), cache_batch_idx (a dynamic runtime arg), or device
+// shape (its T rides on the kv TensorAccessor's RuntimeTensorShape runtime metadata, not a kernel scalar),
+// cache_batch_idx (a dynamic runtime arg), or device
 // placement. The accessors assume ROW_MAJOR, unpadded, DRAM, interleaved q/indices, so a cache hit with a
 // tiled/padded/L1/sharded/off-device tensor would otherwise run on wrong assumptions. K_DIM comes from q,
 // whose shape IS hashed, so it is pinned. Shared by validate_on_program_cache_miss and _hit.
@@ -216,14 +217,24 @@ std::vector<tt::tt_metal::DynamicRuntimeArg> SparseSDPAOperation::get_dynamic_ru
     const uint32_t kv_batch_page_offset = attrs.cache_batch_idx.value() * T;
     const tt::tt_metal::CoreCoord grid = t.q.device()->compute_with_storage_grid_size();
     const uint32_t num_cores = grid.x * grid.y;
-    constexpr uint32_t kReaderKernelIdx = 0, kWriterKernelIdx = 1;
-    constexpr uint32_t kReaderBatchOffsetArg = 5, kWriterBatchOffsetArg = 4;
+    // Arg slots/kernel indices are defined once in sparse_sdpa_rt (header), shared with the program factory's
+    // emit order so a reorder can't silently desync this re-apply path from the factory.
     std::vector<tt::tt_metal::DynamicRuntimeArg> args;
     args.reserve(2 * num_cores);
     for (uint32_t i = 0; i < num_cores; ++i) {
         const tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
-        args.push_back({kReaderKernelIdx, core, kReaderBatchOffsetArg, kv_batch_page_offset, /*is_common=*/false});
-        args.push_back({kWriterKernelIdx, core, kWriterBatchOffsetArg, kv_batch_page_offset, /*is_common=*/false});
+        args.push_back(
+            {sparse_sdpa_rt::kReaderKernelIdx,
+             core,
+             sparse_sdpa_rt::kReaderBatchOffsetArg,
+             kv_batch_page_offset,
+             /*is_common=*/false});
+        args.push_back(
+            {sparse_sdpa_rt::kWriterKernelIdx,
+             core,
+             sparse_sdpa_rt::kWriterBatchOffsetArg,
+             kv_batch_page_offset,
+             /*is_common=*/false});
     }
     return args;
 }

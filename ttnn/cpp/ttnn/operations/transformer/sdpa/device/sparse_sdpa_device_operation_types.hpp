@@ -24,8 +24,8 @@ struct SparseSDPAParams {
 };
 
 struct SparseSDPAInputs {
-    Tensor q;        // [1, H, S, K_DIM] bf16 ROW_MAJOR  (K_DIM = head dim, e.g. 576)
-    Tensor kv;       // [1, 1, T, K_DIM] bf16 ROW_MAJOR  (or [B,1,T,K_DIM] when indexed; may be ND-sharded DRAM)
+    Tensor q;   // [1, H, S, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (K_DIM = head dim, e.g. 576)
+    Tensor kv;  // [1, 1, T, K_DIM] bf16/fp8_e4m3 ROW_MAJOR  (or [B,1,T,K_DIM] when indexed; may be ND-sharded DRAM)
     Tensor indices;  // [1, 1, S, TOPK] uint32 ROW_MAJOR  (0xFFFFFFFF = masked)
 };
 

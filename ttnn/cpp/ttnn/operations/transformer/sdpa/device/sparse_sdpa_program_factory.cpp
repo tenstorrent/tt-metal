@@ -283,6 +283,9 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         tt::tt_metal::CoreCoord core = {i % grid.x, i / grid.x};
         uint32_t tok_start = i * base + std::min(i, extra);
         uint32_t tok_count = base + (i < extra ? 1u : 0u);
+        // kv_batch_page_offset is the LAST positional arg of each list; its index is encoded once in
+        // sparse_sdpa_rt::k{Reader,Writer}BatchOffsetArg (used by get_dynamic_runtime_args to re-apply it on a
+        // cache hit). If you reorder these lists, update those constants or the re-apply targets the wrong slot.
         reader_desc.emplace_runtime_args(core, {q_buf, kv_buf, idx_buf, tok_start, tok_count, kv_batch_page_offset});
         writer_desc.emplace_runtime_args(
             core, {out_buf, tok_start, tok_count, kv_buf, kv_batch_page_offset});  // kv_buf: writer K-half gather

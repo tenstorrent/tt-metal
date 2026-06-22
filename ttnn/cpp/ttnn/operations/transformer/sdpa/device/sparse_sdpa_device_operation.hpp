@@ -17,6 +17,17 @@
 
 namespace ttnn::prim {
 
+// Reader/writer runtime-arg layout — single source of truth shared by the program factory (which EMITS the
+// args in create_descriptor) and get_dynamic_runtime_args (which RE-APPLIES the indexed-cache page offset to
+// the cached program). kv_batch_page_offset is the LAST positional arg of each kernel's list; if that order
+// changes in the factory, update these indices here, or the dynamic re-apply silently writes the wrong slot.
+namespace sparse_sdpa_rt {
+inline constexpr uint32_t kReaderKernelIdx = 0;
+inline constexpr uint32_t kWriterKernelIdx = 1;
+inline constexpr uint32_t kReaderBatchOffsetArg = 5;  // {q, kv, idx, tok_start, tok_count, [kv_batch_page_offset]}
+inline constexpr uint32_t kWriterBatchOffsetArg = 4;  // {out, tok_start, tok_count, kv, [kv_batch_page_offset]}
+}  // namespace sparse_sdpa_rt
+
 struct SparseSDPAOperation {
     using operation_attributes_t = SparseSDPAParams;
     using tensor_args_t = SparseSDPAInputs;

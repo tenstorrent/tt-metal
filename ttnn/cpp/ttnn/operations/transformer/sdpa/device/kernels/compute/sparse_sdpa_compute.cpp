@@ -265,7 +265,9 @@ void kernel_main() {
                             /*trigger_reduce=*/false,
                             /*skip_pack_configure=*/true);
                     }
-                    pack_to_unpack_sync();                // out_cur PACK writes must be visible to SALAD/normalize
+                    pack_to_unpack_sync();                // flush PV's HELD out_cur packs (push_back deferred to
+                                                          // after the group loop) so SALAD's L1-accumulate (!is_first)
+                                                          // reads them; normalize reads post-push_back, so covered
                     reconfig_data_format_srca(cb_qk_im);  // PV left srcA in cb_k_in's format; restore bf16
                 }
 
