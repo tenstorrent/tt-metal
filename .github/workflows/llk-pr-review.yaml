@@ -122,7 +122,7 @@ jobs:
       - name: Run /code-review
         uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.AY_KEY }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.AI_GH_TOKEN }}
           trigger_phrase: "@llk-ai review"
           prompt: "/code-review max --comment"
