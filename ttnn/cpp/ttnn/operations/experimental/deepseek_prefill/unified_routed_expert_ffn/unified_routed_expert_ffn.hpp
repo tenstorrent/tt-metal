@@ -9,6 +9,7 @@
 #include <vector>
 
 #include <tt-metalium/global_semaphore.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -84,7 +85,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     // Reserved for overlapping the routed expert with the combine; currently
     // only propagated through the call chain, not yet wired into the kernels.
-    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn
 

@@ -86,7 +86,8 @@ ttnn::Tensor unified_routed_expert_moe(
     const std::vector<ttnn::Tensor>& down_projs,
     uint32_t max_dispatched_tokens_per_expert,
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore) {
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore,
+    const std::optional<tt::tt_metal::SubDeviceId>& /*subdevice_id*/) {
     TT_FATAL(
         gate_projs.size() == up_projs.size() && gate_projs.size() == down_projs.size(),
         "gate/up/down projection lists must have the same length (got {}, {}, {})",

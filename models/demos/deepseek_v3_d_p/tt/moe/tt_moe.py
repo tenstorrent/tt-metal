@@ -24,6 +24,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
@@ -217,6 +218,14 @@ class TtMoe(LightweightModule):
         self.overlap_shared_expert_with_dispatch = overlap_shared_expert_with_dispatch
         self.overlap_routed_expert_with_combine = overlap_routed_expert_with_combine
 
+        # The routed-expert/combine overlap relies on the unified_routed_expert_moe op, which
+        # only runs on Blackhole (TtRoutedExpert.forward gates on is_blackhole()), so the overlap
+        # is unsupported on other archs.
+        # See https://github.com/tenstorrent/tt-metal/issues/47553
+        assert not (
+            overlap_routed_expert_with_combine and not is_blackhole()
+        ), "overlap_routed_expert_with_combine is only supported on Blackhole"
+
         # Unpack row/col CCL config
         if isinstance(num_links, tuple):
             self.row_num_links, self.col_num_links = num_links
@@ -284,43 +293,56 @@ class TtMoe(LightweightModule):
         )
 
         # ========================================
-        # Sub-devices: when overlap is enabled, split the Tensix grid into a "dispatch"
-        # strip and a "shared expert" strip so the two ops run on disjoint cores and the
-        # Fast-Dispatch per-sub-device counters let them overlap on-chip.
-        #   sub-device 0 (dispatch_sd):     rows [0, dispatch_sd_rows)
-        #   sub-device 1 (shared_sd):       rows [dispatch_sd_rows, grid_y)
-        # When overlap is disabled, both ops run sequentially on the full grid and no
+        # Sub-devices: when either overlap is enabled, split the Tensix grid into a
+        # "data movement" (dm) strip and a "compute" strip so the two overlapped ops run on
+        # disjoint cores and the Fast-Dispatch per-sub-device counters let them overlap on-chip.
+        # The same split serves both overlaps:
+        #   - shared-expert / dispatch overlap: dm = dispatch, compute = shared expert
+        #   - routed-expert / combine overlap:  dm = combine,  compute = routed expert
+        #   sub-device 0 (dm_sd):       rows [0, dm_sd_rows)
+        #   sub-device 1 (compute_sd):  rows [dm_sd_rows, grid_y)
+        # When both overlaps are disabled, ops run sequentially on the full grid and no
         # sub-device manager is created.
         # ========================================
-        if overlap_shared_expert_with_dispatch:
-            dispatch_sd_rows = 1
+        if overlap_shared_expert_with_dispatch or overlap_routed_expert_with_combine:
+            dm_sd_rows = 1
             grid = mesh_device.compute_with_storage_grid_size()
             grid_x, grid_y = grid.x, grid.y
-            assert 0 < dispatch_sd_rows < grid_y, f"dispatch_sd_rows={dispatch_sd_rows} must be in (0, grid_y={grid_y})"
-            dispatch_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dispatch_sd_rows - 1))}
+            assert 0 < dm_sd_rows < grid_y, f"dm_sd_rows={dm_sd_rows} must be in (0, grid_y={grid_y})"
+            dm_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, dm_sd_rows - 1))}
             )
-            shared_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, dispatch_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
+            compute_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, dm_sd_rows), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
             )
-            dispatch_sd = ttnn.SubDevice([dispatch_cores])
-            shared_sd = ttnn.SubDevice([shared_cores])
-            self.sd_manager_id = mesh_device.create_sub_device_manager([dispatch_sd, shared_sd], 0)
-            self.dispatch_sd_id = ttnn.SubDeviceId(0)
-            self.shared_sd_id = ttnn.SubDeviceId(1)
-            # Stash the CoreRangeSet of the shared sub-device so TtSharedExpert can build
+            dm_sd = ttnn.SubDevice([dm_cores])
+            compute_sd = ttnn.SubDevice([compute_cores])
+            self.sd_manager_id = mesh_device.create_sub_device_manager([dm_sd, compute_sd], 0)
+            self.dm_sd_id = ttnn.SubDeviceId(0)
+            self.compute_sd_id = ttnn.SubDeviceId(1)
+            # Stash the CoreRangeSet of the compute sub-device so TtSharedExpert can build
             # sub-device-confined shard_specs in Python without a C++ worker_cores binding.
-            self.shared_sd_cores = shared_cores
+            self.compute_sd_cores = compute_cores
             logger.debug(
-                f"Sub-devices: grid={grid_x}x{grid_y}, dispatch=rows[0,{dispatch_sd_rows}), "
-                f"shared=rows[{dispatch_sd_rows},{grid_y})"
+                f"Sub-devices: grid={grid_x}x{grid_y}, dm=rows[0,{dm_sd_rows}), " f"compute=rows[{dm_sd_rows},{grid_y})"
+            )
+
+            # Global semaphore reserved for overlapping the routed expert with the combine.
+            # For now it is created here and propagated to the routed_expert op as an
+            # argument, but is not yet consumed by the device kernels.
+            _routed_expert_sem_cores = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
+            )
+            self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
+                mesh_device, _routed_expert_sem_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
             )
         else:
             self.sd_manager_id = None
-            self.dispatch_sd_id = None
-            self.shared_sd_id = None
-            self.shared_sd_cores = None
-            logger.debug("Sub-devices disabled: shared expert and dispatch will run sequentially")
+            self.dm_sd_id = None
+            self.compute_sd_id = None
+            self.compute_sd_cores = None
+            self.routed_expert_global_semaphore = None
+            logger.debug("Sub-devices disabled: overlapped ops will run sequentially")
 
         # Initialize dispatch module (row axis: axis 0)
         self.dispatch_module = TtDispatchModule(
@@ -336,7 +358,7 @@ class TtMoe(LightweightModule):
             cluster_axis=0,
             num_links=self.row_num_links,
             topology=self.row_topology,
-            subdevice_id=self.dispatch_sd_id,
+            subdevice_id=self.dm_sd_id,
         )
 
         # Initialize combine module (row axis: axis 0)
@@ -351,6 +373,7 @@ class TtMoe(LightweightModule):
             num_links=self.row_num_links,
             topology=self.row_topology,
             init_zeros=False,
+            subdevice_id=self.dm_sd_id,
         )
 
         # Build (group, chip, local_expert) -> global expert id table, sharded
@@ -371,17 +394,6 @@ class TtMoe(LightweightModule):
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
         global_expert_idx_tt = ttnn.squeeze(global_expert_idx_tt, 0)
 
-        # Global semaphore reserved for overlapping the routed expert with the combine.
-        # For now it is created here and propagated to the routed_expert op as an
-        # argument, but is not yet consumed by the device kernels.
-        _grid = mesh_device.compute_with_storage_grid_size()
-        _routed_expert_sem_cores = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_grid.x - 1, _grid.y - 1))}
-        )
-        self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
-            mesh_device, _routed_expert_sem_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
-        )
-
         # Initialize routed expert
         self.routed_expert = TtRoutedExpert(
             mesh_device=mesh_device,
@@ -395,6 +407,7 @@ class TtMoe(LightweightModule):
             weights_dtype=routed_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.routed_expert",
+            subdevice_id=self.compute_sd_id,
         )
 
         # Initialize shared expert (col axis: axis 1)
@@ -409,8 +422,8 @@ class TtMoe(LightweightModule):
             weights_dtype=shared_expert_weights_dtype,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.shared_expert",
-            subdevice_id=self.shared_sd_id,
-            subdevice_cores=self.shared_sd_cores,
+            subdevice_id=self.compute_sd_id,
+            subdevice_cores=self.compute_sd_cores,
         )
 
         # Initialize reduce module for post-combine reduction (col axis: axis 1)
@@ -630,13 +643,15 @@ class TtMoe(LightweightModule):
 
         # The routed_expert op bumps this semaphore once per local expert, so after the
         # call it should read `experts_per_chip` on every core. Log the distinct values,
-        # then reset it to zero for the next forward.
-        _sem_values = ttnn.read_global_semaphore_value(self.routed_expert_global_semaphore)
-        logger.debug(
-            f"[TtMoe.forward] routed_expert semaphore (expect {self.experts_per_chip}): "
-            f"distinct={sorted(set(_sem_values))}, count={len(_sem_values)}"
-        )
-        ttnn.reset_global_semaphore_value(self.routed_expert_global_semaphore, 0)
+        # then reset it to zero for the next forward. The semaphore only exists when an
+        # overlap is enabled (see __init__); skip when it was not created.
+        if self.routed_expert_global_semaphore is not None:
+            _sem_values = ttnn.read_global_semaphore_value(self.routed_expert_global_semaphore)
+            logger.debug(
+                f"[TtMoe.forward] routed_expert semaphore (expect {self.experts_per_chip}): "
+                f"distinct={sorted(set(_sem_values))}, count={len(_sem_values)}"
+            )
+            ttnn.reset_global_semaphore_value(self.routed_expert_global_semaphore, 0)
 
         # ========================================
         # Step 4: Combine (enabled)

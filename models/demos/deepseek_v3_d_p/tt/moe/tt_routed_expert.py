@@ -202,6 +202,7 @@ class TtRoutedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        subdevice_id=None,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -224,6 +225,10 @@ class TtRoutedExpert(LightweightModule):
                           Produced by sharding ExpertMapping.create_global_expert_idx_table via
                           get_ep_mesh_mapper, so each device holds (1, 1, experts_per_chip) of
                           global ids. Required.
+            subdevice_id: Optional SubDeviceId confining the routed expert's core allocation,
+                          used to overlap the routed expert with the combine on disjoint cores.
+                          For now it is only propagated to the unified_routed_expert_moe op; it
+                          is not yet consumed by the kernels. Defaults to None (full grid).
         """
         super().__init__()
         self.mesh_device = mesh_device
@@ -238,6 +243,7 @@ class TtRoutedExpert(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.cache_name_prefix = cache_name_prefix
         self.global_expert_idx_table = global_expert_idx_table
+        self.subdevice_id = subdevice_id
 
         total_experts = self.num_devices * experts_per_chip
         logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -420,6 +426,7 @@ class TtRoutedExpert(LightweightModule):
                 max_dispatched_tokens_per_expert=self.max_tokens,
                 compute_kernel_config=self.compute_kernel_config,
                 global_semaphore=global_semaphore,
+                subdevice_id=self.subdevice_id,
             )
             logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
             return expert_outputs

@@ -63,7 +63,7 @@ from tests.ttnn.utils_for_testing import comp_pcc
 _MOE_LAYER_IDX = 3
 
 # L1_SMALL region reserved global semaphore allocation.
-MOE_L1_SMALL_REGION_SIZE = 1024
+MOE_L1_SMALL_REGION_SIZE = 2048
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
@@ -652,6 +652,7 @@ def run_model(
                     max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
                 ),
                 "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+                "l1_small_size": MOE_L1_SMALL_REGION_SIZE,
             },
             2 if is_blackhole() else 1,
             ttnn.Topology.Linear,
