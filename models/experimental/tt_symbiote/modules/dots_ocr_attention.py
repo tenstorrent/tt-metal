@@ -647,12 +647,28 @@ class TTNNDotsOCRAttention(TTNNModule):
             # earlier "validation" run that approved LoFi was confounded by the
             # broken DRAM-sharded LM head also in that commit, so the LoFi delta
             # was masked. Keep at HiFi2 until a clean A/B confirms it's safe.)
-            self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=True,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=True,
-            )
+            #
+            # head_parallel runs head-LOCAL SDPA (6 Q / 1 KV per device). The
+            # paged-decode kernel accumulates the softmax/V-reduction differently
+            # with 1 KV head than with the full 2-head set, and that per-layer
+            # delta accumulates over 28 layers x ~180 greedy steps into a drifted
+            # (verbose <td>/nested-table) OCR markup vs col_parallel. Give the
+            # head-local path more accumulation headroom (HiFi4 + fp32 dest acc)
+            # to close that gap; col_parallel / 2-head keep the cheaper HiFi2.
+            if getattr(self, "_head_parallel", False):
+                self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi4,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=True,
+                )
+            else:
+                self.sdpa.decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=True,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                )
 
         # Override QKV compute config: HiFi2 for decode
         self.qkv_proj.compute_kernel_config = ttnn.WormholeComputeKernelConfig(

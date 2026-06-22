@@ -167,18 +167,23 @@ def _tp4_prefill_body_enabled(device=None) -> bool:
 def _head_parallel_local_kv_cache_enabled(device=None) -> bool:
     """Whether ``head_parallel`` uses per-chip local KV + head-local SDPA.
 
-    The ``tp4_prefill`` hybrid disables this by default: multimodal OCR matches
-    ``col_parallel`` when decode uses the replicated two-KV-head cache plus
-    N-parallel QKV (same as ``DOTS_OCR_COL_PARALLEL_USE_N_PARALLEL_ATTN=1``).
-    The legacy local-KV path diverges on long greedy decode (empty HTML tables
-    within 180 tokens). Set ``DOTS_OCR_HEAD_PARALLEL_LOCAL_KV_CACHE=1`` to
-    force the local-KV path for perf experiments.
+    Default ``True``: the local-KV path (head-local SDPA + 1-KV-head/chip cache)
+    is now both correct AND faster than the 2-head replicated path. Two fixes
+    closed its earlier long-greedy-decode drift on OCR tables:
+      1. o_proj: all_gather the local-head ctx -> full ctx and run the
+         col-sharded full-contraction o_proj (bit-identical to col_parallel),
+         instead of a row-parallel reduce_scatter (which added an extra per-layer
+         BFP8 rounding) -- fixed the empty/garbled table CONTENT.
+      2. decode SDPA: HiFi4 + fp32_dest_acc for the head-local path -- the
+         1-KV-head paged-decode accumulation needed more headroom than HiFi2;
+         fixed the verbose ``<td>``/nested-table markup drift.
+    Both validated to match ``dots_ocr_demo.txt`` at DP1 (N300) and DP2_TP2.
+    Set ``DOTS_OCR_HEAD_PARALLEL_LOCAL_KV_CACHE=0`` to force the (slower) 2-head
+    replicated path.
     """
     override = os.environ.get("DOTS_OCR_HEAD_PARALLEL_LOCAL_KV_CACHE")
     if override is not None:
         return override.strip().lower() in {"1", "true", "yes", "on"}
-    if _tp4_prefill_body_enabled(device):
-        return False
     return True
 
 
