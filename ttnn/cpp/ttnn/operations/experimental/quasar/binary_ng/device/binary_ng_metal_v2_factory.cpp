@@ -5,8 +5,9 @@
 // Metal 2.0 / DataflowBuffer (DFB) program factory for binary_ng.
 //
 // This is the generic Metal 2.0 translation of binary_ng's ProgramDescriptor factory
-// (binary_ng_program_factory.cpp). It is gated behind TT_METAL_BINARY_NG_METAL_V2=1 and only invoked
-// for the slice that BinaryNgDeviceOperation::matches_metal_v2_slice() admits:
+// (binary_ng_program_factory.cpp). It is invoked for the slice that
+// BinaryNgDeviceOperation::matches_metal_v2_slice() admits (the default path for that slice; the DFB
+// path is arch-portable — CB-backed on Wormhole/Blackhole, overlay-backed on Quasar):
 //
 //   SHARDED no-broadcast ADD (the ResNet50 residual config: bf8/bf16, height/block-sharded L1,
 //   in-place, optional fused RELU). This is the faithful translation of the descriptor factory's
@@ -17,6 +18,7 @@
 
 #include "binary_ng_device_operation.hpp"
 #include "binary_ng_utils.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -47,7 +49,7 @@
 using namespace tt::tt_metal;
 namespace m2 = tt::tt_metal::experimental;
 
-namespace ttnn::operations::binary_ng {
+namespace ttnn::operations::experimental::quasar::binary_ng {
 
 namespace {
 
@@ -55,11 +57,13 @@ using ttnn::device_operation::ProgramArtifacts;
 
 // Kernel sources for the sharded no-broadcast DFB path.
 constexpr const char* kShardedReaderDfb =
-    "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_dfb/dataflow/reader_sharded_no_bcast_dfb.cpp";
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/"
+    "reader_sharded_no_bcast_dfb.cpp";
 constexpr const char* kShardedWriterDfb =
-    "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_dfb/dataflow/writer_sharded_no_bcast_dfb.cpp";
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/dataflow/"
+    "writer_sharded_no_bcast_dfb.cpp";
 constexpr const char* kShardedComputeDfb =
-    "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp";
+    "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp";
 
 // Per-core shard tile count for a sharded tensor, mirroring the real factory's ShardShapeGenerator:
 // the (tile-rounded) shard height-in-tiles * width-in-tiles. For HEIGHT/WIDTH/BLOCK sharding the end
@@ -202,7 +206,8 @@ ProgramArtifacts create_sharded_artifacts(
         post_acts[0].type() == unary::UnaryOpType::RELU) {
         compute_defines["PROCESS_POST_ACTIVATIONS(i)"] = "";
         compute_defines["PACK_RELU"] = "1";
-        unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_defines);
+        ttnn::operations::unary::utils::update_macro_defines(
+            ttnn::operations::unary::UnaryOpType::RELU, compute_defines);
     } else if (!post_acts.empty()) {
         add_activation_defines(compute_defines, post_acts, "POST", input_dtype);
     }
@@ -328,4 +333,4 @@ ttnn::device_operation::ProgramArtifacts BinaryNgDeviceOperation::ProgramFactory
     return create_sharded_artifacts(operation_attributes, tensor_args, c);
 }
 
-}  // namespace ttnn::operations::binary_ng
+}  // namespace ttnn::operations::experimental::quasar::binary_ng

@@ -17,7 +17,6 @@ file(
     GLOB_RECURSE kernels
     device/kernels/*
     device/kernels_ng/*
-    device/kernels_dfb/*
 )
 target_sources(
     ttnn_op_eltwise_binary_ng
