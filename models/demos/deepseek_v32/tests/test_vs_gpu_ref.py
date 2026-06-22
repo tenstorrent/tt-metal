@@ -63,6 +63,7 @@ the bottom validates the trace bundle (no weights/device). Full GLM run guide +
 weight/trace download: context/GLM_5_1_TRACE.md.
 """
 
+import gc
 import glob
 import os
 import types  # GLM: build the HF-attribute config by hand (transformers can't load glm_moe_dsa)
@@ -78,15 +79,23 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.glm_5_1_config import GLM51Config  # GLM dims
 from models.demos.deepseek_v3_d_p.tests.conftest import _resolve_config_only  # == the config_only fixture
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config  # GLM block MoE fabric
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker  # global .tensorbin checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
 from models.demos.deepseek_v32.reference_cpu.model import MLACPU, ModelArgs  # GLM CPU reference
 from models.demos.deepseek_v32.reference_cpu.utils import precompute_freqs_cis
-from models.demos.deepseek_v32.reference_cpu.weights import initialize_weights  # GLM per-layer weights
+from models.demos.deepseek_v32.reference_cpu.weights import (
+    initialize_weights,
+    load_dense_block_weights,
+    load_moe_block_weights,
+)
 from models.demos.deepseek_v32.tests.mesh_utils import parametrize_mesh_device, skip_if_seq_too_small_for_sp
 from models.demos.deepseek_v32.tests.test_mla import WEIGHT_NAME_MAP, assert_config_matches, build_cpu_reference
 from models.demos.deepseek_v32.tt import ops
 from models.demos.deepseek_v32.tt.mla import interleaved_to_halfsplit_perm, ttMLA
+from models.demos.deepseek_v32.tt.tt_prefill_block import TtPrefillBlock  # GLM whole-layer block (MLA+DSA+MoE)
 
 pytestmark = pytest.mark.gate
 
@@ -500,6 +509,390 @@ def test_mla_output_device_vs_reference(mesh_device, model, layer, device_params
     logger.info(f"[device {model} L{layer}] MLA output PCC: {pcc}")
     ttnn.synchronize_device(mesh_device)
     assert pcc >= OUTPUT_PCC, f"MLA output PCC {pcc} < {OUTPUT_PCC}"
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# GLM-5.1 whole-layer block (input_layernorm → MLA+DSA → residual → post_attn_layernorm
+# → MoE → residual) vs the GPU trace's whole-layer output. GLM-only (the v32 block wires
+# the DSA ttMLA + deepseek_v3_d_p TtMoe). GLM MoE = Kimi-style single-group top-k of all
+# 256 experts (NUM_EXPERT_GROUPS=1). Layer 30 is MoE (layers 0-2 are dense). The gate runs
+# on host (HOST_ALL); the routed/shared experts, MLA and norms run on device.
+# ════════════════════════════════════════════════════════════════════════════════
+# Layers for the block test. Layers 0/1/2 are DENSE (first_k_dense_replace=3 → plain MLP); 3..77 are MoE.
+# The whole-layer decoder_io trace exists for all 78 layers but must be `git lfs pull`-ed per layer, and a
+# MoE layer's ~30 GB of expert weights download JIT on first run — so a case auto-skips until its trace is
+# pulled. Default: two dense (0, 1) + two MoE (30, 60). Override for a full sweep, e.g.
+# `GLM_BLOCK_LAYERS="$(seq -s, 0 77)" pytest ...`.
+GLM_BLOCK_LAYERS = [int(x) for x in os.environ.get("GLM_BLOCK_LAYERS", "0,1,30,60").split(",")]
+# whole-layer PCC vs the fp8 GPU trace: bf16 MLA + bfloat4_b routed experts + host gate + the
+# DSA top-k frame noise all stack up, so this is looser than the per-stage MLA thresholds.
+BLOCK_OUTPUT_PCC = 0.95
+
+
+def _moe_device_params(fabric_config, relaxed_init=False):
+    """device_params for the block: MLA's worker_l1_size + the MoE dispatch/combine fabric router
+    (max payload = EMB_SIZE). FABRIC_1D for LoudBox/QuietBox; FABRIC_2D (+ RELAXED_INIT) for Galaxy.
+    The MLA-only tests above don't need the fabric router config."""
+    dp = {
+        "fabric_config": fabric_config,
+        "fabric_router_config": create_fabric_router_config(max_payload_size=GLM51Config.FABRIC_PAYLOAD_SIZE),
+        "worker_l1_size": ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE if is_blackhole() else WH_WORKER_L1_SIZE,
+    }
+    if relaxed_init:
+        dp["reliability_mode"] = ttnn.FabricReliabilityMode.RELAXED_INIT
+    return dp
+
+
+# LoudBox(8)/QuietBox(4): box-adaptive meshes, FABRIC_1D.
+_MOE_DEVICE_PARAMS = [_moe_device_params(ttnn.FabricConfig.FABRIC_1D)]
+# Galaxy (Wormhole): GLM needs tp<=2, so the native (8,4) mesh (tp=4) is NOT usable. A SINGLE Galaxy is
+# 8x4 (valid sub-meshes up to 8 rows x 4 cols), so (8,2) [16 chips] runs on ONE Galaxy; (16,2) [32 chips]
+# needs a MULTI-Galaxy scale-out (16 rows > the single-Galaxy 8-row bound). ((32,1) likewise can't open on
+# one Galaxy.) FABRIC_2D + RELAXED_INIT; requires_mesh_topology auto-skips a case off a box without that topology.
+_GALAXY_BLOCK_CASES = [
+    pytest.param(
+        (8, 2),
+        _moe_device_params(ttnn.FabricConfig.FABRIC_2D, relaxed_init=True),
+        2,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 2), topology="mesh-8x2"),
+        id="galaxy-sp8xtp2",
+    ),
+    pytest.param(
+        (16, 2),
+        _moe_device_params(ttnn.FabricConfig.FABRIC_2D, relaxed_init=True),
+        2,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(16, 2), topology="mesh-16x2"),
+        id="galaxy-sp16xtp2",
+    ),
+]
+
+
+def _load_block_trace(layer: int) -> dict:
+    """Whole-layer (decoder_io) streams for the block test. Input = the PREVIOUS layer's
+    decoder_output (this layer's pre-input_layernorm hidden); output = this layer's
+    decoder_output (post-MoE, post both residuals). GLM-only; skips if absent / not LFS-pulled."""
+    root = _ref_dir("glm_5_1")
+    # Block input = the previous layer's decoder_output (== this layer's pre-input_layernorm hidden);
+    # layer 0 has no previous layer, so its input is the standalone decoder_input_layer_0 (embedding out).
+    in_name = "decoder_input_layer_0" if layer == 0 else f"decoder_output_layer_{layer - 1}"
+    need = {
+        "block_in": root / "decoder_io" / in_name,
+        "block_out": root / "decoder_io" / f"decoder_output_layer_{layer}",
+    }
+    for d in need.values():
+        files = glob.glob(f"{d}/rows_*.safetensors")
+        if not files:
+            pytest.skip(f"block trace stream missing (set $GLM51_REF_DIR): {d}")
+        if os.path.getsize(files[0]) < 1024:  # 133-byte git-lfs pointer → not pulled
+            pytest.skip(f"block trace stream is an unpulled LFS pointer: {d} — run `git lfs pull --include='{d}/*'`")
+    return {k: load_stream(v) for k, v in need.items()}
+
+
+def _glm_block_state_dict(layer: int) -> dict:
+    """Full TtPrefillBlock state_dict for a GLM layer: MLA (+indexer) weights via the existing
+    MLACPU/WEIGHT_NAME_MAP path, plus decoder norms + the FFN — a dense MLP for layers < first_k_dense_replace,
+    else MoE gate/experts/shared from HF (~30 GB for a MoE layer)."""
+    _, mla_cpu = _build_glm_cpu_reference(layer)
+    sd = mla_cpu.state_dict()
+    state = {"mla_weights": {v3: sd[cpu].clone() for cpu, v3 in WEIGHT_NAME_MAP.items()}}
+    # Dense layers (< first_k_dense_replace) carry a plain MLP (ffn_weights); MoE layers carry gate/experts/shared.
+    if layer < GLM51Config.NUM_DENSE_LAYERS:
+        state.update(load_dense_block_weights(layer, repo=GLM_REPO))  # attn_norm/ffn_norm + dense MLP
+    else:
+        state.update(load_moe_block_weights(layer, repo=GLM_REPO))  # attn_norm/ffn_norm + gate/experts/shared
+    return state
+
+
+# MoE gate (router) compute mode: HOST_ALL runs routing on host (experts still on device); DEVICE_FP32
+# runs the on-device single-group gate kernel — the GLM/Kimi path (fp32 moe_grouped_topk; the bf16
+# deepseek_grouped_gate kernel is DeepSeek-V3.2 multi-group only).
+_GATE_MODES = [
+    pytest.param(GateComputeMode.HOST_ALL, id="gate_host"),
+    pytest.param(GateComputeMode.DEVICE_FP32, id="gate_device"),
+]
+
+
+def _run_glm_block(mesh_device, layer, gate_mode, num_links=1, topology=ttnn.Topology.Linear):
+    """Build the GLM decoder block on `mesh_device`, run it over the trace's pre-input_layernorm block
+    input, and PCC-compare the whole-layer output vs decoder_output_layer_L. `gate_mode` picks where the
+    MoE router runs (host vs on-device single-group gate). ~30 GB of MoE weights download on first run."""
+    _skip_unsupported("glm_5_1", mesh_device)
+    # Dense layers have no MoE gate, so the gate mode is a no-op there — run only the gate_host id to
+    # avoid an identical duplicate run for gate_device.
+    if layer < GLM51Config.NUM_DENSE_LAYERS and gate_mode != GateComputeMode.HOST_ALL:
+        pytest.skip(f"layer {layer} is dense (no MoE gate) — gate_mode is a no-op; run with gate_host")
+    trace = _load_block_trace(layer)
+    config = _glm_hf_config()
+    state_dict = _glm_block_state_dict(layer)
+
+    block = TtPrefillBlock(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=GLM51Config,
+        state_dict=state_dict,
+        layer_idx=layer,
+        seq_len=SEQ_LEN,
+        sp_axis=0,
+        tp_axis=1,
+        num_links=num_links,
+        topology=topology,
+        gate_fallback_mode=gate_mode,  # HOST_ALL: routing on host; DEVICE_FP32: on-device single-group gate
+        index_args=_glm_model_args(),  # GLM indexer: 32 heads, θ=1e6, interleaved rope
+    )
+
+    # SP-shard seq (axis 0, dim -2) + TP-shard hidden (axis 1, dim -1): the block's canonical layout.
+    shard_dims = [None, None]
+    shard_dims[1], shard_dims[0] = -1, -2
+    tt_x = ttnn.from_torch(
+        trace["block_in"].reshape(1, 1, SEQ_LEN, -1),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors(SEQ_LEN)
+    kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+    )
+
+    out, _ = block(tt_x, rope_tensors, kvpe_cache, return_kv_cache=False)
+    out_t = ttnn.to_torch(
+        out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+    ).to(torch.bfloat16)[
+        0
+    ]  # [1, S, hidden]
+
+    ref_out = trace["block_out"].reshape(1, SEQ_LEN, -1)
+    for nm, sl in [("rows<2048", slice(0, 2048)), ("rows>=2048", slice(2048, SEQ_LEN))]:
+        _, m = comp_pcc(ref_out[:, sl].float(), out_t[:, sl].float(), 0)
+        logger.info(f"[glm_5_1 block L{layer}] band {nm}: {m}")
+    _, pcc = comp_pcc(ref_out.float(), out_t.float(), 0)
+    logger.info(f"[glm_5_1 block L{layer} {gate_mode.name}] whole-layer output PCC: {pcc}")
+    ttnn.synchronize_device(mesh_device)
+    assert pcc >= BLOCK_OUTPUT_PCC, f"GLM block output PCC {pcc} < {BLOCK_OUTPUT_PCC}"
+
+
+@parametrize_mesh_device()
+@pytest.mark.parametrize("device_params", _MOE_DEVICE_PARAMS, ids=["line"], indirect=True)
+@pytest.mark.parametrize("gate_mode", _GATE_MODES)
+@pytest.mark.parametrize("layer", GLM_BLOCK_LAYERS, ids=[f"glm_5_1-L{_l}" for _l in GLM_BLOCK_LAYERS])
+@pytest.mark.timeout(0)
+def test_glm_block_device_vs_reference(mesh_device, layer, gate_mode, device_params):
+    """Whole GLM-5.1 decoder block (MLA+DSA+MoE) on LoudBox(8)/QuietBox(4) — box-adaptive, tp<=2 —
+    vs the GPU trace's whole-layer output (decoder_output_layer_L). `gate_mode` ∈ {gate_host, gate_device}.
+    On Galaxy this yields the native (8,4) mesh, which GLM skips (tp=4); use test_..._galaxy there."""
+    _run_glm_block(mesh_device, layer, gate_mode)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology", _GALAXY_BLOCK_CASES, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("gate_mode", _GATE_MODES)
+@pytest.mark.parametrize("layer", GLM_BLOCK_LAYERS, ids=[f"glm_5_1-L{_l}" for _l in GLM_BLOCK_LAYERS])
+@pytest.mark.timeout(0)
+def test_glm_block_device_vs_reference_galaxy(mesh_device, layer, gate_mode, device_params, num_links, topology):
+    """Whole GLM-5.1 decoder block on a Galaxy (Wormhole). GLM needs tp<=2, so the native (8,4)
+    Galaxy mesh (tp=4) is unusable — these use (8,2) [16 chips] and (16,2) [32 chips], FABRIC_2D +
+    RELAXED_INIT. requires_mesh_topology auto-skips a case off a box without that many chips."""
+    _run_glm_block(mesh_device, layer, gate_mode, num_links=num_links, topology=topology)
+
+
+# ════════════════════════════════════════════════════════════════════════════════
+# GLM-5.1 WHOLE MODEL — chain N decoder blocks (streaming) and PCC the RUNNING hidden vs the trace.
+# TtPrefillTransformer builds all layers resident (won't fit 78 GLM MoE layers on 8 chips), so we
+# stream: build TtPrefillBlock(L) → forward → carry its device output into layer L+1 → free the block.
+# Input = decoder_input_layer_0 (the embedding output); we compare the running hidden against
+# decoder_output_layer_L at every layer, so it measures ERROR ACCUMULATION through the stack (NOT
+# teacher-forcing — we do NOT reload the trace input per layer). Default 2 layers (dense 0/1, cached);
+# `GLM_MODEL_LAYERS=78 pytest ...` runs the full stack (needs every layer's trace pulled + weights).
+# ════════════════════════════════════════════════════════════════════════════════
+GLM_MODEL_LAYERS = int(os.environ.get("GLM_MODEL_LAYERS", "2"))  # how many layers to chain from layer 0
+MODEL_PCC = 0.90  # running-hidden vs trace; loose floor — accumulation degrades it with depth (logged per layer)
+# Routed-expert precision for the model chain. bf4 (production default) is lossy and inflates the per-layer
+# drift that the discrete DSA/MoE selections amplify; bf8/bf16 reduce it (more DRAM). GLM_MODEL_EXPERT_DTYPE.
+_MODEL_EXPERT_DTYPE = {"bf4": ttnn.bfloat4_b, "bf8": ttnn.bfloat8_b, "bf16": ttnn.bfloat16}[
+    os.environ.get("GLM_MODEL_EXPERT_DTYPE", "bf4")
+]
+# The chain must track the trace at PCC ≥ MODEL_PCC for at least this many LEADING layers (proves per-layer
+# fidelity propagates through the stack). Beyond that, chaining an approximate (bf4/bf16) model against the
+# EXACT fp8 trace inevitably diverges once accumulated drift bifurcates the discrete DSA top-2048 + MoE
+# top-8 selections — verified: every layer is correct in isolation (block test ~0.998), but the full chain
+# decorrelates around layer ~7. That divergence is LOGGED, not asserted (it is a property of the metric,
+# not a port bug). A regression that worsens per-layer error would move the divergence earlier and trip this.
+MODEL_MIN_TRACK_LAYERS = 5
+
+
+def _pulled(stream_dir) -> bool:
+    """True iff the trace stream dir has a real (LFS-pulled, not a 133-byte pointer) safetensors file."""
+    files = glob.glob(f"{stream_dir}/rows_*.safetensors")
+    return bool(files) and os.path.getsize(files[0]) >= 1024
+
+
+# Galaxy (Wormhole) whole-model: a single Galaxy is 8x4 and GLM needs tp<=2, so the chain runs on (8,2)
+# [16 chips]. (16,2) needs a multi-Galaxy scale-out (16 rows > the single-Galaxy 8-row bound), so the
+# single-Galaxy model chain is (8,2) ONLY here. FABRIC_2D + RELAXED_INIT; requires_mesh_topology
+# auto-skips this off a box that can't open mesh-8x2.
+_GALAXY_MODEL_CASES = [
+    pytest.param(
+        (8, 2),
+        _moe_device_params(ttnn.FabricConfig.FABRIC_2D, relaxed_init=True),
+        2,
+        ttnn.Topology.Linear,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 2), topology="mesh-8x2"),
+        id="galaxy-sp8xtp2",
+    ),
+]
+
+
+def _run_glm_model(mesh_device, num_links=1, topology=ttnn.Topology.Linear):
+    """Streaming whole-model chain shared by the LoudBox and Galaxy model tests: feed
+    decoder_input_layer_0, then for each layer build TtPrefillBlock(L) → forward → carry its device
+    output into L+1 → free the block, PCCing the running hidden vs decoder_output_layer_L. (No
+    teacher-forcing — measures error ACCUMULATION through the stack.) num_links/topology drive each
+    block's MoE CCLs (FABRIC_1D line = 1 link; FABRIC_2D Galaxy = 2 links)."""
+    _skip_unsupported("glm_5_1", mesh_device)
+    root = _ref_dir("glm_5_1")
+    in_dir = root / "decoder_io" / "decoder_input_layer_0"
+    if not _pulled(in_dir):
+        pytest.skip(f"model input trace missing/unpulled: {in_dir} — git lfs pull it")
+
+    config = _glm_hf_config()
+    shard_dims = [None, None]
+    shard_dims[1], shard_dims[0] = -1, -2  # SP seq (-2, axis0) + TP hidden (-1, axis1)
+    hidden = ttnn.from_torch(
+        load_stream(in_dir).reshape(1, 1, SEQ_LEN, -1),
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+    )
+    # rope + a single 1-layer kvpe cache are reused across layers (each block fills the full 5120-seq cache).
+    rope_tensors = RotarySetup(config, mesh_device, sp_axis=0, is_balanced=False).get_rope_tensors(SEQ_LEN)
+    kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=config.kv_lora_rank + config.qk_rope_head_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_LEN,
+        mesh_shape=list(mesh_device.shape),
+        sp_axis=0,
+        num_kvpe_cache_layers=1,
+    )
+
+    pccs = []
+    for layer in range(GLM_MODEL_LAYERS):
+        out_dir = root / "decoder_io" / f"decoder_output_layer_{layer}"
+        if not _pulled(out_dir):
+            logger.warning(f"[glm_5_1 model] stopping at layer {layer}: decoder_output_layer_{layer} not pulled")
+            break
+        # TTNN weight cache. Set GLM_USE_CACHE=<dir> to a cache ROOT path (mirrors v3's
+        # TT_DS_PREFILL_TTNN_CACHE): a config subfolder `sp{sp}xtp{tp}_{dtype}` is created under it so
+        # different mesh shapes / expert dtypes don't clash. Unset → no cache (real-load every layer).
+        # On a miss the block does a REAL fp8→bf16 load (accurate) and writes the .tensorbin cache via
+        # as_tensor as it uploads; on a hit it streams bf4 straight from disk.
+        cache_dir, cache_ok = None, False
+        _cache_root = os.environ.get("GLM_USE_CACHE")  # path to the cache root, or unset to disable
+        if _cache_root:
+            sp_, tp_ = mesh_device.shape
+            cache_dir = Path(_cache_root) / f"sp{sp_}xtp{tp_}_{os.environ.get('GLM_MODEL_EXPERT_DTYPE', 'bf4')}"
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            is_dense = layer < GLM51Config.NUM_DENSE_LAYERS
+            experts_per_chip = GLM51Config.NUM_ROUTED_EXPERTS // mesh_device.get_num_devices()
+            init_checker(cache_dir)  # required before the modules' pattern_exists
+            cache_ok = TtPrefillBlock.check_cache_complete(cache_dir, layer, is_dense, experts_per_chip)
+            logger.info(
+                f"[glm_5_1 model] layer {layer}: TTNN cache "
+                f"{'HIT — load bf4' if cache_ok else 'MISS — real load + write cache'} ({cache_dir})"
+            )
+        state_dict = {} if cache_ok else _glm_block_state_dict(layer)  # real fp8 load on miss / no cache
+        block = TtPrefillBlock(
+            mesh_device=mesh_device,
+            config=config,
+            model_cfg=GLM51Config,
+            state_dict=state_dict,
+            layer_idx=layer,
+            seq_len=SEQ_LEN,
+            sp_axis=0,
+            tp_axis=1,
+            num_links=num_links,
+            topology=topology,
+            routed_expert_weights_dtype=_MODEL_EXPERT_DTYPE,
+            gate_fallback_mode=GateComputeMode.HOST_ALL,
+            index_args=_glm_model_args(),
+            # Dispatch-buffer size = dispatch_group_size * seq_per_chip * factor. Must cover the worst
+            # case (factor 8 = every token routing all 8 experts to one chip); undersizing silently
+            # drops tokens at imbalanced layers → corrupt output (factor 2 overflowed at layer 7).
+            dispatch_buffer_capacity_factor=int(os.environ.get("GLM_MODEL_CAPACITY_FACTOR", "8")),
+            weight_cache_path=cache_dir,
+        )
+        del state_dict
+        gc.collect()  # free the ~19 GB host expert dict before the forward
+
+        out_dev, _ = block(hidden, rope_tensors, kvpe_cache, return_kv_cache=False)
+        out_host = ttnn.to_torch(
+            out_dev, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=shard_dims, mesh_shape=mesh_device.shape)
+        ).to(torch.bfloat16)[0]
+        ref_out = load_stream(out_dir).reshape(1, SEQ_LEN, -1)
+        _, pcc = comp_pcc(ref_out.float(), out_host.float(), 0)
+        kind = "dense" if layer < GLM51Config.NUM_DENSE_LAYERS else "moe"
+        logger.info(f"[glm_5_1 model] layer {layer:2d} ({kind}) running-hidden PCC vs decoder_output_{layer}: {pcc}")
+        pccs.append((layer, pcc))
+
+        ttnn.deallocate(hidden)  # free the previous input; carry the device output forward (true chaining)
+        hidden = out_dev
+        del block
+        gc.collect()  # free this layer's device weights before building the next (streaming)
+        ttnn.synchronize_device(mesh_device)
+
+    ttnn.deallocate(hidden)
+    assert pccs, "no layers ran — check the decoder_io trace is pulled"
+    # Count leading layers that track the trace; report where (if) the chain diverges.
+    tracked = 0
+    for _, pcc in pccs:
+        if pcc < MODEL_PCC:
+            break
+        tracked += 1
+    diverged_at = pccs[tracked][0] if tracked < len(pccs) else None
+    logger.info(
+        f"[glm_5_1 model] chained {len(pccs)} layers; tracked {tracked} at PCC≥{MODEL_PCC}"
+        + (f"; DIVERGED at layer {diverged_at}" if diverged_at is not None else " (all tracked)")
+        + f"; trend={[round(p, 5) for _, p in pccs]}"
+    )
+    need = min(len(pccs), MODEL_MIN_TRACK_LAYERS)
+    assert tracked >= need, (
+        f"GLM model tracked only {tracked} leading layers at PCC≥{MODEL_PCC} (need ≥{need}) — "
+        f"per-layer fidelity regressed; trend={[round(p, 5) for _, p in pccs]}"
+    )
+
+
+@parametrize_mesh_device()
+@pytest.mark.parametrize("device_params", _MOE_DEVICE_PARAMS, ids=["line"], indirect=True)
+@pytest.mark.timeout(0)
+def test_glm_model_vs_reference(mesh_device, device_params):
+    """Whole GLM-5.1 model on LoudBox(8)/QuietBox(4) — box-adaptive line meshes, FABRIC_1D, tp<=2.
+    Streams decoder_input_layer_0 through GLM_MODEL_LAYERS blocks; PCCs the running hidden vs
+    decoder_output_layer_L. MoE layers download ~30 GB of weights JIT; stops early at the first
+    unpulled-trace layer. On Galaxy this yields the native (8,4) [tp=4], which GLM skips — use
+    test_glm_model_vs_reference_galaxy there."""
+    _run_glm_model(mesh_device)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology", _GALAXY_MODEL_CASES, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.timeout(0)
+def test_glm_model_vs_reference_galaxy(mesh_device, device_params, num_links, topology):
+    """Whole GLM-5.1 model on a SINGLE Galaxy (Wormhole). GLM needs tp<=2, so the native (8,4) mesh is
+    unusable — this runs (8,2) [16 chips], FABRIC_2D + RELAXED_INIT. requires_mesh_topology auto-skips it
+    off a box that can't open mesh-8x2. ((16,2) needs a multi-Galaxy scale-out — not covered here.)"""
+    _run_glm_model(mesh_device, num_links=num_links, topology=topology)
 
 
 # ════════════════════════════════════════════════════════════════════════════════
