@@ -246,6 +246,21 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     }
     const uint32_t num_scale_blocks_dispatch = full_ct_dim_dispatch / FP8_SCALE_TILES;  // hidden / 128
 
+    // block_ht_dispatch: number of 128-element scale blocks the FP8 compute processes per iteration,
+    // mirroring tile_h / BlockHt in compute_per_token_cast_to_fp8.cpp. The reader streams
+    // block_ct_dim * block_ht tiles per NoC barrier/push and the compute reduces each scale block
+    // independently (its own per-token amax/scale). block_ct_dim stays one scale block wide so every
+    // DEST acquire is <= 4 fp32 tiles (half-sync). Keep 1 on the non-FP8 path, where block_ct_dim
+    // already spans the full pack-untilize block.
+    const uint32_t block_ht_dispatch = operation_attributes.use_fp8_scale ? 2u : 1u;
+    if (operation_attributes.use_fp8_scale) {
+        TT_FATAL(
+            num_scale_blocks_dispatch % block_ht_dispatch == 0,
+            "use_fp8_scale block_ht ({}) must divide the number of 128-element scale blocks ({})",
+            block_ht_dispatch,
+            num_scale_blocks_dispatch);
+    }
+
     // ==================== Semaphores ====================
     // Per-entry credit, each kept on the consumer's L1 (producer NOC-incs):
     //   data_avail  (sender L1, init=0):                untilize → sender, "entry ready".
@@ -271,14 +286,15 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // ==================== Circular Buffers for untilize cores ====================
     // Routing decisions and offsets[] live on the untilize core — sender is fabric-only.
     // c_0: tiled input stripe (reader → compute)
-    // buffering_factor MUST be a multiple of block_ct_dim_dispatch (the reader's per-chunk push
-    // size) so untilize blocks never straddle the CB ring wrap.  2 * block_ct_dim gives double
-    // buffering (=16 for the common block_ct_dim=8 case, unchanged).
+    // buffering_factor MUST be a multiple of the reader's per-chunk push size
+    // (block_ct_dim * block_ht) so the compute's indexed reads never straddle the CB ring wrap.
+    // 2 * block_ct_dim * block_ht gives double buffering (=16 for both the common non-FP8
+    // block_ct_dim=8/block_ht=1 case and the FP8 block_ct_dim=4/block_ht=2 case).
     detail::create_tensor_cb(
         desc,
         untilize_core_grid,
         input_tensor,
-        /*buffering_factor=*/2 * block_ct_dim_dispatch,
+        /*buffering_factor=*/2 * block_ct_dim_dispatch * block_ht_dispatch,
         /*cb_id=*/tt::CBIndex::c_0,
         "untilize_input_scratch");
     // c_1: indices scratch (untilize reader does per-batch DRAM reads)
@@ -362,11 +378,12 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             });
         };
         add_fp32_tile_cb(tt::CBIndex::c_12, 1);                          // cb_scaler
-        add_fp32_tile_cb(tt::CBIndex::c_20, 2 * FP8_SCALE_TILES);        // cb_abs
+        add_fp32_tile_cb(tt::CBIndex::c_20, 2 * FP8_SCALE_TILES);        // cb_abs (one scale block at a time)
         add_fp32_tile_cb(
             tt::CBIndex::c_21, 2 * num_scale_blocks_dispatch);           // cb_scale_tiles (-> writer), double-buffered
-        add_fp32_tile_cb(tt::CBIndex::c_22, 2);                          // cb_inv_scale_tiles
-        add_fp32_tile_cb(tt::CBIndex::c_23, 2 * FP8_SCALE_TILES);        // cb_out_tile
+        add_fp32_tile_cb(tt::CBIndex::c_22, 2 * block_ht_dispatch);  // cb_inv_scale_tiles (block_ht live during divide)
+        add_fp32_tile_cb(
+            tt::CBIndex::c_23, 2 * block_ht_dispatch * FP8_SCALE_TILES);  // cb_out_tile (block_ht scale blocks)
     }
     // c_13: metadata scratch (untilize writer builds metadata here before NOC-writing).
     detail::create_tensor_cb(
@@ -684,6 +701,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             static_cast<uint32_t>(topology),                       // 28
             block_ct_dim_dispatch,                                 // 29: must match the compute kernel
             static_cast<uint32_t>(tt::CBIndex::c_12),              // 30: cb_scaler_id (FP8_SCALE only)
+            block_ht_dispatch,  // 31: scale blocks per read chunk (= per compute iter)
         };
         tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(untilize_reader_compile_args);
         tt::tt_metal::TensorAccessorArgs(indices_tensor.buffer()).append_to(untilize_reader_compile_args);
@@ -781,6 +799,7 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
             untilize_compute_args.push_back(clamp_min_bits);                            // 11
             untilize_compute_args.push_back(clamp_max_bits);                            // 12
             untilize_compute_args.push_back(inv_e4m3_max_bits);                         // 13
+            untilize_compute_args.push_back(block_ht_dispatch);  // 14: scale blocks per iteration
             untilize_compute_defines["FP8_SCALE"] = "1";
         }
         untilize_compute_kd.compile_time_args = std::move(untilize_compute_args);

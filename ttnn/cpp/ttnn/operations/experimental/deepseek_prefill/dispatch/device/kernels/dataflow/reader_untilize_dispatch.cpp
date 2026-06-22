@@ -22,8 +22,8 @@
 //
 // For each assigned batch:
 //   1. Signal compute to start untilizing this batch (cb_signal_id).
-//   2. Stream the tiled input stripe from DRAM → cb_input_id, block_ct_dim tiles
-//      at a time, for compute to untilize.
+//   2. Stream the tiled input stripe from DRAM → cb_input_id, block_ct_dim * block_ht
+//      tiles at a time (one chunk per compute iteration), for compute to untilize.
 //   3. Read this batch's indices and weights pages from DRAM.
 //   4. Take the baton, then build the route plan into cb_plan_id: for each
 //      (token, top-k) routed to this dispatch core, allocate a DRAM page from
@@ -100,15 +100,20 @@ void kernel_main() {
 #ifdef FP8_SCALE
     constexpr uint32_t cb_scaler_id = get_compile_time_arg_val(30);  // reduce scaler CB
 #endif
+    // block_ht: number of 128-element scale blocks the compute consumes per iteration. The reader
+    // streams the whole read_block_tiles = block_ct_dim * block_ht run per NoC barrier/push so it
+    // round-trips once per compute iteration (mirrors reader_per_token_cast_to_fp8). 1 on non-FP8.
+    constexpr uint32_t block_ht = get_compile_time_arg_val(31);
 
-    constexpr auto input_args = TensorAccessorArgs<31>();
+    constexpr auto input_args = TensorAccessorArgs<32>();
     constexpr auto indices_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto weights_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto offsets_args = TensorAccessorArgs<weights_args.next_compile_time_args_offset()>();
     constexpr auto dispatch_table_args = TensorAccessorArgs<offsets_args.next_compile_time_args_offset()>();
 
     constexpr uint32_t tiles_per_row = hidden_size / 32;
-    constexpr uint32_t num_tile_blocks = tiles_per_row / block_ct_dim;
+    constexpr uint32_t read_block_tiles = block_ct_dim * block_ht;  // tiles read per NoC barrier/push
+    constexpr uint32_t num_tile_blocks = tiles_per_row / read_block_tiles;
 
 #ifdef AXIS
     constexpr ReplicateGroup axis = ReplicateGroup(AXIS);
@@ -234,19 +239,19 @@ void kernel_main() {
         signal_ptr[0] = 0x00000000;
         cb_push_back(cb_signal_id, 1);
 
-        // 2. Stream tiled input stripe from DRAM in blocks of block_ct_dim tiles
+        // 2. Stream tiled input stripe from DRAM in blocks of read_block_tiles (= block_ct_dim * block_ht) tiles
         for (uint32_t blk = 0; blk < num_tile_blocks; blk++) {
-            cb_reserve_back(cb_input_id, block_ct_dim);
+            cb_reserve_back(cb_input_id, read_block_tiles);
             uint32_t blk_write_ptr = get_write_ptr(cb_input_id);
-            uint32_t blk_start = tile_base_page + blk * block_ct_dim;
+            uint32_t blk_start = tile_base_page + blk * read_block_tiles;
             {
                 DeviceZoneScopedN("DISPATCH-READ-INPUT-TILES");
-                for (uint32_t col = 0; col < block_ct_dim; col++) {
+                for (uint32_t col = 0; col < read_block_tiles; col++) {
                     noc_async_read_page(blk_start + col, input_addr_gen, blk_write_ptr + col * aligned_input_page_size);
                 }
                 noc_async_read_barrier();
             }
-            cb_push_back(cb_input_id, block_ct_dim);
+            cb_push_back(cb_input_id, read_block_tiles);
         }
 
         // 3. Read this batch's indices and weights pages
