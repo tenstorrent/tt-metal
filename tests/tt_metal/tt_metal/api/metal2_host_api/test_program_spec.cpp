@@ -2223,8 +2223,7 @@ TEST_F(ProgramSpecTestQuasar, UnpackToDestModePlacedAtDfbIdSlot) {
 //    when a DFB endpoint is bound by more than one KernelSpec.
 //
 //    NOTE: The plan is to lift this artificial constraint once LLK support is in
-//    place. DFB IDs will then be passed as implicit RTAs rather than implicit CTAs
-//    on Quasar only.
+//    place.
 
 // Category A: Order-Independence Test
 // This test verifies that the backtracking solver finds valid assignments,
