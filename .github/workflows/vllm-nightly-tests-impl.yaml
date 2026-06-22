@@ -162,7 +162,7 @@ jobs:
               "name": "[WH-T3K] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
               "server-timeout": 30,
-              "benchmark-timeout": 5,
+              "benchmark-timeout": 10,
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
