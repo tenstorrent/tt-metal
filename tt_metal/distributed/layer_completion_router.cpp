@@ -130,6 +130,15 @@ void LayerCompletionRouter::run_subordinate() {
             std::this_thread::sleep_for(std::chrono::microseconds(cfg_.poll_idle_us));
         }
     }
+    // Drain any messages that arrived in the ring between the last pop and
+    // stop_ being set — otherwise they would be silently dropped and the
+    // master would never receive them.
+    while (queue_->try_pop(m)) {
+        std::array<std::byte, sizeof(m)> buf{};
+        std::memcpy(buf.data(), &m, sizeof(m));
+        ctx->send(ttsl::Span<std::byte>(buf.data(), buf.size()), mh::Rank(cfg_.master_rank), kLayerCompletionTag);
+        processed_.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 }  // namespace tt::tt_metal::distributed
