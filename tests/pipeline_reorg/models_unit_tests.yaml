@@ -364,6 +364,20 @@
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
+- name: GLM-4.7-Flash (MoE Lite) unit tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=1
+    pytest --timeout 120 models/experimental/glm4_moe_lite/tests/test_weights.py
+    export TT_ENABLE_HW_TESTS=1
+    pytest --timeout 600 models/experimental/glm4_moe_lite/tests/test_flash_mla_decode_boundary_optional.py
+  model: glm4-moe-lite
+  skus:
+    bh_quietbox_2:
+      timeout: 10
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
 - name: Shallow UNet unit tests
   cmd: |
     pytest --timeout 600 models/experimental/functional_unet/tests/test_unet_model.py

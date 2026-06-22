@@ -20,6 +20,7 @@ on:
           - gemma-4-12b
           - gemma-4-26b-a4b
           - gemma-4-31b
+          - glm4-moe-lite
           - dit-common
           # llama3.3-70b-galaxy: disabled — see #42139
           - flux.1-schnell

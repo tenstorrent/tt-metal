@@ -463,6 +463,39 @@
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
 
+- name: GLM-4.7-Flash (MoE Lite) e2e tests
+  cmd: |
+    export HF_HOME=/mnt/MLPerf/huggingface HF_HUB_OFFLINE=1
+    export TT_REQUIRE_FULL_GLM47_SNAPSHOT=1
+    pytest --timeout 120 models/experimental/glm4_moe_lite/tests/test_real_model_optional.py::test_glm47_snapshot_is_complete
+    export GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES=1 \
+      GLM4_MOE_LITE_FUSE_QKV_A=1 \
+      GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 \
+      GLM4_MOE_LITE_BATCHED_PREFILL=1 \
+      GLM4_MOE_LITE_DECODE_L1_ACT=1 \
+      GLM4_MOE_LITE_EP_L1=1 \
+      GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE=1 \
+      GLM4_MOE_LITE_SKIP_TYPECAST=1 \
+      GLM4_MOE_LITE_ENABLE_MOE=1
+    python models/experimental/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+      --prompt "Summarize" \
+      --simulate-context-len 128 \
+      --min-cache-tokens 256 \
+      --max-new-tokens 8 \
+      --batch-size 1 \
+      --mesh-rows 1 --mesh-cols 4 \
+      --cache-dir /tmp/tt_cache/glm4_moe_lite/vllm \
+      --kv-cache-dtype bf16 \
+      --phase both \
+      --enable-trace --trace-mode sampling
+  model: glm4-moe-lite
+  skus:
+    bh_quietbox_2:
+      timeout: 60
+      tier: 1
+  owner_id: U088413NP0Q # Ashai Reddy
+  team: models
+
 # ── Mistral / Mixtral ──────────────────────────────────────────────
 
 - name: Mistral-7B e2e tests
