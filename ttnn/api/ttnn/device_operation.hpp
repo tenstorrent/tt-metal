@@ -114,18 +114,6 @@ static auto create_mesh_workload_from_workload_factory(
     }
 }
 
-struct CheckDeviceBufferIsAllocated {
-    std::size_t index = 0;
-
-    void operator()(const Tensor& tensor) {
-        if (not tensor.is_allocated()) {
-            // TODO(#40550): This should be a TT_FATAL
-            log_warning(tt::LogOp, "Tensor at index {} is not allocated", index);
-        }
-        index++;
-    }
-};
-
 template <typename device_operation_t>
 auto get_operation_name(const typename device_operation_t::operation_attributes_t& operation_attributes) {
     if constexpr (is_mesh_device_operation_adapter_v<device_operation_t>) {
@@ -231,7 +219,8 @@ void enqueue_mesh_workload(
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
-// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `ProgramSpecFactoryConcept` factories.
+// path for `ProgramFactoryConcept` / `ProgramDescriptorFactoryConcept` / `MetalV2FactoryConcept`
+// factories.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t, typename ProgramFactory, typename Fn>
 void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, const Fn& fn) {
     std::visit(
@@ -245,9 +234,9 @@ void dispatch_to_mesh_workload_factory(const ProgramFactory& program_factory, co
                 using AdaptedMeshWorkloadFactory = mesh_device_operation_t::template DescriptorMeshWorkloadAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
-            [&]<ProgramSpecFactoryConcept T>(const T&) {
+            [&]<MetalV2FactoryConcept T>(const T&) {
                 using AdaptedMeshWorkloadFactory =
-                    mesh_device_operation_t::template ProgramSpecMeshWorkloadFactoryAdapter<T>;
+                    mesh_device_operation_t::template MetalV2MeshWorkloadFactoryAdapter<T>;
                 fn.template operator()<AdaptedMeshWorkloadFactory>();
             },
             [&]<MeshWorkloadFactoryConcept WorkloadFactory>(const WorkloadFactory&) {
@@ -399,8 +388,6 @@ void launch_operation_with_adapter(
     log_operation<mesh_device_operation_t>(
         mesh_device->id(), operation_attributes, tensor_args, program_hash, program_cache_hit);
 
-    ttsl::reflection::visit_object_of_type<Tensor>(CheckDeviceBufferIsAllocated{}, tensor_args);
-
     if (program_cache_hit) {
         handle_mesh_adapter_cache_hit<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, program_cache, program_hash);
@@ -450,8 +437,10 @@ typename device_operation_t::tensor_return_value_t launch(
     const auto operation_name = detail::get_operation_name<device_operation_t>(operation_attributes);
     tt::tt_metal::GraphTracker::instance().track_function_start(operation_name, operation_attributes, input_tensors);
 
-    if (!input_tensors.empty()) {
-        TT_FATAL(is_device_tensor(input_tensors.front().get()), "Device Operations expect tensor with Device storage in inputs");
+    for (const auto& input_tensor_ref : input_tensors) {
+        const auto& input_tensor = input_tensor_ref.get();
+        TT_FATAL(is_device_tensor(input_tensor), "Device Operations expect device tensors as inputs");
+        TT_FATAL(input_tensor.is_allocated(), "Input Tensor is not allocated");
     }
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);

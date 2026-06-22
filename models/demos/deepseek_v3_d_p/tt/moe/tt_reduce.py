@@ -72,7 +72,7 @@ class TtReduceModule(LightweightModule):
             weights: Optional gate weights.
                 Shape: [1, dispatch_group_size, seq_len, topk] or [..., topk, 1]
                 If provided, applies fused weighted sum: sum(weights * combine_output, dim=topk)
-            indices: Global expert IDs per token/slot, INT32.
+            indices: Global expert IDs per token/slot, UINT16.
                 Shape: [dispatch_group_size, seq_len, topk]
             expert_dispatch_table: Dispatch table mapping expert ID to chip ID, INT32.
                 Shape: [num_routed_experts] (sharded per dispatch group)

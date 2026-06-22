@@ -80,6 +80,33 @@ class LMHeadSampling:
     weight shard.
     """
 
+    class Semaphores:
+        MCAST_DATA_SENDER = 0
+        MCAST_DATA_RECEIVER = 1
+        ARGMAX_RECEIVER = 2
+        ARGMAX_LOCAL_READY = 3
+        FABRIC_GATE_BCAST_TURN = 4
+        FABRIC_GATE_ARGMAX_TURN = 5
+        MTP_READY = 6
+        MCAST_EH_DATA_RECEIVER = 7
+        REDUCE_GATE = 8
+        METADATA_READY = 9
+        TOKEN_BCAST_TURN = 10
+        NUM_SEMAPHORES = 11
+        _INIT_VALUE_1 = {FABRIC_GATE_BCAST_TURN, TOKEN_BCAST_TURN}
+
+    @staticmethod
+    def create_semaphores(mesh_device):
+        device_grid_size = mesh_device.compute_with_storage_grid_size()
+        available_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
+        )
+        S = LMHeadSampling.Semaphores
+        return [
+            ttnn.create_global_semaphore(mesh_device, available_cores, 1 if i in S._INIT_VALUE_1 else 0)
+            for i in range(S.NUM_SEMAPHORES)
+        ]
+
     @staticmethod
     def golden(
         input_tensor,
@@ -314,6 +341,7 @@ class LMHeadSampling:
         mtp_bcast_semaphores=None,
         base_token_buffer=None,
         k=32,
+        intra_device_semaphores=None,
     ):
         logger.debug(f"broadcast sender_coord={sender_coord}")
         """
@@ -514,6 +542,25 @@ class LMHeadSampling:
         termination_global_sem_addr = (
             int(ttnn.get_global_semaphore_address(termination_semaphore)) if persistent_mode else 0
         )
+
+        # Intra-device semaphores (global, replacing former local SemaphoreDescriptors)
+        if intra_device_semaphores is None:
+            intra_device_semaphores = LMHeadSampling.create_semaphores(mesh_device)
+        S = LMHeadSampling.Semaphores
+        _sem_addr = [int(ttnn.get_global_semaphore_address(s)) for s in intra_device_semaphores]
+        mcast_data_sender_semaphore_addr = _sem_addr[S.MCAST_DATA_SENDER]
+        mcast_data_receiver_semaphore_addr = _sem_addr[S.MCAST_DATA_RECEIVER]
+        argmax_receiver_semaphore_addr = _sem_addr[S.ARGMAX_RECEIVER]
+        argmax_local_ready_semaphore_addr = _sem_addr[S.ARGMAX_LOCAL_READY]
+        fabric_gate_bcast_turn_semaphore_addr = _sem_addr[S.FABRIC_GATE_BCAST_TURN]
+        fabric_gate_argmax_turn_semaphore_addr = _sem_addr[S.FABRIC_GATE_ARGMAX_TURN]
+        mtp_ready_semaphore_addr = _sem_addr[S.MTP_READY]
+        mcast_eh_data_sender_semaphore_addr = mcast_data_sender_semaphore_addr
+        mcast_eh_data_receiver_semaphore_addr = _sem_addr[S.MCAST_EH_DATA_RECEIVER]
+        reduce_gate_semaphore_addr = _sem_addr[S.REDUCE_GATE]
+        metadata_ready_semaphore_addr = _sem_addr[S.METADATA_READY]
+        token_bcast_turn_semaphore_addr = _sem_addr[S.TOKEN_BCAST_TURN]
+
         # Calculate packet size and page info for CCL broadcast
 
         # Get tile info from input tensor (use a sample device tensor)
@@ -672,28 +719,7 @@ class LMHeadSampling:
         # being read by matmul.  Sender-only, sized to the L1 minimum.
         mcast_eh_ready_cb = 38
 
-        # ====================================================================
-        # Semaphore IDs (for intra-device mcast)
-        # ====================================================================
-        mcast_data_sender_semaphore_id = 0
-        mcast_data_receiver_semaphore_id = 1
-        argmax_receiver_semaphore_id = 2
-        argmax_local_ready_semaphore_id = 3
-        fabric_gate_bcast_turn_semaphore_id = 4
-        fabric_gate_argmax_turn_semaphore_id = 5
-        # [MTP] Semaphore IDs for second mcast (EH projection matmul)
-        # Separate receiver semaphore from first mcast to avoid linked-VC posted write race
-        mtp_ready_semaphore_id = 6
-        mcast_eh_data_sender_semaphore_id = mcast_data_sender_semaphore_id
-        mcast_eh_data_receiver_semaphore_id = 8
-        mtp_done_semaphore_id = 9
-        eh_matmul_done_semaphore_id = 10
-        reduce_gate_semaphore_id = 11
-        # [MTP] Semaphore IDs for singalling metadata unicast in spec stage
-        metadata_ready_semaphore_id = 12
-        # [MTP] Gates MTP token Broadcast::Op after main sampling (worker core L1); separate from
-        # fabric_gate_bcast_turn (activation CCL) to avoid dual use of one semaphore.
-        token_bcast_turn_semaphore_id = 13
+        # Semaphore addresses are now extracted from global semaphores above (see _sem_addr block)
         bcast_config = DeepseekMinimalBroadcast.configure(
             mesh_device=mesh_device,
             input_tensor_mesh=input_tensor_mesh,
@@ -1318,7 +1344,7 @@ class LMHeadSampling:
                     ("rmsnorm_gamma_cb", rmsnorm_gamma_cb),
                     ("rmsnorm_num_tiles", rms_num_tiles),
                     # Mcast receiver
-                    ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+                    ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
                     ("mcast_dst_cb", mcast_dst_cb),
                     ("mcast_dst_num_pages", num_tiles_k),
                     # Matmul
@@ -1332,8 +1358,8 @@ class LMHeadSampling:
                     ("sampling_winner_page_bytes", sampling_winner_page_bytes),
                     ("sampling_num_senders", argmax_num_senders),
                     ("sampling_expected_remote_incs", argmax_expected_remote_incs),
-                    ("sampling_receiver_semaphore_id", argmax_receiver_semaphore_id),
-                    ("sampling_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
+                    ("sampling_receiver_semaphore_addr", argmax_receiver_semaphore_addr),
+                    ("sampling_local_ready_semaphore_addr", argmax_local_ready_semaphore_addr),
                     ("sampling_mesh_mode", argmax_mesh_mode),
                     ("sampling_stage1_sender", argmax_stage1_sender),
                     ("sampling_stage1_receiver", argmax_stage1_receiver),
@@ -1374,11 +1400,11 @@ class LMHeadSampling:
                     ("sampling_indices_scratch_addr", sampling_indices_scratch_addr_ct),
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("termination_semaphore_addr", termination_global_sem_addr),
-                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
-                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_turn_semaphore_addr", fabric_gate_bcast_turn_semaphore_addr),
+                    ("fabric_gate_argmax_turn_semaphore_addr", fabric_gate_argmax_turn_semaphore_addr),
                     (
-                        "token_bcast_turn_semaphore_id",
-                        token_bcast_turn_semaphore_id if enable_mtp_on_device else 0,
+                        "token_bcast_turn_semaphore_addr",
+                        token_bcast_turn_semaphore_addr if enable_mtp_on_device else 0,
                     ),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
                     ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
@@ -1414,20 +1440,20 @@ class LMHeadSampling:
                     ("hnorm_ready_cb", hnorm_ready_cb),
                     ("mcast_eh_ready_cb", mcast_eh_ready_cb if enable_mtp_on_device else 0),
                     # [MTP] semaphores
-                    ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
-                    ("metadata_ready_semaphore_id", metadata_ready_semaphore_id),
+                    ("mtp_ready_semaphore_addr", mtp_ready_semaphore_addr),
+                    ("metadata_ready_semaphore_addr", metadata_ready_semaphore_addr),
                     (
-                        "mcast_eh_data_sender_semaphore",
-                        mcast_eh_data_sender_semaphore_id if enable_mtp_on_device else 0,
+                        "mcast_eh_data_sender_semaphore_addr",
+                        mcast_eh_data_sender_semaphore_addr if enable_mtp_on_device else 0,
                     ),
-                    ("mcast_eh_data_receiver_semaphore", mcast_eh_data_receiver_semaphore_id),
+                    ("mcast_eh_data_receiver_semaphore_addr", mcast_eh_data_receiver_semaphore_addr),
                     ("mcast_eh_src_num_pages", rms_num_tiles if enable_mtp_on_device else 0),
                     ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp_on_device else 0),
                     ("rmsnorm_h_num_tiles", rms_num_tiles),
                     ("rmsnorm_e_num_tiles", e_num_tiles if enable_mtp_on_device else 0),
                     ("embedding_size_bytes", embedding_dim * 2 if enable_mtp_on_device else 0),
                     # Sender core NOC for L1-to-L1 copy (embedding region in mcast_eh_src_cb -> embedding_cb)
-                    ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
+                    ("reduce_gate_semaphore_addr", reduce_gate_semaphore_addr if enable_mtp_on_device else 0),
                     ("sampling_defer_socket_output", 1 if enable_socket_output else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
@@ -1488,8 +1514,8 @@ class LMHeadSampling:
                     ("mcast_dest_noc_end_x", mcast_dest_noc_end.x),
                     ("mcast_dest_noc_end_y", mcast_dest_noc_end.y),
                     ("mcast_num_cores", num_mcast_cores),
-                    ("mcast_data_sender_semaphore", mcast_data_sender_semaphore_id),
-                    ("mcast_data_receiver_semaphore", mcast_data_receiver_semaphore_id),
+                    ("mcast_data_sender_semaphore_addr", mcast_data_sender_semaphore_addr),
+                    ("mcast_data_receiver_semaphore_addr", mcast_data_receiver_semaphore_addr),
                     ("mcast_data_size_bytes", mcast_data_size_bytes),
                     ("rmsnorm_input_cb", rmsnorm_input_cb),
                     ("rmsnorm_num_tiles", rms_num_tiles),
@@ -1500,7 +1526,7 @@ class LMHeadSampling:
                     ("matmul_eh_out_w", eh_out_w_per_core if enable_mtp_on_device else 0),
                     ("mcast_is_part_of_receiver_grid", is_part_of_receiver_grid),
                     ("sampling_winner_page_bytes", sampling_winner_page_bytes),
-                    ("sampling_local_ready_semaphore_id", argmax_local_ready_semaphore_id),
+                    ("sampling_local_ready_semaphore_addr", argmax_local_ready_semaphore_addr),
                     ("sampling_socket_mode", argmax_socket_mode),
                     ("sampling_socket_cb", sampling_socket_cb if enable_socket_output else 0),
                     ("sampling_socket_page_size_bytes", socket_page_size_bytes if enable_socket_output else 0),
@@ -1526,11 +1552,11 @@ class LMHeadSampling:
                     ("sampling_copy_probabilities_to_q", sampling_copy_probabilities_to_q_value),
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("termination_semaphore_addr", termination_global_sem_addr),
-                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
-                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_turn_semaphore_addr", fabric_gate_bcast_turn_semaphore_addr),
+                    ("fabric_gate_argmax_turn_semaphore_addr", fabric_gate_argmax_turn_semaphore_addr),
                     (
-                        "token_bcast_turn_semaphore_id",
-                        token_bcast_turn_semaphore_id if enable_mtp_on_device else 0,
+                        "token_bcast_turn_semaphore_addr",
+                        token_bcast_turn_semaphore_addr if enable_mtp_on_device else 0,
                     ),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
                     ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
@@ -1545,12 +1571,12 @@ class LMHeadSampling:
                     ("mcast_eh_dest_noc_end_y", mcast_dest_noc_end.y if enable_mtp_on_device else 0),
                     ("mcast_eh_num_cores", num_mcast_cores if enable_mtp_on_device else 0),
                     (
-                        "mcast_eh_data_sender_semaphore",
-                        mcast_eh_data_sender_semaphore_id if enable_mtp_on_device else 0,
+                        "mcast_eh_data_sender_semaphore_addr",
+                        mcast_eh_data_sender_semaphore_addr if enable_mtp_on_device else 0,
                     ),
                     (
-                        "mcast_eh_data_receiver_semaphore",
-                        mcast_eh_data_receiver_semaphore_id if enable_mtp_on_device else 0,
+                        "mcast_eh_data_receiver_semaphore_addr",
+                        mcast_eh_data_receiver_semaphore_addr if enable_mtp_on_device else 0,
                     ),
                     ("hnorm_ready_cb", hnorm_ready_cb),
                     ("mcast_eh_ready_cb", mcast_eh_ready_cb if enable_mtp_on_device else 0),
@@ -1559,14 +1585,14 @@ class LMHeadSampling:
                     ("mcast_eh_dst_num_pages", eh_num_tiles_k if enable_mtp_on_device else 0),
                     ("mcast_eh_data_size_bytes", eh_mcast_data_size_bytes if enable_mtp_on_device else 0),
                     ("mcast_eh_src_num_pages", rms_num_tiles if enable_mtp_on_device else 0),
-                    ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
+                    ("reduce_gate_semaphore_addr", reduce_gate_semaphore_addr if enable_mtp_on_device else 0),
                     ("reduce_gate_num_targets", reduce_num_fabric_and_worker_cores),
                     ("sampling_defer_socket_output", 1 if enable_socket_output else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("eh_matmul_num_cores", eh_matmul_num_cores if enable_mtp_on_device else 0),
-                    ("mtp_ready_semaphore_id", mtp_ready_semaphore_id),
-                    ("metadata_ready_semaphore_id", metadata_ready_semaphore_id),
+                    ("mtp_ready_semaphore_addr", mtp_ready_semaphore_addr),
+                    ("metadata_ready_semaphore_addr", metadata_ready_semaphore_addr),
                     ("gather_dst_cb", eh_gather_dst_cb if enable_mtp_on_device else 0),
                     ("gather_dst_num_pages", eh_gather_dst_num_pages),
                     ("gather_send_total_bytes", eh_gather_send_total_bytes),
@@ -1639,11 +1665,11 @@ class LMHeadSampling:
                     ("matmul_out_w", out_w_per_core),
                     ("persistent_mode", 1 if persistent_mode else 0),
                     ("termination_semaphore_addr", termination_global_sem_addr),
-                    ("fabric_gate_bcast_turn_semaphore_id", fabric_gate_bcast_turn_semaphore_id),
-                    ("fabric_gate_argmax_turn_semaphore_id", fabric_gate_argmax_turn_semaphore_id),
+                    ("fabric_gate_bcast_turn_semaphore_addr", fabric_gate_bcast_turn_semaphore_addr),
+                    ("fabric_gate_argmax_turn_semaphore_addr", fabric_gate_argmax_turn_semaphore_addr),
                     (
-                        "token_bcast_turn_semaphore_id",
-                        token_bcast_turn_semaphore_id if enable_mtp_on_device else 0,
+                        "token_bcast_turn_semaphore_addr",
+                        token_bcast_turn_semaphore_addr if enable_mtp_on_device else 0,
                     ),
                     ("fabric_gate_bcast_noc_x", int(bcast_worker_core_phys.x)),
                     ("fabric_gate_bcast_noc_y", int(bcast_worker_core_phys.y)),
@@ -1672,7 +1698,7 @@ class LMHeadSampling:
                     ("matmul_eh_subblock_w", eh_subblock_w if enable_mtp_on_device else 0),
                     ("matmul_eh_subblock_k", eh_subblock_k if enable_mtp_on_device else 0),
                     ("matmul_eh_num_subblocks_k", eh_num_subblocks_k if enable_mtp_on_device else 0),
-                    ("reduce_gate_semaphore_id", reduce_gate_semaphore_id if enable_mtp_on_device else 0),
+                    ("reduce_gate_semaphore_addr", reduce_gate_semaphore_addr if enable_mtp_on_device else 0),
                     ("argmax_core_noc_x", argmax_core_noc_x if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     ("argmax_core_noc_y", argmax_core_noc_y if (enable_mtp_on_device or is_mtp_verify_stage) else 0),
                     # [Reduce] TRISC CT args
@@ -2320,82 +2346,7 @@ class LMHeadSampling:
                     )
                     cbs_list.extend([reduce_cb_recv, reduce_cb_pkt, reduce_local_cb_desc, reduce_scratch_cb_desc])
 
-                # ================================================================
-                # Semaphore descriptors (for intra-device mcast)
-                # ================================================================
-                semaphore_descriptors = [
-                    ttnn.SemaphoreDescriptor(
-                        id=mcast_data_sender_semaphore_id,
-                        core_ranges=all_cores,
-                        initial_value=0,
-                    ),
-                    ttnn.SemaphoreDescriptor(
-                        id=mcast_data_receiver_semaphore_id,
-                        core_ranges=all_cores,
-                        initial_value=0,
-                    ),
-                ]
-                if enable_argmax:
-                    semaphore_descriptors.extend(
-                        [
-                            ttnn.SemaphoreDescriptor(
-                                id=argmax_receiver_semaphore_id,
-                                core_ranges=argmax_core_grid,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=argmax_local_ready_semaphore_id,
-                                core_ranges=argmax_core_grid,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=fabric_gate_bcast_turn_semaphore_id,
-                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
-                                initial_value=1,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=fabric_gate_argmax_turn_semaphore_id,
-                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(argmax_final_core, argmax_final_core)]),
-                                initial_value=0,
-                            ),
-                        ]
-                    )
-                # Semaphores for MTP in Base Stage
-                if enable_mtp_on_device:
-                    semaphore_descriptors.extend(
-                        [
-                            ttnn.SemaphoreDescriptor(
-                                id=token_bcast_turn_semaphore_id,
-                                core_ranges=ttnn.CoreRangeSet([ttnn.CoreRange(worker_core, worker_core)]),
-                                initial_value=1,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=mtp_ready_semaphore_id,
-                                core_ranges=mcast_sender_core_grid,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=mcast_eh_data_receiver_semaphore_id,
-                                core_ranges=all_cores,
-                                initial_value=0,
-                            ),
-                            ttnn.SemaphoreDescriptor(
-                                id=reduce_gate_semaphore_id,
-                                core_ranges=all_cores,
-                                initial_value=0,
-                            ),
-                        ]
-                    )
-                if is_exit_device:
-                    semaphore_descriptors.extend(
-                        [
-                            ttnn.SemaphoreDescriptor(
-                                id=metadata_ready_semaphore_id,
-                                core_ranges=all_cores,
-                                initial_value=0,
-                            ),
-                        ]
-                    )
+                # Semaphores are now global (created via LMHeadSampling.create_semaphores)
                 # ================================================================
                 # Unified kernel descriptor
                 # ================================================================
@@ -2645,7 +2596,7 @@ class LMHeadSampling:
                 program = ttnn.ProgramDescriptor(
                     kernels=kernel_result.kernels,
                     cbs=cbs_list,
-                    semaphores=semaphore_descriptors,
+                    semaphores=[],
                 )
 
                 # Append CCL routing args to the broadcast writer kernel (NCRISC in current broadcast split).

@@ -173,6 +173,14 @@ int main(int argc, char** argv) {
             log_info(tt::LogTest, "Skipping Test Group: {} due to platform skip policy", test_config.name);
             continue;
         }
+        if (builder.should_skip_test_for_disabled_mesh_passthrough(test_config)) {
+            log_info(
+                tt::LogTest,
+                "Skipping Test Group: {} because sequential_mesh_passthrough requires "
+                "TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1",
+                test_config.name);
+            continue;
+        }
         log_info(tt::LogTest, "Running Test Group: {}", test_config.name);
 
         const auto& topology = test_config.fabric_setup.topology;

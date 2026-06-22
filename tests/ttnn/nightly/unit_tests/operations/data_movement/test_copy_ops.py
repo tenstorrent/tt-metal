@@ -8,10 +8,43 @@ import torch
 
 import ttnn
 
+from tests.ttnn.python_api_testing.sweep_tests.ttnn_pytorch_ops import eltwise_typecast
+from tests.ttnn.python_api_testing.typecast_test_helpers import (
+    INTEGER_OUTPUT_DTYPES,
+    assert_integer_typecast_equal,
+    make_typecast_test_input,
+    typecast_test_input_bounds,
+)
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp, tt_dtype_to_torch_dtype
 from tests.ttnn.unit_tests.operations.test_utils import get_ttnn_torch_dtype
 
 pytestmark = pytest.mark.use_module_device
+
+
+def _make_typecast_torch_input(shape, input_dtype, output_dtype):
+    pt_dtype = tt_dtype_to_torch_dtype[input_dtype]
+    if output_dtype in INTEGER_OUTPUT_DTYPES:
+        in_low, in_high = typecast_test_input_bounds(input_dtype, output_dtype)
+        return make_typecast_test_input(shape, pt_dtype, in_low, in_high)
+    return torch.randn(shape, dtype=pt_dtype)
+
+
+def _make_host_typecast_torch_input(shape, output_dtype):
+    """Host typecast inputs; uint32 stays non-negative (host matches relu-style golden)."""
+    in_low, in_high = typecast_test_input_bounds(ttnn.float32, output_dtype)
+    if output_dtype == ttnn.uint32:
+        in_low = 0
+    return make_typecast_test_input(shape, tt_dtype_to_torch_dtype[ttnn.float32], in_low, in_high)
+
+
+def _host_typecast_golden(torch_tensor, output_dtype):
+    """Golden for host-resident typecast; host paths differ from device for some dtypes."""
+    if output_dtype == ttnn.uint8:
+        return torch.clamp(torch_tensor, 0, 255).to(torch.uint8)
+    if output_dtype == ttnn.uint16:
+        # Host fp32→uint16 truncates; device float_to_uint16 rounds in float32 first.
+        return torch.clamp(torch_tensor.to(torch.int32), min=0, max=65535)
+    return eltwise_typecast(torch_tensor, tt_input_dtype=ttnn.float32, tt_output_dtype=output_dtype)
 
 
 def run_copy_test(N, C, H, W, layout, device):
@@ -264,7 +297,6 @@ def test_typecast_output_tensor(device):
     h = w = 32
     from_dtype = ttnn.bfloat16
     to_dtype = ttnn.uint32
-    gold_tensor = ttnn.ones([h, w], to_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
     bfloat16_tensor = ttnn.ones([h, w], from_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
     uint32_preallocated = ttnn.empty([h, w], to_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
 
@@ -274,11 +306,12 @@ def test_typecast_output_tensor(device):
     ttnn.typecast(bfloat16_tensor, to_dtype, memory_config=ttnn.L1_MEMORY_CONFIG, output_tensor=uint32_preallocated)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
-    torch_gold = ttnn.to_torch(gold_tensor)
+    torch_input = torch.ones([h, w], dtype=torch.bfloat16)
+    torch_expected = eltwise_typecast(torch_input, tt_input_dtype=from_dtype, tt_output_dtype=to_dtype)
     torch_output_ttnn = ttnn.to_torch(output_ttnn)
     torch_output_ttnn_preallocated = ttnn.to_torch(uint32_preallocated)
-    torch.equal(torch_gold, torch_output_ttnn)
-    torch.equal(torch_gold, torch_output_ttnn_preallocated)
+    assert_integer_typecast_equal(torch_expected, torch_output_ttnn)
+    assert_integer_typecast_equal(torch_expected, torch_output_ttnn_preallocated)
 
 
 def test_typecast_community(device):
@@ -292,11 +325,10 @@ def test_typecast_community(device):
 def run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype, device):
     """Test typecast operation on row-major device tensors."""
     torch.manual_seed(54321)
-    torch_dtype = torch.bfloat16
-    input = torch.randn(shape, dtype=torch_dtype)
+    torch_input = _make_typecast_torch_input(shape, input_dtype, output_dtype)
 
     # Create row-major tensor on device
-    input_tensor = ttnn.from_torch(input, input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(torch_input, input_dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
 
     # Verify input is row-major
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Input tensor should be in ROW_MAJOR_LAYOUT"
@@ -310,21 +342,13 @@ def run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype,
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT, "Output should maintain ROW_MAJOR_LAYOUT"
     assert output_tensor.memory_config() == memory_config, "Output memory config should match"
 
-    # Convert original input to output dtype for comparison
     torch_output = ttnn.to_torch(output_tensor)
 
-    # Map ttnn dtype to torch dtype for conversion
-    torch_output_dtype = get_ttnn_torch_dtype(output_dtype)
-
-    # Convert original input to match output dtype for comparison
-    torch_expected = input.to(torch_output_dtype)
-
-    if output_dtype == ttnn.int32:
-        # For integer types, use exact equality (typecast from float to int may have rounding)
-        assert torch.equal(
-            torch_expected, torch_output
-        ), f"Integer typecast mismatch: expected {torch_expected}, got {torch_output}"
+    if output_dtype in INTEGER_OUTPUT_DTYPES:
+        torch_expected = eltwise_typecast(torch_input, tt_input_dtype=input_dtype, tt_output_dtype=output_dtype)
+        assert_integer_typecast_equal(torch_expected, torch_output)
     else:
+        torch_expected = torch_input.to(get_ttnn_torch_dtype(output_dtype))
         assert_with_ulp(torch_expected, torch_output, ulp_threshold=2)
 
 
@@ -484,17 +508,15 @@ def test_typecast_host_tensor(output_dtype, preferred_layout, device):
     """
     Test that typecast works on host tensors (fixes issue #16279).
 
-    This test reproduces the scenario from the bug report and tests various dtypes:
-    - Create a host tensor from torch (no device parameter)
-    - Call typecast on the host tensor
-    - Verify it works without throwing an error
+    Host-resident fp32→uint8 clamps to [0, 255] (not wrap); fp32→uint16 truncates (device
+    rounds); fp32→uint32 uses non-negative inputs so relu-style golden matches.
     """
-    torch.manual_seed(2005)
     shape = [32, 2048]
-    torch_tensor = torch.rand(shape, dtype=torch.float32)
+    torch.manual_seed(2005)
+    torch_tensor = _make_host_typecast_torch_input(shape, output_dtype)
 
     # Create host tensor
-    ttnn_tensor_host = ttnn.from_torch(torch_tensor, layout=preferred_layout)
+    ttnn_tensor_host = ttnn.from_torch(torch_tensor, dtype=ttnn.float32, layout=preferred_layout)
 
     # Verify input is on host
     assert ttnn_tensor_host.storage_type() == ttnn.StorageType.HOST
@@ -507,11 +529,12 @@ def test_typecast_host_tensor(output_dtype, preferred_layout, device):
     assert ttnn_tensor_typecast.dtype == output_dtype
     assert ttnn_tensor_typecast.storage_type() == ttnn.StorageType.HOST
 
-    # Convert back to torch and verify the shape
     torch_output = ttnn.to_torch(ttnn_tensor_typecast)
     assert torch_output.shape == tuple(shape)
 
-    # Verify values are reasonable
-    torch_dtype = tt_dtype_to_torch_dtype[output_dtype]
-    torch_expected = torch_tensor.to(torch_dtype)
-    torch.equal(torch_expected, torch_output)
+    if output_dtype in INTEGER_OUTPUT_DTYPES:
+        torch_expected = _host_typecast_golden(torch_tensor, output_dtype)
+        assert_integer_typecast_equal(torch_expected, torch_output)
+    elif output_dtype == ttnn.bfloat16:
+        torch_expected = torch_tensor.to(tt_dtype_to_torch_dtype[output_dtype])
+        assert_with_ulp(torch_expected, torch_output, ulp_threshold=2)

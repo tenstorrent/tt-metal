@@ -102,7 +102,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < num_doublings; j++) {
                 // This ensures the cur_page_size will be aligned to 16B so future walk retains alignment
                 tt_memmove<false, false, false, 16 * original_page_size_bytes>(
-                    data_location + target_offset, data_location, cur_page_size);
+                    noc, data_location + target_offset, data_location, cur_page_size);
                 target_offset += cur_page_size;
                 cur_page_size *= 2;
             }
@@ -112,7 +112,7 @@ void kernel_main() {
         if ((data_location & w_offset_to_use) != (dst_noc_addr & w_offset_to_use)) {
             // Can't directly copy due to alignment
             tt_memmove<false, false, false, 16 * original_page_size_bytes>(
-                alignment_buffer + (dst_noc_addr & w_offset_to_use), data_location, cur_page_size);
+                noc, alignment_buffer + (dst_noc_addr & w_offset_to_use), data_location, cur_page_size);
             data_location = alignment_buffer + (dst_noc_addr & w_offset_to_use);
         }
 

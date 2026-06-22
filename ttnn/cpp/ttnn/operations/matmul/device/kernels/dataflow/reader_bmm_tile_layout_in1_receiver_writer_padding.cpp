@@ -11,7 +11,6 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
-
 void kernel_main() {
     // READER
     uint32_t rt_args_idx = 0;

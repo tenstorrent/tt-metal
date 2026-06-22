@@ -182,6 +182,8 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         }
     }
 
+    reconfig_data_format_srca(cb_interm_pre_add, cb_ex_welford);
+
     cb_ex_obj.wait_front(1);
     cb_ex2_obj.wait_front(1);
     if constexpr (welford_state_fp32_alias) {

@@ -209,6 +209,10 @@ from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
 )
 
+from ttnn._ttnn.counter_channel import (
+    InterProcessCounterChannel,
+)
+
 from ttnn.types import (
     TILE_SIZE,
     DataType,
@@ -463,6 +467,7 @@ from ttnn.operations.matmul import (
     MatmulDeviceOperation,
     MatmulMultiCoreReuseOptimizedProgramFactory,
     create_matmul_attributes,
+    matmul_select_program_factory,
 )
 
 from ttnn.operations.normalization import (

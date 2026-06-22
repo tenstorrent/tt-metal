@@ -38,14 +38,6 @@ void kernel_main() {
     // Variables
     std::uint32_t start_dram_addr_offset_for_tensor_row = 0;
 
-    constexpr uint32_t num_elements_in_zeros_buffer = MEM_ZEROS_SIZE / sizeof(uint32_t);
-    volatile tt_l1_ptr uint32_t* zero_base_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(MEM_ZEROS_BASE);
-    for (uint32_t zero_base_offset = 0; zero_base_offset < num_elements_in_zeros_buffer; zero_base_offset++) {
-        *(zero_base_ptr + zero_base_offset) = 0;
-    }
-
-    uint64_t zeros_base_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-
     for (std::uint32_t i = 0; i < num_tiles_r; i++) {
         for (std::uint32_t j = 0; j < 32; j++) {
             std::uint32_t src_addr_ = src_addr + start_dram_addr_offset_for_tensor_row;
@@ -70,24 +62,15 @@ void kernel_main() {
                     8 rows three times, then we send 7 rows
                 */
                 for (std::uint32_t z = 0; z < 3; z++) {
-                    noc.async_read(
-                        UnicastEndpoint{},
-                        cb,
-                        num_bytes_for_sending_eight_tile_rows,
-                        {.addr = MEM_ZEROS_BASE},
-                        {.offset_bytes = cb_write_offset});
+                    noc.async_write_zeros(cb, num_bytes_for_sending_eight_tile_rows, {.offset_bytes = cb_write_offset});
                     cb_write_offset += num_bytes_for_sending_eight_tile_rows;
                 }
 
-                noc.async_read(
-                    UnicastEndpoint{},
-                    cb,
-                    num_bytes_for_sending_seven_tile_rows,
-                    {.addr = MEM_ZEROS_BASE},
-                    {.offset_bytes = cb_write_offset});
+                noc.async_write_zeros(cb, num_bytes_for_sending_seven_tile_rows, {.offset_bytes = cb_write_offset});
 
                 src_addr_ += num_bytes_per_tile;
                 noc.async_read_barrier();
+                noc.write_zeros_l1_barrier();
                 cb.push_back(1);
 
             }  // End num_tiles_c loop

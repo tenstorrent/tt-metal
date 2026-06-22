@@ -228,7 +228,7 @@ inline void recip_sum(uint32_t curr_sum_index, uint32_t recip_dst_index) {
     sfpi::vFloat sum_bottom_4 = sfpi::l_reg[sfpi::LRegs::LReg2];
     // Init after to avoid trampling cached registers before we use them
     // TODO: Putting the prev regs in the upper regs lets us init ahead of time
-    ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+    ckernel::sfpu::sfpu_reciprocal_init<false>();
     sfpi::vFloat recip_top_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_top_4);
     sfpi::vFloat recip_bottom_4 = ckernel::sfpu::sfpu_reciprocal<exp_approx_mode>(sum_bottom_4);
 
@@ -426,7 +426,7 @@ void calculate_fused_max_sub_exp_add_tile(int scale_bf16) {
             sfpi::dst_reg[worker_max_base_idx] = exp_worker;
         } else {
             sfpi::vFloat curr_sum = exp_worker * worker_sum_vec + exp_prev * prev_sum_vec;
-            ckernel::sfpu::_init_sfpu_reciprocal_<false>();
+            ckernel::sfpu::sfpu_reciprocal_init<false>();
             sfpi::vFloat recip_sum = ckernel::sfpu::sfpu_reciprocal<SDPA_EXP_APPROX_MODE>(curr_sum);
             sfpi::dst_reg[prev_max_base_idx] = exp_prev * recip_sum;
             sfpi::dst_reg[worker_max_base_idx] = exp_worker * recip_sum;

@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from triage import ScriptConfig, log_warning, triage_field, run_script, log_check
 from ttexalens.memory_access import MemoryAccess, RiscDebugMemoryAccess
 from run_checks import run as get_run_checks
-from elfs_cache import ParsedElfFile, run as get_elfs_cache, ElfsCache
+from elfs_cache import ElfFile, run as get_elfs_cache, ElfsCache
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
@@ -63,9 +63,7 @@ class DumpWaitGlobalsData:
     sem_minus_local: int | None = triage_field("cb_extra_pages", verbose=1)
 
 
-def _read_symbol_value(
-    elf_obj: ParsedElfFile, symbol: str, mem_access: MemoryAccess, check_value: bool = True
-) -> int | None:
+def _read_symbol_value(elf_obj: ElfFile, symbol: str, mem_access: MemoryAccess, check_value: bool = True) -> int | None:
     """Resolve and read an integer symbol value from the kernel ELF using the provided mem_access.
 
     Returns None if the symbol cannot be read.

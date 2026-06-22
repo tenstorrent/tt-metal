@@ -1,0 +1,13 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# 16x8 quad-Blackhole-galaxy torus mesh spanning 8x4 hosts (32 processes, each owns a 2x2 slice)
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 16, 8 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 8, 4 ] }
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }

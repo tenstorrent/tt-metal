@@ -17,9 +17,12 @@
 // For each assigned batch:
 //   1. Read this batch's metadata pages from DRAM into cb_metadata_batch_id (consumed by
 //      writer_untilize).
-//   2. Read dispatched_buffer tiles into cb_dispatched_buffer_id for compute to consume.
-// Compute (untilize_combine) and writer_untilize on this same core independently walk the
-// same expert/batch loop using the multicasted counter in c_1, so no per-batch signal CB
+//   2. TILE_LAYOUT: read dispatched_buffer tiles into cb_dispatched_buffer_id (c_0) for the
+//      compute kernel to untilize into cb_untilize_id (c_2).
+//      ROW_MAJOR: dispatched_buffer is already row-major, so read its rows page-per-page
+//      directly into cb_untilize_id (c_2); no compute kernel runs and c_0 is unused.
+// Compute (untilize_combine, TILE only) and writer_untilize on this same core independently walk
+// the same expert/batch loop using the multicasted counter in c_1, so no per-batch signal CB
 // is needed — producer-consumer ordering on c_0 / c_2 / c_9 keeps everyone in lock-step.
 //
 
@@ -208,11 +211,13 @@ void kernel_main() {
                 cb_push_back(cb_metadata_batch_id, read_batch_size);
             }
 
-            // 2. Read tiles for this batch in block_ct_dim-sized chunks so each push matches one
-            //    compute-side pack_untilize_block consumption of block_ct_dim tiles.  The CB
+#if IS_TILE_LAYOUT
+            // 2. TILE: read tiles for this batch in block_ct_dim-sized chunks so each push matches
+            //    one compute-side pack_untilize_block consumption of block_ct_dim tiles.  The CB
             //    write pointer advances with every push, so re-fetch it after each
             //    `cb_reserve_back` — capturing it once before the loop lands every chunk in
-            //    the same slot and leaves the other slot uninitialized.
+            //    the same slot and leaves the other slot uninitialized.  The paired compute
+            //    kernel untilizes cb_dispatched_buffer_id (c_0) -> cb_untilize_id (c_2).
             {
                 constexpr uint32_t num_blocks = tiles_per_batch / block_ct_dim;
                 for (uint32_t cnt = 0; cnt < num_blocks; cnt++) {
@@ -234,6 +239,33 @@ void kernel_main() {
                 // Steps 3-7 (wait for untilize, wait for sender's send signal, NOC-write to
                 // sender, signal sender, pop untilize CB) now run on writer_untilize.
             }
+#else
+            // 2. ROW_MAJOR: dispatched_buffer is already row-major, so there is no untilization to
+            //    do.  Read the batch's rows page-per-page straight into cb_untilize_id (c_2) — the
+            //    same CB the compute kernel fills in the TILE path — so writer_untilize consumes it
+            //    identically.  No compute kernel runs and cb_dispatched_buffer_id (c_0) is unused.
+            //    start_token is this expert's (tile-aligned) start row, == expert_region_offsets[e];
+            //    batch_token_start offsets to this batch within the expert.  Always reserve/push
+            //    read_batch_size pages so c_2 wraps cleanly (matching writer_untilize's
+            //    cb_wait_front(cb_untilize_id, read_batch_size)); only the first batch_count pages
+            //    hold valid rows.
+            {
+                uint32_t batch_row_start = start_token + batch_token_start;
+                cb_reserve_back(cb_untilize_id, read_batch_size);
+                uint32_t untilize_base = get_write_ptr(cb_untilize_id);
+                {
+                    // DeviceZoneScopedN("DISPATCHED-BUFFER-row-read");
+                    for (uint32_t t = 0; t < batch_count; t++) {
+                        noc_async_read_page(
+                            batch_row_start + t,
+                            dispatched_buffer_addr_gen,
+                            untilize_base + t * aligned_output_page_size);
+                    }
+                    noc_async_read_barrier();
+                }
+                cb_push_back(cb_untilize_id, read_batch_size);
+            }
+#endif
         }
         // Advance to the next expert's region.  Buffer and metadata both use the same
         // tile-aligned per-expert stride, so start_page_tiled (and start_token derived from

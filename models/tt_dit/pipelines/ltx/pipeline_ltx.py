@@ -65,8 +65,10 @@ LTX_UPSAMPLER_HF_REF = "Lightricks/LTX-2.3:ltx-2.3-spatial-upscaler-x2-1.1.safet
 TEMPORAL_COMPRESSION = 8
 SPATIAL_COMPRESSION = 32
 
-# I2V conditioning-image H.264 CRF: round-trip through the codec the VAE/DiT were trained on
-# before encoding (a pristine image gives OOD latents). Mirrors ltx_pipelines DEFAULT_IMAGE_CRF.
+# Conditioning-image H.264 compression level (CRF). The LTX-2 VAE/DiT are trained on
+# codec-degraded frames, so an I2V conditioning image must be round-tripped through the
+# same lossy codec before VAE encoding — feeding a pristine image yields out-of-distribution
+# latents (frame-0 seam, weak identity). Mirrors ``ltx_pipelines.utils.constants.DEFAULT_IMAGE_CRF``.
 DEFAULT_IMAGE_CRF = 33
 
 # Default negative prompt (inlined from the LTX-2 reference
@@ -118,6 +120,28 @@ def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int
     return latent_frames, height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
 
 
+def ceil_to(x: int, multiple: int) -> int:
+    """Smallest multiple of ``multiple`` that is >= ``x``."""
+    return -(-x // multiple) * multiple
+
+
+def pad_hw_replicate(x_BCFHW: torch.Tensor, h_mult: int, w_mult: int) -> tuple[torch.Tensor, int, int]:
+    """Replicate-pad a ``(B, C, F, H, W)`` tensor's H/W up to multiples of ``h_mult``/``w_mult``.
+
+    The sharded VAE convs seam the latent at the 2x4 mesh boundaries when H/W don't divide
+    evenly across the mesh (the uneven-dim halo runs a crop-masking path); padding to even
+    shards avoids it. Returns ``(padded, H, W)`` — the original H/W so the caller can crop the
+    replicated margin back off after the op.
+    """
+    B, C, frames, H, W = x_BCFHW.shape
+    pad_h, pad_w = (-H) % h_mult, (-W) % w_mult
+    if pad_h or pad_w:
+        x_BCFHW = torch.nn.functional.pad(
+            x_BCFHW.reshape(B * C, frames, H, W), (0, pad_w, 0, pad_h), mode="replicate"
+        ).reshape(B, C, frames, H + pad_h, W + pad_w)
+    return x_BCFHW, H, W
+
+
 @dataclass
 class TransformerState:
     model: LTXTransformerModel
@@ -142,6 +166,11 @@ class LTXTransformerState:
         self._tt_video_timestep = StateTensor()
         self._tt_video_ts_pair = StateTensor()
         self._tt_video_pin_mask = StateTensor()
+        # I2V frame-0 pin buffers: held across every denoise step and read by the (eager) pin, so
+        # they MUST be pre-allocated before trace capture — otherwise they land in the trace's
+        # activation region and get clobbered on replay, pinning garbage (intermittent static).
+        self._tt_i2v_mask = StateTensor()
+        self._tt_i2v_clean = StateTensor()
         self._tt_video_pad_mask = StateTensor()
         self._tt_audio_pad_mask = StateTensor()
         self._tt_video_rope_cos = StateTensor()
@@ -381,11 +410,6 @@ class LTXPipeline:
         self.transformer_states: list[TransformerState] = []
         self.vae_decoder = None
         self.vae_encoder = None
-        # Memoized I2V conditioning latents, keyed by (image_path, height, width). The VAE
-        # encoder is eager (not part of the denoise trace), so re-running it per generation is
-        # wasteful and — under a traced replay pass — has hung the device; the encode is
-        # deterministic in (path, resolution), so cache the host result and reuse it.
-        self._i2v_cond_cache: dict[tuple[str, int, int], torch.Tensor] = {}
         self.upsampler: LTXLatentUpsampler | None = None
         # On-device audio decode chain (Stage A mel-VAE + Stage B/C vocoder+BWE).
         # Shells are built at `_instantiate_modules`; weights are loaded via
@@ -679,7 +703,13 @@ class LTXPipeline:
         with safe_open(self._upsampler_path, framework="pt") as f:
             cfg = json.loads(f.metadata()["config"])
         latent_frames = (self._init_num_frames - 1) // TEMPORAL_COMPRESSION + 1
-        input_hw = (self._init_height // 64, self._init_width // 64)
+        # Round the s1 input H/W up to the mesh factors so the upsampler's pinned GroupNorm
+        # and conv dims are built for even shards; _upsample_latent replicate-pads runtime
+        # input to match and crops the output. Even shards skip the halo crop-masking that
+        # seams uneven dims (e.g. 17x30) at the 2x4 boundaries.
+        hf = self.vae_parallel_config.height_parallel.factor
+        wf = self.vae_parallel_config.width_parallel.factor
+        input_hw = (ceil_to(self._init_height // 64, hf), ceil_to(self._init_width // 64, wf))
         return LTXLatentUpsampler(
             input_hw=input_hw,
             in_channels=cfg["in_channels"],
@@ -967,10 +997,23 @@ class LTXPipeline:
         """
         assert self.vae_encoder is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
         self._prepare_vae_encoder()
+        # Pad the image so its latent is evenly shardable across the mesh: an uneven latent
+        # (e.g. the stage-1 cond at 544x960 -> 17x30) seams at the shard boundaries, and that
+        # seam pinned into frame-0 is the i2v grid. The padding lands on an even latent shard
+        # (latent = pixels / SPATIAL_COMPRESSION). The encoder's gather-fold path is a defensive
+        # fallback for any residual per-device odd dim.
+        pc = self.vae_parallel_config
+        image_BCFHW, H, W = pad_hw_replicate(
+            image_BCFHW,
+            pc.height_parallel.factor * SPATIAL_COMPRESSION,
+            pc.width_parallel.factor * SPATIAL_COMPRESSION,
+        )
         device_latent = self.vae_encoder(image_BCFHW)
+        device_latent = device_latent[:, :, :, : H // SPATIAL_COMPRESSION, : W // SPATIAL_COMPRESSION]
         if os.environ.get("LTX_VAE_ENCODER_HOST", "0") != "1":
             return device_latent
         host_latent = self._host_encode_image(image_BCFHW)
+        host_latent = host_latent[:, :, :, : H // SPATIAL_COMPRESSION, : W // SPATIAL_COMPRESSION]
         self._log_encoder_parity(device_latent, host_latent)
         return host_latent
 
@@ -1087,8 +1130,12 @@ class LTXPipeline:
     def _load_conditioning_image(
         image_path: str, height: int, width: int, crf: int = DEFAULT_IMAGE_CRF
     ) -> torch.Tensor:
-        """Decode -> CRF round-trip -> resize+center-crop -> normalize to [-1,1]. Returns
-        ``(1,3,1,H,W)`` float32. Port of ``load_image_and_preprocess``; ``crf=0`` skips the codec."""
+        """Host-side image preprocessing (port of ``load_image_and_preprocess``): decode ->
+        CRF codec round-trip (domain matching) -> resize preserving aspect + center crop ->
+        normalize to [-1, 1]. Returns ``(1, 3, 1, height, width)`` float32.
+
+        The CRF round-trip runs at native resolution before resize (matching the reference
+        order); pass ``crf=0`` to skip it."""
         import math
 
         import numpy as np
@@ -1113,15 +1160,19 @@ class LTXPipeline:
         tensor = tensor.unsqueeze(2)  # (1, 3, 1, H, W)
         return tensor / 127.5 - 1.0
 
-    def decode_latents(self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int) -> torch.Tensor:
+    def decode_latents(
+        self, latent: torch.Tensor, latent_frames: int, latent_h: int, latent_w: int, *, output_type: str = "float"
+    ) -> torch.Tensor:
         """Decode latent tensor to video pixels.
 
         Args:
             latent: (B, num_tokens, C) flat latent from denoising loop
             latent_frames, latent_h, latent_w: Spatial dimensions
+            output_type: "float" → (B, 3, F, H, W) torch in [-1, 1] (for in-pipeline export);
+                         "rgb"   → (B, 3, F, H, W) uint8 numpy, RGB planar
 
         Returns:
-            (B, 3, F, H, W) decoded video
+            decoded video in the requested format
         """
         if self.vae_decoder is None:
             logger.warning("No VAE decoder loaded, returning raw latent")
@@ -1132,7 +1183,10 @@ class LTXPipeline:
         latent_spatial = latent.reshape(B, latent_frames, latent_h, latent_w, self.in_channels)
         latent_spatial = latent_spatial.permute(0, 4, 1, 2, 3)  # BCTHW
 
-        return self.vae_decoder(latent_spatial)
+        video = self.vae_decoder(latent_spatial, output_type=output_type)
+        if output_type != "float":
+            return video.numpy()
+        return video
 
     def _vae_per_channel_stats(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Cached ``(mean-of-means, std-of-means)`` reshaped for ``(B, C, F, H, W)``
@@ -1173,7 +1227,14 @@ class LTXPipeline:
         self._prepare_upsampler()
         mean, std = self._vae_per_channel_stats()
         x = video_latent.float() * std + mean
+        # Pad to even mesh shards so the upsampler's sharded convs skip the uneven-dim halo
+        # crop-masking that seams the 2x4 boundaries (s1 17x30); crop the 2x-upsampled margin
+        # off to preserve the field of view. _new_upsampler builds the upsampler at these
+        # rounded dims so its pinned GroupNorm/conv shapes match.
+        pc = self.upsampler.parallel_config
+        x, H, W = pad_hw_replicate(x, pc.height_parallel.factor, pc.width_parallel.factor)
         x = self.upsampler(x)
+        x = x[:, :, :, : H * 2, : W * 2]
         return (x.float() - mean) / std
 
     def _warmup_upsample(self, num_frames: int, height: int, width: int) -> None:
@@ -1187,15 +1248,11 @@ class LTXPipeline:
 
     def _warmup_encode(self, height: int, width: int) -> None:
         """Load the VAE encoder + JIT-compile encode kernels with a zero single-frame image
-        at the target resolution. No-op when no encoder is configured (non-I2V checkpoints).
-
-        Always device-only (bypasses ``encode_image``'s host parity path): a zeros input gives a
-        degenerate PCC, and the meaningful device-vs-host comparison is logged on the real
-        conditioning image during generate()."""
+        at the target resolution. No-op when no encoder is configured (non-I2V checkpoints)."""
         if self.vae_encoder is None:
             return
-        self._prepare_vae_encoder()
-        self.vae_encoder(torch.zeros(1, 3, 1, height, width))
+        dummy = torch.zeros(1, 3, 1, height, width)
+        self.encode_image(dummy)
 
     def _warmup_decode(self, num_frames: int, height: int, width: int) -> None:
         """Load VAE + JIT-compile decode kernels with a zero dummy latent at
@@ -1542,9 +1599,11 @@ class LTXPipeline:
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run AV denoising with full MultiModalGuider guidance. Returns (video_latent, audio_latent).
 
-        I2V: pass ``image_cond_latent`` ``(B, 128, F', lh, lw)`` + ``image_cond_strength``. Frame-0
-        tokens are pinned to the clean latent via a per-token denoise mask + per-token timesteps +
-        a per-step blend (mirrors ``VideoConditionByLatentIndex`` + ``GaussianNoiser``).
+        I2V conditioning: pass ``image_cond_latent`` (the encoded conditioning latent
+        ``(B, 128, F', lh, lw)``, frame-0 aligned) and ``image_cond_strength``. Frame-0 tokens are
+        pinned to the clean image latent via a per-token denoise mask (``denoise_mask = 1 - strength``
+        there), per-token timesteps (``denoise_mask * sigma``), and a per-step ``post_process_latent``
+        blend (mirrors the reference ``VideoConditionByLatentIndex`` + ``GaussianNoiser``).
 
         Stage-2 / refine usage: pass ``sigmas`` (the explicit schedule), the
         upsampled ``initial_video_latent`` plus the stage-1 ``initial_audio_latent``,
@@ -1558,7 +1617,9 @@ class LTXPipeline:
         # N_local % TILE_HEIGHT == 0 and N_global == N_local * ring_size checks pass.
         video_N = self._sp_pad_len(video_N_real)
 
-        # needs_video_ts: transformer expects a per-token timestep (all-ones mask for pure T2V).
+        # I2V conditioning state. ``needs_video_ts`` is True whenever the transformer expects a
+        # per-token video timestep (the two-stage pipeline builds it that way), even for pure T2V
+        # (then the mask is all-ones, so timesteps = sigma everywhere == the old scalar path).
         image_cond = image_cond_latent is not None
         needs_video_ts = getattr(self.transformer, "image_conditioning", False)
         denoise_mask = None  # (B, video_N_real, 1)
@@ -1626,7 +1687,8 @@ class LTXPipeline:
             ), f"sigmas length {len(sigmas)} must equal num_inference_steps+1 ({num_inference_steps+1})"
 
         if image_cond:
-            # GaussianNoiser on a conditioned init: frame-0 = clean latent, noise scaled by mask * ns.
+            # Reference GaussianNoiser over a conditioned initial state: the base latent has frame-0
+            # tokens replaced by the clean image latent; noise is scaled by ``denoise_mask * ns``.
             ns = noise_scale if initial_video_latent is not None else sigmas[0].item()
             if seed is not None:
                 torch.manual_seed(seed)
@@ -1690,7 +1752,8 @@ class LTXPipeline:
             sigma = sigmas[step_idx].item()
             sigma_next = sigmas[step_idx + 1].item()
 
-            # Per-token video timestep (B, video_N): mask * sigma on real tokens, sigma on SP padding.
+            # Per-token video timestep (B, video_N): denoise_mask * sigma on real tokens, sigma on
+            # SP-padding tokens. Only consumed when the transformer is in image-conditioning mode.
             video_ts = None
             if needs_video_ts:
                 video_ts = torch.full((B, video_N), sigma, dtype=torch.float32)
@@ -1787,7 +1850,8 @@ class LTXPipeline:
                     real_token_count=audio_N_real,
                 )
 
-            # I2V: pin frame-0 to the clean latent (denoised * mask + clean * (1 - mask)) pre-Euler.
+            # I2V post_process_latent: pin frame-0 tokens to the clean image latent
+            # (denoised * mask + clean * (1 - mask)) before the Euler step. Audio untouched.
             if image_cond:
                 v_den_real = v_den[:, :video_N_real, :].float()
                 blended = v_den_real * denoise_mask + clean_latent * (1.0 - denoise_mask)

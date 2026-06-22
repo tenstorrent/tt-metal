@@ -1695,8 +1695,8 @@ def test_full_model_parity_decode_trace(layer_set, decode_steps, pli, mesh_devic
 
 @parametrize_mesh_with_fabric()
 @pytest.mark.parametrize("decode_steps", [4], ids=lambda n: f"steps{n}")
-@pytest.mark.parametrize("layer_set", ["all_kv_shared"], ids=["all-kv-shared"])
-@pytest.mark.parametrize("pli", [True], ids=["pli"])
+@pytest.mark.parametrize("layer_set", ["small", "all_kv_shared"], ids=["small", "all-kv-shared"])
+@pytest.mark.parametrize("pli", [False, True], ids=["no-pli", "pli"])
 def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, mesh_device, reset_seeds, request):
     """End-to-end mirror of vLLM's warmup→inference flow.
 
@@ -1742,8 +1742,6 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
-            if kv_shared_override <= 0:
-                pytest.skip("Model has no kv-shared layers")
         hf_text_config = _create_hf_text_config_with_pli(vocab_size=256, num_layers=num_layers, pli_size=64)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override
@@ -1758,8 +1756,6 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             real = TestFactory.create_hf_config()
             num_layers = int(real.num_hidden_layers)
             kv_shared_override = int(getattr(real, "num_kv_shared_layers", 0) or 0)
-            if kv_shared_override <= 0:
-                pytest.skip("Model has no kv-shared layers")
         hf_text_config = _create_hf_text_config(vocab_size=256, num_layers=num_layers)
         if kv_shared_override is not None:
             hf_text_config.num_kv_shared_layers = kv_shared_override
@@ -1835,7 +1831,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
         max_batch_size=1,
         num_blocks=uniform_num_blocks,
         can_sample_on_device=False,
-        non_greedy_decoding_on_device=False,
+        greedy_only=True,
     )
 
     # vLLM warmup — replicate the bridge's pre-decode setup so the
@@ -1852,7 +1848,7 @@ def test_full_model_parity_warmup_then_inference(layer_set, decode_steps, pli, m
             max_batch_size=1,
             num_blocks=warmup_num_blocks,
             can_sample_on_device=False,
-            non_greedy_decoding_on_device=False,
+            greedy_only=True,
         )
     finally:
         if hasattr(tt_model_vllm, "_active_page_tables_per_layer"):

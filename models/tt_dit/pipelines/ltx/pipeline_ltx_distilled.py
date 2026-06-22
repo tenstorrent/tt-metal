@@ -143,7 +143,10 @@ class LTXDistilledPipeline(LTXPipeline):
         # Warm the encoders last: they coresident-evict the DiT/VAE, so gen #0 then re-loads the DiT.
         # The VAE image encoder is warmed here (not before the denoise warmups) for the same reason:
         # running it evicts the transformer weights, which the denoise steps above still need resident.
-        if self.vae_encoder is not None and os.environ.get("LTX_I2V_IMAGE"):
+        # Warm whenever the checkpoint has an encoder, not only when an I2V image is staged: the first
+        # I2V request can arrive after capture, and loading the encoder then evicts the DiT and clobbers
+        # the already-captured traces' activation regions — corrupting every subsequent gen to static.
+        if self.vae_encoder is not None:
             logger.info(f"warmup image encoder: {height // 2}x{width // 2} + {height}x{width}")
             self._warmup_encode(height // 2, width // 2)
             self._warmup_encode(height, width)
@@ -242,6 +245,15 @@ class LTXDistilledPipeline(LTXPipeline):
                 mesh_axes=[None, None, sp_axis, None],
                 device=self.mesh_device,
             )
+            # I2V pin buffers (mask + clean frame-0 latent): reserve here so traced replays can't
+            # clobber them. Allocated for every stage even when unused by t2v — small and harmless.
+            for buf in (state._tt_i2v_mask, state._tt_i2v_clean):
+                buf.update(
+                    torch.zeros(1, 1, video_N, self.in_channels),
+                    False,
+                    mesh_axes=[None, None, sp_axis, None],
+                    device=self.mesh_device,
+                )
 
     def _denoise_no_guidance(
         self,
@@ -386,18 +398,13 @@ class LTXDistilledPipeline(LTXPipeline):
             mask_host[:, :, :video_N_real, :] = denoise_mask[0, :, 0].unsqueeze(-1).expand(-1, self.in_channels)
             clean_host = torch.zeros(1, 1, video_N, self.in_channels)
             clean_host[:, :, :video_N_real, :] = clean_latent
-            tt_i2v_mask = bf16_tensor(
-                mask_host,
-                device=self.mesh_device,
-                mesh_axis=sp_axis,
-                shard_dim=-2,
+            # Write into the pre-allocated, trace-baked buffers (copy-in-place when traced) so the
+            # held pin inputs keep stable addresses across replays — never freshly allocated here.
+            state._tt_i2v_mask.update(mask_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device)
+            state._tt_i2v_clean.update(
+                clean_host, traced, mesh_axes=[None, None, sp_axis, None], device=self.mesh_device
             )
-            tt_i2v_clean = bf16_tensor(
-                clean_host,
-                device=self.mesh_device,
-                mesh_axis=sp_axis,
-                shard_dim=-2,
-            )
+            tt_i2v_mask, tt_i2v_clean = state.tt_i2v_mask, state.tt_i2v_clean
 
         for step_idx in range(num_steps):
             sigma = sigmas[step_idx].item()
@@ -407,8 +414,10 @@ class LTXDistilledPipeline(LTXPipeline):
             )
             video_ts_pair_tt = video_pin_mask_tt = None
             if needs_video_ts:
-                # Per-token timestep has 2 values (pinned frame-0 vs. sigma): pass the (2,) pair +
-                # {0,1} pin mask so the transformer blends per token (avoids dense modulation, OOM).
+                # The per-token video timestep has just two distinct values: pinned frame-0 tokens
+                # at pinned_ts, everything else at sigma. Pass the (2,) pair + a {0,1} pin mask so the
+                # transformer evaluates AdaLN on only those two timesteps and blends per token —
+                # this avoids the dense per-token modulation + its tile-padded reshape (OOM at full res).
                 pinned_scale = (1.0 - image_cond_strength) if (image_cond and n_cond > 0) else 1.0
                 ts_pair = torch.tensor([pinned_scale * sigma, sigma], dtype=torch.float32)
                 state._tt_video_ts_pair.update(ts_pair.reshape(1, 1, 2, 1) * 1000.0, traced, device=self.mesh_device)
@@ -551,7 +560,8 @@ class LTXDistilledPipeline(LTXPipeline):
         self,
         prompt: str,
         *,
-        output_path: str,
+        output_path: str | None = None,
+        output_type: str = "rgb",
         # I2V: list of (image_path, frame_idx, strength). Only frame_idx==0 is supported.
         images: list[tuple[str, int, float]] | None = None,
         num_frames: int = 121,
@@ -559,8 +569,13 @@ class LTXDistilledPipeline(LTXPipeline):
         width: int = 768,
         seed: int = 10,
         fps: int = 24,
-    ) -> str:
-        """Run the distilled 2-stage AV pipeline and write an MP4."""
+    ):
+        """Run the distilled 2-stage AV pipeline.
+
+        output_path given → encode an AV MP4 and return its path (str).
+        output_path None  → return ``(frames, audio)`` for the caller to encode: frames per
+                            ``output_type`` (see ``decode_latents``), audio = decoded ``Audio``.
+        """
         assert height % 64 == 0, f"Height must be divisible by 64 (got {height})"
         assert width % 64 == 0, f"Width must be divisible by 64 (got {width})"
 
@@ -591,24 +606,14 @@ class LTXDistilledPipeline(LTXPipeline):
             if cond_imgs:
                 assert self.vae_encoder is not None, "checkpoint has no VAE encoder; cannot run I2V conditioning"
                 img_path, _, cond_strength = cond_imgs[0]
-                # The conditioning latent depends only on (image, resolution), so encode once and
-                # memoize. This skips re-running the eager VAE encoder on later gens (e.g. the traced
-                # steady-state replay pass, where re-encoding has been observed to hang the device).
-                s1_key = (img_path, s1_height, s1_width)
-                full_key = (img_path, height, width)
-                cache = self._i2v_cond_cache
-                if s1_key in cache and full_key in cache:
-                    s1_cond_latent, full_cond_latent = cache[s1_key], cache[full_key]
-                    logger.info(f"I2V: reusing cached conditioning latents for {img_path} (strength={cond_strength})")
-                else:
-                    logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
-                    t0 = time.time()
-                    img_s1 = self._load_conditioning_image(img_path, s1_height, s1_width)
-                    img_full = self._load_conditioning_image(img_path, height, width)
-                    s1_cond_latent = cache[s1_key] = self.encode_image(img_s1)
-                    full_cond_latent = cache[full_key] = self.encode_image(img_full)
-                    timings.append(("Image encode", time.time() - t0))
-                    logger.info(f"Image encode: {time.time() - t0:.1f}s")
+                logger.info(f"I2V: encoding conditioning image {img_path} (strength={cond_strength})")
+                t0 = time.time()
+                img_s1 = self._load_conditioning_image(img_path, s1_height, s1_width)
+                img_full = self._load_conditioning_image(img_path, height, width)
+                s1_cond_latent = self.encode_image(img_s1)
+                full_cond_latent = self.encode_image(img_full)
+                timings.append(("Image encode", time.time() - t0))
+                logger.info(f"Image encode: {time.time() - t0:.1f}s")
 
         t0 = time.time()
         self._prepare_transformer(0)
@@ -633,14 +638,6 @@ class LTXDistilledPipeline(LTXPipeline):
         t_stage1 = time.time() - t0
         timings.append(("Stage 1 denoise", t_stage1))
         logger.info(f"Stage 1 denoise: {t_stage1:.1f}s")
-
-        if os.environ.get("LTX_DECODE_S1_AUDIO", "").lower() in ("1", "true", "yes"):
-            s1_path = output_path.replace(".mp4", "_s1.wav")
-            audio_obj = self.decode_audio(s1_audio, num_frames, fps=fps)
-            if audio_obj is not None:
-                self._write_stage1_wav(audio_obj, s1_path)
-                logger.info(f"LTX_DECODE_S1_AUDIO: wrote {s1_path}")
-            return output_path
 
         latent_frames = (num_frames - 1) // TEMPORAL_COMPRESSION + 1
         s1_h, s1_w = s1_height // SPATIAL_COMPRESSION, s1_width // SPATIAL_COMPRESSION
@@ -681,8 +678,10 @@ class LTXDistilledPipeline(LTXPipeline):
             logger.info(f"VAE prepare: {time.time() - t0:.1f}s")
 
         latent_h, latent_w = height // SPATIAL_COMPRESSION, width // SPATIAL_COMPRESSION
+        # export_video_audio needs float [-1,1]; the frame-return path uses the requested output_type.
+        decode_type = "float" if output_path is not None else output_type
         t0 = time.time()
-        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w)
+        video_pixels = self.decode_latents(s2_video, latent_frames, latent_h, latent_w, output_type=decode_type)
         t_vae_decode = time.time() - t0
         timings.append(("VAE decode", t_vae_decode))
         logger.info(f"VAE decode (forward): {t_vae_decode:.1f}s — {tuple(video_pixels.shape)}")
@@ -693,10 +692,13 @@ class LTXDistilledPipeline(LTXPipeline):
         timings.append(("Audio decode", t_audio_decode))
         logger.info(f"Audio decode: {t_audio_decode:.1f}s")
 
+        self.last_timings = list(timings)
+        if output_path is None:
+            logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | frames={tuple(video_pixels.shape)}")
+            return video_pixels, audio_obj
+
         t0 = time.time()
         export_video_audio(video_pixels, output_path, fps=fps, audio=audio_obj)
         logger.info(f"Video export: {time.time() - t0:.1f}s")
-
-        self.last_timings = list(timings)
         logger.info(f"Total (compute): {sum(s for _, s in timings):.1f}s | Output: {output_path}")
         return output_path

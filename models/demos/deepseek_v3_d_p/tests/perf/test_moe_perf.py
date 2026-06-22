@@ -40,10 +40,10 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        expected_ns_8x1=102_298_878,
+        expected_ns_8x1=36_272_143,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=94_929_326,
+        expected_ns_2x4=39_194_517,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
@@ -59,7 +59,7 @@ def test_deepseek_v3_moe_perf_galaxy():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
-        expected_device_perf_ns_per_iteration=105_670_132,
+        expected_device_perf_ns_per_iteration=41_294_210,
         subdir="deepseek_v3_moe",
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,

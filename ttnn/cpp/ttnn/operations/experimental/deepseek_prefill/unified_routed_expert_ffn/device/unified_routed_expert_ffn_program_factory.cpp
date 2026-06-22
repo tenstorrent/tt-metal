@@ -4,6 +4,7 @@
 
 #include "unified_routed_expert_ffn_program_factory.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <map>
 #include <unordered_map>
@@ -289,22 +290,43 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         /*tiles=*/d_in0_block_num_tiles * 2,
         intermed_tile_size);
 
-    // Scratch CBs for the device-side count lookup. One page each, sized to
-    // the corresponding tensor's aligned page size so noc_async_read_page
-    // can land them.
-    const uint32_t counts_page_size = counts_buffer->aligned_page_size();
-    const uint32_t idx_page_size = idx_buffer->aligned_page_size();
+    // Scratch CBs for the device-side count lookup. The reader does a single
+    // noc_async_read_page(page=0, ...) of each tensor and then indexes
+    // counts[global_expert_id] / idx[local_expert_id]. Both indices stay within
+    // the tensor's own length (counts: [0, num_global_experts); idx:
+    // [0, idx_len)), and the reader's page-0 read contract requires the entire
+    // vector to live in page 0 — i.e. aligned_page_size already covers every
+    // index the reader can produce. So aligned_page_size is the exact capacity
+    // the scratch needs; we keep a num_entries*4B floor purely as a defensive
+    // guard in case a future layout reports a sub-row page.
+    //
+    // Previously this floored to MAX_GLOBAL_EXPERTS * 4B (a fixed 4 KB), which
+    // over-allocated ~3 KB/core for the 256-expert DS-V3 path and ~2.5 KB for
+    // Kimi (384). That slack is what tipped the mesh-4x2 perf-256 program over
+    // the L1 ceiling once MEM_MAILBOX_SIZE grew 256 B (#46526). Sizing to the
+    // real per-call requirement reclaims it (~6 KB/core across both scratches)
+    // — far more than the 192 B overlap — and still scales correctly up to the
+    // host-side-validated MAX_GLOBAL_EXPERTS limit.
+    const uint32_t counts_num_entries = static_cast<uint32_t>(t.counts.logical_shape()[-1]);
+    const uint32_t idx_num_entries = static_cast<uint32_t>(t.global_expert_idx_table.logical_shape()[-1]);
+    const uint32_t counts_scratch_bytes = std::max<uint32_t>(
+        static_cast<uint32_t>(counts_buffer->aligned_page_size()),
+        counts_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
+    const uint32_t idx_scratch_bytes = std::max<uint32_t>(
+        static_cast<uint32_t>(idx_buffer->aligned_page_size()),
+        idx_num_entries * static_cast<uint32_t>(sizeof(uint32_t)));
     tt::tt_metal::CircularBufferConfig counts_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(counts_page_size, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_COUNTS_SCRATCH, counts_page_size);
+        tt::tt_metal::CircularBufferConfig(counts_scratch_bytes, {{CB_COUNTS_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_COUNTS_SCRATCH, counts_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, counts_cb_cfg);
     // CB_IDX_SCRATCH holds the device-side global_expert_idx_table page so
     // reader/compute/writer can resolve `global_expert_id =
-    // idx_table[local_expert_id]` without re-reading DRAM. One page sized
-    // to the table's aligned page size.
+    // idx_table[local_expert_id]` without re-reading DRAM. Sized the same way:
+    // a single-chip deployment can place all experts locally, so the idx table
+    // may itself be up to MAX_GLOBAL_EXPERTS entries.
     tt::tt_metal::CircularBufferConfig idx_cb_cfg =
-        tt::tt_metal::CircularBufferConfig(idx_page_size, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
-            .set_page_size(CB_IDX_SCRATCH, idx_page_size);
+        tt::tt_metal::CircularBufferConfig(idx_scratch_bytes, {{CB_IDX_SCRATCH, tt::DataFormat::UInt32}})
+            .set_page_size(CB_IDX_SCRATCH, idx_scratch_bytes);
     tt::tt_metal::CreateCircularBuffer(program, core_range_set, idx_cb_cfg);
 
     // -------------------------- kernel build ------------------------------

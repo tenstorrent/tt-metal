@@ -29,12 +29,13 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void reshuffle_rows_tile(uint32_t idst, uint32_t idx_addr) {
-    MATH(SFPU_CALL_MODE(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reshuffle_rows, (APPROX), RC_custom, idst, idx_addr));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_reshuffle_rows, (APPROX), idst, VectorMode::RC_custom, idx_addr));
 }
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void reshuffle_rows_tile_init() { MATH(SFPU_INIT(reshuffle_rows)); }
+ALWI void reshuffle_rows_tile_init() { MATH(SFPU_UNARY_INIT(reshuffle_rows)); }
 
 }  // namespace ckernel

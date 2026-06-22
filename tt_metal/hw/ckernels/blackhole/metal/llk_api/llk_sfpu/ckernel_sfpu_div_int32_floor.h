@@ -29,7 +29,7 @@ sfpi_inline void calculate_div_int32_body(
     sfpi::vMag b = sfpi::abs(b_orig);
 
     // Convert to floats, but check for the edge case mentioned above.
-    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat b_f = sfpi::convert<sfpi::vFloat>(b, sfpi::RoundMode::Nearest);
     v_if(b_f < 0.0f) { b_f = 0x1.0p31f; }
     v_endif;
 
@@ -43,7 +43,7 @@ sfpi_inline void calculate_div_int32_body(
     e = e * e + e;
     sfpi::vMag a = sfpi::abs(a_orig);
     inv_b_f = e * inv_b_f + inv_b_f;
-    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::NearestEven);
+    sfpi::vFloat a_f = sfpi::convert<sfpi::vFloat>(a, sfpi::RoundMode::Nearest);
     v_if(a_f < 0.0f) { a_f = 0x1.0p31f; }
     v_endif;
 
@@ -52,7 +52,7 @@ sfpi_inline void calculate_div_int32_body(
     // the mantissa so that we extract the top 22 bits of the result.
     sfpi::vFloat q_f = a_f * inv_b_f + vConstFloatPrgm0;
     sfpi::vInt sign = a_orig ^ b_orig;
-    sfpi::vUInt q = sfpi::exman(q_f);
+    sfpi::vMag q_m = sfpi::exman(q_f);
 
     // Compute qb = q * b.  This tells us how close our approximation `q` is to
     // the target `a`.  We split into 23-bit chunks.
@@ -60,22 +60,19 @@ sfpi_inline void calculate_div_int32_body(
     // 22 bits, so we can compute qb = (q1<<10 + 0) * (b1<<22 + b0)
     //                               = (q1<<10) * b0
 
-    sfpi::vInt qb = sfpi::fractional_mul(q, b);
-
-    q <<= 10;
-    qb <<= 10;
+    sfpi::vInt qb{sfpi::fractional_mul(q_m, b) << 10};
+    sfpi::vInt q{q_m << 10};
 
     // Compute remainder.
     sfpi::vInt r = a - qb;
-    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::NearestEven);
+    sfpi::vFloat r_f = sfpi::convert<sfpi::vFloat>(sfpi::abs(r), sfpi::RoundMode::Nearest);
 
     // Compute correction value in float32.
     sfpi::vFloat correction_f = r_f * inv_b_f;
-    sfpi::vInt b1 = b >> 23;
-    sfpi::vInt correction = sfpi::float_to_uint16(correction_f, sfpi::RoundMode::NearestEven);
+    sfpi::vMag correction = sfpi::convert<sfpi::vUInt16>(correction_f, sfpi::RoundMode::Nearest);
 
     // Compute tmp = correction * b.
-    b1 = sfpi::fractional_mul(correction, b1);
+    sfpi::vInt b1 = sfpi::fractional_mul(correction, b >> 23);
     sfpi::vInt tmp_hi = sfpi::fractional_mul(correction, b, sfpi::FractionalHalf::High);
     sfpi::vInt tmp_lo = sfpi::fractional_mul(correction, b);
     tmp_hi += b1;

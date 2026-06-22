@@ -52,8 +52,9 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         // Switch from the default SrcA format bank to the override bank so manual SrcA_val writes control MOVB2D behavior.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
 
-        // Disable zero flag to prevent mantissa flushing when exponent bits are 0.
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+        // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
+        // zero-substitution flag via the math state tracker.
+        math::_configure_mov_ops_zero_flag_state_();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
@@ -178,7 +179,6 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
             TTI_CLEARDVALID(0b10, 0);
         }
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(0);
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
     }
     else
     {

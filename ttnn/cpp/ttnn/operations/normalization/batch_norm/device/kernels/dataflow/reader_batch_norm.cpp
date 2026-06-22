@@ -9,7 +9,6 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/kernel/dataflow/moreh_common.hpp"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -31,12 +30,12 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t k_tile_face_elems = 1024;
 
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const auto src = TensorAccessor(src_args, src_addr);
-
     Noc noc;
-    CircularBuffer cb_id_src_obj(cb_id_src);
-    CircularBuffer cb_id_eps_obj(cb_id_eps);
+    CircularBuffer cb_src(cb_id_src);
+    CircularBuffer cb_eps(cb_id_eps);
+
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
+    const auto src = TensorAccessor(src_args, src_addr);
 
     uint32_t tiles_per_batch = HtWt * C;
     uint32_t start_n = start_tile_id / tiles_per_batch;
@@ -44,15 +43,15 @@ void kernel_main() {
     uint32_t start_c = start_remaining / HtWt;
     uint32_t start_t = start_remaining % HtWt;
 
-    cb_id_eps_obj.reserve_back(onetile);
+    cb_eps.reserve_back(onetile);
     if constexpr (fill_eps_fp32) {
         float eps_f = 0;
         std::memcpy(&eps_f, &eps, sizeof(float));  // Alternative for std::bit_cast
-        fill_with_val<k_tile_face_elems, float>(cb_id_eps, eps_f);
+        fill_with_val<k_tile_face_elems, float>(cb_eps.get_write_ptr(), eps_f);
     } else {
-        fill_with_val_bfloat16(cb_id_eps, eps);
+        fill_with_val_bfloat16(cb_eps.get_write_ptr(), eps);
     }
-    cb_id_eps_obj.push_back(onetile);
+    cb_eps.push_back(onetile);
 
     // Input tile offset
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride + start_t;
@@ -64,10 +63,10 @@ void kernel_main() {
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
-                cb_id_src_obj.reserve_back(onetile);
-                noc.async_read(src, cb_id_src_obj, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                cb_src.reserve_back(onetile);
+                noc.async_read(src, cb_src, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
                 noc.async_read_barrier();
-                cb_id_src_obj.push_back(onetile);
+                cb_src.push_back(onetile);
             }
             tile_offset += next_channel_shift;
         }

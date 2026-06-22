@@ -8,6 +8,8 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <cstdint>
+#include <tt-metalium/workload_descriptor.hpp>
 #include <optional>
 #include <vector>
 
@@ -20,15 +22,30 @@ struct RingAttentionAllGatherAsyncMultiCoreWithWorkersProgramFactory {
 
     using tensor_return_value_t = std::vector<Tensor>;
 
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate = std::nullopt);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 };
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn {
+
+namespace ring_attention_all_gather_async_detail {
+
+// All-gather reader runtime-arg layout: [0]=dim, [1]=ring_size, [2]=out_ready_sem,
+// followed by one tensor-descriptor block per gathered input.
+constexpr uint32_t kReaderRuntimeArgHeaderCount = 3;
+constexpr uint32_t kTensorDescriptorFieldCount = 8;
+constexpr uint32_t kInputBatchBaseFieldOffset = 7;
+
+inline uint32_t input_batch_base_pages(
+    uint32_t batch_idx, uint32_t num_heads, uint32_t tensor_height_tiles, uint32_t tensor_width_tiles) {
+    return batch_idx * num_heads * tensor_height_tiles * tensor_width_tiles;
+}
+
+}  // namespace ring_attention_all_gather_async_detail
 
 // Append all kernels, CBs, semaphores, and runtime args required by the
 // ring-attention all-gather worker pipeline to `desc`.
@@ -54,6 +71,10 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler>& fused_op_signaler,
     CoreCoord core_grid_offset = CoreCoord(0, 0),
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    // When set, gather only this batch slot (dim-0 index) of `input_tensor` into slot 0 of
+    // `output_tensor` — lets a consumer keep a full KV cache as input with a batch-1 gathered buffer
+    // (a full-batch output also works; only slot 0 is written). std::nullopt => full batch (default).
+    std::optional<uint32_t> input_batch_slice_idx = std::nullopt);
 
 }  // namespace ttnn

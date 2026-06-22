@@ -490,7 +490,9 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         "Both DFBs must be created via add_dataflow_buffer before aliasing.",
         secondary_id,
         dataflow_buffers_.size());
-    TT_FATAL(primary_id != secondary_id, "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
+    TT_FATAL(
+        primary_id != secondary_id,
+        "set_dfb_alias: cannot alias a DFB with itself. Primary and secondary DFB IDs must be different");
 
     auto& primary_dfb = dataflow_buffers_[primary_id];
     auto& secondary_dfb = dataflow_buffers_[secondary_id];
@@ -505,7 +507,6 @@ void ProgramImpl::set_dfb_alias(uint32_t primary_id, uint32_t secondary_id) {
         "set_dfb_alias: secondary DFB id {} is already aliased to primary DFB id {}.",
         secondary_id,
         secondary_dfb->alias_primary_id.value());
-
 
     dataflow_buffers_[primary_id]->alias_secondary_ids.push_back(secondary_id);
     dataflow_buffers_[secondary_id]->alias_primary_id = primary_id;
@@ -579,12 +580,18 @@ std::vector<std::string> ProgramImpl::get_registered_kernel_names() const {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, bool dynamic_tensor_shape, bool match_padded_shape_only) {
+    const std::string& name,
+    const TensorSpec& spec,
+    bool dynamic_tensor_shape,
+    bool match_padded_shape_only,
+    bool enqueue_invariant) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
-        name, Metal2NameRegistry::RegisteredTensorParameter{spec, dynamic_tensor_shape, match_padded_shape_only});
+        name,
+        Metal2NameRegistry::RegisteredTensorParameter{
+            spec, dynamic_tensor_shape, match_padded_shape_only, enqueue_invariant});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
 }
 
@@ -619,6 +626,17 @@ bool ProgramImpl::get_tensor_parameter_match_padded_shape_only(const std::string
         return false;
     }
     return it->second.match_padded_shape_only;
+}
+
+bool ProgramImpl::get_tensor_parameter_enqueue_invariant(const std::string& name) const {
+    if (!metal2_registry_) {
+        return false;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end()) {
+        return false;
+    }
+    return it->second.enqueue_invariant;
 }
 
 std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() const {
@@ -2165,7 +2183,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
         for (const auto& [kernel, build_options] : submitted_kernels) {
             kernel->read_binaries(device, binary_root);
             kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-            Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+            Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
         }
     } else {
         // Local path: parallel build via thread pool.
@@ -2179,7 +2197,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                             ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
                         kernel->read_binaries(device, binary_root);
                         kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
-                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+                        Inspector::program_kernel_compile_finished(this, device, kernel, build_options, binary_root);
                     },
                     events);
             }
@@ -2369,11 +2387,12 @@ void detail::ProgramImpl::finalize_offsets(IDevice* device) {
         return this->get_kernels(index);
     };
 
-    detail::KernelGroupsGetter kernel_groups_getter = [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& {
-        return this->get_kernel_groups(index);
-    };
+    detail::KernelGroupsGetter kernel_groups_getter =
+        [this](uint32_t index) -> std::vector<std::shared_ptr<KernelGroup>>& { return this->get_kernel_groups(index); };
 
-    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& { return this->semaphores(); };
+    detail::SemaphoresGetter semaphores_getter = [this]() -> const std::vector<Semaphore>& {
+        return this->semaphores();
+    };
 
     // Create a span with just this program
     std::array<ProgramImpl*, 1> programs_array = {this};
@@ -2424,12 +2443,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         TT_ASSERT(state.offset == tt::align(state.offset, hal.get_alignment(HalMemType::L1)));
 
         state.offset = tt::tt_metal::experimental::dfb::detail::finalize_dfbs(
-            index,
-            kernel_groups_getter(index),
-            dataflow_buffers,
-            state.offset,
-            state.dfb_offset,
-            state.dfb_size);
+            index, kernel_groups_getter(index), dataflow_buffers, state.offset, state.dfb_offset, state.dfb_size);
 
         // On WH/BH, DFBs reuse the CB firmware init path; set local_cb_mask to a proper DFB
         // slot bitmask so setup_local_cb_read_write_interfaces initialises every DFB slot.

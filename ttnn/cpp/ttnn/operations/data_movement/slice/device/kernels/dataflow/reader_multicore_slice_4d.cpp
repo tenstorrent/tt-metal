@@ -43,6 +43,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
 
@@ -151,13 +152,10 @@ void kernel_main() {
                 cb_out.reserve_back(1);
                 uint32_t l1_write_addr = cb_out.get_write_ptr();
 
-                // Read the full input row first
-                noc.async_read(
-                    s0,
-                    cb_out,
-                    input_bytes_per_row,
-                    {.page_id = input_row_idx, .offset_bytes = 0},
-                    {.offset_bytes = 0});
+                // noc_async_read_sharded splits the read across shards for B/W-sharded inputs;
+                // falls through to a single noc_async_read for interleaved / HEIGHT-sharded.
+                tt::data_movement::common::noc_async_read_sharded(
+                    noc, l1_write_addr, s0, input_row_idx, /*offset=*/0, /*size=*/input_bytes_per_row);
                 noc.async_read_barrier();
 
                 // Now slice the row according to width slice parameters

@@ -12,15 +12,8 @@
 
 namespace {
 
-FORCE_INLINE static float bfloat16_to_float(uint16_t bfloat_val) {
-    uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
-    float f;
-    std::memcpy(&f, &uint32_data, sizeof(f));
-    return f;
-}
-
 FORCE_INLINE float perform_reduction(float input, uint16_t source_value, ScatterReductionType scatter_reduction_type) {
-    float fp32_source_value = bfloat16_to_float(source_value);
+    float fp32_source_value = bf16_to_fp32(source_value);
     switch (scatter_reduction_type) {
         case ScatterReductionType::ADD: {
             return input + fp32_source_value;
@@ -97,7 +90,7 @@ FORCE_INLINE void copy_input_to_fp32_temp(uint32_t input_cb, uint32_t fp32_temp_
     volatile tt_l1_ptr float* fp32_temp_l1_write_ptr =
         reinterpret_cast<volatile tt_l1_ptr float*>(fp32_temp_l1_write_addr);
     for (uint32_t index_in_input_chunk = 0; index_in_input_chunk < input_chunk_size; ++index_in_input_chunk) {
-        fp32_temp_l1_write_ptr[index_in_input_chunk] = bfloat16_to_float(input_l1_read_ptr[index_in_input_chunk]);
+        fp32_temp_l1_write_ptr[index_in_input_chunk] = bf16_to_fp32(input_l1_read_ptr[index_in_input_chunk]);
     }
 }
 
@@ -117,6 +110,7 @@ FORCE_INLINE void copy_fp32_temp_to_output(uint32_t fp32_temp_cb, uint32_t outpu
 }  // namespace
 
 void kernel_main() {
+    Noc noc;
     constexpr auto ctas{get_ctas()};
 
     const uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
@@ -164,6 +158,7 @@ void kernel_main() {
 
             // first phase: copy input data to output
             load_to_cb(
+                noc,
                 ctas.input_cb,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
@@ -186,6 +181,7 @@ void kernel_main() {
                         std::min(ctas.source_stick_size - source_offset, source_chunk_size);
 
                     load_to_cb(
+                        noc,
                         ctas.index_cb,
                         index_addr_gtor,
                         index_offset * sizeof(index_std_type),
@@ -194,6 +190,7 @@ void kernel_main() {
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
                     load_to_cb(
+                        noc,
                         ctas.source_cb,
                         source_addr_gtor,
                         source_offset * sizeof(input_std_type),

@@ -42,13 +42,22 @@ enum class SenderCoreType : uint8_t {
 // sets across senders must be disjoint and must not collide with the resolved DRAM-sender
 // physical NOC coords.
 //
+// When `dual_senders_per_bank` is true, each bank is driven by two DRISC sender cores
+// (the free subchannel plus the bank's NOC1-endpoint subchannel, both on NOC0); the
+// bank's receivers are split ceil/floor across them. This is only valid for the
+// receiver-contiguous DRAM layout and must match the TensorPrefetcherConfig flag used
+// at StartTensorPrefetcher. Every bank must then have at least two receivers (one
+// receiver cannot be split across two senders); a single-receiver bank is rejected with
+// a TT_FATAL — use `dual_senders_per_bank = false` for such topologies.
+//
 // MeshDevice-only: the arena that backs this GCB's pages_sent allocation lives on
 // MeshDeviceImpl, so a bare IDevice cannot construct one.
 GlobalCircularBuffer CreateGlobalCircularBufferWithDramSenders(
     distributed::MeshDevice& mesh_device,
     const std::vector<std::pair<uint32_t, CoreRangeSet>>& bank_to_receivers,
     uint32_t size,
-    BufferType buffer_type = BufferType::L1);
+    BufferType buffer_type = BufferType::L1,
+    bool dual_senders_per_bank = false);
 
 // Read-only accessors for the DRAM-sender state inside a GlobalCircularBuffer. For
 // GCBs created via the worker-sender path these return SenderCoreType::Worker / 0 /
@@ -66,7 +75,7 @@ DeviceAddr pages_sent_worker_l1_base(const GlobalCircularBuffer& gcb);
 // DRISC L1 base of the per-GCB "sender state block" — the RemoteSenderCBInterface
 // bytes (including the fifo_wr_ptr that persists across requests), the sender config
 // block, and the receiver NOC XY table. Pre-written by the GCB constructor on every
-// (device, sender_core). The DRAM-core prefetcher kernel loads this block into its
+// (device, sender_core). The Tensor prefetcher kernel loads this block into its
 // static cb_interface slot on each request that targets this GCB, runs the chunk loop,
 // and writes fifo_wr_ptr back so the ring offset survives multi-GCB request switching.
 // Layout: tt_metal/impl/buffers/dram_sender_state_block.hpp. Zero for worker-sender GCBs.

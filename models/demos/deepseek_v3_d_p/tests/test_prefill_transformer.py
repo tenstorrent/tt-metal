@@ -22,6 +22,7 @@ Parametrized over:
 import gc
 import json
 import os
+import time
 
 import pytest
 import torch
@@ -43,7 +44,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeM
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table,
+    create_kv_chunk_address_table_ds,
     init_kvpe_cache,
 )
 from models.demos.deepseek_v3_d_p.utils.pcc_plot_utils import generate_pcc_plots, write_pcc_summary
@@ -78,6 +79,8 @@ TRACE_PCC_THRESHOLD = 0.97
 TRACE_PCC_THRESHOLD_HOST = 0.96
 TRACE_PCC_THRESHOLD_DEVICE_BF16 = 0.88
 TRACE_PCC_THRESHOLD_DEVICE_FP32 = 0.95
+# Determinism: every iteration is expected to match the iter-0 baseline near-bit-exactly.
+DETERMINISM_PCC_THRESHOLD = 1.0
 
 # Input sources: "random" = random token IDs, "json_prompts" = test_prompts_1024.json,
 # or any InfiniteBench subset name (downloaded on first use via infinitebench_prompt fixture).
@@ -142,6 +145,7 @@ def run_model(
     num_links,
     topology,
     pcc_validation,
+    determinism_check,
     num_iterations,
     input_source,
     use_pretrained,
@@ -428,7 +432,7 @@ def run_model(
     lookup_table_config.chunk_size_bytes = CHUNK_SIZE_BYTES
 
     # just create atm for demo purposes, don't actually use it
-    lookup_table = create_kv_chunk_address_table(
+    lookup_table = create_kv_chunk_address_table_ds(
         config=lookup_table_config,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -457,11 +461,81 @@ def run_model(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=(0, None)),
     )
 
+    # --- Determinism check (isolated from the pcc_validation path below) ---
+    # Run num_iterations forwards on identical input and compare every iteration's per-stage
+    # intermediates + final logits + sampled token against the iter-0 baseline.
+    if determinism_check:
+        if pcc_validation:
+            pytest.skip("determinism_check and pcc_validation are mutually exclusive — pick one")
+        if num_iterations < 2:
+            pytest.skip("determinism_check requires num_iterations >= 2 (iter 0 is the baseline)")
+        threshold = DETERMINISM_PCC_THRESHOLD
+        logger.info(f"Determinism check (threshold={threshold}, baseline=iter0)")
+        profiler.start("tt_forward")
+        baseline_items = baseline_logits = baseline_first_token_id = None
+        det_failures = []
+        for i in range(num_iterations):
+            logger.info(f"Determinism iteration: {i}")
+            # Seed the host sampler so identical (bit-exact) logits sample the same token
+            # -> first_token_id reflects only device determinism.
+            torch.manual_seed(0)
+            first_token_id, _, tt_intermediates = transformer(
+                tt_tokens,
+                tt_kvpe_cache,
+                number_of_non_padded_tokens=number_of_non_padded_tokens,
+                return_intermediates=True,
+                read_profiler=False,
+                temperature=temperature,
+            )
+            ttnn.synchronize_device(mesh_device)
+            if i == 0:
+                # lm_head is a fixed 32-row tile (not the full sequence) -> exclude it from the
+                # per-stage slicer; the "logits" comparison below covers the LM-head output.
+                excluded = {"first_token", "logits", "lm_head"}
+                baseline_items = [
+                    (k, v.clone().detach())
+                    for k, v in tt_intermediates.items()
+                    if isinstance(v, torch.Tensor) and k not in excluded
+                ]
+                _bl = tt_intermediates.get("logits")
+                baseline_logits = _bl.clone().detach() if isinstance(_bl, torch.Tensor) else None
+                baseline_first_token_id = first_token_id
+                logger.info(f"Determinism: captured iter0 baseline ({len(baseline_items)} tensors)")
+                continue
+            iter_pcc = _compare_intermediate_pcc(
+                baseline_items, tt_intermediates, number_of_non_padded_tokens, padding_side
+            )
+            if baseline_logits is not None and isinstance(tt_intermediates.get("logits"), torch.Tensor):
+                try:
+                    _, lp = comp_pcc(baseline_logits.float(), tt_intermediates["logits"].float())
+                    iter_pcc.append(("logits", lp))
+                except Exception as e:
+                    logger.error(f"logits PCC comparison failed: {e}")
+                    iter_pcc.append(("logits", -1.0))
+            iter_pcc.append(("first_token_id", 1.0 if first_token_id == baseline_first_token_id else -1.0))
+            logger.info(f"\n--- Determinism iter {i} vs iter0 ---")
+            for label, pcc in iter_pcc:
+                status = "PASS" if pcc >= threshold else ("FAIL" if pcc >= 0 else "ERROR")
+                logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
+                if pcc < threshold:
+                    det_failures.append((i, label, pcc))
+        profiler.end("tt_forward")
+        profiler.end("total_test_time")
+        if det_failures:
+            msg = "; ".join(f"iter {it} {label}: {pcc:.6f}" for it, label, pcc in det_failures)
+            pytest.fail(f"Determinism PCC below {threshold}: {msg}")
+        logger.success(
+            f"TtPrefillTransformer determinism test passed across {num_iterations} iteration(s) "
+            f"(num_layers={num_layers}, n_routed_experts={n_routed_experts}, gate_fallback_mode={gate_fallback_mode})"
+        )
+        return
+
     # --- Forward ---
     profiler.start("tt_forward")
     logger.info("Running TtPrefillTransformer forward...")
     do_return_kv = pcc_validation and return_kv_cache
     for i in range(num_iterations):
+        start = time.time()
         logger.info(f"Starting iteration: {i}")
         first_token_id, first_token_prob, tt_intermediates = transformer(
             tt_tokens,
@@ -473,6 +547,8 @@ def run_model(
         )
         logger.info(f"Starting completion sync on iteration: {i}")
         ttnn.synchronize_device(mesh_device)
+        end = time.time()
+        logger.info(f"Iteration {i} completed in {end - start} seconds.")
     profiler.end("tt_forward")
     logger.info(f"Forward pass completed. First token: ID={first_token_id}, prob={first_token_prob:.4f}")
 
@@ -646,9 +722,9 @@ def run_model(
         logger.info(f"{'-'*50}")
         failures = []
         for label, pcc in pcc_results:
-            status = "PASS" if pcc > threshold else ("FAIL" if pcc >= 0 else "ERROR")
+            status = "PASS" if pcc >= threshold else ("FAIL" if pcc >= 0 else "ERROR")
             logger.info(f"{label:<20s}  {pcc:>10.6f}  {status:>8s}")
-            if pcc <= threshold:
+            if pcc < threshold:
                 failures.append((label, pcc))
         logger.info(f"{'='*50}")
 
@@ -804,7 +880,8 @@ def run_model(
 )
 # iter2000 is the long-running stability soak (program-cache growth, semaphore
 # desync, leaks). Kept opt-in via -k iter2000; CI selectors normally pick iter1.
-@pytest.mark.parametrize("num_iterations", [1, 5, 25, 2000], ids=["iter1", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -856,6 +933,7 @@ def test_ds_prefill_transformer(
     num_links,
     topology,
     pcc_validation,
+    determinism_check,
     num_iterations,
     input_source,
     use_pretrained,
@@ -881,6 +959,7 @@ def test_ds_prefill_transformer(
         num_links,
         topology,
         pcc_validation,
+        determinism_check,
         num_iterations,
         input_source,
         use_pretrained,
@@ -934,10 +1013,11 @@ def test_ds_prefill_transformer(
 )
 @pytest.mark.parametrize(
     "n_routed_experts, gate_fallback_mode",
-    [(384, GateComputeMode.HOST_ALL)],
-    ids=["e384_host"],
+    [(384, GateComputeMode.DEVICE)],
+    ids=["e384_device"],
 )
-@pytest.mark.parametrize("num_iterations", [1, 5, 25, 2000], ids=["iter1", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
+@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -971,6 +1051,7 @@ def test_kimi_prefill_transformer(
     num_links,
     topology,
     pcc_validation,
+    determinism_check,
     num_iterations,
     input_source,
     use_pretrained,
@@ -996,6 +1077,7 @@ def test_kimi_prefill_transformer(
         num_links,
         topology,
         pcc_validation,
+        determinism_check,
         num_iterations,
         input_source,
         use_pretrained,

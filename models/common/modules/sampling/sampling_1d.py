@@ -13,6 +13,7 @@ See also: models/common/sampling/tt_sampling.py (TTTv1 source)
 from __future__ import annotations
 
 import inspect
+import sys
 from dataclasses import dataclass, replace
 from typing import Any, Optional
 
@@ -21,7 +22,22 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.modules.lazy_buffer import LazyBuffer, resolve_lazy_buffer
-from models.common.modules.tt_ccl import get_tt_ccl
+from models.common.modules.tt_ccl import default_topology, get_tt_ccl
+
+# ---------------------------------------------------------------------------
+# Power-of-2 helpers (local copies; keep this TTTv2 module self-contained)
+# ---------------------------------------------------------------------------
+
+
+def _is_power_of_2(n: int) -> bool:
+    return n > 0 and (n & (n - 1)) == 0
+
+
+def _upper_power_of_2(n: int) -> int:
+    if n <= 1:
+        return 1
+    return 1 << (n - 1).bit_length()
+
 
 # ---------------------------------------------------------------------------
 # Config
@@ -49,6 +65,11 @@ class Sampling1DConfig:
     allow_force_argmax: bool = False
     num_argmax_gather_links: Optional[int] = None  # None → same as num_gather_links
     ag_topology: Optional[ttnn.Topology] = None  # None → Topology.Linear
+    # Pad each per-device logit shard up to the next power of 2 before ttnn.topk. Big device-perf
+    # win for non-power-of-2 vocab on the multi-device path (TTTv1's pad_logits_to_power_of_2).
+    # Strict TTTv1 parity: only the multi-device path is padded — the 1×1 multi_step split path
+    # is left unpadded.
+    pad_to_power_of_2: bool = False
 
     # --- Persistent buffer specs (LazyBuffer | ttnn.Tensor | None) ---
     # Static index buffers (computed from vocab_size + num_devices, never mutated)
@@ -191,6 +212,7 @@ class Sampling1D(LightweightModule):
         temp: ttnn.Tensor | None = None,
         seeds: ttnn.Tensor | None = None,
         tt_out_tok: ttnn.Tensor | None = None,
+        enable_log_probs: bool | list[bool] = False,
     ):
         """Sample tokens from logits.
 
@@ -200,12 +222,22 @@ class Sampling1D(LightweightModule):
                 All provided → top-k sampling path.
             seeds: Optional per-call seed override. If None, uses config seeds buffer.
             tt_out_tok: Optional output tensor to write results to.
+            enable_log_probs: Per-call logprobs toggle (bool, or per-user list of bool — if any
+                user is enabled the whole batch computes logprobs). Refreshed every call, so no
+                mutable logprobs state is stored on the module. Only the top-k path emits logprobs
+                (sampled-token logprob); the argmax path never does (see ``_sample_argmax``). The
+                calculator additionally requires a multi-device shard (T3K 1×8) — it returns ``None``
+                on 1×1/1×2 even when enabled.
 
         Returns:
             (token_ids, log_probs_or_none)
         """
         self.load_device_buffers()
         cfg = self.config
+
+        # Per-call logprobs mode — refreshed each forward from the arg, never persisted on the
+        # module (TTTv2 principle: no mutable sampling state). Mirrors main's reset_params path.
+        self._log_probs_calculator.set_log_probs_mode(enable_log_probs)
 
         # Route: argmax or top-k
         if k is None and p is None and temp is None:
@@ -232,24 +264,59 @@ class Sampling1D(LightweightModule):
             dim=-1,
             output_tensor=tt_out_tok,
             keepdim=False,
-            use_multicore=True,
         )
-        log_probs = self._log_probs_calculator.calculate_log_probs(logits, tt_out_tok)
-        return tt_out_tok, log_probs
+        # Argmax path never emits logprobs (main's contract: force-argmax is disabled whenever
+        # logprobs are requested). Return None unconditionally — do not call the calculator.
+        return tt_out_tok, None
+
+    def _get_argmax_all_gather_config(self, cluster_axis):
+        """Clamp the tuned all-gather config to what the actual submesh supports.
+
+        Port of main's ``_get_force_argmax_all_gather_config`` (#44246): bound num_links to the
+        links available on the submesh, and force Linear topology below 8 devices (Ring routing
+        like D0→D12 only wraps cleanly on T3K-class 8-device groups).
+        """
+        cfg = self.config
+        num_links = cfg.num_argmax_gather_links
+        if hasattr(cfg.tt_ccl, "get_num_links"):
+            num_links = min(num_links, cfg.tt_ccl.get_num_links(cluster_axis))
+        topology = cfg.ag_topology
+        if cfg.mesh_device.get_num_devices() < 8:
+            topology = ttnn.Topology.Linear
+        return max(1, num_links), topology
 
     def _argmax_all_gather(self, logits):
-        """Multi-device: all-gather logits before argmax."""
+        """Multi-device: all-gather logits before argmax.
+
+        On ring-capable meshes (e.g. T3K 1×8) use Ring topology with no barrier semaphore to match the
+        model's logits gather and avoid trace-capture issues seen with some barrier-based configurations.
+        For other meshes, fall back to the clamped Linear+barrier path.
+        """
         cfg = self.config
+        if default_topology(cfg.mesh_device) == ttnn.Topology.Ring:
+            return ttnn.experimental.all_gather_async(
+                logits,
+                persistent_output_buffer=None,
+                dim=3,
+                multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+                num_links=1,
+                memory_config=logits.memory_config(),
+                topology=ttnn.Topology.Ring,
+                chunks_per_sync=24,
+                num_workers_per_link=4,
+                num_buffers_per_channel=2,
+            )
         cluster_axis = 1
+        num_links, topology = self._get_argmax_all_gather_config(cluster_axis)
         return ttnn.experimental.all_gather_async(
             logits,
             persistent_output_buffer=None,
             dim=3,
             multi_device_global_semaphore=cfg.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis),
-            num_links=cfg.num_argmax_gather_links,
+            num_links=num_links,
             memory_config=logits.memory_config(),
             cluster_axis=cluster_axis,
-            topology=cfg.ag_topology,
+            topology=topology,
             barrier_semaphore=cfg.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis),
             chunks_per_sync=10,
             num_workers_per_link=1,
@@ -332,7 +399,13 @@ class Sampling1D(LightweightModule):
         ttnn.deallocate(topk_values)
         ttnn.deallocate(topk_global_indices)
 
-        log_probs = self._log_probs_calculator.calculate_log_probs(logits, tt_out_tok)
+        # Logprobs (old path: single sampled-token logprob). Gated on enable_log_probs so the
+        # disabled case incurs zero extra ops. The calculator itself returns None unless the mesh
+        # is multi-device with num_devices ∈ {8, 32} (T3K 1×8).
+        if self._log_probs_calculator.enable_log_probs:
+            log_probs = self._log_probs_calculator.calculate_log_probs(logits, tt_out_tok)
+        else:
+            log_probs = None
         return tt_out_tok, log_probs
 
     # -- Top-k strategies (bound at init, no if-else in forward) --------------
@@ -371,6 +444,18 @@ class Sampling1D(LightweightModule):
         """Local topk → all_gather across devices. Port of tt_sampling.py:372-421."""
         cfg = self.config
         cluster_shape = cfg.mesh_device.shape
+
+        # Pad the per-device shard up to the next power of 2 so ttnn.topk hits its fast path.
+        # Padded entries get -inf so they are never selected; the pre-padded _local_indices buffer
+        # is widened to match (see _resolve_sampling1d_config). Mirrors tt_sampling.py:451-458.
+        if cfg.pad_to_power_of_2 and not _is_power_of_2(x_bf16.shape[-1]):
+            padded_width = _upper_power_of_2(x_bf16.shape[-1])
+            x_bf16 = ttnn.pad(
+                x_bf16,
+                [(0, 0), (0, 0), (0, 0), (0, padded_width - x_bf16.shape[-1])],
+                value=-sys.float_info.max,
+                sub_core_grids=cfg.sub_core_grids,
+            )
 
         topk_values, topk_indices = ttnn.topk(
             x_bf16,
@@ -484,6 +569,7 @@ class Sampling1D(LightweightModule):
             allow_force_argmax=allow_force_argmax,
             num_argmax_gather_links=num_argmax_gather_links,
             ag_topology=ag_topology,
+            pad_to_power_of_2=getattr(args, "pad_logits_to_power_of_2", False),
         )
         return cls.from_config(config)
 
@@ -572,7 +658,14 @@ def _resolve_sampling1d_config(config: Sampling1DConfig) -> Sampling1DConfig:
             row = torch.cat([r, r])
         else:
             row = torch.arange(local_indices_width, dtype=torch.int32)
-        return row.unsqueeze(0).unsqueeze(0).expand(1, 1, B, -1).contiguous()
+        out = row.unsqueeze(0).unsqueeze(0).expand(1, 1, B, -1).contiguous()
+        # Pad the indices buffer to match the power-of-2-padded topk input width (multi-device
+        # path only — strict TTTv1 parity, so the 1×1 split path is never padded). Fill with -1
+        # (invalid index) so the padded slots are never used. Mirrors tt_sampling.py:277-284.
+        if config.pad_to_power_of_2 and not multi_step_reduction and not _is_power_of_2(local_indices_width):
+            padded_width = _upper_power_of_2(local_indices_width)
+            out = torch.nn.functional.pad(out, (0, padded_width - local_indices_width), mode="constant", value=-1)
+        return out
 
     local_idx_defaults = dict(
         dtype=ttnn.uint16,
