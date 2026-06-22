@@ -345,7 +345,7 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
     const auto address = tensor.address();
     TT_FATAL(
         address <= std::numeric_limits<uint32_t>::max(),
-        "Tensor argument for TensorParameter '{}' base address exceeds uint32_t max",
+        "Tensor argument for TensorParameter '{}' base address {} exceeds uint32_t max",
         handle.tensor_parameter_name,
         address);
     emit(static_cast<uint32_t>(address));
