@@ -140,6 +140,9 @@ struct BenchmarkConfig {
     // true = column-major (fix x, vary y first). Lets us probe NoC-direction asymmetry
     // (a row of cores contends differently on the torus than a column).
     bool core_layout_col = false;
+    // Reverse the core fill order (take the LAST `want` cores instead of the first) -- the
+    // mirror-image core set, to test whether which specific cores are used drives results.
+    bool core_reverse = false;
     // NoC assignment for reader / writer (0 = NOC0, 1 = NOC1). The two NoCs route opposite
     // directions on the torus; measured read-BW table shows reads scale to ~206 GB/s on
     // NOC0 but cap at ~67 on NOC1, so the defaults are reader=NOC0, writer=NOC1 (the
@@ -213,6 +216,9 @@ BenchmarkConfig parse_args(const std::vector<std::string>& args) {
     cfg.num_active_cores = test_args::get_command_option_uint32(args, "--num-active-cores", cfg.num_active_cores);
     if (test_args::has_command_option(args, "--core-layout-col")) {
         cfg.core_layout_col = true;
+    }
+    if (test_args::has_command_option(args, "--core-reverse")) {
+        cfg.core_reverse = true;
     }
     cfg.reader_noc = test_args::get_command_option_uint32(args, "--reader-noc", cfg.reader_noc);
     cfg.writer_noc = test_args::get_command_option_uint32(args, "--writer-noc", cfg.writer_noc);
@@ -563,23 +569,29 @@ BuiltProgram build_program(
     if (cfg.num_active_cores > 0 && cfg.num_active_cores < want) {
         want = cfg.num_active_cores;
     }
-    // Build exactly `want` worker cores. Row-major fills a row before stepping y;
-    // column-major (--core-layout-col) fixes x and varies y first, so e.g. 8 cores
-    // land in a column at x=0 (physical x=1) instead of a single NoC row.
-    std::vector<CoreCoord> core_list;
+    // Build the full grid order (row-major, or column-major with --core-layout-col), then
+    // take the first `want`. --core-reverse takes the LAST `want` instead (reversed fill
+    // order) so we can use the mirror-image core set and rule out which specific cores /
+    // direction drive the curve.
+    std::vector<CoreCoord> full_order;
     if (cfg.core_layout_col) {
-        for (uint32_t x = 0; x < full_grid.x && core_list.size() < want; ++x) {
-            for (uint32_t y = 0; y < full_grid.y && core_list.size() < want; ++y) {
-                core_list.push_back(CoreCoord{x, y});
+        for (uint32_t x = 0; x < full_grid.x; ++x) {
+            for (uint32_t y = 0; y < full_grid.y; ++y) {
+                full_order.push_back(CoreCoord{x, y});
             }
         }
     } else {
-        for (uint32_t y = 0; y < full_grid.y && core_list.size() < want; ++y) {
-            for (uint32_t x = 0; x < full_grid.x && core_list.size() < want; ++x) {
-                core_list.push_back(CoreCoord{x, y});
+        for (uint32_t y = 0; y < full_grid.y; ++y) {
+            for (uint32_t x = 0; x < full_grid.x; ++x) {
+                full_order.push_back(CoreCoord{x, y});
             }
         }
     }
+    if (cfg.core_reverse) {
+        std::reverse(full_order.begin(), full_order.end());
+    }
+    std::vector<CoreCoord> core_list(
+        full_order.begin(), full_order.begin() + std::min<size_t>(want, full_order.size()));
     const uint32_t num_cores = static_cast<uint32_t>(core_list.size());
     std::vector<CoreRange> ranges;
     ranges.reserve(num_cores);
@@ -594,9 +606,10 @@ BuiltProgram build_program(
 
     log_info(
         LogTest,
-        "Active cores: {} ({}-major), full_grid {}x{}, total_num_tiles={} ({} tiles/core); first={} last={}",
+        "Active cores: {} ({}-major{}), full_grid {}x{}, total_num_tiles={} ({} tiles/core); first={} last={}",
         num_cores,
         cfg.core_layout_col ? "column" : "row",
+        cfg.core_reverse ? " reversed" : "",
         full_grid.x,
         full_grid.y,
         total_num_tiles,
