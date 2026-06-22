@@ -145,6 +145,11 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
 
     const bool is_tile = input_a.layout() == Layout::TILE;
 
+    Buffer* batch_ids_buffer = batch_ids.buffer();
+    Buffer* input_a_buffer = input_a.buffer();
+    Buffer* input_b_buffer = input_b.buffer();
+    Buffer* output_buffer = output.buffer();
+
     // -----------------------------------------------------------------------------------
     // Path selection
     // -----------------------------------------------------------------------------------
@@ -209,9 +214,27 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
         shard_page_size = is_tile ? tt::tile_size(cb_data_format) : shard_width * input_a.element_size();
     }
 
-    // Use shard geometry for the kernel when on the shard_local path.
-    const uint32_t kernel_page_size = is_shard_local ? shard_page_size : page_size;
-    const uint32_t kernel_rounded_page_size = is_shard_local ? round_up_to_mul32(shard_page_size) : rounded_page_size;
+    // Generic interleaved path: the CB stages whole interleaved pages copied verbatim from
+    // input to output. A NOC DRAM access always moves a full alignment-sized chunk, so the CB
+    // slot AND the per-page transfer must be sized to the buffer's *aligned* page size, not a
+    // hardcoded 32B multiple. Wormhole DRAM alignment is 32B (== round_up_to_mul32), so the old
+    // sizing happened to be correct there; Blackhole DRAM alignment is 64B, so a 32B CB slot is
+    // overrun by the 64B NOC read and adjacent staged pages are clobbered (wrong output, PCC ~0.5).
+    // This bites when the last-dim row is smaller than the DRAM alignment, e.g. the permute
+    // fallback for dim==rank-1 ROW_MAJOR, which feeds the dim=0 primitive a tiny (4-elem = 8B) row.
+    // input_a / input_b / output share the page (last) dim on this path, so a single aligned size
+    // applies; std::max keeps it correct even if alignments ever differ.
+    const uint32_t generic_aligned_page_size = is_tile ? rounded_page_size
+                                                        : static_cast<uint32_t>(std::max({input_a_buffer->aligned_page_size(),
+                                                                                          input_b_buffer->aligned_page_size(),
+                                                                                          output_buffer->aligned_page_size()}));
+
+    // Use shard geometry for the shard_local path, full aligned pages for the generic path.
+    const uint32_t kernel_page_size =
+        is_shard_local ? shard_page_size : (is_native ? page_size : generic_aligned_page_size);
+    const uint32_t kernel_rounded_page_size = is_shard_local ? round_up_to_mul32(shard_page_size)
+                                              : is_native     ? rounded_page_size
+                                                              : generic_aligned_page_size;
     const uint32_t batch_size_in_pages = is_shard_local ? shard_ppb : inner_count;
 
     ProgramDescriptor desc;
@@ -271,11 +294,6 @@ ProgramDescriptor IndexedFillProgramFactory::create_descriptor(
             .page_size = batch_page_size,
         }}},
     });
-
-    Buffer* batch_ids_buffer = batch_ids.buffer();
-    Buffer* input_a_buffer = input_a.buffer();
-    Buffer* input_b_buffer = input_b.buffer();
-    Buffer* output_buffer = output.buffer();
 
     // ---- Reader: single unified kernel; path selected via `mode` compile-time arg.
     std::vector<uint32_t> reader_compile_time_args = {cb_index, batch_cb_index, kernel_page_size, kernel_mode};
