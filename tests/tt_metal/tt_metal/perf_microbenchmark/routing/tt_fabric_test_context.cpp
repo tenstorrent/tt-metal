@@ -5,10 +5,13 @@
 #include <tt_stl/reflection.hpp>
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/tt_fabric_test_context.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <thread>
+#include <tuple>
 #include <unistd.h>
+#include <vector>
 
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_constants.hpp"
@@ -333,19 +336,66 @@ void TestContext::setup_devices() {
     // When TT_FABRIC_DUMP_DIR is set, capture the live PSD and routing tables so a
     // CPU-only test can replay routing-table generation against the same inputs.
     if (const char* dump_dir = std::getenv("TT_FABRIC_DUMP_DIR")) {
-        std::filesystem::create_directories(dump_dir);
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         const auto& distributed_context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
         int rank = *(distributed_context->rank());
 
+        // rank -> hostname, one line per rank. The join key (host) lets the offline parser
+        // attach an MPMD rank to each node-map row.
         char host_buf[256] = {0};
         gethostname(host_buf, sizeof(host_buf) - 1);
+        log_info(tt::LogTest, "FABRIC_RANK_HOST rank={} host={}", rank, host_buf);
 
-        std::string prefix = std::string(dump_dir) + "/rank" + std::to_string(rank) + "_" + host_buf;
-        control_plane.get_physical_system_descriptor().emit_to_text_proto(prefix + "_psd.textproto");
-        control_plane.get_physical_system_descriptor().dump_to_yaml(prefix + "_psd.yaml");
-        control_plane.print_routing_tables();
-        log_info(tt::LogTest, "Dumped fabric state to {}_psd.{{textproto,yaml}}", prefix);
+        const auto& psd = control_plane.get_physical_system_descriptor();
+
+        // Bridge the PSD's physical coords (host/tray/asic_location) to the FabricNodeId
+        // (M<mesh>D<chip>) used in the routing tables. get_fabric_node_id_from_asic_id only
+        // resolves asics LOCAL to this rank (it throws for remote ones), so emit on EVERY
+        // rank -- the union across ranks covers the full mesh. asic_id is the internal
+        // lookup key only; the row carries the human-readable host/tray/asic_location, which
+        // also uniquely identifies the asic. Node is printed M<mesh>D<chip> to match the
+        // routing-table format. One grep-able line per local asic, sorted by node.
+        struct NodeRow {
+            std::string host;
+            uint32_t tray;
+            uint32_t asic_loc;
+            tt::tt_fabric::FabricNodeId node;
+        };
+        std::vector<NodeRow> rows;
+        for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
+            try {
+                auto node = control_plane.get_fabric_node_id_from_asic_id(*asic_id);
+                rows.push_back({desc.host_name, *desc.tray_id, *desc.asic_location, node});
+            } catch (const std::exception&) {
+                // asic present in PSD but not mapped into this rank's fabric; skip it.
+            }
+        }
+        std::sort(rows.begin(), rows.end(), [](const NodeRow& a, const NodeRow& b) {
+            return std::tie(*a.node.mesh_id, a.node.chip_id) < std::tie(*b.node.mesh_id, b.node.chip_id);
+        });
+        for (const auto& r : rows) {
+            log_info(
+                tt::LogTest,
+                "FABRIC_NODE_MAP host={} tray={} asic_loc={} node=M{}D{}",
+                r.host,
+                r.tray,
+                r.asic_loc,
+                *r.node.mesh_id,
+                r.node.chip_id);
+        }
+
+        // The PSD is a global, symmetric view and the routing tables are populated for the
+        // full mesh on every rank (control_plane iterates the global chip-id container),
+        // derived deterministically from the global mesh-graph + PSD -- identical across
+        // ranks. Dump both once, from rank 0.
+        if (rank == 0) {
+            std::filesystem::create_directories(dump_dir);
+            std::string prefix = std::string(dump_dir) + "/psd";
+            psd.emit_to_text_proto(prefix + ".textproto");
+            psd.dump_to_yaml(prefix + ".yaml");
+            log_info(tt::LogTest, "Dumped fabric PSD to {}.{{textproto,yaml}}", prefix);
+            control_plane.print_routing_tables();
+        }
     }
 }
 

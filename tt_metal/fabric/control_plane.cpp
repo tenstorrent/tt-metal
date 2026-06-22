@@ -2076,7 +2076,7 @@ void ControlPlane::print_routing_tables() const {
     this->print_ethernet_channels();
 
     std::stringstream ss;
-    ss << "Control Plane: IntraMesh Routing Tables" << std::endl;
+    ss << "FABRIC_RT_DUMP Control Plane: IntraMesh Routing Tables" << std::endl;
     for (const auto& [fabric_node_id, chip_routing_table] : this->intra_mesh_routing_tables_) {
         ss << fabric_node_id << ":" << std::endl;
         for (int eth_chan = 0; eth_chan < chip_routing_table.size(); eth_chan++) {
@@ -2088,9 +2088,9 @@ void ControlPlane::print_routing_tables() const {
         }
     }
 
-    log_debug(tt::LogFabric, "{}", ss.str());
+    log_info(tt::LogFabric, "{}", ss.str());
     ss.str(std::string());
-    ss << "Control Plane: InterMesh Routing Tables" << std::endl;
+    ss << "FABRIC_RT_DUMP Control Plane: InterMesh Routing Tables" << std::endl;
 
     for (const auto& [fabric_node_id, chip_routing_table] : this->inter_mesh_routing_tables_) {
         ss << fabric_node_id << ":" << std::endl;
@@ -2102,12 +2102,15 @@ void ControlPlane::print_routing_tables() const {
             ss << std::endl;
         }
     }
+    // InterMesh kept at log_debug: compiled out in Release, so the log shows only the
+    // IntraMesh table (which is all we inspect). Build with TT_METAL_ENABLE_LOGGING=ON
+    // to bring this back.
     log_debug(tt::LogFabric, "{}", ss.str());
 }
 
 void ControlPlane::print_ethernet_channels() const {
     std::stringstream ss;
-    ss << "Control Plane: Physical eth channels in each direction" << std::endl;
+    ss << "FABRIC_ETH_DUMP Control Plane: Physical eth channels in each direction" << std::endl;
     for (const auto& [fabric_node_id, fabric_eth_channels] : this->router_port_directions_to_physical_eth_chan_map_) {
         ss << fabric_node_id << ": " << std::endl;
         for (const auto& [direction, eth_chans] : fabric_eth_channels) {
@@ -2118,7 +2121,7 @@ void ControlPlane::print_ethernet_channels() const {
             ss << std::endl;
         }
     }
-    log_debug(tt::LogFabric, "{}", ss.str());
+    log_info(tt::LogFabric, "{}", ss.str());
 }
 
 FabricContext& ControlPlane::get_fabric_context() const {

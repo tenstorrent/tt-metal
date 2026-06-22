@@ -170,6 +170,51 @@ TEST(MeshGraphValidation, TestMGDConnections) {
     EXPECT_EQ(rev_count, 1);
 }
 
+// Stage 0->3 (CPU-only): build a MeshGraph from a skip-link descriptor and verify the SkipLink
+// pattern expands into the expected intra-mesh edges. No device needed -- MeshGraph(ClusterType,
+// path) parses the descriptor and builds connectivity from geometry.
+TEST(MeshGraphValidation, SkipLinks8x4Torus) {
+    const std::filesystem::path desc_path =
+        std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/skip_links_8x4_mesh_graph_descriptor.textproto";
+
+    tt::tt_fabric::MeshGraph mesh_graph(tt::tt_metal::ClusterType::BLACKHOLE_GALAXY, desc_path.string());
+    const auto& intra = mesh_graph.get_intra_mesh_connectivity();
+    ASSERT_EQ(intra.size(), 1u);
+    const auto& m0 = intra[0];
+    ASSERT_EQ(m0.size(), 32u);  // 8x4 = 32 chips
+
+    // axis=ROW (dim0 len 8), start=2, step=4 -> coord blocks [2,5] and [6,1(RING wrap)];
+    // chip = row*4 + col, replicated across all 4 columns -> 8 bidirectional skip edges.
+    const std::vector<std::pair<int, int>> expected_skip_edges = {
+        {8, 20},
+        {9, 21},
+        {10, 22},
+        {11, 23},  // block [2,5]: rows 2<->5
+        {24, 4},
+        {25, 5},
+        {26, 6},
+        {27, 7},  // block [6,1] (wrap): rows 6<->1
+    };
+
+    for (const auto& [a, b] : expected_skip_edges) {
+        EXPECT_EQ(m0[a].count(b), 1u) << "missing skip edge " << a << " -> " << b;
+        EXPECT_EQ(m0[b].count(a), 1u) << "missing reverse skip edge " << b << " -> " << a;  // bidirectional
+        if (m0[a].count(b) && m0[b].count(a)) {
+            // Skip links are assigned the Z direction (own channel bucket, separate from N/S/E/W).
+            EXPECT_EQ(m0[a].at(b).port_direction, tt::tt_fabric::RoutingDirection::Z);
+            EXPECT_EQ(m0[b].at(a).port_direction, tt::tt_fabric::RoutingDirection::Z);
+        }
+    }
+
+    // Base torus grid is preserved: chip 8 (row2,col0) keeps its 4 wrap-around neighbors + 1 skip.
+    EXPECT_EQ(m0[8].count(4), 1u);   // N (row1,col0)
+    EXPECT_EQ(m0[8].count(12), 1u);  // S (row3,col0)
+    EXPECT_EQ(m0[8].count(9), 1u);   // E (row2,col1)
+    EXPECT_EQ(m0[8].count(11), 1u);  // W (row2,col3 via TORUS_X wrap)
+    EXPECT_EQ(m0[8].size(), 5u);     // 4 grid neighbors + 1 skip edge
+}
+
 TEST_F(ControlPlaneFixture, TestControlPlaneInitNoMGD) {
     // Reset MetalContext's control plane to ensure a clean state
     tt::tt_metal::MetalContext::instance().set_default_fabric_topology();
