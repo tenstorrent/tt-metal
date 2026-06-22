@@ -250,7 +250,7 @@ def _paged_sdpa_decode_golden(
     return out
 
 
-def _batch_paged_golden(q_heads, k_chip, v_chip, page_row, pos, block, scale):
+def _batch_paged_golden(q_heads, k_chip, v_chip, page_row, pos, block, scale, sliding_window=None):
     """Causal paged attention for ONE batch from device-resident shards.
 
     q_heads [NQH, D]; k_chip/v_chip [num_blocks, n_kv_heads, block, D]; page_row
@@ -271,6 +271,12 @@ def _batch_paged_golden(q_heads, k_chip, v_chip, page_row, pos, block, scale):
         kvh = min(h // rep, nkvh - 1)
         k_seq = k_chip[pages, kvh].reshape(-1, d)[:n_active].float()
         v_seq = v_chip[pages, kvh].reshape(-1, d)[:n_active].float()
+        # Sliding-window (local) attention: the query at position pos attends to
+        # only the last `sliding_window` tokens (gemma sliding layers). Without
+        # this the golden does full attention -> wrong vs the windowed device op.
+        if sliding_window and n_active > int(sliding_window):
+            k_seq = k_seq[-int(sliding_window) :]
+            v_seq = v_seq[-int(sliding_window) :]
         w = torch.softmax((q_heads[h].float() @ k_seq.t()) * scale, dim=-1)
         out[h] = w @ v_seq
     return out
@@ -777,8 +783,16 @@ def run(
         pt = ttnn.to_torch(pt_dts[i])
         pt = pt.reshape(pt.shape[-2], -1) if pt.ndim >= 2 else pt.reshape(1, -1)
         for k in range(b_eff):
+            _sw = op_kwargs.get("sliding_window_size")
             g = _batch_paged_golden(
-                qc[k % qc.shape[0]], kc, vc, pt[k % pt.shape[0]], int(cp[k % cp.numel()].item()), block, _scale
+                qc[k % qc.shape[0]],
+                kc,
+                vc,
+                pt[k % pt.shape[0]],
+                int(cp[k % cp.numel()].item()),
+                block,
+                _scale,
+                sliding_window=_sw,
             )
             all_g.append(g)
             all_d.append(ot[0, stride * k, :NH, :].float())
