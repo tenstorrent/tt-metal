@@ -155,17 +155,13 @@ def test_save_load_roundtrip(tmp_path, optimizer_name):
 
     restored_params = _params_np(restored)
     for name, orig_arr in orig_params.items():
-        np.testing.assert_allclose(
-            restored_params[name], orig_arr, rtol=1e-2, atol=1e-2, err_msg=f"param {name} mismatch after load"
-        )
+        np.testing.assert_array_equal(restored_params[name], orig_arr, err_msg=f"param {name} mismatch after load")
 
     assert _scalars(opt2) == orig_scalars, "optimizer scalars (steps/lr/...) not restored"
     restored_moments = _moments_np(opt2)
     assert set(restored_moments) == set(orig_moments)
     for key, orig_arr in orig_moments.items():
-        np.testing.assert_allclose(
-            restored_moments[key], orig_arr, rtol=1e-2, atol=1e-2, err_msg=f"optimizer moment {key} mismatch"
-        )
+        np.testing.assert_array_equal(restored_moments[key], orig_arr, err_msg=f"optimizer moment {key} mismatch")
 
     # --- strongest check: one more identical step must produce identical params on both
     _train_steps(orig, opt, n=1, x_np=x_np)
@@ -173,8 +169,8 @@ def test_save_load_roundtrip(tmp_path, optimizer_name):
     orig_after = _params_np(orig)
     restored_after = _params_np(restored)
     for name, orig_arr in orig_after.items():
-        np.testing.assert_allclose(
-            restored_after[name], orig_arr, rtol=1e-2, atol=1e-2, err_msg=f"param {name} diverged after one more step"
+        np.testing.assert_array_equal(
+            restored_after[name], orig_arr, err_msg=f"param {name} diverged after one more step"
         )
 
     ctx.reset_graph()
