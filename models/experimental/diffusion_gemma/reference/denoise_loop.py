@@ -64,10 +64,16 @@ def denoise_block(
     torch run's exact noise for token-for-token PCC determinism (R5).
     """
     canvas = init_canvas
-    prev_argmax: Optional[torch.Tensor] = None
     committed: Optional[torch.Tensor] = None
     records: List[StepRecord] = []
-    stable_count = 0
+    # HF StableAndConfidentStoppingCriteria: halt when the clean-argmax canvas has
+    # been stable across the last `stable_steps_to_halt` (HF `stability_threshold`)
+    # steps AND the mean per-position entropy of the temperature-scaled logits is
+    # below `entropy_stop_threshold` (HF `confidence_threshold`). HF keeps a rolling
+    # argmax buffer (init -1); we keep the last N argmaxes (whole-batch collapsed —
+    # per-request halting is #47557).
+    n_stable = config.stable_steps_to_halt
+    argmax_history: List[torch.Tensor] = []
 
     for step in range(config.max_denoise_steps):
         temperature = S.temperature_at_step(
@@ -86,16 +92,17 @@ def denoise_block(
         entropy_mean = res.entropy.mean().item()
         records.append(StepRecord(step, temperature, entropy_mean, int(res.accept_mask.sum()), res.argmax))
 
-        committed = res.argmax  # commit = clean argmax
-        stable = prev_argmax is not None and torch.equal(res.argmax, prev_argmax)
-        if stable and entropy_mean < config.entropy_stop_threshold:
-            stable_count += 1
-        else:
-            stable_count = 0
-        prev_argmax = res.argmax
+        committed = res.argmax  # commit = clean argmax (never the noisy sample)
+        # stable: current argmax equals each of the last N argmaxes (HF compares the
+        # current canvas to all N rolling-buffer slots before storing it).
+        stable = n_stable == 0 or (
+            len(argmax_history) >= n_stable and all(torch.equal(res.argmax, h) for h in argmax_history[-n_stable:])
+        )
+        confident = entropy_mean < config.entropy_stop_threshold
+        argmax_history.append(res.argmax)
         canvas = res.canvas  # carry the renoised canvas into the next step
 
-        if stable_count >= config.stable_steps_to_halt:
+        if stable and confident:
             return DenoiseTrajectory(committed, step + 1, True, records)
 
     return DenoiseTrajectory(committed, config.max_denoise_steps, False, records)

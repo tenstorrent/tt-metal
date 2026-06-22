@@ -40,12 +40,14 @@ def test_from_hf_config_matches_target_26b():
     assert (tc.num_attention_heads, tc.num_key_value_heads) == (16, 8)
     assert tc.head_dim == 256
     assert tc.vocab_size == 262144
+    assert tc.intermediate_size == 2112
     assert tc.sliding_window == 1024
     assert tc.sliding_window_pattern == 6  # derived from layer_types
     assert tc.rms_norm_eps == 1e-6
     assert tc.final_logit_softcapping == 30.0
     assert tc.num_experts == 128
     assert tc.moe_intermediate_size == 704
+    assert (tc.num_global_key_value_heads, tc.global_head_dim) == (2, 512)
     assert tc.attention_k_eq_v is True
     assert tc.hidden_activation == "gelu_pytorch_tanh"
 
@@ -64,12 +66,15 @@ def test_hand_written_defaults_stay_in_sync_with_config_json():
         "num_key_value_heads",
         "head_dim",
         "vocab_size",
+        "intermediate_size",
         "sliding_window",
         "sliding_window_pattern",
         "rms_norm_eps",
         "final_logit_softcapping",
         "num_experts",
         "moe_intermediate_size",
+        "num_global_key_value_heads",
+        "global_head_dim",
         "attention_k_eq_v",
         "hidden_activation",
     ]:

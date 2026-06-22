@@ -34,6 +34,7 @@
     "1x4": {
       "test_attention_prefill[blackhole-seq4096-global-1x4]": 0.97,
       "test_attention_paged_decode_via_harness[blackhole-sliding-1x4]": 0.98,
+      "test_full_model[blackhole-1x4]": 0.83,
       "test_layer_forward[blackhole-prefill_128-sliding-1x4]": 0.97,
       "test_layer_forward[blackhole-prefill_1024-sliding-1x4]": 0.97,
       "test_layer_forward[blackhole-prefill_4096-sliding-1x4]": 0.97

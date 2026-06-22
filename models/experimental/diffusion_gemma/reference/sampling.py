@@ -11,10 +11,22 @@ importantly the **sort-by-confidence + cumulative-entropy cutoff + scatter-back*
 the device path must replicate — are pinned and unit-tested before any kernel
 work.
 
-Per denoise step (plan.md §2.1):
-    temperature-scale -> Gumbel-max -> token entropy -> entropy-budget acceptance
+Per denoise step (reconciled against transformers `generation_diffusion_gemma.py`):
+    temperature-scale (LinearTemperatureScheduleLogitsProcessor)
+    -> sample a denoiser canvas
+    -> entropy-bound acceptance (EntropyBoundSampler.accept_canvas)
     -> renoise the rejected positions (to RANDOM tokens, not [MASK]).
-Commit value is the **clean argmax** of the logits, not the noisy sample.
+Acceptance, stopping, and the next-step self-conditioning signal all operate on
+the **temperature-scaled** ``processed_logits``. Commit value is the **clean
+argmax** of those logits, not the sampled canvas.
+
+Sampler note: HF draws the denoiser canvas with ``torch.multinomial(softmax(
+processed_logits))`` (see :func:`sample_canvas`). :func:`gumbel_max_sample` is the
+**distributionally-equivalent** Gumbel-max form used for deterministic, injectable
+noise — what the device path needs for token-for-token PCC, since on-device RNG
+won't match torch's multinomial. The two only affect the *intermediate* canvas
+carried between steps; the validated **decisions** (clean argmax commit, per-step
+entropy, accept mask) are deterministic in the logits and identical either way.
 
 Determinism (risk R5): for token-for-token PCC vs torch, the caller injects the
 torch run's exact Gumbel noise (`gumbel_noise=`) and renoise token ids
@@ -30,11 +42,25 @@ import torch.nn.functional as F
 
 
 def temperature_at_step(step: int, num_steps: int, t_start: float, t_end: float) -> float:
-    """Linear temperature schedule across denoise steps (default 0.8 -> 0.4)."""
-    if num_steps <= 1:
-        return t_end
-    frac = step / (num_steps - 1)
-    return t_start + (t_end - t_start) * frac
+    """Linear temperature schedule (HF ``LinearTemperatureScheduleLogitsProcessor``).
+
+    HF runs the denoise step index in REVERSE (``cur_step = num_steps .. 1``) and
+    computes ``temperature = t_min + (t_max - t_min) * (cur_step / num_steps)``.
+    Here ``step`` is the forward index ``0 .. num_steps-1`` (as the loop counts
+    up), so ``cur_step = num_steps - step`` and ``t_start`` is HF ``t_max`` (the
+    hottest, first step), ``t_end`` is HF ``t_min``:
+
+        temperature(step) = t_end + (t_start - t_end) * ((num_steps - step) / num_steps)
+
+    => step 0 returns ``t_start`` (0.8); the last step (``num_steps-1``) returns
+    ``t_end + (t_start - t_end)/num_steps`` (~0.408 for 0.8/0.4/48), NOT exactly
+    ``t_end`` — the schedule never reaches ``t_min`` because HF's ``cur_step``
+    bottoms out at 1, not 0. The trajectory is monotonically decreasing.
+    """
+    if num_steps <= 0:
+        return t_start
+    cur_step = num_steps - step  # HF iterates cur_step = N..1
+    return t_end + (t_start - t_end) * (cur_step / num_steps)
 
 
 def sample_gumbel_noise(
@@ -69,6 +95,25 @@ def gumbel_max_sample(
     return torch.argmax(scaled + noise, dim=-1)
 
 
+def sample_canvas(
+    logits: torch.Tensor,
+    temperature: float = 1.0,
+    *,
+    generator: Optional[torch.Generator] = None,
+) -> torch.Tensor:
+    """Multinomial canvas sampling — exact HF ``_denoising_step`` mechanism.
+
+    ``denoiser_canvas = multinomial(softmax(logits / T))`` over the vocab axis.
+    ``logits``: ``[B, L, vocab]`` -> token ids ``[B, L]``. Uses fp32 softmax like
+    HF. Equivalent in distribution to :func:`gumbel_max_sample`; use that instead
+    when you need injectable, device-reproducible noise (R5).
+    """
+    probs = F.softmax(logits / temperature, dim=-1, dtype=torch.float32)
+    flat = probs.reshape(-1, probs.shape[-1])
+    ids = torch.multinomial(flat, num_samples=1, generator=generator).squeeze(-1)
+    return ids.view(*logits.shape[:-1])
+
+
 def token_entropy(logits: torch.Tensor, *, temperature: float = 1.0) -> torch.Tensor:
     """Per-position Shannon entropy ``H = -sum p log p`` of ``softmax(logits/T)``.
 
@@ -85,22 +130,30 @@ def entropy_budget_accept(
     *,
     min_accept: int = 1,
 ) -> torch.Tensor:
-    """Accept most->least confident positions until cumulative entropy > budget.
+    """Entropy-bound acceptance — exact reproduction of HF ``EntropyBoundSampler.accept_canvas``.
 
     ``entropy``: ``[..., L]`` -> bool accept mask ``[..., L]``. Positions are
-    sorted by ascending entropy (most confident first); the inclusive cumulative
-    entropy prefix that stays ``<= budget`` is accepted (the position that tips
-    the sum over budget is rejected), then the decision is **scattered back** to
-    the original canvas positions (the inverse-permutation the device path must
-    replicate, #47463). ``min_accept`` force-accepts the N most-confident
-    positions to guarantee per-step progress.
+    sorted by ASCENDING entropy (most confident first); position ``i`` (in sorted
+    order) is accepted iff the **exclusive** entropy prefix — the sum of the
+    entropies of all *strictly more confident* positions — stays ``<= budget``::
 
-    Note: the inclusive-``<=`` cutoff and ``min_accept`` tie-break are to be
-    reconciled against the HF reference once it is importable (#47468).
+        sorted_entropy, sort_idx = sort(entropy)              # ascending
+        cum = cumsum(sorted_entropy)
+        accept_sorted = (cum - sorted_entropy) <= budget      # EXCLUSIVE prefix
+        accept = scatter_back(accept_sorted, sort_idx)        # to original positions
+
+    This is the upper bound on the joint mutual information of the accepted set
+    (sum_i^k H_i - max_i H_i <= bound, https://arxiv.org/pdf/2505.24857), so the
+    accepted tokens are ~independent. The most-confident position always has an
+    exclusive prefix of 0, so it is always accepted (>=1 accepted per step) — HF
+    has no explicit ``min_accept``. ``min_accept`` is retained only for the
+    device spike's API (#47463) and is a no-op for the HF-default ``<=1``.
+
+    The scatter-back is the inverse-permutation the device path must replicate.
     """
     sorted_entropy, sort_idx = torch.sort(entropy, dim=-1)  # ascending: confident first
     cum = torch.cumsum(sorted_entropy, dim=-1)
-    accept_sorted = cum <= budget
+    accept_sorted = (cum - sorted_entropy) <= budget  # exclusive prefix (HF accept_canvas)
     if min_accept > 0:
         accept_sorted[..., :min_accept] = True
     accept = torch.zeros_like(entropy, dtype=torch.bool)

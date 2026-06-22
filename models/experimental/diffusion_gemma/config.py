@@ -33,6 +33,11 @@ class TextConfig:
     num_key_value_heads: int = 8  # verified
     head_dim: int = 256  # verified
     vocab_size: int = 262144  # verified
+    # Dense MLP / shared-expert intermediate. Also the **self-conditioning gated
+    # MLP** intermediate — modeling_diffusion_gemma.DiffusionGemmaSelfConditioning
+    # uses `config.intermediate_size` (NOT moe_intermediate_size), so the net-new
+    # self-cond loader (#47461) sizes gate/up/down against this.
+    intermediate_size: int = 2112  # verified (config.json text_config.intermediate_size)
 
     # --- MoE --------------------------------------------------------------
     num_experts: int = 128  # verified
@@ -42,6 +47,12 @@ class TextConfig:
 
     # --- attention -------------------------------------------------------
     sliding_window: int = 1024  # verified (sliding layers; full-attn interleaved)
+    # Full-attention (global) layers use a DIFFERENT head geometry than sliding
+    # layers: fewer KV heads + a wider per-head dim (with partial RoPE, factor
+    # 0.25). These drive the global-layer KV-cache sizing (#47474/#47487) and the
+    # bidirectional full-attn path (#47462) — sliding layers keep head_dim/8-KV.
+    num_global_key_value_heads: int = 2  # verified (config.json text_config.num_global_key_value_heads)
+    global_head_dim: int = 512  # verified (config.json text_config.global_head_dim)
     # Every 6th layer is full_attention: layer_types has full at [5,11,17,23,29]
     # for the 30-layer 26B-A4B (configs/gemma-4-26B-A4B-it/config.json).
     sliding_window_pattern: int = 6  # verified (derived from layer_types)
@@ -80,11 +91,14 @@ class TextConfig:
             "num_key_value_heads",
             "head_dim",
             "vocab_size",
+            "intermediate_size",
             "sliding_window",
             "rms_norm_eps",
             "final_logit_softcapping",
             "num_experts",
             "moe_intermediate_size",
+            "num_global_key_value_heads",
+            "global_head_dim",
             "attention_k_eq_v",
             "hidden_activation",
         ]
@@ -106,21 +120,36 @@ class DiffusionConfig:
     in ``reference/sampling.py``.
     """
 
-    canvas_length: int = 256  # verified
-    max_denoise_steps: int = 48  # verified (model card: max 48 steps)
+    # All values below are the **released** defaults from the checkpoint's
+    # generation_config.json, cross-checked against the canonical
+    # transformers `generation_diffusion_gemma.py` (DiffusionGemmaGenerationConfig
+    # defaults, lines ~224-229). Field names are kept descriptive; the HF
+    # generation_config key each maps to is noted in parentheses.
+    canvas_length: int = 256  # verified (config.json canvas_length / generation_config max_new_tokens)
+    max_denoise_steps: int = 48  # verified (generation_config: max_denoising_steps)
 
-    # Linear temperature schedule across denoise steps.
-    temperature_start: float = 0.8  # verified
-    temperature_end: float = 0.4  # verified
+    # Linear temperature schedule (HF LinearTemperatureScheduleLogitsProcessor).
+    # HF iterates the denoise step index in REVERSE (cur_step = N..1) and computes
+    #   temperature = t_min + (t_max - t_min) * (cur_step / N)
+    # so over the trajectory the temperature ramps t_max -> ~t_min+(t_max-t_min)/N
+    # (i.e. 0.8 -> ~0.408 for N=48), DEcreasing. ``temperature_start`` is HF
+    # ``t_max`` (first/hottest step) and ``temperature_end`` is HF ``t_min``.
+    # See reference/sampling.py:temperature_at_step for the exact formula.
+    temperature_start: float = 0.8  # verified (generation_config: t_max)
+    temperature_end: float = 0.4  # verified (generation_config: t_min)
 
-    # Entropy-budget acceptance: accept most→least confident until accumulated
-    # entropy exceeds this budget; renoise the rest.
-    entropy_budget: float = 0.1  # verified (model card: entropy bound = 0.1)
+    # Entropy-bound acceptance (EntropyBoundSampler): accept the k lowest-entropy
+    # positions s.t. (sum of the entropies of all *strictly more* confident
+    # positions) <= budget, then renoise the rest. See reference/sampling.py.
+    entropy_budget: float = 0.1  # verified (generation_config: sampler_config.entropy_bound)
 
-    # Stop when the argmax canvas is stable for this many steps AND mean
-    # per-token entropy is below the threshold (or the step cap is reached).
-    entropy_stop_threshold: float = 0.1  # TODO(confirm)
-    stable_steps_to_halt: int = 1  # TODO(confirm)
+    # StableAndConfidentStoppingCriteria: halt when the argmax canvas has been
+    # stable for ``stable_steps_to_halt`` steps AND the mean per-position entropy
+    # of the temperature-scaled logits is below ``entropy_stop_threshold``.
+    # HF names the latter ``confidence_threshold`` (it is an entropy bound, not a
+    # probability) and the former ``stability_threshold``.
+    entropy_stop_threshold: float = 0.005  # verified (generation_config: confidence_threshold)
+    stable_steps_to_halt: int = 1  # verified (generation_config: stability_threshold)
 
     # Noise model: rejected positions are renoised to RANDOM token ids (uniform
     # discrete diffusion), NOT a [MASK] token / absorbing state.

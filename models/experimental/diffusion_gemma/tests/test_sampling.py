@@ -20,10 +20,13 @@ def _gen(seed=0):
 
 
 def test_temperature_schedule_endpoints_and_monotone():
+    # HF reversed-step formula: step 0 == t_max (0.8); last step == t_min + (t_max-t_min)/N,
+    # NOT exactly t_min (cur_step bottoms out at 1, not 0).
     assert S.temperature_at_step(0, 48, 0.8, 0.4) == pytest.approx(0.8)
-    assert S.temperature_at_step(47, 48, 0.8, 0.4) == pytest.approx(0.4)
+    assert S.temperature_at_step(47, 48, 0.8, 0.4) == pytest.approx(0.4 + 0.4 * (1 / 48))
+    assert S.temperature_at_step(24, 48, 0.8, 0.4) == pytest.approx(0.6)  # cur_step=24 -> midpoint
     ts = [S.temperature_at_step(i, 48, 0.8, 0.4) for i in range(48)]
-    assert all(ts[i] >= ts[i + 1] for i in range(47))
+    assert all(ts[i] >= ts[i + 1] for i in range(47))  # monotonically decreasing
     assert 0.4 < ts[24] < 0.8
 
 
@@ -68,30 +71,45 @@ def test_entropy_budget_accept_extremes_and_monotone():
         prev = cur
 
 
-def test_entropy_budget_accept_cumulative_cutoff():
+def test_entropy_budget_accept_exclusive_prefix_cutoff():
     # ascending order by value: idx 1(0.1), 3(0.2), 0(0.5), 4(0.7), 2(0.9)
+    # EXCLUSIVE prefix (sum of strictly-more-confident) per sorted pos:
+    #   idx1: 0.0 | idx3: 0.1 | idx0: 0.3 | idx4: 0.8 | idx2: 1.5
     entropy = torch.tensor([[0.5, 0.1, 0.9, 0.2, 0.7]])
-    # budget 0.35: cum 0.1 (idx1) + 0.2 -> 0.3 (idx3) accepted; +0.5 -> 0.8 > 0.35 rejects idx0
+    # budget 0.35: accept idx1(0.0), idx3(0.1), idx0(0.3) (<=0.35); reject idx4(0.8), idx2(1.5)
     acc = S.entropy_budget_accept(entropy, budget=0.35, min_accept=1)
-    assert torch.equal(acc, torch.tensor([[False, True, False, True, False]]))
+    assert torch.equal(acc, torch.tensor([[True, True, False, True, False]]))
 
 
 def test_acceptance_scatter_back_inverse_permutation():
     # The scatter-back the device path must replicate (#47463): accept decisions
-    # taken in sorted-by-confidence order map to ORIGINAL canvas positions.
+    # taken in sorted-by-confidence order map to ORIGINAL canvas positions. Mirror
+    # HF EntropyBoundSampler.accept_canvas exactly (exclusive-prefix cutoff).
     entropy = torch.rand(3, 17, generator=_gen(4))
     budget = 0.9
     acc = S.entropy_budget_accept(entropy, budget=budget, min_accept=1)
 
     sorted_e, idx = torch.sort(entropy, dim=-1)
     cum = torch.cumsum(sorted_e, dim=-1)
-    accept_sorted = cum <= budget
-    accept_sorted[..., :1] = True
+    accept_sorted = (cum - sorted_e) <= budget  # exclusive prefix
     ref = torch.zeros_like(entropy, dtype=torch.bool)
     for r in range(entropy.shape[0]):
         for c in range(entropy.shape[1]):
             ref[r, idx[r, c]] = accept_sorted[r, c]
     assert torch.equal(acc, ref)
+
+
+def test_sample_canvas_multinomial_matches_argmax_when_peaked():
+    # multinomial(softmax) of near-one-hot logits returns the peak token id.
+    vocab = 50
+    peaked = torch.full((2, 8, vocab), -1e4)
+    peaked[..., 13] = 1e4
+    out = S.sample_canvas(peaked, temperature=0.7, generator=_gen(11))
+    assert out.shape == (2, 8)
+    assert torch.equal(out, torch.full((2, 8), 13))
+    # in-range for arbitrary logits
+    rand = S.sample_canvas(torch.randn(1, 5, vocab, generator=_gen(12)), generator=_gen(13))
+    assert int(rand.min()) >= 0 and int(rand.max()) < vocab
 
 
 def test_renoise_keeps_accepted_replaces_rejected():
