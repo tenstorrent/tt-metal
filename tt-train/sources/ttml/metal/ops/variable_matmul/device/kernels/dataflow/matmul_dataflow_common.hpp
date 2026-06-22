@@ -26,19 +26,17 @@ struct TensorShape2D {
 };
 
 /**
- * Read a block of in0 from a potentially padded tensor, optionally at an M-row and/or K-col
- * offset into the source tensor (the source is treated as a parent buffer; we read just the
- * sub-range starting at (in0_row_offset_tiles, in0_k_offset_tiles)). Bounds check on
- * matmul-M/K uses the effective `shape`, independent of the parent stride.
+ * Read a block of in0 from a (possibly padded) tensor, optionally sub-ranged at an M-row /
+ * K-col offset (UseOffset treats the source as a parent buffer starting at
+ * (in0_row_offset_tiles, in0_k_offset_tiles)). Bounds checks use the effective matmul `shape`,
+ * not the parent stride.
  *
- * Iteration order is always M-outer, K-inner (CB layout = [M, K] tile-major). When
- * TransposeA is true, the physical tensor is stored as [K_parent, M_parent] instead of
- * [M_parent, K_parent]; the address formula uses `parent_M_tiles_stride` for the K-row
- * stride. For non-transpose, the row stride is `parent_K_tiles_stride` (= parent K tile
- * count, used only when UseOffset).
+ * Iteration is M-outer, K-inner (CB layout [M, K] tile-major). TransposeA storage is
+ * [K_parent, M_parent] (row stride parent_M_tiles_stride); non-transpose is [M_parent, K_parent]
+ * (row stride parent_K_tiles_stride). Both strides used only when UseOffset.
  *
- * `shape` carries the matmul-coordinate effective sizes (logical_d0=effective_M for
- * non-transpose / logical_d0=K for transpose, logical_d1=K_tiles or effective_M).
+ * `shape` holds matmul-coordinate sizes: non-transpose (logical_d0=M, logical_d1=K),
+ * transpose (logical_d0=K, logical_d1=M).
  */
 template <uint32_t M_block_tiles, uint32_t K_block_tiles, bool TransposeA, bool UseOffset, typename TensorAccessorType>
 void read_in0_block_sync(
@@ -103,13 +101,12 @@ void read_in0_block_sync(
 }
 
 /**
- * Read a block of in1 from a potentially padded tensor, optionally at a K-axis offset.
- * When UseOffset is true the weight is treated as a parent buffer and the K-axis is
- * sliced [k_offset, k_offset + matmul_K). Bounds checks use the effective (matmul-K)
- * `shape`, independent of the parent K extent.
+ * Read a block of in1 from a (possibly padded) tensor, optionally K-sliced: UseOffset treats
+ * the weight as a parent buffer and reads K-range [k_offset, k_offset + matmul_K). Bounds
+ * checks use the effective matmul `shape`, not the parent K extent.
  *
- * The CB ends up K-outer, N-inner (tile (k, n) at index k * N_block_tiles + n), which
- * is what the matmul compute kernel expects.
+ * The CB ends up K-outer, N-inner (tile (k, n) at index k * N_block_tiles + n), as the matmul
+ * compute kernel expects.
  */
 template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool TransposeB, bool UseOffset, typename TensorAccessorType>
 void read_in1_block_sync(
@@ -190,12 +187,11 @@ void read_in1_block_sync(
 }
 
 /**
- * Write a block of output to a potentially padded tensor.
- * Skip writing when M >= logical_M or N >= logical_N
+ * Write a block of output to a (possibly padded) tensor; skip tiles where M >= logical_M or
+ * N >= logical_N. When UseOutOffset is true the output is a parent buffer and we write into
+ * rows [out_row_offset_tiles, out_row_offset_tiles + actual_M); matmul-N equals the parent's N
+ * (caller-validated), so shape.logical_d1 stays the correct N stride.
  */
-// When UseOutOffset is true, the output tensor is a parent buffer; we write into rows
-// [out_row_offset_tiles, out_row_offset_tiles + actual_M) of it. matmul-N must equal
-// the parent's N (caller-validated), so shape.logical_d1 is still the correct N stride.
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
 void write_block_sync(
     const TensorAccessorType& tensor_accessor,
@@ -236,8 +232,8 @@ void write_block_sync(
 }
 
 /**
- * This write method is more granular, waiting on a row of output tiles
- * in the output CB before writing those out, rather than waiting on the entire block.
+ * Like write_block_sync, but waits on one row of output tiles in the CB at a time rather than
+ * the whole block before writing.
  */
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, bool UseOutOffset, typename TensorAccessorType>
 void write_block_sync_granular(
@@ -276,11 +272,10 @@ void write_block_sync_granular(
 }
 
 /**
- * Staggered defer-write index used by both dm_in0_sender and dm_in1_sender_out: each core picks
- * a k-block index for its deferred output write so that the writes spread across the next
- * output block's K-loop (latency hiding). Clamp to the last K iter — without this, K-axis
- * OffsetsRoles that shrink K at runtime can leave the check never firing, deadlocking
- * cb_id_out once M_blocks_per_core * N_blocks_per_core - 1 exceeds the CB depth.
+ * Staggered defer-write index for both senders: each core picks a k-block for its deferred
+ * output write so writes spread across the next output block's K-loop (latency hiding).
+ * Clamp to the last K iter — otherwise K-shrinking OffsetsRoles can leave the trigger never
+ * firing, deadlocking cb_id_out once M_blocks_per_core * N_blocks_per_core - 1 exceeds CB depth.
  */
 FORCE_INLINE uint32_t compute_defer_write_k_block(uint32_t core_y_index, uint32_t y_axis_cores, uint32_t K_num_blocks) {
     const uint32_t k_blocks_per_axis_core = (K_num_blocks + y_axis_cores - 1U) / y_axis_cores;
