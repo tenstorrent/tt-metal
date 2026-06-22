@@ -260,6 +260,150 @@ def test_pipeline_distilled(
         pipeline.release_traces()
 
 
+def _ffmpeg_frames(path, n):
+    """Sample ``n`` luma frames evenly across ``path`` (via ffmpeg) as float ndarrays."""
+    import io
+    import subprocess
+
+    from PIL import Image
+
+    frames = []
+    for t in np.linspace(0.1, 5.5, n):
+        raw = subprocess.run(
+            [
+                "ffmpeg",
+                "-v",
+                "error",
+                "-ss",
+                f"{t}",
+                "-i",
+                path,
+                "-vframes",
+                "1",
+                "-f",
+                "image2pipe",
+                "-vcodec",
+                "png",
+                "-",
+            ],
+            capture_output=True,
+        ).stdout
+        if raw:
+            frames.append(np.asarray(Image.open(io.BytesIO(raw)).convert("L")).astype(float))
+    return frames
+
+
+def _temporal_seam_score(path):
+    """Grid-seam strength at the 2x4 mesh boundaries (W/4,W/2,3W/4 vertical; H/2 horizontal),
+    isolated from moving content via the per-column/row TEMPORAL MEDIAN of the gradient (the
+    seam is static at fixed lines; single-frame metrics are content-confounded). Clean ~<=1;
+    a baked seam pushes the boundary ratio well above (gridded measured V=1.5, H=2.4)."""
+    fs = _ffmpeg_frames(path, 16)
+    assert fs, f"no frames decoded from {path}"
+    h, w = fs[0].shape
+    gx = np.median(np.stack([np.abs(np.diff(f, axis=1)).mean(0) for f in fs]), 0)
+    gy = np.median(np.stack([np.abs(np.diff(f, axis=0)).mean(1) for f in fs]), 0)
+    v = float(np.mean([gx[round(w * i / 4)] for i in (1, 2, 3)]) / np.median(gx))
+    hh = float(gy[round(h / 2)] / np.median(gy))
+    return v, hh
+
+
+@pytest.mark.skipif(
+    not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
+    reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
+)
+@pytest.mark.parametrize(
+    "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
+    [
+        [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+    ],
+    ids=["bh_2x4sp1tp0"],
+    indirect=["mesh_device", "device_params"],
+)
+def test_pipeline_distilled_i2v(
+    mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, topology, is_fsdp, tmp_path
+):
+    """E2E I2V: condition on the FIRST FRAME of the t2v e2e clip (same DEFAULT_LTX_PROMPT),
+    then assert the I2V output (a) reproduces that frame at frame-0 (conditioning works) and
+    (b) is free of the VAE 2x4 grid seam (guards the non-mesh-aligned i2v fix at 1088x1920,
+    whose s1 cond latent is the uneven 17x30 that used to seam)."""
+    import subprocess
+
+    from PIL import Image
+
+    ckpt = default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")
+    parent_mesh = mesh_device
+    mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    num_frames = int(os.environ.get("NUM_FRAMES", "145"))
+    height = int(os.environ.get("HEIGHT", "1088"))  # 1088x1920 -> s1 latent 17x30 (uneven, the fixed case)
+    width = int(os.environ.get("WIDTH", "1920"))
+    traced = os.environ.get("LTX_TRACED", "0") in ("1", "true", "True")
+    seed = int(os.environ.get("SEED", "10"))
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+
+    pipeline = LTXDistilledPipeline.create_pipeline(
+        mesh_device=mesh_device,
+        checkpoint_name=ckpt,
+        gemma_path=default_ltx_gemma(),
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        num_links=num_links,
+        dynamic_load=dynamic_load,
+        topology=topology,
+        is_fsdp=is_fsdp,
+        run_warmup=traced,  # trace capture needs warmup; eager doesn't
+        traced=traced,
+        num_frames=num_frames,
+        height=height,
+        width=width,
+    )
+
+    if int(ttnn.distributed_context_get_rank()) != 0:
+        return
+
+    def _gen(out, images):
+        pipeline.generate(
+            prompt, output_path=str(out), images=images, num_frames=num_frames, height=height, width=width, seed=seed
+        )
+
+    # 1) t2v e2e clip -> its first frame is the conditioning image
+    t2v = tmp_path / "t2v.mp4"
+    _gen(t2v, None)
+    cond = tmp_path / "cond_frame0.png"
+    subprocess.run(["ffmpeg", "-v", "error", "-i", str(t2v), "-vframes", "1", "-y", str(cond)], check=True)
+
+    # 2) i2v conditioned on that frame
+    i2v = tmp_path / "i2v.mp4"
+    _gen(i2v, [(str(cond), 0, 1.0)])
+
+    # (a) conditioning works: i2v frame-0 reproduces the conditioning frame (VAE roundtrip + CRF,
+    # so not identity — but a far tighter correlation than an unconditioned gen of the same prompt).
+    def _luma0(path):
+        raw = subprocess.run(
+            ["ffmpeg", "-v", "error", "-i", path, "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            capture_output=True,
+        ).stdout
+        return torch.from_numpy(
+            np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32")
+        ).flatten()
+
+    c, f0 = _luma0(str(cond)), _luma0(str(i2v))
+    pcc = torch.corrcoef(torch.stack([c, f0]))[0, 1].item()
+    print(f"\nI2V_E2E frame0-vs-cond PCC={pcc:.4f}", flush=True)
+
+    # (b) seam-free at the uneven 1088x1920 (the i2v grid-seam fix). Thresholds bracket the
+    # measured clean range (V,H ~<=1.0) below the gridded baseline (V=1.5, H=2.4).
+    v, hh = _temporal_seam_score(str(i2v))
+    print(f"I2V_E2E seam V={v:.2f} H={hh:.2f} (clean<=~1.0, gridded V=1.5/H=2.4)", flush=True)
+
+    if traced:
+        pipeline.release_traces()
+
+    assert pcc > 0.85, f"i2v frame-0 does not reproduce the conditioning frame (PCC={pcc:.4f}) — conditioning broken"
+    assert v < 1.3 and hh < 1.5, f"i2v grid seam present (V={v:.2f}, H={hh:.2f}) at 1088x1920"
+
+
 @pytest.mark.skipif(
     not os.path.exists(default_ltx_checkpoint("ltx-2.3-22b-distilled-1.1.safetensors")),
     reason="needs the LTX checkpoint (set LTX_CHECKPOINT to a local .safetensors)",
