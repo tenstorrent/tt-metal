@@ -64,10 +64,12 @@ def _close_conv_device():
         try:
             ttnn.close_mesh_device(_CONV_DEV)
         except Exception:
+            # best-effort teardown; a close failure must not mask the test result
             pass
     try:
         ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
     except Exception:
+        # best-effort; fabric may already be disabled during teardown
         pass
     _CONV_DEV = None
     _CONV_MODE = None
@@ -376,7 +378,6 @@ def _make_conv_tensor(torch_t, placement_str, mesh, dtype, layout, memory_config
     replicate-with-topology stamp records the same metadata but leaves the data
     replicated, which still hangs.)
     """
-    import re
 
     is_mesh = hasattr(mesh, "get_num_devices")
     if not is_mesh or not placement_str or placement_str == "__ABSENT__":
@@ -735,6 +736,7 @@ def run(
             if _t is not None:
                 ttnn.deallocate(_t)
         except Exception:
+            # best-effort cleanup; ignore deallocation errors during teardown
             pass
 
     # Reshape output to NHWC then compare

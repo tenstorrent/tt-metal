@@ -64,7 +64,8 @@ def _build_hash_to_device_shape():
         try:
             if not os.path.isfile(path):
                 continue
-            ops = _json.load(open(path)).get("operations", {})
+            with open(path) as _f:
+                ops = _json.load(_f).get("operations", {})
             cfgs = ops.get("ttnn.full", {}).get("configurations", [])
             if not cfgs:
                 continue
@@ -98,6 +99,7 @@ def _close_vector_device():
         try:
             ttnn.close_mesh_device(_CUR_DEVICE)
         except Exception:
+            # best-effort teardown; a close failure must not mask the test result
             pass
     _CUR_DEVICE = None
     _CUR_SHAPE = "__uninit__"

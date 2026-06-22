@@ -182,6 +182,7 @@ def run(
                     _pc_kwargs["max_cores_per_head_batch"] = _pc.max_cores_per_head_batch
                 op_kwargs["program_config"] = ttnn.SDPAProgramConfig(**_pc_kwargs)
         except Exception:
+            # best-effort reconstruction; fall back to the default program_config
             pass
 
     # Read chunk_start_idx from op_kwargs (from traced config) or use default

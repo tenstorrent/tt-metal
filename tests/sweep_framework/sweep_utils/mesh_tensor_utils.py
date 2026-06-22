@@ -676,6 +676,7 @@ def replicate_with_topology(
                 try:
                     ttnn.synchronize_device(mesh_device)
                 except Exception:
+                    # best-effort sync; ignore and continue the retry loop
                     pass
             # last attempt failing leaves the DRAM-resident tensor (best-effort)
     else:

@@ -278,6 +278,7 @@ def _run_gather_in0_ring_matmul(
 
                 apply_tensor_placement_topology(a_tt, input_a_placement, mesh_shape)
             except Exception:
+                # best-effort topology stamp; non-fatal if it cannot be applied
                 pass
 
         out_mc = ttnn.create_sharded_memory_config(

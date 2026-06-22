@@ -70,6 +70,7 @@ def _teardown_cached_device():
         try:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         except Exception:
+            # best-effort; fabric may already be disabled during teardown
             pass
 
 
@@ -153,10 +154,12 @@ def device_context(mesh_shape, fabric_config, device_params=None, full_mesh_shap
             elif mesh_device is not None:
                 ttnn.close_mesh_device(mesh_device)
         except Exception:
+            # best-effort teardown; a close failure must not mask the test result
             pass
         try:
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         except Exception:
+            # best-effort; fabric may already be disabled during teardown
             pass
         yield None, f"Device error {e}"
         return

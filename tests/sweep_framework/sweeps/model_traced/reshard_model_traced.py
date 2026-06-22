@@ -41,6 +41,7 @@ def _close_vector_device():
         try:
             ttnn.close_mesh_device(_CUR_DEVICE)
         except Exception:
+            # best-effort teardown; a close failure must not mask the test result
             pass
     _CUR_DEVICE = None
     _CUR_AXIS = "__uninit__"

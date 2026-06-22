@@ -1103,6 +1103,7 @@ def run(
                 if int(_csg.get("x", 0)) > int(_dg.x) or int(_csg.get("y", 0)) > int(_dg.y):
                     program_config = None
             except Exception:
+                # best-effort grid check; leave program_config unchanged on failure
                 pass
 
     # Use traced program_config when available — master and sweep both run on the
