@@ -31,7 +31,7 @@ apply_fp8_dequantize_compat()
 DEVSTRAL_REPO_ID = "mistralai/Devstral-Small-2-24B-Instruct-2512"
 
 PCC_TARGET = float(os.environ.get("MINISTRAL3_DECODER_STACK_PCC", "0.98"))
-DECODE_STEPS = int(os.environ.get("MINISTRAL3_DECODER_DECODE_STEPS", "32"))
+DECODE_STEPS = int(os.environ.get("MINISTRAL3_DECODER_DECODE_STEPS", "256"))
 # Profile decode forward only: skip per-step to_torch (UntilizeDeviceOperation in Tracy).
 PROFILE_DECODE = os.environ.get("MINISTRAL3_DECODER_PROFILE", "0").strip().lower() in ("1", "true", "yes")
 _DECODE_PCC_RESULTS: dict[int, float | str] = {}
