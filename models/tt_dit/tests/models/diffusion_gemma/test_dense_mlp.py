@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Per-layer parity: TT ``DiffusionGemmaSelfConditioning`` vs the actual
-``transformers.models.diffusion_gemma.modeling_diffusion_gemma.DiffusionGemmaSelfConditioning``.
+"""Per-layer parity: TT ``DiffusionGemmaDenseMLP`` vs the actual
+``transformers.models.diffusion_gemma.modeling_diffusion_gemma.DiffusionGemmaText4MLP``.
 
-    pytest models/tt_dit/tests/models/diffusion_gemma/test_self_conditioning.py -s
+    pytest models/tt_dit/tests/models/diffusion_gemma/test_dense_mlp.py -s
 """
 
 import pytest
@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.diffusion_gemma.self_conditioning import DiffusionGemmaSelfConditioning
+from ....models.transformers.diffusion_gemma.dense_mlp import DiffusionGemmaDenseMLP
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
@@ -33,20 +33,19 @@ ALLCLOSE_RTOL = 2e-2
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_self_conditioning(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int) -> None:
-    """TT vs HF DiffusionGemmaSelfConditioning."""
+@pytest.mark.parametrize("seq_len", [256])
+def test_dense_mlp(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, seq_len: int) -> None:
+    """TT vs HF DiffusionGemmaText4MLP."""
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
-        DiffusionGemmaSelfConditioning as HFSelfConditioning,
+        DiffusionGemmaText4MLP,
+        DiffusionGemmaTextConfig,
     )
-    from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaTextConfig
 
     torch.manual_seed(0)
-    torch_dtype = torch.float32
+    dtype = torch.float32
 
-    # DiffusionGemma-26B-A4B-it text config.
     hidden_size = 2816
     intermediate_size = 2112
-    canvas_length = 256
     B = 1
 
     tp_factor = tuple(mesh_device.shape)[tp_axis]
@@ -57,15 +56,14 @@ def test_self_conditioning(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links
         hidden_size=hidden_size,
         intermediate_size=intermediate_size,
         hidden_activation="gelu_pytorch_tanh",
-        rms_norm_eps=1e-6,
     )
-    torch_model = HFSelfConditioning(hf_config).to(torch_dtype).eval()
+    # layer_idx is unused by DiffusionGemmaText4MLP (it overrides parent's kv-share logic) but required by sig.
+    torch_model = DiffusionGemmaText4MLP(hf_config, layer_idx=0).to(dtype).eval()
 
-    inputs_embeds = torch.randn(B, canvas_length, hidden_size, dtype=torch_dtype)
-    sc_signal = torch.randn(B, canvas_length, hidden_size, dtype=torch_dtype)
+    x = torch.randn(B, seq_len, hidden_size, dtype=dtype)
 
     with torch.no_grad():
-        torch_out = torch_model(inputs_embeds, sc_signal)
+        torch_out = torch_model(x)
 
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
     parallel_config = DiTParallelConfig(
@@ -74,27 +72,21 @@ def test_self_conditioning(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links
         cfg_parallel=None,
     )
 
-    tt_model = DiffusionGemmaSelfConditioning(
+    tt_model = DiffusionGemmaDenseMLP(
         hidden_size=hidden_size,
         intermediate_size=intermediate_size,
-        rms_norm_eps=hf_config.rms_norm_eps,
         mesh_device=mesh_device,
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
     )
     tt_model.load_state_dict(torch_model.state_dict())
 
-    tt_inputs_embeds = bf16_tensor(inputs_embeds.unsqueeze(0), device=mesh_device)
-    tt_sc_signal = bf16_tensor(sc_signal.unsqueeze(0), device=mesh_device)
-
-    tt_out = tt_model(tt_inputs_embeds, tt_sc_signal)
+    tt_x = bf16_tensor(x.unsqueeze(0), device=mesh_device)
+    tt_out = tt_model(tt_x)
     tt_out_torch = local_device_to_torch(tt_out).squeeze(0)
 
-    logger.info(f"torch_out: {torch_out.shape}, tt_out: {tt_out_torch.shape}")
     assert_quality(torch_out, tt_out_torch, pcc=PCC_THRESHOLD)
 
-    abs_diff = (torch_out - tt_out_torch.to(torch_dtype)).abs()
+    abs_diff = (torch_out - tt_out_torch.to(dtype)).abs()
     logger.info(f"max abs diff: {abs_diff.max().item():.3e}")
-    assert torch.allclose(
-        torch_out, tt_out_torch.to(torch_dtype), atol=ALLCLOSE_ATOL, rtol=ALLCLOSE_RTOL
-    ), f"allclose failed: max abs={abs_diff.max().item():.3e}"
+    assert torch.allclose(torch_out, tt_out_torch.to(dtype), atol=ALLCLOSE_ATOL, rtol=ALLCLOSE_RTOL)
