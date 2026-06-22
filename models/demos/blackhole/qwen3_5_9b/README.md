@@ -61,11 +61,6 @@ export MESH_DEVICE=P150x4
 Face hub id (resolved via `snapshot_download`) or a local checkpoint directory.
 `MESH_DEVICE` selects the mesh shape (`P150` → `(1,1)`, `P150x4` → `(1,4)`).
 
-Install the pinned dependency:
-
-```bash
-pip install -r models/demos/blackhole/qwen3_5_9b/requirements.txt   # transformers==5.10.0
-```
 
 ## End-to-end demo test (`demo/text_demo.py`)
 
