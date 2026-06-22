@@ -5,7 +5,8 @@
 // Common TensorShape coverage definitions shared by TRISC-specific coverage tables.
 //
 // Regenerate by running the functional pytests with --logging-level=DEBUG
-// and feeding the per-worker test_run_gw*.log files through /tmp/ts-coverage/parse.py.
+// and feeding the per-worker test_run_gw*.log files through
+// tests/python_tests/helpers/tensor_shape_coverage_parser.py.
 //
 
 #pragma once
@@ -22,26 +23,26 @@
 namespace ckernel::coverage
 {
 
-inline TensorShape TENSOR_SHAPE_FR1_NF1x1  = {1, MAX_FACE_C_DIM, 1, 1};  ///<  1x16
-inline TensorShape TENSOR_SHAPE_FR1_NF1x2  = {1, MAX_FACE_C_DIM, 1, 2};  ///<  1x32
-inline TensorShape TENSOR_SHAPE_FR1_NF2x1  = {1, MAX_FACE_C_DIM, 2, 1};  ///<  2x16
-inline TensorShape TENSOR_SHAPE_FR1_NF2x2  = {1, MAX_FACE_C_DIM, 2, 2};  ///<  2x32
-inline TensorShape TENSOR_SHAPE_FR2_NF1x1  = {2, MAX_FACE_C_DIM, 1, 1};  ///<  2x16
-inline TensorShape TENSOR_SHAPE_FR2_NF1x2  = {2, MAX_FACE_C_DIM, 1, 2};  ///<  2x32
-inline TensorShape TENSOR_SHAPE_FR2_NF2x1  = {2, MAX_FACE_C_DIM, 2, 1};  ///<  4x16
-inline TensorShape TENSOR_SHAPE_FR2_NF2x2  = {2, MAX_FACE_C_DIM, 2, 2};  ///<  4x32
-inline TensorShape TENSOR_SHAPE_FR4_NF1x1  = {4, MAX_FACE_C_DIM, 1, 1};  ///<  4x16
-inline TensorShape TENSOR_SHAPE_FR4_NF1x2  = {4, MAX_FACE_C_DIM, 1, 2};  ///<  4x32
-inline TensorShape TENSOR_SHAPE_FR4_NF2x1  = {4, MAX_FACE_C_DIM, 2, 1};  ///<  8x16
-inline TensorShape TENSOR_SHAPE_FR4_NF2x2  = {4, MAX_FACE_C_DIM, 2, 2};  ///<  8x32
-inline TensorShape TENSOR_SHAPE_FR8_NF1x1  = {8, MAX_FACE_C_DIM, 1, 1};  ///<  8x16
-inline TensorShape TENSOR_SHAPE_FR8_NF1x2  = {8, MAX_FACE_C_DIM, 1, 2};  ///<  8x32
-inline TensorShape TENSOR_SHAPE_FR8_NF2x1  = {8, MAX_FACE_C_DIM, 2, 1};  ///< 16x16
-inline TensorShape TENSOR_SHAPE_FR8_NF2x2  = {8, MAX_FACE_C_DIM, 2, 2};  ///< 16x32
-inline TensorShape TENSOR_SHAPE_FR16_NF1x1 = {16, MAX_FACE_C_DIM, 1, 1}; ///< 16x16
-inline TensorShape TENSOR_SHAPE_FR16_NF1x2 = {16, MAX_FACE_C_DIM, 1, 2}; ///< 16x32
-inline TensorShape TENSOR_SHAPE_FR16_NF2x1 = {16, MAX_FACE_C_DIM, 2, 1}; ///< 32x16
-inline TensorShape TENSOR_SHAPE_FR16_NF2x2 = DEFAULT_TENSOR_SHAPE;       ///< 32x32
+constexpr TensorShape TENSOR_SHAPE_FR1_NF1x1  = {1, MAX_FACE_C_DIM, 1, 1};  ///<  1x16
+constexpr TensorShape TENSOR_SHAPE_FR1_NF1x2  = {1, MAX_FACE_C_DIM, 1, 2};  ///<  1x32
+constexpr TensorShape TENSOR_SHAPE_FR1_NF2x1  = {1, MAX_FACE_C_DIM, 2, 1};  ///<  2x16
+constexpr TensorShape TENSOR_SHAPE_FR1_NF2x2  = {1, MAX_FACE_C_DIM, 2, 2};  ///<  2x32
+constexpr TensorShape TENSOR_SHAPE_FR2_NF1x1  = {2, MAX_FACE_C_DIM, 1, 1};  ///<  2x16
+constexpr TensorShape TENSOR_SHAPE_FR2_NF1x2  = {2, MAX_FACE_C_DIM, 1, 2};  ///<  2x32
+constexpr TensorShape TENSOR_SHAPE_FR2_NF2x1  = {2, MAX_FACE_C_DIM, 2, 1};  ///<  4x16
+constexpr TensorShape TENSOR_SHAPE_FR2_NF2x2  = {2, MAX_FACE_C_DIM, 2, 2};  ///<  4x32
+constexpr TensorShape TENSOR_SHAPE_FR4_NF1x1  = {4, MAX_FACE_C_DIM, 1, 1};  ///<  4x16
+constexpr TensorShape TENSOR_SHAPE_FR4_NF1x2  = {4, MAX_FACE_C_DIM, 1, 2};  ///<  4x32
+constexpr TensorShape TENSOR_SHAPE_FR4_NF2x1  = {4, MAX_FACE_C_DIM, 2, 1};  ///<  8x16
+constexpr TensorShape TENSOR_SHAPE_FR4_NF2x2  = {4, MAX_FACE_C_DIM, 2, 2};  ///<  8x32
+constexpr TensorShape TENSOR_SHAPE_FR8_NF1x1  = {8, MAX_FACE_C_DIM, 1, 1};  ///<  8x16
+constexpr TensorShape TENSOR_SHAPE_FR8_NF1x2  = {8, MAX_FACE_C_DIM, 1, 2};  ///<  8x32
+constexpr TensorShape TENSOR_SHAPE_FR8_NF2x1  = {8, MAX_FACE_C_DIM, 2, 1};  ///< 16x16
+constexpr TensorShape TENSOR_SHAPE_FR8_NF2x2  = {8, MAX_FACE_C_DIM, 2, 2};  ///< 16x32
+constexpr TensorShape TENSOR_SHAPE_FR16_NF1x1 = {16, MAX_FACE_C_DIM, 1, 1}; ///< 16x16
+constexpr TensorShape TENSOR_SHAPE_FR16_NF1x2 = {16, MAX_FACE_C_DIM, 1, 2}; ///< 16x32
+constexpr TensorShape TENSOR_SHAPE_FR16_NF2x1 = {16, MAX_FACE_C_DIM, 2, 1}; ///< 32x16
+constexpr TensorShape TENSOR_SHAPE_FR16_NF2x2 = DEFAULT_TENSOR_SHAPE;       ///< 32x32
 
 enum class TensorShapeFunctionCoverage
 {

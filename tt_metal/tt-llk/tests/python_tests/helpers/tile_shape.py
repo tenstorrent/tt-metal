@@ -90,7 +90,7 @@ def construct_tile_shape(tile_dimensions: Tuple[int, int] = (32, 32)) -> TileSha
 
 def cpp_tensor_shape(tile_shape: TileShape) -> str:
     """
-    Emit the C++ ``ckernel::TensorShape`` aggregate literal that matches ``tile_shape``.
+    Emit a C++ ``ckernel::make_tensor_shape`` call that matches ``tile_shape``.
 
     Used by fuser code generators to construct the C++ TensorShape value
     expected by LLK functions taking a ``ckernel::TensorShape`` parameter.
