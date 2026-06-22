@@ -177,7 +177,7 @@ def _head_parallel_local_kv_cache_enabled(device=None) -> bool:
       2. decode SDPA: HiFi4 + fp32_dest_acc for the head-local path -- the
          1-KV-head paged-decode accumulation needed more headroom than HiFi2;
          fixed the verbose ``<td>``/nested-table markup drift.
-    Both validated to match ``dots_ocr_demo.txt`` at DP1 (N300) and DP2_TP2.
+    Both validated to match ``dots_ocr_demo.txt`` at DP1 (N300), DP2_TP2, and DP4_TP2.
     Set ``DOTS_OCR_HEAD_PARALLEL_LOCAL_KV_CACHE=0`` to force the (slower) 2-head
     replicated path.
     """
@@ -1027,6 +1027,10 @@ class TTNNDotsOCRPipeline(TTNNModule):
         and assembles the pipeline.
         """
         from transformers import AutoModelForCausalLM
+
+        from models.experimental.tt_symbiote.models.dots_ocr_parallelism import validate_pipeline_batch_size
+
+        validate_pipeline_batch_size(batch_size, device)
 
         hf_model = AutoModelForCausalLM.from_pretrained(
             model_path,

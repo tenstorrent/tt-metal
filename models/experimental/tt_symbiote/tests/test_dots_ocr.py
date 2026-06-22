@@ -15,6 +15,13 @@ from models.experimental.tt_symbiote.core.run_config import DispatchManager
 
 # from models.experimental.tt_symbiote.models.dots_ocr import TTNNDotsOCRPipeline
 from models.experimental.tt_symbiote.models.dots_ocr import TTNNDotsOCRPipeline, _create_paged_kv_cache
+from models.experimental.tt_symbiote.models.dots_ocr_parallelism import (
+    is_tp2_hybrid_parallelism,
+    mesh_dp_degree as _dots_ocr_mesh_dp_degree,
+    mesh_num_devices as _dots_ocr_mesh_num_devices,
+    pipeline_batch_size as _dots_ocr_pipeline_batch_size_from_parallelism,
+    resolve_mesh_device_shape as _resolve_mesh_device_shape,
+)
 from models.experimental.tt_symbiote.modules.dots_ocr_decoder_layer import (
     TTNNDotsOCRDecoderLayer,
     TTNNDotsOCRLayerStack,
@@ -27,104 +34,12 @@ from models.experimental.tt_symbiote.modules.dots_ocr_vision import (
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
 
-MESH_DEVICE_MAP = {
-    "N150": (1, 1),
-    "N300": (1, 2),
-    "N150x4": (1, 4),
-    "T3K": (2, 4),
-    "T3K_DP8": (8, 1),
-    "TG": (8, 4),
-    "P100": (1, 1),
-    "P150": (1, 1),
-    "P300": (1, 2),
-    "P150x4": (1, 4),
-    "P150x8": (1, 8),
-    "BHGLX": (8, 4),
-}
-
-DOTS_OCR_DP_MESH_DEVICE_MAP = {
-    "N300": (2, 1),
-    "T3K": (8, 1),
-}
-
-DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP = {
-    "T3K": (2, 4),
-}
-
-DOTS_OCR_DP2_TP2_MESH_DEVICE_MAP = {
-    "T3K": (2, 2),
-}
-
 DOTS_OCR_LAYOUT_PROMPT = "output all the text present in the image"
-
-
-def _dots_ocr_parallelism_mode() -> str:
-    return os.environ.get("DOTS_OCR_PARALLELISM", "").upper()
-
-
-def _mesh_device_map_get(mapping, mesh_device, default=None):
-    if mesh_device is None:
-        return default
-    for key, value in mapping.items():
-        if key.upper() == mesh_device.upper():
-            return value
-    return default
 
 
 def _assert_l1_resident(tensor, name: str):
     assert isinstance(tensor, ttnn.Tensor), f"{name} should be a TTNN tensor"
     assert tensor.memory_config().buffer_type == ttnn.BufferType.L1, f"{name} should reside in L1"
-
-
-def _resolve_mesh_device_shape():
-    mesh_device = os.environ.get("MESH_DEVICE")
-    parallelism = _dots_ocr_parallelism_mode()
-    if parallelism == "DP2_TP4":
-        shape = _mesh_device_map_get(DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP, mesh_device)
-        if shape is None:
-            raise ValueError("DOTS_OCR_PARALLELISM=DP2_TP4 is only supported for MESH_DEVICE=T3K")
-        return shape
-    if parallelism == "DP2_TP2":
-        # DP=2, TP=2 on T3K -> (2, 2) = 4 devices. TP axis (last dim) = 2 makes
-        # ``_tp_degree`` = 2; defaults match DP2_TP4 (``tp4_prefill`` prefill body
-        # + ``col_parallel`` decode) for multimodal OCR quality.
-        shape = _mesh_device_map_get(DOTS_OCR_DP2_TP2_MESH_DEVICE_MAP, mesh_device)
-        if shape is None:
-            raise ValueError("DOTS_OCR_PARALLELISM=DP2_TP2 is only supported for MESH_DEVICE=T3K")
-        return shape
-    if parallelism == "DP":
-        return _mesh_device_map_get(
-            DOTS_OCR_DP_MESH_DEVICE_MAP,
-            mesh_device,
-            _mesh_device_map_get(MESH_DEVICE_MAP, mesh_device, len(ttnn.get_device_ids())),
-        )
-    return _mesh_device_map_get(MESH_DEVICE_MAP, mesh_device, len(ttnn.get_device_ids()))
-
-
-def _dots_ocr_mesh_dp_degree():
-    sh = _resolve_mesh_device_shape()
-    if not isinstance(sh, (tuple, list)) or len(sh) < 2:
-        return 1
-    parallelism = _dots_ocr_parallelism_mode()
-    if parallelism == "DP2_TP4":
-        return int(sh[0])
-    if parallelism == "DP":
-        return int(sh[0]) if int(sh[0]) > 1 else int(sh[1])
-    if int(sh[0]) > 1 and int(sh[1]) > 1:
-        return int(sh[0])
-    return 1
-
-
-def _dots_ocr_mesh_num_devices():
-    sh = _resolve_mesh_device_shape()
-    if isinstance(sh, int):
-        return max(1, int(sh))
-    if isinstance(sh, (tuple, list)):
-        if len(sh) >= 2:
-            return int(sh[0]) * int(sh[1])
-        if len(sh) == 1:
-            return int(sh[0])
-    return 1
 
 
 def _dots_ocr_device_params():
@@ -251,14 +166,8 @@ def _dots_ocr_vision_one_layer_block_counts() -> list[int]:
 
 
 def _dots_ocr_pipeline_batch_size():
-    """Match ``TTNNDotsOCRPipeline`` batch to mesh size when DP is requested.
-
-    DP sharding in the pipeline requires ``batch_size == dp_degree``. Plain
-    ``T3K`` defaults to the hybrid ``(2, 4)`` mesh; ``T3K_DP8`` keeps the
-    working ``(8, 1)`` DP8/TP1 mesh available explicitly.
-    """
-    n = _dots_ocr_mesh_dp_degree()
-    return n if n > 1 else 1
+    """Match ``TTNNDotsOCRPipeline`` batch to mesh DP degree when DP is requested."""
+    return _dots_ocr_pipeline_batch_size_from_parallelism()
 
 
 def _dots_ocr_stack_input_ids_for_dp(input_ids: torch.Tensor) -> torch.Tensor:
@@ -288,6 +197,16 @@ def _dots_ocr_tp_decode_scheme() -> str:
     from models.experimental.tt_symbiote.models.dots_ocr import _decode_tp_scheme_from_env
 
     return _decode_tp_scheme_from_env()
+
+
+def test_dots_ocr_dp4_tp2_mesh_resolution(monkeypatch):
+    """DP4_TP2 uses T3K mesh (4, 2) with batch_size 4 (no device required)."""
+    monkeypatch.setenv("MESH_DEVICE", "T3K")
+    monkeypatch.setenv("DOTS_OCR_PARALLELISM", "DP4_TP2")
+    assert _resolve_mesh_device_shape() == (4, 2)
+    assert _dots_ocr_mesh_dp_degree() == 4
+    assert _dots_ocr_pipeline_batch_size() == 4
+    assert is_tp2_hybrid_parallelism()
 
 
 @pytest.mark.parametrize(
@@ -380,7 +299,9 @@ def test_dots_ocr_vision(mesh_device, image_link):
 
     Default mesh comes from ``MESH_DEVICE``. Plain T3K is the hybrid ``(2, 4)``
     shape and ``T3K_DP8`` is the working ``(8, 1)`` DP8/TP1 shape.
-    ``DOTS_OCR_PARALLELISM=DP`` remains available for DP-only shapes. For TP decode scheme comparisons, set
+    ``DOTS_OCR_PARALLELISM`` selects DP×TP hybrids: ``DP2_TP4`` ``(2,4)``,
+    ``DP2_TP2`` ``(2,2)``, ``DP4_TP2`` ``(4,2)``; plain ``DP`` is DP8/TP1.
+    For TP decode scheme comparisons, set
     ``DOTS_OCR_TP_DECODE_SCHEME=row``; otherwise ``col_parallel`` is used.
     """
     pytest.importorskip("qwen_vl_utils")
@@ -1575,11 +1496,11 @@ def test_dots_ocr_vision(mesh_device, image_link):
     ],
 )
 @pytest.mark.skipif(
-    os.environ.get("MESH_DEVICE", "").upper() != "T3K" or _dots_ocr_parallelism_mode() != "DP2_TP2",
-    reason="head_parallel TP2 OCR regression requires MESH_DEVICE=T3K DOTS_OCR_PARALLELISM=DP2_TP2",
+    os.environ.get("MESH_DEVICE", "").upper() != "T3K" or not is_tp2_hybrid_parallelism(),
+    reason="head_parallel TP2 OCR regression requires MESH_DEVICE=T3K DOTS_OCR_PARALLELISM=DP2_TP2|DP4_TP2",
 )
 def test_dots_ocr_vision_head_parallel_tp2_ocr_regression(mesh_device, image_link, monkeypatch):
-    """Full-pipeline OCR/table regression for tp4_prefill + head_parallel on DP2_TP2."""
+    """Full-pipeline OCR/table regression for tp4_prefill + head_parallel on DP2_TP2 / DP4_TP2."""
     monkeypatch.setenv("DOTS_OCR_TP_DECODE_SCHEME", "head_parallel")
 
     pytest.importorskip("qwen_vl_utils")
