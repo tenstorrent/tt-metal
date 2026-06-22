@@ -667,3 +667,71 @@ def test_insert_stress_dram_utilization_single_expert(device, count):
     torch.testing.assert_close(out_torch[start : start + rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     local_slice = local_torch[:rows, :].float()
     assert_with_pcc(local_slice, out_torch[start : start + rows, :].float(), pcc=0.9999)
+
+
+# ---------------------------------------------------------------------------
+# Sub-device confinement (proof of concept).
+#
+# insert splits work purely by flat core_id / num_cores, so running it on a
+# sub-device's worker cores instead of the full grid must produce identical
+# output. This exercises the `subdevice_id` plumbing end-to-end.
+# ---------------------------------------------------------------------------
+
+
+def _run_insert_on_subdevice(global_tensor, local_tensor, start, counts, sub_core_range_set, *, expert_id):
+    """Run insert confined to `sub_core_range_set`, returning the host output tensor.
+
+    Creates + loads a single-sub-device manager so SubDeviceId(0) resolves to the
+    provided cores, runs the op with subdevice_id=SubDeviceId(0), then restores the
+    default sub-device manager.
+    """
+    device = global_tensor.device()
+    idx_table = _make_identity_idx_table(device)
+    sub_device = ttnn.SubDevice([sub_core_range_set])
+    manager_id = device.create_sub_device_manager([sub_device], 0)
+    try:
+        device.load_sub_device_manager(manager_id)
+        out = ttnn.experimental.deepseek_prefill.insert(
+            global_tensor,
+            local_tensor,
+            start,
+            counts,
+            idx_table,
+            local_expert_id=expert_id,
+            subdevice_id=ttnn.SubDeviceId(0),
+        )
+        ttnn.synchronize_device(device)
+        device.clear_loaded_sub_device_manager()
+        out_host = ttnn.to_torch(out)
+    finally:
+        device.remove_sub_device_manager(manager_id)
+    return out_host
+
+
+def test_insert_subdevice_matches_full_grid(device):
+    starts, counts, expert_id, global_rows, local_rows, hidden_dim = [0, 64, 96, 128], [32, 17, 32, 5], 1, 256, 32, 64
+
+    torch.manual_seed(0)
+    local_torch = torch.randn(local_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+
+    # Full-grid reference: fresh global each run since insert writes in place.
+    global_torch = torch.randn(global_rows, hidden_dim, dtype=torch.float32).to(torch.bfloat16)
+    g_full = _to_tile_bfp8(device, global_torch)
+    l_full = _to_tile_bfp8(device, local_torch)
+    s_full = _make_index_from_values(device, starts)
+    c_full = _make_index_from_values(device, counts)
+    out_full = ttnn.to_torch(_run(g_full, l_full, s_full, c_full, global_expert_id=expert_id))
+
+    # Sub-device run: identical inputs, confined to rows [1, grid_y).
+    grid = device.compute_with_storage_grid_size()
+    assert grid.y > 1, "test requires a compute grid with at least 2 rows"
+    sub_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 1), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    g_sd = _to_tile_bfp8(device, global_torch)
+    l_sd = _to_tile_bfp8(device, local_torch)
+    s_sd = _make_index_from_values(device, starts)
+    c_sd = _make_index_from_values(device, counts)
+    out_sd = _run_insert_on_subdevice(g_sd, l_sd, s_sd, c_sd, sub_cores, expert_id=expert_id)
+
+    assert out_sd.shape == out_full.shape, f"{out_sd.shape} vs {out_full.shape}"
+    # Sub-device-confined output must be bit-identical to the full-grid output.
+    torch.testing.assert_close(out_sd.float(), out_full.float(), atol=0.0, rtol=0.0)

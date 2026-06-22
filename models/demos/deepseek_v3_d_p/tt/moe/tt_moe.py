@@ -642,6 +642,18 @@ class TtMoe(LightweightModule):
         )
         logger.debug(f"[TtMoe.forward] expert_outputs shape: {expert_outputs.shape} {expert_outputs.dtype=}")
 
+        # ========================================
+        # Step 4: Combine (enabled)
+        # ========================================
+        # Combine expects TILE_LAYOUT input
+        combined_output = self.combine_module(
+            expert_outputs,
+            metadata,
+            tt_expert_token_counts,
+            tt_expert_region_offsets,
+        )
+        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
+
         # The routed_expert op bumps this semaphore once per local expert, so after the
         # call it should read `experts_per_chip` on every core. Log the distinct values,
         # then reset it to zero for the next forward. The semaphore only exists when an
@@ -657,18 +669,6 @@ class TtMoe(LightweightModule):
                 f"distinct={sorted(set(_sem_values))}, count={len(_sem_values)}"
             )
             ttnn.reset_global_semaphore_value(self.routed_expert_global_semaphore, 0)
-
-        # ========================================
-        # Step 4: Combine (enabled)
-        # ========================================
-        # Combine expects TILE_LAYOUT input
-        combined_output = self.combine_module(
-            expert_outputs,
-            metadata,
-            tt_expert_token_counts,
-            tt_expert_region_offsets,
-        )
-        logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)

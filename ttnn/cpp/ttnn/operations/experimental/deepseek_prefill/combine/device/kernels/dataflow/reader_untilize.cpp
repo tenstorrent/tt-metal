@@ -167,11 +167,11 @@ void kernel_main() {
 
     for (uint32_t local_expert = expert_start_idx; local_expert < expert_end_idx; local_expert++) {
         // Overlap handshake with the routed expert: before processing this expert, wait until the
-        // routed-expert global semaphore reaches a value >= TODO.
+        // routed-expert global semaphore reaches a value >= local_expert + 1.
         if (routed_expert_sem_addr != 0) {
             volatile tt_l1_ptr uint32_t* routed_expert_sem_ptr =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(routed_expert_sem_addr);
-            noc_semaphore_wait_min(routed_expert_sem_ptr, 0);
+            noc_semaphore_wait_min(routed_expert_sem_ptr, local_expert + 1);
         }
 
         uint32_t expert_tokens = local_expert_counts[local_expert];

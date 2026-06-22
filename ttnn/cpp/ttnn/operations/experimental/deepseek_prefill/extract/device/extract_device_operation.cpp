@@ -179,11 +179,14 @@ ttnn::Tensor prefill_extract(
     const ttnn::Tensor& counts,
     const ttnn::Tensor& global_expert_idx_table,
     uint32_t local_expert_id,
-    uint32_t max_dispatched_tokens_per_expert) {
+    uint32_t max_dispatched_tokens_per_expert,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::extract::ExtractDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
-            .local_expert_id = local_expert_id, .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert},
+            .local_expert_id = local_expert_id,
+            .max_dispatched_tokens_per_expert = max_dispatched_tokens_per_expert,
+            .subdevice_id = subdevice_id},
         OperationType::tensor_args_t{
             .global_tensor = global_tensor,
             .start = start,
