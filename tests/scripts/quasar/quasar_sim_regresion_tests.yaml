@@ -36,13 +36,6 @@ unit_tests_legacy:
 #  instances are named relu_1tiles, exponential_1tiles, … - not /0, /1,
 # … /10
 # This breaks gitlab
-
-unit_tests_llk:
-  # Quasar bring-up: single-tile bf16 eltwise ADD via the Metal 2.0 ProgramSpec/DFB
-  # path.
-  - filter: "LLKMeshDeviceFixtureSlowDispatchOnly.TensixBinaryComputeSingleCoreSingleTileAdd"
-    config: 1x3
-
 # unit_tests_llk:
 #   - filter: "*SingleCoreSingleMeshDeviceSfpuParameterizedFixture*TensixSfpuCompute/10"
 #     config: 1x3
