@@ -257,6 +257,6 @@ def test_lora_row_parallel_variant(
 # Construction-time validation
 # --------------------------------------------------------------------
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
-def test_invalid_lora_mode_raises(mesh_device: ttnn.MeshDevice) -> None:
-    with pytest.raises(ValueError, match="lora_mode"):
+def test_invalid_lora_mode_raises(mesh_device: ttnn.MeshDevice, expect_error) -> None:
+    with expect_error(ValueError, "lora_mode"):
         LoRALinear(64, 64, bias=False, mesh_device=mesh_device, lora_mode="bogus")
