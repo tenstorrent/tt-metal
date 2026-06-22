@@ -28,6 +28,7 @@
 #include "sfpu/ckernel_sfpu_sigmoid.h"
 #include "sfpu/ckernel_sfpu_silu.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
+#include "sfpu/ckernel_sfpu_typecast.h"
 
 // Binary SFPU op headers (consumed by the binary dispatchers below). The op is
 // selected via the LLK ckernel::BinaryOp enum (reused like Blackhole; the
