@@ -773,35 +773,9 @@ public:
         // dispatcher's historical naming, not a reference to ProgramDescriptor.
         static void apply_descriptor(
             cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& attrs,
+            const operation_attributes_t& /*attrs*/,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
-            // A factory whose kernels consume tensor addresses (and other shape-derived values) as
-            // plain runtime args — rather than via ProgramSpec TensorParameters — gets nothing
-            // refreshed by UpdateTensorArgs alone: those raw runtime args keep their cache-miss
-            // values and go stale once a later dispatch supplies tensors at fresh addresses.
-            // When the factory parks NO op-owned tensors, re-derive the full ProgramRunArgs by
-            // calling the factory again and re-apply them with SetProgramRunArgs (which patches the
-            // already-allocated arg buffers in place). This refreshes every runtime arg, raw and
-            // tensor-backed alike. We keep the lighter UpdateTensorArgs-only path for factories
-            // that DO own tensors, whose stable-address contract that path is built around.
-            bool has_op_owned_tensors = false;
-            for (const auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                const auto& sv = cached_workload.shared_variables.at(coordinate_range);
-                if (sv.op_owned_tensors && !sv.op_owned_tensors->empty()) {
-                    has_op_owned_tensors = true;
-                    break;
-                }
-            }
-
-            if (!has_op_owned_tensors) {
-                auto artifacts = MetalV2Factory::create_program_artifacts(attrs, tensor_args, tensor_return_value);
-                for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                    tt::tt_metal::experimental::SetProgramRunArgs(program, artifacts.run_params);
-                }
-                return;
-            }
-
             auto io_mesh_tensors = collect_mesh_tensors(tensor_args, tensor_return_value);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
                 const auto& sv = cached_workload.shared_variables.at(coordinate_range);
