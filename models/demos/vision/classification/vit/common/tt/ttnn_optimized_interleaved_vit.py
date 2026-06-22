@@ -304,7 +304,8 @@ def vit_encoder(
     encoder_input = embeddings
 
     encoder_output = None
-    for index, encoder_parameters in enumerate(parameters.layer):
+    encoder_layers = parameters.layer if hasattr(parameters, "layer") else parameters
+    for index, encoder_parameters in enumerate(encoder_layers):
         encoder_output = vit_layer(
             config,
             encoder_input,
@@ -330,7 +331,7 @@ def vit(
         config,
         embeddings_output,
         attention_mask,
-        parameters=parameters.vit.encoder,
+        parameters=parameters.vit.encoder if "encoder" in parameters.vit else parameters.vit.layers,
     )
     # ttnn.deallocate(embeddings_output)
 

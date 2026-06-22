@@ -205,7 +205,7 @@ class Qwen3VLVisionAttention(nn.Module):
         value_states = value_states.transpose(0, 1).unsqueeze(0)
 
         attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
+        if self.config._attn_implementation not in (None, "eager"):
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         if is_flash_attention_requested(self.config):
@@ -474,7 +474,7 @@ class Qwen3VLTextAttention(nn.Module):
             key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx, cache_kwargs)
 
         attention_interface: Callable = eager_attention_forward
-        if self.config._attn_implementation != "eager":
+        if self.config._attn_implementation not in (None, "eager"):
             attention_interface = ALL_ATTENTION_FUNCTIONS[self.config._attn_implementation]
 
         attn_output, attn_weights = attention_interface(

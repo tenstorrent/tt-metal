@@ -14,6 +14,8 @@ This is observational/diagnostic — no PCC threshold assertions.
 
 import matplotlib
 
+from models.common.utility_functions import hf_cache_layer_kv
+
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
@@ -561,7 +563,7 @@ def test_prefill_block_loop(
             tt_kvpe_cache, mesh_device, sp_axis=sp_axis
         )  # [1, 1, seq_total, head_dim]
         tt_kvpe_host = tt_kvpe_host.squeeze(0).float()  # [1, seq_total, head_dim]
-        torch_kvpe = ref_cache.key_cache[real_layer_idx].float()  # [1, 1, seq, head_dim]
+        torch_kvpe = hf_cache_layer_kv(ref_cache, real_layer_idx)[0].float()  # [1, 1, seq, head_dim]
         torch_kvpe = torch_kvpe.squeeze(1)  # [1, seq, head_dim]
 
         # Split into KV (nope) and PE (rope)

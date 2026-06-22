@@ -35,6 +35,9 @@ on:
       measure-memory:
         type: string
         default: "false"
+      fail-on-test-failure:
+        type: string
+        default: "false"
       mesh-shape:
         type: string
         default: ""
@@ -203,6 +206,9 @@ jobs:
           # single process never does a live FABRIC_1D->FABRIC_2D transition.
           if [[ -n "$MESH_DIMS" ]]; then
             CMD+=(--mesh-dims "$MESH_DIMS")
+          fi
+          if [[ "${{ inputs.fail-on-test-failure }}" == "true" ]]; then
+            CMD+=("--fail-on-test-failure")
           fi
 
           # Two-pass run: COL first, then ROW. Skip a pass when the matching

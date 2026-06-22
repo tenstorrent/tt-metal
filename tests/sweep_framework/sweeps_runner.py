@@ -68,6 +68,7 @@ class SweepsConfig:
     # process never does a live FABRIC_1D->FABRIC_2D control-plane transition,
     # whose first post-transition op hangs on T3K CI. None = run all meshes.
     mesh_dims: str | None = None
+    fail_on_test_failure: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -94,6 +95,7 @@ def create_config_from_args(args) -> SweepsConfig:
         main_proc_verbose=args.main_proc_verbose,
         trace_params=args.trace_params,
         mesh_dims=args.mesh_dims,
+        fail_on_test_failure=args.fail_on_test_failure,
     )
 
     # Validate and set ARCH_NAME
@@ -1203,6 +1205,25 @@ def run_sweeps(
                     f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})"
                 )
 
+    # Derive failure from actual per-test statuses, not from export_results() return value
+    # (export_results unconditionally returns "success" for file-based destinations).
+    if config.fail_on_test_failure and status_counts:
+        from tests.sweep_framework.framework.statuses import TestStatus
+
+        fail_status_names = {
+            TestStatus.FAIL_ASSERT_EXCEPTION.name,
+            TestStatus.FAIL_CRASH_HANG.name,
+            TestStatus.FAIL_L1_OUT_OF_MEM.name,
+            TestStatus.FAIL_WATCHER.name,
+            TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF.name,
+        }
+        failed_count = sum(count for name, count in status_counts.items() if name in fail_status_names)
+        if failed_count > 0:
+            final_status = "failure"
+            logger.error(f"{failed_count} test case(s) failed/crashed/hung")
+
+    return final_status
+
 
 def get_module_names(config: SweepsConfig):
     """Extract module names based on configuration"""
@@ -1433,6 +1454,13 @@ if __name__ == "__main__":
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). Outputs to generated/ttnn/reports/operation_parameters/",
     )
 
+    parser.add_argument(
+        "--fail-on-test-failure",
+        action="store_true",
+        required=False,
+        help="Exit with non-zero status if any test case fails, crashes, or hangs. Use in CI to mark the job as failed.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
 
     # Argument validation
@@ -1487,7 +1515,7 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    run_sweeps(
+    final_status = run_sweeps(
         module_names,
         config=config,
     )
@@ -1497,3 +1525,7 @@ if __name__ == "__main__":
 
     if config.measure_device_perf:
         disable_profiler()
+
+    if config.fail_on_test_failure and final_status == "failure":
+        logger.error("Exiting with failure: one or more test cases did not pass (--fail-on-test-failure)")
+        sys.exit(1)
