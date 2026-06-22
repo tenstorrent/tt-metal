@@ -20,7 +20,7 @@ from ....utils.padding import PaddingConfig
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard
 
 TEST_MESH_PARAMS = [
-    # BH Onnly
+    # BH Only
     pytest.param((1, 2), (1, 2), 0, 1, 2, "1x2sp0tp1", id="1x2sp0tp1"),
     pytest.param((2, 2), (2, 2), 0, 1, 2, "2x2sp0tp1", id="2x2sp0tp1"),
     # WH Only
