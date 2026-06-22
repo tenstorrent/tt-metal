@@ -50,6 +50,11 @@ on:
         required: false
         type: boolean
         default: false
+      run_triage_tests:
+        description: "Run tt-triage tests"
+        required: false
+        type: boolean
+        default: true
       additional_test_categories:
         description: >
           Additional test categories to run (comma-separated, e.g.,
@@ -306,7 +311,9 @@ jobs:
   # =============================================================================
   triage-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
-    if: ${{ contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150') }}
+    if: |
+      (github.event_name == 'schedule' || inputs.run_triage_tests) &&
+      contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
     secrets: inherit
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:
