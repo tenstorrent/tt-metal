@@ -19,4 +19,5 @@ global_env:
   PREFILL_MIGRATION_TABLE_QUEUE: "/mig_ep1_table"
   PREFILL_MIGRATION_RESP_QUEUE: "/mig_ep1_resp"
   # Set PREFILL_MIGRATION_CLIENT_DIR to the dir containing the migration_client.so file
-  PREFILL_MIGRATION_SELFTEST: "0"
+  PREFILL_MIGRATION_SELFTEST: "1"
+  PREFILL_MIGRATION_CLIENT_DIR: "/data/nolenzhao/tt-llm-engine/disaggregation/migration/build_RelWithDebInfo/python"

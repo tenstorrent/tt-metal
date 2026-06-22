@@ -235,6 +235,135 @@ def _load_token_ids() -> list[int]:
 
 
 # ---------------------------------------------------------------------------
+# Layer-completion routing (pipeline / num_ranks > 1)
+# ---------------------------------------------------------------------------
+
+
+def build_layer_completion_sink(producer, *, source_rank, num_layers):
+    """Build the per-layer completion sink the runtime fires once per layer.
+
+    Computes a globally-dense ordering key and pushes a full completion
+    into `producer` (a pipelined_prefill.LayerCompletionQueue). The
+    master router re-emits completions strictly in ascending `seq`.
+
+    seq = request_id * num_layers + layer_idx — dense across all (request,
+    layer) pairs. For pipelined prefill each rank owns a disjoint set of
+    global layer indices per request, so the union of every rank's seqs
+    tiles [0, num_requests*num_layers) with no gaps or collisions.
+
+    The runtime calls the returned sink as `sink(layer_idx, request_id)`,
+    binding the current chunk's request_id per prefill() call — so this
+    builder needs no request-id accessor and reads no shared mutable state.
+
+    Args:
+        producer: connected LayerCompletionQueue (the host-local ring).
+        source_rank: this rank's world rank (diagnostic in the payload).
+        num_layers: total GLOBAL layers (the seq stride per request), NOT this rank's slice.
+    """
+
+    def on_layer_complete(layer_idx: int, request_id: int) -> None:
+        # Hot path: fired once per layer inside model.forward. Push directly (no per-call closure)
+        # and return on the common success; only the rare full-ring case falls into the spin below.
+        seq = request_id * num_layers + layer_idx
+        if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
+            return
+
+        # Ring is sized well above in-flight depth; a full ring means the router
+        # thread is momentarily behind. Spin (don't drop) for up to PUSH_SPIN_TIMEOUT_S
+        # waiting for it to drain; log on entry, every PUSH_SPIN_LOG_EVERY_S while waiting,
+        # and on exit. Only surface an error if it never catches up.
+        start = time.monotonic()
+        next_log = start + LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
+        logger.warning(
+            f"[layer-completion] ring full (seq={seq}); spinning up to "
+            f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s for router to drain"
+        )
+        while True:
+            if producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
+                logger.info(f"[layer-completion] ring drained after {time.monotonic() - start:.1f}s; pushed seq={seq}")
+                return
+            if _shutdown:
+                # Operator asked to stop (SIGTERM/SIGINT). Abort the spin immediately instead of
+                # ignoring the signal for up to the full timeout; teardown runs via run_request_loop's
+                # finally. Raising (vs. silently dropping) keeps the failure visible.
+                raise RuntimeError(f"layer-completion ring full (seq={seq}); shutdown requested while spinning")
+            now = time.monotonic()
+            if now - start >= LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:
+                logger.error(f"[layer-completion] gave up after {now - start:.1f}s spinning on full ring (seq={seq})")
+                raise RuntimeError(
+                    f"layer-completion ring full (seq={seq}); router not draining after "
+                    f"{LAYER_COMPLETION_PUSH_SPIN_TIMEOUT_S:.0f}s"
+                )
+            if now >= next_log:
+                logger.warning(f"[layer-completion] still spinning on full ring (seq={seq}) after {now - start:.0f}s")
+                next_log += LAYER_COMPLETION_PUSH_SPIN_LOG_EVERY_S
+            time.sleep(LAYER_COMPLETION_PUSH_SPIN_SLEEP_S)
+
+    return on_layer_complete
+
+
+class _CompletionCheckConsumer:
+    """Test-only scheduler stand-in (enabled by PREFILL_CHECK_COMPLETIONS=1).
+
+    Thin Python wrapper over the C++ LayerCompletionConsumer from the standalone `_layer_completion`
+    extension (models/demos/deepseek_v3_d_p/tt/runners/pipelined_prefill — NOT part of the ttnn
+    module). The C++ consumer drains the master router's scheduler counter
+    channel on a NATIVE thread — immune to the GIL. An earlier Python daemon-thread version stalled at
+    a partial count because the master rank's main thread blocks in a GIL-holding request-loop call
+    and starves any Python drain thread, even though the router had already injected every completion.
+
+    In production a real scheduler consumes this channel; this only fakes the consumer side under test.
+    Pre-configured with the expected total (PREFILL_CHECK_EXPECTED_CHUNKS) so the C++ thread
+    self-terminates + logs PASS on its own — no dependency on Python teardown.
+    """
+
+    def __init__(self, ack_shm_name: str, *, num_layers: int):
+        # Imported here (not at module top) so the runner doesn't hard-fail when the test-only
+        # _layer_completion extension is absent; only PREFILL_CHECK_COMPLETIONS=1 runs reach this.
+        from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import LayerCompletionConsumer
+
+        self._num_layers = num_layers
+        # This consumer only runs in (unbounded) request mode, where the external producer — NOT
+        # PREFILL_STANDALONE_NCHUNKS — determines the chunk count. So the expected total must come from
+        # PREFILL_CHECK_EXPECTED_CHUNKS; NCHUNKS is deliberately not consulted (it's commonly set via the
+        # standalone global_env and would silently pick a wrong-but-confident count). If unset, the
+        # consumer's self-terminate threshold is a guess and the PASS/FAIL signal is unreliable.
+        explicit_chunks = os.environ.get("PREFILL_CHECK_EXPECTED_CHUNKS")
+        if explicit_chunks is None:
+            logger.warning(
+                "[completion-check] PREFILL_CHECK_EXPECTED_CHUNKS is not set; falling back to 11 chunks — "
+                "the PASS/FAIL tally is unreliable in unbounded request mode. Set it to the number of "
+                "chunks the producer will actually send."
+            )
+        self._expected_chunks = int(explicit_chunks or "11")
+        self._expected_total = self._expected_chunks * num_layers
+        # Internal C++ native-thread consumer (re-exported from prefill_test; see that module).
+        self._impl = LayerCompletionConsumer(
+            channel_shm_name=ack_shm_name,
+            expected=self._expected_total,
+            connect_timeout_ms=30000,
+            log_step=num_layers,
+        )
+        logger.info(
+            f"[completion-check] C++ consumer draining {ack_shm_name}; expecting {self._expected_total} "
+            f"completions ({self._expected_chunks} chunks x {num_layers} layers), then self-terminates"
+        )
+
+    def stop_and_report(self) -> None:
+        self._impl.stop()  # join the native thread + final drain
+        got = self._impl.total
+        logger.info(
+            f"[completion-check] master aggregated {got} completions "
+            f"(expected {self._expected_total} = {self._expected_chunks} x {self._num_layers})"
+        )
+        assert got > 0, "[completion-check] FAIL: master received ZERO completions (router not aggregating)"
+        if got >= self._expected_total:
+            logger.success(f"[completion-check] PASS: {got} >= {self._expected_total}")
+        else:
+            logger.warning(f"[completion-check] count short: got {got}, expected {self._expected_total}")
+
+
+# ---------------------------------------------------------------------------
 # Loop
 # ---------------------------------------------------------------------------
 
@@ -771,6 +900,37 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
     ack_channel = None
     service_id = os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")
 
+    # Per-layer LayerAck -> scheduler-driven migration. Two wirings by topology:
+    #   * single-rank: the runtime owns the scheduler's counter channel and inject()s it
+    #     directly (the original path).
+    #   * pipeline (num_ranks > 1): each rank owns only a layer slice, so it cannot inject
+    #     the scheduler channel directly. Every rank pushes full {seq, source_rank, layer_idx,
+    #     request_id} completions into a host-local LayerCompletionQueue; a per-host
+    #     LayerCompletionRouter forwards them to the master rank, which re-emits them in
+    #     global seq order into the SAME counter channel the scheduler connects to. See
+    #     build_layer_completion_sink() and ttnn.layer_completion.
+    ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
+    master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
+    router = None
+    producer = None
+    # Completion checking (master rank only, test-only): a consumer that stands in for the scheduler
+    # on the master's counter channel, to verify aggregated per-(chunk, layer) completions. See
+    # _CompletionCheckConsumer. Gated by PREFILL_CHECK_COMPLETIONS=1 so it never competes with a real
+    # scheduler consuming the same channel in production.
+    completion_check = None
+    check_completions = os.environ.get("PREFILL_CHECK_COMPLETIONS", "0") == "1"
+
+    enable_layer_ack = (
+        os.environ.get("PREFILL_ENABLE_LAYER_ACK", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")) == "1"
+    )
+
+    def _unlink_stale_shm(name: str) -> None:
+        # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
+        path = f"/dev/shm/{name.lstrip('/')}"
+        if os.path.exists(path):
+            logger.warning(f"[migration] removing stale shm {path} from a prior run")
+            os.remove(path)
+
     # Migration KV-chunk-table publish: runs for ANY rank count. Every rank participates in the
     # cross-host all-gather that merges the table, but only the first rank builds it and sends it to
     # the worker (the gating lives inside publish_kv_chunk_table_and_wait_ready, mirroring tt-blaze
@@ -817,81 +977,138 @@ def _serve_request(runtime, kv_cache, mesh_device, hf_config, rank: int, num_ran
             wait_ready_timeout_ms=wait_ready_ms,
         )
 
-    # Per-layer LayerAck: single-rank only for now (pipelined migration is future work).
-    if single_rank:
-        # The runner bumps a counter once per layer; the scheduler reads the delta.
-        ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
-        _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
-        if os.path.exists(_stale_ack_shm):
-            # A prior run that didn't tear down cleanly leaves the segment behind (shm_open O_EXCL fails).
-            logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
-            os.remove(_stale_ack_shm)
+    if single_rank and enable_layer_ack:
+        # Direct path: the runtime owns + inject()s the scheduler counter channel.
+        _unlink_stale_shm(ack_shm_name)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
         runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+    elif single_rank:
+        logger.info("[migration] LayerAck channel disabled (set PREFILL_ENABLE_LAYER_ACK=1 to enable)")
+    else:
+        # Pipeline path: route per-rank completions to the master, which re-emits in seq order.
+        # Imported here (not at module top) so single-rank / no-extension builds never need the
+        # standalone _layer_completion .so (built only with WITH_PYTHON_BINDINGS).
+        from models.demos.deepseek_v3_d_p.tt.runners.pipelined_prefill import LayerCompletionQueue
+
+        # Each rank's router OWNS its own ring, so the name must be per-rank — append _{rank} even to
+        # the env override (a single literal would make colocated ranks unlink each other's live ring
+        # and collide on O_EXCL create).
+        ring_base = os.environ.get("PREFILL_LAYER_COMPLETION_RING", "/tt_prefill_layer_completion_ring")
+        ring_shm_name = f"{ring_base}_{rank}"
+        _unlink_stale_shm(ring_shm_name)
+        if rank == master_rank:
+            _unlink_stale_shm(ack_shm_name)
+        # The router owns the host-local ring (and, on the master, the scheduler counter channel,
+        # which it inject()s in order). Subordinate ranks MPI-forward completions to the master.
+        router = ttnn.layer_completion.LayerCompletionRouter(
+            rank=rank,
+            world_size=num_ranks,
+            master_rank=master_rank,
+            ring_shm_name=ring_shm_name,
+            scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+        )
+        producer = LayerCompletionQueue.connect(ring_shm_name, connect_timeout_ms=30000)
+        # seq stride is the GLOBAL layer total (NUM_LAYERS), NOT this rank's slice; the layer_idx
+        # arriving at the sink is already global; the chunk index is set per chunk in _compute_and_send.
+        runtime.set_layer_completion_sink(
+            build_layer_completion_sink(
+                producer,
+                source_rank=rank,
+                num_layers=NUM_LAYERS,
+            )
+        )
+        logger.info(
+            f"[migration] pipelined layer-completion routing up: rank={rank}/{num_ranks} master={master_rank} "
+            f"ring={ring_shm_name} "
+            + (f"(owns scheduler channel {ack_shm_name})" if rank == master_rank else "(subordinate -> master)")
+        )
+
+        if rank == master_rank and check_completions:
+            completion_check = _CompletionCheckConsumer(ack_shm_name, num_layers=NUM_LAYERS)
 
     logger.info(f"[pp rank {rank}] setup complete, entering request loop")
 
-    # Prefill into the src slot (slot 0). Returns {slot_id -> real (non-pad) end position}.
-    real_end_per_slot = run_request_loop(
-        runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out
-    )
+    try:
+        # Prefill into the src slot (slot 0). Returns {slot_id -> real (non-pad) end position}.
+        # In-loop migration self-test: rank 0 loopback-migrates src->dst, then EVERY rank asserts its
+        # local dst KV slice equals its src slice (validate_migrations_pairwise). Env-gated so ALL ranks
+        # take the same branch (the barrier below requires it); production serving is unaffected.
+        real_end_per_slot = run_request_loop(
+            runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out
+        )
 
-    # In-loop migration self-test: rank 0 loopback-migrates src->dst, then EVERY rank asserts its
-    # local dst KV slice equals its src slice (validate_migrations_pairwise). Env-gated so ALL ranks
-    # take the same branch (the barrier below requires it); production serving is unaffected.
-    if _selftest:
-        src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
-        dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1"))
+        if _selftest:
+            src_slot = int(os.environ.get("PREFILL_MIGRATE_SRC_SLOT", "0"))
+            dst_slot = int(os.environ.get("PREFILL_MIGRATE_DST_SLOT", "1"))
 
-        # PRECONDITION: every stage must have finished writing all its layers' KV before rank 0
-        # migrates. The bounded loop's tail barrier got all ranks through the last chunk; now flush
-        # THIS rank's device writes and barrier so rank 0 reads fully-written KV on every stage.
-        ttnn.synchronize_device(runtime.mesh_device)
-        if num_ranks > 1:
-            ttnn.distributed_context_barrier()
+            # PRECONDITION: every stage must have finished writing all its layers' KV before rank 0
+            # migrates. The bounded loop's tail barrier got all ranks through the last chunk; now flush
+            # THIS rank's device writes and barrier so rank 0 reads fully-written KV on every stage.
+            ttnn.synchronize_device(runtime.mesh_device)
+            if num_ranks > 1:
+                ttnn.distributed_context_barrier()
 
-        # RANK 0 ONLY issues the migrate (it holds the MigrationLayerClient).
-        if is_first_rank:
-            assert migration_endpoint is not None, "rank 0 must hold the migration client for the self-test"
-            # Loopback target is THIS endpoint's own id (A->B loopback; no peer, no connect_to).
-            self_ep = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
-            # Position range = the src slot's real prefilled length, aligned UP to the 32-token KV
-            # migration chunk (blaze's _align_up(S)). Migrate the FULL global layer range [0, NUM_LAYERS)
-            # the merged table was built for — the worker routes each layer to its owning stage.
-            POS_CHUNK = 32
-            real_end = real_end_per_slot.get(src_slot, 0)
-            pos_end = ((real_end + POS_CHUNK - 1) // POS_CHUNK) * POS_CHUNK
-            logger.info(
-                f"[migration-selftest] loopback migrate slot{src_slot}->slot{dst_slot} "
-                f"layers[0,{NUM_LAYERS}) pos[0,{pos_end}) (real_end={real_end}, self_ep={self_ep})"
-            )
-            # wait_complete's C++ default is only 30s; a full-prefill loopback copy (here ~2 GB:
-            # 56320 pos x 61 layers) can exceed that, so make it configurable.
-            wait_complete_ms = int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000"))
-            tok = migration_endpoint.migrate(1, self_ep, src_slot, dst_slot, 0, NUM_LAYERS, 0, pos_end)
-            migration_endpoint.wait_complete(tok, wait_complete_ms)
-            logger.success(f"[migration-selftest] migrate slot{src_slot}->slot{dst_slot} complete")
+            # RANK 0 ONLY issues the migrate (it holds the MigrationLayerClient).
+            if is_first_rank:
+                assert migration_endpoint is not None, "rank 0 must hold the migration client for the self-test"
+                # Loopback target is THIS endpoint's own id (A->B loopback; no peer, no connect_to).
+                self_ep = int(os.environ.get("PREFILL_MIGRATION_ENDPOINT_ID", "1"))
+                # Position range = the src slot's real prefilled length, aligned UP to the 32-token KV
+                # migration chunk (blaze's _align_up(S)). Migrate the FULL global layer range [0, NUM_LAYERS)
+                # the merged table was built for — the worker routes each layer to its owning stage.
+                POS_CHUNK = 32
+                real_end = real_end_per_slot.get(src_slot, 0)
+                pos_end = ((real_end + POS_CHUNK - 1) // POS_CHUNK) * POS_CHUNK
+                logger.info(
+                    f"[migration-selftest] loopback migrate slot{src_slot}->slot{dst_slot} "
+                    f"layers[0,{NUM_LAYERS}) pos[0,{pos_end}) (real_end={real_end}, self_ep={self_ep})"
+                )
+                # wait_complete's C++ default is only 30s; a full-prefill loopback copy (here ~2 GB:
+                # 56320 pos x 61 layers) can exceed that, so make it configurable.
+                wait_complete_ms = int(os.environ.get("PREFILL_MIGRATE_WAIT_COMPLETE_MS", "120000"))
+                tok = migration_endpoint.migrate(1, self_ep, src_slot, dst_slot, 0, NUM_LAYERS, 0, pos_end)
+                migration_endpoint.wait_complete(tok, wait_complete_ms)
+                logger.success(f"[migration-selftest] migrate slot{src_slot}->slot{dst_slot} complete")
 
-        # Barrier: every rank must wait for rank 0's migrate to finish before reading its local
-        # dst slot (the migrate covers all stages; each rank then verifies its own layers).
-        if num_ranks > 1:
-            ttnn.distributed_context_barrier()
-        ttnn.synchronize_device(runtime.mesh_device)
+            # Barrier: every rank must wait for rank 0's migrate to finish before reading its local
+            # dst slot (the migrate covers all stages; each rank then verifies its own layers).
+            if num_ranks > 1:
+                ttnn.distributed_context_barrier()
+            ttnn.synchronize_device(runtime.mesh_device)
 
-        from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_migrations_pairwise
+            from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import validate_migrations_pairwise
 
-        validate_migrations_pairwise(runtime, [(src_slot, dst_slot)])
+            validate_migrations_pairwise(runtime, [(src_slot, dst_slot)])
+    finally:
+        # Always tear down — the request loop can raise (e.g. the layer-completion sink's ring-full
+        # spin timing out on a stalled router); without this, producer/router/ack segments + the
+        # router listener thread leak, and a downstream peer blocked in D2D recv deadlocks the pipeline.
+        # Release services while the mesh + command queues are still alive (their dtors free a command
+        # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
 
-    # Release services while the mesh + command queues are still alive (their dtors free a command
-    # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
-    import gc
+        # Release services while the mesh + command queues are still alive (their dtors free a command
+        # queue and service-core L1; running after close_mesh_device aborts with cq_id-out-of-range).
+        import gc
 
-    h2d_service = d2d_in = d2d_out = None
-    gc.collect()
-    if ack_channel is not None:
-        ack_channel.shutdown()  # munmap + shm_unlink
-        ack_channel = None
+        h2d_service = d2d_in = d2d_out = None
+        gc.collect()
+        # NOTE: for num_ranks>1 the request loop only returns on a clean _shutdown; the known
+        # rough-shutdown path (downstream ranks block in D2D recv, exit on SIGKILL) can bypass this.
+        # Clean cross-rank router teardown (barrier + end-of-request sentinel) is future work.
+        if producer is not None:
+            producer.shutdown()
+        if router is not None:
+            router.stop()  # joins the listener; on the master, unlinks the scheduler counter channel
+        if completion_check is not None:
+            # Tally AFTER router.stop(): the master injects its own trailing completions during the
+            # listener's final drain (inside stop()). The consumer's mapping survives the owner's
+            # shm_unlink (POSIX), so it still reads those — tallying earlier would miss them and
+            # falsely report "count short". router.stop() unlinks the channel on the master.
+            completion_check.stop_and_report()
+        if ack_channel is not None:
+            ack_channel.shutdown()  # munmap + shm_unlink
+            ack_channel = None
 
 
 if __name__ == "__main__":
