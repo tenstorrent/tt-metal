@@ -41,7 +41,6 @@ def compute_pointwise_metrics(
         )
 
     signed_error = hw - golden
-    abs_error = np.abs(signed_error)
 
     is_finite_golden = np.isfinite(golden)
     is_finite_hw = np.isfinite(hw)
@@ -57,14 +56,11 @@ def compute_pointwise_metrics(
     ulp_defined = finite & golden_nonzero & np.isfinite(ulp) & (ulp > 0)
     safe_ulp = np.where(ulp_defined, ulp, 1.0)
     signed_ulp_error = np.where(ulp_defined, signed_error / safe_ulp, np.nan)
-    abs_ulp_error = np.abs(signed_ulp_error)
 
     return {
-        "abs_error": abs_error,
         "signed_error": signed_error,
         "rel_error": rel_error,
         "signed_ulp_error": signed_ulp_error,
-        "abs_ulp_error": abs_ulp_error,
         "is_finite_hw": is_finite_hw,
         "is_finite_golden": is_finite_golden,
     }

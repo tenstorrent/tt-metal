@@ -44,8 +44,6 @@ from helpers.test_variant_parameters import (
 )
 
 _THIS_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = _THIS_DIR / "_csv_output"
-SHARD_DIR = OUTPUT_DIR / "_shards"
 
 # ── CSV schema ──────────────────────────
 CSV_COLUMNS: List[str] = [
@@ -85,6 +83,10 @@ _FMT_ABBR = {
     "Bfp2_b": "bfp2",
     "Tf32": "tf32",
 }
+
+_ARCH = os.getenv("CHIP_ARCH", "unknown").lower()
+OUTPUT_DIR = _THIS_DIR / "_csv_output" / _ARCH_ABBR.get(_ARCH, _ARCH)
+SHARD_DIR = OUTPUT_DIR / "_shards"
 
 # How rows are ordered inside each final per-op CSV.
 MERGE_SORT_COLS = [
