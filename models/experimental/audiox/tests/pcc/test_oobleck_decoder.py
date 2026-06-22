@@ -14,6 +14,7 @@ from models.experimental.audiox.reference.oobleck import (
     ResidualUnit,
     SnakeBeta,
 )
+from models.experimental.audiox.tt.decoder_policy import should_stream_decoder_block
 
 
 def test_snake_beta_at_zero_init_is_identity():
@@ -120,3 +121,9 @@ def test_oobleck_encoder_param_names_match_upstream_convention():
     assert "blocks.0.downsample.weight_g" in names
     assert "blocks.0.res1.conv1.weight_g" in names
     assert "blocks.0.res1.act1.alpha" in names
+
+
+def test_should_stream_decoder_block_only_for_really_long_low_channel_tail():
+    assert should_stream_decoder_block(input_length=221184, stride=2, out_channels=128) is False
+    assert should_stream_decoder_block(input_length=165376, stride=4, out_channels=128) is True
+    assert should_stream_decoder_block(input_length=165376, stride=4, out_channels=256) is False

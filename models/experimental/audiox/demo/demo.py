@@ -25,13 +25,13 @@ import sys
 from pathlib import Path
 
 import torch
-import torchaudio
 
 from models.experimental.audiox.demo.media import (
     load_audio_prompt,
     load_image_prompt,
     load_video_prompt,
     resample_output_audio,
+    save_output_audio,
 )
 from models.experimental.audiox.reference.conditioners import (
     AudioAutoencoderConditioner,
@@ -305,8 +305,7 @@ def run_demo(
         input_sample_rate=_HF_CONFIG["sample_rate"],
         output_sample_rate=_HF_CONFIG["output_sample_rate"],
     )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    torchaudio.save(str(output), audio[0], _HF_CONFIG["output_sample_rate"])
+    save_output_audio(output, audio[0], sample_rate=_HF_CONFIG["output_sample_rate"])
     if return_details:
         return {
             "output_path": output,

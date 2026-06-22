@@ -23,7 +23,6 @@ import time
 from pathlib import Path
 
 import torch
-import torchaudio
 import ttnn
 
 from models.common.auto_compose import to_torch_auto_compose
@@ -39,7 +38,8 @@ from models.experimental.audiox.demo.demo import (
     _resolve_duration_seconds,
     _resolve_audio_prompt,
 )
-from models.experimental.audiox.demo.media import resample_output_audio
+from models.experimental.audiox.demo.media import resample_output_audio, save_output_audio
+from models.experimental.audiox.demo.tt_runtime import apply_tt_env_overrides, restore_tt_env, tt_open_kwargs_from_env
 from models.experimental.audiox.tt.dit import TtDiffusionTransformer
 from models.experimental.audiox.tt.oobleck import TtOobleckDecoder
 from models.experimental.audiox.tt.sampler import sample_rf as tt_sample_rf
@@ -99,8 +99,9 @@ def _local_mesh_width(device_id: int) -> int:
 
 def open_tt_device(device_id: int):
     os.environ.setdefault("TT_METAL_SLOW_DISPATCH_MODE", "1")
+    open_kwargs = tt_open_kwargs_from_env()
     if os.getenv("AUDIOX_TT_OPEN_MODE", "mesh") == "direct":
-        return ttnn.open_device(device_id=device_id)
+        return ttnn.open_device(device_id=device_id, **open_kwargs)
     if _should_use_local_mesh():
         dispatch_core_config = ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.WORKER)
         physical_device_ids = _local_mesh_physical_device_ids(device_id)
@@ -111,6 +112,7 @@ def open_tt_device(device_id: int):
                 mesh_shape=ttnn.MeshShape(1, len(physical_device_ids)),
                 physical_device_ids=physical_device_ids,
                 dispatch_core_config=dispatch_core_config,
+                **open_kwargs,
             )
         except RuntimeError:
             try:
@@ -118,10 +120,11 @@ def open_tt_device(device_id: int):
                     mesh_shape=ttnn.MeshShape(1, 1),
                     physical_device_ids=[device_id],
                     dispatch_core_config=dispatch_core_config,
+                    **open_kwargs,
                 )
             except RuntimeError:
                 pass
-    return ttnn.open_device(device_id=device_id)
+    return ttnn.open_device(device_id=device_id, **open_kwargs)
 
 
 def _to_tt(t: torch.Tensor, device, layout=ttnn.TILE_LAYOUT) -> ttnn.Tensor:
@@ -360,6 +363,9 @@ class TtAudioXSession:
         tt_audio_nhwc = self.tt_decoder(_nct_to_nhwc(tt_latent))
         _synchronize_tt_device(self.device)
         timings["decode_seconds"] = time.perf_counter() - started_at
+        timings["decoder_profile_present"] = getattr(self.tt_decoder, "last_profile", None) is not None
+        if timings["decoder_profile_present"]:
+            timings["decoder_profile"] = self.tt_decoder.last_profile
         _deallocate_tt(tt_latent)
 
         timings["generation_seconds"] = (
@@ -387,8 +393,7 @@ class TtAudioXSession:
             input_sample_rate=_HF_CONFIG["sample_rate"],
             output_sample_rate=_HF_CONFIG["output_sample_rate"],
         )
-        output.parent.mkdir(parents=True, exist_ok=True)
-        torchaudio.save(str(output), audio[0], _HF_CONFIG["output_sample_rate"])
+        save_output_audio(output, audio[0], sample_rate=_HF_CONFIG["output_sample_rate"])
         timings["save_seconds"] = time.perf_counter() - started_at
         if return_details:
             return {
@@ -449,6 +454,18 @@ def _parse_args(argv: list) -> argparse.Namespace:
     p.add_argument("--steps", type=int, default=100)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--duration-seconds", type=int, default=_HF_CONFIG["duration_seconds"])
+    p.add_argument("--tt-device-id", type=int, default=0)
+    p.add_argument("--tt-open-mode", choices=("mesh", "direct"))
+    p.add_argument("--tt-local-mesh-width", type=int)
+    p.add_argument("--tt-l1-small-size", type=int)
+    p.add_argument("--tt-trace-region-size", type=int)
+    p.add_argument("--tt-num-command-queues", type=int)
+    p.add_argument("--tt-worker-l1-size", type=int)
+    p.add_argument("--tt-conv-transpose-input-chunk", type=int)
+    p.add_argument("--tt-conv1d-width-slices", type=int)
+    p.add_argument("--tt-conv-transpose-height-slices", type=int)
+    p.add_argument("--tt-conv-transpose-stride2-act-block-h", type=int)
+    p.add_argument("--tt-conv-transpose-stride4-act-block-h", type=int)
     args = p.parse_args(argv)
     if not args.prompt and args.video is None and args.image is None and args.audio is None:
         p.error("at least one of --prompt, --video, --image, or --audio is required")
@@ -457,7 +474,20 @@ def _parse_args(argv: list) -> argparse.Namespace:
 
 def main(argv: list = None) -> int:
     args = _parse_args(argv if argv is not None else sys.argv[1:])
-    device = open_tt_device(device_id=0)
+    previous_tt_env = apply_tt_env_overrides(
+        open_mode=args.tt_open_mode,
+        local_mesh_width=args.tt_local_mesh_width,
+        l1_small_size=args.tt_l1_small_size,
+        trace_region_size=args.tt_trace_region_size,
+        num_command_queues=args.tt_num_command_queues,
+        worker_l1_size=args.tt_worker_l1_size,
+        conv_transpose_input_chunk=args.tt_conv_transpose_input_chunk,
+        conv1d_width_slices=args.tt_conv1d_width_slices,
+        conv_transpose_height_slices=args.tt_conv_transpose_height_slices,
+        conv_transpose_stride2_act_block_h=args.tt_conv_transpose_stride2_act_block_h,
+        conv_transpose_stride4_act_block_h=args.tt_conv_transpose_stride4_act_block_h,
+    )
+    device = open_tt_device(device_id=args.tt_device_id)
     try:
         out = run_tt_demo(
             checkpoint=args.checkpoint,
@@ -473,6 +503,7 @@ def main(argv: list = None) -> int:
         )
     finally:
         close_tt_device(device)
+        restore_tt_env(previous_tt_env)
     print(f"wrote {out}")
     return 0
 

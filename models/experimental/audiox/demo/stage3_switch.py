@@ -9,6 +9,7 @@ from pathlib import Path
 
 from models.experimental.audiox.demo.demo import _HF_CONFIG, _resolve_duration_seconds
 from models.experimental.audiox.demo.media import make_synthetic_video_prompt
+from models.experimental.audiox.demo.tt_runtime import apply_tt_env_overrides, restore_tt_env
 from models.experimental.audiox.demo import validate as validate_mod
 
 
@@ -21,6 +22,17 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument("--duration-seconds", type=int, default=_HF_CONFIG["duration_seconds"])
     p.add_argument("--tt-device-id", type=int, default=0)
     p.add_argument("--warmup-runs", type=int, default=1, help="Optional number of warmup runs before measuring")
+    p.add_argument("--tt-open-mode", choices=("mesh", "direct"))
+    p.add_argument("--tt-local-mesh-width", type=int)
+    p.add_argument("--tt-l1-small-size", type=int)
+    p.add_argument("--tt-trace-region-size", type=int)
+    p.add_argument("--tt-num-command-queues", type=int)
+    p.add_argument("--tt-worker-l1-size", type=int)
+    p.add_argument("--tt-conv-transpose-input-chunk", type=int)
+    p.add_argument("--tt-conv1d-width-slices", type=int)
+    p.add_argument("--tt-conv-transpose-height-slices", type=int)
+    p.add_argument("--tt-conv-transpose-stride2-act-block-h", type=int)
+    p.add_argument("--tt-conv-transpose-stride4-act-block-h", type=int)
     p.add_argument("--video-audio", type=Path, help="Optional real video for the video-to-audio case")
     p.add_argument("--video-music", type=Path, help="Optional real video for the video-to-music case")
     p.add_argument(
@@ -115,6 +127,19 @@ def main(argv: list[str] | None = None) -> int:
 
     warmup_reports = []
     case_reports = []
+    previous_tt_env = apply_tt_env_overrides(
+        open_mode=args.tt_open_mode,
+        local_mesh_width=args.tt_local_mesh_width,
+        l1_small_size=args.tt_l1_small_size,
+        trace_region_size=args.tt_trace_region_size,
+        num_command_queues=args.tt_num_command_queues,
+        worker_l1_size=args.tt_worker_l1_size,
+        conv_transpose_input_chunk=args.tt_conv_transpose_input_chunk,
+        conv1d_width_slices=args.tt_conv1d_width_slices,
+        conv_transpose_height_slices=args.tt_conv_transpose_height_slices,
+        conv_transpose_stride2_act_block_h=args.tt_conv_transpose_stride2_act_block_h,
+        conv_transpose_stride4_act_block_h=args.tt_conv_transpose_stride4_act_block_h,
+    )
     setup_started_at = time.perf_counter()
     device = _open_tt_device(device_id=args.tt_device_id)
     session = _build_session(args.checkpoint, device, seed=args.seed)
@@ -155,6 +180,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         session.deallocate()
         _close_tt_device(device)
+        restore_tt_env(previous_tt_env)
 
     measured_elapsed_seconds = time.perf_counter() - measured_started_at
     summary = {

@@ -12,11 +12,13 @@ with ``conv_transpose2d`` over a degenerate width-1 dim — mathematically
 identical to the 1D op, kernel ``(2*stride, 1)`` and stride ``(stride, 1)``."""
 
 import os
+import time
 
 import torch
 import ttnn
 
 from models.experimental.audiox.tt.common import to_tt
+from models.experimental.audiox.tt.decoder_policy import should_stream_decoder_block
 
 
 _LONG_SEQUENCE_THRESHOLD = int(os.getenv("AUDIOX_TT_LONG_SEQUENCE_THRESHOLD", "131072"))
@@ -26,9 +28,12 @@ _CONV_TRANSPOSE_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_HEIGHT_S
 _CONV_TRANSPOSE_LONG_THRESHOLD = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_THRESHOLD", "131072"))
 _CONV_TRANSPOSE_LONG_HEIGHT_SLICES = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_HEIGHT_SLICES", "512"))
 _CONV_TRANSPOSE_LONG_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_LONG_ACT_BLOCK_H", "0"))
+_CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H", "32"))
+_CONV_TRANSPOSE_STRIDE4_ACT_BLOCK_H = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_STRIDE4_ACT_BLOCK_H", "64"))
 _CONV_TRANSPOSE_INPUT_CHUNK = int(os.getenv("AUDIOX_TT_CONV_TRANSPOSE_INPUT_CHUNK", "32768"))
 _STREAM_RESIDUAL_CHUNK = int(os.getenv("AUDIOX_TT_STREAM_RESIDUAL_CHUNK", "16384"))
 _STREAM_SNAKE_CHUNK = int(os.getenv("AUDIOX_TT_STREAM_SNAKE_CHUNK", "256"))
+_OUT_CONV_STREAM_THRESHOLD = int(os.getenv("AUDIOX_TT_OUT_CONV_STREAM_THRESHOLD", "262144"))
 
 
 def _debug_decoder(message: str) -> None:
@@ -404,7 +409,7 @@ def _conv_transpose1d_impl(
     a no-op (``kW=1``, ``sW=1``, ``pW=0``). Input is RM, output is converted
     back to interleaved TILE for the next pointwise op."""
     out_length = (input_length - 1) * stride - 2 * padding + kernel_size
-    act_block_h = 64 if stride == 4 else 32
+    act_block_h = _CONV_TRANSPOSE_STRIDE4_ACT_BLOCK_H if stride == 4 else _CONV_TRANSPOSE_STRIDE2_ACT_BLOCK_H
     num_height_slices = _CONV_TRANSPOSE_HEIGHT_SLICES
     if input_length >= _CONV_TRANSPOSE_LONG_THRESHOLD:
         if _CONV_TRANSPOSE_LONG_ACT_BLOCK_H > 0:
@@ -555,6 +560,7 @@ class TtDecoderBlock:
         self.res1 = TtResidualUnit(mesh_device, sd, out_channels, dilation=1, prefix=prefix + "res1.")
         self.res2 = TtResidualUnit(mesh_device, sd, out_channels, dilation=3, prefix=prefix + "res2.")
         self.res3 = TtResidualUnit(mesh_device, sd, out_channels, dilation=9, prefix=prefix + "res3.")
+        self.last_profile = None
 
     def _stream_upsample(self, x: ttnn.Tensor) -> list[ttnn.Tensor]:
         base_chunks = []
@@ -638,13 +644,27 @@ class TtDecoderBlock:
         return self.res3.stream(upsampled)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        if isinstance(x, list) or (x.shape[1] >= _CONV_TRANSPOSE_LONG_THRESHOLD and self.out_channels <= 128):
-            return self._stream(x)
+        profile = {
+            "stride": self.stride,
+            "out_channels": self.out_channels,
+            "streamed": False,
+        }
+        if isinstance(x, list) or should_stream_decoder_block(x.shape[1], self.stride, self.out_channels):
+            started_at = time.perf_counter()
+            out = self._stream(x)
+            profile["streamed"] = True
+            profile["seconds"] = time.perf_counter() - started_at
+            self.last_profile = profile
+            return out
 
         batch_size, input_length = x.shape[0], x.shape[1]
 
+        started_at = time.perf_counter()
         h = self.act(x)
+        profile["act_seconds"] = time.perf_counter() - started_at
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
+
+        started_at = time.perf_counter()
         h, _ = _conv_transpose1d(
             h,
             self.up_w,
@@ -659,9 +679,28 @@ class TtDecoderBlock:
             input_length=input_length,
             label=f"decoder_block[stride={self.stride}].upsample",
         )
+        profile["upsample_seconds"] = time.perf_counter() - started_at
+
+        started_at = time.perf_counter()
         h = self.res1(h)
+        profile["res1_seconds"] = time.perf_counter() - started_at
+
+        started_at = time.perf_counter()
         h = self.res2(h)
-        return self.res3(h)
+        profile["res2_seconds"] = time.perf_counter() - started_at
+
+        started_at = time.perf_counter()
+        h = self.res3(h)
+        profile["res3_seconds"] = time.perf_counter() - started_at
+        profile["seconds"] = (
+            profile["act_seconds"]
+            + profile["upsample_seconds"]
+            + profile["res1_seconds"]
+            + profile["res2_seconds"]
+            + profile["res3_seconds"]
+        )
+        self.last_profile = profile
+        return h
 
     def deallocate(self) -> None:
         self.act.deallocate()
@@ -718,13 +757,16 @@ class TtOobleckDecoder:
             )
 
         self.out_act = TtSnakeBeta(mesh_device, sd, "out_act.")
+        self.last_profile = None
 
         # out_conv has bias=False upstream; pass None.
         out_w = reconstruct_wn_weight(sd, "out_conv.")
         self.out_conv_channels_in = c_mults[0] * channels
         self.out_w = ttnn.from_torch(out_w, dtype=ttnn.float32)
 
-    def _stream_out_conv(self, chunks: list[ttnn.Tensor]) -> list[ttnn.Tensor]:
+    def _stream_out_conv(self, chunks: ttnn.Tensor | list[ttnn.Tensor]) -> list[ttnn.Tensor]:
+        if not isinstance(chunks, list):
+            chunks = [chunks]
         chunks = _split_stream_chunks(chunks, _STREAM_RESIDUAL_CHUNK)
         act_chunks = []
         for chunk in chunks:
@@ -760,7 +802,9 @@ class TtOobleckDecoder:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch_size, input_length = x.shape[0], x.shape[1]
+        profile = {}
 
+        started_at = time.perf_counter()
         h = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         h = _conv1d(
             h,
@@ -776,17 +820,35 @@ class TtOobleckDecoder:
             input_length=input_length,
             label="decoder.in_conv",
         )
+        profile["in_conv_seconds"] = time.perf_counter() - started_at
 
-        for block in self.blocks:
+        block_times = []
+        for block_index, block in enumerate(self.blocks):
+            started_at = time.perf_counter()
             h = block(h)
+            block_profile = block.last_profile or {}
+            block_times.append(
+                {
+                    "block_index": block_index,
+                    "stride": block.stride,
+                    "out_channels": block.out_channels,
+                    "seconds": time.perf_counter() - started_at,
+                    **block_profile,
+                }
+            )
+        profile["blocks"] = block_times
 
-        if isinstance(h, list):
-            return self._stream_out_conv(h)
+        started_at = time.perf_counter()
+        if isinstance(h, list) or h.shape[1] >= _OUT_CONV_STREAM_THRESHOLD:
+            out = self._stream_out_conv(h)
+            profile["out_conv_seconds"] = time.perf_counter() - started_at
+            self.last_profile = profile
+            return out
 
         h = self.out_act(h)
         out_length = h.shape[1]
         h = ttnn.to_layout(h, ttnn.ROW_MAJOR_LAYOUT)
-        return _conv1d(
+        out = _conv1d(
             h,
             self.out_w,
             None,
@@ -800,6 +862,9 @@ class TtOobleckDecoder:
             input_length=out_length,
             label="decoder.out_conv",
         )
+        profile["out_conv_seconds"] = time.perf_counter() - started_at
+        self.last_profile = profile
+        return out
 
     def deallocate(self) -> None:
         for tensor in (self.in_w, self.in_b, self.out_w):
