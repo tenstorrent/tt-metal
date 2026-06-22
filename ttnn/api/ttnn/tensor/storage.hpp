@@ -153,13 +153,6 @@ struct DeviceStorage {
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Begin internal functions:
 
-    // Returns the MeshBuffer associated with the underlying device memory.
-    // This function should be removed in-favor of `get_mesh_tensor()`.
-    // The function also leaks the ownership of the underlying device memory out.
-    // This is meant to be transitional and is to be removed.
-    // Throws if the DeviceStorage is not constructed from a MeshTensor.
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
-
     // There are situations where we want to "reinterpret" an existing Tensor without modifying its underlying memory.
     // For example, select slice ops can be done in-place, as can select reshapes. This DeviceStorage constructor
     // addresses such cases.
