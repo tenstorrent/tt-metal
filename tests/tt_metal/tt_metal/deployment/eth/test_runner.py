@@ -37,11 +37,13 @@ testl1datacmp = re.compile(
 testmissinglinks = re.compile(
     f"({timeregex}).*Test \| missing links: chip\[(.*) \((.*)\), ubb: (.*), chip: (.*)\]: expected (\d*) links, got (\d*) .*"
 )
+testtimeout = re.compile(f"({timeregex}).*Test \| Timed out! You probably need to reset the device .*")
 locinfo = "sdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], rdev: \[(.*) \((.*)\), ubb: (.*), chip: (.*)\], score: \[(.*)\], rcore: \[(.*)\], processor: \[(.*)\], link: \[(.*)\]"
 testcheck = re.compile(f"({timeregex}).*Test \| core_check: {locinfo} .*")
 
 print_logs = True
 missing_links: dict[str, dict] = {}
+exit_status = 0
 
 
 class TestCase(str, Enum):
@@ -114,6 +116,7 @@ class EventType(Enum):
     TESTCHECK = auto()
     TESTDONE = auto()
     MISSINGLINKS = auto()
+    TIMEOUT = auto()
 
 
 @dataclass
@@ -312,6 +315,15 @@ def parse_setup(l: str) -> Optional[Event]:
     return Event(EventType.TESTSETUP, {})
 
 
+def parse_timeout(l: str) -> Optional[Event]:
+    m = testtimeout.match(l)
+    if m is None:
+        return None
+
+    # print(f"\tTIMEDOUT")
+    return Event(EventType.TIMEOUT, {})
+
+
 def parse_done(l: str) -> Optional[Event]:
     m = testdone.match(l)
     if m is None:
@@ -334,7 +346,7 @@ def parse_missinglinks(l: str) -> Optional[Event]:
         "expected": m.group(6),
         "got": m.group(7),
     }
-    print(f"\tMISSINGLINKS {extra}")
+    # print(f"\tMISSINGLINKS {extra}")
     return Event(EventType.MISSINGLINKS, extra)
 
 
@@ -352,6 +364,7 @@ def parse_line(l: str, logf: Optional[TextIO]) -> Optional[Event]:
         parse_l1datacmp,
         parse_testend,
         parse_datacmp,
+        parse_timeout,
         parse_bwfail,
         parse_cores,
         parse_check,
@@ -503,6 +516,9 @@ def parse_evs(evs: list[Event]) -> Iterator[TestRun]:
         elif e.typ == EventType.MISSINGLINKS:
             global missing_links
             missing_links[e.extra["id"]] = e.extra
+        elif e.typ == EventType.TIMEOUT:
+            print("The test timed out, you should reset the card! (tt-smi -r)", file=sys.stderr)
+            exit(1)
 
     yield from runs
 
@@ -835,6 +851,8 @@ async def main():
 
     if logf:
         logf.close()
+
+    exit(exit_status)
 
 
 if __name__ == "__main__":
