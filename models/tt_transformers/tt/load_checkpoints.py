@@ -115,6 +115,44 @@ def load_hf_state_dict_filtered(ckpt_dir, key_prefixes, local_files_only=None):
     return loaded_weights
 
 
+def dequantize_fp8_state_dict(state_dict):
+    """Dequantize a per-tensor / per-expert fp8 (F8_E4M3) HF state_dict to bf16.
+
+    Handles the vanilla fp8 scheme (quant_method="fp8", weight_block_size=null) used by
+    e.g. Mistral-Small-4: each fp8 weight W ships a companion bf16 ``scale_inv`` and dequant
+    is a plain ``W.float() * scale_inv`` (the scale broadcasts):
+      - normal linears: ``<name>.weight`` (fp8) <-> ``<name>.weight_scale_inv`` (scalar [])
+      - stacked experts: ``<name>`` (fp8 [E, ...]) <-> ``<name>_scale_inv`` ([E, 1, 1] per-expert)
+    Static activation scales (``*activation_scale``) are unused on the bf16-weight path and dropped.
+    This is intentionally NOT transformers' block-wise FineGrainedFP8 path (which needs a
+    weight_block_size); it consumes the raw safetensors directly. Non-fp8 tensors pass through.
+    Returns a new state_dict; a no-op (same dict) if nothing is fp8.
+    """
+    fp8_dtype = getattr(torch, "float8_e4m3fn", None)
+    if fp8_dtype is None or not any(v.dtype == fp8_dtype for v in state_dict.values()):
+        return state_dict
+
+    def scale_key(weight_key):
+        # normal linear weights carry a ".weight" suffix; stacked-expert weights do not
+        if weight_key.endswith(".weight"):
+            return weight_key[: -len(".weight")] + ".weight_scale_inv"
+        return weight_key + "_scale_inv"
+
+    out = {}
+    for key, tensor in state_dict.items():
+        if key.endswith("_scale_inv") or key.endswith("activation_scale"):
+            continue  # scales: consumed below (weights) or unused on the bf16-weight path
+        if tensor.dtype == fp8_dtype:
+            sk = scale_key(key)
+            if sk not in state_dict:
+                raise KeyError(f"fp8 weight {key!r} has no companion scale {sk!r}")
+            scale = state_dict[sk].to(torch.float32)
+            out[key] = (tensor.to(torch.float32) * scale).to(torch.bfloat16)
+        else:
+            out[key] = tensor
+    return out
+
+
 def standardize_hf_keys(state_dict):
     key_meta = "lm_head.weight"
     key_hf = "model.embed_tokens.weight"

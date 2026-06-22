@@ -256,6 +256,7 @@ models:
     bh_p150: 7
     bh_p300: 8
     bh_quietbox_2: 30
+    bh_loudbox: 20 # mistral-small-4-119b e2e (trace + generate), P150x8
   unit:
     wh_llmbox: 100
     wh_galaxy_perf: 10
@@ -282,6 +283,7 @@ models:
     bh_p150: 20
     bh_p300: 30
     bh_quietbox_2: 21
+    bh_loudbox: 20 # mistral-small-4-119b unit (MLA + MoE + decoder PCC), P150x8
   integration:
     wh_llmbox: 422
   perf:

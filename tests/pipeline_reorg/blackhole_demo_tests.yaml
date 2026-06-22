@@ -40,6 +40,9 @@
   team: models
   model-name: mistral-small-3.1-24b
 
+# mistral-small-4-119b migrated to the 3-tier Models CI (tests/pipeline_reorg/models_e2e_tests.yaml +
+# models_unit_tests.yaml, tier 3, bh_loudbox) per the deprecation of this pipeline.
+
 # ─── stable_diffusion_xl ────────────────────────────────────────────────────
 
 - name: stable_diffusion_xl demos

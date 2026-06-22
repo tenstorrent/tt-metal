@@ -1,0 +1,6 @@
+# Mistral-Small-4-119B (mistral4) requires transformers >= 5.10 for native
+# mistral4 / mistral3 / pixtral model classes and the fp8 dequant path.
+# NOTE: this is newer than the repo-wide transformers pin; bumping the global
+# pin is a documented merge prerequisite (coordinate with sibling model PRs that
+# pin a different major version — they cannot share an env).
+transformers>=5.10
