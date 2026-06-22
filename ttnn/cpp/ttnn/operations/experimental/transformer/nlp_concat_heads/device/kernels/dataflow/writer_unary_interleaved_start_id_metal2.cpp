@@ -18,11 +18,13 @@ void kernel_main() {
     const uint32_t num_pages = get_arg(args::num_pages);
     const uint32_t start_id = get_arg(args::start_id);
 
-    // Page size from the CB interface (works for both TILE and ROW_MAJOR layouts).
-    const uint32_t page_bytes = get_local_cb_interface(dfb::in).fifo_page_size;
-
     Noc noc;
     DataflowBuffer cb(dfb::in);
+
+    // Page size from the DFB (arch-portable; works for TILE and ROW_MAJOR). NOTE: do not use
+    // get_local_cb_interface(dfb::in).fifo_page_size here — that Gen1 CB-interface field reads 0
+    // on Gen2/Quasar, which makes the async_write below a 0-byte transaction (sim rejects it).
+    const uint32_t page_bytes = cb.get_entry_size();
 
     constexpr uint32_t onepage = 1;
     const auto s = TensorAccessor(ta::output);
