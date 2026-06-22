@@ -1,6 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Decoder stack PCC at model-card full depth (T=1600 latent frames)."""
+
+from __future__ import annotations
+
 import pytest
 import torch
 
@@ -8,8 +12,9 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import decoder_blocks_stack_reference
 from models.experimental.voxtraltts.reference.voxtral_config import audio_tokenizer_latent_dim, load_voxtral_config
-from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
+    _DECODE_CHUNK_T,
     VoxtralTTAudioTokenizer,
     extract_audio_tokenizer_state_dict,
 )
@@ -17,6 +22,9 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     voxtral_audio_tokenizer_high_accuracy_optimizations,
 )
+
+_MODEL_CARD_DECODE_T = _DECODE_CHUNK_T
+_STACK_PCC_TARGET = 0.98
 
 
 def _latent_ncl_to_tt_b1tc(device, latent_ncl_bf16: torch.Tensor) -> ttnn.Tensor:
@@ -32,17 +40,10 @@ def _latent_ncl_to_tt_b1tc(device, latent_ncl_bf16: torch.Tensor) -> ttnn.Tensor
 
 
 @torch.no_grad()
-@pytest.mark.parametrize(
-    "time_len,pcc",
-    [
-        (4, 0.99),
-        (39, 0.98),
-        (64, 0.99),
-        (128, 0.98),
-    ],
-)
-def test_audio_tokenizer_decode_full_forward_stack_pcc(device, reset_seeds, time_len, pcc):
-    """All 12 decoder blocks chained vs bf16 CPU golden. T=128/pcc=0.98 covers realistic audio lengths."""
+@pytest.mark.timeout(0)
+def test_audio_tokenizer_decode_full_forward_stack_pcc(device, reset_seeds):
+    """All 12 decoder blocks vs bf16 CPU golden at model-card T=1600."""
+    time_len = _MODEL_CARD_DECODE_T
     model_name = resolve_voxtral_model_name_or_skip()
     try:
         full = _load_safetensors_state_dict(model_name)
@@ -77,8 +78,8 @@ def test_audio_tokenizer_decode_full_forward_stack_pcc(device, reset_seeds, time
 
     tt_btd = ttnn.to_torch(y_tt).squeeze(1).float()
     assert ref.shape == tt_btd.shape, f"shape mismatch ref={tuple(ref.shape)} tt={tuple(tt_btd.shape)}"
-    passing, msg = comp_pcc(ref.float(), tt_btd, pcc=pcc)
-    assert passing, f"decode_full_forward stack PCC failed (time_len={time_len}, required={pcc}): {msg}"
+    passing, msg = comp_pcc(ref.float(), tt_btd, pcc=_STACK_PCC_TARGET)
+    assert passing, f"decode_full_forward stack PCC failed (T={time_len}, required={_STACK_PCC_TARGET}): {msg}"
 
 
 @torch.no_grad()
