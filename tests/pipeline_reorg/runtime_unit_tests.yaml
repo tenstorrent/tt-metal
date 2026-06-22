@@ -35,9 +35,13 @@
   team: runtime
 
 # --- Core API Tests (includes kernel path validation) ---
+# Runtime tensor tests were split out of unit_tests_api into their own
+# unit_tests_tensor binary; run it here so this group's coverage (and its
+# already-budgeted runtime) is unchanged by the split.
 - name: runtime_api
   cmd: |
     ./build/test/tt_metal/unit_tests_api
+    ./build/test/tt_metal/unit_tests_tensor
     rm -rf /tmp/kernels && mkdir -p /tmp/kernels
     TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter='CompileProgramWithKernelPathEnvVarFixture.*'
   skus:
