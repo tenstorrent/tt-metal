@@ -41,7 +41,8 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-    create_kv_chunk_address_table_block_cyclic,
+    PREFILL_CHUNK_OUTPUT_TOKENS,
+    create_kv_chunk_address_table_kimi,
 )
 
 # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
@@ -157,22 +158,29 @@ def build_and_serialize_kv_chunk_table(
     """Build the KV chunk address table from the device KV layout and serialize it to ``path``
     for the inference server to forward via SET_TABLE. Returns the path on success.
 
-    Uses the block-cyclic builder (create_kv_chunk_address_table_block_cyclic): chunked prefill
-    stores KV positions block-cyclic across the SP shards (every model variant), so the table must
-    map each natural position to its true block-cyclic storage chip + offset. The migration worker
-    copies the chunks the table lists for the migrated position range. A contiguous (wrong) table
-    still works for a blanket copy of the WHOLE cache — every chunk is copied regardless of its
-    label — but any sub-cache migration (a prefix copy of [0, N), or a prompt shorter than
-    max_seq_len) lists the wrong, block-cyclically-scattered chunks and copies mostly un-prefilled
-    storage, so the migrated KV fails its PCC check. ``chunk_size_global`` is the prefill chunk size
-    (the block-cyclic period; the same value passed to blockcyclic_positions)."""
+    Uses create_kv_chunk_address_table_kimi: chunked prefill stores KV positions block-cyclic across
+    the SP shards (every model variant), so the table must map each natural position to its true
+    block-cyclic storage chip + offset. The migration worker copies the chunks the table lists for
+    the migrated position range. A contiguous (wrong) table still works for a blanket copy of the
+    WHOLE cache — every chunk is copied regardless of its label — but any sub-cache migration (a
+    prefix copy of [0, N), or a prompt shorter than max_seq_len) lists the wrong, block-cyclically-
+    scattered chunks and copies mostly un-prefilled storage, so the migrated KV fails its PCC check.
+
+    ``chunk_size_global`` is the prefill chunk size (the block-cyclic period; the same value passed
+    to blockcyclic_positions). The kimi builder hardcodes this period as PREFILL_CHUNK_OUTPUT_TOKENS,
+    so a non-default PREFILL_CHUNK_SIZE is rejected here rather than silently mismapped."""
+    assert chunk_size_global == PREFILL_CHUNK_OUTPUT_TOKENS, (
+        f"create_kv_chunk_address_table_kimi assumes a block-cyclic period of "
+        f"PREFILL_CHUNK_OUTPUT_TOKENS={PREFILL_CHUNK_OUTPUT_TOKENS}, but chunk_size_global={chunk_size_global}. "
+        f"A different period would mismap every position; re-introduce a parametrized builder if needed."
+    )
     cfg = _disaggregation().KvChunkAddressTableConfig()
     cfg.num_layers = num_layers
     cfg.max_sequence_length = seq_len
     cfg.num_slots = num_users
     cfg.chunk_n_tokens = NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     cfg.chunk_size_bytes = _CHUNK_SIZE_BYTES
-    table = create_kv_chunk_address_table_block_cyclic(
+    table = create_kv_chunk_address_table_kimi(
         config=cfg,
         mesh_device=mesh_device,
         mesh_shape=mesh_shape,
@@ -181,7 +189,6 @@ def build_and_serialize_kv_chunk_table(
         tt_kvpe_cache=kvpe_cache,
         chunk_size_bytes=_CHUNK_SIZE_BYTES,
         num_users=num_users,
-        chunk_size_global=chunk_size_global,
     )
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
@@ -210,11 +217,11 @@ def publish_kv_chunk_table_and_wait_ready(
     migrations are issued by the C++ PrefillScheduler over its own adapter.
 
     ``chunk_size_global`` is the prefill chunk size (the block-cyclic period;
-    same value passed to blockcyclic_positions). It is required by
-    ``build_and_serialize_kv_chunk_table`` to map natural positions to the
-    true block-cyclic storage chunks — without it slot-1 migrated reads land
-    at the wrong SP shards and PCC collapses to ~0.70 (the half-correct
-    pattern we hit before the chunk_size_global plumbing landed).
+    same value passed to blockcyclic_positions). The table builder maps natural
+    positions to their true block-cyclic storage chunks — a wrong period makes
+    slot-1 migrated reads land at the wrong SP shards and PCC collapses to ~0.70
+    (the half-correct pattern). The kimi builder hardcodes this period, so
+    ``build_and_serialize_kv_chunk_table`` asserts it matches PREFILL_CHUNK_OUTPUT_TOKENS.
 
     Strict-by-default: any failure to import the extension, attach to the
     queues, or reach WORKER_READY raises. Callers that only need the serialized

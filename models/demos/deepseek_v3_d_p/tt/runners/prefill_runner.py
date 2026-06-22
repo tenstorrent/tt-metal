@@ -138,6 +138,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     task_id = 0
     actual_isl = len(token_ids)
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0"))
+    assert 0 <= slot_id < cfg.num_users, f"PREFILL_STANDALONE_SLOT={slot_id} out of range [0, {cfg.num_users})"
 
     # Chunk count: explicit env override, else round the prompt up to whole chunks. Pad/trim the
     # token list to exactly n_chunks * chunk_size (chunked prefill requires full chunks).

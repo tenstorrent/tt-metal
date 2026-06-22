@@ -5,8 +5,9 @@
 
 Golden-trace loaders + per-slot block-cyclic KV PCC check + slot->slot and
 multi-pair migration validators. Extracted from prefill_runner.py so the runner
-holds only the serving loop. The runner imports validate_migration_kv /
-validate_migrations_pairwise / _kv_cache_pcc_check; the loaders are internal.
+holds only the serving loop. The runner imports a single public entrypoint,
+validate_after_prefill, which dispatches to validate_migration_kv /
+validate_migrations_pairwise / _kv_cache_pcc_check; everything else is internal.
 """
 
 import os
@@ -93,8 +94,9 @@ def _kv_cache_pcc_check(
     """Gather the device KV cache for `slot_id`, un-rotate the block-cyclic layout to natural order,
     and PCC-compare each layer against the golden DeepSeek-R1 `kv_post_transform` trace.
 
-    Shared by `run_standalone_chunked_prefill_loop` (single-process) and the request-loop PCC mode
-    (driven by the external producer over the H2D socket). Returns the min per-layer PCC and asserts
+    Invoked by the request-loop PCC mode (driven by the external producer over the H2D socket) and
+    by the migration validators in this module; the single-process `run_standalone_loop` uses
+    `runner_utils.kv_cache_pcc_check` instead. Returns the min per-layer PCC and asserts
     (unless PREFILL_STANDALONE_CHUNKED_RECORD_ONLY=1) when any layer is below threshold.
 
     Env:
@@ -271,20 +273,43 @@ def validate_migrations_pairwise(pipeline: TtDeepSeekPrefillPipeline, pairs):
     num_layers = cfg.num_layers
     thr = float(os.environ.get("PREFILL_MIGRATE_PAIRWISE_PCC", "0.99"))
 
-    # Single gather of the whole cache: [num_users*num_layers, 1, seq_len_cache, kvpe] (TP via [:, :1]).
-    cache_full = ttnn.to_torch(
-        pipeline.kvpe_cache,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape),
-    ).to(torch.float32)[:, :1]
+    # Read each pair sequentially to bound peak host memory. Gathering the whole cache at once is
+    # [num_users*num_layers, 1, seq_len_cache, kvpe] in fp32 (~236 GiB at 32 users / 56K seq) and
+    # OOMs/thrashes the host. Instead, per pair we slice only the src and dst user blocks off the
+    # device ([num_layers, 1, seq_len_cache, kvpe] each, ~8 GiB) and free them before the next pair.
+    # No un-rotation is needed: both endpoints carry the same block-cyclic rotation, so comparing
+    # them directly is rotation-invariant.
+    dev_shape = list(pipeline.kvpe_cache.shape)  # slice dim 0 (user*layer); keep dims 1..3 full
+
+    def _read_user_block(user: int) -> "torch.Tensor":
+        # memory_config=DRAM interleaved is REQUIRED: kvpe_cache is ND-sharded ROUND_ROBIN_1D over
+        # the 8 DRAM banks, and slicing it into another ND-shard produces a sub-tensor whose host
+        # read-back miscomputes the DRAM core (TT_FATAL "logical DRAM core 8-0 ... num_views=8").
+        # Forcing an interleaved output makes slice gather from the banks correctly and stay
+        # host-readable (verified bit-exact vs the full-cache gather in test_kv_slice_read_repro).
+        sl = ttnn.slice(
+            pipeline.kvpe_cache,
+            [user * num_layers, 0, 0, 0],
+            [(user + 1) * num_layers, dev_shape[1], dev_shape[2], dev_shape[3]],
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        block = ttnn.to_torch(
+            sl, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
+        ).to(torch.float32)[
+            :, :1
+        ]  # [num_layers, 1, seq_len_cache, kvpe]
+        ttnn.deallocate(sl)
+        return block
 
     failures = []
     for src, dst in pairs:
+        src_block = _read_user_block(src)
+        dst_block = _read_user_block(dst)
         min_pcc = 1.0
         for layer in range(num_layers):
-            sb = src * num_layers + layer
-            db = dst * num_layers + layer
-            _, pcc = comp_pcc(cache_full[sb, 0], cache_full[db, 0])
+            _, pcc = comp_pcc(src_block[layer, 0], dst_block[layer, 0])
             min_pcc = min(min_pcc, pcc)
+        del src_block, dst_block
         status = "PASS" if min_pcc >= thr else "FAIL"
         logger.info(f"[kv-migrate-validate] pairwise src_slot={src} dst_slot={dst} min_pcc={min_pcc:.6f} -> {status}")
         print(f"[kv-migrate-validate] AFTER pairwise src={src} dst={dst} min_pcc={min_pcc:.6f}")
