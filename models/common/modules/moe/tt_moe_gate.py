@@ -40,7 +40,6 @@ import torch
 
 import ttnn
 from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
-from models.demos.deepseek_v3.tt.deepseek_moe_gate.op import DeepseekMoeGateOp
 
 _TOKEN_SHAPE = (16, 16)  # 256 experts laid out as a 16×16 face per token
 _SHARD_SHAPE = (32, 32)  # one 32×32 tile per core (the op's per-token shard)
@@ -143,7 +142,7 @@ class TTMoEGate:
             raise ValueError(f"num_experts must be ≥ 1; got {num_experts}")
         # n_group=8 → the deepseek grouped op. It is HARDWIRED to 256 experts laid out as 8 groups × 32,
         # emitting top-8 (top-2-sum per group → top-4 groups → top-8 of 128). It takes NO group/expert-count/k
-        # argument — DeepseekMoeGateOp.golden bakes in the top-2/top-4/top-8 constants, and the op unit test
+        # argument — grouped_golden bakes in the top-2/top-4/top-8 constants, and the op unit test
         # (models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py) only ever feeds (batch,8,32).
         # So n_group=8 is EXACTLY 256-experts-select-8: a <256 grouped model has ≠32 experts/group (padding to
         # 256 would re-group it → wrong top-8) and k≠8 isn't emitted, so neither is supported. (No real grouped
@@ -532,10 +531,17 @@ class TTMoEGate:
             cur = ttnn.to_memory_config(cur, memory_config=mem_in)  # height-shard: one token/core
 
             if self.n_group == 8:
-                # deepseek grouped top-8 (sigmoid + bias); no top-k / output-softmax knobs. DeepseekMoeGateOp
-                # is deepseek-v3's own op — keep using it (only the generalized/ungrouped op is decoupled).
-                w, idx = DeepseekMoeGateOp.op(
-                    cur, bias, out, in_idx, out_idx, self.eps, self.scaling_factor, self.enable_sigmoid
+                # deepseek grouped top-8 (sigmoid + bias); no top-k / output-softmax knobs. Call the C++ op
+                # directly (ttnn namespace, not a demo package), symmetric with the generalized op below.
+                w, idx = ttnn.experimental.deepseek.moe.deepseek_moe_gate(
+                    cur,
+                    bias_tensor=bias,
+                    input_indices_tensor=in_idx,
+                    output_tensor=out,
+                    output_indices_tensor=out_idx,
+                    eps=self.eps,
+                    scaling_factor=self.scaling_factor,
+                    enable_sigmoid=self.enable_sigmoid,
                 )
             else:
                 w, idx = ttnn.experimental.deepseek.moe.generalized_moe_gate(
@@ -638,8 +644,8 @@ class TTMoEGate:
         gate_proj_bias: torch.Tensor | None = None,  # [num_experts] router LINEAR bias (gpt-oss): logits = Wx + b
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """PyTorch reference: hidden → logits → gate → (scores[batch,k], indices[batch,k]). n_group==8
-        (grouped) delegates to ``DeepseekMoeGateOp.golden`` (deepseek-v3's own op); n_group==1 (ungrouped)
-        is inlined below (no dependency on the generalized op wrapper)."""
+        (grouped) delegates to ``TTMoEGate.grouped_golden`` (below); n_group==1 (ungrouped) is inlined below.
+        Both are self-contained — no dependency on any demo package."""
         batch = hidden.shape[0]
         logits = hidden.float() @ gate_weight.float()  # [batch, num_experts]
         # router LINEAR bias (gpt-oss) is part of the projection: logits = Wx + b. It flows into BOTH
@@ -661,12 +667,12 @@ class TTMoEGate:
             # experts as 8×32). Bias likewise reshapes to (8, 32) (the device uploads it transposed in the
             # 16×16 tile, but the golden works in logical expert order). See the op unit test:
             # models/demos/deepseek_v3_b1/tests/unit_tests/test_deepseek_moe_gate.py (input_shape=(b,8,32)).
-            return DeepseekMoeGateOp.golden(
+            return TTMoEGate.grouped_golden(
                 logits.reshape(batch, 8, 32),
                 bias.reshape(8, 32),
-                eps,
-                scaling_factor,
-                enable_sigmoid,
+                eps=eps,
+                scaling_factor=scaling_factor,
+                enable_sigmoid=enable_sigmoid,
             )
         # ungrouped global top-k (inlined — the generalized op is no longer a deepseek-v3 dependency):
         # rank by (score + bias), gather the UNBIASED score at the selected experts, normalize, scale.
@@ -685,3 +691,34 @@ class TTMoEGate:
         # to softmax-post absent a selection bias).
         weights = torch.exp(sel) if (score_func == "softmax" and softmax_position == "post") else sel
         return weights / (weights.sum(-1, keepdim=True) + eps) * scaling_factor, indices
+
+    @staticmethod
+    def grouped_golden(
+        input_tensor: torch.Tensor,  # [batch, n_group, group_size] per-expert scores/logits (e.g. [batch, 8, 32])
+        bias_tensor: torch.Tensor,  # [n_group, group_size] or [batch, n_group, group_size] selection bias
+        eps: float = 1e-20,
+        scaling_factor: float = 2.5,
+        enable_sigmoid: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """PyTorch reference for the DeepSeek GROUPED gate (n_group=8): 256 experts as 8 groups × 32 — per
+        group take the top-2 bias-corrected scores and sum them, pick the top-4 groups by that sum, then the
+        top-8 (by bias-corrected score) over those 4 groups (128 experts), gather the UNBIASED score at the
+        chosen experts, linearly renormalize and scale. Returns (scores[batch, 8], global_indices[batch, 8]).
+        Mirrors the device op ``ttnn.experimental.deepseek.moe.deepseek_moe_gate``; SINGLE source of truth,
+        shared by ``TTMoEGate.golden`` (n_group=8) and the op unit test (test_generalized_moe_gate.py)."""
+        row_offsets = torch.arange(input_tensor.shape[-2]) * input_tensor.shape[-1]  # group g -> base id g*32
+        batch_idx = torch.arange(input_tensor.shape[0]).unsqueeze(-1)
+        scores = torch.sigmoid(input_tensor) if enable_sigmoid else input_tensor
+        bias_scores = scores + bias_tensor
+        sorted_bias, sorted_indices = torch.sort(bias_scores, dim=-1, descending=True)
+        sorted_scores = torch.gather(scores, dim=-1, index=sorted_indices)
+        sorted_indices = sorted_indices + row_offsets.view(1, -1, 1)  # local -> global expert id
+        top2_sum = sorted_bias[:, :, 0] + sorted_bias[:, :, 1]  # per-group top-2-sum
+        _, sorted_top2_indices = torch.sort(top2_sum, dim=-1, descending=True)  # rank groups by it
+        top4_values = sorted_bias[batch_idx, sorted_top2_indices[:, :4]].flatten(1)  # top-4 groups' bias scores
+        top4_scores = sorted_scores[batch_idx, sorted_top2_indices[:, :4]].flatten(1)
+        top4_indices = sorted_indices[batch_idx, sorted_top2_indices[:, :4]].flatten(1)
+        _, top8_pos = torch.topk(top4_values, 8, dim=-1, sorted=True)  # top-8 of the 128 by bias score
+        top8_scores = torch.gather(top4_scores, dim=-1, index=top8_pos)  # UNBIASED scores at the chosen experts
+        top8_indices = torch.gather(top4_indices, dim=-1, index=top8_pos)
+        return top8_scores / (torch.sum(top8_scores, dim=-1, keepdim=True) + eps) * scaling_factor, top8_indices

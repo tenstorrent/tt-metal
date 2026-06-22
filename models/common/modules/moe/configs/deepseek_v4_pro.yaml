@@ -16,6 +16,9 @@ has_bias: false
 n_group: 1
 score_func: sqrtsoftplus
 routed_scaling_factor: 2.5
+# noaux_tc score-correction bias (e_score_correction_bias): added to the sqrtsoftplus scores for SELECTION
+# only (output weights stay unbiased). Explicit per-model flag (not inferred from score_func).
+score_correction_bias: true
 
 compute:
   intermediate_size: 3072

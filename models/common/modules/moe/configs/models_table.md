@@ -2,8 +2,8 @@
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **GPT-OSS 120B** | 2880 | 2880 | — | 128 | 0 | 4 | custom GELU-gated | softmax | simple | —/— | 1.0 | Yes | Yes | all MoE | 36 | No | GPT-OSS |
 | **DeepSeek V3** | 7168 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 8/4 | 2.5 | No | correction | 3 | 61 | No | DS V3 |
-| **DS V4 Flash** | 4096 | 2048 | 2048 | 256 | 1 | 6 | SiLU/SwiGLU (swiglu_limit=10, routed only) | `sqrtsoftplus` (code) | noaux_tc; hash L0–2 (code) | —/— | 1.5 | No | No | 0 | 43 | No | DS V4 |
-| **DS V4 Pro** | 7168 | 3072 | 3072 | 384 | 1 | 6 | SiLU/SwiGLU (swiglu_limit=10, routed only) | `sqrtsoftplus` (code) | noaux_tc; hash L0–2 (code) | —/— | 2.5 | No | No | 0 | 61 | No | DS V4 |
+| **DS V4 Flash** | 4096 | 2048 | 2048 | 256 | 1 | 6 | SiLU/SwiGLU (swiglu_limit=10, routed only) | `sqrtsoftplus` (code) | noaux_tc; hash L0–2 (code) | —/— | 1.5 | No | correction (code) | 0 | 43 | No | DS V4 |
+| **DS V4 Pro** | 7168 | 3072 | 3072 | 384 | 1 | 6 | SiLU/SwiGLU (swiglu_limit=10, routed only) | `sqrtsoftplus` (code) | noaux_tc; hash L0–2 (code) | —/— | 2.5 | No | correction (code) | 0 | 61 | No | DS V4 |
 | **GLM-5** | 6144 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.5 | No | correction | 3 | 78 | No | DS V3-like |
 | **Kimi K2.5** | 7168 | 2048 | 2048 | 384 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | noaux_tc | 1/1 | 2.827 | No | correction | 1 | 61 | No | DS V3-like |
 | **Ling 1T** | 8192 | 2048 | 2048 | 256 | 1 | 8 | SiLU/SwiGLU | `sigmoid` | group_limited_topk (code) | 8/4 | 2.5 | No | correction (bias-enabled) | 4 | 80 | No | DS V3-like |
