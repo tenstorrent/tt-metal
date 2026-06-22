@@ -30,8 +30,8 @@ import pytest
 import torch
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
-from models.utility_functions import is_blackhole
 
 # Single worker core per side (num_workers == 1), matching the gtest's kWorkerCores.
 _WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
