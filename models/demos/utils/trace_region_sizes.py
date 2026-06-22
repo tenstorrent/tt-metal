@@ -19,14 +19,17 @@ Resolution:
     ``t3k`` -> ``wh_llmbox_perf`` work), returning the configured size in bytes.
 
 Two ways callers consume it:
-    * Eager -- call ``resolve_trace_region_size`` /
-      ``resolve_demo_trace_region_size`` / ``build_trace_device_params``
-      directly when opening a device or building a ``device_params`` dict
-      (the SKU is read from the current cluster via ``get_current_device_sku_name``).
-    * Deferred (pytest) -- put ``TRACE_MODEL_KEY_PARAM: "<model-key>"`` in a
-      parametrized ``device_params`` dict; the ``device_params`` fixture calls
-      ``apply_trace_model_key`` to resolve it to ``trace_region_size`` just
-      before the device opens.
+    * Direct (full physical device) -- call ``resolve_trace_region_size`` /
+      ``resolve_demo_trace_region_size`` / ``build_trace_device_params`` when a
+      demo opens the whole physical device itself (the SKU is read from the
+      current cluster via ``get_current_device_sku_name``, where physical ==
+      logical).
+    * Deferred (pytest mesh_device fixture) -- put
+      ``TRACE_MODEL_KEY_PARAM: "<model-key>"`` in a parametrized
+      ``device_params`` dict. The ``mesh_device`` fixture resolves it to
+      ``trace_region_size`` at device-open time using the SKU of the logical
+      submesh actually opened (derived from the mesh shape / ``data_parallel`` /
+      ``MESH_DEVICE``), not the physical cluster.
 
 Unconfigured pairs default to dynamic allocation: if a (model, SKU) pair is
 not present in the YAML, resolution logs an info message and returns
@@ -54,7 +57,8 @@ TRACE_REGION_SIZES_YAML_PATH = Path(__file__).resolve().parents[2] / "model_trac
 # trace_region_size=0 lets the runtime allocate trace buffers dynamically (see deepseek-v3 demo).
 TRACE_REGION_SIZE_DYNAMIC = 0
 
-# Populated from device_params parametrize dict; resolved at fixture time via apply_trace_model_key().
+# Set in a device_params parametrize dict; the mesh_device fixture pops it and resolves
+# trace_region_size from the YAML using the logical submesh SKU at device-open time.
 TRACE_MODEL_KEY_PARAM = "_trace_model_key"
 
 
@@ -156,19 +160,16 @@ def resolve_trace_region_size_for_candidates(model_name_candidates: list[str], s
 
 
 def resolve_demo_trace_region_size(model_key: str) -> int:
-    """Resolve trace region size for a demo using the current cluster SKU."""
+    """Resolve trace region size using the physical cluster SKU.
+
+    Intended for demos that open the full physical device directly (so physical ==
+    logical). Tests/demos that open a logical submesh via the ``mesh_device`` fixture
+    should instead pass ``TRACE_MODEL_KEY_PARAM`` in ``device_params`` so the fixture
+    resolves against the logical submesh SKU.
+    """
     from models.demos.utils.device_sku import get_current_device_sku_name
 
     return resolve_trace_region_size(model_key, get_current_device_sku_name())
-
-
-def apply_trace_model_key(device_params: dict[str, Any]) -> dict[str, Any]:
-    """Resolve trace_region_size from YAML when TRACE_MODEL_KEY_PARAM is set in device_params."""
-    params = device_params.copy()
-    model_key = params.pop(TRACE_MODEL_KEY_PARAM, None)
-    if model_key is not None:
-        params["trace_region_size"] = resolve_demo_trace_region_size(model_key)
-    return params
 
 
 def build_trace_device_params(model_key: str, **extra: Any) -> dict[str, Any]:

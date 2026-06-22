@@ -87,12 +87,26 @@ def _model_name_candidates() -> list[str]:
     return hf_model_name_candidates(hf_model)
 
 
-def get_supported_trace_region_size(request, mesh_device):
+def get_logical_sku(request, mesh_device):
+    """Canonical SKU for the submesh actually opened.
+
+    Derives the SKU from the parametrized mesh shape, ``data_parallel``, and
+    ``MESH_DEVICE`` rather than the physical cluster, so a logical submesh
+    (e.g. a 1x4 slice of a Galaxy, or a ``MESH_DEVICE=N300`` run on a T3K) maps
+    to the SKU of the mesh that is actually opened. Returns ``None`` for CPU or
+    when the device count is unsupported.
+    """
     device_name_based_on_dp = device_name_based_on_data_parallel(request, mesh_device, os.getenv("MESH_DEVICE"))
     if not device_name_based_on_dp or device_name_based_on_dp == "CPU":
         return None
+    return normalize_sku(device_name_based_on_dp)
 
-    sku = normalize_sku(device_name_based_on_dp)
+
+def get_supported_trace_region_size(request, mesh_device):
+    sku = get_logical_sku(request, mesh_device)
+    if sku is None:
+        return None
+
     candidates = _model_name_candidates()
     if not candidates:
         return None

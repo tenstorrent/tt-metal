@@ -24,10 +24,9 @@ from models.demos.qwen25_vl.tt.common import (
 from models.demos.qwen25_vl.tt.generator import Generator
 from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
-from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
-from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -43,9 +42,10 @@ def _qwen25_vl_model_key() -> str:
 
 
 def _qwen25_vl_device_params():
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
     return {
         "fabric_config": True,
-        "trace_region_size": resolve_trace_region_size(_qwen25_vl_model_key(), get_current_device_sku_name()),
+        TRACE_MODEL_KEY_PARAM: _qwen25_vl_model_key(),
         "num_command_queues": 1,
     }
 

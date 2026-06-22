@@ -583,8 +583,12 @@ from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 )
 ```
 
-Root and per-demo `conftest.py` call `apply_trace_model_key()` on
-`device_params` before the device is opened.
+The `mesh_device` fixture pops `TRACE_MODEL_KEY_PARAM` and resolves it to
+`trace_region_size` at device-open time, using the SKU of the **logical
+submesh** actually opened (derived from the mesh shape / `data_parallel` /
+`MESH_DEVICE`) — not the physical cluster. This matters for runs that open a
+sub-slice of a larger machine (e.g. a `1x4` slice of a Galaxy, or
+`MESH_DEVICE=N300` on a T3K).
 
 For demos that open a device directly (no shared fixture), use
 `build_trace_device_params(model_key)`:

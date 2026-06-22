@@ -17,7 +17,8 @@ import pytest
 import torch
 from loguru import logger
 
-from models.tt_transformers.demo.trace_region_config import get_supported_trace_region_size
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM, resolve_trace_region_size
+from models.tt_transformers.demo.trace_region_config import get_logical_sku, get_supported_trace_region_size
 from tests.scripts.common import get_updated_device_params, run_process_and_get_result
 
 # Constants for device configurations
@@ -295,9 +296,9 @@ def get_tt_cache_path():
 
 @pytest.fixture(scope="function")
 def device_params(request):
-    from models.demos.utils.trace_region_sizes import apply_trace_model_key
-
-    return apply_trace_model_key(getattr(request, "param", {}))
+    # Return a copy so the mesh_device fixture can resolve/pop TRACE_MODEL_KEY_PARAM
+    # (using the logical submesh SKU) without mutating the shared parametrize dict.
+    return dict(getattr(request, "param", {}))
 
 
 @pytest.fixture(scope="module")
@@ -579,16 +580,26 @@ def mesh_device(request, silicon_arch_name, device_params):
             )
         mesh_shape = ttnn.MeshShape(1, param)
 
-    if "trace_region_size" not in device_params:
+    # Resolve trace_region_size against the SKU of the submesh actually opened.
+    # TRACE_MODEL_KEY_PARAM is resolved here (not at device_params/collection time) so the
+    # logical SKU reflects request.param/data_parallel/MESH_DEVICE, not the physical cluster.
+    trace_model_key = device_params.pop(TRACE_MODEL_KEY_PARAM, None)
+    if "trace_region_size" in device_params:
+        logger.info(
+            f"Keeping trace_region_size={device_params['trace_region_size']!r} from device_params (already set)"
+        )
+    elif trace_model_key is not None:
+        sku = get_logical_sku(request, param)
+        if sku is None:
+            logger.info(f"No SKU for {param!r}; not setting trace_region_size for model {trace_model_key!r}")
+        else:
+            device_params["trace_region_size"] = resolve_trace_region_size(trace_model_key, sku)
+    else:
         override_trace_region_size = get_supported_trace_region_size(request, param)
         if override_trace_region_size is None:
             logger.info(f"No trace region size for {param!r}")
         else:
             device_params["trace_region_size"] = override_trace_region_size
-    else:
-        logger.info(
-            f"Keeping trace_region_size={device_params['trace_region_size']!r} from device_params (already set)"
-        )
 
     updated_device_params = get_updated_device_params(device_params)
     updated_device_params.pop("require_exact_physical_num_devices", False)

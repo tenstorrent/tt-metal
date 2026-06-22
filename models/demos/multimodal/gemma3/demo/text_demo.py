@@ -21,7 +21,7 @@ from models.demos.multimodal.gemma3.tt.gemma_multimodal_generator import GemmaMu
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_accuracy, verify_perf
 from models.demos.utils.model_targets import resolve_accuracy_targets
-from models.demos.utils.trace_region_sizes import resolve_trace_region_size
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.common import PagedAttentionConfig, preprocess_inputs_prefill
 from models.tt_transformers.tt.generator import create_submeshes
@@ -322,15 +322,16 @@ def _gemma3_text_demo_model_key() -> str:
 
 
 def _gemma3_text_demo_device_params():
-    resolved_size = resolve_trace_region_size(_gemma3_text_demo_model_key(), get_current_device_sku_name())
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
+    model_key = _gemma3_text_demo_model_key()
     if is_blackhole():
         return {
             "fabric_config": True,
-            "trace_region_size": resolved_size,
+            TRACE_MODEL_KEY_PARAM: model_key,
             "num_command_queues": 2,
             "l1_small_size": 24576,
         }
-    return {"fabric_config": True, "trace_region_size": resolved_size, "num_command_queues": 1}
+    return {"fabric_config": True, TRACE_MODEL_KEY_PARAM: model_key, "num_command_queues": 1}
 
 
 # List of supported Parameters for demo.py
