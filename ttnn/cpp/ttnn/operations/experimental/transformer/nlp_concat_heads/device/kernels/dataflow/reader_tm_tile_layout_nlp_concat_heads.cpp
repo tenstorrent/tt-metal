@@ -8,29 +8,27 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
-#include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     Noc noc;
 
-    // WRITER RUNTIME ARGS
-    uint32_t in0_tensor_addr = get_arg_val<uint32_t>(0);
-    uint32_t num_blocks = get_arg_val<uint32_t>(1);
-    uint32_t in0_h_dim = get_arg_val<uint32_t>(2);
-    uint32_t in0_tensor_tile_id = get_arg_val<uint32_t>(3);
+    // RUNTIME ARGS
+    uint32_t num_blocks = get_arg(args::num_blocks);
+    uint32_t in0_h_dim = get_arg(args::in0_h_dim);
+    uint32_t in0_tensor_tile_id = get_arg(args::in0_tensor_tile_id);
 
     // COMPILE TIME ARGS
-    constexpr uint32_t in0_h_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_w_tiles = get_compile_time_arg_val(1);
-    constexpr uint32_t in0_c = get_compile_time_arg_val(2);
-    constexpr uint32_t in0_HtWt = get_compile_time_arg_val(3);
-    constexpr auto in0_args = TensorAccessorArgs<4>();
+    constexpr uint32_t in0_h_tiles = get_arg(args::in0_h_tiles);
+    constexpr uint32_t in0_w_tiles = get_arg(args::in0_w_tiles);
+    constexpr uint32_t in0_c = get_arg(args::in0_c);
+    constexpr uint32_t in0_HtWt = get_arg(args::in0_HtWt);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_id_in0);
-    const auto s0 = TensorAccessor(in0_args, in0_tensor_addr);
+    const auto s0 = TensorAccessor(ta::input);
 
-    CircularBuffer cb_in0(cb_id_in0);
+    DataflowBuffer cb_in0(dfb::in);
+    const uint32_t single_tile_size_bytes = cb_in0.get_tile_size();
 
     constexpr uint32_t block_size = 1;  // micro-block size for read/write; nothing to do with num_blocks
     uint32_t l1_write_addr;
