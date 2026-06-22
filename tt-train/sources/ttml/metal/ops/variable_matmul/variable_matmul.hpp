@@ -16,14 +16,14 @@ namespace ttml::metal {
 // Re-export config type for convenience
 using VariableMatmulConfig = ttml::metal::ops::variable_matmul::device::VariableMatmulConfig;
 
-// Variable-M and variable-K matmul: M and K are runtime args. The program cache keys
-// on (N, transpose flags, grid), so a single cached program services any (M, K) pair
-// within a transpose variant.
+// Variable-M and variable-K matmul: M and K are runtime args, excluded from the program hash
+// (see compute_program_hash for the full key), so one cached program serves any (M, K) pair.
 //
-// Always reads offsets on-device: every call must provide an offsets_tensor and an
-// OffsetsRole. The dataflow kernels read offsets_tensor[offsets_start_index..start_index+2]
-// at runtime and derive the per-call M/K ranges (and, for InputAndOutputRow, the output
-// write-at-offset row). One cached program serves all expert slices.
+// Always reads offsets on-device: every call provides an offsets_tensor; the offset role is
+// fixed by which entry point is called (see below). The dataflow kernels read
+// offsets_tensor[offsets_start_index..start_index+2] at runtime and derive the per-call M/K
+// ranges (and, for variable_matmul_into_rows, the output write-at-offset row). One cached
+// program serves all expert slices.
 //
 // CONTRACT: offsets values MUST be tile-aligned (multiples of TILE_HEIGHT = 32). The kernels
 // address the read/write/K windows at tile granularity (offset / 32), so a non-multiple-of-32
