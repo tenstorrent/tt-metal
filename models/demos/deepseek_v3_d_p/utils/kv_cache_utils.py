@@ -7,10 +7,10 @@ Utilities for KVPE cache initialization and management.
 
 import socket
 
-import torch
 from loguru import logger
 
 import ttnn
+from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
 
 # This is a predefined constant for the number of contiguous tokens in a DRAM bank
 NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
@@ -263,7 +263,6 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
     # hack in num_users * num_layers into batch size, so each user's layers are contiguous in memory
     num_layers = num_kvpe_cache_layers
     seq_len_local = seq_len // mesh_shape[sp_axis]
-    torch_kvpe_cache = torch.zeros(num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim)
 
     core_ranges = [
         ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
@@ -281,13 +280,26 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
         nd_shard_spec=kv_nd_shard_spec,
     )
 
-    tt_kvpe_cache = ttnn.from_torch(
-        torch_kvpe_cache,
-        dtype=ttnn.bfloat8_b,
-        device=mesh_device,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=kv_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    # Allocate + zero on device. The host from_torch path packs the full replicated
+    # cache as bfp8 on host, overflowing pack_as_bfp8_tiles' 32-bit page index at high
+    # num_users; a device kernel zeros it instead with no host transfer.
+    tt_kvpe_cache = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([num_users * num_layers, 1, seq_len_local, kvpe_cache_head_dim]),
+        ttnn.bfloat8_b,
+        ttnn.TILE_LAYOUT,
+        mesh_device,
+        kv_mem_config,
     )
+    DRAMZeroFill.op(tt_kvpe_cache)
+
+    # allocate_tensor_on_device leaves topology unset; reproduce ReplicateTensorToMesh,
+    # which is a 1D MeshShape(num_devices) with a single Replicate placement.
+    num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+    dist_shape = ttnn.MeshShape([num_devices])
+    placements = [ttnn.PlacementReplicate()]
+    coords = [
+        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(dist_shape)
+    ]
+    tt_kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
     return tt_kvpe_cache
