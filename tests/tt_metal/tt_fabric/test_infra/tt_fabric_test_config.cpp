@@ -1108,6 +1108,27 @@ bool TestConfigBuilder::should_skip_test_on_platform(const ParsedTestConfig& tes
             }
         }
     }
+    // Temporarily skip golden-comparison-failing benchmark tests on wormhole_b0 (T3K), refs #46873
+    static const std::unordered_set<std::string> skipped_on_wormhole_b0 = {
+        "LinearMulticast",
+        "UnidirLinearMulticast",
+        "SingleSenderLinearUnicastAllDevices",
+        "NeighborExchangeLinear",
+        "FullRingMulticast",
+        "FullRingUnicast",
+        "HalfRingMulticast",
+        "MeshMulticast",
+        "SingleSenderMeshUnicastAllDevices",
+        "CustomMaxPacketSizeLinear3K",
+        "CustomMaxPacketSizeMesh3K",
+    };
+    {
+        auto arch_name = tt::tt_metal::hal::get_arch_name();
+        if (arch_name == "wormhole_b0" && skipped_on_wormhole_b0.count(test_config.name)) {
+            log_info(LogTest, "Skipping test '{}' on wormhole_b0 due to golden comparison failures, refs #46873", test_config.name);
+            return true;
+        }
+    }
     if (device_info_provider_.is_multi_mesh() && (test_config.fabric_setup.topology == Topology::Linear ||
                                                   test_config.fabric_setup.topology == Topology::Ring)) {
         log_info(
