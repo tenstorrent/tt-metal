@@ -1,10 +1,98 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import math
 
 import torch
 import ttnn
+import models.tt_transformers.tt.decoder as transformer_decoder
+from models.tt_transformers.tt.common import Mode
+from models.tt_transformers.tt.mlp import MLP as TransformerMLP
+
+
+class VoxtralTTTextMLP(TransformerMLP):
+    """Voxtral-only text MLP customizations layered on tt_transformers MLP."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        args_obj = kwargs["args"]
+        original_as_tensor = ttnn.as_tensor
+        weight_index = 0
+        weight_names = ("w1", "w2", "w3")
+
+        def as_tensor_with_voxtral_layout(*tensor_args, **tensor_kwargs):
+            nonlocal weight_index
+            if weight_index < len(weight_names):
+                weight_name = weight_names[weight_index]
+                weight_index += 1
+                use_interleaved = (
+                    weight_name in ("w1", "w3")
+                    and getattr(args_obj, "mlp_interleaved_weights", False)
+                    or weight_name == "w2"
+                    and getattr(args_obj, "mlp_ff2_interleaved_weights", False)
+                )
+                if use_interleaved:
+                    tensor_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+                    cache_file_name = tensor_kwargs.get("cache_file_name")
+                    if cache_file_name is not None:
+                        tensor_kwargs["cache_file_name"] = type(cache_file_name)(
+                            str(cache_file_name).replace(f"{weight_name}_sharded", f"{weight_name}_interleaved")
+                        )
+            return original_as_tensor(*tensor_args, **tensor_kwargs)
+
+        ttnn.as_tensor = as_tensor_with_voxtral_layout
+        try:
+            super().__init__(*args, **kwargs)
+        finally:
+            ttnn.as_tensor = original_as_tensor
+
+    def forward(self, x: ttnn.Tensor, mode: Mode) -> ttnn.Tensor:
+        use_fused_w1_silu = (
+            mode == Mode.DECODE
+            and getattr(self.args, "mlp_w1_fuse_silu_decode", False)
+            and hasattr(self.args, "get_mlp_ff1_w1_prg_config")
+        )
+        if not use_fused_w1_silu:
+            return super().forward(x, mode)
+
+        original_get_ff1_3_prg_config = self.args.get_mlp_ff1_3_prg_config
+        original_mul = ttnn.mul
+        ff1_3_call_count = 0
+
+        def get_ff1_3_prg_config(mode_arg, seq_len=1, prefetcher=None):
+            nonlocal ff1_3_call_count
+            ff1_3_call_count += 1
+            if ff1_3_call_count == 1:
+                return self.args.get_mlp_ff1_w1_prg_config(mode_arg, seq_len, prefetcher)
+            return original_get_ff1_3_prg_config(mode_arg, seq_len, prefetcher)
+
+        def mul_with_optional_fused_silu(*mul_args, **mul_kwargs):
+            if mul_kwargs.get("input_tensor_a_activations") == [self.activation_type]:
+                mul_kwargs["input_tensor_a_activations"] = []
+            return original_mul(*mul_args, **mul_kwargs)
+
+        self.args.get_mlp_ff1_3_prg_config = get_ff1_3_prg_config
+        ttnn.mul = mul_with_optional_fused_silu
+        try:
+            return super().forward(x, mode)
+        finally:
+            self.args.get_mlp_ff1_3_prg_config = original_get_ff1_3_prg_config
+            ttnn.mul = original_mul
+
+
+# The shared MLP initializer asks args.get_state_dict_prefix(self.__class__.__name__, ...).
+# Keep the local subclass compatible with the existing tt_transformers state-dict module map.
+VoxtralTTTextMLP.__name__ = "MLP"
+
+
+@contextlib.contextmanager
+def use_voxtral_text_mlp():
+    original_mlp = transformer_decoder.MLP
+    transformer_decoder.MLP = VoxtralTTTextMLP
+    try:
+        yield
+    finally:
+        transformer_decoder.MLP = original_mlp
 
 
 class VoxtralTTMLP:

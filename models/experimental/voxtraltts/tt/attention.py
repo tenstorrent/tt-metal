@@ -9,7 +9,121 @@ import torch
 import ttnn
 
 from models.common.rmsnorm import RMSNorm
+import models.tt_transformers.tt.attention as transformer_attention
+from models.tt_transformers.tt.attention import Attention as TransformerAttention
 from models.tt_transformers.tt.common import Mode
+
+
+class VoxtralTTTextAttention(TransformerAttention):
+    """Voxtral-only text attention customizations layered on tt_transformers Attention."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        state_dict = kwargs["state_dict"]
+        weight_cache_path = kwargs["weight_cache_path"]
+        layer_num = kwargs["layer_num"]
+        configuration = kwargs["configuration"]
+
+        super().__init__(*args, **kwargs)
+
+        if not self._use_interleaved_wo(configuration):
+            return
+
+        layer_name = configuration.get_state_dict_prefix("Attention", layer_num)
+        pt_wo = state_dict[f"{layer_name}.wo.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        cache_file_name = (
+            None
+            if configuration.dummy_weights or weight_cache_path is None
+            else weight_cache_path / f"{layer_name}.wo_interleaved"
+        )
+
+        self.wo = ttnn.as_tensor(
+            pt_wo,
+            dtype=self.wo_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=2),
+            cache_file_name=cache_file_name,
+        )
+
+    def _use_interleaved_wo(self, configuration) -> bool:
+        return (
+            getattr(configuration, "attn_wo_interleaved_weights", False)
+            and not self.use_fused_all_gather_matmul
+            and not self.TG
+        )
+
+    def _use_interleaved_wo_decode(self) -> bool:
+        return self._use_interleaved_wo(self.args) and self.prefetcher is None
+
+    def forward_prefill(self, *args, **kwargs) -> ttnn.Tensor:
+        original_tt_all_reduce = transformer_attention.tt_all_reduce
+        original_nlp_create_qkv_heads = ttnn.experimental.nlp_create_qkv_heads
+        original_nlp_concat_heads = ttnn.experimental.nlp_concat_heads
+        original_all_gather_async = ttnn.experimental.all_gather_async
+        original_linear = ttnn.linear
+
+        def tt_all_reduce_prefill(*reduce_args, **reduce_kwargs):
+            cluster_axis = reduce_kwargs.get("cluster_axis", reduce_args[3] if len(reduce_args) > 3 else 0)
+            if cluster_axis == 1:
+                reduce_kwargs["memory_config"] = self.args.get_attn_qkv_all_reduce_output_mem_config(
+                    Mode.PREFILL, 1, None
+                )
+            elif cluster_axis == 0:
+                reduce_kwargs["memory_config"] = self.args.get_attn_dense_output_mem_config(Mode.PREFILL, None)
+            return original_tt_all_reduce(*reduce_args, **reduce_kwargs)
+
+        def nlp_create_qkv_heads_prefill(*create_args, **create_kwargs):
+            create_kwargs["memory_config"] = self.args.get_attn_create_head_input_mem_config(Mode.PREFILL)
+            return original_nlp_create_qkv_heads(*create_args, **create_kwargs)
+
+        def nlp_concat_heads_prefill(*concat_args, **concat_kwargs):
+            concat_kwargs["memory_config"] = self.args.get_attn_concat_heads_output_mem_config(Mode.PREFILL, None)
+            return original_nlp_concat_heads(*concat_args, **concat_kwargs)
+
+        def all_gather_async_prefill(*gather_args, **gather_kwargs):
+            gather_kwargs["memory_config"] = self.args.get_attn_all_gather_output_mem_config(Mode.PREFILL, None)
+            return original_all_gather_async(*gather_args, **gather_kwargs)
+
+        def linear_prefill(input_tensor, weight, *linear_args, **linear_kwargs):
+            if weight is self.wo:
+                linear_kwargs["memory_config"] = ttnn.DRAM_MEMORY_CONFIG
+            return original_linear(input_tensor, weight, *linear_args, **linear_kwargs)
+
+        transformer_attention.tt_all_reduce = tt_all_reduce_prefill
+        ttnn.experimental.nlp_create_qkv_heads = nlp_create_qkv_heads_prefill
+        ttnn.experimental.nlp_concat_heads = nlp_concat_heads_prefill
+        ttnn.experimental.all_gather_async = all_gather_async_prefill
+        ttnn.linear = linear_prefill
+        try:
+            return super().forward_prefill(*args, **kwargs)
+        finally:
+            transformer_attention.tt_all_reduce = original_tt_all_reduce
+            ttnn.experimental.nlp_create_qkv_heads = original_nlp_create_qkv_heads
+            ttnn.experimental.nlp_concat_heads = original_nlp_concat_heads
+            ttnn.experimental.all_gather_async = original_all_gather_async
+            ttnn.linear = original_linear
+
+    def forward_decode(self, *args, **kwargs) -> ttnn.Tensor:
+        if not self._use_interleaved_wo_decode():
+            return super().forward_decode(*args, **kwargs)
+
+        original_tt_all_gather = transformer_attention.tt_all_gather
+
+        def tt_all_gather_interleaved(*gather_args, **gather_kwargs):
+            attn_output = original_tt_all_gather(*gather_args, **gather_kwargs)
+            return ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
+
+        transformer_attention.tt_all_gather = tt_all_gather_interleaved
+        try:
+            return super().forward_decode(*args, **kwargs)
+        finally:
+            transformer_attention.tt_all_gather = original_tt_all_gather
+
+
+# The shared Attention initializer asks configuration.get_state_dict_prefix(self.__class__.__name__, ...).
+# Keep the local subclass compatible with the existing tt_transformers state-dict module map.
+VoxtralTTTextAttention.__name__ = "Attention"
 
 
 class VoxtralTTAttention:

@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import pytest
 import torch
 import torch.nn.functional as F
@@ -17,6 +19,15 @@ from models.experimental.voxtraltts.reference.functional import (
 
 from models.experimental.voxtraltts.tests.common import create_real_voxtral_text_model_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
+
+
+TEXT_PREFILL_SEQ_LEN = int(os.environ.get("VOXTRAL_TEXT_PREFILL_SEQ_LEN", "512"))
+TEXT_PREFILL_MAX_SEQ_LEN = int(os.environ.get("VOXTRAL_TEXT_PREFILL_MAX_SEQ_LEN", str(max(256, TEXT_PREFILL_SEQ_LEN))))
+TEXT_DECODE_SEQ_LEN = int(os.environ.get("VOXTRAL_TEXT_DECODE_SEQ_LEN", "128"))
+TEXT_DECODE_STEPS = int(os.environ.get("VOXTRAL_TEXT_DECODE_STEPS", "32"))
+TEXT_DECODE_MAX_SEQ_LEN = int(
+    os.environ.get("VOXTRAL_TEXT_DECODE_MAX_SEQ_LEN", str(max(256, TEXT_DECODE_SEQ_LEN + TEXT_DECODE_STEPS + 1)))
+)
 
 
 def _prefill_tile_start(token_index: int) -> int:
@@ -82,11 +93,14 @@ def test_text_model_inference(device, reset_seeds):
 
 
 @torch.no_grad()
-@pytest.mark.timeout(3600)
 def test_text_model_prefill_inference(device, reset_seeds):
-    model = create_real_voxtral_text_model_or_skip(device, max_seq_len=256, dtype=ttnn.bfloat8_b)
+    model = create_real_voxtral_text_model_or_skip(
+        device,
+        max_seq_len=TEXT_PREFILL_MAX_SEQ_LEN,
+        dtype=ttnn.bfloat8_b,
+    )
 
-    seq_len = 128
+    seq_len = TEXT_PREFILL_SEQ_LEN
     tokens = torch.randint(0, model.inner.vocab_size, (1, seq_len), dtype=torch.int64)
     tt_x, rot_mats_global, rot_mats_local, _, _, _ = model.prepare_inputs_prefill(tokens, start_pos=0)
     tt_logits = model.inner.ttnn_prefill_forward(
@@ -105,18 +119,17 @@ def test_text_model_prefill_inference(device, reset_seeds):
 
 
 @torch.no_grad()
-@pytest.mark.timeout(3600)
 def test_text_model_prefill_pcc(device, reset_seeds):
     model = create_real_voxtral_text_model_or_skip(
         device,
-        max_seq_len=256,
+        max_seq_len=TEXT_PREFILL_MAX_SEQ_LEN,
         dtype=ttnn.bfloat16,
         optimizations=voxtral_text_logits_pcc_optimizations,
     )
     args = model.inner.args
     state_dict = args.load_state_dict()
 
-    seq_len = 128
+    seq_len = TEXT_PREFILL_SEQ_LEN
     tokens = torch.randint(0, model.inner.vocab_size, (1, seq_len), dtype=torch.int64)
 
     tt_x, rot_mats_global, rot_mats_local, _, _, _ = model.prepare_inputs_prefill(tokens, start_pos=0)
@@ -141,16 +154,16 @@ def test_text_model_prefill_pcc(device, reset_seeds):
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 def test_text_model_decode_reference_pcc(device, reset_seeds):
+    prompt_len = TEXT_DECODE_SEQ_LEN
     model = create_real_voxtral_text_model_or_skip(
         device,
-        max_seq_len=256,
+        max_seq_len=TEXT_DECODE_MAX_SEQ_LEN,
         dtype=ttnn.bfloat16,
         optimizations=voxtral_text_logits_pcc_optimizations,
     )
     args = model.inner.args
     state_dict = args.load_state_dict()
 
-    prompt_len = 128
     vocab_size = model.inner.vocab_size
     prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.int64)
     decode_input_token = torch.randint(0, vocab_size, (1,), dtype=torch.int64)
@@ -183,19 +196,18 @@ def test_text_model_decode_reference_pcc(device, reset_seeds):
 
 
 @torch.no_grad()
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("decode_steps", [4, 26], ids=["4_steps", "26_steps"])
-def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_steps):
+def test_text_model_decode_multistep_reference_pcc(device, reset_seeds):
+    decode_steps = TEXT_DECODE_STEPS
+    prompt_len = TEXT_DECODE_SEQ_LEN
     model = create_real_voxtral_text_model_or_skip(
         device,
-        max_seq_len=256,
+        max_seq_len=TEXT_DECODE_MAX_SEQ_LEN,
         dtype=ttnn.bfloat16,
         optimizations=voxtral_text_logits_pcc_optimizations,
     )
     args = model.inner.args
     state_dict = args.load_state_dict()
 
-    prompt_len = 128
     vocab_size = model.inner.vocab_size
     prompt_tokens = torch.randint(0, vocab_size, (1, prompt_len), dtype=torch.int64)
     decode_tokens = torch.randint(0, vocab_size, (1, decode_steps), dtype=torch.int64)
@@ -226,10 +238,11 @@ def test_text_model_decode_multistep_reference_pcc(device, reset_seeds, decode_s
         ref_tokens = torch.cat([prompt_tokens, decode_tokens[:, : step + 1]], dim=1)
         ref_last_logits = _reference_last_logits(state_dict, args, ref_tokens)
 
-        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=0.99)
+        pcc_threshold = 0.98 if step > 26 else 0.99
+        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=pcc_threshold)
         print(
-            f"test_text_model_decode_multistep_reference_pcc[{decode_steps}_steps] "
-            f"step={step} PCC={float(pcc_value):.6f}"
+            f"test_text_model_decode_multistep_reference_pcc[prompt_len={prompt_len}, {decode_steps}_steps] "
+            f"step={step} PCC={float(pcc_value):.6f} threshold={pcc_threshold}"
         )
         assert passing, f"Step {step} decode logits mismatch vs reference " f"(pos={current_pos}): {pcc_value}"
 

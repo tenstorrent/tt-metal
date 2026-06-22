@@ -48,6 +48,7 @@ from pathlib import Path
 from time import perf_counter
 from typing import Any
 
+os.environ.setdefault("TT_LOGGER_LEVEL", "ERROR")
 import numpy as np
 import torch
 from loguru import logger

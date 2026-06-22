@@ -252,6 +252,18 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 # Prefill: L1 interleaved activations (Matmul/LayerNorm/SDPA Tracy labels; lower DRAM BW).
                 # Disable with VOXTRAL_TEXT_PREFILL_L1=0 if prefill OOMs on very long sequences.
                 self.prefill_activations_l1 = os.environ.get("VOXTRAL_TEXT_PREFILL_L1", "1") != "0"
+                # The L1-activation prefill path only fits while the (per-chunk) activation footprint is
+                # small. Above this sequence length the residual/activation L1 buffers grow until they
+                # clash with the prefill matmuls' static circular buffers, so prefill transparently
+                # falls back to the standard DRAM-interleaved path (correct for any seq_len, 128..16k+).
+                # Boundary defaults to prefill_len_cutoff (512 BH / 1024 WH); override with
+                # VOXTRAL_TEXT_PREFILL_L1_MAX_SEQ_LEN.
+                self.prefill_l1_max_seq_len = int(
+                    os.environ.get("VOXTRAL_TEXT_PREFILL_L1_MAX_SEQ_LEN", str(self.prefill_len_cutoff))
+                )
+                # Set per prefill call (see VoxtralTTTextModel.prepare_inputs_prefill) so the L1/DRAM
+                # activation decision tracks the actual sequence length. None => fall back to max_seq_len.
+                self._current_prefill_seq_len = None
                 self._apply_voxtral_decode_mlp_dram_grid_overrides()
             finally:
                 if prev_hf_model is None:
@@ -386,7 +398,15 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
             return state_dict
 
         def _prefill_l1_mem(self, mode: Mode) -> bool:
-            return bool(getattr(self, "prefill_activations_l1", False)) and mode == Mode.PREFILL
+            if not (bool(getattr(self, "prefill_activations_l1", False)) and mode == Mode.PREFILL):
+                return False
+            # Only keep activations in L1 while they fit; otherwise use the DRAM path. When the current
+            # prefill length is unknown, be conservative and key off max_seq_len so long-context configs
+            # never silently OOM/CB-clash.
+            seq_len = getattr(self, "_current_prefill_seq_len", None)
+            if seq_len is None:
+                seq_len = self.max_seq_len
+            return seq_len <= getattr(self, "prefill_l1_max_seq_len", self.prefill_len_cutoff)
 
         def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
             if self._prefill_l1_mem(mode):

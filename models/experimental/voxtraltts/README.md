@@ -310,6 +310,19 @@ python -m models.experimental.voxtraltts.reference.demo_reference \
 | E2E waveform (teacher-forced) | ≥ 0.99 | | Shared codes; gated in CI |
 | E2E waveform (free-run) | ~0.957 | | North-star metric; logged only, not gated |
 
+#### Prefill full depth PCC check
+
+| seq_len | PCC |
+|--------:|:----|
+| 128 | 0.997682 |
+| 256 | 0.993873 |
+| 512 | 0.996975 |
+| 1024 | 0.998127 |
+| 2048 | 0.998615 |
+| 4096 | |
+| 8192 | TODO |
+| 16384 | TODO |
+
 ### 6.2 Quality metrics
 
 | Metric | Tool | Target | Notes |

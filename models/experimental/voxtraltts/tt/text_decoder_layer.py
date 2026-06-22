@@ -7,6 +7,8 @@ import ttnn
 import torch
 from models.tt_transformers.tt.decoder import TransformerBlock
 
+from models.experimental.voxtraltts.tt.mlp import use_voxtral_text_mlp
+
 
 def remap_voxtral_text_state_dict(state_dict: dict[str, object]) -> dict[str, object]:
     """Map HF/Voxtral text keys to tt_transformers naming."""
@@ -80,20 +82,21 @@ class VoxtralTTTextDecoderLayer:
         attention_class=None,
         prefetcher=None,
     ) -> "VoxtralTTTextDecoderLayer":
-        inner = TransformerBlock(
-            args=args,
-            mesh_device=mesh_device,
-            tt_ccl=tt_ccl,
-            dtype=dtype,
-            state_dict=remap_voxtral_text_state_dict(state_dict),
-            layer_num=layer_num,
-            weight_cache_path=weight_cache_path,
-            transformation_mats=transformation_mats,
-            paged_attention_config=paged_attention_config,
-            use_paged_kv_cache=use_paged_kv_cache,
-            attention_class=attention_class,
-            prefetcher=prefetcher,
-        )
+        with use_voxtral_text_mlp():
+            inner = TransformerBlock(
+                args=args,
+                mesh_device=mesh_device,
+                tt_ccl=tt_ccl,
+                dtype=dtype,
+                state_dict=remap_voxtral_text_state_dict(state_dict),
+                layer_num=layer_num,
+                weight_cache_path=weight_cache_path,
+                transformation_mats=transformation_mats,
+                paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
+                attention_class=attention_class,
+                prefetcher=prefetcher,
+            )
         return cls(inner)
 
     def __call__(self, *args, **kwargs):
