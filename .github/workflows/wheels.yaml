@@ -205,15 +205,6 @@ jobs:
             CIBW_ENABLE_TRACY="${{ inputs.tracy && 'ON' || 'OFF' }}"
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
             CIBW_ENABLE_LTO="${{ inputs.enable-lto && 'ON' || 'OFF' }}"
-            NO_PROXY=garage.garage.svc.cluster.local
-            no_proxy=garage.garage.svc.cluster.local
-          # cibuildwheel runs the build in a Docker container on the default bridge network.
-          # From that bridge the ccache-storage-s3 helper (AWS Go SDK) reaches garage:3900
-          # DIRECTLY — the same path that makes build-artifact.yaml's container: job work.
-          # Routing garage through the Squid proxy instead returns HTTP 400 on the SigV4 PUT,
-          # so we set NO_PROXY=garage above to bypass the proxy for garage. The helper honors
-          # NO_PROXY (AWS Go SDK). CCACHE_REMOTE_ONLY=true keeps a helper that still can't
-          # reach garage non-fatal, so the compile proceeds regardless.
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           # CIBW_AFTER_BUILD does not exist in cibuildwheel v2.23.2. Use repair-wheel-command
           # instead: it runs inside the container after compilation, supports {dest_dir}/{wheel}
