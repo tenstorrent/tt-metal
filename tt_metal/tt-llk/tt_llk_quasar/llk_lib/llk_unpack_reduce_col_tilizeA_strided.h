@@ -85,6 +85,7 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_init_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t full_ct_dim, const TensorShape& tensor_shape)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
+    LLK_ASSERT(tensor_shape.total_row_dim() == 32 && tensor_shape.total_col_dim() == 32, "Unpack reduce col tilizeA strided only supports 32x32 tiles");
 
     cfg_rmw(THCON_UNPACKER0_REG0_TRANSPOSE_RMW, 0);
     cfg_rmw(THCON_UNPACKER1_REG0_TRANSPOSE_RMW, 0);
