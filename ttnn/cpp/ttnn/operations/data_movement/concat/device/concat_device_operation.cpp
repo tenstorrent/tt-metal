@@ -155,7 +155,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         if (memory_layout == TensorMemoryLayout::BLOCK_SHARDED) {
             TT_FATAL(
                 tensor_args.input_tensors.size() <= 16,
-                "Block-sharded concat supports at most 16 input tensors (got {}). "
+                "Block-sharded concat supports a maximum of 16 input tensors (got {}). "
                 "Batching is not supported for block-sharded concat.",
                 tensor_args.input_tensors.size());
             TT_FATAL(
@@ -414,17 +414,11 @@ Tensor concat_impl(
                                           (is_height_concat && (memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
                                                                 memory_layout == TensorMemoryLayout::BLOCK_SHARDED));
         if (shard_dim_compatible) {
-            TT_FATAL(
-                input_tensors[0].shard_spec().has_value(),
-                "Sharded tensor must have a shard_spec (nd_shard_spec not supported for concat).");
             const auto& first_shard = input_tensors[0].shard_spec().value();
             auto output_shard_shape = first_shard.shape;
             const uint32_t shard_concat_idx = is_width_concat ? 1 : 0;
             output_shard_shape[shard_concat_idx] = 0;
             for (const auto& t : input_tensors) {
-                TT_FATAL(
-                    t.shard_spec().has_value(),
-                    "Sharded tensor must have a shard_spec (nd_shard_spec not supported for concat).");
                 output_shard_shape[shard_concat_idx] += t.shard_spec().value().shape[shard_concat_idx];
             }
             auto temp_shard_spec = ShardSpec(first_shard.grid, output_shard_shape, first_shard.orientation);

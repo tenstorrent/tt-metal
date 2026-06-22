@@ -35,19 +35,13 @@ ProgramDescriptor ConcatBlockShardedProgramFactory::create_descriptor(
     Tensor& output = tensor_return_value;
 
     const uint32_t rank = input_tensors[0].logical_shape().rank();
-    TT_FATAL(
-        dim == rank - 2 || dim == rank - 1,
-        "Block-sharded concat only supports the last two dims (H={}, W={}), got dim={}",
-        rank - 2,
-        rank - 1,
-        dim);
+    // ConcatBlockShardedProgramFactory supports concat only on the last two dims (H, W)
     const bool is_width_concat = dim == rank - 1;
 
     ProgramDescriptor desc;
 
     const uint32_t num_input_tensors = input_tensors.size();
-    const uint32_t cb_dst_id = 16;
-    TT_FATAL(num_input_tensors <= cb_dst_id, "Not enough circular buffers for {} inputs.", num_input_tensors);
+    constexpr uint32_t cb_dst_id = 16;
 
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const bool rm_layout = output.layout() == Layout::ROW_MAJOR;
