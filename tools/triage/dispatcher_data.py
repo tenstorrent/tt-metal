@@ -621,8 +621,8 @@ class DispatcherData:
                 firmware_path = os.path.join(build_env.firmwarePath, proc_name.lower(), f"{proc_name.lower()}.elf")
         firmware_path = os.path.realpath(firmware_path)
 
+        kernel_path: str | None
         if kernel:
-            kernel_path: str | None
             # Prefer the per-processor ELF path resolved by Inspector at compile time. It is indexed by
             # processor index.
             kernel_path = self._inspector_kernel_elf_path(kernel, proc_type)
