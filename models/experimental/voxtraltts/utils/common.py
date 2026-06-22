@@ -436,15 +436,15 @@ def create_real_voxtral_text_model_or_skip(
     max_batch_size: int = 1,
     dtype=ttnn.bfloat16,
     optimizations=voxtral_text_default_optimizations,
-    use_paged_kv_cache: bool = False,
+    use_paged_kv_cache: bool = True,
     paged_block_size: int = 32,
 ):
     """Build the TT text model with the production config by default.
 
-    When ``use_paged_kv_cache=True``, builds ``paged_attention_config`` for long-context
-    attention (required beyond ~256 tokens on Blackhole). The text model itself always
-    uses ``use_paged_kv_cache=False`` so it allocates internal KV blocks (``layer_past``);
-    ``True`` is only for vLLM with an external KV cache — see ``VoxtralTTSPipeline``.
+    ``use_paged_kv_cache=True`` (default) builds ``paged_attention_config`` for paged
+    SDPA at all sequence lengths. Set ``False`` only to exercise the non-paged path.
+    The text model always uses internal KV blocks (``layer_past``); ``use_paged_kv_cache``
+    on ``VoxtralTTTextModel.create`` selects paged vs default attention layout.
     """
     import math
 
@@ -492,6 +492,33 @@ def build_voxtral_text_page_table_tt(mesh_device, *, max_seq_len: int, paged_blo
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+@lru_cache(maxsize=1)
+def hf_voxtral_text_reference_or_skip():
+    """Cached HF ``MistralForCausalLM`` text backbone loaded from the Voxtral checkpoint.
+
+    Used for incremental-decode PCC: prefill with ``use_cache=True``, then thread
+    ``past_key_values`` step by step (same contract as the TT decode path under test).
+    """
+    from transformers import MistralForCausalLM
+
+    from models.experimental.voxtraltts.reference.cpu_reference import (
+        _build_text_config,
+        _load_text_state_dict,
+        _resolve_model_file,
+    )
+    from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
+
+    name = resolve_voxtral_model_name_or_skip()
+    try:
+        cfg = load_voxtral_config(name)
+        ckpt = _resolve_model_file(name, "consolidated.safetensors")
+        hf = MistralForCausalLM(_build_text_config(name))
+        hf.load_state_dict(_load_text_state_dict(ckpt, cfg), strict=False)
+    except Exception as exc:
+        pytest.skip(f"HF text reference unavailable: {exc}")
+    return hf.to(dtype=torch.bfloat16).eval()
 
 
 def create_voxtral_audio_tokenizer_or_skip(

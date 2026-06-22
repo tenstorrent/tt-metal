@@ -138,7 +138,7 @@ models/experimental/voxtraltts/
 │   └── reference_outputs/       #   Golden codes fixture + generator script
 │       ├── generate_voxtral_golden_codes.py
 │       └── voxtral_golden_codes.refpt
-├── conftest.py                  #   Pytest plugin loader (fixtures live in utils/conftest.py)
+├── conftest.py                  #   Pytest fixtures (device mesh, trace reset)
 ├── tests/                       # Test modules only (unit, PCC, perf)
 │   ├── audio_tokenizer_workload.py       #   Audio tokenizer test workload helpers
 │   ├── pcc/                     #   E2E waveform PCC + quality-metric tests
@@ -146,21 +146,18 @@ models/experimental/voxtraltts/
 │   │   ├── test_voxtral_e2e_pcc.py              #   Teacher-forced + free-run waveform PCC
 │   │   └── test_voxtral_e2e_quality_metrics.py  #   UTMOS / WER / speaker similarity
 │   ├── perf/                    #   Wall-clock and device-perf tests
+│   │   ├── test_e2e_isl_sweep_perf.py                   #   E2E ISL sweep + KV budget
 │   │   ├── test_e2e_performant.py                       #   E2E wall-clock (trace-enabled)
-│   │   ├── test_profile_single_layer_prefill_decode.py  #   Single-layer profiling
-│   │   ├── test_single_layer_device_perf.py             #   Single-layer device perf
+│   │   ├── test_profile_single_layer_prefill_decode.py  #   Text layer 0: 128 prefill + 1 decode (Tracy)
 │   │   ├── test_voxtral_tts_device_perf.py              #   Full model device perf
 │   │   ├── test_voxtral_tts_perf_inference.py           #   Inference throughput perf
 │   │   ├── test_voxtral_tts_stage_device_perf.py        #   Per-stage device perf
 │   │   └── test_voxtral_tts_stage_perf_run.py           #   Per-stage perf run
-│   ├── test_acoustic_model.py                      #   Acoustic model PCC tests (Euler steps, FM layers)
-│   ├── test_attention.py                           #   Attention unit tests
-│   ├── test_audio_tokenizer_*.py                   #   Audio tokenizer component unit tests
-│   ├── test_mlp.py                                 #   MLP unit tests
-│   ├── test_rmsnorm.py                             #   RMSNorm unit tests
-│   ├── test_text_decoder_layer.py                  #   Text decoder layer tests
-│   ├── test_text_decoder_layer_pcc.py              #   Text decoder layer PCC tests
-│   ├── test_text_model.py                          #   Text model unit + decode PCC tests
+│   ├── test_acoustic_model.py                      #   Acoustic FM module PCC (forward + Euler)
+│   ├── test_audio_tokenizer_decoder_stack.py       #   Audio tokenizer decoder stack PCC
+│   ├── test_audio_tokenizer_full_decode.py         #   Audio tokenizer codes → waveform PCC
+│   ├── test_audio_tokenizer_opt.py                 #   Full tokenizer decode perf harness
+│   ├── test_text_model.py                          #   Text backbone prefill/decode logit PCC
 │   └── test_voxtral_tts_pipeline_component_pcc.py #   Pipeline component PCC
 ├── tt/                          # TTNN on-device implementations
 │   ├── acoustic_model.py        #   Acoustic flow-matching head
@@ -202,9 +199,8 @@ models/experimental/voxtraltts/
 └── utils/
     ├── audio_tokenizer_optimizations.py  #   Optimisation preset factories
     ├── config_helpers.py                 #   Compute kernel configs (acoustic, semantic, …)
-    ├── conftest.py                       #   Pytest fixtures (device mesh, trace reset)
     ├── debug_trace.py                    #   Debug and trace utilities
-    └── test_common.py                    #   Shared test/demo helpers (prompt text, mesh, model loaders)
+    └── common.py                         #   Shared test/demo helpers (prompt text, mesh, model loaders)
 ```
 
 ---
@@ -215,28 +211,25 @@ All tests require the environment from [Section 2](#2-installation) and `HF_MODE
 
 ### 5.1 Unit tests
 
-Single-module correctness checks (shape, finite outputs, basic model config). Run quickly; do not require a full model download for most cases.
+Single-module correctness checks (no op-level matmul/conv/attention bring-up tests). Full-stack load and config: demo and e2e ISL sweep.
 
 ```bash
-# Text model — shape + config
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_inference -sv
+# Text backbone logit PCC (prefill + decode)
+pytest models/experimental/voxtraltts/tests/test_text_model.py -sv
 
-# Text model — prefill forward pass (finite output)
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_prefill_inference -sv
+# Full pipeline smoke / perf
+python models/experimental/voxtraltts/demo/demo.py
+pytest models/experimental/voxtraltts/tests/perf/test_e2e_isl_sweep_perf.py -q -s
 
-# Audio tokenizer components
-pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_decoder_transformer_block.py -sv
+# Audio tokenizer module PCC
 pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_full_decode.py -sv
+pytest models/experimental/voxtraltts/tests/test_audio_tokenizer_decoder_stack.py -sv
 
-# Acoustic model components
-pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_predict_velocity_pcc -sv
-pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_semantic_logits_pcc -sv
-pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_forward_matches_cpu_reference -sv
+# Acoustic FM module PCC
+pytest models/experimental/voxtraltts/tests/test_acoustic_model.py -sv
 
-# MLP / RMSNorm / attention primitives
-pytest models/experimental/voxtraltts/tests/test_mlp.py -sv
-pytest models/experimental/voxtraltts/tests/test_rmsnorm.py -sv
-pytest models/experimental/voxtraltts/tests/test_attention.py -sv
+# Pipeline component PCC
+pytest models/experimental/voxtraltts/tests/test_voxtral_tts_pipeline_component_pcc.py -sv
 
 # Run all unit tests at once
 pytest models/experimental/voxtraltts/tests/ \
@@ -323,7 +316,7 @@ pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_tt
 pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_staged_pcc -sv --timeout=0
 ```
 
-E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `utils/test_common.py`) and `voxtral_text_hf_aligned_optimizations` for numerical fidelity.
+E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `utils/common.py`) and `voxtral_text_hf_aligned_optimizations` for numerical fidelity.
 
 **PCC environment overrides**
 
@@ -345,20 +338,14 @@ python models/experimental/voxtraltts/reference/reference_outputs/generate_voxtr
 #### Component / module PCC
 
 ```bash
-# Text model — single decode step vs float32 CPU reference
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_decode_reference_pcc -sv
+# Text backbone — prefill last-token logits PCC (128…65504)
+pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_prefill_logit_pcc -sv
 
-# Text model — multi-step decode (26 steps) vs float32 CPU reference
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_decode_multistep_reference_pcc -sv
+# Text backbone — teacher-forced decode logits PCC (32-step CI + tail rows)
+pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_decode_multistep_logit_pcc -sv
 
-# Text model — prefill logits PCC
-pytest models/experimental/voxtraltts/tests/test_text_model.py::test_text_model_prefill_pcc -sv
-
-# Acoustic FM — Euler step sampled state + final pre-round scaled values PCC vs CPU
-pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_decode_euler_stepwise_pcc -sv
-
-# Acoustic FM — attention + MLP PCC for every FM layer
-pytest models/experimental/voxtraltts/tests/test_acoustic_model.py::test_acoustic_all_layers_attention_mlp_pcc -sv
+# Acoustic FM — full forward + Euler stepwise PCC vs CPU
+pytest models/experimental/voxtraltts/tests/test_acoustic_model.py -sv
 
 # Pipeline component — prefill hidden + decode step (no full AR)
 pytest models/experimental/voxtraltts/tests/test_voxtral_tts_pipeline_component_pcc.py -sv
@@ -406,11 +393,7 @@ e.g : text_prefill, text_decode, acoustic_forward, audio_decode
 
 Full TT inference demo: text (or pre-computed codes/latents) → `.wav` on device. Trace replay is **on by default** on P150 and BH QB2.
 
-<<<<<<< Updated upstream
-With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `utils/test_common.py`), voice `casual_male`, `text_max_seq_len=4096`, and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run exactly this default path (`CI=true` also sets `warmup_iters=0` to skip the untimed warmup pass).
-=======
-With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `tests/common.py`), voice `casual_male`, `text_max_seq_len=4096`, and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run the same default path with `warmup_iters=1` so the timed `run` pass uses trace replay (compile/capture happen on the untimed warmup pass).
->>>>>>> Stashed changes
+With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `utils/common.py`), voice `casual_male`, `text_max_seq_len=65536`, paged KV attention (on by default), and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run the same default path with `warmup_iters=1` so the timed `run` pass uses trace replay (compile/capture happen on the untimed warmup pass).
 
 #### Prerequisites
 
@@ -475,7 +458,7 @@ Run `python models/experimental/voxtraltts/demo/demo.py --help` for the live lis
 |-----------|---------|-------------|
 | `--text` | `VOXTRAL_STANDARD_CHAR_TEXT` (~500 chars) | Prompt text; omit to use the shared standard prompt (same as PCC / perf tests) |
 | `--default-voice NAME` | `casual_male` | Voice used when `--voice` is omitted |
-| `--text-max-seq-len` | `4096` | Maximum text tokens for prefill / KV cache length. For contexts **> 4096** on P150, also pass `--use-paged-kv-cache` |
+| `--text-max-seq-len` | `65536` | Maximum text tokens for prefill / KV cache length (text + speech timeline) |
 | `--max-speech-tokens` | `5000` | Upper bound on autoregressive acoustic frames. The demo **auto-raises** this from word count (~8 tokens/word). Set `64` for smoke tests; set `0` to use the auto-estimate only |
 | `--seed` | `0` | RNG seed for flow-matching noise (reproducible acoustic sampling) |
 | `--warmup-iters` | `1` | Untimed warmup passes before the measured run (compile + trace capture; set `0` to skip). Skipped when trace is disabled via `--no-decode-trace` |
@@ -484,8 +467,9 @@ Run `python models/experimental/voxtraltts/demo/demo.py --help` for the live lis
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `--use-paged-kv-cache` | off (flag) | Enable paged KV cache — required to exceed the ~4096-token L1 limit on Blackhole P150 without OOM |
-| `--paged-block-size` | `32` | KV block size for paged attention (must be a multiple of 32). Only used with `--use-paged-kv-cache` |
+| *(paged KV)* | **on** | Paged attention is enabled by default at all sequence lengths |
+| `--no-paged-kv-cache` | off (flag) | Disable paged KV; use default (non-paged) attention instead |
+| `--paged-block-size` | `32` | KV block size for paged attention (must be a multiple of 32) |
 
 **Audio decode quality (`--mode text`, `codes`, `latents`)**
 
@@ -645,7 +629,7 @@ The prompt is more than your `--text`. The tokenized speech request also prepend
 
 Here `prompt_seq_len ≈ 158 > 128`, so with `--text-max-seq-len 128` the prompt does not even fit. `_max_decode_tokens()` raises *"Prompt token length (158) exceeds text KV cache (text_max_seq_len=128)"* before any acoustic frame is decoded, and **no `.wav` is written**.
 
-The 128 limit is not special — any value at or below `prompt_seq_len` fails the same way, and `prompt_seq_len` grows with longer text and varies by voice. Set `--text-max-seq-len` above `prompt_seq_len` plus the frames you expect (~8 tokens/word). The default `4096` is safe for normal prompts; only raise it past ~4096 (with `--use-paged-kv-cache`) for very long ones.
+The 128 limit is not special — any value at or below `prompt_seq_len` fails the same way, and `prompt_seq_len` grows with longer text and varies by voice. Set `--text-max-seq-len` above `prompt_seq_len` plus the frames you expect (~8 tokens/word). The default `65536` uses paged KV and supports long prompts plus full decode budget.
 
 ### 6.5 Demo verification
 

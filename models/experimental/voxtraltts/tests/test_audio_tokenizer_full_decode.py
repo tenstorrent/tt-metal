@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Codes → waveform PCC vs CPU ``audio_tokenizer_decode_reference``."""
+
+"""Codes → waveform PCC vs CPU ``audio_tokenizer_decode_reference`` at model-card full depth."""
 
 from __future__ import annotations
 
@@ -11,43 +12,29 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import audio_tokenizer_decode_reference
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
-from models.experimental.voxtraltts.utils.test_common import (
+from models.experimental.voxtraltts.utils.common import (
     create_voxtral_audio_tokenizer_or_skip,
     resolve_voxtral_model_name_or_skip,
 )
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     voxtral_audio_tokenizer_high_accuracy_optimizations,
 )
-from models.experimental.voxtraltts.tt.audio_tokenizer.model import extract_audio_tokenizer_state_dict
+from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
+    _DECODE_CHUNK_T,
+    extract_audio_tokenizer_state_dict,
+)
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 
+# Production decode chunk from params.json / ``VoxtralTTAudioTokenizer`` (1600 acoustic frames).
+_MODEL_CARD_DECODE_T = _DECODE_CHUNK_T
 _PCC_TARGET = 0.98
 
 
 @torch.no_grad()
-@pytest.mark.parametrize(
-    "time_len,pcc",
-    [
-        (4, _PCC_TARGET),
-        (32, _PCC_TARGET),
-        (39, _PCC_TARGET),
-        (64, _PCC_TARGET),
-        pytest.param(
-            96,
-            _PCC_TARGET,
-            marks=pytest.mark.timeout(3600),
-            id="medium_decode_96",
-        ),
-        pytest.param(
-            160,
-            _PCC_TARGET,
-            marks=pytest.mark.timeout(3600),
-            id="chunked_decode_160",
-        ),
-    ],
-)
-def test_audio_tokenizer_full_decode_pcc(device, reset_seeds, time_len, pcc):
-    """Random codes → waveform PCC vs CPU golden."""
+@pytest.mark.timeout(0)
+def test_audio_tokenizer_full_decode_pcc(device, reset_seeds):
+    """Random codes → waveform PCC vs CPU at full model-card depth (T=1600)."""
+    time_len = _MODEL_CARD_DECODE_T
     model_name = resolve_voxtral_model_name_or_skip()
     try:
         full = _load_safetensors_state_dict(model_name)
@@ -102,5 +89,5 @@ def test_audio_tokenizer_full_decode_pcc(device, reset_seeds, time_len, pcc):
     assert (
         ref_wav.shape == tt_wav.shape
     ), f"Waveform shape mismatch: ref={tuple(ref_wav.shape)}, tt={tuple(tt_wav.shape)}"
-    passing, msg = comp_pcc(ref_wav.float(), tt_wav.float(), pcc=pcc)
-    assert passing, f"Full decode end-to-end PCC failed (time_len={time_len}, target={pcc}): {msg}"
+    passing, msg = comp_pcc(ref_wav.float(), tt_wav.float(), pcc=_PCC_TARGET)
+    assert passing, f"Full decode PCC failed (T={time_len}, target={_PCC_TARGET}): {msg}"

@@ -21,7 +21,7 @@ from models.experimental.voxtraltts.reference.voxtral_config import (
     DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
     voxtral_num_codebooks,
 )
-from models.experimental.voxtraltts.utils.test_common import (
+from models.experimental.voxtraltts.utils.common import (
     VOXTRAL_GOLDEN_CODES_DEFAULT_PATH,
     VOXTRAL_STANDARD_CHAR_TEXT,
     log_per_step_code_match,
