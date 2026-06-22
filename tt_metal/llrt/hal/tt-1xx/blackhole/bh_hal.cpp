@@ -70,7 +70,7 @@ constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t
 }
 
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 

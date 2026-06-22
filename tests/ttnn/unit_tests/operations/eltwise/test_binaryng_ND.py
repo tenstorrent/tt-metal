@@ -100,6 +100,8 @@ def test_ND_subtile_bcast(device, shapes, ttnn_fn):
 
     if ttnn_fn == ttnn.hypot:
         assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=2)
+    elif ttnn_fn == ttnn.divide:
+        assert_with_ulp(output_tensor, torch_output_tensor, ulp_threshold=0)
     else:
         output_tensor = ttnn.to_torch(output_tensor)
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.999

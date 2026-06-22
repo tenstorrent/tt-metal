@@ -7,7 +7,7 @@
 Replaces the matmul consumer with a diagnostic kernel that DPRINTs progress
 and detects over/under-counts. Drives both the worker-core sender
 (`ttnn.dram_prefetcher`) and the DRAM-core sender
-(`ttnn.experimental.start_dram_core_prefetcher`) against the same validator so any
+(`ttnn.experimental.start_tensor_prefetcher`) against the same validator so any
 divergence between the two paths surfaces immediately.
 
 See tt_metal/impl/buffers/prefetcher_matmul_design.md for the contract being validated.
@@ -24,17 +24,17 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
     ring_grid_cols as _ring_grid_cols,
     bank_receivers_strided as _bank_receivers_strided,
     make_recv_contig_weight as _make_recv_contig_weight,
-    dram_core_prefetcher_session,
+    tensor_prefetcher_session,
 )
 
 
-pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
-def _require_dram_core_prefetcher(device):
+def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
@@ -193,12 +193,10 @@ def test_validator_dram_sender(device, K, N, dtype, recv_per_bank, num_layers):
         device, K, N, dtype, recv_per_bank, num_layers
     )
 
-    with dram_core_prefetcher_session(device):
+    with tensor_prefetcher_session(device):
         # Flattened: repeat the tensor num_layers times (the prefetcher no longer has a
         # num_layers replay count). Dedup keeps this to 1 layout + num_layers entries.
-        ttnn.experimental.queue_dram_core_prefetcher_request(
-            device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb
-        )
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
             tt_weight,
@@ -227,18 +225,18 @@ def test_validator_dram_sender_multi_gcb_switching(device, K, N, dtype, recv_per
         device, K, N, dtype, recv_per_bank, num_layers=1, row_offset=recv_per_bank
     )
 
-    with dram_core_prefetcher_session(device):
+    with tensor_prefetcher_session(device):
         # Interleave A → B → A so the third request hits A's persistent ring state
         # established by the first A request and skipped over by the B request.
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight_a, ring_size)], global_cb=gcb_a)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_a, ring_size)], global_cb=gcb_a)
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight_b, ring_size)], global_cb=gcb_b)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_b, ring_size)], global_cb=gcb_b)
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_b, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_b
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight_a, ring_size)], global_cb=gcb_a)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_a, ring_size)], global_cb=gcb_a)
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_size // 4), global_cb=gcb_a
         )
@@ -268,16 +266,16 @@ def test_validator_dram_sender_mixed_num_receivers(device):
         device, K, N, dtype, recv_per_bank=2, num_layers=1, row_offset=1
     )
 
-    with dram_core_prefetcher_session(device):
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight_a, ring_a)], global_cb=gcb_a)
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_a, ring_a)], global_cb=gcb_a)
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight_b, ring_b)], global_cb=gcb_b)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_b, ring_b)], global_cb=gcb_b)
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_b, num_layers=1, print_stride=max(1, ring_b // 4), global_cb=gcb_b
         )
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(tt_weight_a, ring_a)], global_cb=gcb_a)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight_a, ring_a)], global_cb=gcb_a)
         ttnn.experimental.test_dram_prefetcher_validator(
             device, tt_weight_a, num_layers=1, print_stride=max(1, ring_a // 4), global_cb=gcb_a
         )
@@ -380,10 +378,8 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
     tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
         device, K, N, dtype, recv_per_bank, num_layers, dual_senders=dual_senders
     )
-    with dram_core_prefetcher_session(device, dual_senders_per_bank=dual_senders):
-        ttnn.experimental.queue_dram_core_prefetcher_request(
-            device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb
-        )
+    with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size)] * num_layers, global_cb=gcb)
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
             tt_weight,
@@ -435,8 +431,8 @@ def test_validator_dram_sender_recv_contig_page_size_switch(device):
     gcb_size = ring_size * max(page_a, page_b)
     gcb = ttnn.experimental.create_global_circular_buffer_with_dram_senders(device, bank_to_receivers, gcb_size)
 
-    with dram_core_prefetcher_session(device):
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(weight_a, ring_size)], global_cb=gcb)
+    with tensor_prefetcher_session(device):
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight_a, ring_size)], global_cb=gcb)
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
             weight_a,
@@ -446,7 +442,7 @@ def test_validator_dram_sender_recv_contig_page_size_switch(device):
         )
         ttnn.synchronize_device(device)
 
-        ttnn.experimental.queue_dram_core_prefetcher_request(device, [(weight_b, ring_size)], global_cb=gcb)
+        ttnn.experimental.queue_tensor_prefetcher_request(device, [(weight_b, ring_size)], global_cb=gcb)
         ttnn.experimental.test_dram_prefetcher_validator(
             device,
             weight_b,

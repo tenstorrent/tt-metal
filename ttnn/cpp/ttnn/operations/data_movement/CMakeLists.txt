@@ -32,7 +32,7 @@ file(
     pad/device/kernels/*
     permute/device/kernels/*
     reshape_on_device/device/kernels/*
-    repeat/device/kernels/repeat_*_rm.cpp
+    repeat/device/kernels/*
     reshape_view/device/device/*
     scatter/device/kernels/*
     sharded/device/kernels/*

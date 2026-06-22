@@ -106,6 +106,10 @@ class DataFormat(Enum):
             DataFormat.UInt8,
         }
 
+    def needs_int8_math_config(self) -> bool:
+        """Checks if the format requires int8 math mode in the ALU."""
+        return self in {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
+
     def is_32_bit(self) -> bool:
         """Checks if the data format is a 32-bit type."""
         return self in {DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32}

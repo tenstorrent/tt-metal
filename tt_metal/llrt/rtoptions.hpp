@@ -17,6 +17,7 @@
 #include <filesystem>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -148,6 +149,28 @@ struct FabricTelemetrySettings {
     bool is_telemetry_enabled(uint32_t phys_chip_id, uint32_t channel_id, uint32_t risc_id) const {
         return chips.matches(phys_chip_id) && channels.matches(channel_id) && eriscs.matches(risc_id);
     }
+};
+
+enum class SanitizerReportMethod {
+    Default,
+    Assert,
+    Print,
+};
+
+struct SanitizerSettings {
+    bool enabled = false;
+    SanitizerReportMethod method = SanitizerReportMethod::Default;
+
+    std::optional<bool> pedantic = std::nullopt;
+    std::optional<bool> warn = std::nullopt;
+    std::optional<bool> error = std::nullopt;
+
+    // default off after sanitizer becomes stable.
+    std::optional<bool> info = std::nullopt;
+    std::optional<bool> fault = std::nullopt;
+
+    // llk developer special mode.
+    std::optional<bool> internal = std::nullopt;
 };
 
 class RunTimeOptions {
@@ -375,6 +398,8 @@ class RunTimeOptions {
     bool shm_tracking_disabled = false;
     bool shm_verbose = false;
 
+    SanitizerSettings sanitizer_settings;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -406,6 +431,7 @@ public:
     void set_watcher_enabled(bool enabled) { watcher_settings.enabled.store(enabled, std::memory_order_relaxed); }
     // Return a hash string of which watcher features are enabled
     std::string get_watcher_hash() const;
+    std::string get_sanitizer_hash() const;
     int get_watcher_interval() const { return watcher_settings.interval_ms.load(std::memory_order_relaxed); }
     void set_watcher_interval(int interval_ms) {
         watcher_settings.interval_ms.store(interval_ms, std::memory_order_relaxed);
@@ -572,8 +598,9 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
+            get_sanitizer_hash(),
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
@@ -825,6 +852,8 @@ public:
 
     uint32_t get_device_print_dispatch_l1_cache_bytes() const { return device_print_dispatch_l1_cache_bytes; }
     void set_device_print_dispatch_l1_cache_bytes(uint32_t v) { device_print_dispatch_l1_cache_bytes = v; }
+
+    const SanitizerSettings& get_sanitizer_settings() const { return sanitizer_settings; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
