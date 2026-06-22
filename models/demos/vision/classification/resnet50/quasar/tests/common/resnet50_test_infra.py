@@ -34,6 +34,10 @@ def load_resnet50_model(model_location_generator):
 
 ## copied from ttlib version test:
 # golden pcc is ordered fidelity, weight dtype, activation dtype
+# Quasar has no bfloat8_b, so only the (fidelity, bfloat16, bfloat16) keys are reachable
+# now. The batch 16/20/32 thresholds (and the inline ATOL/RTOL deltas) are carried over
+# from the earlier bfloat8_b reference and predate the bfloat16 switch. This table is not
+# currently consumed by validate(), which checks against a fixed pcc instead.
 golden_pcc_obj = {
     8: {
         (
@@ -41,62 +45,16 @@ golden_pcc_obj = {
             ttnn.bfloat16,
             ttnn.bfloat16,
         ): 0.983301,  # PCC: 0.9833017469734239             TODO: NEED DEBUGGING WHY THIS IS SLIGHTLY LOWER THAN TTLIB
-        # ): 0.990804,  # Max ATOL Delta: 1.607335090637207, Max RTOL Delta: 115.62200164794922, PCC: 0.9908042840544742
-        (
-            ttnn.MathFidelity.HiFi4,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.986301,  # Max ATOL Delta: 1.5697126388549805, Max RTOL Delta: 21.3042049407959, PCC: 0.9863013351442654
-        (
-            ttnn.MathFidelity.HiFi4,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.973763,  # Max ATOL Delta: 2.455164909362793, Max RTOL Delta: inf, PCC: 0.9737631427307492
-        (
-            ttnn.MathFidelity.HiFi4,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.978099,  # Max ATOL Delta: 1.955164909362793, Max RTOL Delta: inf, PCC: 0.9780993165966628
         (
             ttnn.MathFidelity.HiFi2,
             ttnn.bfloat16,
             ttnn.bfloat16,
         ): 0.983400,  # Max ATOL Delta: 1.7310011386871338, Max RTOL Delta: 369.5689392089844, PCC: 0.9834004200555363
         (
-            ttnn.MathFidelity.HiFi2,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.984828,  # Max ATOL Delta: 1.6054553985595703, Max RTOL Delta: 59.124324798583984, PCC: 0.9848281996919587
-        (
-            ttnn.MathFidelity.HiFi2,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.934073,  # Max ATOL Delta: 4.330164909362793, Max RTOL Delta: inf, PCC: 0.9340735819578696
-        (
-            ttnn.MathFidelity.HiFi2,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.944435,  # Max ATOL Delta: 4.705164909362793, Max RTOL Delta: inf, PCC: 0.9444350983635019
-        (
             ttnn.MathFidelity.LoFi,
             ttnn.bfloat16,
             ttnn.bfloat16,
         ): 0.938909,  # Max ATOL Delta: 3.861414909362793, Max RTOL Delta: 240.63145446777344, PCC: 0.9389092547575272
-        (
-            ttnn.MathFidelity.LoFi,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.959609,  # Max ATOL Delta: 3.205164909362793, Max RTOL Delta: 141.7057342529297, PCC: 0.9596095155046113
-        (
-            ttnn.MathFidelity.LoFi,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.854903,  # Max ATOL Delta: 7.830164909362793, Max RTOL Delta: inf, PCC: 0.8549035869182201
-        (
-            ttnn.MathFidelity.LoFi,
-            ttnn.bfloat16,
-            ttnn.bfloat16,
-        ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419433
     },
     16: {
         (
