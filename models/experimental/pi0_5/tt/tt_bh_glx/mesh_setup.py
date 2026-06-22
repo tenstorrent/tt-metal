@@ -94,6 +94,43 @@ _DEFAULT_TRACE_REGION_SIZE = 134_217_728  # 128 MiB — matches single-chip trac
 
 
 @contextmanager
+def open_prefill_tp4_mesh(
+    tp: int = 4,
+    l1_small_size: Optional[int] = None,
+    trace_region_size: Optional[int] = None,
+    enable_fabric: bool = True,
+):
+    """Open a 1×tp mesh for TP=4 VLM prefill on an 8-chip (or larger) device.
+
+    Yields the mesh device directly.  The caller is responsible for uploading
+    inputs as ReplicateTensorToMesh and downloading outputs via
+    ttnn.get_device_tensors(out)[0] + ttnn.to_torch().
+
+    Args:
+        tp:               tensor-parallel degree (number of chips, default 4).
+        l1_small_size:    bytes per core for static CBs.
+        trace_region_size: bytes per chip for trace capture.
+        enable_fabric:    set FABRIC_1D for AllReduce collectives (default True).
+    """
+    if enable_fabric:
+        ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+
+    open_kwargs = {"mesh_shape": ttnn.MeshShape(1, tp)}
+    if l1_small_size is not None:
+        open_kwargs["l1_small_size"] = l1_small_size
+    if trace_region_size is not None:
+        open_kwargs["trace_region_size"] = trace_region_size
+
+    mesh = ttnn.open_mesh_device(**open_kwargs)
+    try:
+        yield mesh
+    finally:
+        ttnn.close_mesh_device(mesh)
+        if enable_fabric:
+            ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+@contextmanager
 def open_galaxy_mesh(
     l1_small_size: Optional[int] = None,
     trace_region_size: Optional[int] = _DEFAULT_TRACE_REGION_SIZE,

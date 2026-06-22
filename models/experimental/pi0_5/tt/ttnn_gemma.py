@@ -574,6 +574,9 @@ class GemmaAttentionTTNN:
         past_key_value: Optional[Tuple[ttnn.Tensor, ttnn.Tensor]] = None,
         use_cache: bool = False,
         keep_padded: bool = False,
+        *,
+        bs_norm_factory=None,
+        bs_grid: Optional[Tuple[int, int]] = None,
     ) -> Tuple[ttnn.Tensor, Optional[Tuple[ttnn.Tensor, ttnn.Tensor]]]:
         """
         OPTIMIZED forward pass using fused QKV and native TTNN operations.
@@ -602,42 +605,60 @@ class GemmaAttentionTTNN:
             Tuple of (output, optional_cache)
         """
         batch_size = hidden_states.shape[0]
-        seq_len = hidden_states.shape[1]
-
-        # Reshape to 4D for nlp_create_qkv_heads: [batch, 1, seq, hidden]
-        if len(hidden_states.shape) == 3:
+        if len(hidden_states.shape) == 4:
+            seq_len = hidden_states.shape[2]
+        else:
+            seq_len = hidden_states.shape[1]
             hidden_states = ttnn.reshape(hidden_states, (batch_size, 1, seq_len, -1))
 
         # OPTIMIZATION 1: Single fused QKV linear (instead of 3 separate)
         # Output: [batch, 1, seq, Q_dim + K_dim + V_dim]
-        # 2D BLOCK_SHARDED program_config (12x10 grid, in0_block_w=8 fits CBs since
-        # N_tiles=80 is small enough). Caching is by shape so the per-shape kernel
-        # is built once.
-        m_tiles = (seq_len + 31) // 32
+        m_tiles = (batch_size * seq_len) // 32
         k_tiles_in = self.hidden_size // 32
         n_tiles_qkv = self.wqkv.shape[-1] // 32
-        wqkv_pcfg = build_matmul_pcfg(
-            m_tiles, k_tiles_in, n_tiles_qkv, self.grid_size[0], self.grid_size[1], in0_block_w=8
-        )
+        use_bs_qkv = bs_norm_factory is not None and bs_grid is not None
+        if use_bs_qkv:
+            gx, gy = bs_grid
+            if not bs_matmul_divisible(m_tiles, k_tiles_in, n_tiles_qkv, gx, gy):
+                hidden_states = ttnn.sharded_to_interleaved(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
+                use_bs_qkv = False
+            else:
+                bs_mc_qkv = make_bs_memcfg(batch_size, seq_len, self.wqkv.shape[-1], gx, gy)
+                qkv_pcfg = build_bs_matmul_pcfg(m_tiles, k_tiles_in, n_tiles_qkv, gx, gy, dst_budget=4)
+                xqkv = ttnn.linear(
+                    hidden_states,
+                    self.wqkv,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=bs_mc_qkv,
+                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                    program_config=qkv_pcfg,
+                )
+                xqkv = ttnn.sharded_to_interleaved(xqkv, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        if wqkv_pcfg is not None:
-            xqkv = ttnn.linear(
-                hidden_states,
-                self.wqkv,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                program_config=wqkv_pcfg,
+        if not use_bs_qkv:
+            m_tiles_interleaved = (seq_len + 31) // 32
+            wqkv_pcfg = build_matmul_pcfg(
+                m_tiles_interleaved, k_tiles_in, n_tiles_qkv, self.grid_size[0], self.grid_size[1], in0_block_w=8
             )
-        else:
-            xqkv = ttnn.linear(
-                hidden_states,
-                self.wqkv,
-                dtype=ttnn.bfloat8_b,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
-                core_grid=self.core_grid,
-            )
+
+            if wqkv_pcfg is not None:
+                xqkv = ttnn.linear(
+                    hidden_states,
+                    self.wqkv,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                    program_config=wqkv_pcfg,
+                )
+            else:
+                xqkv = ttnn.linear(
+                    hidden_states,
+                    self.wqkv,
+                    dtype=ttnn.bfloat8_b,
+                    memory_config=ttnn.L1_MEMORY_CONFIG,
+                    compute_kernel_config=self.compute_kernel_config_hifi2,
+                    core_grid=self.core_grid,
+                )
 
         # OPTIMIZATION 2: Native TTNN head splitting (no PyTorch transfers!)
         # This splits the fused QKV into separate Q, K, V with proper head layout
@@ -1559,6 +1580,60 @@ def build_sharded_norm_pcfg(
     result = (pc, make_memcfg, grid)
     _sharded_norm_cache[key] = result
     return result
+
+
+def make_bs_memcfg(batch: int, m_padded: int, width: int, grid_x: int, grid_y: int) -> ttnn.MemoryConfig:
+    """Block-sharded L1 memcfg on the same grid as sharded RMSNorm."""
+    return ttnn.create_sharded_memory_config(
+        (batch, 1, m_padded, width),
+        core_grid=ttnn.CoreGrid(y=grid_y, x=grid_x),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+
+def bs_matmul_divisible(m_tiles: int, k_tiles: int, n_tiles: int, grid_x: int, grid_y: int) -> bool:
+    return m_tiles % grid_y == 0 and k_tiles % grid_x == 0 and n_tiles % grid_x == 0
+
+
+def build_bs_matmul_pcfg(
+    m_tiles: int,
+    k_tiles: int,
+    n_tiles: int,
+    grid_x: int,
+    grid_y: int,
+    *,
+    in0_block_w: Optional[int] = None,
+    activation=None,
+    dst_budget: int = 4,
+) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
+    """Block-sharded matmul program config pinned to the LN grid (SigLIP BS pattern)."""
+    assert bs_matmul_divisible(m_tiles, k_tiles, n_tiles, grid_x, grid_y)
+    per_core_M = m_tiles // grid_y
+    per_core_N = n_tiles // grid_x
+    per_core_K = k_tiles // grid_x
+    if in0_block_w is None:
+        in0_block_w = min(per_core_K, 4)
+    while in0_block_w > 1 and per_core_K % in0_block_w != 0:
+        in0_block_w -= 1
+    in0_block_w = max(1, in0_block_w)
+    out_subblock_w = min(per_core_N, dst_budget)
+    while out_subblock_w > 1 and per_core_N % out_subblock_w != 0:
+        out_subblock_w -= 1
+    out_subblock_h = max(1, dst_budget // out_subblock_w)
+    out_subblock_h = min(per_core_M, out_subblock_h)
+    while out_subblock_h > 1 and per_core_M % out_subblock_h != 0:
+        out_subblock_h -= 1
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=activation,
+    )
 
 
 # Shared compute-kernel config for sharded RMS/LayerNorm. packer_l1_acc=True is
