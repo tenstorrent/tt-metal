@@ -97,6 +97,63 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     assert not torch.equal(tt_out1, tt_out2)
 
 
+def _height_sharded_l1_config(shard_shape, core_grid):
+    return ttnn.create_sharded_memory_config(
+        shard_shape,
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
+def run_sharded_binary_ng_add(device, shape, mem_config, dtype=ttnn.bfloat8_b):
+    """Run a sharded add (the ResNet50 residual config — the Metal 2.0 DFB slice) and return
+    (torch_result, ttnn_result), measuring program-cache entries added by the dispatch."""
+    torch_a = torch.rand(shape, dtype=torch.bfloat16)
+    torch_b = torch.rand(shape, dtype=torch.bfloat16)
+    torch_result = torch.add(torch_a, torch_b)
+
+    tt_a = ttnn.from_torch(torch_a, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+    tt_b = ttnn.from_torch(torch_b, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+    with device.cache_entries_counter.measure():
+        tt_result = ttnn.add(tt_a, tt_b, memory_config=mem_config)
+    return torch_result, ttnn.to_torch(tt_result)
+
+
+@pytest.mark.parametrize(
+    "num_cores, tiles_per_core",
+    # Single-tile shards, and multi-tile shards (exercises the compute kernel's chunk loop).
+    [(8, 1), (4, 2)],
+)
+def test_ng_cache_reuse_add_sharded(device, isolate_program_cache, num_cores, tiles_per_core):
+    """Height-sharded L1 bf8 add (the ResNet50 residual config, run through the same DFB kernels),
+    run twice with FRESH data -> 1 cache entry, both dispatches numerically correct, outputs differ.
+
+    This is the program-cache-hit correctness check for the Metal 2.0 ProgramSpec factory
+    (TT_METAL_BINARY_NG_METAL_V2=1): the second dispatch is a cache hit that must re-bind the new
+    input/output tensor addresses. With the flag off this exercises the existing ProgramDescriptor
+    path identically. Named to match `-k add`."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, num_cores - 1))})
+    shard_shape = [tiles_per_core * 32, 32]
+    shape = [num_cores * tiles_per_core * 32, 32]
+    mem_config = _height_sharded_l1_config(shard_shape, core_grid)
+
+    torch.manual_seed(0)
+    torch_ref1, tt_out1 = run_sharded_binary_ng_add(device, shape, mem_config)
+    assert_with_pcc(torch_ref1, tt_out1, 0.992)
+
+    torch.manual_seed(12345)
+    torch_ref2, tt_out2 = run_sharded_binary_ng_add(device, shape, mem_config)
+    assert_with_pcc(torch_ref2, tt_out2, 0.992)
+
+    # Same program reused: exactly one cache entry across both dispatches.
+    assert device.cache_entries_counter.total == 1
+    # Distinct random inputs -> the cache-hit dispatch must have produced a different result,
+    # proving the second dispatch's tensor addresses (not the first's) were used.
+    assert not torch.equal(tt_out1, tt_out2)
+
+
 def test_ng_cache_reuse_scalar_different_values(device, isolate_program_cache):
     """Different scalar values but same op -> 1 cache entry, different outputs."""
     shape = [1, 1, 32, 64]
