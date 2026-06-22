@@ -20,6 +20,7 @@
 #if !defined(UCK_CHLKC_MATH)
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/cross_node_dfb_init.h"
 #include "internal/hw_thread.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
@@ -173,6 +174,13 @@ int main(int argc, char* argv[]) {
         uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
         // NOC argument is unused
         experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
+
+        if (launch_msg->kernel_config.num_cross_node_dfbs) {
+            uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(
+                kernel_config_base + launch_msg->kernel_config.remote_cross_node_dfb_offset);
+            experimental::setup_cross_node_dfb_interfaces<false>(
+                dfb_l1_base, launch_msg->kernel_config.num_cross_node_dfbs, 0, 0, 0, 0);
+        }
 #endif
 
         rta_l1_base =

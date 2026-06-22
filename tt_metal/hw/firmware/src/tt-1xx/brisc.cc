@@ -24,6 +24,8 @@
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
+#include "internal/cross_node_dfb_interface.h"
+#include "internal/cross_node_dfb_init.h"
 #include "internal/hw_thread.h"
 #include "dev_mem_map.h"
 #include "noc_overlay_parameters.h"
@@ -71,6 +73,10 @@ uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 uint32_t noc_posted_writes_num_issued[NUM_NOCS] __attribute__((used));
 
 CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
+
+CrossNodeSenderDFBInterface   g_cross_node_sender_dfb_interface[MAX_CROSS_NODE_DFBS] __attribute__((used));
+CrossNodeReceiverDFBInterface g_cross_node_receiver_dfb_interface[MAX_CROSS_NODE_DFBS] __attribute__((used));
+CrossNodeDFBMetadata          g_cross_node_dfb_metadata[MAX_CROSS_NODE_DFBS] __attribute__((used));
 
 uint32_t tt_l1_ptr* rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr* crta_l1_base __attribute__((used));
@@ -333,6 +339,21 @@ inline void wait_ncrisc_trisc() {
 
 inline void trigger_sync_register_init() { subordinate_sync->trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
+inline void barrier_cross_node_dfb_setup(uint8_t noc_index, uint32_t noc_mode) {
+#if defined(ARCH_BLACKHOLE)
+    WAYPOINT("NDFW");
+    if (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
+    } else {
+        while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+    }
+    invalidate_l1_cache();
+    WAYPOINT("NDFD");
+#endif
+}
+
 inline void barrier_remote_cb_interface_setup(uint8_t noc_index, uint32_t noc_mode, uint32_t end_cb_index) {
 #if defined(ARCH_BLACKHOLE)
     // cq_dispatch does not update noc transaction counts so skip this barrier on the dispatch core
@@ -511,6 +532,18 @@ int main() {
                 experimental::setup_remote_cb_interfaces<true>(
                     cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                 barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
+                if (launch_msg_address->kernel_config.num_cross_node_dfbs) {
+                    uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(
+                        kernel_config_base + launch_msg_address->kernel_config.remote_cross_node_dfb_offset);
+                    experimental::setup_cross_node_dfb_interfaces<true>(
+                        dfb_l1_base,
+                        launch_msg_address->kernel_config.num_cross_node_dfbs,
+                        noc_index,
+                        noc_mode,
+                        true,
+                        cmd_buf);
+                    barrier_cross_node_dfb_setup(noc_index, noc_mode);
+                }
                 start_ncrisc_kernel_run(enables);
                 uint32_t kernel_lma =
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -533,6 +566,18 @@ int main() {
                     experimental::setup_remote_cb_interfaces<true>(
                         cb_l1_base, end_cb_index, noc_index, noc_mode, true, cmd_buf);
                     barrier_remote_cb_interface_setup(noc_index, noc_mode, end_cb_index);
+                    if (launch_msg_address->kernel_config.num_cross_node_dfbs) {
+                        uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(
+                            kernel_config_base + launch_msg_address->kernel_config.remote_cross_node_dfb_offset);
+                        experimental::setup_cross_node_dfb_interfaces<true>(
+                            dfb_l1_base,
+                            launch_msg_address->kernel_config.num_cross_node_dfbs,
+                            noc_index,
+                            noc_mode,
+                            true,
+                            cmd_buf);
+                        barrier_cross_node_dfb_setup(noc_index, noc_mode);
+                    }
                 }
                 start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
@@ -543,6 +588,14 @@ int main() {
 
             // BRISC reads perf counters after TRISCs finish (BRISC has NOC access for DRAM push).
             ReadPerfCounters();
+
+            // Auto-commit: write back fifo_wr/rd_ptr for any CrossNodeDFBs with auto_commit set.
+            if (launch_msg_address->kernel_config.num_cross_node_dfbs) {
+                uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(
+                    kernel_config_base + launch_msg_address->kernel_config.remote_cross_node_dfb_offset);
+                experimental::commit_auto_dfbs(
+                    dfb_l1_base, launch_msg_address->kernel_config.num_cross_node_dfbs);
+            }
 
             trigger_sync_register_init();
 
