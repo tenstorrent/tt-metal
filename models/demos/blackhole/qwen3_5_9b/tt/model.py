@@ -1,7 +1,8 @@
-# models/demos/blackhole/qwen3_5_9b/tt/model.py
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Full Qwen3.5-9B text model for Blackhole P150.
 
-Assembly: tok_embeddings → 32 × Qwen35DecoderLayer → RMSNorm → LM Head
+Assembly: tok_embeddings -> 32 x Qwen35DecoderLayer -> RMSNorm -> LM Head
 Manages hybrid state: KV cache (8 attention layers) + recurrent state (24 DeltaNet layers).
 """
 import math

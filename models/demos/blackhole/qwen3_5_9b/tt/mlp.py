@@ -1,12 +1,11 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """SwiGLU MLP for Qwen3.5: down(silu(gate(x)) * up(x)).
 
 Single device (9B): full weights, dense matmuls (unchanged validated path).
 Tensor-parallel (27B on a (1,4) mesh): w1/w3 column-parallel, w2 row-parallel,
 followed by tt_all_reduce (which reduce-scatters on a mesh with a 1 in its shape,
-e.g. P150x4) so the output is fractured along the hidden dim — matching the
-fractured-residual scheme used by models/demos/qwen35_27b.
+e.g. P150x4) so the output is fractured along the hidden dim.
 """
 import os
 from dataclasses import dataclass

@@ -1,4 +1,5 @@
-# models/demos/blackhole/qwen3_5_9b/tt/layer.py
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Hybrid TransformerBlock for Qwen3.5-9B.
 
 Dispatches to either Gated DeltaNet (linear attention) or Gated Full Attention

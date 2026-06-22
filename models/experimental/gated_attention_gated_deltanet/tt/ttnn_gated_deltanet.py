@@ -10,12 +10,12 @@ import torch
 
 import ttnn
 
-from tt.ttnn_delta_rule_ops import (
+from .ttnn_delta_rule_ops import (
     recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
     recurrent_gated_delta_rule_decode_inplace_ttnn,
 )
-from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
+from .ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter
 
 _L1_SEQ_THRESHOLD = 512
 

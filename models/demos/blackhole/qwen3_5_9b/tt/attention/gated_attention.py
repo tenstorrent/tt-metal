@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """The Qwen3.5-9B gated full-attention layer — composes config/weights/prefill/decode."""
 
@@ -13,7 +13,7 @@ class Qwen35GatedAttention:
     """Gated Full Attention layer for Qwen3.5-9B with KV cache.
 
     Uses softmax SDPA with GQA (16 Q heads, 4 KV heads, head_dim=256)
-    plus a sigmoid output gate derived from the 2× wide q_proj.
+    plus a sigmoid output gate derived from the 2x wide q_proj.
     Q and K are normalized with zero-centered RMSNorm before attention.
     """
 

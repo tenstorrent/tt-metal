@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Tensor-parallel (TP>1) Gated DeltaNet decode for Qwen3.5.
 
@@ -9,19 +9,22 @@ composed-op `recurrent_gated_delta_rule_decode_ttnn` from the experimental
 backend (it does L2-norm + scale + the delta step), driven on each device's
 local heads. Projections/conv are sharded; weights kept interleaved (auto matmul).
 
-Sharding mirrors models/demos/qwen35_27b. GDN output uses the *gated* RMSNorm
-(weight, NO +1) followed by a SiLU(z) gate — distinct from the +1 QK/layer norms.
+GDN output uses the *gated* RMSNorm (weight, NO +1) followed by a SiLU(z) gate — distinct from the +1 QK/layer norms.
 """
 import os
 
 import torch
-from tt.ttnn_delta_rule_ops import recurrent_gated_delta_rule_decode_ttnn
-from tt.ttnn_delta_rule_seq import chunk_gated_delta_rule_seq_adapter, create_chunk_masks_seq
-from tt.ttnn_gated_deltanet import _causal_conv1d_fir
 
-import models.demos.blackhole.qwen3_5_9b.tt.gdn._experimental_path  # noqa: F401  (puts experimental backend on sys.path)
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt import tp_common as tpc
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
+    recurrent_gated_delta_rule_decode_ttnn,
+)
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import (
+    chunk_gated_delta_rule_seq_adapter,
+    create_chunk_masks_seq,
+)
+from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import _causal_conv1d_fir
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 

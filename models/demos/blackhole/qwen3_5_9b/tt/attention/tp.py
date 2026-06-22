@@ -1,10 +1,8 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Tensor-parallel (TP>1) full-attention path for Qwen3.5.
 
-Ported from models/demos/qwen35_27b/tt/attention.py forward_decode.
-
-Long-context (64k+) correctness choices, validated at 64k on Qwen3.5-27B-FP8 and Qwen3.6-27B:
+Long-context (64k+) correctness choices, validated at 64k on Qwen3.6-27B:
   - HYBRID q/k-norm scaling: PREFILL uses the HF-correct (1+weight) scale (sharp attention,
     required for retrieval — without it long-context attention is uniform and retrieval is zero);
     DECODE uses the raw weights (flat attention, robust to the small per-step decode noise that
@@ -166,8 +164,7 @@ class TPAttention:
                 ttnn.fill_cache(self.k_caches[h], ttnn.slice(k, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
                 ttnn.fill_cache(self.v_caches[h], ttnn.slice(v, (0, h, 0, 0), (1, h + 1, S, HD)), 0)
 
-        # Keep Q/K/V bf16 into SDPA (matches forward_prefill_paged + the 9B's working path). The
-        # unconditional bf8 cast here was inconsistent with the documented bf16-Q fix and degraded
+        # Keep Q/K/V bf16 into SDPA. The unconditional bf8 cast here was inconsistent with the documented bf16-Q fix and degraded
         # the bespoke prefill_tp oracle vs the paged path. QWEN_SDPA_BF8_Q=1 restores the old bf8.
         if os.environ.get("QWEN_SDPA_BF8_Q") == "1":
             q8 = ttnn.typecast(q, dtype=ttnn.bfloat8_b)
@@ -232,8 +229,7 @@ class TPAttention:
 
         # QK RMSNorm — raw (no-+1) at DECODE only (hybrid scaling): sharp +1 prefill retrieves the
         # long context; flat decode averages over keys so the per-step decode noise cannot flip
-        # retrieval (the loop/junk failure mode). Validated 64k on 3.5-FP8 AND 3.6 (coherent
-        # Frankenstein summaries; sharp decode loops/junks both).
+        # retrieval (the loop/junk failure mode).
         q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6), tw["q_norm_flat"])
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6), tw["k_norm_flat"])
 
@@ -247,7 +243,7 @@ class TPAttention:
         )
         if use_paged:
             # External paged KV cache (vLLM/contract path): update at cur_pos via the
-            # page_table, then paged SDPA-decode. Mirrors qwen35_27b attention.py:188-218.
+            # page_table, then paged SDPA-decode
             keys, values = self.paged_k, self.paged_v
             k_p = ttnn.pad(k, [1, B, 32, HD], [0, 0, 0, 0], 0.0)
             v_p = ttnn.pad(v, [1, B, 32, HD], [0, 0, 0, 0], 0.0)

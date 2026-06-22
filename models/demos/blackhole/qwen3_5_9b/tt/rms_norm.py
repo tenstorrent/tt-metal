@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Zero-centered RMSNorm for Qwen3.5 (weights pre-offset by +1; fused ttnn.rms_norm)."""
 import ttnn

@@ -1,4 +1,5 @@
-# models/demos/blackhole/qwen3_5_9b/tt/model_config.py
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Qwen3.5-9B model configuration for Blackhole P150.
 
 Subclasses ``tt_transformers.ModelArgs`` (the framework convention). ``HF_MODEL`` is
@@ -6,9 +7,8 @@ the single source of truth and must be exported (the base raises a clear error i
 is unset). It may be a local checkpoint directory OR a hub id; a hub id is resolved to
 a local snapshot directory via ``snapshot_download`` (same as the vLLM wrapper) because
 ``AutoConfig.from_pretrained`` on a bare hub id is unreliable in this transformers
-version. Following the ``gpt_oss`` / ``gemma4`` convention, config, weights and the
-tokenizer are loaded with ``trust_remote_code=True``. The base class resolves the
-checkpoint from ``HF_MODEL`` (``self.CKPT_DIR``) and parses the HF config via
+version. Config, weights and the tokenizer are loaded with ``trust_remote_code=True``.
+The base class resolves the checkpoint from ``HF_MODEL`` (``self.CKPT_DIR``) and parses the HF config via
 ``AutoConfig``. No JSON config override and no ``checkpoint_dir`` constructor param remain.
 
 Everything Qwen3.5-specific (hybrid Gated DeltaNet + Gated Full Attention layers,
@@ -213,7 +213,7 @@ class Qwen35ModelArgs(ModelArgs):
         )
 
     def _set_hf_params(self, checkpoint_dir):
-        # Match gpt_oss/gemma4: load the HF config with trust_remote_code=True. Set the
+        # Load the HF config with trust_remote_code=True. Set the
         # flag before delegating so the base AutoConfig.from_pretrained call uses it.
         self.trust_remote_code_hf = True
         super()._set_hf_params(checkpoint_dir)

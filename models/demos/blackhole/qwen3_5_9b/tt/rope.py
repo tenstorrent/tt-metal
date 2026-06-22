@@ -1,4 +1,5 @@
-# models/demos/blackhole/qwen3_5_9b/tt/rope.py
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """RoPE setup for Qwen3.5-9B Gated Attention layers.
 
 Qwen3.5 uses partial rotary embeddings: only 25% of the head dimensions

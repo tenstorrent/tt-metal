@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 """Weight loading + precompute for the Qwen3.5-9B Gated DeltaNet layer.
@@ -13,8 +13,6 @@ from dataclasses import dataclass
 
 import torch
 
-# Install the experimental backend on sys.path BEFORE importing its ops.
-import models.demos.blackhole.qwen3_5_9b.tt.gdn._experimental_path  # noqa: F401
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.config import GDNConfig
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_seq import create_chunk_masks_seq

@@ -1,12 +1,10 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Tensor-parallel (multi-device) helpers for Qwen3.5 on Blackhole.
 
-Ported from ``models/demos/qwen35_27b/tt/model_config.py`` (the proven TP=4
-implementation of this exact architecture) and generalized so the same helpers
-serve both the 9B (single device) and 27B (TP=4) configs. Everything here is
-inert on a 1-device mesh — ``model_config.py`` only builds these configs and
-calls the sharding helpers when ``num_devices > 1``.
+TP helpers shared by the 9B (single device) and 27B (TP=4) configs.
+Inert on a 1-device mesh — ``model_config.py`` only invokes these when
+``num_devices > 1``.
 
 Contents:
 - Hardware constants + compute-kernel configs

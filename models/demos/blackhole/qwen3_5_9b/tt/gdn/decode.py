@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 """Recurrent / chunked DeltaNet forward (the `forward` dispatch).
@@ -8,8 +8,6 @@ Operates on the gdn instance: reads weights from `gdn.weights`, config dims from
 `gdn.cfg`, mirrored scalar attrs + runtime state from `gdn`. Every ttnn op,
 memory_config, and the `gated_deltanet_forward_ttnn` kwargs are verbatim.
 """
-# Install the experimental backend on sys.path BEFORE importing its ops.
-import models.demos.blackhole.qwen3_5_9b.tt.gdn._experimental_path  # noqa: F401
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.gdn.state import init_recurrent_state, split_fused_conv_state
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_gated_deltanet import gated_deltanet_forward_ttnn

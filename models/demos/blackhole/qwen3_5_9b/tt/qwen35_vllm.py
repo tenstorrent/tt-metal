@@ -1,5 +1,4 @@
-# tt/qwen35_vllm.py
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Local vLLM wrapper for Qwen3.5-9B: a thin tt_transformers Generator subclass.
 

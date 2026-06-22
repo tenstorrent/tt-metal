@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Helpers for slicing nested state dicts (mirrors gemma4/gpt_oss utils.substate)."""
+"""Helpers for slicing nested state dicts."""
 from __future__ import annotations
 
 import itertools

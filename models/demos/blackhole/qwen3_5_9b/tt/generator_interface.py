@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """Helpers for the Generator contract: pack the (cos,sin) rope pair into one
 tensor (copy_host_to_device cannot carry a nested tuple), and the shared
