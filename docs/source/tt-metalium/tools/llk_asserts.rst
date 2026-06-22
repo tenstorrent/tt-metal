@@ -265,11 +265,11 @@ LLK asserts are fully integrated into the tt-metal CI/CD system through the ``en
 
 The following key workflow files accept the ``enable-llk-asserts`` boolean input and can be triggered manually via ``workflow_dispatch`` with the checkbox enabled:
 
-- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, models, ops, TTNN, profiler)
+- ``sanity-tests.yaml`` — broad sanity suite (fast dispatch, ops, TTNN, profiler)
 - ``sanity-tests-debug.yaml`` — nightly debug run (also the scheduled nightly LLK assert run)
-- ``blackhole-post-commit.yaml`` — Blackhole-specific test matrix (models, ops, TTNN, UMD, multi-card)
+- ``blackhole-post-commit.yaml`` — Blackhole-specific test matrix (ops, TTNN, UMD, multi-card)
 
-Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``models-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the three above are the most useful entry points for validating new asserts.
+Other workflows also accept this parameter (e.g. ``ttnn-post-commit.yaml``, ``ops-post-commit.yaml``, ``tt-metal-l2-nightly.yaml``, and others), but the three above are the most useful entry points for validating new asserts.
 
 **Nightly Runs with LLK Asserts**
 

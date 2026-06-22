@@ -95,7 +95,7 @@ repos:
       entry: bash .github/scripts/utils/validate_golden_csv_columns.sh
       language: system
       pass_filenames: false
-      files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+      files: ^tests/tt_metal/tt_fabric/test_infra/golden/.*bandwidth.*\.csv$
 
 # ---- LLK hooks (tt_metal/tt-llk/) ----
 # LLK lives at tt_metal/tt-llk/ and has its own formatting standards.

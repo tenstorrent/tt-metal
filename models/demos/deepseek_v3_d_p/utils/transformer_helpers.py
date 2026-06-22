@@ -163,9 +163,19 @@ INFINITEBENCH_SUBSETS = {
     "longbook_qa_eng": "longbook_qa_eng.jsonl",
 }
 
-INFINITEBENCH_CACHE_DIR = Path(
-    os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE", "/tmp/deepseek_v3_transformer_inputs")
-)
+
+def _default_infinitebench_cache_dir() -> str:
+    # Prefer a test-specific override, then HF_HOME/infinitebench, then a temp dir.
+    explicit = os.environ.get("TT_DS_PREFILL_INFINITEBENCH_CACHE")
+    if explicit:
+        return explicit
+    hf_home = os.environ.get("HF_HOME")
+    if hf_home:
+        return os.path.join(hf_home, "infinitebench")
+    return "/tmp/deepseek_v3_transformer_inputs"
+
+
+INFINITEBENCH_CACHE_DIR = Path(_default_infinitebench_cache_dir())
 
 
 # --- HF model helpers ---

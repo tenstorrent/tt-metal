@@ -741,23 +741,10 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_same_rank_groups_feasi
 
     const size_t nt = target_indices.size();
     const size_t ng = global_indices.size();
-    if (nt > ng) {
-        if (!quiet_mode_) {
-            log_info(
-                tt::LogFabric,
-                "Constraint validation failed: more same-rank target groups than global host partitions (cannot "
-                "assign each group to a distinct partition).");
-        } else {
-            log_debug(
-                tt::LogFabric,
-                "Constraint validation failed: same-rank groups infeasible (too many target groups).");
-        }
-        return false;
-    }
 
-    // can_assign[ti][gj]: target group target_indices[ti] can use global partition global_indices[gj]
-    // (every member has some allowed candidate in that partition). Matching is injective: groups are not
-    // tied by index — any bijection between target groups and distinct global partitions is allowed.
+    // can_assign[ti][gj]: logical target group ti can be carved inside physical global partition gj
+    // (every member has some allowed candidate in that partition). Multiple target groups may share
+    // the same global partition (e.g. N mesh_host_ranks on one galaxy host).
     std::vector<std::vector<bool>> can_assign(nt, std::vector<bool>(ng, false));
     for (size_t ti = 0; ti < nt; ++ti) {
         const auto& tset = target_groups[target_indices[ti]];
@@ -791,38 +778,29 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate_same_rank_groups_feasi
         }
     }
 
-    std::vector<bool> used_gj(ng, false);
-    std::function<bool(size_t)> try_match;
-    try_match = [&](size_t ti) -> bool {
-        if (ti == nt) {
-            return true;
-        }
+    for (size_t ti = 0; ti < nt; ++ti) {
+        bool has_partition = false;
         for (size_t gj = 0; gj < ng; ++gj) {
-            if (!can_assign[ti][gj] || used_gj[gj]) {
-                continue;
+            if (can_assign[ti][gj]) {
+                has_partition = true;
+                break;
             }
-            used_gj[gj] = true;
-            if (try_match(ti + 1)) {
-                return true;
+        }
+        if (!has_partition) {
+            if (!quiet_mode_) {
+                log_info(
+                    tt::LogFabric,
+                    "Constraint validation failed: same-rank target group has no physical host partition "
+                    "where every member still allows at least one mapping (check required, forbidden, "
+                    "and reserved constraints).");
+            } else {
+                log_debug(
+                    tt::LogFabric,
+                    "Constraint validation failed: same-rank groups infeasible (no host partition for a target "
+                    "group).");
             }
-            used_gj[gj] = false;
+            return false;
         }
-        return false;
-    };
-
-    if (!try_match(0)) {
-        if (!quiet_mode_) {
-            log_info(
-                tt::LogFabric,
-                "Constraint validation failed: no injective assignment of same-rank target groups to distinct "
-                "global partitions where every member still allows at least one mapping (check required, "
-                "forbidden, and reserved constraints).");
-        } else {
-            log_debug(
-                tt::LogFabric,
-                "Constraint validation failed: same-rank groups infeasible (no matching to global partitions).");
-        }
-        return false;
     }
     return true;
 }
@@ -1007,9 +985,9 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_cardinality_constraint(
         return false;
     }
 
-    // Warn if some pairs were filtered but constraint is still satisfiable
+    // Informational: some pairs were filtered but the constraint is still satisfiable (not an error).
     if (!invalid_pairs.empty() && valid_pairs.size() >= min_count) {
-        log_warning(
+        log_debug(
             tt::LogFabric,
             "Cardinality constraint: {} pair(s) were filtered out due to conflicts with required constraints, "
             "but constraint is still satisfiable with {} remaining valid pair(s) (min_count: {})",
