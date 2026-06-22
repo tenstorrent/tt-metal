@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
 #include "api/compute/bcast.h"
 #include "api/compute/copy_dest_values.h"
@@ -84,6 +85,8 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute configuration
     //-------------------------------------------------------------------------
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w, cb_s2c_out);
+
     // Pack is configured to Float16_b
     pack_reconfig_data_format(cb_s2c_out);
 
@@ -95,7 +98,7 @@ void kernel_main() {
 
     if (is_send_core) {
         // Initialize matmul: input @ weight -> output
-        mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/2, /*rt_dim=*/1, /*kt_dim=*/1);
+        matmul_block_init(cb_s2c_in, cb_r2c_w, /*transpose=*/false, /*ct_dim=*/2, /*rt_dim=*/1, /*kt_dim=*/1);
 
         //-------------------------------------------------------------------------
         // Compute: input @ 2 weights -> 2 outputs
@@ -161,7 +164,7 @@ void kernel_main() {
     // -------------------------------------------------------------------------
 
     // Initialize matmul: input @ weight -> output
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_s2c_out, /*transpose=*/false, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
+    matmul_block_init(cb_s2c_in, cb_r2c_w, /*transpose=*/false, /*ct_dim=*/1, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //-------------------------------------------------------------------------
     // Compute: input @ weight -> output

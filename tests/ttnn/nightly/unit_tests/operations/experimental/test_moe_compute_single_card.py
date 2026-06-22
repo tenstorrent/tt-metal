@@ -576,7 +576,7 @@ def test_moe_compute_single_card_gpt_oss(mesh_device, mesh_shape, bh_ring_size):
 
 # Minimal sanity check that compute_only=True with conflicting CCL kwargs is rejected.
 @pytest.mark.parametrize("mesh_shape, mesh_device", [((1, 1), (1, 1))], indirect=["mesh_device"])
-def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape):
+def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape, expect_error):
     """compute_only=True with cluster_axis set must raise (loud rejection per spec)."""
     # Build minimal valid input shapes; we do NOT need the op to actually run --
     # validation must reject the bad arg combination before kernel launch.
@@ -636,7 +636,7 @@ def test_moe_compute_compute_only_rejects_cluster_axis(mesh_device, mesh_shape):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    with pytest.raises(RuntimeError, match=r"compute_only.*cluster_axis"):
+    with expect_error(RuntimeError, r"compute_only.*cluster_axis"):
         ttnn.experimental.moe_compute(
             tt_sparse,
             tt_indices,

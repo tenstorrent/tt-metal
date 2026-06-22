@@ -28,6 +28,9 @@ struct TopologySatSolver {
 
     int declare_one_more_variable();
     void add(int lit);
+    // Assume a literal for the next solve() only (retracted afterwards). Lets callers add a symmetry-breaking hint
+    // that is sound for any instance: if the assumption makes it UNSAT, re-solve() without it.
+    void assume(int lit);
     int solve();
     int val(int lit) const;
 

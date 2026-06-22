@@ -19,6 +19,19 @@ public:
             EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, expected_messages));
         }
     }
+
+    // Runs a callstack kernel and verifies the resolved frames: `present` must appear in the given
+    // order, and every entry in `absent` must NOT appear (i.e. it was skipped or never reached).
+    void TestCallstack(
+        const std::string& kernel_path,
+        const std::vector<std::string>& present,
+        const std::vector<std::string>& absent = {}) {
+        for (auto& mesh_device : this->devices_) {
+            RunProgram(mesh_device, kernel_path);
+            EXPECT_TRUE(FileContainsAllStringsInOrder(dprint_file_name, present));
+            EXPECT_TRUE(FileContainsNoneOfStrings(dprint_file_name, absent));
+        }
+    }
 };
 
 TEST_F(DevicePrintOutputFixture, PrintSimpleString) {
@@ -476,4 +489,70 @@ TEST_F(DevicePrintOutputFixture, PrintInlineFunction) {
 
         EXPECT_TRUE(FileContainsAllStrings(dprint_file_name, messages));
     }
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackPcFullRaFirmware) {
+    // The PC inline chain reaches the kernel_main terminal, so the unwind stops there and the
+    // firmware return address is never resolved -- no continuation sentinel is emitted.
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_pc_full_ra_fw.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackPcFull) {
+    // PC alone unwinds its inline chain all the way to the kernel_main terminal (RA is poisoned and
+    // trimmed once the terminal is found), so no continuation sentinel is emitted.
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_pc_full.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "pc3", "pc2", "pc1", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackPcRaFull) {
+    // The PC and RA inline chains together unwind all the way to the kernel_main terminal, so no
+    // continuation sentinel is emitted.
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_pc_ra_full.cpp",
+        /* present */
+        {"CALLSTACK_BEGIN", "pc3", "pc2", "pc1", "ra3", "ra2", "ra1", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackPcRaPartial) {
+    // ra1 is noinline, so kernel_main sits above ra1's frame and cannot be reached from a single
+    // return address: the unwind stops after ra1 and emits the "..." sentinel. kernel_main must not
+    // appear, since it was never reached.
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_pc_ra_partial.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "pc3", "pc2", "pc1", "ra3", "ra2", "ra1", "...", "CALLSTACK_END"},
+        /* absent */ {"kernel_main"});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackSentinelSkip) {
+    // Both PC and RA are the invalid-address sentinel, with a non-zero skip count. Neither address
+    // resolves, so the callstack collapses to the "..." sentinel regardless of skip_frames.
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_sentinel.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "...", "CALLSTACK_END"});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackSkipCrossPcRa) {
+    // skip_frames = 4 crosses the PC/RA boundary: it removes the two PC frames (pc2, pc1) and the
+    // first two RA frames (ra5, ra4), leaving ra3, ra2, ra1 and kernel_main. The skipped frames must
+    // not appear.
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_skip_cross.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "ra3", "ra2", "ra1", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"pc2", "pc1", "ra5", "ra4"});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackSkipUnderflow) {
+    // skip_frames skips through the terminal, which would underflow the remaining-frame count. The
+    // host clamps the skip, so the callstack collapses to the "..." sentinel instead of reading out
+    // of bounds. None of the frames between the print site and the terminal should appear.
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_skip_underflow.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "...", "CALLSTACK_END"},
+        /* absent */ {"inner", "middle", "kernel_main"});
 }
