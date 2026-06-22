@@ -4,7 +4,9 @@
 
 #pragma once
 
+#include <memory>
 #include <optional>
+#include <tuple>
 
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/tile.hpp>
@@ -76,6 +78,8 @@ private:
     Tile tile_;
 };
 
+class PageConfigImpl;
+
 class PageConfig {
 public:
     using Config = std::variant<RowMajorPageConfig, TilePageConfig>;
@@ -83,6 +87,12 @@ public:
     PageConfig(const Config& config);
     PageConfig(Layout layout);
     PageConfig(Layout layout, const std::optional<Tile>& tile);
+
+    ~PageConfig();
+    PageConfig(const PageConfig& other);
+    PageConfig& operator=(const PageConfig& other);
+    PageConfig(PageConfig&& other) noexcept;
+    PageConfig& operator=(PageConfig&& other) noexcept;
 
     // Alignment is applied to the tensor shape, to guarantee that it is divisible by page size.
     // For tile layout, the page size is the tile size, so alignment is also equal to the tile size.
@@ -112,14 +122,22 @@ public:
     /// maximum possible alignment is used.
     Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
 
-    bool operator==(const PageConfig&) const = default;
-    bool operator!=(const PageConfig&) const = default;
+    bool operator==(const PageConfig& other) const;
+    bool operator!=(const PageConfig& other) const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("config");
-    auto attribute_values() const { return std::forward_as_tuple(config_); }
+    std::tuple<const Config&> attribute_values() const;
 
 private:
-    Config config_;
+    // Access to the implementation.
+    //
+    // pre-condition: the PageConfig must not be in a moved-from state.
+    PageConfigImpl& impl();
+    const PageConfigImpl& impl() const;
+
+    // impl_ may be nullptr if the PageConfig is in a moved-from state.
+    // Avoid using impl_ directly; use the impl() accessor instead.
+    std::unique_ptr<PageConfigImpl> impl_;
 };
 
 }  // namespace tt::tt_metal
