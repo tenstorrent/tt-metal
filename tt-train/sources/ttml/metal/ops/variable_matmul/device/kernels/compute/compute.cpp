@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,14 +14,14 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     copy_tile_to_dst_init_short(in_cb);
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
-    constexpr uint32_t fused_act_dst_id = 0;
+    constexpr uint32_t dst_id = 0;
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
             acquire_dst();
-            copy_tile(in_cb, tile_id, fused_act_dst_id /*dst*/);
-            pack_tile(fused_act_dst_id, out_cb);
+            copy_tile(in_cb, tile_id, dst_id /*dst*/);
+            pack_tile(dst_id, out_cb);
             release_dst();
             tile_id++;
         }
@@ -169,7 +169,8 @@ void zero_blocks(
 }
 
 void kernel_main() {
-    // K_num_blocks and M_blocks_per_core come from runtime args.
+    // K_tiles, M_blocks_per_core, and the M/N tile ranges come from runtime args (read below);
+    // K_num_blocks is derived from K_tiles further down.
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(0);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(2);
@@ -321,10 +322,8 @@ void kernel_main() {
                 }
 
                 if (k_block == K_num_blocks - 1) {
-                    /**
-                     * On next iteration we might get reuse on in0
-                     *
-                     */
+                    // Last K-iter: if the next N-block reuses this M-block's in0, keep it (the
+                    // !reuse_in0_block check below then skips popping in0_cb).
                     if (n_block_iter < N_blocks_per_core - 1) {
                         // going to stride on N, so reuse in0
                         reuse_in0_block = true;
