@@ -26,6 +26,11 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_
 from models.tt_transformers.tt.common import Mode
 
 
+def acoustic_fm_noise_seed(base_seed: int, step_idx: int) -> int:
+    """Derive a deterministic per-step RNG seed for the acoustic flow-matching Euler loop."""
+    return base_seed * 1_000_000 + step_idx
+
+
 def extract_acoustic_state_dict(full_state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     prefix = "acoustic_transformer."
     return {k[len(prefix) :]: v for k, v in full_state_dict.items() if k.startswith(prefix)}
