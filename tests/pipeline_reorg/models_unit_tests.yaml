@@ -707,11 +707,8 @@
     export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
     export CI=true
-    export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
-    python models/experimental/voxtraltts/demo/demo.py \
-      --text "Hello from Voxtral on Tenstorrent Blackhole." \
-      --output-dir generated/voxtraltts_demo \
-      --max-speech-tokens 256
+    export MESH_DEVICE=P150x4
+    python models/experimental/voxtraltts/demo/demo.py
   model: voxtral-tts
   skus:
     bh_quietbox_2:

@@ -231,11 +231,11 @@ export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-
 export ARCH_NAME=blackhole_140_arch_eth_dispatch.yaml
 ```
 
-Optional mesh override (default is **1×1** on all hosts; set **1×4** on BH QB2 for tensor-parallel text):
+Optional mesh selection via ``MESH_DEVICE`` (default is **1×1** when unset; set **P150x4** on BH QB2 for tensor-parallel text):
 
 ```bash
-export VOXTRAL_COMPUTE_MESH_SHAPE=1,1   # P150 or QB2 single-device compute (default)
-export VOXTRAL_COMPUTE_MESH_SHAPE=1,4   # QB2 only — TP text on full chassis mesh
+export MESH_DEVICE=P150    # 1×1 single-device compute (default)
+export MESH_DEVICE=P150x4  # QB2 only — TP text on full 1×4 chassis mesh
 ```
 
 Trace is **on by default** for PCC and demo (via `configure_decode_trace()` in `demo.py`; `--no-decode-trace` to disable). **2CQ is also on by default** on 1×1 and multi-device (`--no-decode-trace-2cq` to disable).
@@ -247,11 +247,11 @@ Voxtral jobs use the canonical Blackhole demo cache layout (`HF_HOME`, `HF_MODEL
 | Pipeline | Job | Hardware |
 |----------|-----|----------|
 | `models_unit_tests.yaml` | Voxtral TTS unit tests | P150 (`bh_p150b_civ2`) |
-| `models_unit_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 (`bh_quietbox_2`) |
+| `models_unit_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 (`bh_quietbox_2`) — `MESH_DEVICE=P150x4`, `demo.py` with defaults |
 | `models_e2e_tests.yaml` | Teacher-forced E2E PCC (golden codes / acoustic / golden acoustic) | P150 |
-| `models_e2e_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 (`bh_quietbox_2`) |
-| `blackhole_demo_tests.yaml` | Demo smoke WAV | P150 CIv2 (1×1) |
-| `blackhole_demo_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 |
+| `models_e2e_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 (`bh_quietbox_2`) — `MESH_DEVICE=P150x4`, `demo.py` with defaults |
+| `blackhole_demo_tests.yaml` | Demo smoke WAV | P150 CIv2 (1×1) — `demo.py` with defaults |
+| `blackhole_demo_tests.yaml` | Demo smoke WAV (1×4 TP text) | QB2 — `MESH_DEVICE=P150x4`, `demo.py` with defaults |
 
 Local dry-run of the gated unit suite (excludes `tests/perf`):
 
@@ -370,25 +370,16 @@ pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_device_perf.py
 #### Modulewise perf test (per-stage device profiling)
 
 ```bash
-# Text prefill
-pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_stage_device_perf.py -sv -k text_prefill
+# Modulewise device perf test
+pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_stage_device_perf.py -sv -k <model test name>
+e.g : text_prefill, text_decode, acoustic_forward, audio_decode
 
-# Text decode
-pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_stage_device_perf.py -sv -k text_decode
-
-# Acoustic forward (semantic head + flow-matching)
-pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_stage_device_perf.py -sv -k acoustic_forward
-
-# Audio decode (tokenizer latent → mel → waveform)
-pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_stage_device_perf.py -sv -k audio_decode
-
-# End to end
-pytest models/experimental/voxtraltts/tests/perf/test_voxtral_tts_device_perf.py
-```
 
 ### 5.4 Demo
 
-Full TT inference demo: text (or pre-computed codes/latents) → `.wav` on device. Trace replay is **on by default** on P150 and BH QB2; compute mesh defaults to **1×1** (`VOXTRAL_COMPUTE_MESH_SHAPE=1,1`).
+Full TT inference demo: text (or pre-computed codes/latents) → `.wav` on device. Trace replay is **on by default** on P150 and BH QB2.
+
+With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `tests/common.py`), voice `casual_male`, `text_max_seq_len=4096`, and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run exactly this default path (`CI=true` also sets `warmup_iters=0` to skip the untimed warmup pass).
 
 #### Prerequisites
 
@@ -406,31 +397,42 @@ python_env/bin/python -m pip install -r models/experimental/voxtraltts/requireme
 #### P150 (1×1) — recommended starting point
 
 ```bash
+export MESH_DEVICE=P150
+python models/experimental/voxtraltts/demo/demo.py
+```
+
+Output: `generated/voxtraltts_demo/run_item0.wav` (and `.codes.pt` debug sidecar when generated).
+
+#### BH QB2 (1×4 tensor-parallel text)
+
+```bash
+export MESH_DEVICE=P150x4
+python models/experimental/voxtraltts/demo/demo.py
+```
+
+Long prompts on 1×4 may use sentence-aligned chunking automatically when the word count exceeds the trace chunk threshold.
+
+#### Customizing a local run
+
+Override any default on the command line — CI uses the defaults above with no extra flags:
+
+```bash
 python models/experimental/voxtraltts/demo/demo.py \
     --text "Paris is a beautiful city in the heart of Europe." \
-    --voice casual_male \
+    --voice casual_female \
     --output-dir /tmp/voxtral_out \
     --text-max-seq-len 4096 \
     --max-speech-tokens 5000 \
     --warmup-iters 1
 ```
 
-Output: `/tmp/voxtral_out/run_item0.wav` (and `.codes.pt` debug sidecar when generated).
-
-#### BH QB2 (1×4 tensor-parallel text)
+Quick smoke (short text, few acoustic frames):
 
 ```bash
-export VOXTRAL_COMPUTE_MESH_SHAPE=1,4
-
 python models/experimental/voxtraltts/demo/demo.py \
-    --text "Voxtral is a four billion parameter open weight text to speech model released by Mistral AI." \
-    --voice casual_male \
-    --output-dir /tmp/voxtral_out \
-    --text-max-seq-len 4096 \
-    --max-speech-tokens 5000
+    --text "Hello from Voxtral." \
+    --max-speech-tokens 256
 ```
-
-Long prompts on 1×4 may use sentence-aligned chunking automatically when the word count exceeds the trace chunk threshold.
 
 #### Demo CLI parameters
 
@@ -440,11 +442,12 @@ Run `python models/experimental/voxtraltts/demo/demo.py --help` for the live lis
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
+| `--text` | `VOXTRAL_STANDARD_CHAR_TEXT` (~500 chars) | Prompt text; omit to use the shared standard prompt (same as PCC / perf tests) |
 | `--default-voice NAME` | `casual_male` | Voice used when `--voice` is omitted |
 | `--text-max-seq-len` | `4096` | Maximum text tokens for prefill / KV cache length. For contexts **> 4096** on P150, also pass `--use-paged-kv-cache` |
 | `--max-speech-tokens` | `5000` | Upper bound on autoregressive acoustic frames. The demo **auto-raises** this from word count (~8 tokens/word). Set `64` for smoke tests; set `0` to use the auto-estimate only |
 | `--seed` | `0` | RNG seed for flow-matching noise (reproducible acoustic sampling) |
-| `--warmup-iters` | `1` | Number of untimed warmup passes before the measured run (skipped when trace is disabled via `--no-decode-trace`) |
+| `--warmup-iters` | `1` (`0` when `CI=true`) | Number of untimed warmup passes before the measured run (skipped when trace is disabled via `--no-decode-trace`) |
 
 **KV cache / long prompts (`--mode text`)**
 
@@ -495,7 +498,8 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 |----------|---------|-------------|
 | `HF_MODEL` | `mistralai/Voxtral-4B-TTS-2603` | Model weights path or HF repo ID (used when `--model` is omitted; same as other models pipelines) |
 | `VOXTRAL_TTS_MODEL` | — | Optional override if `HF_MODEL` is set to a different model in a shared shell |
-| `VOXTRAL_COMPUTE_MESH_SHAPE` | `1,1` | Compute mesh: `1,1` (P150 / QB2 1×1 submesh) or `1,4` (QB2 tensor-parallel text) |
+| `MESH_DEVICE` | unset → `P150` (1×1) | Compute mesh: `P150` (1×1 submesh on QB2) or `P150x4` (QB2 tensor-parallel text) |
+| `CI` | unset | When `true`, demo uses `warmup_iters=0` (CI pipelines set this; no other demo flags required) |
 | `VOXTRAL_DECODE_TRACE` | `1` | Traced AR text-decode replay. Set `0` or pass `--no-decode-trace` to disable |
 | `VOXTRAL_DECODE_TRACE_2CQ` | — | Not read at runtime; use `--no-decode-trace-2cq` or `configure_decode_trace(decode_trace_2cq=False)` |
 | `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size in bytes (passed to device open) |

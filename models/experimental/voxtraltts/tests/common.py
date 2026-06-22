@@ -21,13 +21,14 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_defau
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     voxtral_audio_tokenizer_default_optimizations,
 )
+from models.experimental.voxtraltts.utils.mesh import voxtral_mesh_device_compute_shape
 
 VOXTRAL_STANDARD_CHAR_TEXT = (
-    "Voxtral TTS is a frontier open weights text to speech model for production voice agents. It produces "
-    "realistic expressive speech with natural prosody across English, French, Spanish, German, Italian, "
-    "Portuguese, Dutch, Arabic, and Hindi. The system supports preset voices, low latency streaming, batch "
-    "inference, and twenty four kilohertz audio output for customer support, real time translation, reading "
-    "applications, call centers, and responsive multilingual assistant workflows with clear speech.."
+    "Voxtral is a four billion parameter open weight tts model released by Mistral AI in two thousand twenty six, "
+    "designed for low latency multilingual voice generation across English, Spanish, French, Portuguese, Hindi, German, "
+    "Dutch, and Italian. It builds on the Ministral three billion language backbone with a flow matching acoustic decoder "
+    "and produces audio at twelve point five hertz with high quality, suitable for streaming voice applications and real time "
+    "agent deployments which supports low latency."
 )
 
 # Same fixture as ``models/tt_transformers/tests/test_model_prefill.py``.
@@ -144,31 +145,22 @@ def voxtral_single_device_mesh_shape() -> ttnn.MeshShape:
     return ttnn.MeshShape(1, 1)
 
 
-def voxtral_parse_mesh_shape(env_value: str) -> tuple[int, int]:
-    parts = [p.strip() for p in env_value.split(",")]
-    if len(parts) != 2:
-        raise ValueError(f"Expected mesh shape 'rows,cols', got {env_value!r}")
-    return int(parts[0]), int(parts[1])
-
-
 def voxtral_requested_compute_mesh_shape() -> tuple[int, int]:
-    """Parse ``VOXTRAL_COMPUTE_MESH_SHAPE`` without probing PCIe (safe before device open)."""
-    raw = os.getenv("VOXTRAL_COMPUTE_MESH_SHAPE", "1,1").strip()
-    return voxtral_parse_mesh_shape(raw)
+    """Parse ``MESH_DEVICE`` without probing PCIe (safe before device open)."""
+    return voxtral_mesh_device_compute_shape()
 
 
 def voxtral_compute_mesh_shape() -> ttnn.MeshShape:
-    """Compute mesh shape from ``VOXTRAL_COMPUTE_MESH_SHAPE`` (default ``1,1``).
+    """Compute mesh shape from ``MESH_DEVICE`` (default ``1,1`` when unset).
 
-    On P150 (no 1×4 host mesh) this is always 1×1 regardless of the environment.
-    On BH QB2, ``1,4`` enables tensor-parallel text on the full host mesh; acoustic and
+    On P150 (no 1×4 host mesh) this is always 1×1 regardless of ``MESH_DEVICE``.
+    On BH QB2, ``P150x4`` enables tensor-parallel text on the full 1×4 mesh; acoustic and
     audio tokenizer replicate weights onto every device.
     """
     ensure_voxtral_device_available()
     if voxtral_host_mesh_shape() is None:
         return ttnn.MeshShape(1, 1)
-    raw = os.getenv("VOXTRAL_COMPUTE_MESH_SHAPE", "1,1").strip()
-    rows, cols = voxtral_parse_mesh_shape(raw)
+    rows, cols = voxtral_mesh_device_compute_shape()
     return ttnn.MeshShape(rows, cols)
 
 
@@ -276,8 +268,8 @@ def open_voxtral_runtime_mesh(
     * **P150 (1 card):** ``CreateDevice(0)`` — unchanged single-card path.
     * **BH QB2 (4 cards):** ``open_mesh_device(1×4)`` for the host fabric topology. By default a
       ``1×1`` submesh is used for compute (audio-safe, ``cluster_shape=(1,1)``). Set
-      ``VOXTRAL_COMPUTE_MESH_SHAPE=1,4`` to run tensor-parallel text on the full 1×4 mesh;
-      acoustic and audio tokenizer replicate weights on every device.
+      ``MESH_DEVICE=P150x4`` to run tensor-parallel text on the full 1×4 mesh; acoustic and audio
+      tokenizer replicate weights on every device.
     """
     from conftest import set_fabric
 
@@ -304,7 +296,7 @@ def open_voxtral_runtime_mesh(
         compute_devices = int(compute_shape[0]) * int(compute_shape[1])
         if compute_devices > host_devices:
             raise ValueError(
-                f"VOXTRAL_COMPUTE_MESH_SHAPE={tuple(compute_shape)} exceeds host mesh "
+                f"MESH_DEVICE requests compute mesh {tuple(compute_shape)}, which exceeds host mesh "
                 f"{tuple(host_shape)} ({host_devices} devices)"
             )
         if compute_devices > 1:
