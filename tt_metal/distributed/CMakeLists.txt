@@ -7,6 +7,7 @@ set(FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/socket_peer_descriptor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/hd_socket_descriptor.fbs
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/h2d_stream_service_descriptor.fbs
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/d2h_stream_service_descriptor.fbs
 )
 
 # Check if distributed compute is enabled

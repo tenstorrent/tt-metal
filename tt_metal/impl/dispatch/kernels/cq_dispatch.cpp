@@ -1187,12 +1187,11 @@ void set_go_signal_noc_data() {
         reinterpret_cast<volatile CQDispatchCmd tt_l1_ptr*>(l1_uncached_addr(cmd_ptr));
     uint32_t num_words = cmd->set_go_signal_noc_data.num_words;
     ASSERT(num_words <= max_num_go_signal_noc_data_entries);
-    volatile tt_l1_ptr uint32_t* data_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_uncached_addr(cmd_ptr + sizeof(CQDispatchCmd)));
+    volatile tt_l1_ptr uint32_t* data_ptr = uncached_l1_ptr<uint32_t>(cmd_ptr + sizeof(CQDispatchCmd));
     for (uint32_t i = 0; i < num_words; ++i) {
         go_signal_noc_data[i] = *(data_ptr++);
     }
-    cmd_ptr = round_up_pow2(reinterpret_cast<uintptr_t>(data_ptr), L1_ALIGNMENT);
+    cmd_ptr = round_up_pow2(l1_cached_addr(reinterpret_cast<uintptr_t>(data_ptr)), L1_ALIGNMENT);
 }
 
 static inline bool process_cmd_d(uintptr_t& cmd_ptr, uint32_t* l1_cache) {

@@ -1,0 +1,49 @@
+# SPDX-FileCopyrightText: 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+# VC1 mesh passthrough functional tests -- requires TT_METAL_ENABLE_FABRIC_MESH_PASS_THROUGH=1 environment variable
+
+Tests:
+  # Sequential mesh pass-through: one pass per mesh, where that mesh is the sole sender and every
+  # other mesh receives (far meshes reached via pass-through hops). Running one sender mesh at a time
+  # avoids the cyclic cross-mesh VC1 dependency that makes simultaneous all-mesh traffic deadlock-prone.
+  # Iteration count is auto-derived from the number of meshes in the system.
+  - name: "MeshPassthroughSequentialInterMeshOnly"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+
+    defaults:
+      size: 1024
+      ftype: unicast
+      num_packets: 1000
+
+    patterns:
+      # mesh_scope is optional: all (default) | inter_mesh | intra_mesh.
+      # inter_mesh restricts each pass to the sender mesh -> other meshes (the pure pass-through case).
+      - type: sequential_mesh_passthrough
+        mesh_scope: inter_mesh
+
+  - name: "MeshPassthroughSequential"
+    enable_flow_control: true
+    fabric_setup:
+      topology: Mesh
+
+    parametrization_params:
+      num_links: [1, 2]
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+
+    defaults:
+      size: 1024
+      ftype: unicast
+      num_packets: 1000
+
+    patterns:
+      # mesh_scope is optional: all (default) | inter_mesh | intra_mesh.
+      # inter_mesh restricts each pass to the sender mesh -> other meshes (the pure pass-through case).
+      - type: sequential_mesh_passthrough

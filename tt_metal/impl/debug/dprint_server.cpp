@@ -379,15 +379,19 @@ void DPrintServer::Impl::print_buffer_data(
             auto kernel_id = static_cast<int>(header->info_id);
             risc_data.last_loaded_kernel_id = kernel_id;
 
-            // Find elf path from inspector using kernel id
-            auto kernel_path = Inspector::get_kernel_path_from_watcher_kernel_id(header->info_id);
-            auto [processor_class, processor_type_idx] =
-                hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
-            const auto& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-                device_id, programmable_core_type_idx, static_cast<uint32_t>(processor_class), processor_type_idx);
-            const auto& risc_name = build_state.get_target_name();
-            auto elf_path = std::filesystem::path(kernel_path) / risc_name / (risc_name + ".elf");
-            risc_data.kernel_elf_path = elf_path.string();
+            // Find the elf path for this risc from the inspector.
+            auto elf_path = Inspector::get_kernel_elf_path(header->info_id, header->risc_id);
+
+            if (elf_path.empty() || !std::filesystem::exists(elf_path)) {
+                log_warning(
+                    tt::LogMetal,
+                    "DPRINT: could not resolve ELF path for kernel id {} risc {}; print messages for this kernel will "
+                    "not be decoded.",
+                    kernel_id,
+                    header->risc_id);
+                continue;
+            }
+            risc_data.kernel_elf_path = elf_path;
             risc_data.kernel_elf_parser = DevicePrintParser::get_parser_for_elf(elf_path);
         } else if (
             header->is_kernel == 0 && header->risc_id == 0 && header->message_payload == 0 &&
@@ -425,11 +429,12 @@ void DPrintServer::Impl::print_buffer_data(
                     // Find firmware elf path from BuildEnvManager.
                     auto [processor_class, processor_type_idx] =
                         hal.get_processor_class_and_type_from_index(programmable_core_type, header->risc_id);
-                    auto firmware_elf_path = BuildEnvManager::get_instance().get_firmware_binary_path(
-                        device_id,
-                        programmable_core_type_idx,
-                        static_cast<uint32_t>(processor_class),
-                        processor_type_idx);
+                    auto firmware_elf_path = BuildEnvManager::get_instance(context_->get_context_id())
+                                                 .get_firmware_binary_path(
+                                                     device_id,
+                                                     programmable_core_type_idx,
+                                                     static_cast<uint32_t>(processor_class),
+                                                     processor_type_idx);
 
                     risc_data.firmware_elf_path = firmware_elf_path;
                     risc_data.firmware_elf_parser = DevicePrintParser::get_parser_for_elf(firmware_elf_path);
@@ -459,16 +464,21 @@ void DPrintServer::Impl::print_buffer_data(
                 auto formatted_message =
                     elf_parser->format_message(header->info_id, payload_bytes, format_message_buffer);
                 if (!formatted_message.empty()) {
-                    // Find if we have something buffered from before
-                    if (!risc_data.message_buffer.empty()) {
-                        // We have something in the buffer, prepend it to the current message and clear the buffer.
-                        risc_data.message_buffer += formatted_message;
-                        formatted_message = risc_data.message_buffer;
+                    // Append onto any buffered partial line and work in message_buffer;
+                    std::string& buffer = risc_data.message_buffer;
+                    buffer.append(formatted_message);
+
+                    // DEVICE_PRINT will output '\r' when it wants to open a new line without
+                    // flushing the host buffer for that core. This allows multiple calls to DEVICE_PRINT
+                    // to span multiple lines without interleaving with prints from other cores
+                    auto last_newline_pos = buffer.rfind('\n');
+                    if (last_newline_pos != std::string::npos) {
+                        // replace the '\r' before the '\n' because they will be flushed in this iteration
+                        std::replace(buffer.begin(), buffer.begin() + last_newline_pos, '\r', '\n');
                     }
 
                     // Check if we hit new line
-                    auto newline_pos = formatted_message.find('\n');
-
+                    auto newline_pos = buffer.find('\n');
                     if (newline_pos != std::string::npos) {
                         // We will do message printing. Check if we have generated line prefix for this risc before,
                         // if not generate one.
@@ -493,12 +503,12 @@ void DPrintServer::Impl::print_buffer_data(
                         // Are we printing the whole string, or we need to split it into multiple lines because of
                         // multiple new lines in the message or because we want to prepend line prefix to each line?
                         ostream* output_stream = get_output_stream(risc_key);
-                        if (newline_pos == formatted_message.size() - 1) {
-                            *output_stream << line_prefix << formatted_message << flush;
-                            risc_data.message_buffer.clear();
+                        if (newline_pos == buffer.size() - 1) {
+                            *output_stream << line_prefix << buffer << flush;
+                            buffer.clear();
                         } else {
                             std::size_t newline_start = 0;
-                            std::string_view full_message_view = formatted_message;
+                            std::string_view full_message_view = buffer;
                             while (newline_pos != std::string::npos) {
                                 std::string_view line =
                                     full_message_view.substr(newline_start, newline_pos - newline_start);
@@ -506,15 +516,9 @@ void DPrintServer::Impl::print_buffer_data(
                                 newline_start = newline_pos + 1;
                                 newline_pos = full_message_view.find('\n', newline_start);
                             }
-                            if (newline_start < full_message_view.size()) {
-                                risc_data.message_buffer = formatted_message.substr(newline_start);
-                            } else {
-                                risc_data.message_buffer.clear();
-                            }
+                            // Keep only the trailing partial line (everything after the last '\n') for next time.
+                            buffer.erase(0, newline_start);
                         }
-                    } else {
-                        // We don't have a complete line yet, buffer the message for next time.
-                        risc_data.message_buffer = formatted_message;
                     }
                 }
             }

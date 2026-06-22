@@ -22,9 +22,6 @@
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/custom_mm.h"
 #include "../kernel_includes/tt_metal/include/compute_kernel_api/compressed_custom_mm.h"
 using namespace ckernel;
-#ifdef TRISC_PACK
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#endif
 #endif
 
 namespace deepseek_b1_ops {

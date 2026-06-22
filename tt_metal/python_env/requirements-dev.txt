@@ -33,6 +33,9 @@ protobuf==5.29.6
 transformers == 4.53.0
 huggingface-hub >= 0.30.0
 
+# For Tracy WASM profiler web GUI server
+websockets==16.0
+
 # testing
 pytest==9.0.3
 pytest-cov==7.0.0

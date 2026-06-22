@@ -169,7 +169,6 @@ Tensor argmax(
     const std::optional<int>& dim,
     bool keepdim,
     const std::optional<CoreRangeSet>& sub_core_grids,
-    bool use_multicore,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
@@ -251,14 +250,12 @@ Tensor argmax(
 
     if (should_row_major_h_via_tile(input_tensor, dim, output_memory_config)) {
         const Tensor tiled_input = ttnn::to_layout(input_tensor, Layout::TILE);
-        // Multicore prim::argmax is only valid for ROW_MAJOR inputs; this path uses TILE.
         return prim::argmax(
             tiled_input,
             DataType::UINT32,
             dim,
             keepdim,
             sub_core_grids,
-            /*use_multicore=*/false,
             output_memory_config,
             std::move(optional_output_tensor));
     }
@@ -269,7 +266,6 @@ Tensor argmax(
         dim,
         keepdim,
         sub_core_grids,
-        use_multicore,
         output_memory_config,
         std::move(optional_output_tensor));
 }

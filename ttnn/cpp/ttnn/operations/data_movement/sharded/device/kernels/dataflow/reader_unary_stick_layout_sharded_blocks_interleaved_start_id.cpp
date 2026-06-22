@@ -123,11 +123,15 @@ void kernel_main() {
                 }
             }
         }
-
     }
-    // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads.
-    // No Device 2.0 wrapper exists for this config-only register write; this is
-    // not a NoC transaction.
-    noc_async_read_set_trid(0);
+    // Reset the sticky NOC_PACKET_TAG register for downstream untagged reads
+    UnicastEndpoint self_ep;
+    noc.set_async_read_state<NocOptions::TXN_ID>(
+        self_ep,
+        /*size_bytes=*/0,
+        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+         .addr = 0},
+        NocOptVals{.trid = 0});
     cb_in0.push_back(block_height);
 }

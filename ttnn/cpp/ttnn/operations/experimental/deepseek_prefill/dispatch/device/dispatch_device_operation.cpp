@@ -93,8 +93,10 @@ DispatchDeviceOperation::spec_return_value_t DispatchDeviceOperation::compute_ou
     auto dispatch_buffer_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, hidden_dim});
     auto dispatch_metadata_shape = ttnn::Shape({1, 1, max_dispatch_buffer_token_size, metadata_len});
 
-    // FP8 dispatch uses UINT8 (1 byte/element) for DRAM allocation; actual content is Fp8_e4m3.
-    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::UINT8 : DataType::BFLOAT16;
+    // FP8 dispatch emits Fp8_e4m3 (1 byte/element); DataType::FP8_E4M3 maps directly to
+    // tt::DataFormat::Fp8_e4m3 via datatype_to_dataformat_converter, so downstream CBs created
+    // with detail::create_tensor_cb(output_tensor, ...) pick up the right dtype/page-size.
+    auto dispatch_buffer_dtype = operation_attributes.use_fp8_dispatch ? DataType::FP8_E4M3 : DataType::BFLOAT16;
 
     // Create TensorSpec objects with correct dtypes
     auto dispatch_buffer_spec = TensorSpec(

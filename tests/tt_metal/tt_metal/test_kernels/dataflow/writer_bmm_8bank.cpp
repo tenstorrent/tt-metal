@@ -24,7 +24,7 @@ void kernel_main() {
     const uint32_t entry_size = dfb.get_entry_size();
 #endif
 
-    const auto s = TensorAccessor(ta::dst);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
 

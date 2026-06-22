@@ -26,12 +26,20 @@
 #include "llk_device_fixture.hpp"
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/float8_utils.hpp"
+#include "tt_metal/test_utils/mx_utils.hpp"
 
 namespace tt::tt_metal {
 
 using std::vector;
 
 namespace unit_tests::llk::mxfp8_typecast {
+
+using tt::test_utils::bf16_to_floats;
+using tt::test_utils::check_pcc;
+using tt::test_utils::is_close;
+using tt::test_utils::is_close_vectors;
+using tt::test_utils::mx_to_floats;
+using tt::test_utils::pack_as_mx_tiles;
 
 // Run a datacopy kernel with different input/output formats.
 // For Quasar, data is moved via DataflowBuffers (DFBs) and the hardware
@@ -218,9 +226,7 @@ static vector<uint32_t> create_random_vector_of_mxfp8(
     }
 
     auto span = tt::stl::make_const_span(fp32_vec);
-    vector<uint32_t> packed = (fmt == tt::DataFormat::MxFp8R)
-                                  ? pack_as_mxfp8_e5m2_tiles(span, /*row_major_input=*/true)
-                                  : pack_as_mxfp8_e4m3_tiles(span, /*row_major_input=*/true);
+    vector<uint32_t> packed = pack_as_mx_tiles(fmt, span, /*row_major_input=*/true);
     TT_FATAL(
         packed.size() * sizeof(uint32_t) == num_tiles * single_tile_size,
         "MXFP8 packed size {} bytes does not match expected {} bytes",
@@ -228,29 +234,6 @@ static vector<uint32_t> create_random_vector_of_mxfp8(
         num_tiles * single_tile_size);
     return packed;
 }
-
-// --- Format-to-float unpackers ---
-
-static vector<float> mxfp8_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
-    auto span = tt::stl::make_const_span(packed);
-    if (fmt == tt::DataFormat::MxFp8R) {
-        return unpack_mxfp8_e5m2_tiles_into_float_vec(span, /*row_major_output=*/false);
-    }
-    if (fmt == tt::DataFormat::MxFp8P) {
-        return unpack_mxfp8_e4m3_tiles_into_float_vec(span, /*row_major_output=*/false);
-    }
-    TT_THROW("Unsupported MXFP8 DataFormat: {}", static_cast<int>(fmt));
-}
-
-// bf16_to_floats lives in tt_metal/test_utils/float8_utils.hpp; expose it in
-// this namespace so mxfp8_tc::bf16_to_floats call sites resolve.
-using tt::test_utils::bf16_to_floats;
-
-// --- Validation ---
-// is_close + is_close_vectors + check_pcc all live in tt_metal/test_utils/comparison.hpp.
-using tt::test_utils::check_pcc;
-using tt::test_utils::is_close;
-using tt::test_utils::is_close_vectors;
 
 // --- Random typecast test driver ---
 //
@@ -274,7 +257,7 @@ static vector<uint32_t> generate_random_src(tt::DataFormat fmt, uint32_t num_til
 static vector<float> unpack_to_floats(tt::DataFormat fmt, const vector<uint32_t>& packed) {
     switch (fmt) {
         case tt::DataFormat::MxFp8R:
-        case tt::DataFormat::MxFp8P: return mxfp8_to_floats(fmt, packed);
+        case tt::DataFormat::MxFp8P: return mx_to_floats(fmt, packed);
         case tt::DataFormat::Float16_b: return bf16_to_floats(packed);
         default: TT_THROW("Unsupported DataFormat for mxfp8 unpack: {}", static_cast<int>(fmt));
     }
@@ -315,7 +298,7 @@ struct TileLayout {
 static TileLayout get_e5m2_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mxfp8_e5m2_tiles(tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8R, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
@@ -324,7 +307,7 @@ static TileLayout get_e5m2_tile_layout() {
 static TileLayout get_e4m3_tile_layout() {
     constexpr uint32_t kTileHW = 1024;
     std::vector<float> zeros(kTileHW, 0.0f);
-    auto packed = pack_as_mxfp8_e4m3_tiles(tt::stl::make_const_span(zeros), /*row_major_input=*/true);
+    auto packed = pack_as_mx_tiles(tt::DataFormat::MxFp8P, tt::stl::make_const_span(zeros), /*row_major_input=*/true);
     const size_t elem_words = kTileHW / 4;
     const size_t exp_words = packed.size() - elem_words;
     return TileLayout{.total_words = packed.size(), .exp_bytes = exp_words * 4};
@@ -817,7 +800,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8RSpecialCases) {
 
     // Block 3: +1.0 sanity — verify each element round-trips exactly via the
     // float unpack (1.0 is exactly representable in E5M2 with scale=2^0).
-    auto floats = mxfp8_tc::mxfp8_to_floats(tt::DataFormat::MxFp8R, result);
+    auto floats = mxfp8_tc::mx_to_floats(tt::DataFormat::MxFp8R, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }
@@ -875,7 +858,7 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TensixFloat16bToMxFp8PSpecialCases) {
     }
 
     // Block 3: +1.0 sanity.
-    auto floats = mxfp8_tc::mxfp8_to_floats(tt::DataFormat::MxFp8P, result);
+    auto floats = mxfp8_tc::mx_to_floats(tt::DataFormat::MxFp8P, result);
     for (uint32_t i = 96; i < 128; ++i) {
         EXPECT_EQ(floats[i], 1.0f) << "block 3 (BF16 +1.0 in) elem " << i;
     }
