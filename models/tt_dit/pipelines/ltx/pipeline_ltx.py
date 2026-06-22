@@ -27,7 +27,7 @@ from safetensors.torch import load_file
 
 import ttnn
 
-from ...encoders.gemma.encoder_pair import GemmaTokenizerEncoderPair
+from ...encoders.gemma3.encoder_pair import GemmaTokenizerEncoderPair
 from ...models.transformers.ltx.rope_ltx import LTXRopeType, precompute_freqs_cis, reshape_interleaved_to_bhnd
 from ...models.transformers.ltx.transformer_ltx import LTXTransformerModel
 from ...models.upsampler.latent_upsampler_ltx import LTXLatentUpsampler
