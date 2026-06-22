@@ -2158,6 +2158,7 @@ class UnarySFPUGolden:
             MathOperation.ReluMin: self._relu_min,
             MathOperation.ReduceColumn: self._reduce_columns,
             MathOperation.ReduceRow: self._reduce_rows,
+            MathOperation.Typecast: self._typecast,
         }
         self.data_format = None
         self.dest_acc = DestAccumulation.No
@@ -2462,6 +2463,12 @@ class UnarySFPUGolden:
 
     def _neg(self, x):
         return -x
+
+    def _typecast(self, x):
+        # Typecast is an elementwise identity at the value level; the src->dst format
+        # conversion is applied by the golden framework's dst_format / output-format
+        # casting (and, for class-1 MXFP8 pairs, by the unpack/pack gasket on hardware).
+        return x
 
     def _gelu(self, x):
         input_tensor = (
