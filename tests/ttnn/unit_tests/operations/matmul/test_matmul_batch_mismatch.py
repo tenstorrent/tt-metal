@@ -18,9 +18,9 @@ from models.common.utility_functions import comp_pcc
     "a_shape, b_shape",
     [
         ((1, 1, 128, 2048), (1, 7, 2048, 256)),
-        ((1, 64, 768), (5, 768, 192)),
+        ((1, 128, 2048), (7, 2048, 256)),
         ((1, 1, 256, 512), (1, 3, 512, 64)),
-        ((1, 192, 384), (6, 384, 96)),
+        ((1, 64, 768), (5, 768, 192)),
     ],
 )
 def test_matmul_a_batch1_b_batched(a_shape, b_shape, device):
