@@ -50,7 +50,7 @@ void kernel_main() {
     const auto packet_buffer = TensorAccessor(packet_buffer_args, intermediate_base_addr, packet_size_bytes);
 
     cb_reserve_back(cb_packet_landing, 1);
-    const uint64_t packet_l1_addr = get_write_ptr(cb_packet_landing);
+    const uint32_t packet_l1_addr = get_write_ptr(cb_packet_landing);
 
     // Wait for the sender's "done" — the payload has fully landed in the intermediate buffer.
     auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);

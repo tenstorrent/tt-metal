@@ -1,0 +1,18 @@
+{
+  "summary": {
+    "total": 0,
+    "supported_pass": 0,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "no_axes_found": 0
+  },
+  "by_category": {}
+}
