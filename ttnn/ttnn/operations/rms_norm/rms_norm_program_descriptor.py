@@ -147,10 +147,17 @@ _FORCE_BH = None
 #       K-1 peer partials (one parallel read phase gated by a "produced" counter), then a
 #       SINGLE mcast of the assembled K-tile block to the group. O(1) transport phases.
 #       Compute is identical (every core still combines the K gathered partials).
+#   2 (TRANSPORT_REDUCE_BCAST) — reduce-then-broadcast: rank 0 gathers the K-1 peer partials
+#       + its own into cb_partials_gathered (IDENTICAL to mode 1's gather leg, same "produced"
+#       counter), then root COMPUTE reduces the K gathered partials -> cb_partial_sumsq (the
+#       global Σx²). The root reader then mcasts ONLY that single reduced tile to the group.
+#       Peers receive that one tile directly into cb_partial_sumsq and SKIP the combine reduce.
+#       Moves the K-tile combine off every peer and shrinks the broadcast from K tiles to 1.
 # Production default is decided by _select_transport. _FORCE_TRANSPORT (perf tests only)
 # overrides it for the transport bake-off; NEVER set in production.
 TRANSPORT_MCAST_ALLGATHER = 0
 TRANSPORT_ROOT_RELAY = 1
+TRANSPORT_REDUCE_BCAST = 2
 _FORCE_TRANSPORT = None
 # Semaphore id for the mode-1 "produced" counter (peers -> root). Distinct from the
 # DATA_READY (0) / CONSUMED (1) pair used by the broadcast mcast pipe.
@@ -562,7 +569,11 @@ def _regime_a_descriptor(
     cbs = [
         cb(CB_INPUT_RESIDENT, dt, input_resident_pages),
         cb(CB_SCALER, inter, 1),
-        cb(CB_OUTPUT, dt, 2),
+        # Target 1 (profile_logging.md): hold a full reduce_block of output so the TILE
+        # writer can drain a block behind ONE noc_async_write_barrier instead of one
+        # barrier per tile. Double-buffered so the writer drains block N while compute
+        # produces block N+1 (preserves the pass2 ∥ write overlap).
+        cb(CB_OUTPUT, dt, 2 * reduce_block),
         # Refinement 5: PASS-1 is now a single square + single reduce over the whole
         # resident shard, so cb_squared holds the full shard (Wt tiles) rather than one
         # reduce_block chunk. Wt is host-bounded by the same A/B heuristic that bounds
@@ -605,6 +616,7 @@ def _regime_a_descriptor(
         CB_INPUT_RESIDENT,  # cb_rm_in (unused)
         TRANSPORT_MCAST_ALLGATHER,  # transport_mode (unused; num_partials==1)
         0,  # produced_sem_id (unused; num_partials==1)
+        CB_PARTIAL_SUMSQ,  # cb_partial_sumsq (mode-2 bcast dest; unused; num_partials==1)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -631,7 +643,8 @@ def _regime_a_descriptor(
             0,  # total_sticks (RM only)
         ]
         writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start * Wt, count * Wt, 0]
-        compute_rt[core.x][core.y] = [count]
+        # compute RT: [num_rows, is_root]. is_root = 0 in Regime A (mode-2 selector unused).
+        compute_rt[core.x][core.y] = [count, 0]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -642,7 +655,8 @@ def _regime_a_descriptor(
     )
 
     # ---------- writer (unified; layout_is_rm=0) ----------
-    writer_ct = [CB_OUTPUT, 0, 0, 0, 0, 0, 0]
+    # CT idx 3 = TILE write-block (Target 1): tiles drained per noc_async_write_barrier.
+    writer_ct = [CB_OUTPUT, 0, 0, reduce_block, 0, 0, 0]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
@@ -676,6 +690,7 @@ def _regime_a_descriptor(
         CB_INPUT_RESIDENT,  # cb_rm_in (unused for TILE)
         CB_OUTPUT,  # cb_rm_out (unused for TILE)
         bh,  # Refinement 7: BLOCK_HEIGHT (rows per work-unit; 1 = no row-blocking)
+        TRANSPORT_MCAST_ALLGATHER,  # transport_mode (unused; Regime A num_partials==1)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -803,7 +818,8 @@ def _regime_b_descriptor(
     cbs = [
         cb(CB_INPUT_RESIDENT, dt, Wt_s),
         cb(CB_SCALER, inter, 1),
-        cb(CB_OUTPUT, dt, 2),
+        # Target 1 (profile_logging.md): batch TILE writes one block/barrier (double-buffered).
+        cb(CB_OUTPUT, dt, 2 * reduce_block),
         # Refinement 5: single square + single reduce over the whole resident shard;
         # cb_squared holds the full per-core shard (Wt_s tiles), not one reduce_block.
         # Wt_s is bounded by _select_k (the W-split keeps it small), so L1 is unaffected.
@@ -874,7 +890,9 @@ def _regime_b_descriptor(
                 vry1,
             ] + sender_coords
             writer_rt[lx][ly] = [output_tensor.buffer_address(), input_page_base, Wt_s, 0]
-            compute_rt[lx][ly] = [1]  # one tile-row group per core
+            # compute RT: [num_rows, is_root]. is_root=1 only for rank 0 (the mode-2 root that
+            # runs the combine reduce + mcasts the reduced tile); peers (r>0) skip the combine.
+            compute_rt[lx][ly] = [1, 1 if r == 0 else 0]
 
     # ---------- reader (unified; layout_is_rm=0, num_partials=K -> mcast all-gather) ----------
     reader_ct = [
@@ -899,7 +917,8 @@ def _regime_b_descriptor(
         0,  # layout_is_rm = 0 (TILE)
         CB_INPUT_RESIDENT,  # cb_rm_in (unused)
         transport_mode,  # Refinement 9 (Part A): all-reduce transport selector
-        PRODUCED_SEM,  # produced_sem_id (mode 1 gather counter)
+        PRODUCED_SEM,  # produced_sem_id (mode 1/2 gather counter)
+        CB_PARTIAL_SUMSQ,  # cb_partial_sumsq (mode-2 reduce-bcast dest/source)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -916,7 +935,8 @@ def _regime_b_descriptor(
     )
 
     # ---------- writer (unified; layout_is_rm=0) ----------
-    writer_ct = [CB_OUTPUT, 0, 0, 0, 0, 0, 0]
+    # CT idx 3 = TILE write-block (Target 1): tiles drained per noc_async_write_barrier.
+    writer_ct = [CB_OUTPUT, 0, 0, reduce_block, 0, 0, 0]
     writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_writer.cpp"),
@@ -950,6 +970,7 @@ def _regime_b_descriptor(
         CB_INPUT_RESIDENT,  # cb_rm_in (unused for TILE)
         CB_OUTPUT,  # cb_rm_out (unused for TILE)
         1,  # Refinement 7: BLOCK_HEIGHT = 1 (Regime B is not row-blocked)
+        transport_mode,  # Refinement 9 (Part D): mode-2 gates root-only combine reduce
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -1069,6 +1090,7 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         CB_RM_IN,  # cb_rm_in
         TRANSPORT_MCAST_ALLGATHER,  # transport_mode (unused; RM Regime A num_partials==1)
         0,  # produced_sem_id (unused; num_partials==1)
+        CB_RM_PARTIAL_SUMSQ,  # cb_partial_sumsq (mode-2 bcast dest; unused; num_partials==1)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -1095,7 +1117,8 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
             total_sticks,
         ]
         writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start, count, total_sticks, 0]
-        compute_rt[core.x][core.y] = [count]
+        # compute RT: [num_rows, is_root]. is_root = 0 in RM Regime A (mode-2 selector unused).
+        compute_rt[core.x][core.y] = [count, 0]
 
     reader_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_reader.cpp"),
@@ -1140,6 +1163,7 @@ def _regime_rm_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, ep
         CB_RM_IN,  # cb_rm_in (input stick source -> tilize)
         CB_RM_OUT,  # cb_rm_out (untilize dest)
         1,  # Refinement 7: BLOCK_HEIGHT = 1 (ROW_MAJOR is not row-blocked)
+        TRANSPORT_MCAST_ALLGATHER,  # transport_mode (unused; RM Regime A num_partials==1)
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),
@@ -1298,7 +1322,9 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
                 vry1,
             ] + sender_coords
             writer_rt[lx][ly] = [output_tensor.buffer_address(), g, 1, total_sticks, shard_col0]
-            compute_rt[lx][ly] = [1]
+            # compute RT: [num_rows, is_root]. is_root=1 only for rank 0 (the mode-2 root that
+            # runs the combine reduce + mcasts the reduced tile); peers (r>0) skip the combine.
+            compute_rt[lx][ly] = [1, 1 if r == 0 else 0]
 
     # ---------- reader (unified; layout_is_rm=1, num_partials=K) ----------
     reader_ct = [
@@ -1323,7 +1349,8 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
         1,  # layout_is_rm = 1
         CB_RM_IN,  # cb_rm_in
         transport_mode,  # Refinement 9 (Part A): all-reduce transport selector
-        PRODUCED_SEM,  # produced_sem_id (mode 1 gather counter)
+        PRODUCED_SEM,  # produced_sem_id (mode 1/2 gather counter)
+        CB_RM_PARTIAL_SUMSQ,  # cb_partial_sumsq (mode-2 reduce-bcast dest/source)
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     reader_ct.extend(
@@ -1374,6 +1401,7 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
         CB_RM_IN,
         CB_RM_OUT,
         1,  # Refinement 7: BLOCK_HEIGHT = 1 (Regime B RM is not row-blocked)
+        transport_mode,  # Refinement 9 (Part D): mode-2 gates root-only combine reduce
     ]
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=str(KERNEL_DIR / "rms_norm_compute.cpp"),

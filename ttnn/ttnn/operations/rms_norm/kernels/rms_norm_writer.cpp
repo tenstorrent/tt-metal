@@ -13,6 +13,7 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_output = get_compile_time_arg_val(0);  // TILE: cb_output; RM: cb_rm_out
@@ -28,6 +29,7 @@ void kernel_main() {
     const uint32_t arg1 = get_arg_val<uint32_t>(1);          // TILE: page_base; RM: start_block
     const uint32_t arg2 = get_arg_val<uint32_t>(2);          // TILE: num_tiles; RM: num_blocks
 
+    DeviceZoneScopedN("WR-write");
     if constexpr (layout_is_rm) {
         const uint32_t total_sticks = get_arg_val<uint32_t>(3);
         const uint32_t shard_col0 = get_arg_val<uint32_t>(4);  // W-column band offset (0 in Regime A)
@@ -75,12 +77,31 @@ void kernel_main() {
         const uint32_t num_tiles = arg2;
         const uint32_t tile_bytes = get_tile_size(cb_output);
         const auto output_accessor = TensorAccessor(output_args, output_addr, tile_bytes);
-        for (uint32_t i = 0; i < num_tiles; ++i) {
-            cb_wait_front(cb_output, 1);
-            const uint32_t l1 = get_read_ptr(cb_output);
-            noc_async_write_tile(page_base + i, output_accessor, l1);
-            noc_async_write_barrier();
-            cb_pop_front(cb_output, 1);
+        // Target 1 (profile_logging.md): drain a block of `reduce_block` tiles behind ONE
+        // noc_async_write_barrier (was one barrier per tile, which serialized the NoC write
+        // latencies). cb_output is sized 2*reduce_block by the descriptor so compute fills
+        // block N+1 while the writer drains block N. write_block == reduce_block (CT idx 3).
+        const uint32_t write_block = reduce_block;
+        for (uint32_t i = 0; i < num_tiles;) {
+            uint32_t b = num_tiles - i;
+            if (b > write_block) {
+                b = write_block;
+            }
+            {
+                DeviceZoneScopedN("WR-wait");
+                cb_wait_front(cb_output, b);
+            }
+            uint32_t l1 = get_read_ptr(cb_output);
+            {
+                DeviceZoneScopedN("WR-noc");
+                for (uint32_t k = 0; k < b; ++k) {
+                    noc_async_write_tile(page_base + i + k, output_accessor, l1);
+                    l1 += tile_bytes;
+                }
+                noc_async_write_barrier();
+            }
+            cb_pop_front(cb_output, b);
+            i += b;
         }
     }
 }

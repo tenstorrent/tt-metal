@@ -27,6 +27,7 @@
 #include "api/dataflow/noc.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast_pipe.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace {
 FORCE_INLINE void zero_l1(uint32_t addr, uint32_t nbytes) {
@@ -70,8 +71,14 @@ void kernel_main() {
     //       with all K partials in cb_partials_gathered and runs the same single-reduce
     //       combine, so only this reader leg differs.
     constexpr uint32_t transport_mode = get_compile_time_arg_val(20);
-    constexpr uint32_t produced_sem_id = get_compile_time_arg_val(21);  // mode 1: peers->root "produced" counter
-    constexpr auto input_args = TensorAccessorArgs<22>();
+    constexpr uint32_t produced_sem_id = get_compile_time_arg_val(21);  // mode 1/2: peers->root "produced" counter
+    // Refinement 9 (Part D): mode-2 reduce-then-broadcast dest/source CB. Holds the single
+    // GLOBAL Σx² tile: on the root the reader cb_wait_fronts it (after compute's combine push)
+    // and mcasts it; on a peer the reader receives the broadcast tile into it and pushes it
+    // (peer compute's finalize then reads it). Same CB index across all cores → same L1 addr,
+    // so the sender's dst addr == every receiver's cb_partial_sumsq addr. Unused for modes 0/1.
+    constexpr uint32_t cb_partial_sumsq = get_compile_time_arg_val(22);
+    constexpr auto input_args = TensorAccessorArgs<23>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
 
     // ---- runtime args (superset; mcast-only args at [7..] read under constexpr) ----
@@ -151,65 +158,74 @@ void kernel_main() {
     }
 
     // ---- input read ----
-    if constexpr (layout_is_rm) {
-        // ROW_MAJOR: read sticks per 32-stick block, chunked along W (with W/H zeroing).
-        // For Regime B RM, this core owns a W-column band starting at shard_col0
-        // (= input_page_base, repurposed for RM; 0 in Regime A). All column maths is
-        // clamped against the GLOBAL W, so padding columns contribute 0 and inv_W in
-        // compute carries the true full-row element count.
-        const uint32_t shard_col0 = input_page_base;
-        const auto input_accessor = TensorAccessor(input_args, input_addr);
-        for (uint32_t b = 0; b < num_units; ++b) {
-            const uint32_t global_block = start_unit + b;
-            const uint32_t block_start_stick = global_block * TILE_H;
-            uint32_t rows_this_block = total_sticks - block_start_stick;
-            if (rows_this_block > TILE_H) {
-                rows_this_block = TILE_H;
-            }
-            for (uint32_t c = 0; c < num_chunks; ++c) {
-                const uint32_t col0 = shard_col0 + c * chunk_cols;
-                uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
-                if (valid_cols > chunk_cols) {
-                    valid_cols = chunk_cols;
+    {
+        DeviceZoneScopedN("RDR-input");
+        if constexpr (layout_is_rm) {
+            // ROW_MAJOR: read sticks per 32-stick block, chunked along W (with W/H zeroing).
+            // For Regime B RM, this core owns a W-column band starting at shard_col0
+            // (= input_page_base, repurposed for RM; 0 in Regime A). All column maths is
+            // clamped against the GLOBAL W, so padding columns contribute 0 and inv_W in
+            // compute carries the true full-row element count.
+            const uint32_t shard_col0 = input_page_base;
+            const auto input_accessor = TensorAccessor(input_args, input_addr);
+            for (uint32_t b = 0; b < num_units; ++b) {
+                const uint32_t global_block = start_unit + b;
+                const uint32_t block_start_stick = global_block * TILE_H;
+                uint32_t rows_this_block = total_sticks - block_start_stick;
+                if (rows_this_block > TILE_H) {
+                    rows_this_block = TILE_H;
                 }
-                const uint32_t chunk_row_bytes = valid_cols * in_elem;
-                const uint32_t byte_off = col0 * in_elem;
-
-                cb_reserve_back(cb_rm_in, reduce_block);
-                uint32_t l1 = get_write_ptr(cb_rm_in);
-                for (uint32_t r = 0; r < TILE_H; ++r) {
-                    if (r < rows_this_block && chunk_row_bytes > 0) {
-                        const uint32_t zstart = chunk_row_bytes & ~3u;
-                        if (zstart < in_padded_chunk_bytes) {
-                            zero_l1(l1 + zstart, in_padded_chunk_bytes - zstart);
-                        }
-                        const uint64_t noc_addr = input_accessor.get_noc_addr(block_start_stick + r, byte_off);
-                        noc_async_read(noc_addr, l1, chunk_row_bytes);
-                    } else {
-                        zero_l1(l1, in_padded_chunk_bytes);
+                for (uint32_t c = 0; c < num_chunks; ++c) {
+                    const uint32_t col0 = shard_col0 + c * chunk_cols;
+                    uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
+                    if (valid_cols > chunk_cols) {
+                        valid_cols = chunk_cols;
                     }
-                    l1 += in_padded_chunk_bytes;
+                    const uint32_t chunk_row_bytes = valid_cols * in_elem;
+                    const uint32_t byte_off = col0 * in_elem;
+
+                    cb_reserve_back(cb_rm_in, reduce_block);
+                    uint32_t l1 = get_write_ptr(cb_rm_in);
+                    for (uint32_t r = 0; r < TILE_H; ++r) {
+                        if (r < rows_this_block && chunk_row_bytes > 0) {
+                            const uint32_t zstart = chunk_row_bytes & ~3u;
+                            if (zstart < in_padded_chunk_bytes) {
+                                zero_l1(l1 + zstart, in_padded_chunk_bytes - zstart);
+                            }
+                            const uint64_t noc_addr = input_accessor.get_noc_addr(block_start_stick + r, byte_off);
+                            noc_async_read(noc_addr, l1, chunk_row_bytes);
+                        } else {
+                            zero_l1(l1, in_padded_chunk_bytes);
+                        }
+                        l1 += in_padded_chunk_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_rm_in, reduce_block);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_rm_in, reduce_block);
+            }
+        } else {
+            // TILE: read Wt tiles per unit (row) into cb_input_resident.
+            const uint32_t tile_bytes = get_tile_size(cb_input_resident);
+            const auto input_accessor = TensorAccessor(input_args, input_addr, tile_bytes);
+            for (uint32_t u = 0; u < num_units; ++u) {
+                const uint32_t page_base = input_page_base + u * Wt;
+                {
+                    DeviceZoneScopedN("RDR-resv");
+                    cb_reserve_back(cb_input_resident, Wt);
+                }
+                uint32_t l1 = get_write_ptr(cb_input_resident);
+                {
+                    DeviceZoneScopedN("RDR-noc");
+                    for (uint32_t wt = 0; wt < Wt; ++wt) {
+                        noc_async_read_tile(page_base + wt, input_accessor, l1);
+                        l1 += tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                }
+                cb_push_back(cb_input_resident, Wt);
             }
         }
-    } else {
-        // TILE: read Wt tiles per unit (row) into cb_input_resident.
-        const uint32_t tile_bytes = get_tile_size(cb_input_resident);
-        const auto input_accessor = TensorAccessor(input_args, input_addr, tile_bytes);
-        for (uint32_t u = 0; u < num_units; ++u) {
-            const uint32_t page_base = input_page_base + u * Wt;
-            cb_reserve_back(cb_input_resident, Wt);
-            uint32_t l1 = get_write_ptr(cb_input_resident);
-            for (uint32_t wt = 0; wt < Wt; ++wt) {
-                noc_async_read_tile(page_base + wt, input_accessor, l1);
-                l1 += tile_bytes;
-            }
-            noc_async_read_barrier();
-            cb_push_back(cb_input_resident, Wt);
-        }
-    }
+    }  // RDR-input
 
     // ---- (Regime B) cross-core all-reduce of the K partial Σx² over the group rectangle ----
     if constexpr (num_partials > 1) {
@@ -222,7 +238,10 @@ void kernel_main() {
         // rank 0 (== root for transport_mode==1) coords are at [12, 13].
 
         // Wait for compute's fully-accumulated local Σx² (single push).
-        cb_wait_front(cb_local_sumsq, 1);
+        {
+            DeviceZoneScopedN("RDR-ar-wait");
+            cb_wait_front(cb_local_sumsq, 1);
+        }
         const uint32_t partial_l1 = get_read_ptr(cb_local_sumsq);
 
         // Gathered partials carry the INTERMEDIATE format (Float32 when fp32_dest_acc_en),
@@ -232,7 +251,73 @@ void kernel_main() {
         Noc noc;
         const McastRect rect{rect_x0, rect_y0, rect_x1, rect_y1};
 
-        if constexpr (transport_mode == 1) {
+        DeviceZoneScopedN("RDR-ar-xport");
+        if constexpr (transport_mode == 2) {
+            // ----- Reduce-then-broadcast (Refinement 9 Part D) -----
+            // Like mode 1, the ROOT gathers all K partials into cb_partials_gathered (same
+            // "produced"-gated unicast gather). But instead of broadcasting the K-tile block
+            // and having every core reduce it, the ROOT COMPUTE reduces the K gathered partials
+            // into cb_partial_sumsq (the single global Σx²) and the ROOT READER then mcasts ONLY
+            // that 1 tile. Peers receive that single tile directly into cb_partial_sumsq and
+            // their compute SKIPS the combine reduce. cb_partial_sumsq sits at the same CB index
+            // (→ same L1 address) on every core, so the sender's dst == every receiver's
+            // cb_partial_sumsq base (the §9 same-index-same-address invariant).
+            Semaphore<> produced(produced_sem_id);
+            const uint32_t root_x = get_arg_val<uint32_t>(12);  // rank-0 (root) virtual coords
+            const uint32_t root_y = get_arg_val<uint32_t>(13);
+
+            if (my_rank == 0) {
+                // ---- GATHER leg (identical to mode 1): assemble the K-tile block for compute ----
+                cb_reserve_back(cb_partials_gathered, num_partials);
+                const uint32_t gathered_base = get_write_ptr(cb_partials_gathered);
+                noc_async_read(
+                    get_noc_addr(my_x[noc_index], my_y[noc_index], partial_l1), gathered_base, partial_tile_bytes);
+                produced.wait_min(num_partials - 1);
+                for (uint32_t r = 1; r < num_partials; ++r) {
+                    const uint32_t px = get_arg_val<uint32_t>(12 + 2 * r);
+                    const uint32_t py = get_arg_val<uint32_t>(12 + 2 * r + 1);
+                    noc_async_read(
+                        get_noc_addr(px, py, partial_l1), gathered_base + r * partial_tile_bytes, partial_tile_bytes);
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_partials_gathered, num_partials);
+                cb_pop_front(cb_local_sumsq, 1);
+
+                // ---- BROADCAST leg: wait for root compute's REDUCED global Σx², mcast 1 tile ----
+                // Root compute reduces cb_partials_gathered -> cb_partial_sumsq (the existing
+                // combine, gated my_rank==0). Wait for that single push, then mcast ONLY that
+                // tile. Do NOT pop cb_partial_sumsq — root compute's FINALIZE (CopyTile) pops it.
+                // cb_partial_sumsq is double-buffered (size 2), so a future row's push cannot
+                // overwrite this tile's L1 while the mcast send reads it.
+                cb_wait_front(cb_partial_sumsq, 1);
+                const uint32_t reduced_l1 = get_read_ptr(cb_partial_sumsq);
+                DEVICE_PRINT("ROOT send dst_l1={}\n", reduced_l1);
+                // The mode-2 broadcast moves a cb_partial_sumsq tile (the global Σx²), so stride
+                // with THAT CB's tile size — decoupled from cb_partials_gathered (both carry the
+                // intermediate format today, but never assume they match).
+                const uint32_t reduced_tile_bytes = get_tile_size(cb_partial_sumsq);
+                SenderPipe<
+                    num_partials - 1,
+                    data_ready_sem_id,
+                    consumed_sem_id,
+                    Staging::Counter,
+                    /*PRE_HANDSHAKE=*/true>
+                    sender(noc, rect);
+                sender.send(reduced_l1, reduced_l1, reduced_tile_bytes);
+            } else {
+                // Peer: signal "produced" to root, then receive the SINGLE reduced global tile
+                // directly into cb_partial_sumsq. Peer compute SKIPS the combine reduce and its
+                // FINALIZE reads this cb_partial_sumsq tile.
+                produced.up(noc, root_x, root_y, 1);
+                cb_pop_front(cb_local_sumsq, 1);
+                cb_reserve_back(cb_partial_sumsq, 1);
+                DEVICE_PRINT("PEER rank={} reserve wptr={}\n", my_rank, get_write_ptr(cb_partial_sumsq));
+                ReceiverPipe<data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true> receiver(
+                    noc);
+                receiver.receive(root_x, root_y);
+                cb_push_back(cb_partial_sumsq, 1);
+            }
+        } else if constexpr (transport_mode == 1) {
             // ----- Root-relay gather-then-broadcast (O(1) transport phases) -----
             // Raw noc_async_read is used for the GATHER leg (rank 0 unicast-reads each peer's
             // cb_local_sumsq): mcast_pipe is mcast-oriented and offers no root-reads-many-peers

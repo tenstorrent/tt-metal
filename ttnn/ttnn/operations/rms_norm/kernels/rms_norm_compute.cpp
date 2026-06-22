@@ -43,6 +43,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -85,9 +86,21 @@ void kernel_main() {
     // num_partials==1) with a grid already saturated (Ht_total > total_cores) — every
     // other path keeps BLOCK_HEIGHT==1 and is byte-identical to the pre-R7 kernel.
     constexpr uint32_t BLOCK_HEIGHT = get_compile_time_arg_val(21);
+    // Refinement 9 (Part D): Regime-B all-reduce transport selector (mirrors the reader CT).
+    //   0/1 — every core runs the K-partial combine reduce (mode 1 root-relay broadcasts the
+    //         full K-tile block; mode 0 all-gathers it). Byte-identical to the pre-R9D combine.
+    //   2   — reduce-then-broadcast: ONLY the root (is_root==1) runs the combine reduce; its
+    //         reader then mcasts the single reduced global Σx² tile. Peers SKIP the combine —
+    //         their reader pushed cb_partial_sumsq with the received global tile, which FINALIZE
+    //         reads directly. Compiled out (and unused) for modes 0/1 and Regime A.
+    constexpr uint32_t transport_mode = get_compile_time_arg_val(22);
 
     // ---- runtime args ----
     const uint32_t num_rows = get_arg_val<uint32_t>(0);  // RM: number of 32-stick blocks
+    // Refinement 9 (Part D): mode-2 root vs peer selector (1 = root rank 0; 0 = peer / Regime A).
+    // Only consulted when transport_mode == 2; for modes 0/1 and Regime A the host passes 0 and
+    // the constexpr branch below is elided.
+    const uint32_t is_root = get_arg_val<uint32_t>(1);
 
     using ckl::BinaryDataFormatReconfig;
     using ckl::BinaryFpu;
@@ -236,68 +249,90 @@ void kernel_main() {
         // the descriptor (≤32 tiles for every routed shape).
         //
         // square resident[0 .. Wt) -> cb_squared (no pop of resident; reused in PASS-2)
-        ckl::eltwise_chain(
-            EltwiseShape::tiles(Wt),
-            BinaryFpu<
-                cb_input_resident,
-                cb_input_resident,
-                BinaryFpuOp::Mul,
-                BroadcastDim::None,
-                InputLifecycle::HeldBulk,
-                InputLifecycle::HeldBulk,
-                BinaryDataFormatReconfig::Input,
-                Dst::D0,
-                OperandKind::Block,
-                OperandKind::Block,
-                TileOffset::Set,
-                TileOffset::Set>{0, 0},
-            PackTile<cb_squared, OutputLifecycle::Streaming>{});
+        {
+            DeviceZoneScopedN("CMP-p1-square");
+            ckl::eltwise_chain(
+                EltwiseShape::tiles(Wt),
+                BinaryFpu<
+                    cb_input_resident,
+                    cb_input_resident,
+                    BinaryFpuOp::Mul,
+                    BroadcastDim::None,
+                    InputLifecycle::HeldBulk,
+                    InputLifecycle::HeldBulk,
+                    BinaryDataFormatReconfig::Input,
+                    Dst::D0,
+                    OperandKind::Block,
+                    OperandKind::Block,
+                    TileOffset::Set,
+                    TileOffset::Set>{0, 0},
+                PackTile<cb_squared, OutputLifecycle::Streaming>{});
+        }
 
         // reduce the full squared shard into the local Sum(x^2) (single output tile)
-        ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, ReduceInputPolicy::BulkWaitBulkPop>(
-            cb_squared,
-            cb_scaler,
-            cb_partial_sumsq,
-            ReduceInputBlockShape::of(1, Wt),
-            ckl::ReduceInputMemoryLayout::contiguous());
-
-        // ---------- (Regime B) cross-core combine ----------
-        if constexpr (num_partials > 1) {
-            // (1) Hand the FULLY-accumulated local Sum(x^2) to the reader on a dedicated
-            //     single-push CB (copy also pops cb_partial_sumsq, emptying it).
-            ckl::copy<cb_partial_sumsq, cb_local_sumsq>(EltwiseShape::tiles(1));
-
-            // (2) Refinement 9 (Part B — combine compute): the reader all-gathered the K peer
-            //     partials CONTIGUOUSLY into cb_partials_gathered; their plain elementwise sum
-            //     is the global Sum(x^2) over the full W. Each partial is a PASS-1 REDUCE_ROW
-            //     output (per-stick sum in column 0, every other column zero), so a SINGLE
-            //     reduce<SUM, REDUCE_ROW> over the K-tile block sums the K tiles' rows into one
-            //     output tile (col 0 = Σ_k partial_k per stick) — expressing the whole combine
-            //     in ONE helper call. This REPLACES the former `copy` + (K-1) eltwise `add`s,
-            //     each of which round-tripped L1 (read two operands, pack the running sum back):
-            //     K-1 unnecessary L1 round-trips to sum K single tiles. The reduce LLK
-            //     accumulates all K gathered tiles in DEST and packs exactly once. It reuses the
-            //     same 1.0 SUM scaler as PASS-1 (cb_scaler). The Refinement-1 correctness
-            //     invariant is preserved: the reader still hands over only the FULLY-accumulated
-            //     local Σx² (via cb_local_sumsq, step 1) before the all-gather.
+        {
+            DeviceZoneScopedN("CMP-p1-reduce");
             ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, ReduceInputPolicy::BulkWaitBulkPop>(
-                cb_partials_gathered,
+                cb_squared,
                 cb_scaler,
                 cb_partial_sumsq,
-                ReduceInputBlockShape::of(1, num_partials),
+                ReduceInputBlockShape::of(1, Wt),
                 ckl::ReduceInputMemoryLayout::contiguous());
         }
 
+        // ---------- (Regime B) cross-core combine ----------
+        if constexpr (num_partials > 1) {
+            DeviceZoneScopedN("CMP-combine");
+            // (1) Hand the FULLY-accumulated local Sum(x^2) to the reader on a dedicated
+            //     single-push CB (copy also pops cb_partial_sumsq, emptying it). Runs on ALL
+            //     cores in every transport mode (the Refinement-1 invariant: the reader only
+            //     consumes the FULLY-accumulated local Σx² via cb_local_sumsq).
+            ckl::copy<cb_partial_sumsq, cb_local_sumsq>(EltwiseShape::tiles(1));
+
+            // (2) Refinement 9 (Part D): in mode 2 (reduce-then-broadcast) ONLY the root runs the
+            //     K-partial combine reduce; its reader mcasts the single reduced tile. Peers SKIP
+            //     the combine entirely — their reader pushed the received global Σx² into
+            //     cb_partial_sumsq, which FINALIZE reads directly. For modes 0/1 EVERY core runs
+            //     the combine (byte-identical to pre-R9D). transport_mode is constexpr, so the
+            //     mode-0/1 path compiles to the unconditional combine with no is_root test.
+            const bool run_combine = (transport_mode != 2) || (is_root != 0);
+            if (run_combine) {
+                // (2) Refinement 9 (Part B — combine compute): the reader all-gathered the K peer
+                //     partials CONTIGUOUSLY into cb_partials_gathered; their plain elementwise sum
+                //     is the global Sum(x^2) over the full W. Each partial is a PASS-1 REDUCE_ROW
+                //     output (per-stick sum in column 0, every other column zero), so a SINGLE
+                //     reduce<SUM, REDUCE_ROW> over the K-tile block sums the K tiles' rows into one
+                //     output tile (col 0 = Σ_k partial_k per stick) — expressing the whole combine
+                //     in ONE helper call. This REPLACES the former `copy` + (K-1) eltwise `add`s,
+                //     each of which round-tripped L1 (read two operands, pack the running sum back):
+                //     K-1 unnecessary L1 round-trips to sum K single tiles. The reduce LLK
+                //     accumulates all K gathered tiles in DEST and packs exactly once. It reuses the
+                //     same 1.0 SUM scaler as PASS-1 (cb_scaler). The Refinement-1 correctness
+                //     invariant is preserved: the reader still hands over only the FULLY-accumulated
+                //     local Σx² (via cb_local_sumsq, step 1) before the all-gather.
+                ckl::reduce<ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW, ReduceInputPolicy::BulkWaitBulkPop>(
+                    cb_partials_gathered,
+                    cb_scaler,
+                    cb_partial_sumsq,
+                    ReduceInputBlockShape::of(1, num_partials),
+                    ckl::ReduceInputMemoryLayout::contiguous());
+            }  // run_combine
+        }
+
         // ---------- FINALIZE: rsqrt(sum * inv_W + eps) ----------
-        ckl::eltwise_chain(
-            EltwiseShape::tiles(1),
-            CopyTile<cb_partial_sumsq, Dst::D0, InputLifecycle::Streaming>{},
-            ckl::MulUnary<>{inv_W_bits},
-            ckl::AddUnary<>{eps_bits},
-            ckl::Rsqrt<>{},
-            PackTile<cb_recip_rms, OutputLifecycle::Streaming>{});
+        {
+            DeviceZoneScopedN("CMP-finalize");
+            ckl::eltwise_chain(
+                EltwiseShape::tiles(1),
+                CopyTile<cb_partial_sumsq, Dst::D0, InputLifecycle::Streaming>{},
+                ckl::MulUnary<>{inv_W_bits},
+                ckl::AddUnary<>{eps_bits},
+                ckl::Rsqrt<>{},
+                PackTile<cb_recip_rms, OutputLifecycle::Streaming>{});
+        }
 
         // ---------- PASS 2: normalize ----------
+        DeviceZoneScopedN("CMP-pass2");
         if constexpr (has_gamma) {
             // Streaming fused Col->Row multiply, chunked by reduce_block. cb_normalized is
             // sized to ONE block (not Wt), so per-core L1 does not scale with shard width.
