@@ -3,11 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from shutil import copyfile
-
-
 from tracy import *
-from tracy.serve_wasm import launch_server_subprocess, point_embed_at_trace
 
 
 def main():

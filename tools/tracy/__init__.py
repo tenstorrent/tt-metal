@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc..
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -144,7 +144,7 @@ def generate_report(
         if childCallsList:
             childCallStr = f"-x {','.join(childCallsList)}"
         subprocess.run(
-            f"{binFolder / TRACY_CSVEXPROT_TOOL} -u -f TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
+            f"{binFolder / TRACY_CSVEXPROT_TOOL} -u -p TT_ {childCallStr} {logsFolder / TRACY_FILE_NAME}",
             shell=True,
             check=True,
             stdout=csvFile,
