@@ -26,7 +26,7 @@ void kernel_main() {
     for (uint32_t row = start_row; row < end_row; ++row) {
         cb.reserve_back(1);
         uint32_t l1_write_addr = cb.get_write_ptr();
-        tt::data_movement::common::noc_async_read_sharded(l1_write_addr, s0, row, 0, page_size);
+        tt::data_movement::common::noc_async_read_sharded(noc, l1_write_addr, s0, row, 0, page_size);
         noc.async_read_barrier();
         cb.push_back(1);
     }

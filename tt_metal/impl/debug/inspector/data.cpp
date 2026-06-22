@@ -41,7 +41,8 @@ std::string stringify_tensor_specs(const std::vector<TensorSpec>& tensor_specs) 
     return std::string(buf.data(), buf.size());
 }
 
-Data::Data(std::optional<int> rank) : logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
+Data::Data(std::optional<int> rank, ContextId context_id) :
+    context_id(context_id), logger(MetalContext::instance().rtoptions().get_inspector_log_path(), rank) {
     // Initialize RPC server if enabled
     const auto& rtoptions = MetalContext::instance().rtoptions();
     if (rtoptions.get_inspector_rpc_server_enabled()) {
@@ -280,9 +281,9 @@ void Data::rpc_get_kernel(rpc::Inspector::GetKernelParams::Reader params, rpc::I
 // Declared here in Data to centralize Inspector RPC callback registration and
 // tie it to Inspector Data's lifetime
 void Data::rpc_get_all_build_envs(rpc::Inspector::GetAllBuildEnvsResults::Builder results) {
-    // Get build environment info for all devices
-    // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex
-    const auto& build_envs_info = BuildEnvManager::get_instance().get_all_build_envs_info();
+    // Get build environment info for all devices in this Inspector's owning MetalContext.
+    // Calls to BuildEnvManager::get_all_build_envs_info are thread-safe as it's protected by an internal mutex.
+    const auto& build_envs_info = BuildEnvManager::get_instance(context_id).get_all_build_envs_info();
     // Populate RPC response with build environment info for all devices
     auto result_build_envs = results.initBuildEnvs(build_envs_info.size());
     const auto fw_compile_hash = this->fw_compile_hash.load(std::memory_order_acquire);
@@ -586,6 +587,7 @@ void collect_rtoptions_entries(std::vector<ConfigurationEntry>& entries, const t
     RT(fabric_trimming_profile_path);
     RT(fabric_trimming_override_path);
     RT(enable_fabric_vc2);
+    RT(enable_fabric_mesh_pass_through);
     RT(fabric_router_sync_timeout_ms);
     RT(fabric_kernel_opt_level);
     RT(reliability_mode);

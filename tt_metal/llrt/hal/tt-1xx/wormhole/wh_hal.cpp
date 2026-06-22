@@ -67,7 +67,7 @@ constexpr static std::uint32_t get_dram_backed_command_queues_base(std::uint32_t
     return get_dram_device_print_dispatch_base(dram_profiler_size) + DRAM_DEVICE_PRINT_DISPATCH_SIZE;
 }
 constexpr static std::uint32_t get_dram_backed_command_queues_size(bool enable_dram_backed_cq) {
-    return enable_dram_backed_cq ? (1 << 28)  // 256 MB
+    return enable_dram_backed_cq ? (16u << 20)  // 16 MB
                                  : 0;
 }
 constexpr static std::uint32_t get_dram_unreserved_base(std::uint32_t dram_profiler_size, bool enable_dram_backed_cq) {

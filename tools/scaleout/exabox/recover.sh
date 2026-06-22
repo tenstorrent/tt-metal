@@ -2,6 +2,10 @@
 
 set -eo pipefail
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -22,9 +26,8 @@ Optional:
     --skip-validation                       Skip validation, only run tt-smi reset
     --no-send-traffic                       Disable --send-traffic in cluster validation
     --check                                 Dry run: verify MPI can reach all hosts via hostname, then exit
-    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
-                                            Use a specific interface name to avoid virtual interfaces
-                                            (Kubernetes CNI, flannel, docker) being selected by MPI
+    --mpi-if <interface>                    Network interface for MPI TCP transport
+                                            (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
     --output <directory>                    Output directory for logs and validation artifacts (default: recover-logs).
@@ -84,7 +87,8 @@ SKIP_RESET=false
 SKIP_VALIDATION=false
 SEND_TRAFFIC=true
 CHECK=false
-MPI_IF="ens5f0np0"
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 OUTPUT_DIR="recover-logs"
 RERUN_ON_RETRAIN=false
@@ -177,6 +181,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -280,6 +285,15 @@ fi
 if [[ "$SKIP_RESET" == true && "$SKIP_VALIDATION" == true ]]; then
     echo "Error: cannot use both --skip-reset and --skip-validation"
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    echo "Auto-detected MPI interface: $MPI_IF"
 fi
 
 # Set log file path inside output directory (captures actual start time).

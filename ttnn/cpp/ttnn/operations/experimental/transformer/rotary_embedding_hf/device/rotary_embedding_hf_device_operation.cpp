@@ -123,7 +123,8 @@ tt::tt_metal::TensorSpec RotaryEmbeddingHfDeviceOperation::compute_output_specs(
             shard_spec.shape = {Ht * TILE_HEIGHT, input_tensor.padded_shape()[-1]};
             shard_spec.orientation = tt::tt_metal::ShardOrientation::ROW_MAJOR;
         }
-        auto mem_config = args.output_mem_config.with_shard_spec(shard_spec);
+        auto mem_config = tt::tt_metal::MemoryConfig(
+            args.output_mem_config.memory_layout(), args.output_mem_config.buffer_type(), shard_spec);
         return tt::tt_metal::TensorSpec(
             shape,
             tt::tt_metal::TensorLayout(

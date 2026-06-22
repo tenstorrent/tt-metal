@@ -184,7 +184,8 @@ GroupAttnMatmulDeviceOperation::spec_return_value_t GroupAttnMatmulDeviceOperati
             ShardOrientation shard_orientation =
                 operation_attributes.row_major ? ShardOrientation::ROW_MAJOR : ShardOrientation::COL_MAJOR;
             ShardSpec shard_spec = ShardSpec{all_cores, {output_shape[2], output_shape[3]}, shard_orientation};
-            output_mem_config = output_mem_config.with_shard_spec(shard_spec);
+            output_mem_config = tt::tt_metal::MemoryConfig(
+                output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
         }
         return TensorSpec(
             output_shape, TensorLayout(operation_attributes.output_dtype, PageConfig(Layout::TILE), output_mem_config));

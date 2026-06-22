@@ -24,6 +24,8 @@ struct TopologySatSolver::Impl {
 
     void add(int lit) { solver.add(lit); }
 
+    void assume(int lit) { solver.assume(lit); }
+
     int solve() { return solver.solve(); }
 
     int val(int lit) const {
@@ -60,6 +62,8 @@ int TopologySatSolver::declare_one_more_variable() {
 }
 
 void TopologySatSolver::add(int lit) { impl_->add(lit); }
+
+void TopologySatSolver::assume(int lit) { impl_->assume(lit); }
 
 int TopologySatSolver::solve() { return impl_->solve(); }
 

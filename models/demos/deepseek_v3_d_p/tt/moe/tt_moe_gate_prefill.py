@@ -18,6 +18,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class GateComputeMode(Enum):
@@ -267,6 +268,10 @@ class TtMoEGatePrefill(LightweightModule):
         """
         self.config = config
         self.mesh_device = mesh_device
+        # Shared per-mesh CCL singleton: provides persistent global semaphores for the gate's TP
+        # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
+        # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.fallback_mode = fallback_mode
 
         if weight is not None and bias is not None:
@@ -423,11 +428,19 @@ class TtMoEGatePrefill(LightweightModule):
             program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        if self.mesh_device.shape[self.config.ccl_config["TP_AXIS"]] > 1:
+        tp_axis = self.config.ccl_config["TP_AXIS"]
+        if self.mesh_device.shape[tp_axis] > 1:
+            # Pass persistent CCL semaphores (created once in TT_CCL) so all_reduce_async reuses them
+            # instead of internally allocating+leaking global semaphores in main L1 every call. The
+            # composite all-reduce needs barrier_semaphores of size 2 ([0]=reduce-scatter, [1]=all-gather),
+            # plus the reduce-scatter (3) and all-gather (2) semaphore vectors.
             logits = ttnn.experimental.all_reduce_async(
                 logits,
-                cluster_axis=self.config.ccl_config["TP_AXIS"],
+                cluster_axis=tp_axis,
                 mesh_device=self.mesh_device,
+                barrier_semaphores=self.tt_ccl.barrier_semaphore_handles[tp_axis],
+                rs_global_semaphores=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=tp_axis),
+                ag_global_semaphores=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=tp_axis),
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
