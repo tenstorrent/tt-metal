@@ -254,7 +254,7 @@ jobs:
         if: ${{ !inputs.dry-run }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 infra/release_notes_by_layer.py CHANGELOG.txt
+        run: python3 .github/actions/scripts/release_notes_by_layer.py CHANGELOG.txt
       - name: Output changelog
         if: ${{ !inputs.dry-run }}
         run: cat CHANGELOG.txt
