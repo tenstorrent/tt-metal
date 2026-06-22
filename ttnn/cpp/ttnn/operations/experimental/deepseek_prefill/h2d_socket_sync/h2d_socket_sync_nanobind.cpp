@@ -11,7 +11,7 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "h2d_socket_sync.hpp"
-#include "ttnn/tensor/socket_services.hpp"
+#include "ttnn/services/h2d_socket_service.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::h2d_socket_sync::detail {
 

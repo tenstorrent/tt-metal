@@ -13,7 +13,7 @@
 #include "h2d_socket_sync_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/socket_services.hpp"
+#include "ttnn/services/h2d_socket_service.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
