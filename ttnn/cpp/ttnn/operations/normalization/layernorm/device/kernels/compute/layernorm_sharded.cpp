@@ -316,6 +316,7 @@ void kernel_main() {
         }
         reduce_uninit<FP32_DEST_ACC>();
         cb_ex2.push_back(num_tiles_per_allgather_worker);
+        reconfig_data_format(cb_xmm2_id, cb_scaler_id);
 
         if (enable_sqrt) {
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
