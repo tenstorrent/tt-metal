@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import sys
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Callable
@@ -84,6 +85,31 @@ DEFAULT_NEGATIVE_PROMPT = (
     "pauses, incorrect timing, unnatural transitions, inconsistent framing, tilted camera, flat lighting, "
     "inconsistent tone, cinematic oversaturation, stylized filters, or AI artifacts."
 )
+
+
+def _ensure_ltx_reference_on_path() -> None:
+    """Put the LTX-2 reference package (``ltx_core`` / ``ltx_pipelines``) on ``sys.path``.
+
+    Used by the host VAE encoder (I2V device-vs-host parity) and ``encode_prompts_reference``.
+    Honors ``LTX_REFERENCE_ROOT`` (a directory containing ``ltx_core``); otherwise falls back to
+    ``<repo>/LTX-2/packages/{ltx-core,ltx-pipelines}/src`` — the layout the LTX unit tests assume
+    (``git clone https://github.com/Lightricks/LTX-2`` at the repo root). No-op if already importable.
+    """
+    import importlib.util
+
+    if importlib.util.find_spec("ltx_core") is not None:
+        return
+    repo_root = os.environ.get("TT_METAL_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..", "..")
+    )
+    candidates = []
+    if os.environ.get("LTX_REFERENCE_ROOT"):
+        candidates.append(os.environ["LTX_REFERENCE_ROOT"])
+    candidates.append(os.path.join(repo_root, "LTX-2", "packages", "ltx-core", "src"))
+    candidates.append(os.path.join(repo_root, "LTX-2", "packages", "ltx-pipelines", "src"))
+    for path in candidates:
+        if path and os.path.isdir(path) and path not in sys.path:
+            sys.path.insert(0, path)
 
 
 def latent_grid(num_frames: int, height: int, width: int) -> tuple[int, int, int]:
@@ -576,6 +602,12 @@ class LTXPipeline:
         self._vae_causal = vae_cfg.get("causal_decoder", False)
         self._vae_base_channels = vae_cfg.get("decoder_base_channels", 128)
         self._vae_patch_size = vae_cfg.get("patch_size", 4)
+        # Extra fields needed to reconstruct the reference (host) VAE encoder for I2V parity checks.
+        self._vae_in_channels = vae_cfg.get("in_channels", 3)
+        self._vae_latent_channels = vae_cfg.get("latent_channels", 128)
+        self._vae_norm_layer = vae_cfg.get("norm_layer", "pixel_norm")
+        self._vae_latent_log_var = vae_cfg.get("latent_log_var", "uniform")
+        self._vae_spatial_padding_mode = vae_cfg.get("spatial_padding_mode", "zeros")
         if self._vae_decoder_blocks:
             logger.info(f"VAE config: {len(self._vae_decoder_blocks)} blocks, causal={self._vae_causal}")
         if self._vae_encoder_blocks:
@@ -927,10 +959,95 @@ class LTXPipeline:
 
     def encode_image(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
         """Encode a conditioning image/clip ``(B, 3, F, H, W)`` in [-1, 1] to a normalized
-        latent ``(B, 128, F', H', W')``. Loads the encoder (evicting coresident peers)."""
+        latent ``(B, 128, F', H', W')``. Loads the encoder (evicting coresident peers).
+
+        When ``LTX_VAE_ENCODER_HOST=1`` (off by default), also runs the reference CPU/torch
+        encoder, logs device-vs-host parity (PCC + abs diff), and returns the HOST latent for
+        the run — a self-checking I2V path. Default (``0``) is the device-only fast path.
+        """
         assert self.vae_encoder is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
         self._prepare_vae_encoder()
-        return self.vae_encoder(image_BCFHW)
+        device_latent = self.vae_encoder(image_BCFHW)
+        if os.environ.get("LTX_VAE_ENCODER_HOST", "0") != "1":
+            return device_latent
+        host_latent = self._host_encode_image(image_BCFHW)
+        self._log_encoder_parity(device_latent, host_latent)
+        return host_latent
+
+    def _build_host_vae_encoder(self):
+        """Reference (CPU/torch) LTX-2 VAE encoder from ``ltx_core``, built lazily from the same
+        checkpoint ``vae.encoder.*`` weights + per-channel statistics the device encoder loads.
+        Cached across calls. Raises a clear error if the LTX-2 reference package is unavailable."""
+        if getattr(self, "_host_vae_encoder_mod", None) is not None:
+            return self._host_vae_encoder_mod
+        _ensure_ltx_reference_on_path()
+        try:
+            from ltx_core.model.video_vae.enums import LogVarianceType, NormLayerType, PaddingModeType
+            from ltx_core.model.video_vae.video_vae import VideoEncoder
+        except ImportError as e:
+            raise ImportError(
+                "LTX_VAE_ENCODER_HOST=1 needs the LTX-2 reference package (ltx_core), which was not "
+                "importable. Clone it at the repo root (git clone https://github.com/Lightricks/LTX-2 "
+                "into <repo>/LTX-2) or set LTX_REFERENCE_ROOT to a checkout's "
+                "packages/ltx-core/src directory."
+            ) from e
+
+        encoder = VideoEncoder(
+            in_channels=self._vae_in_channels,
+            out_channels=self._vae_latent_channels,
+            encoder_blocks=self._vae_encoder_blocks,
+            patch_size=self._vae_patch_size,
+            norm_layer=NormLayerType(self._vae_norm_layer),
+            latent_log_var=LogVarianceType(self._vae_latent_log_var),
+            encoder_spatial_padding_mode=PaddingModeType(self._vae_spatial_padding_mode),
+        )
+        # Pull only the encoder + per-channel-stats tensors (not the full 22B checkpoint) via safe_open.
+        state: dict[str, torch.Tensor] = {}
+        with safe_open(self._vae_checkpoint_path, framework="pt") as f:
+            for k in f.keys():
+                if k.startswith("vae.encoder."):
+                    state[k.removeprefix("vae.encoder.")] = f.get_tensor(k)
+                elif k in (
+                    "vae.per_channel_statistics.mean-of-means",
+                    "vae.per_channel_statistics.std-of-means",
+                ):
+                    state[k.removeprefix("vae.")] = f.get_tensor(k)
+        encoder.load_state_dict(state, strict=True)
+        encoder = encoder.to(torch.float32).eval()
+        logger.info(f"Built host VAE encoder (ltx_core reference, {len(self._vae_encoder_blocks)} blocks)")
+        self._host_vae_encoder_mod = encoder
+        return encoder
+
+    def _host_encode_image(self, image_BCFHW: torch.Tensor) -> torch.Tensor:
+        """Encode the conditioning image on the host (reference encoder), matching the device
+        encoder's contract: ``(B, 3, F, H, W)`` in [-1, 1] -> normalized ``(B, 128, F', H', W')``."""
+        encoder = self._build_host_vae_encoder()
+        with torch.no_grad():
+            return encoder(image_BCFHW.detach().float())
+
+    @staticmethod
+    def _log_encoder_parity(device_latent: torch.Tensor, host_latent: torch.Tensor) -> None:
+        """Log device-vs-host conditioning-latent agreement (PCC + abs/rel diff)."""
+        d = device_latent.detach().float()
+        h = host_latent.detach().float()
+        if d.shape != h.shape:
+            logger.warning(
+                f"I2V VAE encoder parity: SHAPE MISMATCH device {tuple(d.shape)} vs host {tuple(h.shape)} "
+                "(using HOST latent for the run)"
+            )
+            return
+        df, hf = d.flatten(), h.flatten()
+        dc, hc = df - df.mean(), hf - hf.mean()
+        denom = float(dc.norm() * hc.norm())
+        pcc = float(torch.dot(dc, hc)) / denom if denom > 0 else float("nan")
+        max_abs = float((df - hf).abs().max())
+        mean_abs = float((df - hf).abs().mean())
+        rel = max_abs / (float(hf.abs().max()) + 1e-8)
+        logger.info(
+            f"I2V VAE encoder parity (device vs host) shape={tuple(d.shape)}: "
+            f"PCC={pcc:.6f}  max|Δ|={max_abs:.6f}  mean|Δ|={mean_abs:.6f}  rel={rel:.4%}  "
+            "(using HOST latent for the run)"
+        )
 
     @staticmethod
     def _crf_codec_roundtrip(arr, crf: int):
@@ -1070,11 +1187,15 @@ class LTXPipeline:
 
     def _warmup_encode(self, height: int, width: int) -> None:
         """Load the VAE encoder + JIT-compile encode kernels with a zero single-frame image
-        at the target resolution. No-op when no encoder is configured (non-I2V checkpoints)."""
+        at the target resolution. No-op when no encoder is configured (non-I2V checkpoints).
+
+        Always device-only (bypasses ``encode_image``'s host parity path): a zeros input gives a
+        degenerate PCC, and the meaningful device-vs-host comparison is logged on the real
+        conditioning image during generate()."""
         if self.vae_encoder is None:
             return
-        dummy = torch.zeros(1, 3, 1, height, width)
-        self.encode_image(dummy)
+        self._prepare_vae_encoder()
+        self.vae_encoder(torch.zeros(1, 3, 1, height, width))
 
     def _warmup_decode(self, num_frames: int, height: int, width: int) -> None:
         """Load VAE + JIT-compile decode kernels with a zero dummy latent at
