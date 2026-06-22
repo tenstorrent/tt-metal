@@ -11,6 +11,7 @@ Uses HF DeepseekV3Model layer as the reference: creates a model with random weig
 extracts those weights into our TT state_dict format, and compares forward passes.
 """
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -125,7 +126,13 @@ def run_model(
 
     # --- Cache setup ---
     is_dense = layer_idx < config.first_k_dense_replace
-    cache_dir = Path(f"/tmp/{variant.name}_prefill_block/{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl")
+    cache_root = os.environ.get("TT_DS_PREFILL_HOST_REF_CACHE", "/tmp")
+    balanced_tag = "balanced" if is_balanced else "non_balanced"
+    gate_tag = gate_fallback_mode.value if gate_fallback_mode else "no_gate_fallback"
+    cache_dir = Path(
+        f"{cache_root}/{variant.name}_prefill_block/"
+        f"{layer_type}_{sp_factor}x{tp_factor}mesh_{isl_total}isl_{balanced_tag}_{gate_tag}"
+    )
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     init_checker(cache_dir)
@@ -539,8 +546,8 @@ def test_ds_prefill_block(
 )
 @pytest.mark.parametrize(
     "layer_type, gate_fallback_mode",
-    [("dense", None), ("moe", GateComputeMode.HOST_ALL)],
-    ids=["dense", "moe-gate_host"],
+    [("dense", None), ("moe", GateComputeMode.DEVICE_FP32)],
+    ids=["dense", "moe_gate_device"],
 )
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(

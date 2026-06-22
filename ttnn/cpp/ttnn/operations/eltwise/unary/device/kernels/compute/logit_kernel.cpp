@@ -13,6 +13,8 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/dataflow/circular_buffer.h"
 
+// Formula: logit(x) = log(x/(1-x)) -- calls clamp, rsub, div, and log tiles.
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     const uint32_t packed_scalar1 = get_arg_val<uint32_t>(1);

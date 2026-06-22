@@ -614,7 +614,7 @@ namespace tensor_accessor {
 // auto-generated kernel_bindings_generated.h) to construct the TensorAccessor directly.
 //
 // The user's kernel code looks like:
-//  auto ta = TensorAccessor(ta::my_host_declared_accessor_name);
+//  auto ta = TensorAccessor(tensor::my_host_declared_accessor_name);
 //
 // No more fussing around with TensorAccessorArgs!
 // All of the boilerplate, nasty args offset logic, and raw base pointer are now fully hidden

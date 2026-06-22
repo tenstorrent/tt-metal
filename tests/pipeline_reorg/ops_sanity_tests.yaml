@@ -1,0 +1,59 @@
+# This file defines the test matrix for the ops sanity tests pipeline.
+
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The exact command to run for the test.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+#   slow_dispatch: If true, TT_METAL_SLOW_DISPATCH_MODE=1 is exported before
+#     running cmd. Defaults to false.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: wormhole_b0 sdxl op tests
+  cmd: 'pytest --timeout 300 models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py -k "_performance" -xv --tb=short'
+  skus:
+    wh_n300_civ2:
+      timeout: 5
+  owner_id: U0837MYG788 # Marko Radosavljevic
+  team: models
+  slow_dispatch: false
+
+- name: blackhole deepseek blitz op tests (slow dispatch)
+  cmd: 'pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 60
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+  slow_dispatch: true
+
+- name: blackhole deepseek blitz op tests (fast dispatch)
+  cmd: 'pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/ --ignore=models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 30
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+  slow_dispatch: false
+
+- name: blackhole deepseek per-core allocation tests (slow dispatch)
+  cmd: 'pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation/'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+  slow_dispatch: true
+
+- name: blackhole deepseek per-core allocation tests (fast dispatch)
+  cmd: 'pytest --timeout 600 -m "not skip_post_commit" models/demos/deepseek_v3_b1/tests/unit_tests/per_core_allocation/'
+  skus:
+    bh_p150b_civ2_viommu:
+      timeout: 10
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+  slow_dispatch: false

@@ -111,6 +111,9 @@ void kernel_main() {
     std::array<uint32_t, num_inputs> input_batch_head_count;
     std::array<uint32_t, num_inputs> input_tile_id_start;
     std::array<uint32_t, num_inputs> input_tile_id_end;
+    // Phase-1 input page base: nonzero only for single-slot gather (skip to the sliced input slot).
+    // The slice is always emitted into output slot 0, whatever the output batch size.
+    std::array<uint32_t, num_inputs> input_batch_base;
 
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
         input_tensor_Wt[input_idx] = get_arg_val<uint32_t>(arg_idx++);
@@ -120,6 +123,7 @@ void kernel_main() {
         input_batch_head_count[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_start[input_idx] = get_arg_val<uint32_t>(arg_idx++);
         input_tile_id_end[input_idx] = get_arg_val<uint32_t>(arg_idx++);
+        input_batch_base[input_idx] = get_arg_val<uint32_t>(arg_idx++);
     }
 
     auto inputs_tuple = make_tensor_accessor_tuple(inputs_args, arg_idx);
@@ -141,9 +145,11 @@ void kernel_main() {
     CircularBuffer cb_output(cb_output_id);
 
     // Push out our local slice
+    // For a single-slot gather this starts at the sliced batch slot; otherwise 0 (full batch).
     uint32_t output_tile_id_start = 0;
     // Read local slice to our buffers, before sending them over
     for (uint32_t input_idx = 0; input_idx < num_inputs; input_idx++) {
+        output_tile_id_start = input_batch_base[input_idx];
         uint32_t tiles_read = input_tile_id_start[input_idx];
         uint32_t tiles_to_read = input_tile_id_end[input_idx];
         for (uint32_t bh_idx = 0; bh_idx < input_batch_head_count[input_idx]; bh_idx++) {

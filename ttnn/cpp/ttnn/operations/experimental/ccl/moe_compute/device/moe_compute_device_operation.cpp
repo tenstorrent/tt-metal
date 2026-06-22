@@ -186,6 +186,13 @@ void MoEComputeDeviceOperation::validate_on_program_cache_miss(
     const uint32_t tiles_per_step = (tiles_per_step_raw + 1) & ~1u;
     TT_FATAL(
         tiles_per_step >= 2 && tiles_per_step % 2 == 0, "tiles_per_step ({}) must be even and >= 2", tiles_per_step);
+
+    const uint32_t experts_per_device = tensor_args.matmul_w0_w1_tensor.logical_shape()[2];
+    TT_FATAL(
+        args.num_shared_experts_per_device <= experts_per_device,
+        "num_shared_experts_per_device ({}) must be <= experts_per_device ({})",
+        args.num_shared_experts_per_device,
+        experts_per_device);
 }
 
 MoEComputeDeviceOperation::spec_return_value_t MoEComputeDeviceOperation::compute_output_specs(
@@ -395,7 +402,8 @@ std::vector<ttnn::Tensor> moe_compute(
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore,
     const std::optional<ttnn::experimental::prim::detail::MoEActivationFunction>& activation_type,
     const bool compute_only,
-    const std::optional<uint32_t>& bh_ring_size) {
+    const std::optional<uint32_t>& bh_ring_size,
+    const std::optional<uint32_t>& num_shared_experts_per_device) {
     using OperationType = ttnn::experimental::prim::MoEComputeDeviceOperation;
 
     const auto& input_shape = tilize_input_tensor.tensor_spec().logical_shape();
@@ -485,6 +493,7 @@ std::vector<ttnn::Tensor> moe_compute(
             .layer_id = layer_id,
             .output_height_shard_dim = output_height_shard_dim,
             .intermediate_size = intermediate_size,
+            .num_shared_experts_per_device = num_shared_experts_per_device,
             .has_bias = has_bias,
             .num_token_parallel_cores = num_token_parallel_cores,
             .num_data_parallel_cores = num_data_parallel_cores,

@@ -282,8 +282,13 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
             // Default to FULL_MESH when intermesh exists
             // TODO: Implement detection logic for:
             //   - EDGE_ONLY: Check if workload only needs edge nodes (optimization)
-            //   - FULL_MESH_WITH_PASS_THROUGH: Check if any mesh forwards traffic between other meshes
-            constexpr bool needs_mesh_pass_through = false;
+            //   - FULL_MESH_WITH_PASS_THROUGH: Auto-detect when a mesh forwards traffic between other meshes
+            //
+            // EXPERIMENTAL: pass-through (A->B->C inter-mesh routing) is currently opt-in via env var.
+            // It reuses VC1 for both in-mesh delivery and cross-mesh pass-through and is NOT guaranteed
+            // deadlock-free (a fully deadlock-free implementation requires a dedicated pass-through VC).
+            const bool needs_mesh_pass_through =
+                tt::tt_metal::MetalContext::instance().rtoptions().get_enable_fabric_mesh_pass_through();
 
             config = needs_mesh_pass_through ? IntermeshVCConfig::full_mesh_with_pass_through()
                                              : IntermeshVCConfig::full_mesh();

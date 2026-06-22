@@ -418,27 +418,40 @@ void kernel_main() {
 
     // while reader and compute kernels are applying the sigmoid, we can create the topk indices
     // I see no performance difference generating these internally inside the writer kernel
-    generate_index_tiles(cb_expert_index_template, width_tiles, indices_page_size);
-    generate_group_indices_tiles(cb_group_index_template, width_tiles, n_groups);
     generate_reduce_scalar(cb_reduce_ones_scalar, packed_one_scalar, n_activated_experts);
     write_single_scalar(cb_epsilon_scalar, packed_epsilon);
     write_single_scalar(cb_route_scale_scalar, packed_route_scale);
+    if constexpr (n_groups != 1) {
+        // Grouped path reuses these templates across all height tiles (they are never popped).
+        generate_index_tiles(cb_expert_index_template, width_tiles, indices_page_size);
+        generate_group_indices_tiles(cb_group_index_template, width_tiles, n_groups);
+    }
 
     for (uint32_t height_tile = start_height_tile; height_tile < end_height_tile; height_tile++) {
         // Use remainder_tokens_per_tile only for the LAST tile of the sequence, otherwise use full tile_height
         uint32_t tokens_per_tile = ((height_tile + 1) % seq_len_tiles == 0) ? remainder_tokens_per_tile : tile_height;
-        generate_summed_experts_tiles(
-            cb_top_experts_per_group, cb_sorted_group_scores, width_tiles, summed_experts_per_group, tokens_per_tile);
-        generate_winning_group_tiles<
-            cb_sorted_group_order,
-            cb_biased_scores,  // Use biased scores for selection/routing; unbiased (sigmoid-only) scores are gathered
-                               // later for final weight computation
-            cb_expert_index_template,
-            cb_winning_group_scores,
-            cb_winning_group_indices,
-            width_tiles,
-            topk_groups,
-            num_group_tiles>(tokens_per_tile);
+        if constexpr (n_groups == 1) {
+            // Single expert group: no grouping. The compute kernel's plain top-k consumes (pops) the
+            // expert-index template, so it must be regenerated every iteration.
+            generate_index_tiles(cb_expert_index_template, width_tiles, indices_page_size);
+        } else {
+            generate_summed_experts_tiles(
+                cb_top_experts_per_group,
+                cb_sorted_group_scores,
+                width_tiles,
+                summed_experts_per_group,
+                tokens_per_tile);
+            generate_winning_group_tiles<
+                cb_sorted_group_order,
+                cb_biased_scores,  // Use biased scores for selection/routing; unbiased (sigmoid-only) scores are
+                                   // gathered later for final weight computation
+                cb_expert_index_template,
+                cb_winning_group_scores,
+                cb_winning_group_indices,
+                width_tiles,
+                topk_groups,
+                num_group_tiles>(tokens_per_tile);
+        }
 
         cb_wait_front(cb_out_indices, 1);
 

@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Benchmark: DRAM-core prefetcher vs worker-core prefetcher on Blackhole.
+"""Benchmark: Tensor prefetcher vs worker-core prefetcher on Blackhole.
 
 Parametrized over Llama-3.2-1B, Llama-3.2-3B, Llama-3.1-8B, Llama-3.3-70B production
 prefetcher matmuls (QKV / WO / FF1 / FF2). For models that need multi-device tensor
@@ -14,7 +14,7 @@ Both paths share the same gather_in0 matmul kernels and the same production scat
 receiver layout / receiver sub-device / stall group setup. The only difference is
 which prefetcher is used:
 - DRAM-core: DRISC kernel on DRAM cores, started once via
-  `start_dram_core_prefetcher(num_layers=N+1)` before the trace, stopped after.
+  `start_tensor_prefetcher(num_layers=N+1)` before the trace, stopped after.
 - Worker-core: BRISC+NCRISC kernels on worker cores, dispatched once via
   `ttnn.dram_prefetcher(num_layers=N+1)` before the trace.
 
@@ -28,7 +28,7 @@ parametrize values for ad-hoc runs. `BENCH_TRACE_REPEATS` (default 100) controls
 trace replay length for both paths. All shapes use ring=64 (8 banks × 8
 receivers/bank) and bfloat8_b.
 
-Per-shape results: see `docs/dram_core_prefetcher_bench_results.md`. The
+Per-shape results: see `docs/tensor_prefetcher_bench_results.md`. The
 table there was measured with the previous worker-core trace shape and is
 pending re-measurement after the move to N discrete `ttnn.linear` launches.
 
@@ -57,13 +57,13 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import (
 )
 
 
-pytestmark = run_for_blackhole("DRAM-core prefetcher requires Blackhole")
+pytestmark = run_for_blackhole("Tensor prefetcher requires Blackhole")
 
 
 @pytest.fixture(autouse=True)
-def _require_dram_core_prefetcher(device):
+def _require_tensor_prefetcher(device):
     """Skip unless programmable DRAM cores are available on this device."""
-    if not ttnn.experimental.is_dram_core_prefetcher_supported(device):
+    if not ttnn.experimental.is_tensor_prefetcher_supported(device):
         pytest.skip("programmable DRAM cores unavailable; set TT_METAL_ENABLE_BLACKHOLE_DRAM_PROGRAMMABLE_CORES=1")
 
 
@@ -431,8 +431,8 @@ def test_bench_dram_core_repeats(device, op_name, shape):
         )
 
     # One long-lived DRISC stream: 1 warmup/correctness layer + trace_repeats traced layers.
-    ttnn.experimental.start_dram_core_prefetcher(device)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    ttnn.experimental.start_tensor_prefetcher(device)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, ring_size)] * num_prefetch_layers,
         global_cb=gcb,
@@ -461,7 +461,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
     elapsed = time.perf_counter() - t0
     ttnn.release_trace(device, bench_trace)
 
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     per_matmul_us = elapsed / trace_repeats * 1e6
     # Use unpadded K in the TFLOP/s formula so it's comparable across paths (worker-core uses
@@ -644,9 +644,9 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
 
     # Centralized recv-contig param + cross-check: returns the validated block_count
     # (== ring_size) and TT_FATALs on a weight/program_config/gcb mismatch.
-    block_count = ttnn.experimental.dram_core_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
-    ttnn.experimental.start_dram_core_prefetcher(device, dual_senders_per_bank=dual_senders)
-    ttnn.experimental.queue_dram_core_prefetcher_request(
+    block_count = ttnn.experimental.tensor_prefetcher_block_count_for_matmul_1d(cc_program_config, tt_weight, gcb)
+    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    ttnn.experimental.queue_tensor_prefetcher_request(
         device,
         [(tt_weight, block_count)] * num_prefetch_layers,
         global_cb=gcb,
@@ -673,7 +673,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape):
     elapsed = time.perf_counter() - t0
     ttnn.release_trace(device, bench_trace)
 
-    ttnn.experimental.stop_dram_core_prefetcher(device)
+    ttnn.experimental.stop_tensor_prefetcher(device)
 
     per_matmul_us = elapsed / trace_repeats * 1e6
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
@@ -847,7 +847,7 @@ def test_bench_workercore_repeats(device, op_name, shape):
         )
 
     # One bulk dram_prefetcher dispatch before the trace, mirroring the DRAM-core path's
-    # start_dram_core_prefetcher call. The kernel runs async on device and pushes
+    # start_tensor_prefetcher call. The kernel runs async on device and pushes
     # num_prefetch_layers worth of pages; the warmup matmul + N traced matmul launches
     # drain them as they arrive (GCB credit gates the producer/consumer pipeline).
     ttnn.dram_prefetcher([tt_weight, tt_addrs], num_layers=num_prefetch_layers, global_cb=gcb)

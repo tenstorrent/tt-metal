@@ -1,5 +1,9 @@
 #!/bin/bash
 
+# Source MPI interface validation utility
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$SCRIPT_DIR/utils/mpi_if_selection.sh"
+
 # Function to display help
 show_help() {
     cat << EOF
@@ -26,7 +30,8 @@ Optional:
                                             /data/scaleout_configs is mounted by default when it exists on
                                             the host; each host path is mounted at the same path inside
                                             the container
-    --mpi-if <interface>                    Network interface for MPI TCP transport (default: ens5f0np0)
+    --mpi-if <interface>                    Network interface for MPI TCP transport
+                                            (auto-detected if not specified)
     --mpi-args <args>                       Extra arguments passed directly to mpirun (quoted string)
                                             e.g. --mpi-args "--tag-output"
     --validation-args <args>                Extra arguments passed verbatim to run_cluster_validation (quoted string)
@@ -65,7 +70,8 @@ OUTPUT_DIR="validation_output"
 # pass them via --volume / the descriptor path flags.
 EXTRA_VOLUMES=()
 [[ -d /data/scaleout_configs ]] && EXTRA_VOLUMES+=(/data/scaleout_configs)
-MPI_IF="ens5f0np0"
+MPI_IF=""
+MPI_IF_EXPLICIT=false
 MPI_EXTRA_ARGS=()
 VALIDATION_EXTRA_ARGS=()
 
@@ -145,6 +151,7 @@ while [[ $# -gt 0 ]]; do
                 exit 1
             fi
             MPI_IF="$2"
+            MPI_IF_EXPLICIT=true
             shift 2
             ;;
         --mpi-args)
@@ -206,6 +213,15 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     echo ""
     show_help
     exit 1
+fi
+
+# Validate/auto-detect MPI interface with first host from the list
+FIRST_HOST="${HOSTS%%,*}"
+if [[ "$MPI_IF_EXPLICIT" == "true" ]]; then
+    validate_mpi_interface "$MPI_IF" "true" "$FIRST_HOST"
+else
+    MPI_IF=$(validate_mpi_interface "" "false" "$FIRST_HOST")
+    echo "Auto-detected MPI interface: $MPI_IF"
 fi
 
 run_cluster_validation() {
