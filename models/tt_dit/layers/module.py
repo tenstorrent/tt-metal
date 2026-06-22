@@ -134,6 +134,8 @@ class Module(ABC):
         for name in state_dict:
             unexpected_keys.append(f"{module_key_prefix}{name}")
 
+        self._is_loaded = True
+
     def load_torch_state_dict(self, state_dict: Mapping[str, torch.Tensor], *, strict: bool = True) -> IncompatibleKeys:
         """Load PyTorch state dict into module parameters.
 
