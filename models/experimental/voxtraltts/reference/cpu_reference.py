@@ -34,7 +34,7 @@ from models.experimental.voxtraltts.reference.voxtral_request import (
     load_mistral_tokenizer,
 )
 from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
-from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
+from models.experimental.voxtraltts.tt.acoustic_model import acoustic_fm_noise_seed
 
 _ACOUSTIC_CFG_ALPHA = 1.2
 

@@ -28,7 +28,7 @@ from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_mod
 from models.experimental.voxtraltts.tt.acoustic_model import VoxtralTTAcousticModel
 from models.experimental.voxtraltts.tt.voxtral_tts import ACOUSTIC_CFG_ALPHA_DEFAULT
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
-from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
+from models.experimental.voxtraltts.tt.acoustic_model import acoustic_fm_noise_seed
 from models.tt_transformers.tt.common import Mode
 
 _E2E_DEMO_TEXT = (
