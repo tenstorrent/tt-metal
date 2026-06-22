@@ -7,7 +7,7 @@ Implementation plan for bringing up **Google DiffusionGemma 26B-A4B-it** on Tens
 - **New module root:** `models/experimental/diffusion_gemma/`
 - **Companion doc:** [`AGENTS.md`](./AGENTS.md) — terse working context for agents. This file is the executable plan: milestones, per-issue workstreams, dependencies, risks, and acceptance gates.
 
-> **TL;DR.** The text backbone is identical to the in-repo **Gemma-4 26B-A4B MoE** (`models/demos/gemma4/`). The real work is the **generation procedure**, not the backbone: a block-autoregressive multi-canvas *text-diffusion* loop with **bidirectional canvas attention**, a **three-phase KV-cache state machine**, **entropy-budget acceptance sampling**, and **self-conditioning**. Bring up text-first on T3K (correctness) → QB2 (product).
+> **TL;DR.** The text backbone is identical to the in-repo **Gemma-4 26B-A4B MoE** (`models/demos/gemma4/`). The real work is the **generation procedure**, not the backbone: a block-autoregressive multi-canvas *text-diffusion* loop with **bidirectional canvas attention**, a **three-phase KV-cache state machine**, **entropy-budget acceptance sampling**, and **self-conditioning**. Bring up text-first on QB2.
 
 ---
 
@@ -78,12 +78,12 @@ The **same backbone, shared weights**, runs in three phases per 256-token block,
 
 | Milestone | HW | Scope | Exit criteria | Perf |
 |---|---|---|---|---|
-| **Foundation** | T3K | Correctness gate (not a product target) | Causal 26B-A4B backbone PCC vs HF on **T3K** (#47461) on the DiffusionGemma ckpt; torch ref + PCC harness (#47468) live | — |
+| **Foundation** | QB2 | Correctness gate (not a product target) | Causal 26B-A4B backbone PCC vs HF on **QB2** (#47461) on the DiffusionGemma ckpt; torch ref + PCC harness (#47468) live | — |
 | **Functional** | **QB2** (gated on #47487) | text-only · batch 1 · max ctx 256K · on-device sampling · vLLM | E2E text generation matches torch ref at 256K on QB2; served via TT plugin | TTFT ~50%, t/s/u ~100% |
 | **Functional +** | + BHG, then broader HW | + T+I / T+V · all resolutions · batch>1 | Multimodal e2e; batched decode at PCC parity to batch=1 | t/s/u ~200% |
 | **Complete** | all | everything | — | — |
 
-**QB2/Galaxy HW enablement (#47487) is a hard prereq of the *Functional* milestone, NOT of Foundation.** Foundation validates correctness on T3K (the only HW 26B-A4B runs on today).
+**Foundation validates the causal backbone on QB2** — 26B-A4B is verified to fit + run on `P150x4` (TP=4, no OOM; experts TP-sharded). #47487 owns the full QB2 memory budget / 256K batch ceiling (and, later, Galaxy 4×8 TP) on top of that.
 
 ---
 
@@ -92,7 +92,7 @@ The **same backbone, shared weights**, runs in three phases per 256-token block,
 ```mermaid
 graph TD
   47468["#47468 torch ref + PCC harness<br/>(oracle — upstream of all TT validation)"]
-  47461["#47461 causal backbone on T3K<br/>+ self-conditioning loader"]
+  47461["#47461 causal backbone on QB2<br/>+ self-conditioning loader"]
   47487["#47487 HW enablement<br/>QB2 fit + Galaxy 4×8 TP"]
   47474["#47474 KV phase state machine"]
   47462["#47462 bidirectional forward<br/>+ 2D mask geometry"]
@@ -156,18 +156,18 @@ Each workstream lists **scope**, **depends-on**, **key code anchors**, **approac
 - **Approach:** Stand up the oracle independent of any TT code. Add hooks to inject the torch run's Gumbel noise + random-renoise token ids (on-device RNG won't bit-match — see R5). The harness must validate **diffusion decisions**, not just logits (bfp8 small-probability drift can flip accept/renoise).
 - **Acceptance:** Deterministic torch trajectory reproducible; harness can PCC any TT module against the oracle and diff entropy/argmax decisions per step.
 
-#### #47461 — Causal Gemma-4 26B-A4B backbone on T3K
-- **Scope:** Bring up the existing causal backbone on the **DiffusionGemma checkpoint**; validate it reproduces HF logits (PCC + coherent greedy generation) on **T3K**. Implement the **net-new self-conditioning gated MLP loader** (no such module in `gemma4/tt/`).
+#### #47461 — Causal Gemma-4 26B-A4B backbone on QB2
+- **Scope:** Bring up the existing causal backbone on the **DiffusionGemma checkpoint**; validate it reproduces HF logits (PCC + coherent greedy generation) on **QB2**. Implement the **net-new self-conditioning gated MLP loader** (no such module in `gemma4/tt/`).
 - **Depends-on:** #47468 oracle (to validate against).
 - **Approach — two stages, do not conflate:** (1) bring up the unchanged gemma4 path and PCC vs HF on the **gemma4 ckpt**; (2) repoint to the **DiffusionGemma ckpt** and validate text weight mapping + causal-pass PCC — catch missing/renamed weight keys, the extra self-conditioning weights, and config diffs (per-layer q/k/v-norm + K=V reconciliation vs `modeling_diffusion_gemma.py`, `canvas_length`, …) — **before** any diffusion delta.
 - **De-risk surface:** MoE-128/top-8 sparse routing, shared MLP, final softcap, dual-θ RoPE, 256K ctx, multi-device TP.
-- **Acceptance:** Causal backbone logits PCC vs HF on T3K on the DiffusionGemma ckpt; self-cond loader lands so #47468's self-cond module PCC can run.
+- **Acceptance:** Causal backbone logits PCC vs HF on QB2 on the DiffusionGemma ckpt; self-cond loader lands so #47468's self-cond module PCC can run.
 
 #### #47487 — HW enablement: QB2 fit + Galaxy 4×8 TP
 - **Scope:** Fit/run the causal backbone on **QB2** (1×4 Blackhole) with a **documented memory budget + batch ceiling**, and wire a **4×8 TP/EP/SP mesh** for Galaxy/BHG. Validate backbone logits PCC on both.
 - **Depends-on:** #47461 (validated backbone).
-- **Facts:** 26B-A4B is T3K-only today (`models/demos/gemma4/README.md`); `is_galaxy` is currently used only for sampling args (`tt/model.py:407`) — no 4×8 mesh wired in `tt/`. Weight memory ≈ bf16 51.7 GB / bfp8 26 GB.
-- **Approach:** Reuse `gemma4/tt/{config.py,ccl.py}`. **The QB2 budget must additionally account for the per-step canvas K/V scratch (#47474 storage class ii) and the non-causal long-context mask buffers (#47462)** — neither is exercised by the T3K causal run (R3). Size the batch ceiling against weights + 256K KV + canvas scratch + mask.
+- **Facts:** 26B-A4B fits + runs on QB2 (`P150x4`, TP=4) — verified, no OOM (experts are TP-sharded ≈5.7 GB/chip). `is_galaxy` is currently used only for sampling args (`tt/model.py:407`) — no 4×8 mesh wired in `tt/`. Weight memory ≈ bf16 51.7 GB / bfp8 26 GB.
+- **Approach:** Reuse `gemma4/tt/{config.py,ccl.py}`. **The QB2 budget must additionally account for the per-step canvas K/V scratch (#47474 storage class ii) and the non-causal long-context mask buffers (#47462)** — neither is exercised by the short-prompt causal-backbone run (R3). Size the batch ceiling against weights + 256K KV + canvas scratch + mask.
 - **Acceptance:** Documented QB2 memory budget + batch ceiling at 256K; backbone PCC on QB2 and (later) Galaxy.
 
 ### Functional core
@@ -274,7 +274,7 @@ Layered, oracle-driven (all via #47468):
 |---|---|---|---|
 | **R1** | Entropy-budget acceptance (data-dependent cutoff + scatter-back) may not be trace-able under static Metal Trace | Could force per-step host readback → defeats trace → **Functional perf gate (#47465) at risk** | **Spike #47463 acceptance before committing the loop.** Fallback: fixed-max-steps + masked no-op (traceable) or bounded host readback. Spike outcome is a hard input to #47465. |
 | **R2** | Canvas K/V written into the frozen cache during denoise corrupts prompt KV | Silent correctness failure | #47474 three storage classes; per-step canvas K/V never written until commit; PCC over ≥2 committed blocks. |
-| **R3** | QB2 memory fit — weights + 256K KV + **canvas scratch + non-causal mask** | OOM / reduced batch ceiling | #47487 budget must include #47474 scratch + #47462 mask; **T3K causal PCC does not de-risk this.** |
+| **R3** | QB2 memory fit — weights + 256K KV + **canvas scratch + non-causal mask** | OOM / reduced batch ceiling | #47487 budget must include #47474 scratch + #47462 mask; **a short-prompt causal-backbone PCC does not de-risk the 256K fit.** |
 | **R4** | Long-context (>32768) non-causal path — existing chunked path is **causal-only** and silently wrong above 32768 | Wrong results at long ctx | Build a net-new non-causal chunked path in #47462; do not reuse the causal chunked op. |
 | **R5** | On-device RNG won't bit-match torch | Can't do token-for-token PCC | Inject torch's exact Gumbel + renoise ids (#47468); validate decisions. |
 | **R6** | vLLM block-granular emission is an **upstream `dev` PR** in a separate repo | Serving blocked on external review | #47488 depends on #47466; plan the upstream PR early; separate review cycle. |

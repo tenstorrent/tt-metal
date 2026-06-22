@@ -56,20 +56,20 @@ We serve via the [tenstorrent/vllm](https://github.com/tenstorrent/vllm) TT plug
 - The PCC harness must validate the diffusion *decisions* (entropy values, Gumbel-max argmax agreement, multi-step trajectory), not just logits — bfp8 small-probability drift can flip accept/renoise.
 
 ## Hardware staging
-- 26B-A4B currently runs on **T3K (1×8) only** (`models/demos/gemma4/README.md`). **Validate the backbone on T3K first.**
+- 26B-A4B is verified to fit + run on **QB2 (`P150x4`, 1×4, TP=4)** — no OOM, experts TP-sharded. **Validate the backbone on QB2.**
 - Near-term product target: **QB2 only**; **BHG (Galaxy) adapted later**, then broader HW. QB2 fit + Galaxy 4×8 TP enablement tracked in #47487.
-- **A clean T3K causal PCC does NOT de-risk the QB2 fit for the diffusion path.** The QB2 memory budget (#47487) must additionally account for the **per-step canvas K/V scratch zone** (#47474 storage class ii) and the **non-causal long-context mask buffers** (#47462) — neither is exercised by the T3K causal-backbone run. Size the batch ceiling against weights + 256K KV + canvas scratch + mask.
+- **A clean short-prompt causal PCC does NOT de-risk the 256K QB2 fit for the diffusion path.** The QB2 memory budget (#47487) must additionally account for the **per-step canvas K/V scratch zone** (#47474 storage class ii) and the **non-causal long-context mask buffers** (#47462) — neither is exercised by the short-prompt causal-backbone run. Size the batch ceiling against weights + 256K KV + canvas scratch + mask.
 
 ## Milestones
-- **Foundation (exit criteria)** — causal Gemma-4 26B-A4B backbone PCC-validated vs HF **on T3K** (#47461) + torch ref / PCC harness (#47468). This is a correctness gate, not a product target. QB2/Galaxy enablement (#47487) is a **hard prereq of the Functional milestone**, not of foundation.
+- **Foundation (exit criteria)** — causal Gemma-4 26B-A4B backbone PCC-validated vs HF **on QB2** (#47461) + torch ref / PCC harness (#47468). This is a correctness gate, not a product target. #47487 owns the full QB2 256K memory budget + batch ceiling (and, later, Galaxy 4×8 TP) on top.
 - **Functional** — text-only · batch 1 · max ctx 256K · on-device sampling · vLLM · QB2 (gated on #47487). Perf TTFT ~50%, t/s/u ~100%.
 - **Functional +** — + image/video inputs · all resolutions · + BHG/broader HW. Perf t/s/u ~200%.
 - **Complete** — everything.
 - Batching: batch=1 first, then batch=4 (#47557).
 
 ## Issue map (label `DiffusionGemma`, parent #47452)
-- **Foundation (T3K correctness):** #47468 torch ref + PCC harness · #47461 causal backbone (T3K) **+ self-conditioning loader**
-- **Functional HW prereq:** #47487 HW enablement / QB2 fit + Galaxy 4×8 TP — **gates the Functional milestone, not the T3K foundation**; budget must include #47474 canvas scratch + non-causal mask
+- **Foundation (QB2 correctness):** #47468 torch ref + PCC harness · #47461 causal backbone (QB2) **+ self-conditioning loader**
+- **Functional HW prereq:** #47487 HW enablement / QB2 256K budget + Galaxy 4×8 TP — budget must include #47474 canvas scratch + non-causal mask
 - **Functional core:** #47474 KV phase state machine (prereq → #47462/#47463) · #47462 bidirectional forward · #47463 decode loop (**spike gates #47465**) · #47472 on-device sampling · #47557 batched decode · #47464 functional e2e · #47465 perf · #47466 vLLM integration · #47488 vLLM block-granular runner/scheduler (**depends on #47466; upstream tenstorrent/vllm `dev` PR — separate repo/review**)
 - **Functional +:** #47467 multimodal
 - **Infra / optional:** #47475 quant dequant · #47489 CI
