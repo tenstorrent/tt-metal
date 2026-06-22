@@ -312,6 +312,71 @@ GraphLayoutResult resolve_graph_layout(
     }
 
     // ------------------------------------------------------------------
+    // 5.4. Deconflict stage 0's forward-exit chip vs the loopback-entry chip.
+    //
+    // The forwarding-stage loop below (5.5) starts at i=1 and only inspects
+    // NON-loopback entry edges, so it never compares stage 0's forward-exit
+    // (src == stage_order[0]) against the ring loopback's entry into stage 0
+    // (is_loopback && dst == stage_order[0]).  When the resolver lands both on
+    // the same physical chip, stage 0's forward-D2D and loopback-D2D persistent
+    // kernels are dispatched to the same Tensix core (both at PIPELINE_CORE_COORD),
+    // and the slow-dispatch launch deadlocks in wait_for_idle (the first kernel,
+    // being persistent, never goes idle).  Re-pick the loopback edge's link so its
+    // entry chip into stage 0 differs from the forward-exit chip; the forward-exit
+    // chip stays put (stage 1's entry socket targets it).
+    // ------------------------------------------------------------------
+    {
+        ResolvedEdge* fwd_exit = nullptr;
+        ResolvedEdge* lb_entry = nullptr;
+        for (auto& re : resolved_edges) {
+            if (!re.is_loopback && re.src == stage_order[0]) {
+                fwd_exit = &re;
+            }
+            if (re.is_loopback && re.dst == stage_order[0]) {
+                lb_entry = &re;
+            }
+        }
+        if (fwd_exit != nullptr && lb_entry != nullptr && lb_entry->entry_row == fwd_exit->exit_row &&
+            lb_entry->entry_col == fwd_exit->exit_col) {
+            size_t s0_sub = node_to_sub.at(stage_order[0]);
+            size_t lb_src_sub = node_to_sub.at(lb_entry->src);
+            bool resolved = false;
+            // Prefer moving the loopback entry (keeps the forward-exit chip stable).
+            const auto& lb_links = connections.at({lb_src_sub, s0_sub}).links;
+            for (const auto& lp : lb_links) {
+                if (lp.entry_row != fwd_exit->exit_row || lp.entry_col != fwd_exit->exit_col) {
+                    lb_entry->exit_row = lp.exit_row;
+                    lb_entry->exit_col = lp.exit_col;
+                    lb_entry->entry_row = lp.entry_row;
+                    lb_entry->entry_col = lp.entry_col;
+                    resolved = true;
+                    break;
+                }
+            }
+            if (!resolved) {
+                // Fall back to moving the forward exit instead.
+                size_t fwd_dst_sub = node_to_sub.at(fwd_exit->dst);
+                const auto& fwd_links = connections.at({s0_sub, fwd_dst_sub}).links;
+                for (const auto& lp : fwd_links) {
+                    if (lp.exit_row != lb_entry->entry_row || lp.exit_col != lb_entry->entry_col) {
+                        fwd_exit->exit_row = lp.exit_row;
+                        fwd_exit->exit_col = lp.exit_col;
+                        fwd_exit->entry_row = lp.entry_row;
+                        fwd_exit->entry_col = lp.entry_col;
+                        resolved = true;
+                        break;
+                    }
+                }
+            }
+            if (!resolved) {
+                throw std::runtime_error(
+                    "resolve_graph_layout: stage 0 forward-exit and loopback-entry resolve to the "
+                    "same chip and no alternative ethernet link exists to deconflict them");
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
     // 5.5. Deconflict same-chip entry/exit for forwarding stages.
     //
     // A forwarding stage i has both an entry chip (where data arrives from
