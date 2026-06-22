@@ -21,7 +21,7 @@ from models.experimental.voxtraltts.reference.functional import (
 )
 from models.experimental.voxtraltts.tests.common import create_real_voxtral_text_model_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
-from models.tt_transformers.tt.common import Mode
+from models.experimental.voxtraltts.tt.text_backbone.common import Mode
 
 PCC_TARGET = 0.99
 

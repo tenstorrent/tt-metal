@@ -1,0 +1,310 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+"""Voxtral text-model fp32-promoting RMSNorm (HF-faithful MistralRMSNorm).
+
+Split out of rmsnorm.py so it uses the vendored text_backbone Mode/RMSNorm — the Mode enum
+identity must match the vendored framework the text model is built from (the acoustic norms in
+rmsnorm.py stay on the tt_transformers Mode).
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Any
+
+import torch
+import ttnn
+
+from models.experimental.voxtraltts.tt.text_backbone.common import Mode
+
+
+class VoxtralTextRMSNorm:
+    """FP32-promoting RMSNorm matching HF MistralRMSNorm exactly.
+
+    HF's ``MistralRMSNorm`` promotes the input tensor to FP32 *before* computing the
+    variance, then casts the normalised result back to bf16 and multiplies by the
+    (bf16) weight. The shared ``models.common.rmsnorm.RMSNorm`` uses bf16 inputs with
+    an fp32 *accumulator*, which means the per-element ``x*x`` multiplication loses
+    bf16 precision before accumulation — a small but compounding error over the 32
+    text-model layers.
+
+    This class implements the HF behaviour explicitly with ttnn primitives:
+
+    1. ``ttnn.typecast(x, fp32)`` — promote input
+    2. ``ttnn.multiply(x_fp32, x_fp32)`` — squared values in fp32
+    3. ``ttnn.mean(dim=-1, keepdim=True)`` — variance in fp32
+    4. ``ttnn.rsqrt(variance + eps)`` — inverse-sqrt in fp32
+    5. ``ttnn.multiply(x_fp32, rsqrt)`` — normalise in fp32 (broadcast over last dim)
+    6. ``ttnn.typecast(result, bf16)`` — cast back
+    7. ``ttnn.multiply(normalised, weight_bf16)`` — final weight multiply in bf16
+
+    Matches HF MistralRMSNorm's forward exactly. Same interface as :class:`VoxtralTTRMSNorm`
+    so it can be drop-in replaced into a tt_transformers-built text model.
+
+    Note: each call adds ~5 extra ttnn ops vs the fused ``ttnn.rms_norm`` kernel, so this
+    is slower per-call. Use only where the precision matters (typically the text-model
+    layer norms feeding into attention / MLP).
+    """
+
+    def __init__(
+        self,
+        device,
+        dim: int,
+        state_dict: dict[str, torch.Tensor],
+        weight_key: str,
+        eps: float = 1e-5,
+        weight_dtype=ttnn.bfloat16,
+        weight_cache_path: Path | None = None,
+        *,
+        args=None,
+        tt_ccl=None,
+        ag_config_key: str | None = None,
+        enable_all_gather: bool = True,
+        prefetcher=None,
+    ) -> None:
+        # Resolve weight from state_dict using either ``weight_key`` or ``weight_key.weight``.
+        if f"{weight_key}.weight" in state_dict:
+            weight = state_dict[f"{weight_key}.weight"]
+        elif weight_key in state_dict:
+            weight = state_dict[weight_key]
+        else:
+            raise KeyError(f"VoxtralTextRMSNorm: weight not found at {weight_key!r} or {weight_key}.weight")
+
+        self.args = args
+        self.tt_ccl = tt_ccl
+        self.ag_config_key = ag_config_key
+        self.enable_all_gather = enable_all_gather
+        self.prefetcher = prefetcher
+        num_devices = int(args.num_devices) if args is not None else 1
+        cluster_shape = tuple(args.cluster_shape) if args is not None else None
+        use_distributed_gamma = (
+            num_devices > 1 and cluster_shape is not None and args is not None and args.is_distributed_norm(Mode.DECODE)
+        )
+
+        weight_torch = weight.reshape(1, 1, 1, -1).to(torch.bfloat16).contiguous()
+        mesh_mapper = None
+        if use_distributed_gamma:
+            mesh_mapper = ttnn.ShardTensor2dMesh(
+                mesh_device=device,
+                dims=(None, 3),
+                mesh_shape=cluster_shape,
+            )
+        elif num_devices > 1:
+            mesh_mapper = ttnn.ReplicateTensorToMesh(device)
+        self.weight_tt = ttnn.from_torch(
+            weight_torch,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mesh_mapper,
+        )
+        self.eps = float(eps)
+        self.dim = int(dim // num_devices) if use_distributed_gamma else int(dim)
+        self.mesh_device = device
+
+        # Fused-kernel path (opt-in, default ON). The manual __call__ below spends ~8 ttnn ops per
+        # norm; with 53 norms/decode-token that is ~hundreds of tiny ops whose host-dispatch GAP
+        # (~100us each) dominates decode wall-clock (and RTF) far more than their compute. The fused
+        # ``ttnn.rms_norm`` does square+mean+rsqrt+normalize+weight in ONE kernel. We still promote the
+        # input to fp32 first so the x*x square is fp32 (HF-faithful — the bf16 square is exactly what
+        # this class was created to avoid), and use fp32_dest_acc for the variance accumulation.
+        # Disable with VOXTRAL_TEXT_FUSED_RMSNORM=0 to fall back to the explicit decomposition.
+        self.use_fused = os.environ.get("VOXTRAL_TEXT_FUSED_RMSNORM", "1") == "1"
+        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
+
+    def _needs_pre_gather(self, mode: Mode) -> bool:
+        return (
+            self.args is not None
+            and self.tt_ccl is not None
+            and self.args.is_multichip
+            and mode == Mode.DECODE
+            and not self.args.is_distributed_norm(mode)
+        )
+
+    def _needs_post_gather(self, mode: Mode) -> bool:
+        return (
+            self.enable_all_gather
+            and self.args is not None
+            and self.tt_ccl is not None
+            and self.args.is_distributed_norm(mode)
+            and mode == Mode.DECODE
+        )
+
+    def _ag_num_links(self, mode: Mode) -> int:
+        if self.ag_config_key and mode == Mode.DECODE:
+            return self.args.model_config[self.ag_config_key]["num_links"]
+        return self.tt_ccl.get_num_links(1)
+
+    def _ag_chunks_per_sync(self, mode: Mode) -> int:
+        if self.ag_config_key and mode == Mode.DECODE:
+            return self.args.model_config[self.ag_config_key]["chunks_per_sync"]
+        return 10
+
+    def _ag_workers_per_link(self, mode: Mode) -> int:
+        if self.ag_config_key and mode == Mode.DECODE:
+            return self.args.model_config[self.ag_config_key]["num_workers_per_link"]
+        return 2
+
+    def _all_gather_async(self, x: ttnn.Tensor, mode: Mode, memory_config) -> ttnn.Tensor:
+        subdevice_id = self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None
+        return ttnn.experimental.all_gather_async(
+            x,
+            persistent_output_buffer=None,
+            dim=3,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(),
+            num_links=self._ag_num_links(mode),
+            topology=self.args.ccl_topology(),
+            memory_config=memory_config,
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(),
+            chunks_per_sync=self._ag_chunks_per_sync(mode),
+            num_workers_per_link=self._ag_workers_per_link(mode),
+            num_buffers_per_channel=2,
+            subdevice_id=subdevice_id,
+        )
+
+    def _prepare_multichip_input(self, x: ttnn.Tensor, mode: Mode, sharded_output_config) -> tuple[ttnn.Tensor, bool]:
+        """Match ``DistributedNorm``: gather fractured decode activations when required."""
+        input_mem_cfg = (
+            sharded_output_config if mode == Mode.DECODE and sharded_output_config else ttnn.DRAM_MEMORY_CONFIG
+        )
+        if self._needs_pre_gather(mode):
+            # all_gather lands in the decode sharded memcfg; match DistributedNorm in_sharded=True.
+            return self._all_gather_async(x, mode, input_mem_cfg), True
+        x = ttnn.to_memory_config(x, input_mem_cfg)
+        in_sharded = mode == Mode.DECODE and sharded_output_config is not None
+        return x, in_sharded
+
+    def _finalize_multichip_output(
+        self,
+        out: ttnn.Tensor,
+        mode: Mode,
+        sharded_output_config,
+        output_mem_config,
+        *,
+        in_sharded: bool,
+        pre_gathered: bool,
+    ) -> ttnn.Tensor:
+        if self._needs_post_gather(mode):
+            out = self._all_gather_async(out, mode, out.memory_config())
+        elif in_sharded and sharded_output_config is not None:
+            out = ttnn.to_memory_config(out, sharded_output_config)
+        elif output_mem_config is not None:
+            out = ttnn.to_memory_config(out, output_mem_config)
+        return out
+
+    def __call__(self, x: ttnn.Tensor, mode: Mode | str = Mode.DECODE, **kwargs: Any) -> ttnn.Tensor:
+        """Returns ``weight * normalize_fp32(x)`` with the bf16/fp32 cast pattern HF uses."""
+        if isinstance(mode, str):
+            mode = Mode(mode)
+
+        norm_config = kwargs.get("norm_config")
+        sharded_output_config = norm_config.get("sharded_output_config") if norm_config else None
+        output_mem_config = norm_config.get("output_mem_config") if norm_config else None
+
+        if self.use_fused:
+            sharded_program_config = norm_config.get("sharded_program_config") if norm_config else None
+            return self._forward_fused(x, mode, sharded_output_config, output_mem_config, sharded_program_config)
+
+        pre_gathered = self._needs_pre_gather(mode)
+        x, in_sharded = self._prepare_multichip_input(x, mode, sharded_output_config)
+        if in_sharded:
+            x = ttnn.sharded_to_interleaved(x)
+
+        # Capture input dtype so we can restore it at the end (matches HF's behaviour).
+        input_dtype = x.dtype
+        dram_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+
+        # Step 1: promote to fp32
+        x_fp32 = ttnn.typecast(x, ttnn.float32, memory_config=dram_mem_cfg)
+
+        # Step 2: x ** 2 in fp32
+        x_sq = ttnn.multiply(x_fp32, x_fp32, dtype=ttnn.float32, memory_config=dram_mem_cfg)
+
+        # Step 3: variance = mean(x_sq, dim=-1, keepdim=True)
+        variance = ttnn.mean(x_sq, dim=-1, keepdim=True)
+        if x_sq.is_allocated():
+            ttnn.deallocate(x_sq)
+
+        # Step 4: rsqrt(variance + eps)
+        var_eps = ttnn.add(variance, self.eps, dtype=ttnn.float32, memory_config=dram_mem_cfg)
+        if variance.is_allocated():
+            ttnn.deallocate(variance)
+        rsqrt = ttnn.rsqrt(var_eps, memory_config=dram_mem_cfg)
+        if var_eps.is_allocated():
+            ttnn.deallocate(var_eps)
+
+        # Step 5: x_fp32 * rsqrt  (broadcast scalar-per-row over last dim)
+        normalised_fp32 = ttnn.multiply(x_fp32, rsqrt, dtype=ttnn.float32, memory_config=dram_mem_cfg)
+        if x_fp32.is_allocated():
+            ttnn.deallocate(x_fp32)
+        if rsqrt.is_allocated():
+            ttnn.deallocate(rsqrt)
+
+        # Step 6: cast back to input dtype (typically bf16)
+        normalised_in = ttnn.typecast(normalised_fp32, input_dtype, memory_config=dram_mem_cfg)
+        if normalised_fp32.is_allocated():
+            ttnn.deallocate(normalised_fp32)
+
+        # Step 7: weight * normalised (bf16 * bf16, broadcast over last dim)
+        out = ttnn.multiply(
+            normalised_in,
+            self.weight_tt,
+            dtype=ttnn.bfloat16,
+            memory_config=dram_mem_cfg,
+        )
+        if normalised_in.is_allocated():
+            ttnn.deallocate(normalised_in)
+
+        return self._finalize_multichip_output(
+            out,
+            mode,
+            sharded_output_config,
+            output_mem_config,
+            in_sharded=in_sharded,
+            pre_gathered=pre_gathered,
+        )
+
+    def _forward_fused(self, x, mode, sharded_output_config, output_mem_config, sharded_program_config=None):
+        """Single fused ``ttnn.rms_norm`` (fp32 square via fp32 input + fp32_dest_acc).
+
+        Replaces the ~8-op manual fp32 decomposition with one kernel (still fp32-faithful via the
+        fp32 input promote). Runs on the INTERLEAVED tensor: the sharded fp32 ``rms_norm`` was tried
+        (opt7) but the fp32 sharded kernel splits into 2 ops, adding back more ops than the saved
+        layout conversions (net gap up, free-run 0.7707->0.7622) — so it's not used. ``sharded_program_config``
+        is accepted for signature compatibility but intentionally unused.
+        """
+        pre_gathered = self._needs_pre_gather(mode)
+        x, in_sharded = self._prepare_multichip_input(x, mode, sharded_output_config)
+        if in_sharded:
+            x = ttnn.sharded_to_interleaved(x)
+
+        input_dtype = x.dtype
+        # Promote to fp32 so the kernel's x*x is computed in fp32 (HF-faithful — the precision this
+        # class exists to preserve). fp32_dest_acc keeps the variance reduction in fp32 too.
+        x_fp32 = ttnn.typecast(x, ttnn.float32, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out = ttnn.rms_norm(
+            x_fp32,
+            epsilon=self.eps,
+            weight=self.weight_tt,
+            compute_kernel_config=self.compute_kernel_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if x_fp32.is_allocated():
+            ttnn.deallocate(x_fp32)
+        if out.dtype != input_dtype:
+            out = ttnn.typecast(out, input_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        return self._finalize_multichip_output(
+            out,
+            mode,
+            sharded_output_config,
+            output_mem_config,
+            in_sharded=in_sharded,
+            pre_gathered=pre_gathered,
+        )

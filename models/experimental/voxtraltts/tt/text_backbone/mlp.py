@@ -1,7 +1,6 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
+
 # SPDX-License-Identifier: Apache-2.0
-"""Voxtral text-model MLP: tt_transformers fork with interleaved-weight / fused-SiLU decode opts."""
-from __future__ import annotations
 
 import torch
 
@@ -9,11 +8,10 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.voxtraltts.tt.text_backbone.ccl import tt_all_reduce
 from models.experimental.voxtraltts.tt.text_backbone.common import Mode, pad_to_size
-from models.experimental.voxtraltts.tt.text_backbone.mlp import MLP as _BaseMLP
 from models.experimental.voxtraltts.tt.text_backbone.model_config import OpGroup, TensorGroup
 
 
-class MLP(_BaseMLP):
+class MLP(LightweightModule):
     def __init__(
         self,
         mesh_device,
@@ -27,7 +25,7 @@ class MLP(_BaseMLP):
         state_dict_prefix=None,
         prefetcher=None,
     ):
-        LightweightModule.__init__(self)
+        super().__init__()
 
         self.mesh_device = mesh_device
         self.tt_ccl = tt_ccl
@@ -50,18 +48,8 @@ class MLP(_BaseMLP):
         else:
             cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{hidden_dim_string}"
 
-        # Opt-in (Voxtral mlp_interleaved_weights): w1/w3 DRAM-INTERLEAVED instead of bank-sharded,
-        # so decode can use a 1D mcast matmul. getattr-gated → every other model unchanged.
-        if getattr(args, "mlp_interleaved_weights", False):
-            w1_w3_mem_config = ttnn.DRAM_MEMORY_CONFIG
-        else:
-            w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
-        # Opt-in (Voxtral mlp_ff2_interleaved_weights): w2 DRAM-INTERLEAVED instead of bank-sharded,
-        # so decode can use a 1D mcast w2 matmul. getattr-gated → every other model unchanged.
-        if getattr(args, "mlp_ff2_interleaved_weights", False):
-            w2_mem_config = ttnn.DRAM_MEMORY_CONFIG
-        else:
-            w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
+        w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
+        w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
         # Note: unsqueeze(0).unsqueeze(0) makes weights 4D [1, 1, H, W] to match attention weights
@@ -106,17 +94,11 @@ class MLP(_BaseMLP):
             decoder_id=layer_num, tensor=TensorGroup.FF2, prefetcher=use_prefetcher
         )
 
-        # Layout-aware cache tag: interleaved w1/w3 must NOT reuse the DRAM-sharded cache entry
-        # (as_tensor loads the cached tensor's layout and ignores memory_config on a cache hit).
-        _ff13_tag = "w{}_interleaved" if getattr(args, "mlp_interleaved_weights", False) else "w{}_sharded"
         self.w1 = as_sharded_tensor(
-            _ff13_tag.format(1), ff1_3_dtype, dims=w1_dims
+            "w1_sharded", ff1_3_dtype, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        # Layout-aware tag: interleaved w2 must NOT reuse the DRAM-sharded cache entry (as_tensor
-        # loads the cached tensor's layout and ignores memory_config on a cache hit).
-        _ff2_tag = "w2_interleaved" if getattr(args, "mlp_ff2_interleaved_weights", False) else "w2_sharded"
-        self.w2 = as_sharded_tensor(_ff2_tag, ff2_dtype, dims=w2_dims)
-        self.w3 = as_sharded_tensor(_ff13_tag.format(3), ff1_3_dtype, dims=w1_dims)
+        self.w2 = as_sharded_tensor("w2_sharded", ff2_dtype, dims=w2_dims)
+        self.w3 = as_sharded_tensor("w3_sharded", ff1_3_dtype, dims=w1_dims)
 
         # Default activation is SILU
         self.activation_type = (
@@ -156,16 +138,7 @@ class MLP(_BaseMLP):
 
         # In decode mode (seqlen <= 32) do DRAM sharded matmuls
         # These use HiFi2; this drops 1 bit of the activations but would be FLOP-bound on 12 cores with HiFi4
-        w1_fuse_silu_decode = (
-            mode == Mode.DECODE
-            and getattr(self.args, "mlp_w1_fuse_silu_decode", False)
-            and hasattr(self.args, "get_mlp_ff1_w1_prg_config")
-        )
-        pc_1 = (
-            self.args.get_mlp_ff1_w1_prg_config(mode, seq_len, self.prefetcher)
-            if w1_fuse_silu_decode
-            else self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
-        )
+        pc_1 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
         pc_2 = self.args.get_mlp_ff2_prg_config(mode, seq_len, self.prefetcher)
         pc_3 = self.args.get_mlp_ff1_3_prg_config(mode, seq_len, self.prefetcher)
 
@@ -198,6 +171,9 @@ class MLP(_BaseMLP):
         ttnn.deallocate(x)
 
         if TG:
+            # if mode == "decode" and self.dim!=8192:
+            #     w1_out = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
+            #     w3_out = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
             if self.dim == 8192 or mode == Mode.PREFILL:
                 input_mem_cfg = w1_out.memory_config()
 
@@ -260,7 +236,7 @@ class MLP(_BaseMLP):
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
-            input_tensor_a_activations=[] if w1_fuse_silu_decode else [self.activation_type],
+            input_tensor_a_activations=[self.activation_type],
             dtype=activation_dtype or ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )

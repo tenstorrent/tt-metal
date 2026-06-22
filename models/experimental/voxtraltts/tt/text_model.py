@@ -5,11 +5,11 @@ from pathlib import Path
 
 import ttnn
 import torch
-from models.tt_transformers.tt.common import Mode
-from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import TensorGroup
+from models.experimental.voxtraltts.tt.text_backbone.common import Mode
+from models.experimental.voxtraltts.tt.text_backbone.model import Transformer
+from models.experimental.voxtraltts.tt.text_backbone.model_config import TensorGroup
 
-from models.experimental.voxtraltts.tt.rmsnorm import VoxtralTextRMSNorm
+from models.experimental.voxtraltts.tt.text_rmsnorm import VoxtralTextRMSNorm
 from models.experimental.voxtraltts.tt.text_attention import Attention as VoxtralTextAttention
 from models.experimental.voxtraltts.tt.text_decoder_layer import remap_voxtral_text_state_dict
 from models.experimental.voxtraltts.tt.text_mlp import MLP as VoxtralTextMLP
@@ -213,6 +213,15 @@ class VoxtralTTTextModel:
         return (tt_embd, *rest)
 
     def prepare_inputs_decode(self, *args, **kwargs):
+        # Internal paged KV cache (paged_attention_config set with use_paged_kv_cache=False) needs an
+        # explicit page_table: the paged_update_cache op otherwise treats the paged-shaped cache as
+        # non-paged and the batch assert fails (cache[0]=max_num_blocks != input batch). For a single
+        # user the mapping is identity over the allocated blocks. Build it when the cache is paged and
+        # the caller didn't supply one. No-op for the plain non-paged cache (production demo path).
+        pac = getattr(self.inner.layers[0].attention, "paged_attention_config", None)
+        if pac is not None and len(args) == 2 and kwargs.get("page_table") is None:
+            page_table = torch.arange(pac.max_num_blocks, dtype=torch.int32).reshape(1, pac.max_num_blocks)
+            return self.inner.prepare_inputs_decode(args[0], args[1], page_table)
         return self.inner.prepare_inputs_decode(*args, **kwargs)
 
     def switch_mode(self, mode):
