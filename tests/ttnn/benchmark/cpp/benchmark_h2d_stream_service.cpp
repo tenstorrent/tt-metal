@@ -89,6 +89,7 @@ const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{3, 3}};
 // constrains the other sweeps (a large cb raises the FIFO floor via fifo >= cb and drops small sizes).
 constexpr uint32_t kDefaultCbPages = 4;
 constexpr uint32_t kDefaultFifoPages = 64;
+constexpr bool kParallelHostPush = true;
 
 std::shared_ptr<MeshDevice> g_mesh_device;
 
@@ -313,6 +314,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         .socket_mode = H2DMode::DEVICE_PULL,
         .worker_cores = kWorkerCores,
         .metadata_size_bytes = 0,
+        .parallel_host_push = kParallelHostPush,
     };
 
     tt::tt_metal::H2DStreamService service(g_mesh_device, std::move(cfg));
@@ -433,6 +435,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["fifo_size_bytes"] = static_cast<double>(fifo_size_bytes);
         state.counters["scratch_cb_size_bytes"] = static_cast<double>(scratch_cb_size_bytes);
         state.counters["worker_count"] = static_cast<double>(num_workers);
+        state.counters["parallel_host_push"] = kParallelHostPush ? 1.0 : 0.0;
         state.counters["per_shard_bytes"] = static_cast<double>(per_shard_payload_bytes);
         state.counters["socket_page_size"] = static_cast<double>(socket_page_size);
         state.counters["num_socket_pages"] = static_cast<double>(num_socket_pages);

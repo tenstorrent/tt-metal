@@ -6,9 +6,13 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <exception>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tt_stl/span.hpp>
@@ -77,6 +81,11 @@ public:
         // mapper runs (raw-bytes overload only). Must be length-preserving.
         std::function<void(ttsl::Span<std::byte> bytes,
                            ttsl::Span<const std::byte> metadata)> preprocessor;
+
+        // Experimental host-side feeder parallelism. When enabled, each
+        // forward_to_tensor call launches one async task per socket, and each
+        // task writes that socket's pages serially. Disabled by default.
+        bool parallel_host_push = false;
     };
 
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -200,6 +209,25 @@ private:
     // still outstanding.
     void drain_socket_acks();
 
+    enum class HostPushJobKind { None, Payload, Metadata, Stop };
+
+    struct alignas(64) HostPushWorkerState {
+        std::mutex mutex;
+        std::condition_variable cv;
+        HostPushJobKind job = HostPushJobKind::None;
+        std::byte* payload_base = nullptr;
+        bool done = true;
+        std::exception_ptr error;
+    };
+
+    void start_parallel_host_push_workers();
+    void stop_parallel_host_push_workers();
+    void parallel_write_payload(const std::vector<std::byte*>& bases);
+    void parallel_write_metadata();
+    void submit_host_push_job(size_t socket_index, HostPushJobKind job, std::byte* payload_base = nullptr);
+    void wait_host_push_jobs();
+    void host_push_worker_loop(size_t socket_index);
+
     // True for owner services (own all device-side resources), false for
     // connector services. The dtor branches on it.
     bool is_owner_ = true;
@@ -275,6 +303,9 @@ private:
     uint32_t completion_completed_stride_ = sizeof(uint32_t);
     // Per-coord L1 scratch word the writer stages the count in before pushing it.
     std::map<distributed::MeshCoordinate, DeviceAddr> completion_src_addrs_;
+
+    std::vector<std::unique_ptr<HostPushWorkerState>> host_push_worker_states_;
+    std::vector<std::thread> host_push_workers_;
 };
 
 }  // namespace tt::tt_metal
