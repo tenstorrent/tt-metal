@@ -244,7 +244,7 @@ def test_move_sharded_custom_grid(device):
     )
 
 
-def test_move_sharded_to_interleaved_rejected(device):
+def test_move_sharded_to_interleaved_rejected(device, expect_error):
     """Verify move rejects sharded-to-interleaved conversion (output must be sharded)."""
     torch.manual_seed(42)
     shape = [1, 1, 128, 64]
@@ -267,7 +267,7 @@ def test_move_sharded_to_interleaved_rejected(device):
     )
 
     # Attempt to move to interleaved layout should fail
-    with pytest.raises(RuntimeError, match="Expected output tensor memory config to be sharded"):
+    with expect_error(RuntimeError, match="Expected output tensor memory config to be sharded"):
         ttnn.move(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
