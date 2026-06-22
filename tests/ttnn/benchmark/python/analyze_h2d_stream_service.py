@@ -23,9 +23,11 @@ Usage:
 Produces a normalized per-case CSV and one throughput line chart per family (plus
 baseline-vs-candidate overlays and a per-case delta CSV in compare mode).
 
-Note on metrics: these cases are fully sharded (FullShard2D), so aggregate feeder
-throughput equals global payload throughput; charts use aggregate_gbps and the CSV
-carries both.
+Note on metrics: charts use aggregate_gbps as the primary steady-state feeder
+throughput. The benchmark also records untimed barrier/Finish tails so post-window
+DRAM-completion or worker-drain backlog is visible without changing the headline
+timed loop. These cases are fully sharded (FullShard2D), so aggregate feeder
+throughput equals global payload throughput; the CSV carries both.
 """
 
 from __future__ import annotations
@@ -101,6 +103,12 @@ NUMERIC_COLUMNS = [
     "socket_page_size",
     "num_socket_pages",
     "pages_per_chunk",
+    "slot_count",
+    "host_fifo_depth_transfers",
+    "device_cb_depth_transfers",
+    "pipeline_depth_transfers",
+    "barrier_tail_ms",
+    "drain_finish_tail_ms",
     "real_time",
     "cpu_time",
     "iterations",
@@ -275,6 +283,14 @@ def print_run_report(df: pd.DataFrame) -> None:
         for (pages, cb, fifo), g in multi.groupby(["per_device_pages", "cb_pages", "fifo_pages"]):
             readings = "  ".join(f"{r.family}={r[PRIMARY_METRIC]:.3f}" for _, r in g.iterrows())
             print(f"    p{int(pages)}/cb{int(cb)}/fifo{int(fifo)}: {readings} GB/s")
+
+    tail_cols = [c for c in ("barrier_tail_ms", "drain_finish_tail_ms") if c in df.columns]
+    if tail_cols:
+        print("\n  Untimed tail diagnostics:")
+        for col in tail_cols:
+            values = df[col].dropna()
+            if not values.empty:
+                print(f"    {col}: median={values.median():.3f} ms, max={values.max():.3f} ms")
 
 
 def write_run_outputs(df: pd.DataFrame, out_dir: Path, prefix: str) -> None:

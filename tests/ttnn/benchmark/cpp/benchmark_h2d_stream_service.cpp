@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -97,8 +98,15 @@ std::shared_ptr<MeshDevice> g_mesh_device;
 struct BenchmarkCase {
     std::string label;          // "<family>/p<pages>/cb<cb>/fifo<fifo>"
     uint32_t per_device_pages;  // tensor pages per device (the "size" axis)
-    uint32_t cb_pages;          // scratch-CB size in tensor pages (read granularity)
+    uint32_t cb_pages;          // scratch-CB budget in tensor pages; service derives chunking/slots
     uint32_t fifo_pages;        // socket FIFO size in tensor pages (buffering depth)
+};
+
+struct WarmupPlan {
+    uint32_t warmup_iters;
+    uint64_t host_fifo_depth_transfers;
+    uint64_t device_cb_depth_transfers;
+    uint64_t pipeline_depth_transfers;
 };
 
 template <typename T>
@@ -209,10 +217,30 @@ MeshWorkload build_drain_workload(
     return worker_workload;
 }
 
-uint32_t compute_warmup_iters(uint32_t fifo_size_bytes, uint64_t per_shard_payload_bytes) {
+uint64_t ceil_div(uint64_t numerator, uint64_t denominator) {
+    TT_FATAL(denominator > 0, "ceil_div denominator must be > 0");
+    return (numerator / denominator) + (numerator % denominator != 0 ? 1 : 0);
+}
+
+WarmupPlan compute_warmup_plan(
+    uint32_t fifo_size_bytes, uint64_t per_shard_payload_bytes, uint32_t slot_count, uint32_t num_socket_pages) {
     TT_FATAL(per_shard_payload_bytes > 0, "per_shard_payload_bytes must be > 0");
-    const uint64_t depth_in_transfers = (fifo_size_bytes + per_shard_payload_bytes - 1) / per_shard_payload_bytes;
-    return std::max<uint32_t>(kMinWarmupIters, static_cast<uint32_t>(depth_in_transfers) + kWarmupSettlingIters);
+    TT_FATAL(slot_count > 0, "slot_count must be > 0");
+    TT_FATAL(num_socket_pages > 0, "num_socket_pages must be > 0");
+
+    const uint64_t host_fifo_depth_transfers = ceil_div(fifo_size_bytes, per_shard_payload_bytes);
+    const uint64_t device_cb_depth_transfers = ceil_div(slot_count, num_socket_pages);
+    const uint64_t pipeline_depth_transfers = host_fifo_depth_transfers + device_cb_depth_transfers;
+    const uint64_t warmup_iters = std::max<uint64_t>(kMinWarmupIters, pipeline_depth_transfers + kWarmupSettlingIters);
+    TT_FATAL(
+        warmup_iters <= std::numeric_limits<uint32_t>::max(), "warmup_iters ({}) exceeds uint32_t range", warmup_iters);
+
+    return WarmupPlan{
+        .warmup_iters = static_cast<uint32_t>(warmup_iters),
+        .host_fifo_depth_transfers = host_fifo_depth_transfers,
+        .device_cb_depth_transfers = device_cb_depth_transfers,
+        .pipeline_depth_transfers = pipeline_depth_transfers,
+    };
 }
 
 bool benchmark_supported(benchmark::State& state) {
@@ -230,7 +258,7 @@ bool benchmark_supported(benchmark::State& state) {
 
 void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCase& cs) {
     // The drain kernel is sized to exactly one warmup+perf pass, so the benchmark body must run a
-    // single iteration; more would push past the kernel's bounded loop and deadlock the receiver's
+    // single iteration; more would push past the kernel's bounded loop and deadlock the service's
     // worker-sync wait. This guards against benchmark misconfiguration (it is set via Iterations(1)).
     TT_FATAL(
         state.max_iterations == 1,
@@ -308,21 +336,28 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     TT_FATAL(per_shard_payload_bytes % socket_page_size == 0, "per-shard payload bytes must divide socket page size");
     const uint32_t num_socket_pages = static_cast<uint32_t>(per_shard_payload_bytes / socket_page_size);
     const uint32_t pages_per_chunk = socket_page_size / backing_buf->page_size();
-    const uint32_t warmup_iters = compute_warmup_iters(fifo_size_bytes, per_shard_payload_bytes);
+    const uint32_t slot_count = scratch_cb_size_bytes / socket_page_size;
+    const WarmupPlan warmup_plan =
+        compute_warmup_plan(fifo_size_bytes, per_shard_payload_bytes, slot_count, num_socket_pages);
+    const uint32_t warmup_iters = warmup_plan.warmup_iters;
     log_info(
         tt::LogTest,
         "[{}] Geometry: sockets={}, per_shard_payload_bytes={}, socket_page_size={}, num_socket_pages={}, "
-        "pages_per_chunk={}, warmup_iters={}",
+        "pages_per_chunk={}, slot_count={}, host_fifo_depth_transfers={}, device_cb_depth_transfers={}, "
+        "warmup_iters={}",
         case_name,
         sockets.size(),
         per_shard_payload_bytes,
         socket_page_size,
         num_socket_pages,
         pages_per_chunk,
+        slot_count,
+        warmup_plan.host_fifo_depth_transfers,
+        warmup_plan.device_cb_depth_transfers,
         warmup_iters);
 
     // The drain kernel runs a bounded loop of exactly this many iterations, so the host must push
-    // exactly total_iters transfers (warmup + perf) below; a mismatch deadlocks the receiver's
+    // exactly total_iters transfers (warmup + perf) below; a mismatch deadlocks the service's
     // worker-sync wait. This is why the benchmark must run a single state iteration (guard above).
     const uint32_t total_iters = warmup_iters + kPerfIters;
     auto drain_workload = build_drain_workload(g_mesh_device, service, kWorkerCores, total_iters);
@@ -353,12 +388,11 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         }
         log_info(tt::LogTest, "[{}] Warmup phase complete", case_name);
 
-        // Time only the perf-push loop. After warmup the FIFO is full, so every push blocks until
-        // the receiver pops a page, which it can only do after the previous transfer's worker drain
-        // (the receiver is single-threaded: the next read loop follows the worker-sync wait). So the
-        // push rate equals the steady-state end-to-end drain rate. The in-flight depth is identical
-        // at t0 and t1 (FIFO full both times), so exactly perf_iters transfers drain inside the
-        // window -- no warmup-backlog tail, and no need to drain the pipeline before stopping.
+        // Time only the steady-state feeder loop. After the reader/writer split, socket ACKs mean
+        // "reader staged the page into L1", not "writer committed the transfer to DRAM" and not
+        // "workers drained it". The primary metric therefore remains aggregate bytes accepted by the
+        // service under its real backpressure, while the untimed tail measurements below show how
+        // much DRAM-completion / worker-drain cleanup remained after the timed push window.
         log_info(tt::LogTest, "[{}] Starting timed phase with {} iterations", case_name, kPerfIters);
         const auto t0 = std::chrono::steady_clock::now();
         for (uint32_t iter = 0; iter < kPerfIters; ++iter) {
@@ -366,7 +400,19 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         }
         const auto t1 = std::chrono::steady_clock::now();
 
+        log_info(tt::LogTest, "[{}] Starting untimed service.barrier() tail", case_name);
+        const auto barrier_t0 = std::chrono::steady_clock::now();
+        service.barrier();
+        const auto barrier_t1 = std::chrono::steady_clock::now();
+
+        log_info(tt::LogTest, "[{}] Starting untimed drain Finish() tail", case_name);
+        const auto finish_t0 = std::chrono::steady_clock::now();
+        tt::tt_metal::distributed::Finish(g_mesh_device->mesh_command_queue());
+        const auto finish_t1 = std::chrono::steady_clock::now();
+
         const double elapsed_s = std::chrono::duration<double>(t1 - t0).count();
+        const double barrier_tail_ms = std::chrono::duration<double, std::milli>(barrier_t1 - barrier_t0).count();
+        const double drain_finish_tail_ms = std::chrono::duration<double, std::milli>(finish_t1 - finish_t0).count();
         const double aggregate_bytes = static_cast<double>(sockets.size()) *
                                        static_cast<double>(per_shard_payload_bytes) * static_cast<double>(kPerfIters);
         const double aggregate_gbps = aggregate_bytes / elapsed_s / 1.0e9;
@@ -391,20 +437,27 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["socket_page_size"] = static_cast<double>(socket_page_size);
         state.counters["num_socket_pages"] = static_cast<double>(num_socket_pages);
         state.counters["pages_per_chunk"] = static_cast<double>(pages_per_chunk);
+        state.counters["slot_count"] = static_cast<double>(slot_count);
+        state.counters["host_fifo_depth_transfers"] = static_cast<double>(warmup_plan.host_fifo_depth_transfers);
+        state.counters["device_cb_depth_transfers"] = static_cast<double>(warmup_plan.device_cb_depth_transfers);
+        state.counters["pipeline_depth_transfers"] = static_cast<double>(warmup_plan.pipeline_depth_transfers);
+        state.counters["barrier_tail_ms"] = barrier_tail_ms;
+        state.counters["drain_finish_tail_ms"] = drain_finish_tail_ms;
         log_info(
             tt::LogTest,
-            "[{}] Timed phase complete: elapsed_s={:.6f}, aggregate_gbps={:.6f}, global_payload_gbps={:.6f}",
+            "[{}] Timed phase complete: elapsed_s={:.6f}, aggregate_gbps={:.6f}, "
+            "global_payload_gbps={:.6f}, barrier_tail_ms={:.6f}, drain_finish_tail_ms={:.6f}",
             case_name,
             elapsed_s,
             aggregate_gbps,
-            global_gbps);
+            global_gbps,
+            barrier_tail_ms,
+            drain_finish_tail_ms);
     }
 
-    // The bounded drain kernel exits only after consuming all total_iters transfers, and consuming
-    // transfer N requires the receiver to have acked N's pages and the workers to have drained it.
-    // So Finish blocking on the drain workload's completion already guarantees every pushed transfer
-    // was acked and fully drained -- no explicit barrier() or consumed-counter wait is needed.
-    tt::tt_metal::distributed::Finish(g_mesh_device->mesh_command_queue());
+    // service.barrier() and Finish() are intentionally measured outside the primary timed region:
+    // they are tail diagnostics for hidden DRAM-completion and worker-drain backlog, not part of the
+    // aggregate feeder-throughput headline number.
     log_info(tt::LogTest, "[{}] Benchmark case complete", case_name);
 }
 
@@ -421,8 +474,9 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
 
     std::vector<BenchmarkCase> cases;
     auto add_case = [&](const std::string& family, uint32_t pages, uint32_t cb, uint32_t fifo) {
-        // pages must split evenly across the drain workers and the scratch-CB chunk; the socket
-        // page (cb) must fit in the FIFO.
+        // Keep the historical sweep conservative: pages split evenly across drain workers and the
+        // requested cb budget, and the FIFO can hold that requested budget. The split service may
+        // derive a smaller socket page internally; actual pages_per_chunk/slot_count are counters.
         if (pages % num_workers != 0 || pages % cb != 0 || fifo < cb) {
             return;
         }
