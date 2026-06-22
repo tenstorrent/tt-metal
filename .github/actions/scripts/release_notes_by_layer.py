@@ -20,9 +20,19 @@ LAYERS = [
     ("tt-train", ["tt-train/"]),
     ("Models", ["models/", "model_tracer/", "tests/models/"]),
     ("TT-STL", ["tt_stl/"]),
-    ("Infrastructure & CI", [".github/", "infra/", "scripts/", "cmake/",
-                             "dockerfile/", "tests/scripts/",
-                             "tests/pipeline_reorg/", "releases/"]),
+    (
+        "Infrastructure & CI",
+        [
+            ".github/",
+            "infra/",
+            "scripts/",
+            "cmake/",
+            "dockerfile/",
+            "tests/scripts/",
+            "tests/pipeline_reorg/",
+            "releases/",
+        ],
+    ),
     ("Documentation", ["docs/", "tech_reports/", "contributing/"]),
     ("Tooling", ["tools/"]),
 ]
@@ -41,12 +51,14 @@ def layer_of(path):
 def changed_files(owner, repo, number, token):
     files, page = [], 1
     while True:
-        url = (f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}"
-               f"/files?per_page=100&page={page}")
-        req = urllib.request.Request(url, headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github+json",
-        })
+        url = f"https://api.github.com/repos/{owner}/{repo}/pulls/{number}" f"/files?per_page=100&page={page}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": "application/vnd.github+json",
+            },
+        )
         batch = json.load(urllib.request.urlopen(req, timeout=30))
         files += [f["filename"] for f in batch]
         if len(batch) < 100:
