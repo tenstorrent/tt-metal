@@ -378,7 +378,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     kernel_config.fp32_dest_acc_en = fp32_dest_acc_en;
     kernel_config.dst_full_sync_en = dst_full_sync_en;
     kernel_config.math_approx_mode = math_approx_mode;
-    // Enable the welford-fp32 alias only when the SrcA-routed transpose_wh_tile would
+    // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
     // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
     // RMSNorm doesn't use Welford in this kernel path.
     kernel_config.welford_fp32_alias =
@@ -452,7 +452,7 @@ tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descripto
     cb_config.is_pre_all_gather = is_pre_all_gather;
     cb_config.is_post_all_gather = is_post_all_gather;
     cb_config.skip_write_back = skip_write_back;
-    // Enable the welford-fp32 alias only when the SrcA-routed transpose_wh_tile would
+    // Enable the welford-fp32 alias only when the SrcA-routed transpose_tile would
     // otherwise truncate Float32 input to TF32. Restricting to !rms_norm because
     // RMSNorm doesn't use Welford in this kernel path.
     cb_config.welford_fp32_alias =

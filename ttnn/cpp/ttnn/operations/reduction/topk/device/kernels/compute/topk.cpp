@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/pack.h"
@@ -134,9 +134,10 @@ void kernel_main() {
     constexpr uint32_t largest = get_compile_time_arg_val(11);                  // 1 for largest K, 0 for smallest K
 
     // Initialize kernel components
+    compute_kernel_hw_startup(input_val_cb_index, input_ind_cb_index, output_val_cb_index);
     ckernel::topk_tile_init();
-    transpose_wh_init(input_val_cb_index, output_val_cb_index);
-    transpose_wh_init(input_ind_cb_index, output_ind_cb_index);
+    transpose_init(input_val_cb_index);
+    transpose_init(input_ind_cb_index);
 
     CircularBuffer input_val_cb(input_val_cb_index);
     CircularBuffer input_ind_cb(input_ind_cb_index);

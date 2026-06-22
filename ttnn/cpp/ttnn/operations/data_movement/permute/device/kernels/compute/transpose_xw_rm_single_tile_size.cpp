@@ -5,7 +5,7 @@
 #include <cstdint>
 
 #include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/tilize.h"
 #include "api/compute/pack_untilize.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
@@ -27,8 +27,8 @@ void kernel_main() {
     CircularBuffer cb_tilize_exp(cb_tilize);
     CircularBuffer cb_out_exp(cb_out);
 
+    compute_kernel_hw_startup(cb_in, cb_out);
     unary_op_init_common(cb_in, cb_out);
-    transpose_wh_init(cb_tilize, cb_out);
 
     for (uint32_t n = 0; n < num_blocks; n++) {
         // Tilize input via unpack and then pack (asymmetric: x_block_size rows → 1 tile)

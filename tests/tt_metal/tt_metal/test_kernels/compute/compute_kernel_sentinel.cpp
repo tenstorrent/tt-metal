@@ -13,7 +13,7 @@
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/debug/assert.h"
 
 void kernel_main() {
@@ -90,7 +90,7 @@ void kernel_main() {
     fast_tilize_init(cb_in2, 1, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    transpose_wh_init_short(cb_in1);
+    transpose_init(cb_in1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     unary_op_init_common(cb_in0, cb_out0);
@@ -99,8 +99,8 @@ void kernel_main() {
     unary_op_init_common(cb_in1, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
-    transpose_wh_init(cb_in0, cb_out0);
-    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
+    transpose_init(cb_in0);
+    ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));
 
     copy_tile_to_dst_init_short(cb_in2);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA));

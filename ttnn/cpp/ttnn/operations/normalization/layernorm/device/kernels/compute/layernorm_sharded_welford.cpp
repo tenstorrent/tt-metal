@@ -8,7 +8,7 @@
 #include "api/compute/reduce.h"
 #include "api/compute/bcast.h"
 #include "api/compute/layernorm.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_binary.h"
 #include "ttnn/operations/normalization/kernel_util/compute/combine_welford.h"
@@ -136,7 +136,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex_external_id = tt::CBIndex::c_10;
     constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;  // Interleaved E[x] and Var[x] final global mcast result
     constexpr uint32_t cb_transpose_id = tt::CBIndex::c_22;  // Transpose interleaved E[x] and Var[x] to columns
-                                                             // (workaround for bug in transpose_wh_dest)
+                                                             // (workaround for bug in transpose_dest)
     constexpr uint32_t cb_fusion_id = tt::CBIndex::c_18;     // stream gamma/beta
     constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
@@ -291,16 +291,9 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     reconfig_data_format_srca(cb_x_welford_id);
     cb_ex_partial.reserve_back(num_block_ht_result_tiles);
-    // Full transpose_wh_init when the alias is active. cb_x_welford_id's buffer index isn't
-    // visible to binary_op_init_common / unary_op_init_common at the top of kernel_main (only
-    // cb_in0/cb_in_id is), so we run the full init once to program all hw config registers
-    // (pack, math hw_configure) for it. For the non-alias path cb_x_welford_id == cb_in_id and
-    // transpose_init suffices.
-    if constexpr (welford_fp32_alias) {
-        transpose_wh_init(cb_x_welford_id, cb_ex_partial_id);
-    } else {
-        transpose_init(cb_x_welford_id);
-    }
+    // Reconfigure the transpose op for the welford intake CB. When the alias is active,
+    // cb_x_welford_id has UnpackToDestFp32 mode so transpose_tile preserves fp32 precision.
+    transpose_init(cb_x_welford_id);
     welford_init();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
@@ -345,7 +338,7 @@ void kernel_main() {
         }
         welford_finalize_to_row<per_core_recip_lut_size>(welford_mean_dst, partial_reduce_W - 1, *p_reciprocals);
         // We should transpose back to columns here
-        // However, transpose_wh_dest() is currently buggy.
+        // However, transpose_dest() is currently buggy.
         // So we transpose to an intermediate CB downstream
         tile_regs_commit();
         tile_regs_wait();

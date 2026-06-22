@@ -11,7 +11,7 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/reduce.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/bcast.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/reconfig_data_format.h"
@@ -230,7 +230,7 @@ void top_k() {
     CircularBuffer output_ind_cb(output_ind_cb_index);
 
     if (first_call) {
-        transpose_wh_init(input_cb_index, input_transposed_cb_index);
+        transpose_init(input_cb_index);
     }
     for (uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
@@ -434,12 +434,12 @@ void kernel_main() {
     constexpr uint32_t cb_local_vals = get_compile_time_arg_val(16);
     constexpr uint32_t temp_cb_index = get_compile_time_arg_val(17);
     constexpr uint32_t tile_width = get_compile_time_arg_val(18);
-    generate_rand_tile(rand_tile_index, seed);
 
     const uint32_t nearest32_K = 32;
     const uint32_t logk = 5;  // log(32)
 
     // top-k
+    compute_kernel_hw_startup(input_values_cb_index, index_cb_index, input_transposed_cb_index);
     top_k<
         Ht,
         Wt,
@@ -455,6 +455,8 @@ void kernel_main() {
         tile_width,
         true>();
     constexpr uint32_t Kt = nearest32_K / tile_width;
+
+    generate_rand_tile(rand_tile_index, seed);
 
     // scale temperature
 

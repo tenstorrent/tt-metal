@@ -59,7 +59,7 @@ void kernel_main() {
 
     // For ROW_MAJOR, compute_kernel_hw_startup initialises the MATH-PACK DST
     // semaphore required by tilize_block before the first pair is processed.
-    // For TILE layout the existing topk_tile_init + transpose_wh_init path is used.
+    // For TILE layout the existing topk_tile_init + transpose_init path is used.
     if constexpr (is_row_major) {
         compute_kernel_hw_startup(rm_input_value_cb_id, rm_input_index_cb_id, input_tensor_cb_id);
     } else {

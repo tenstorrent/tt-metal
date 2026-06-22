@@ -15,7 +15,7 @@
 #include "api/compute/welford.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
 #include "api/dataflow/circular_buffer.h"
@@ -101,7 +101,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         cb_inb_obj.pop_front(block.full_block_size());
 
         // Pack to intermediate CB (needed
-        // to workaround transpose_wh_dest bug)
+        // to workaround transpose_dest bug)
         pack_reconfig_data_format(cb_interm_pre_add);
         cb_interm_pre_add_obj.reserve_back(block.full_block_size());
         tile_regs_wait();
@@ -242,16 +242,9 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
 
     uint32_t sample_idx = 0;
     reconfig_data_format_srca(cb_x_welford);
-    // Full transpose_wh_init when the alias is active. cb_x_welford's buffer index isn't
-    // visible to compute_kernel_hw_startup at the top of kernel_main (only cb_in is), so we
-    // run the full init once to program all hw config registers for it. The non-alias path
-    // (cb_x_welford == cb_in) uses transpose_init since cb_in's hw config is
-    // already programmed.
-    if constexpr (welford_fp32_alias) {
-        transpose_wh_init(cb_x_welford, cb_ex);
-    } else {
-        transpose_init(cb_x_welford);
-    }
+    // Reconfigure the transpose op for the welford intake CB. When the alias is active,
+    // cb_x_welford has UnpackToDestFp32 mode so transpose_tile preserves fp32 precision.
+    transpose_init(cb_x_welford);
     tile_regs_acquire();
     welford_init();
 

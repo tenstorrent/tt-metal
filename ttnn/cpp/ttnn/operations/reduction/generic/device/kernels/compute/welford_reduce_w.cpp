@@ -128,11 +128,11 @@ void kernel_main() {
             transpose_init(cb_in);
             tile_regs_acquire();
         }
-        // In contrast, on do_scale path, full init_bcast and full transpose_wh_init happen inside
+        // In contrast, on do_scale path, full init_bcast and transpose_init happen inside
         // the Wt loop (each iteration) to pair UNPACK mode flips for cb_in (Default, FPU mul SrcA)
         // and cb_scaled (UnpackToDestFp32, unpack-to-DEST consumer for the welford-intake transpose).
         // The first iteration's init_bcast also resets the leaked UnpackToDest mode from the
-        // previous NCHt iteration's final transpose_wh_init(cb_var, cb_out), so no separate
+        // previous NCHt iteration's final transpose_init(cb_var), so no separate
         // outer-loop reset is needed.
 
         // Welford SFPU state (running mean in LREG4, M2 in LREG5)
@@ -177,7 +177,7 @@ void kernel_main() {
             // welford's recurrence. welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots without
             // clearing LREG4/5 (which would lose the running mean/M2 accumulator). UNPACK A is left in transpose=1 by
             // transpose_tile; welford_update is pure SFPU and does not consume that state, and the next iteration's
-            // transpose_wh_init[_short] reprograms it.
+            // transpose_init reprograms it.
             //
             // For bf16 input the unpack-to-DEST fp32 path is inactive: transpose_tile routes
             // through SrcA without touching the SFPU replay buffer, so the recovery is gated out.

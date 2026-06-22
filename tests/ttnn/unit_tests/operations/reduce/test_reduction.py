@@ -106,7 +106,7 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 # less than the TF32 ULP collapse to the same representation; at offset=1e6 the TF32 ULP
 # is ~512, so all 32 consecutive integers become identical and the apparent variance drops
 # to 0. scalar=-1.0 routes through the do_scale path (mul_tiles_bcast_scalar +
-# transpose_wh_tile of cb_scaled) without changing the expected variance, exercising a
+# transpose_tile of cb_scaled) without changing the expected variance, exercising a
 # different inner-loop pattern than scalar=1.0 (which short-circuits to !do_scale). This
 # test covers all three reduction kernels (H, W, HW) and both code paths.
 @pytest.mark.parametrize("scalar", [1.0, -1.0])

@@ -14,7 +14,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -170,16 +170,15 @@ void kernel_main() {
         uint32_t tile_id = b * block_hw;
         cb_ex_partial.reserve_back(2);
         if constexpr (welford_fp32_alias) {
-            // Full transpose_wh hw init for the alias buffer index consumed by the
-            // welford loop below, so the unpack-to-DEST fp32 path is configured before the
-            // per-tile transpose_init switches to it.
+            // Reconfigure the transpose op for the alias buffer index consumed by the
+            // welford loop below.
 #ifdef TILIZE_IN
-            transpose_wh_init(cb_in_welford_id, cb_ex_partial_id);
+            transpose_init(cb_in_welford_id);
 #else
-            transpose_wh_init(cb_in0_welford_id, cb_ex_partial_id);
+            transpose_init(cb_in0_welford_id);
 #endif
         } else {
-            transpose_wh_init(cb_in0_id, cb_ex_partial_id);
+            transpose_init(cb_in0_id);
         }
         tile_regs_acquire();
         welford_init();

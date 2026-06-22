@@ -12,7 +12,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/welford.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/operations/normalization/kernel_util/compute/memory.h"
 #include "ttnn/operations/normalization/kernel_util/generic/blocked_range.h"
@@ -163,18 +163,9 @@ void kernel_main() {
         // redundant -- gated by welford_fp32_alias.
         uint32_t start_N = 0;
         reconfig_data_format_srca(cb_x_welford);
-        // Full transpose_wh_init when the alias is active. Without this the unpacker is missing
-        // hw config bits for cb_x_welford's fresh buffer index (math/pack hw_configure paths) that
-        // compute_kernel_hw_startup only programmed for cb_in.  reconfig_data_format_srca alone
-        // updates only src/dst format and tile size, which isn't enough when the buffer index
-        // wasn't seen by compute_kernel_hw_startup at the top of the kernel.  For the non-alias
-        // path cb_x_welford == cb_x == cb_in, so the existing hw config is already correct and
-        // a single transpose_init before the Wt loop suffices.
-        if constexpr (welford_fp32_alias) {
-            transpose_wh_init(cb_x_welford, cb_ex);
-        } else {
-            transpose_init(cb_x_welford);
-        }
+        // Reconfigure the transpose op for the welford intake CB. When the alias is active,
+        // cb_x_welford has UnpackToDestFp32 mode so transpose_tile preserves fp32 precision.
+        transpose_init(cb_x_welford);
         tile_regs_acquire();
         welford_init();
         // Welford's recurrence and the fp32 transpose collide in the math thread's replay

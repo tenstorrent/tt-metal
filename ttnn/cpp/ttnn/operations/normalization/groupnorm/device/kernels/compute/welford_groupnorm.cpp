@@ -14,7 +14,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"
-#include "api/compute/transpose_wh.h"
+#include "api/compute/transpose.h"
 #include "api/compute/welford.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
@@ -222,20 +222,12 @@ void kernel_main() {
 #endif
 
     if constexpr (welford_unpack_fp32_active) {
-        // Full transpose_wh hw init for the welford intake CB. The factory marks this CB
-        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN
-        // alias branch.
-        // Neither binary_op_init_common (above) nor, on the TILIZE_IN path, the tilize<>
-        // call unpack-configure the intake CB: binary_op_init_common only configures cb_in0,
-        // and tilize<> configures its source (cb_in_rm_id), not its output (c_29). So we
-        // need the full transpose_wh_init here (not the _short variant used later in the
-        // welford loop) to emit the UnpackToDestFp32 hw_configure for the intake CB. Without
-        // it the welford intake transpose silently falls back to the SrcA / TF32 path,
-        // losing FP32 precision.
+        // Reconfigure the transpose op for the welford intake CB. The factory marks this CB
+        // with UnpackToDestFp32: c_29 in the TILIZE_IN branch, c_19 in the non-TILIZE_IN alias branch.
 #ifdef TILIZE_IN
-        transpose_wh_init(cb_in_id, cb_ex_partial_id);
+        transpose_init(cb_in_id);
 #else
-        transpose_wh_init(cb_in0_welford_id, cb_ex_partial_id);
+        transpose_init(cb_in0_welford_id);
 #endif
     }
 

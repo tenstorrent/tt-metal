@@ -646,7 +646,7 @@ def test_permute_5d_wyh(device, shape, perm, dtype):
 @pytest.mark.parametrize("shape", [[1, 1, 32, 64], [2, 3, 32, 32], [1, 1, 64, 96], [1, 8, 96, 32]])
 def test_transpose_wh_tiled_uint32(device, shape):
     # ttnn.transpose(-2,-1) on TILE_LAYOUT → prim::TransposeWH → transpose_wh_program_factory
-    # compute/transpose_wh.cpp → transpose_wh_tile() → MOVD2B dest_32b_lo=1
+    # compute/transpose_wh.cpp → transpose_tile() → MOVD2B dest_32b_lo=1
     # Unlike ttnn.permute({0,1,3,2}), ttnn.transpose dispatches to transpose_wh_program_factory
     # directly (not permute_tiled_program_factory), so a dedicated test is needed.
     torch.manual_seed(2005)

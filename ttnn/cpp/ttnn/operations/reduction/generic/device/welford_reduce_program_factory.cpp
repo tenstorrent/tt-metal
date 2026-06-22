@@ -169,7 +169,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     ProgramDescriptor desc;
 
     // Input CB c_0. The unpack_to_dest_mode flag below makes c_0 UnpackToDestFp32 for FP32
-    // input on the !do_scale path so the welford SFPU intake (copy_tile / transpose_wh_tile)
+    // input on the !do_scale path so the welford SFPU intake (copy_tile / transpose_tile)
     // reads via the precision-preserving unpack-to-DEST path. On the do_scale path c_0 stays
     // Default so the FPU mul_tiles_bcast_scalar SrcA read works (UnpackToDest is incompatible
     // with FPU SrcA); the SFPU welford on that path reads cb_scaled instead, and cb_scaled's
@@ -232,7 +232,7 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     }
 
     // cb_scaled (c_20): only W-reduce needs this when do_scale is true.
-    // transpose_wh_tile is an unpack operation that reads from a CB, not
+    // transpose_tile is an unpack operation that reads from a CB, not
     // DST, so the FPU mul result must be packed to this intermediate CB.
     // H and HW reduce don't need the transpose.
     bool do_scale = (operation_attributes.scalar != 1.0f);
@@ -422,16 +422,16 @@ tt::tt_metal::ProgramDescriptor WelfordReduceDeviceOperation::WelfordReduceProgr
     // between nearby samples.
     //
     // Apply this to every Float32 CB the compute kernel reads back via copy_tile /
-    // transpose_wh_tile:
+    // transpose_tile:
     //   - Input CB: needed on all three reduction paths (H, W, HW), but only on the !do_scale
     //     path with FP32 input, where the Welford SFPU intake reads c_0 directly via
-    //     copy_tile/transpose_wh_tile, so UnpackToDestFp32 preserves the full FP32 into DEST.
+    //     copy_tile/transpose_tile, so UnpackToDestFp32 preserves the full FP32 into DEST.
     //     On the do_scale path input CB is read by the FPU mul (SrcA), which is incompatible
     //     with UnpackToDest mode. The precision-preserving plumbing lives downstream on cb_scaled.
     //   - W-reduce only: cb_var (c_19) -- the variance tile is read back after the initial
     //     transpose to undo it.
     //   - W-reduce + do_scale only: cb_scaled (c_20) -- the FPU-scaled input tile is read
-    //     back by transpose_wh_tile, whose result feeds the SFPU welford on DEST.
+    //     back by transpose_tile, whose result feeds the SFPU welford on DEST.
     //     flagged UnpackToDestFp32 to preserve the up-to-22 mantissa bits the FPU mul output
     //     can carry beyond its TF32 inputs.
     //   - HW-reduce only: cb_combined (c_22) -- the variance tile is read back after the
