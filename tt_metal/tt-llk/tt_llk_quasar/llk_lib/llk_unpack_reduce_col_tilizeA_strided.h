@@ -28,7 +28,10 @@ inline void _llk_unpack_reduce_col_tilizeA_strided_mop_config_(
     const std::uint32_t buf_desc_id_0, const std::uint32_t buf_desc_id_1, const std::uint32_t full_ct_dim, const TensorShape& tensor_shape)
 {
     const std::uint32_t idx_inc = ckernel::unpack::UNPACR_STRIDE_MAX_ROWS * tensor_shape.num_faces_c_dim * full_ct_dim;
-    const std::uint32_t idx_dec = (-idx_inc + 1) & 0x3FFFF; // needs to be 18-bit number
+
+    constexpr std::uint32_t kIndex18BitMask = 0x3FFFF; // index field is 18 bits wide
+    // 18-bit two's complement of (idx_inc - 1)
+    const std::uint32_t idx_dec = (1u - idx_inc) & kIndex18BitMask;
 
     constexpr std::uint32_t replay_buf_len = 15;
 
