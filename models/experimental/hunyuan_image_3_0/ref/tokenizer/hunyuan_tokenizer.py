@@ -110,18 +110,42 @@ class HunyuanTokenizer:
         config: HunyuanConfig,
         tokenizer: PreTrainedTokenizerFast,
         special: SpecialTokens,
+        *,
+        sequence_template: str = "pretrain",
     ) -> None:
         self.config = config
         self.tokenizer = tokenizer
         self.special = special
-        self._chat = ChatTemplateEncoder(tokenizer, special, sequence_template="pretrain")
+        self.sequence_template = sequence_template
+        self._chat = ChatTemplateEncoder(tokenizer, special, sequence_template=sequence_template)
 
     @classmethod
-    def from_pretrained(cls) -> HunyuanTokenizer:
+    def from_pretrained(cls, *, sequence_template: str = "pretrain") -> HunyuanTokenizer:
         config = load_config()
         tokenizer = load_tokenizer()
         special = build_special_tokens(tokenizer, model_version=config.model_version)
-        return cls(config, tokenizer, special)
+        return cls(config, tokenizer, special, sequence_template=sequence_template)
+
+    @classmethod
+    def from_model_dir(
+        cls,
+        model_dir: Path | str,
+        *,
+        sequence_template: str = "instruct",
+        tokenizer_dir: Path | str | None = None,
+    ) -> HunyuanTokenizer:
+        """Load config (and optionally tokenizer) from a checkpoint directory."""
+        model_dir = Path(model_dir)
+        config_path = model_dir / "config.json"
+        if not config_path.is_file():
+            raise FileNotFoundError(f"Missing config.json under {model_dir}")
+        config = load_config(config_path)
+        tok_dir = Path(tokenizer_dir) if tokenizer_dir is not None else model_dir
+        if not (tok_dir / "tokenizer.json").is_file():
+            tok_dir = TOKENIZER_DIR
+        tokenizer = load_tokenizer(tok_dir)
+        special = build_special_tokens(tokenizer, model_version=config.model_version)
+        return cls(config, tokenizer, special, sequence_template=sequence_template)
 
     def encode(self, text: str, *, add_special_tokens: bool = False) -> list[int]:
         return self.tokenizer.encode(text, add_special_tokens=add_special_tokens)
@@ -168,14 +192,16 @@ class HunyuanTokenizer:
         *,
         image_size: str | tuple[int, int] | list[int] = 1024,
         cond_images: CondImage | list[CondImage] | list[list[CondImage]] | None = None,
+        system_prompt: str | None = None,
         mode: str = "gen_image",
         max_length: int | None = None,
         cfg_factor: int | None = None,
-        sequence_template: str = "pretrain",
+        sequence_template: str | None = None,
     ) -> dict[str, Any]:
         """Build T2I or I2I token sequence(s) for ``mode='gen_image'``.
 
         Pass ``cond_images`` for image-to-image (user cond block before prompt).
+        Pass ``system_prompt`` for instruct-style system block (``en_unified``).
         Returns ``dict(output=TokenizerEncodeOutput, sections=...)`` matching HF layout.
         ``output.tokens`` shape is ``[B, S]`` or ``[2, S]`` when ``cfg_factor=2``.
         """
@@ -184,6 +210,8 @@ class HunyuanTokenizer:
         gen_infos = [self.build_gen_image_info(image_size) for _ in batch_prompt]
         if cfg_factor is None:
             cfg_factor = 1 if self.config.cfg_distilled else 2
+        if sequence_template is None:
+            sequence_template = self.sequence_template
 
         batch_cond_images = None
         if cond_images is not None:
@@ -199,10 +227,13 @@ class HunyuanTokenizer:
             else:
                 batch_cond_images = list(cond_images)
 
+        batch_system_prompt = [system_prompt] * batch_size if system_prompt else None
+
         return self._chat.apply_chat_template(
             batch_prompt=batch_prompt,
             batch_gen_image_info=gen_infos,
             batch_cond_images=batch_cond_images,
+            batch_system_prompt=batch_system_prompt,
             mode=mode,
             max_length=max_length,
             cfg_factor=cfg_factor,

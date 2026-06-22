@@ -15,7 +15,7 @@
 #   5   | gen_image_mask + scatter indices           | TokenizerEncodeOutput side tensors
 #   6   | CFG cond/uncond batch stack                | _stack_batch (uncond_p=0 / 1)
 #
-# Scope: mode='gen_image' (T2I and I2I with cond images), sequence_template='pretrain'.
+# Scope: mode='gen_image' (T2I and I2I with cond images), sequence_template='pretrain'|'instruct'.
 #
 # References
 # ----------
@@ -88,8 +88,20 @@ def _parse_extra_token_pos(extra_token_pos: dict, prefix: str, tokens: torch.Ten
     return image_slices, image_mask
 
 
+@dataclass(frozen=True)
+class InstructConversation:
+    """Minimal hunyuan-image-3 conversation template (upstream conv_templates)."""
+
+    roles: tuple[str, str] = ("User", "Assistant")
+    sep: str = "\n\n"
+    sep2: str = "<|endoftext|>"
+
+    def role_prefix(self, role: str) -> str:
+        return f"{role}: "
+
+
 class ChatTemplateEncoder:
-    """Build Hunyuan T2I ``input_ids`` from prompts (host-side, pretrain template)."""
+    """Build Hunyuan T2I / I2I ``input_ids`` from prompts (host-side)."""
 
     def __init__(
         self,
@@ -101,6 +113,7 @@ class ChatTemplateEncoder:
         self.tokenizer = tokenizer
         self.special = special
         self.sequence_template = sequence_template
+        self._instruct_conv = InstructConversation()
 
     @property
     def bos_token_id(self) -> int:
@@ -518,8 +531,22 @@ class ChatTemplateEncoder:
             real_pos=real_pos,
         )
 
-    def _pretrain_role_format(self) -> tuple[str, str, str, str, str, str]:
-        return "", "", "", "", "", ""
+    def _pretrain_role_format(self) -> tuple[str, str, str, str, str, str, str]:
+        return "", "", "", "", "", "", ""
+
+    def _instruct_role_format(self) -> tuple[str, str, str, str, str, str, str]:
+        conv = self._instruct_conv
+        answer_prefix = self.tokenizer.convert_ids_to_tokens(self.special.answer_token_id)
+        answer_suffix = self.tokenizer.convert_ids_to_tokens(self.special.end_answer_token_id)
+        return (
+            conv.sep,
+            conv.role_prefix(conv.roles[0]),
+            conv.sep,
+            conv.role_prefix(conv.roles[1]),
+            conv.sep,
+            answer_prefix,
+            answer_suffix,
+        )
 
     def apply_general_template(
         self,
@@ -530,10 +557,28 @@ class ChatTemplateEncoder:
         uncond_p: float = 0.0,
     ) -> tuple[TokenizerEncodeOutput, list[dict[str, Any]]]:
         if self.sequence_template == "pretrain":
-            system_suffix, user_prefix, user_suffix, bot_prefix, bot_suffix, _ = self._pretrain_role_format()
+            (
+                system_suffix,
+                user_prefix,
+                user_suffix,
+                bot_prefix,
+                bot_suffix,
+                answer_prefix,
+                answer_suffix,
+            ) = self._pretrain_role_format()
+        elif self.sequence_template == "instruct":
+            (
+                system_suffix,
+                user_prefix,
+                user_suffix,
+                bot_prefix,
+                bot_suffix,
+                answer_prefix,
+                answer_suffix,
+            ) = self._instruct_role_format()
         else:
             raise NotImplementedError(
-                f"sequence_template={self.sequence_template!r} not ported yet; use 'pretrain' for T2I."
+                f"sequence_template={self.sequence_template!r} not supported; use 'pretrain' or 'instruct'."
             )
 
         def process_successive_message(
@@ -553,7 +598,11 @@ class ChatTemplateEncoder:
                     info = message["content"]
                     if not isinstance(info, ImageInfo):
                         raise TypeError(f"Expected ImageInfo, got {type(info)}")
+                    if role == "assistant" and answer_prefix:
+                        _sub_sections.append(dict(type="text", text=answer_prefix))
                     _sub_sections.append(dict(type="gen_image", **info.meta_info))
+                    if role == "assistant" and answer_suffix:
+                        _sub_sections.append(dict(type="text", text=answer_suffix))
                 elif message["type"] in ("cond_joint_image", "cond_vae_image", "cond_vit_image"):
                     info = message["content"]
                     if not isinstance(info, (ImageInfo, JointImageInfo)):
