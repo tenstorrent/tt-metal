@@ -83,8 +83,10 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
         }
 
         if (is_service_workload.value()) {
-            // Service workload: every core is claimed (checked above), so mark launch-once and
-            // dispatch each program via SD, bypassing FD. Re-enqueue TT_FATALs in mark_launched.
+            // Service workload: dispatch each program via SD, bypassing FD. Re-confirm each core is still
+            // a claimed service core (this loop runs every enqueue, unlike the cached scan): guards the
+            // cached classification against a core released between enqueues, failing loudly instead of
+            // SD-launching onto an unclaimed core.
             for (auto& [device_range, program] : programs) {
                 for (const auto& coord : device_range) {
                     auto* device = mesh_cq.device()->impl().get_device(coord);
@@ -94,6 +96,12 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
                         coord);
                     for (const auto& per_type : program.impl().logical_cores()) {
                         for (const auto& core : per_type) {
+                            TT_FATAL(
+                                svc.impl().is_service_core(device->id(), core),
+                                "EnqueueMeshWorkload: service workload targets core {} on device {} that is not a "
+                                "claimed service core (released since a prior enqueue?).",
+                                core,
+                                device->id());
                             svc.impl().mark_launched(device->id(), core);  // launch-once
                         }
                     }
