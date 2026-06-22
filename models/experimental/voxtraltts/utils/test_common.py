@@ -23,6 +23,10 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
 )
 from models.experimental.voxtraltts.utils.mesh import voxtral_mesh_device_compute_shape
 
+VOXTRAL_GOLDEN_CODES_DEFAULT_PATH = (
+    Path(__file__).resolve().parents[1] / "reference" / "reference_outputs" / "voxtral_golden_codes.refpt"
+)
+
 VOXTRAL_STANDARD_CHAR_TEXT = (
     "Voxtral is a four billion parameter open weight tts model released by Mistral AI in two thousand twenty six, "
     "designed for low latency multilingual voice generation across English, Spanish, French, Portuguese, Hindi, German, "

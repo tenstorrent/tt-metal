@@ -6,7 +6,7 @@ Runs the CPU reference once, offline, for a given text/voice and saves the discr
 Tests only load the fixture; they never run the reference. Saved as ``.refpt`` (committable;
 ``*.pt`` is gitignored). Codes are the only thing stored — tests regenerate hiddens/waveforms live.
 
-    ./python_env/bin/python models/experimental/voxtraltts/tests/generate_voxtral_golden_codes.py \
+    ./python_env/bin/python models/experimental/voxtraltts/reference/reference_outputs/generate_voxtral_golden_codes.py \
         --text "..." --voice casual_male --max-tokens 64 --out <path>.refpt
 """
 from __future__ import annotations
@@ -18,10 +18,14 @@ import torch
 from loguru import logger
 
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
-from models.experimental.voxtraltts.tests.common import VOXTRAL_STANDARD_CHAR_TEXT, resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import (
+    VOXTRAL_GOLDEN_CODES_DEFAULT_PATH,
+    VOXTRAL_STANDARD_CHAR_TEXT,
+    resolve_voxtral_model_name_or_skip,
+)
 
-_OUT_DIR = Path(__file__).resolve().parent / "reference_outputs"
-_DEFAULT_OUT = _OUT_DIR / "voxtral_golden_codes.refpt"
+_OUT_DIR = VOXTRAL_GOLDEN_CODES_DEFAULT_PATH.parent
+_DEFAULT_OUT = VOXTRAL_GOLDEN_CODES_DEFAULT_PATH
 
 
 @torch.no_grad()

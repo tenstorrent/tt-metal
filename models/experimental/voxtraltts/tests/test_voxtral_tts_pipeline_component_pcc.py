@@ -34,7 +34,7 @@ from models.experimental.voxtraltts.reference.functional import (
 )
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
-from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     _load_safetensors_state_dict,
     voxtral_text_hf_aligned_optimizations,
