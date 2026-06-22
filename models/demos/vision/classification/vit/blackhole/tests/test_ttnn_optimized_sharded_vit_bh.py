@@ -298,7 +298,10 @@ def test_vit_layer(device, model_name, batch_size, sequence_size, model_location
     model = vit_encoder_layer(load_torch_model(model_location_generator, embedding=True))
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states)
+    # transformers 5.x ViTLayer.forward returns a Tensor (4.x returned a tuple); unwrap only when it is
+    # a tuple (otherwise `*_` unpacking slices off the batch dim). Matches the wormhole twin.
+    _layer_out = model(torch_hidden_states)
+    torch_output = _layer_out[0] if isinstance(_layer_out, tuple) else _layer_out
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
