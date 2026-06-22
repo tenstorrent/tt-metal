@@ -1,3 +1,5 @@
 {"event":"start","details":"investigating mode 2 REDUCE_BCAST numerical mismatch on peer cores","ts":"2026-06-22T13:05:58+00:00"}
 {"event":"observation","details":"peer cb_partial_sumsq reads garbage uninitialized L1, root reads correct 2048. mcast data not landing at peer slot.","ts":"2026-06-22T13:10:26+00:00"}
 {"event":"observation","details":"root reader reads cb_partial_sumsq=256 (local, stale PASS-1) not 2048 (combine). reader read_ptr lags compute front by one slot.","ts":"2026-06-22T13:13:23+00:00"}
+{"event":"fix_verified","details":"mode-2 all-ones now exact 1.0 across all shards. Fix: advance_local_rd/wr_ptr to sync reader pointers with compute slot1.","ts":"2026-06-22T13:21:30+00:00"}
+{"event":"result","details":"ROOT CAUSE: per-RISC-local CB pointers; reader cb_partial_sumsq rd/wr_ptr lagged compute by 1 slot (copy pop). FIX: advance_local_rd/wr_ptr in mode-2 only. Verified: mode2 all shapes+gamma pass (dev+prod), modes 0/1 unchanged (22 passed). Confidence HIGH.","ts":"2026-06-22T13:23:38+00:00"}
