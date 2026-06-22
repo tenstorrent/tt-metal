@@ -7,11 +7,12 @@
 Input: Google Benchmark JSON emitted by benchmark_h2d_stream_service
   (--benchmark_out=results.json --benchmark_out_format=json)
 
-The benchmark sweeps three independent 1D families (all FullShard2D, distributed-tensor
-input, fixed 4x4 worker grid), each holding the other chunk-plan axis at a shared anchor:
+The benchmark sweeps independent families (all FullShard2D, distributed-tensor
+input, fixed 4x4 worker grid), each holding or perturbing the other chunk-plan axes:
   - size: throughput vs per_device_pages   (cb/fifo fixed at the anchor)
   - cb:   throughput vs cb_pages            (fifo fixed at the anchor)
   - fifo: throughput vs fifo_pages          (cb fixed at the anchor)
+  - prod_tune: production-size cb/fifo tuning around the high-throughput region
 
 Benchmark name grammar: BM_H2DStreamService/<family>/p<pages>/cb<cb>/fifo<fifo>
 
@@ -65,6 +66,7 @@ FAMILY_AXIS = {
     "size": ("per_device_pages", "per-device pages"),
     "cb": ("cb_pages", "scratch-CB pages"),
     "fifo": ("fifo_pages", "FIFO pages"),
+    "prod_tune": ("cb_pages", "scratch-CB pages"),
 }
 
 CASE_KEY = ["family", "per_device_pages", "cb_pages", "fifo_pages"]

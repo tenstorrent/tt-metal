@@ -69,7 +69,7 @@ using ::tt::tt_metal::distributed::MeshWorkload;
 
 constexpr uint32_t kMinWarmupIters = 4;
 constexpr uint32_t kWarmupSettlingIters = 2;
-constexpr uint32_t kPerfIters = 100;
+constexpr uint32_t kPerfIters = 300;
 
 // Tensor element size. The H2D service streams raw bytes, so the transfer is
 // dtype-agnostic: a production per-shard page of 1792 bf16 elems is 3584 B, which
@@ -245,11 +245,11 @@ WarmupPlan compute_warmup_plan(
 }
 
 bool benchmark_supported(benchmark::State& state) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    if (!cluster.is_ubb_galaxy()) {
-        state.SkipWithMessage("H2DStreamService kernels are only available on UBB Galaxy systems");
-        return false;
-    }
+    // const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    //  if (!cluster.is_ubb_galaxy()) {
+    //      state.SkipWithMessage("H2DStreamService kernels are only available on UBB Galaxy systems");
+    //      return false;
+    //  }
     if (!tt::tt_metal::experimental::GetMemoryPinningParameters(*g_mesh_device).can_map_to_noc) {
         state.SkipWithMessage("Mapping host memory to NOC is not supported on this system");
         return false;
@@ -528,6 +528,17 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
     for (uint32_t cb : fifo_line_cb) {
         for (uint32_t fifo : fifo_sweep) {
             add_case("fifo", kProdPerDevicePages, cb, fifo);
+        }
+    }
+
+    // prod_tune -- narrow production-shape tuning matrix. The split reader/writer service may derive
+    // a smaller effective pages_per_chunk than the requested cb budget, so this family extends the
+    // production-size cb/fifo search and relies on the derived counters to identify the real geometry.
+    const uint32_t prod_tune_cb_sweep[] = {8, 16, 32, 64, 128};
+    const uint32_t prod_tune_fifo_sweep[] = {kDefaultFifoPages, 128, 256};
+    for (uint32_t fifo : prod_tune_fifo_sweep) {
+        for (uint32_t cb : prod_tune_cb_sweep) {
+            add_case("prod_tune", kProdPerDevicePages, cb, fifo);
         }
     }
 
