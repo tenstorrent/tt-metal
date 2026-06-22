@@ -379,7 +379,6 @@ jobs:
       DISTRO: ${{ needs.parse-platform.outputs.distro }}
       VERSION: ${{ needs.parse-platform.outputs.version }}
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
-      # S3 ccache config — lift to repo vars/secrets when ready
       CCACHE_S3_BUCKET: ccache
       CCACHE_S3_PREFIX: tt-metal
       CCACHE_S3_READONLY: "false"
