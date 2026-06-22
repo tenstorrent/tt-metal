@@ -35,4 +35,5 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/pcie_core_writer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/blitz_decode_pipeline.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/experimental/internal_cluster.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/layer_completion_reorder_buffer.cpp
 )
