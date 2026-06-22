@@ -244,8 +244,13 @@ std::vector<CoreCoord> build_matmul_ring_cores(
 // Column-0-anchored compact matmul placement. Used as a FALLBACK when the DRAM-bank-adjacent ring
 // cannot be used: either it collides with user mux cores, or its bounding box spans the grid so no
 // disjoint combine/tilize layout exists (the WH ROW-dispatch case, where the DRAM-adjacent workers
-// occupy the full compute grid). Packs the ring row-major into the lower-left, reserving the eastern
-// combine strip and the top two tilize rows so combine/tilize have room.
+// occupy the full compute grid). Packs the ring row-major starting at row `y_start`, reserving the
+// eastern combine strip (x_limit) and the top two tilize rows so combine/tilize have room.
+//
+// `y_start` lets the caller slide the block UP off the bottom rows: a wide combine group (e.g.
+// deepseek hidden=7168 -> 16 combine cores) on a short grid (WH 8x9) can only be placed row-major in
+// the bottom rows, so the matmul block must vacate them or no disjoint combine bbox exists. The
+// caller searches y_start (bottom-first) and keeps the first value that yields a disjoint layout.
 //
 // CRITICAL (established experimentally, not assumed): the compact block MUST stay anchored at column
 // x=0. A compact ring whose bbox starts at x>0 hangs / corrupts on device (observed: logical
@@ -253,7 +258,7 @@ std::vector<CoreCoord> build_matmul_ring_cores(
 // leftmost (x=0) cell is mux-free (skipping a whole row otherwise); mux cells in non-leftmost columns
 // are left as gaps inside the bbox (mux inside the matmul bbox is benign, verified).
 std::vector<CoreCoord> build_compact_matmul_cores(
-    const CoreCoord& worker_grid, uint32_t ring_size, const CoreCoordPairSet& mux_pairs) {
+    const CoreCoord& worker_grid, uint32_t ring_size, const CoreCoordPairSet& mux_pairs, uint32_t y_start) {
     std::vector<CoreCoord> cores;
     cores.reserve(ring_size);
 
@@ -263,7 +268,7 @@ std::vector<CoreCoord> build_compact_matmul_cores(
     const uint32_t y_limit =
         worker_grid.y > 2 ? static_cast<uint32_t>(worker_grid.y) - 2 : static_cast<uint32_t>(worker_grid.y);
 
-    for (uint32_t y = 0; y < y_limit && cores.size() < ring_size; ++y) {
+    for (uint32_t y = y_start; y < y_limit && cores.size() < ring_size; ++y) {
         // Anchor at column 0: a row may only contribute if its leftmost cell is mux-free, otherwise
         // the block would start at x>0 (a placement that deadlocks on device).
         if (mux_pairs.contains({0, y})) {
@@ -369,13 +374,15 @@ MoEComputeCoreSelection select_moe_compute_cores(
      *   1. matmul (preferred): DRAM-bank-adjacent workers (perf), padded inside their bbox for ring
      *      N > banks. Used when it does NOT collide with mux AND leaves room for a disjoint
      *      combine/tilize layout.
-     *   2. matmul (fallback): a COMPACT, column-0-anchored ring packed into the lower-left of the
-     *      grid. Required because:
+     *   2. matmul (fallback): a COMPACT, column-0-anchored ring. Required because:
      *        - On WH ROW dispatch the DRAM-bank-adjacent workers span the full compute grid, so the
      *          matmul bbox becomes the entire grid and no disjoint combine/tilize layout exists ->
      *          hang/crash. Compacting the ring shrinks its bbox so tilize/combine fit.
      *        - When user mux cores land on the DRAM-adjacent ring, we relocate matmul instead of the
      *          ring (the ring is what the user can query and route mux around).
+     *      The block's vertical offset is searched bottom-first: on short grids a wide combine group
+     *      (e.g. WH 8x9 + deepseek's 16 combine cores) can only be placed row-major in the bottom
+     *      rows, so the matmul block slides up to vacate them and keep the combine bbox disjoint.
      *   3. combine + tilize: placed in the region NOT spanned by the (chosen) matmul bounding box,
      *      avoiding the mux region, as dense rectangles with mutually disjoint bounding boxes.
      *
@@ -443,32 +450,41 @@ MoEComputeCoreSelection select_moe_compute_cores(
     }
 
     if (!placed.has_value()) {
-        const std::vector<CoreCoord> compact_ring = build_compact_matmul_cores(worker_grid, ring_size, mux_pairs);
-        TT_FATAL(
-            compact_ring.size() == ring_size,
-            "moe_compute: could not build a {}-core column-0-anchored compact matmul ring on the {}x{} worker "
-            "grid (got {}); mux cores may be blocking too many leftmost columns/rows.",
-            ring_size,
-            worker_grid.x,
-            worker_grid.y,
-            compact_ring.size());
-        placed = place_combine_and_tilize(
-            worker_grid,
-            CoreRangeSet(compact_ring).bounding_box(),
-            mux_pairs,
-            num_combine_cores,
-            target_tilize_num_cores);
+        // Search the compact block's vertical offset (column-0-anchored throughout). Bottom-first
+        // (y_start=0) reproduces the validated BH layout; sliding the block up frees the bottom rows
+        // for a wide row-major combine group on short grids (WH 8x9 + deepseek's 16 combine cores),
+        // which is the only way to get a combine bbox disjoint from the matmul bbox there. Keep the
+        // first y_start that yields a fully-disjoint combine/tilize layout.
+        std::vector<CoreCoord> compact_ring;
+        for (uint32_t y_start = 0; y_start < static_cast<uint32_t>(worker_grid.y); ++y_start) {
+            std::vector<CoreCoord> candidate = build_compact_matmul_cores(worker_grid, ring_size, mux_pairs, y_start);
+            if (candidate.size() != ring_size) {
+                // Higher y_start can only fit fewer cores, so no point continuing.
+                break;
+            }
+            std::optional<PlacedWorkers> candidate_placed = place_combine_and_tilize(
+                worker_grid,
+                CoreRangeSet(candidate).bounding_box(),
+                mux_pairs,
+                num_combine_cores,
+                target_tilize_num_cores);
+            if (candidate_placed.has_value()) {
+                compact_ring = std::move(candidate);
+                placed = std::move(candidate_placed);
+                break;
+            }
+        }
         TT_FATAL(
             placed.has_value(),
-            "moe_compute: could not place {} combine + {} tilize cores disjoint from the compact matmul bbox {} "
-            "and {} mux cores on the {}x{} worker grid",
+            "moe_compute: could not place a column-0-anchored compact {}-core matmul ring together with {} "
+            "combine + {} tilize cores disjointly, avoiding {} mux cores, on the {}x{} worker grid",
+            ring_size,
             num_combine_cores,
             target_tilize_num_cores,
-            CoreRangeSet(compact_ring).bounding_box().str(),
             mux_core_range_set.num_cores(),
             worker_grid.x,
             worker_grid.y);
-        matmul_cores = compact_ring;
+        matmul_cores = std::move(compact_ring);
         used_compact_matmul = true;
     }
 
