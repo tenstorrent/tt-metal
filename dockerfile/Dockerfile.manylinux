@@ -48,13 +48,6 @@ RUN --mount=from=mold-layer,source=/install,target=/mold-staging \
     cp -a /mold-staging/lib/* /usr/local/lib/ && \
     mold --version
 
-# Copy ccache from pre-built tool image.
-# The ccache binary has its libexecdir baked in as /usr/local/libexec (see
-# dockerfile/scripts/install-ccache.sh). For the s3:// remote-storage scheme,
-# ccache derives the helper name (ccache-storage-s3) from the URL scheme and
-# looks it up there. We therefore copy the WHOLE /install tree (bin + libexec)
-# so /usr/local/libexec/ccache-storage-s3 is present — otherwise the s3:// path
-# fails at the first compile with "ccache: error: unknown remote storage scheme: s3".
 RUN --mount=from=ccache-layer,source=/install,target=/ccache-staging \
     cp -a /ccache-staging/bin/ccache /usr/local/bin/ && \
     mkdir -p /usr/local/libexec && \

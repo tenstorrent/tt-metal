@@ -16,10 +16,6 @@ echo "=== ccache Remote Storage Analysis (S3/crsh) ==="
 echo ""
 
 # --- Remote hit/miss summary from ccache log ---
-# Note: `grep -c` already prints `0` (and exits 1) when there are no matches, so a
-# `|| echo 0` fallback would append a SECOND `0`, corrupting the value into the
-# two-line string "0\n0" and breaking the summary. Capture grep's own count and
-# only substitute `0` on a genuine error exit (status > 1).
 count_matches() {
     local out rc
     out=$(grep -c "$1" "$INPUT" 2>/dev/null)
