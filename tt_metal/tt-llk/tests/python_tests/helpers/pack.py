@@ -183,7 +183,11 @@ def float_to_bfp8_block(block):
         else:
             mantissa = mantissas_explicit[i]
         mantissa = mantissa & 0x7F
-        mantissa = (signs[i] << 7) | mantissa
+        # Flush negative-zero to +0: when the magnitude rounds/shifts to 0, drop
+        # the sign bit. The tt-metal host quantizer (convert_u32_to_bfp) does the
+        # same, and the hardware unpacker decodes a sign-only mantissa (0x80) to
+        # -inf, so no valid producer should ever emit it.
+        mantissa = ((signs[i] << 7) | mantissa) if mantissa != 0 else 0
         bfp8_mantissas.append(mantissa)
 
     return shared_exponent, bfp8_mantissas
@@ -232,10 +236,16 @@ def truncate_bfp8(bfp8_mantissas, magnitude_bits):
     """
     shift = 7 - magnitude_bits
     mag_mask = (1 << magnitude_bits) - 1
-    return [
-        (((bfp8 >> 7) & 0x1) << magnitude_bits) | ((bfp8 >> shift) & mag_mask)
-        for bfp8 in bfp8_mantissas
-    ]
+    out = []
+    for bfp8 in bfp8_mantissas:
+        magnitude = (bfp8 >> shift) & mag_mask
+        sign = (bfp8 >> 7) & 0x1
+        # Flush negative-zero to +0: truncation can drop a small BFP8 magnitude to
+        # 0 while leaving the sign bit set. Emit +0 so the hardware unpacker never
+        # sees a sign-only mantissa (which it decodes to -inf), matching the host
+        # quantizer's behavior.
+        out.append(((sign << magnitude_bits) | magnitude) if magnitude != 0 else 0)
+    return out
 
 
 def float_to_bfp4_block(block):

@@ -121,9 +121,10 @@ def check_arc(device: Device, heartbeat_sample: HeartbeatSample):
 def run(args, context: Context):
     run_checks = get_run_checks(args, context)
 
-    heartbeat_samples = {
+    heartbeat_samples: dict[Device, HeartbeatSample] = {
         sample.device_description.device: sample.result
-        for sample in run_checks.run_per_device_check(lambda device: get_heartbeat_sample(device))
+        for sample in (run_checks.run_per_device_check(lambda device: get_heartbeat_sample(device)) or [])
+        if isinstance(sample.result, HeartbeatSample)
     }
     time.sleep(2)
     return run_checks.run_per_device_check(lambda device: check_arc(device, heartbeat_samples[device]))

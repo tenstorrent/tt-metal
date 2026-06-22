@@ -117,7 +117,7 @@ target_link_libraries(
         capnp
         capnp-rpc
         protobuf::libprotobuf
-        libdwarf::dwarf-static
+        ttexalens::elf
         Taskflow::Taskflow
 )
 

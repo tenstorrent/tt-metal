@@ -195,9 +195,14 @@ extern "C" uint32_t _start1() {
     if (hartid == 0) {
         extern uint32_t __ldm_data_start[];
         do_crt1(__ldm_data_start);
+        // Originally initalized to WAIT by host firmware initializer.
+        // Will be set back to WAIT immediately before running kernels.
+        (*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[hartid] = SHARED_GLOBALS_READY_GO;
     }
     extern uint32_t __ldm_tdata_init[];
     do_thread_crt1(__ldm_tdata_init);
+    while ((*GET_MAILBOX_ADDRESS_DEV(fw_shared_globals_ready))[0] != SHARED_GLOBALS_READY_GO) {
+    }
     WAYPOINT("I");
     DPRINT("DM0-FW: initialized\n");
 
@@ -215,6 +220,10 @@ extern "C" uint32_t _start1() {
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
         thread_sync_init();
 
+        // Initialize wait for trisc FW
+        for (uint32_t i = MaxDMProcessorsPerCoreType; i < MaxNumKernels; i++) {
+            mailboxes->fw_shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+        }
         deassert_trisc();
         DPRINT("DM0-FW: deasserted TRISC\n");
         wait_subordinates();
@@ -282,6 +291,11 @@ extern "C" uint32_t _start1() {
                 // Copies from L1 to IRAM on chips where NCRISC has IRAM
                 uintptr_t kernel_config_base = firmware_config_init(mailboxes, ProgrammableCoreType::TENSIX, hartid);
 
+                // Initialize wait for kernels
+                for (uint32_t i = 0; i < MaxNumKernels; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
+
                 run_triscs(enables);
 
                 // noc_index = launch_msg_address->kernel_config.brisc_noc_id;
@@ -308,9 +322,6 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
-                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
-                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
-                }
                 start_subordinate_kernel_run_early(enables);
 
                 // DM0 needs to setup DFBs to program implicit synchronization regardless of whether it runs a kernel or not.

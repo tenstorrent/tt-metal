@@ -279,8 +279,11 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
     } else {
         // Enable VC1 for all routers when intermesh VC is configured
         bool enable_vc1 = intermesh_config.requires_vc1;
-        connection_mapping =
-            RouterConnectionMapping::for_mesh_router(topology, location.direction, has_z_router, enable_vc1);
+        // EXPERIMENTAL: in pass-through mode, mesh routers also forward VC1 traffic to the local Z
+        // router (MESH_TO_Z on VC1) so inter-mesh traffic can traverse intermediate meshes (A->B->C).
+        bool enable_mesh_pass_through = intermesh_config.requires_vc1_mesh_pass_through;
+        connection_mapping = RouterConnectionMapping::for_mesh_router(
+            topology, location.direction, has_z_router, enable_vc1, enable_mesh_pass_through);
     }
 
     // Compute injection channel flags at router level BEFORE creating builders

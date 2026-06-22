@@ -7,6 +7,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 
 #include <map>
@@ -127,6 +129,18 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     bool in1_is_sharded = in1_buffer.is_sharded();
     bool output_is_sharded = output.is_sharded();
 
+    // Tiles whose size is not a multiple of the DRAM alignment (e.g. bfp8 32x16 = 544B on Blackhole's
+    // 64B alignment) are padded to it in DRAM. The interleaved reader copies tiles at that padded
+    // stride, so the in0/in1 CBs must hold pages at the aligned stride and the reader/unpacker walk
+    // tiles at the same stride. This is a no-op when the tile is already aligned (all bf16 tiles,
+    // 32-wide bfp8, and everything on Wormhole's 32B alignment) and replaces the staging-CB workaround.
+    // Sharded CBs are backed by the tensor buffer and keep their natural page size.
+    const uint32_t dram_alignment = tt::tt_metal::hal::get_dram_alignment();
+    uint32_t in0_aligned_tile_size =
+        in0_is_sharded ? in0_single_tile_size : tt::align(in0_single_tile_size, dram_alignment);
+    uint32_t in1_aligned_tile_size =
+        in1_is_sharded ? in1_single_tile_size : tt::align(in1_single_tile_size, dram_alignment);
+
     // CB sizes
     uint32_t in0_block_num_tiles = per_core_M_per_batch * in0_block_w;
     uint32_t in0_CB_tiles = in0_block_num_tiles;
@@ -135,7 +149,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     } else {
         in0_CB_tiles *= 2;
     }
-    uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
+    uint32_t in0_CB_size = in0_CB_tiles * in0_aligned_tile_size;
     uint32_t in1_block_num_tiles = per_core_N * in0_block_w;
     uint32_t in1_CB_tiles = in1_block_num_tiles;
     if (in1_is_sharded) {
@@ -143,7 +157,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     } else {
         in1_CB_tiles *= 2;
     }
-    uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
+    uint32_t in1_CB_size = in1_CB_tiles * in1_aligned_tile_size;
     uint32_t out_block_tiles = per_core_M * per_core_N;
     uint32_t out_CB_tiles = out_block_tiles;
     uint32_t out_CB_size = out_CB_tiles * output_single_tile_size;
@@ -157,7 +171,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
     uint32_t out_subblock_num_tiles = out_subblock_h * out_subblock_w;
     uint32_t out_num_subblocks_h = per_core_M_per_batch / out_subblock_h;
     uint32_t out_num_subblocks_w = in1_num_subblocks;
-    uint32_t num_tiles_per_block_out = per_core_M_per_batch * per_core_N;
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
 
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
@@ -198,16 +211,27 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
                 "invoke ttnn::operations::matmul::normalize_program_config() on the program config first. This "
                 "will become a hard error in a future release.");
         }
-        CoreCoord grid = program_config.allowed_worker_cores.has_value()
-                             ? program_config.allowed_worker_cores.value().bounding_box().grid_size()
-                             : program_config.compute_with_storage_grid_size;
-        std::tie(
-            num_cores,
-            all_cores,
-            core_group_1,
-            core_group_2,
-            num_blocks_per_core_group_1,
-            num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+        // Use the CoreRangeSet overload so the output core ranges carry the actual
+        // absolute coordinates (e.g. (4,0)-(7,0)) rather than always starting at (0,0).
+        if (program_config.allowed_worker_cores.has_value()) {
+            std::tie(
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_blocks_per_core_group_1,
+                num_blocks_per_core_group_2) =
+                tt::tt_metal::split_work_to_cores(program_config.allowed_worker_cores.value(), num_output_blocks_total);
+        } else {
+            CoreCoord grid = program_config.compute_with_storage_grid_size;
+            std::tie(
+                num_cores,
+                all_cores,
+                core_group_1,
+                core_group_2,
+                num_blocks_per_core_group_1,
+                num_blocks_per_core_group_2) = tt::tt_metal::split_work_to_cores(grid, num_output_blocks_total);
+        }
         num_blocks_per_core_group_1 *= batch_scale_factor;
         num_blocks_per_core_group_2 *= batch_scale_factor;
     }
@@ -276,20 +300,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         reader_writer_defines.emplace_back("OUT_SHARDED", "1");
     }
 
-    // Blackhole intermediate CB read workaround
-    bool in0_needs_intermediate_cb_read = false;
-    bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
-        in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
-        if (in0_needs_intermediate_cb_read) {
-            reader_defines.emplace_back("INTERMEDIATE_CB_READ", "1");
-        }
-        in1_needs_intermediate_cb_read = ((in1_single_tile_size % 64) != 0);
-        if (in1_needs_intermediate_cb_read) {
-            reader_writer_defines.emplace_back("INTERMEDIATE_CB_READ", "1");
-        }
-    }
-
     // Named compile-time args for CB indices (enables fusion/chaining)
     KernelDescriptor::NamedCompileTimeArgs cb_named_args = {
         {"cb_in0", tt::CBIndex::c_0},
@@ -297,8 +307,6 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         {"cb_bias", tt::CBIndex::c_3},
         {"cb_out", tt::CBIndex::c_4},
         {"cb_intermed0", tt::CBIndex::c_5},
-        {"cb_in0_intermediate", tt::CBIndex::c_8},
-        {"cb_in1_intermediate", tt::CBIndex::c_9},
         {"cb_in0_transposed", tt::CBIndex::c_10},
     };
 
@@ -404,13 +412,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
 
         reader_kernel_desc.emplace_runtime_args(core, {in0_buffer, in0_start_tile_id, num_output_blocks_per_core});
 
+        uint32_t out_start_tile_id =
+            (start_batch * M * N) + (start_m_block * per_core_M_per_batch * N) + (start_n_block * per_core_N);
         reader_writer_kernel_desc.emplace_runtime_args(
-            core,
-            {in1_buffer,
-             in1_start_tile_id,
-             num_output_blocks_per_core,
-             output,
-             num_blocks_written * num_tiles_per_block_out});
+            core, {in1_buffer, in1_start_tile_id, num_output_blocks_per_core, output, out_start_tile_id});
 
         // Compute kernels have no per-core runtime args
         if (i < g1_numcores) {
@@ -508,7 +513,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in0_CB_size,
         tt::CBIndex::c_0,
         in0_data_format,
-        in0_single_tile_size,
+        in0_aligned_tile_size,
         in0_tile,
         in0_is_sharded ? &in0_buffer : nullptr));
 
@@ -517,7 +522,7 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         in1_CB_size,
         tt::CBIndex::c_1,
         in1_data_format,
-        in1_single_tile_size,
+        in1_aligned_tile_size,
         in1_tile,
         in1_is_sharded ? &in1_buffer : nullptr));
 
@@ -554,20 +559,10 @@ tt::tt_metal::ProgramDescriptor MatmulMultiCoreReuseOptimizedProgramFactory::cre
         program_descriptor.cbs.push_back(std::move(output_cb_desc));
     }
 
-    // Optional CBs for Blackhole intermediate reads
-    if (in1_needs_intermediate_cb_read) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in1_single_tile_size, tt::CBIndex::c_9, in1_data_format, in1_single_tile_size, in1_tile));
-    }
-    if (in0_needs_intermediate_cb_read) {
-        program_descriptor.cbs.push_back(make_cb_descriptor(
-            in0_single_tile_size, tt::CBIndex::c_8, in0_data_format, in0_single_tile_size, in0_tile));
-    }
-
     // Optional transpose CB
     if (in0_transpose_tile) {
         program_descriptor.cbs.push_back(
-            make_cb_descriptor(in0_CB_size, tt::CBIndex::c_10, in0_data_format, in0_single_tile_size, in0_tile));
+            make_cb_descriptor(in0_CB_size, tt::CBIndex::c_10, in0_data_format, in0_aligned_tile_size, in0_tile));
     }
 
     return program_descriptor;

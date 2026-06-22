@@ -239,6 +239,8 @@ void kernel_main() {
             reduce_sender_sem.wait_min(block + 2);
             cb_ex_global_obj.push_back(num_tiles * num_tiles_scaler);
         }
+
+        cb_partial_obj.pop_front(block_h * num_tiles_scaler);
     };
 
     if constexpr (!rms_norm) {

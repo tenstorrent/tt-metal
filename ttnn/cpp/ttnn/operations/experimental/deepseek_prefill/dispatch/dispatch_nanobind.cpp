@@ -72,7 +72,7 @@ void bind_dispatch(nb::module_& mod) {
             use_l1_small_for_semaphores (bool, optional): Allocate the workload's
                 GlobalSemaphores in L1_SMALL instead of L1. Defaults to False.
             use_fp8_dispatch (bool, optional): Pack the dispatched buffer as Fp8_e4m3
-                (DRAM allocated as UINT8). Requires TILE input layout, not supported on
+                (DataType::FP8_E4M3). Requires TILE input layout, not supported on
                 Wormhole_B0. Defaults to False.
             num_untilizers_per_sender (int, optional): Number of untilize cores per
                 sender on the tile-layout path.

@@ -9,11 +9,10 @@
 #include <stdint.h>
 #include <functional>
 #include <optional>
-#include <string>
-#include <vector>
+#include <span>
+#include <string_view>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
 #include <tt-metalium/sub_device_types.hpp>
-#include <optional>
 #include "program/program_impl.hpp"
 
 namespace tt {
@@ -59,8 +58,7 @@ void RecordKernelGroup(
 // Update stats with an enqueue of given program.
 void RecordProgramRun(uint64_t program_id);
 
-// Record the mapping from a program's runtime_id to its kernel source paths.
-// Should be called at dispatch time when runtime_id is guaranteed to be set.
+// Record this program's kernel source paths.
 void RecordKernelSourceMap(tt_metal::detail::ProgramImpl& program);
 
 struct ProgramSubDeviceInfo {
@@ -81,12 +79,12 @@ void RecordProgramSubDevice(
 // Look up the sub-device a program was dispatched on, keyed by physical device and runtime_id.
 std::optional<ProgramSubDeviceInfo> GetProgramSubDevice(tt::ChipId device_id, uint64_t runtime_id);
 
-// Look up the kernel source paths for a given runtime_id.
-// Returns a comma-separated string of kernel source paths, or empty string if not found.
-std::string GetKernelSourcesForRuntimeId(uint64_t runtime_id);
+// Tie the program's current runtime ID to its program ID.
+void TieRuntimeIdToProgramId(tt_metal::detail::ProgramImpl& program);
 
-// Look up the kernel source paths for a given runtime_id as a vector.
-std::vector<std::string> GetKernelSourcesVecForRuntimeId(uint64_t runtime_id);
+// Look up kernel source paths by runtime_id; empty span if the runtime_id is unknown.
+// The returned span is valid until MetalContext teardown or reinitialization.
+std::span<const std::string_view> GetKernelSourcesForRuntimeId(uint16_t runtime_id);
 
 // Register a callback to be invoked when real-time profiler data arrives.
 // Multiple callbacks can be registered; they are called in order of registration.

@@ -112,7 +112,7 @@ inline void _calculate_rsqrt_compat_(const int iterations)
         v_endif;
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;
@@ -145,7 +145,7 @@ inline void _calculate_reciprocal_compat_(const int iterations)
         v_endif;
         if constexpr (!(fp32_dest_acc_en || APPROXIMATION_MODE))
         {
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::NearestEven);
+            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = out;
         sfpi::dst_reg++;

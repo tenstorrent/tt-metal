@@ -26,13 +26,12 @@ parameters = {
         "tensor_shape": list(itertools.product(DIM_SIZES, repeat=rank)),
         "dim": [None] + [rank, -1] if rank > 0 else [],
         "keepdim": [True, False],
-        "use_multicore": [True, False],
     }
     for rank in range(5)
 }
 
 
-def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
+def run_argmax(device, tensor_shape, dim, keepdim) -> list:
     """
     Test the compatibility of the torch and ttnn output for the given operation and different
     tensor shapes and dim values.
@@ -62,11 +61,7 @@ def run_argmax(device, tensor_shape, dim, keepdim, use_multicore) -> list:
     ttnn_error_msg = ""
     start_time = start_measuring_time()
     try:
-        op_output_tensor = (
-            ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim, use_multicore=use_multicore)
-            if dim is not None
-            else ttnn_op(ttnn_tensor, use_multicore=use_multicore)
-        )
+        op_output_tensor = ttnn_op(ttnn_tensor, dim=dim, keepdim=keepdim) if dim is not None else ttnn_op(ttnn_tensor)
         output_tensor = ttnn.to_torch(ttnn.from_device(op_output_tensor))
     except RuntimeError as e:
         ttnn_errored = True
@@ -106,14 +101,12 @@ def test_argmax(
     tensor_shape,
     dim,
     keepdim,
-    use_multicore,
 ):
     (result, error_msg), e2e_perf = run_argmax(
         device,
         tensor_shape,
         dim,
         keepdim,
-        use_multicore,
     )
     assert result, error_msg
 
@@ -122,7 +115,6 @@ def run(
     tensor_shape,
     dim,
     keepdim,
-    use_multicore,
     *,
     device,
 ) -> list:
@@ -131,5 +123,4 @@ def run(
         tensor_shape,
         dim,
         keepdim,
-        use_multicore,
     )

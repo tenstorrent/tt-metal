@@ -29,7 +29,7 @@ inline void calculate_selu(uint32_t scale, uint32_t alpha) {
         v_endif;
 
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

@@ -102,7 +102,8 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
                     const bool tile_aligned = adjusted->shape[0] % tt::constants::TILE_HEIGHT == 0 &&
                                               adjusted->shape[1] % tt::constants::TILE_WIDTH == 0;
                     if (!tile_layout || tile_aligned) {
-                        output_mem_config = output_mem_config.with_shard_spec(std::move(adjusted));
+                        output_mem_config = MemoryConfig(
+                            output_mem_config.memory_layout(), output_mem_config.buffer_type(), std::move(adjusted));
                         derived = true;
                     }
                 }
@@ -112,7 +113,8 @@ PermuteDeviceOperation::spec_return_value_t PermuteDeviceOperation::compute_outp
             // Generate a fresh shard spec for the permuted shape.
             auto shard_spec = transpose::generate_transpose_shard_spec(
                 input_tensor, output_padded_shape, output_mem_config.memory_layout());
-            output_mem_config = output_mem_config.with_shard_spec(shard_spec);
+            output_mem_config =
+                MemoryConfig(output_mem_config.memory_layout(), output_mem_config.buffer_type(), shard_spec);
         }
     }
 

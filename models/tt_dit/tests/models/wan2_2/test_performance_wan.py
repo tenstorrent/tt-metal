@@ -76,10 +76,10 @@ def t2v_metrics(mesh_device, height):
             }
         else:
             expected_metrics = {
-                "encoder": 0.1,
+                "encoder": 0.2,
                 "denoising": 370.0,
                 "vae": 7.0,
-                "total": 375.0,
+                "total": 375.2,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"

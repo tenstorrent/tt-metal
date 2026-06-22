@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 
@@ -43,6 +44,17 @@ inline void _llk_math_eltwise_unary_datacopy_(
     const std::uint32_t dst_index, const std::uint32_t src_format, const std::uint32_t dst_format, const std::uint32_t num_faces = 4)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+
+    if constexpr (type == DataCopyType::A2D)
+    {
+        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
+    }
+    else
+    {
+        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
+    }
+    llk::san::operation_check<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
+
     // For 32bit data, each half of DEST can take 16 tiles. Since dest offset is returned as if 16bit data are used, we need to
     // adjust it to offset in faces for 32bit data.
     if (unpack_to_dest && is_32bit_input(src_format, dst_format))
@@ -200,10 +212,26 @@ inline void _llk_math_eltwise_unary_datacopy_(
             cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
             TTI_CLEARDVALID(0b10, 0);
         }
+        // The 32b path manipulated the flag directly above (tt-llk#449 Fp32_enabled dance); invalidate the
+        // tracked state so the next op re-applies the Src zero-substitution flag.
+        math::_invalidate_src_zero_flag_state_();
     }
     else
     {
         math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
+        if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
+        {
+            // UInt16 case needs to use format switching for 32bit dest
+            // without the debug bit 11 hack to write into high bits
+            // avoiding BroadcastType::NONE mode as that path is used by SFPU
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(1);
+                cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
+            }
+        }
 
         if constexpr (type == DataCopyType::A2D)
         {
@@ -222,6 +250,16 @@ inline void _llk_math_eltwise_unary_datacopy_(
             else
             {
                 ckernel_template::run();
+            }
+        }
+
+        if constexpr (is_fp32_dest_acc_en && src_b_bcast_type != BroadcastType::NONE)
+        {
+            // Undo format switching option
+            if (dst_format == to_underlying(DataFormat::UInt16))
+            {
+                TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
+                cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(0);
             }
         }
 
@@ -351,9 +389,17 @@ inline void eltwise_unary_configure_mop(std::uint32_t rows_per_inst, std::uint32
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
+        else if (is_fp32_dest_acc_en && (dst_format == to_underlying(DataFormat::UInt16)))
+        {
+            // Typecasting uint16 to 32bit data, need data to be written to lower 16 bits without modification
+            // to be consumed by SFPU easily.
+            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
+            tmp.program();
+        }
         else
         {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(0, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVA2D(p_mov::DEST_NORM, 0, ADDR_MOD_2, p_mova2d::MOV_8_ROWS, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
         }
@@ -457,6 +503,16 @@ inline void _llk_math_eltwise_unary_datacopy_init_(
         "Blackhole _llk_math_eltwise_unary_datacopy_init_ supports only PackMode::Default and PackMode::Tilize");
     constexpr bool tilize = (pack_mode == PackMode::Tilize);
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    if constexpr (type == DataCopyType::A2D)
+    {
+        llk::san::math_operand_check(dst_format, llk::san::IGNORE);
+    }
+    else
+    {
+        llk::san::math_operand_check(llk::san::IGNORE, dst_format);
+    }
+    llk::san::operation_init<llk::san::Operation::EltwiseUnaryDatacopy>(type, src_b_bcast_type, num_faces, dst_format);
+
     eltwise_unary_configure_addrmod<type, src_b_bcast_type>(dst_format);
 
     if constexpr (type == DataCopyType::A2D && src_b_bcast_type == BroadcastType::NONE)

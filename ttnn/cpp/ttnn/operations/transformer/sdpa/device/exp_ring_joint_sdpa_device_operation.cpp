@@ -26,20 +26,20 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
 
-    const auto& joint_tensor_q = tensor_args.joint_q;
-    const auto& joint_tensor_k = tensor_args.joint_k;
-    const auto& joint_tensor_v = tensor_args.joint_v;
+    const bool has_joint = tensor_args.joint_q.has_value();
+    TT_FATAL(
+        has_joint == tensor_args.joint_k.has_value() && has_joint == tensor_args.joint_v.has_value(),
+        "Joint q/k/v must all be present or all absent");
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    const std::vector<Tensor> sdpa_input_tensors = {
-        input_tensor_q,
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v};
+    std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k, gathered_input_tensor_v};
+    if (has_joint) {
+        sdpa_input_tensors.push_back(tensor_args.joint_q.value());
+        sdpa_input_tensors.push_back(tensor_args.joint_k.value());
+        sdpa_input_tensors.push_back(tensor_args.joint_v.value());
+    }
 
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
 
@@ -60,10 +60,6 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& q_shape = input_tensor_q.logical_shape();
     const auto& k_shape = gathered_input_tensor_k.logical_shape();
     const auto& v_shape = gathered_input_tensor_v.logical_shape();
-    const auto& joint_q_shape = joint_tensor_q.logical_shape();
-    const auto& joint_k_shape = joint_tensor_k.logical_shape();
-    const auto& joint_v_shape = joint_tensor_v.logical_shape();
-
     // Validate storage types and buffers
     for (const auto& tensor : sdpa_input_tensors) {
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to Joint SDPA need to be on device");
@@ -84,40 +80,60 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto NKH = k_shape[1];
     const auto N_local = q_shape[2];
     const auto N_global = k_shape[2];
-    const auto L = joint_q_shape[2];
+    // Joint sequence length: 0 when there are no joint inputs (self-attention).
+    const auto L = has_joint ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const auto DH = q_shape[3];
 
     TT_FATAL(
-        k_shape[0] == B && v_shape[0] == B && joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
-        "Batch sizes must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        k_shape[0] == B && v_shape[0] == B,
+        "Batch sizes must match. Got Q: {}, K: {}, V: {}",
         B,
         k_shape[0],
-        v_shape[0],
-        joint_q_shape[0],
-        joint_k_shape[0],
-        joint_v_shape[0]);
+        v_shape[0]);
 
     // Validate head dimensions match
     TT_FATAL(
-        k_shape[3] == DH && v_shape[3] == DH && joint_q_shape[3] == DH && joint_k_shape[3] == DH &&
-            joint_v_shape[3] == DH,
-        "Head dimensions must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+        k_shape[3] == DH && v_shape[3] == DH,
+        "Head dimensions must match. Got Q: {}, K: {}, V: {}",
         DH,
         k_shape[3],
-        v_shape[3],
-        joint_q_shape[3],
-        joint_k_shape[3],
-        joint_v_shape[3]);
+        v_shape[3]);
 
-    TT_FATAL(
-        v_shape[1] == NKH && joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
-        "Num heads must match. Got Q: {}, K: {}, V: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
-        NQH,
-        NKH,
-        v_shape[1],
-        joint_q_shape[1],
-        joint_k_shape[1],
-        joint_v_shape[1]);
+    TT_FATAL(v_shape[1] == NKH, "Num heads must match. Got K: {}, V: {}", NKH, v_shape[1]);
+
+    // Joint-input shape checks only apply when joint inputs are present.
+    if (has_joint) {
+        const auto& joint_q_shape = tensor_args.joint_q.value().logical_shape();
+        const auto& joint_k_shape = tensor_args.joint_k.value().logical_shape();
+        const auto& joint_v_shape = tensor_args.joint_v.value().logical_shape();
+        TT_FATAL(
+            joint_q_shape[0] == B && joint_k_shape[0] == B && joint_v_shape[0] == B,
+            "Joint batch sizes must match. Got B: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            B,
+            joint_q_shape[0],
+            joint_k_shape[0],
+            joint_v_shape[0]);
+        TT_FATAL(
+            joint_q_shape[3] == DH && joint_k_shape[3] == DH && joint_v_shape[3] == DH,
+            "Joint head dimensions must match. Got DH: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            DH,
+            joint_q_shape[3],
+            joint_k_shape[3],
+            joint_v_shape[3]);
+        TT_FATAL(
+            joint_q_shape[1] == NQH && joint_k_shape[1] == NKH && joint_v_shape[1] == NKH,
+            "Joint num heads must match. Got NQH: {}, NKH: {}, joint_Q: {}, joint_K: {}, joint_V: {}",
+            NQH,
+            NKH,
+            joint_q_shape[1],
+            joint_k_shape[1],
+            joint_v_shape[1]);
+        TT_FATAL(
+            joint_k_shape[2] == L && joint_v_shape[2] == L,
+            "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
+            joint_k_shape[2],
+            joint_v_shape[2]);
+    }
 
     TT_FATAL(
         v_shape[2] == N_global,
@@ -148,12 +164,6 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         "reduce the ring size or reduce padding by reducing the chunk size.",
         N_global - args.logical_n,
         N_local);
-
-    TT_FATAL(
-        joint_k_shape[2] == L && joint_v_shape[2] == L,
-        "Joint sequence length must match. Got joint_K: {}, joint_V: {}",
-        joint_k_shape[2],
-        joint_v_shape[2]);
 
     // Check shapes based on ring
     TT_FATAL(
@@ -280,22 +290,27 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
 ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
-    const auto& joint_input = tensor_args.joint_q;
     auto stats_shape = input.logical_shape();
     stats_shape[3] = 1;
+    // Joint output is empty (zero joint sequence length) when there are no joint inputs.
+    auto joint_output_shape = input.logical_shape();
+    joint_output_shape[2] = 0;
+    uint32_t joint_padded_seq = 0;
+    if (tensor_args.joint_q.has_value()) {
+        joint_output_shape = tensor_args.joint_q.value().logical_shape();
+        joint_padded_seq = tensor_args.joint_q.value().padded_shape()[2];
+    }
     // 2× the sequence length: first half stores running max, second half stores running sum.
     // Used as DRAM scratch for multi-Q-chunk deferred norm round-trips between ring iterations.
-    stats_shape[2] = (input.padded_shape()[2] + joint_input.padded_shape()[2]) * 2;
+    stats_shape[2] = (input.padded_shape()[2] + joint_padded_seq) * 2;
 
     return {
         TensorSpec(
             input.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         TensorSpec(
-            joint_input.logical_shape(),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+            joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         TensorSpec(stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
-
 }
 
 ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
@@ -303,23 +318,26 @@ ExpRingJointSDPAResult ExpRingJointSDPADeviceOperation::create_output_tensors(
     auto output_specs = compute_output_specs(args, tensor_args);
     return {
         create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.joint_q.device()),
+        create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
     };
 }
 
 tt::stl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
-    const std::vector<Tensor> input_tensors = {
+    std::vector<Tensor> input_tensors = {
         tensor_args.input_q,
         tensor_args.input_k,
         tensor_args.input_v,
-        tensor_args.joint_q,
-        tensor_args.joint_k,
-        tensor_args.joint_v,
-        tensor_args.gathered_k,
-        tensor_args.gathered_v,
     };
+    // Joint tensors are optional; presence (and thus tensor count) distinguishes the cache key.
+    if (tensor_args.joint_q.has_value()) {
+        input_tensors.push_back(tensor_args.joint_q.value());
+        input_tensors.push_back(tensor_args.joint_k.value());
+        input_tensors.push_back(tensor_args.joint_v.value());
+    }
+    input_tensors.push_back(tensor_args.gathered_k);
+    input_tensors.push_back(tensor_args.gathered_v);
     return tt::tt_metal::operation::hash_operation<ExpRingJointSDPADeviceOperation>(
         input_tensors,
         args.joint_strategy,
@@ -335,15 +353,15 @@ tt::stl::hash::hash_t ExpRingJointSDPADeviceOperation::compute_program_hash(
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADeviceOperation::create_op_performance_model(
     const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args, ExpRingJointSDPAResult& output_tensors) {
-    Tensors input_tensors = {
-        tensor_args.input_q,
-        tensor_args.input_k,
-        tensor_args.input_v,
-        tensor_args.joint_q,
-        tensor_args.joint_k,
-        tensor_args.joint_v,
-        tensor_args.gathered_k,
-        tensor_args.gathered_v};
+    // Order mirrors compute_program_hash: q/k/v, then joints (if present), then gathered k/v.
+    Tensors input_tensors = {tensor_args.input_q, tensor_args.input_k, tensor_args.input_v};
+    if (tensor_args.joint_q.has_value()) {
+        input_tensors.push_back(tensor_args.joint_q.value());
+        input_tensors.push_back(tensor_args.joint_k.value());
+        input_tensors.push_back(tensor_args.joint_v.value());
+    }
+    input_tensors.push_back(tensor_args.gathered_k);
+    input_tensors.push_back(tensor_args.gathered_v);
 
     auto& output_tensor = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX];
     auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
@@ -357,7 +375,6 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
     const auto& q_shape = tensor_args.input_q.logical_shape();
     const auto& gathered_k_shape = tensor_args.gathered_k.logical_shape();
     const auto& v_shape = tensor_args.gathered_v.logical_shape();
-    const auto& joint_q_shape = tensor_args.joint_q.logical_shape();
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
@@ -367,7 +384,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
     const uint32_t NQH = q_shape[1];
     const uint32_t N_local = q_shape[2];
     const uint32_t N_global = gathered_k_shape[2];
-    const uint32_t L = joint_q_shape[2];
+    const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
     const uint32_t DV = v_shape[3];
 
@@ -391,9 +408,9 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
-    const ttnn::Tensor& joint_tensor_q,
-    const ttnn::Tensor& joint_tensor_k,
-    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::string& joint_strategy,

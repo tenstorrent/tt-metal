@@ -662,6 +662,21 @@ def test_permute_tile_sharded_uneven(shape, dims, mc_factory, device):
             id="WH_RM_interleaved_to_block",
         ),
         pytest.param(
+            (1, 1, 32, 128),
+            (0, 1, 3, 2),
+            lambda _d: L1_INTERLEAVED,
+            lambda d: _width_shard_config((1, 1, 128, 32), d, layout=ttnn.ROW_MAJOR_LAYOUT),
+            id="WH_RM_interleaved_to_width",
+        ),
+        pytest.param(
+            # Irregular output: interleaved input + BLOCK-sharded output, exercises noc_async_write_sharded with a tile-padded spec.
+            (1, 1, 48, 65),
+            (0, 1, 3, 2),
+            lambda _d: L1_INTERLEAVED,
+            lambda d: _block_shard_config((1, 1, 65, 48), d, layout=ttnn.ROW_MAJOR_LAYOUT),
+            id="WH_RM_interleaved_irregular_to_block",
+        ),
+        pytest.param(
             (1, 1, 64, 64),
             (0, 1, 3, 2),
             lambda d: _block_shard_config((1, 1, 64, 64), d, layout=ttnn.ROW_MAJOR_LAYOUT),

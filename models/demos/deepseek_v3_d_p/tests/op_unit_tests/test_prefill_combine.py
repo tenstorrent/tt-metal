@@ -16,6 +16,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
@@ -75,6 +76,8 @@ def test_ttnn_combine(
     run_pcc_check,
     dispatched_buffer_layout,
     use_fp8_output,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Test TTNN combine operation in isolation using torch reference inputs."""
     num_devices = mesh_device.get_num_devices()
@@ -101,6 +104,15 @@ def test_ttnn_combine(
     # non-BH; skip cleanly here so this surfaces as "skipped" instead of an error.
     if use_fp8_output and mesh_device.arch() != ttnn.Arch.BLACKHOLE:
         pytest.skip("fp8 combine output requires Blackhole hardware")
+
+    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
+    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and dispatched_buffer_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("ROW_MAJOR perf coverage does not run in CI")
+
+    # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
+    # linear/ring meshes; 2D mesh / fabric2d (both dims > 1) and 2-link variants still run.
+    if (is_ci_env or is_ci_v2_env) and is_blackhole() and num_links == 1 and 1 in tuple(mesh_device.shape):
+        pytest.skip("1-link linear/ring coverage does not run on BH in CI")
 
     torch.manual_seed(42)
 
