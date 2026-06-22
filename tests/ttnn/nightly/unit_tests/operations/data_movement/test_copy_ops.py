@@ -290,28 +290,41 @@ def test_typecast(N, C, H, W, memory_config, input_dtype, output_dtype, device):
     run_typecast_test(N, C, H, W, memory_config, input_dtype, output_dtype, device)
 
 
-# The idea of the test is to convert bfloat16 to uint32 into preallocated uint32 tensor
-def test_typecast_output_tensor(device):
+@pytest.mark.parametrize(
+    "to_dtype",
+    (ttnn.uint32, ttnn.int32, ttnn.uint16, ttnn.uint8),
+    ids=["UINT32", "INT32", "UINT16", "UINT8"],
+)
+def test_typecast_output_tensor(to_dtype, device):
+    """bf16→integer typecast on device: normal and preallocated output paths.
+
+    Uses shared clamp helpers (typecast_test_input_bounds,
+    make_typecast_test_input, eltwise_typecast, assert_integer_typecast_equal).
+    Asserts both freshly allocated and preallocated outputs; preallocated path
+    checks buffer-page count is unchanged.
+    """
     torch.manual_seed(0)
 
     h = w = 32
     from_dtype = ttnn.bfloat16
-    to_dtype = ttnn.uint32
-    bfloat16_tensor = ttnn.ones([h, w], from_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
-    uint32_preallocated = ttnn.empty([h, w], to_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
 
-    output_ttnn = ttnn.typecast(bfloat16_tensor, ttnn.uint32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    in_low, in_high = typecast_test_input_bounds(from_dtype, to_dtype)
+    torch_input = make_typecast_test_input([h, w], torch.bfloat16, in_low, in_high)
+
+    bfloat16_tensor = ttnn.from_torch(
+        torch_input, dtype=from_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    preallocated = ttnn.empty([h, w], to_dtype, ttnn.TILE_LAYOUT, device, ttnn.L1_MEMORY_CONFIG)
+
+    output_ttnn = ttnn.typecast(bfloat16_tensor, to_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages(device)
-    ttnn.typecast(bfloat16_tensor, to_dtype, memory_config=ttnn.L1_MEMORY_CONFIG, output_tensor=uint32_preallocated)
+    ttnn.typecast(bfloat16_tensor, to_dtype, memory_config=ttnn.L1_MEMORY_CONFIG, output_tensor=preallocated)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages(device))
 
-    torch_input = torch.ones([h, w], dtype=torch.bfloat16)
     torch_expected = eltwise_typecast(torch_input, tt_input_dtype=from_dtype, tt_output_dtype=to_dtype)
-    torch_output_ttnn = ttnn.to_torch(output_ttnn)
-    torch_output_ttnn_preallocated = ttnn.to_torch(uint32_preallocated)
-    assert_integer_typecast_equal(torch_expected, torch_output_ttnn)
-    assert_integer_typecast_equal(torch_expected, torch_output_ttnn_preallocated)
+    assert_integer_typecast_equal(torch_expected, ttnn.to_torch(output_ttnn))
+    assert_integer_typecast_equal(torch_expected, ttnn.to_torch(preallocated))
 
 
 def test_typecast_community(device):
@@ -367,11 +380,17 @@ def run_typecast_row_major_test(shape, memory_config, input_dtype, output_dtype,
     "output_dtype",
     (
         ttnn.int32,
+        ttnn.uint8,
+        ttnn.uint16,
+        ttnn.uint32,
         ttnn.bfloat16,
         ttnn.float32,
     ),
     ids=[
         "INT32",
+        "UINT8",
+        "UINT16",
+        "UINT32",
         "BFLOAT16",
         "FLOAT32",
     ],
@@ -407,7 +426,10 @@ def test_typecast_row_major(shape, memory_config, input_dtype, output_dtype, dev
     This test verifies:
     - Typecast works on row-major layout device tensors
     - Output maintains row-major layout
-    - Various dtype conversions work correctly
+    - Integer outputs (int32, uint8, uint16, uint32): widened inputs + clamp-aware
+      eltwise_typecast golden + assert_integer_typecast_equal
+    - Float outputs: ULP check
+    - Same input/output dtype pairs are skipped (bfloat16→bfloat16, float32→float32 only)
     """
     if input_dtype == output_dtype:
         pytest.skip("Input and output data types are the same")
