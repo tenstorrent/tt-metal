@@ -279,8 +279,12 @@ class LoRAMixin:
                 "runtime LoRA delta does not support chunked-output Linears; "
                 "construct with lora_mode='fuse' for chunks>1"
             )
-        ax = ttnn.matmul(x, self._runtime_A, compute_kernel_config=self.compute_config)
-        delta = ttnn.matmul(ax, self._runtime_B, compute_kernel_config=self.compute_config)
+        # Honor a caller-passed compute_kernel_config override (the base
+        # Linear path does), so runtime LoRA and the base matmul use the
+        # same precision settings within one forward.
+        delta_compute_config = kwargs.get("compute_kernel_config", self.compute_config)
+        ax = ttnn.matmul(x, self._runtime_A, compute_kernel_config=delta_compute_config)
+        delta = ttnn.matmul(ax, self._runtime_B, compute_kernel_config=delta_compute_config)
         ttnn.deallocate(ax)
         out = ttnn.add(base, delta)
         ttnn.deallocate(base)

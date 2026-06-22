@@ -144,7 +144,7 @@ def load_adapter_into(
     # Fused QKV / KV
     for (block_idx, attn_name), qkvs in fused_qkv.items():
         attn = getattr(transformer.blocks[block_idx], attn_name)
-        bank_idx, fused_rank = _register_fused_qkv(attn, qkvs, alphas, scale, name)
+        bank_idx, fused_rank = _register_fused_qkv(attn, block_idx, qkvs, alphas, scale, name)
         if bank_idx is None:
             continue
         key = f"blocks.{block_idx}.{attn_name}.{'to_qkv' if attn.is_self else 'to_kv'}"
@@ -190,6 +190,7 @@ def _collect_pairs(raw: dict[str, torch.Tensor]):
     pairs: dict[str, dict[str, torch.Tensor]] = {}
     alphas: dict[str, float] = {}
     skipped_direct = 0
+    unrecognized: list[tuple[str, str]] = []
 
     for raw_key, tensor in raw.items():
         key = _normalize_key(raw_key)
@@ -200,6 +201,20 @@ def _collect_pairs(raw: dict[str, torch.Tensor]):
             alphas[key[: -len(".alpha")]] = float(tensor.item())
         elif key.endswith(".diff") or key.endswith(".diff_b"):
             skipped_direct += 1
+        else:
+            unrecognized.append((raw_key, key))
+
+    # Surface dropped keys — a non-standard naming convention silently
+    # producing plausible-but-wrong output is the failure mode we cannot
+    # afford here.
+    if unrecognized:
+        sample = ", ".join(f"{raw}→{norm}" for raw, norm in unrecognized[:5])
+        more = "" if len(unrecognized) <= 5 else f" (+{len(unrecognized) - 5} more)"
+        logger.warning(
+            f"adapter loader: {len(unrecognized)} key(s) did not match any known "
+            f"pattern (lora_A/B, lora_down/up, .alpha, .diff, .diff_b) and were "
+            f"dropped. Samples: {sample}{more}"
+        )
 
     return pairs, alphas, skipped_direct
 
@@ -269,6 +284,7 @@ def _resolve_singleton(transformer, diff_path: str):
 
 def _register_fused_qkv(
     attn,
+    block_idx: int,
     qkvs: dict[str, dict[str, torch.Tensor]],
     alphas: dict[str, float],
     scale: float,
@@ -327,7 +343,7 @@ def _register_fused_qkv(
     # Effective scale: pick the first source's alpha (alphas are usually
     # identical across Q/K/V in a single adapter; if not, the choice is
     # safe-ish because we apply scale to all three the same way).
-    alpha_keys = [_lightx2v_qkv_key(attn, r_name) for r_name in required]
+    alpha_keys = [_lightx2v_qkv_key(attn, block_idx, r_name) for r_name in required]
     alpha = next((alphas[k] for k in alpha_keys if k in alphas), float(r))
     eff_scale = scale * (alpha / r)
 
@@ -335,13 +351,13 @@ def _register_fused_qkv(
     return bank_idx, n * r
 
 
-def _lightx2v_qkv_key(attn, qkv: str) -> str:
+def _lightx2v_qkv_key(attn, block_idx: int, qkv: str) -> str:
     """Build the lightx2v alpha key for a Q/K/V projection inside a
-    given WanAttention. The block index is reconstructed from
-    `attn.parent`-ish info we don't have here — so callers pass attn
-    only for ``is_self``."""
+    given WanAttention. Alphas in `_collect_pairs` are keyed by the full
+    normalized base path (``blocks.<i>.<side>.<qkv>``), so the block
+    index must be threaded in alongside ``attn.is_self``."""
     side = "self_attn" if attn.is_self else "cross_attn"
-    return f"{side}.{qkv}"
+    return f"blocks.{block_idx}.{side}.{qkv}"
 
 
 def _head_interleave_lora_B(
