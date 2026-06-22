@@ -20,10 +20,13 @@
 #     hidden[image span] --final_layer(UNetUp)+time_embed_2--> velocity pred
 #
 # Scope / status:
-#   * Single contiguous image span (the T2I case). The on-device scatter uses
-#     ttnn.concat, so the span boundaries must be TILE-aligned (multiples of 32)
-#     in TILE layout. T2I layouts satisfy this; ragged/multi-image (Instruct)
-#     layouts will need the host-scatter fallback (`scatter_on_host=True`).
+#   * Single contiguous gen-image span for on-device scatter (T2I and I2I).
+#     T2I uses ``text_pre | img | text_post``; I2I uses ``base_embeds`` with
+#     cond tokens pre-scattered on host, overwriting only the gen span each step.
+#   * Multi-span attention masks and multi-span 2D RoPE are supported via
+#     ``bundle_to_denoise_cond`` (cond joint + gen bidirectional blocks).
+#   * On-device scatter uses ttnn.concat, so span boundaries should be
+#     TILE-aligned (multiples of 32) in TILE layout when possible.
 #   * VAE decode (latent -> pixels) and tokenizer/sequence construction are
 #     separate milestones — see README. This module stops at the latent.
 
@@ -83,27 +86,56 @@ class HunyuanTtDenoiseStep:
         ttnn.deallocate(toks)
         return seq
 
+    def _scatter_from_base(self, img_tokens, base_embeds):
+        """Overwrite gen span inside prebuilt ``base_embeds`` (I2I path)."""
+        B = self.backbone_batch
+        H = self.backbone.hidden_size
+        toks = ttnn.reshape(img_tokens, [B, self.n_img, H])
+        toks = ttnn.to_layout(toks, ttnn.TILE_LAYOUT)
+        if toks.dtype != base_embeds.dtype:
+            toks = ttnn.typecast(toks, base_embeds.dtype)
+
+        pre_len = self.img_slice.start
+        post_len = self.seq_len - self.img_slice.stop
+        pieces = []
+        if pre_len > 0:
+            pieces.append(ttnn.slice(base_embeds, [0, 0, 0], [B, pre_len, H]))
+        pieces.append(toks)
+        if post_len > 0:
+            pieces.append(ttnn.slice(base_embeds, [0, self.img_slice.stop, 0], [B, self.seq_len, H]))
+        seq = ttnn.concat(pieces, dim=1)
+        ttnn.deallocate(toks)
+        return seq
+
     # -- one step -----------------------------------------------------------
     def __call__(
         self,
         latent_bchw,  # torch [B,C,h,w] or ttnn NHWC flat — UNetDown entry
         *,
-        text_pre,  # ttnn [B, text_pre_len, H] TILE  (sequence before image span)
-        text_post,  # ttnn [B, text_post_len, H] TILE (after image span); may be None
+        text_pre=None,  # ttnn [B, text_pre_len, H] TILE (T2I path)
+        text_post=None,  # ttnn [B, text_post_len, H] TILE; may be None
+        base_embeds=None,  # ttnn [B, S, H] TILE — I2I path (cond pre-scattered)
         t_emb1,  # ttnn [1,1,B,H] timestep embedding for patch_embed
         t_emb2,  # ttnn [1,1,B,H] timestep embedding for final_layer
-        image_infos,  # 2D-RoPE image span info, e.g. [[(img_slice,(h,w))]]
+        image_infos,  # 2D-RoPE spans, e.g. [[(slice,(h,w)), ...]] per batch row
         attention_mask,  # ttnn [B,1,S,S] additive mask
         batch: int = 1,
     ):
         self.backbone_batch = batch
+        if base_embeds is not None and (text_pre is not None or text_post is not None):
+            raise ValueError("pass base_embeds OR text_pre/text_post, not both")
+        if base_embeds is None and text_pre is None:
+            raise ValueError("text_pre or base_embeds is required")
 
         # 1) patch_embed: noised latent -> image tokens [1,1,n_img,H]
         img_tok, th, tw = self.patch_embed(latent_bchw, t_emb1)
         assert (th, tw) == (self.token_h, self.token_w), f"grid mismatch: got {th}x{tw}"
 
         # 2) scatter into the sequence, run the backbone (NO ln_f)
-        seq = self._scatter(img_tok, text_pre, text_post)
+        if base_embeds is not None:
+            seq = self._scatter_from_base(img_tok, base_embeds)
+        else:
+            seq = self._scatter(img_tok, text_pre, text_post)
         ttnn.deallocate(img_tok)
         hidden = self.backbone.forward(
             inputs_embeds=seq,
@@ -137,18 +169,26 @@ def denoise_loop(
     cond,  # conditioning dict for the conditional pass (see below)
     uncond=None,  # same dict for the unconditional pass; None => no CFG
     guidance_scale: float = 1.0,
+    timestep_emb=None,  # host ref TimestepEmbedder for gen_timestep_scatter_index
     mesh_device=None,  # pass the MeshDevice when the backbone is mesh-resident
 ):
     """Run the diffusion denoise loop, returning the final latent (torch NCHW).
 
     `cond`/`uncond` carry the static, timestep-independent conditioning forwarded
     to `step.__call__`:
-        text_pre, text_post, image_infos, attention_mask, batch.
+        text_pre, text_post, base_embeds, image_infos, attention_mask, batch.
+    Use ``text_pre``/``text_post`` for T2I or ``base_embeds`` for I2I (cond
+    tokens pre-scattered on host). ``image_infos`` should list all 2D-RoPE spans
+    (cond + gen) for I2I.
     The timestep embeddings ARE recomputed each step from `time_embed` /
     `time_embed_2` (both passes share them — the timestep is identical), and the
     per-step velocity prediction drives the on-device Euler update via the
     scheduler. With CFG, the conditional and unconditional predictions are
     combined on device before the update.
+
+    When ``timestep_emb`` is set and ``cond`` carries ``base_embeds_host`` plus
+    ``gen_timestep_scatter_index``, the gen-image timestep token is re-scattered
+    on host each step before upload (I2I/T2I gen path).
 
     Latent representation: the scheduler operates on device NHWC-flat tensors,
     but UNetDown's entry only accepts torch NCHW, so the (small) latent makes one
@@ -183,6 +223,22 @@ def denoise_loop(
             return out[:1]  # one replica (flat leading dim is 1)
         return ttnn.to_torch(t_dev)
 
+    def _prepare_base_embeds(c, t_scalar):
+        host = c.get("base_embeds_host")
+        if host is not None:
+            emb = host
+            idx = c.get("gen_timestep_scatter_index")
+            if idx is not None and timestep_emb is not None:
+                from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import (
+                    scatter_gen_timestep_embeds,
+                )
+
+                bsz = emb.shape[0]
+                tvec = torch.tensor([float(t_scalar)] * bsz, dtype=torch.float32)
+                emb = scatter_gen_timestep_embeds(emb, tvec, idx, timestep_emb)
+            return _up(emb, ttnn.bfloat16)
+        return c.get("base_embeds")
+
     for t in scheduler.timesteps:
         # Timestep embedding: pass a (replicated) device tensor [1,1,B,1] so the
         # embedder doesn't host-upload internally (which ignores the mesh).
@@ -192,16 +248,23 @@ def denoise_loop(
         ttnn.deallocate(tvec)
 
         def _one(c):
-            return step(
-                latent,
-                text_pre=c["text_pre"],
-                text_post=c.get("text_post"),
+            kwargs = dict(
                 t_emb1=te1,
                 t_emb2=te2,
                 image_infos=c["image_infos"],
                 attention_mask=c["attention_mask"],
                 batch=c.get("batch", B),
             )
+            base = _prepare_base_embeds(c, t)
+            if base is not None:
+                kwargs["base_embeds"] = base
+            else:
+                kwargs["text_pre"] = c["text_pre"]
+                kwargs["text_post"] = c.get("text_post")
+            pred = step(latent, **kwargs)
+            if base is not None and c.get("base_embeds_host") is not None:
+                ttnn.deallocate(base)
+            return pred
 
         pred = _one(cond)  # device NHWC flat [1,1,B*h*w,C]
         if do_cfg:
