@@ -143,7 +143,6 @@ models/experimental/voxtraltts/
 │   ├── audio_tokenizer_workload.py       #   Audio tokenizer test workload helpers
 │   ├── pcc/                     #   E2E waveform PCC + quality-metric tests
 │   │   ├── test_ttnn_voxtral_unittest.py        #   TTNN-level unit tests
-│   │   ├── test_voxtral_e2e_debug.py            #   Free-run diagnostic (informational)
 │   │   ├── test_voxtral_e2e_pcc.py              #   Teacher-forced + free-run waveform PCC
 │   │   └── test_voxtral_e2e_quality_metrics.py  #   UTMOS / WER / speaker similarity
 │   ├── perf/                    #   Wall-clock and device-perf tests
@@ -205,7 +204,6 @@ models/experimental/voxtraltts/
     ├── config_helpers.py                 #   Compute kernel configs (acoustic, semantic, …)
     ├── conftest.py                       #   Pytest fixtures (device mesh, trace reset)
     ├── debug_trace.py                    #   Debug and trace utilities
-    ├── rng.py                            #   RNG helpers for FM noise
     └── test_common.py                    #   Shared test/demo helpers (prompt text, mesh, model loaders)
 ```
 

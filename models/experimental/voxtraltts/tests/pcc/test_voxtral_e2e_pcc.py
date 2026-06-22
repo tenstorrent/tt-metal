@@ -30,7 +30,7 @@ from models.experimental.voxtraltts.utils.test_common import (
 from models.experimental.voxtraltts.demo.decode_trace_2cq import num_command_queues_for_decode
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_hf_aligned_optimizations
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
-from models.experimental.voxtraltts.utils.rng import acoustic_fm_noise_seed
+from models.experimental.voxtraltts.tt.acoustic_model import acoustic_fm_noise_seed
 
 WAVEFORM_PCC_TARGET = 0.99
 
