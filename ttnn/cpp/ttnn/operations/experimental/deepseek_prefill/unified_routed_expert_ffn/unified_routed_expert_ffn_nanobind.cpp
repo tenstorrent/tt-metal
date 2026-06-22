@@ -54,7 +54,15 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         Keyword Args:
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional)
             output (ttnn.Tensor, optional): pre-allocated output buffer.
-                Must match x.dtype() and x.shape().
+                Must match x.dtype() and x.shape() unless expert_region_offsets
+                is set (direct-write mode), in which case it is the larger
+                shared destination buffer.
+            expert_region_offsets (ttnn.Tensor, optional): UINT32
+                per-global-expert region start offsets. When set, the writer
+                places this expert's output directly into ``output`` at
+                start[global_id]/TILE tile-rows (direct-write mode), fusing the
+                ttnn::insert step. Requires ``output`` to be set. Defaults to
+                None (standalone per-expert output, rows start at 0).
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -69,7 +77,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("local_expert_id"),
         nb::kw_only(),
         nb::arg("compute_kernel_config") = nb::none(),
-        nb::arg("output") = nb::none());
+        nb::arg("output") = nb::none(),
+        nb::arg("expert_region_offsets") = nb::none());
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
