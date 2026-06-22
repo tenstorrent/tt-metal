@@ -159,7 +159,7 @@ private:
                 (page_coord[i] % accessor.dspec().shard_shape()[i]) * accessor.dspec().shard_strides()[i];
         }
 
-        // Calculate bank mapping (round-robin or block-contiguous, per the distribution strategy)
+        // Calculate bank mapping (round-robin or shard-contiguous, per the distribution strategy)
         {
             const auto bank_shard = accessor.shard_to_bank(flattened_shard_id);
             current_page_mapping.bank_id = bank_shard.bank_id;
@@ -246,7 +246,7 @@ private:
             page_offset_within_shard += (page_coord[i] % dspec.shard_shape()[i]) * dspec.shard_strides()[i];
         }
 
-        // Recalculate bank mapping (round-robin or block-contiguous, per the distribution strategy)
+        // Recalculate bank mapping (round-robin or shard-contiguous, per the distribution strategy)
         {
             const auto bank_shard = accessor.shard_to_bank(flattened_shard_id);
             current_page_mapping.bank_id = bank_shard.bank_id;

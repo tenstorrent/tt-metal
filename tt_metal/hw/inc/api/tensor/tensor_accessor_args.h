@@ -29,10 +29,10 @@ struct TensorAccessorArgs {
     static constexpr bool tensor_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeTensorShape);
     static constexpr bool shard_shape_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeShardShape);
     static constexpr bool bank_coords_is_crta = args_config.test(tensor_accessor::ArgConfig::RuntimeBankCoords);
-    // Compile-time default for block-contiguous shard distribution (CONTIGUOUS_1D) vs. round-robin. Used
+    // Compile-time default for shard-contiguous distribution (CONTIGUOUS_1D) vs. round-robin. Used
     // directly when num_banks is compile-time. When num_banks is runtime, the live value is read from the
-    // runtime num_banks word instead (see get_is_block_distribution()). Carries no extra args/slots.
-    static constexpr bool is_block_distribution = args_config.test(tensor_accessor::ArgConfig::IsBlockDistribution);
+    // runtime num_banks word instead (see resolve_shard_contiguous()). Carries no extra args/slots.
+    static constexpr bool is_shard_contiguous = args_config.test(tensor_accessor::ArgConfig::IsShardContiguous);
 
     // Impossible to have runtime rank without runtime tensor and shard shapes since then impossible to calculate CTA
     // offsets in compile time
@@ -112,19 +112,19 @@ public:
         if constexpr (!num_banks_is_crta) {
             return NumBanksCT;
         } else {
-            // The runtime num_banks word packs the block-distribution flag in its top bit; strip it off.
+            // The runtime num_banks word packs the shard-contiguous flag in its top bit; strip it off.
             return tensor_accessor::unpack_num_banks(get_common_arg_val<uint32_t>(num_banks_crta_offset()));
         }
     }
 
-    // Whether shards are block-contiguously distributed (CONTIGUOUS_1D) vs. round-robin. When num_banks is
+    // Whether shards are distributed contiguously (shard-contiguous, CONTIGUOUS_1D) vs. round-robin. When num_banks is
     // compile-time this is the constexpr config bit; when num_banks is runtime it is read from the top bit
     // of the runtime num_banks word, so it can vary per dispatch without recompiling.
-    constexpr bool get_is_block_distribution() const {
+    constexpr bool resolve_shard_contiguous() const {
         if constexpr (!num_banks_is_crta) {
-            return is_block_distribution;
+            return is_shard_contiguous;
         } else {
-            return tensor_accessor::unpack_is_block_distribution(get_common_arg_val<uint32_t>(num_banks_crta_offset()));
+            return tensor_accessor::unpack_is_shard_contiguous(get_common_arg_val<uint32_t>(num_banks_crta_offset()));
         }
     }
 

@@ -31,10 +31,10 @@ struct PageMappingIntermData {
     size_t core_id = 0;
     size_t shard_id = 0;
 
-    // Block (CONTIGUOUS_1D) placement: adjacent shards fill one core's slots before advancing.
+    // Shard-contiguous (CONTIGUOUS_1D) placement: adjacent shards fill one core's slots before advancing.
     // When false, the default round-robin placement is used.
-    bool block_placement = false;
-    size_t shards_per_core = 0;  // only meaningful when block_placement is true
+    bool shard_contiguous_placement = false;
+    size_t shards_per_core = 0;  // only meaningful when shard_contiguous_placement is true
 };
 
 void iterate_within_shard(PageMappingIntermData& params, size_t dim, size_t src_offset, size_t dst_offset) {
@@ -53,7 +53,7 @@ void iterate_within_shard(PageMappingIntermData& params, size_t dim, size_t src_
 void iterate_over_shards(PageMappingIntermData& params, size_t dim, size_t src_offset) {
     if (dim == params.rank) {
         size_t dst_offset = 0;
-        if (params.block_placement) {
+        if (params.shard_contiguous_placement) {
             // Contiguous: shards_per_core consecutive shards fill one core's slots [0..shards_per_core)
             // before advancing to the next core.
             params.core_id = params.shard_id / params.shards_per_core;
@@ -158,7 +158,7 @@ std::vector<CoreCoord> BufferDistributionSpec::compute_core_list(
     if (shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D ||
         shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D) {
         // Both 1D strategies linearize the core grid identically; they differ only in how shards
-        // are assigned to that list (round-robin vs. block), which is handled in iterate_over_shards.
+        // are assigned to that list (round-robin vs. shard-contiguous), which is handled in iterate_over_shards.
         return corerange_to_cores(
             core_range_set, core_range_set.num_cores(), shard_orientation == ShardOrientation::ROW_MAJOR);
     }
@@ -283,9 +283,9 @@ UncompressedBufferPageMapping compute_page_mapping(
     size_t num_shards_per_core = (num_shards + cores.size() - 1) / cores.size();
     size_t shard_pages = shard_shape.volume();
 
-    const bool block_placement = shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    const bool shard_contiguous_placement = shard_distribution_strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
     TT_FATAL(
-        !block_placement || num_shards % cores.size() == 0,
+        !shard_contiguous_placement || num_shards % cores.size() == 0,
         "CONTIGUOUS_1D distribution requires a uniform shards-per-core: num_shards ({}) must be divisible by "
         "num_cores ({}).",
         num_shards,
@@ -319,7 +319,7 @@ UncompressedBufferPageMapping compute_page_mapping(
         .actual_shard_size = actual_shard_size.data(),
         .core_id = 0,
         .shard_id = 0,
-        .block_placement = block_placement,
+        .shard_contiguous_placement = shard_contiguous_placement,
         .shards_per_core = num_shards_per_core,
     };
     CMAKE_UNIQUE_NAMESPACE::iterate_over_shards(params, 0, 0);

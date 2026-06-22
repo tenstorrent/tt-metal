@@ -344,10 +344,10 @@ def _setup_weight_and_gcb_recv_contig(
     triggers the manager's recv-contig detection.
 
     The weight's shard distribution and the GCB sender->receiver pairing must
-    agree: round-robin shards pair with strided arcs, block (CONTIGUOUS_1D)
+    agree: round-robin shards pair with strided arcs, shard-contiguous (CONTIGUOUS_1D)
     shards pair with contiguous arcs. Either pairing yields shard index == ring
     position, so the validator's per-receiver column slice is unchanged."""
-    is_block = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    is_shard_contiguous = distribution_strategy == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
     tile_bytes = _bytes_per_tile(dtype)
     num_dram_banks = device.dram_grid_size().x
     ring_size = num_dram_banks * recv_per_bank
@@ -367,7 +367,7 @@ def _setup_weight_and_gcb_recv_contig(
         device, pt_weight, num_dram_banks, ring_size, dtype, distribution_strategy=distribution_strategy
     )
 
-    if is_block:
+    if is_shard_contiguous:
         bank_to_receivers = [
             (b, _bank_receivers_contiguous(b, recv_per_bank, ring_cols=ring_cols)) for b in range(num_dram_banks)
         ]
@@ -422,9 +422,11 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
     ],
     ids=["multi_ksub", "ff1", "single_r4", "ff1_dual"],
 )
-def test_validator_dram_sender_recv_contig_block(device, K, N, dtype, recv_per_bank, num_layers, dual_senders):
-    """Block (CONTIGUOUS_1D) recv-contig: adjacent shards share a bank, so each bank
-    feeds a contiguous ring arc. Exercises the block shard->bank placement (host BDS)
+def test_validator_dram_sender_recv_contig_shard_contiguous(
+    device, K, N, dtype, recv_per_bank, num_layers, dual_senders
+):
+    """Shard-contiguous (CONTIGUOUS_1D) recv-contig: adjacent shards share a bank, so each bank
+    feeds a contiguous ring arc. Exercises the shard-contiguous shard->bank placement (host BDS)
     and the distribution-aware TensorAccessor the validator reads the source through."""
     tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
         device,

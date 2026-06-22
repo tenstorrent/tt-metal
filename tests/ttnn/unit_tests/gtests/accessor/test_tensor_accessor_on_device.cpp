@@ -493,10 +493,11 @@ TEST_P(ShardedAccessorTestsReshardOnDevice, SingleCoreReshard) {
 
 std::vector<InputOutputBufferParams> get_sharded_accessor_test_params() {
     std::vector<InputOutputBufferParams> base_params{
-        // Block (CONTIGUOUS_1D) distribution with shards_per_core == 2 (32 shards over 16 cores), so block
+        // Shard-contiguous (CONTIGUOUS_1D) distribution with shards_per_core == 2 (32 shards over 16 cores), so
+        // shard-contiguous
         // and round-robin map shards to banks differently. Swept across all arg configs, this exercises
-        // both the compile-time block path (ArgConfig::IsBlockDistribution bit, when num_banks is a CTA) and
-        // the runtime block path (flag packed in the top bit of the runtime num_banks word, when num_banks
+        // both the compile-time shard-contiguous path (ArgConfig::IsShardContiguous bit, when num_banks is a CTA) and
+        // the runtime shard-contiguous path (flag packed in the top bit of the runtime num_banks word, when num_banks
         // is a CRTA). The output buffer stays round-robin to also cover a mixed-distribution reshard.
         InputOutputBufferParams{
             .tensor_shape = tt::tt_metal::Shape{8, 64, 64},

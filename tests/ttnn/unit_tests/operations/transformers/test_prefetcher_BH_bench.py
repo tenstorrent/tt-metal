@@ -482,7 +482,7 @@ def test_bench_dram_core_repeats(device, op_name, shape):
 @pytest.mark.parametrize(
     "distribution",
     [ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D, ttnn.ShardDistributionStrategy.CONTIGUOUS_1D],
-    ids=["round_robin", "block"],
+    ids=["round_robin", "shard_contiguous"],
 )
 def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distribution):
     """Same matmul trace-replay bench as test_bench_dram_core_repeats, but the weight
@@ -491,7 +491,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     Parametrized on the shard distribution to A/B the ring-routing effect:
       - round_robin: bank b feeds the STRIDED ring set [b, b+num_banks, ...] (column b
         of receivers_per_y) -- each bank's writes fan out across the whole ring.
-      - block (CONTIGUOUS_1D): bank b feeds the CONTIGUOUS arc [b*R, b*R+R-1] (row b of
+      - shard-contiguous (CONTIGUOUS_1D): bank b feeds the CONTIGUOUS arc [b*R, b*R+R-1] (row b of
         receivers_per_y) -- each bank's writes stay on a local ring segment.
     The matmul topology (receiver cores, ring order, program config) is identical; only
     the shard->bank placement and the GCB pairing change, so PCC holds for both. Compare
@@ -565,7 +565,7 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
 
     # Receiver-contiguous weight: NdShardSpec, num_shards = ring_size, each shard (K_padded, n_per_recv).
     n_per_recv = _N // ring_size
-    is_block = distribution == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
+    is_shard_contiguous = distribution == ttnn.ShardDistributionStrategy.CONTIGUOUS_1D
     tt_weight = _make_recv_contig_weight(
         device, pt_weight, num_dram_banks, ring_size, _DTYPE, distribution_strategy=distribution
     )
@@ -595,8 +595,8 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     # bank_to_receivers pairing must match the BDS placement so ring position r receives
     # shard r (full K, N-cols [r*npr, ...)):
     #   round_robin -> STRIDED: bank b feeds [b, b+num_banks, ...] = column b of receivers_per_y.
-    #   block       -> CONTIGUOUS arc: bank b feeds [b*R, b*R+R-1] = row b of receivers_per_y.
-    if is_block:
+    #   shard-contiguous -> CONTIGUOUS arc: bank b feeds [b*R, b*R+R-1] = row b of receivers_per_y.
+    if is_shard_contiguous:
         bank_to_receivers = [
             (
                 b,
@@ -707,10 +707,10 @@ def test_bench_dram_core_repeats_recv_contig(device, op_name, shape, distributio
     per_matmul_us = elapsed / trace_repeats * 1e6
     tflops = _flops_per_matmul(_K) * trace_repeats / elapsed / 1e12
     # Effective weight-streaming bandwidth: the full weight (K_padded x N) crosses the
-    # ring once per matmul. This is the metric block distribution aims to improve.
+    # ring once per matmul. This is the metric shard-contiguous distribution aims to improve.
     weight_bytes = k_padded * _N * _DTYPE_BYTES
     gbps = weight_bytes * trace_repeats / elapsed / 1e9
-    dist_id = "block" if is_block else "round_robin"
+    dist_id = "shard_contiguous" if is_shard_contiguous else "round_robin"
     logger.info(
         f"[dram_core_rc][{op_name}] dist={dist_id} dual_senders={dual_senders} trace_elapsed={elapsed * 1e3:.2f}ms "
         f"repeats={trace_repeats} per_matmul={per_matmul_us:.2f}us -> {tflops:.4f} TFLOP/s, {gbps:.1f} GB/s"

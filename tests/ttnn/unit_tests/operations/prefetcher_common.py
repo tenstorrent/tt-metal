@@ -59,7 +59,7 @@ def bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: in
 
 
 def bank_receivers_contiguous(bank_idx: int, recv_per_bank: int, ring_cols: int):
-    """Contiguous receiver arc matching BufferDistributionSpec CONTIGUOUS_1D (block)
+    """Contiguous receiver arc matching BufferDistributionSpec CONTIGUOUS_1D (shard-contiguous)
     placement: bank b -> ring positions [b*recv_per_bank .. (b+1)*recv_per_bank - 1].
 
     Under CONTIGUOUS_1D shard distribution, shard s lands on bank
@@ -92,7 +92,7 @@ def make_recv_contig_weight(
     (shard s -> bank s % num_dram_banks) or CONTIGUOUS_1D (shard s -> bank
     s // recv_per_bank). The GCB sender->receiver pairing must match (use
     ``bank_receivers_strided`` for round-robin, ``bank_receivers_contiguous`` for
-    block) so that shard index == ring position.
+    shard-contiguous) so that shard index == ring position.
 
     With ``ring_size > num_dram_banks`` (bank b stacks ``ring_size //
     num_dram_banks`` slabs vertically), the prefetcher manager auto-detects this

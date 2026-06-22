@@ -318,9 +318,9 @@ private:
         size_t shard_in_bank = 0;  // index of the shard within its bank
     };
 
-    // Round-robin spreads consecutive shards across banks; block (CONTIGUOUS_1D) packs shards_per_bank
+    // Round-robin spreads consecutive shards across banks; shard-contiguous (CONTIGUOUS_1D) packs shards_per_bank
     // consecutive shards into one bank before advancing.
-    FORCE_INLINE BankShard block_mapping(size_t flattened_shard_id) const {
+    FORCE_INLINE BankShard shard_contiguous_mapping(size_t flattened_shard_id) const {
         const size_t shards_per_bank = dspec().num_shards() / dspec().num_banks();
         return {flattened_shard_id / shards_per_bank, flattened_shard_id % shards_per_bank};
     }
@@ -329,22 +329,22 @@ private:
     }
 
     // Maps a flattened shard id to its bank and its slot within that bank, honoring the distribution
-    // strategy. When num_banks is compile-time, the strategy is too (DSpec::is_block) and the branch is
+    // strategy. When num_banks is compile-time, the strategy is too (DSpec::is_shard_contiguous) and the branch is
     // resolved at compile time, keeping these accessors byte-identical to round-robin-only builds. When
-    // num_banks is runtime, the block flag rides in the runtime num_banks word and is read per dispatch.
-    // NOTE: keep the nested `if constexpr` rather than a single `is_block_distribution() ? ...` ternary --
+    // num_banks is runtime, the shard-contiguous flag rides in the runtime num_banks word and is read per dispatch.
+    // NOTE: keep the nested `if constexpr` rather than a single `resolve_shard_contiguous() ? ...` ternary --
     // the ternary would ODR-use (instantiate) both mappings even for static round-robin accessors, losing
     // that byte-identical guarantee.
     FORCE_INLINE BankShard shard_to_bank(size_t flattened_shard_id) const {
         if constexpr (DSpec::has_static_num_banks) {
-            if constexpr (DSpec::is_block) {
-                return block_mapping(flattened_shard_id);
+            if constexpr (DSpec::is_shard_contiguous) {
+                return shard_contiguous_mapping(flattened_shard_id);
             } else {
                 return round_robin_mapping(flattened_shard_id);
             }
         } else {
-            return dspec().is_block_distribution() ? block_mapping(flattened_shard_id)
-                                                   : round_robin_mapping(flattened_shard_id);
+            return dspec().resolve_shard_contiguous() ? shard_contiguous_mapping(flattened_shard_id)
+                                                      : round_robin_mapping(flattened_shard_id);
         }
     }
 
@@ -537,7 +537,7 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t)
             TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram,
-        /* IsBlock */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_block_distribution>>;
+        /* IsShardContiguous */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_shard_contiguous>>;
 
 // CTAD deduction guide for the Metal 2.0 binding-token ctor.
 // Mirrors the (args, size_t) guide above. The token's ADDR_CRTA_OFFSET marks the
@@ -565,7 +565,8 @@ TensorAccessor(tensor_accessor::TensorAccessorBindingToken<CTA_OFFSET, ADDR_CRTA
             TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_dram,
-        /* IsBlock */ TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_block_distribution>>;
+        /* IsShardContiguous */
+        TensorAccessorArgs<CTA_OFFSET, ADDR_CRTA_OFFSET / sizeof(uint32_t) + 1>::is_shard_contiguous>>;
 
 template <std::size_t CTA_OFFSET, std::size_t CRTA_OFFSET>
 TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, uint32_t)
@@ -589,7 +590,7 @@ TensorAccessor(const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args, size_t, 
             TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::NumBanksCT>::type,
         /* IsInterleaved */ !TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_sharded,
         /* IsDram */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_dram,
-        /* IsBlock */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_block_distribution>>;
+        /* IsShardContiguous */ TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::is_shard_contiguous>>;
 
 template <
     uint32_t RankCT,
@@ -599,7 +600,7 @@ template <
     typename BankCoordsWrapper,
     bool IsInterleaved,
     bool IsDram,
-    bool IsBlock>
+    bool IsShardContiguous>
 TensorAccessor(
     tensor_accessor::DistributionSpec<
         RankCT,
@@ -609,7 +610,7 @@ TensorAccessor(
         BankCoordsWrapper,
         IsInterleaved,
         IsDram,
-        IsBlock>,
+        IsShardContiguous>,
     size_t,
     uint32_t)
     -> TensorAccessor<tensor_accessor::DistributionSpec<
@@ -620,7 +621,7 @@ TensorAccessor(
         BankCoordsWrapper,
         IsInterleaved,
         IsDram,
-        IsBlock>>;
+        IsShardContiguous>>;
 
 namespace tensor_accessor::detail {
 template <typename... Args, uint32_t... Indexes>
