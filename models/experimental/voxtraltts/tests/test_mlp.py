@@ -6,7 +6,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.functional import swiglu_mlp as reference_swiglu_mlp
-from models.experimental.voxtraltts.tests.common import load_acoustic_fm_layer_weights_or_skip
+from models.experimental.voxtraltts.utils.test_common import load_acoustic_fm_layer_weights_or_skip
 from models.experimental.voxtraltts.tt.mlp import VoxtralTTMLP
 
 

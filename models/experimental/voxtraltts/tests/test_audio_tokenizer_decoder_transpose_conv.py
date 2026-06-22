@@ -8,7 +8,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import causal_conv_transpose1d_reference_bf16
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config, parse_csv_ints
-from models.experimental.voxtraltts.tests.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.audio_tokenizer.conv import (
     VoxtralTTAudioTokenizerDecoderCausalConvTranspose1d,
     resolve_decoder_block_conv_transpose_fused_weight,
