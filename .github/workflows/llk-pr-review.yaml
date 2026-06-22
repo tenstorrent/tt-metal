@@ -88,11 +88,9 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: tenstorrent/llk_code_gen
-          # llk_code_gen is INTERNAL, so the existing AI_GH_TOKEN (an org-scoped
-          # token) can usually read it — no dedicated secret needed. If that token
-          # is scoped to tt-metal only and this step 404s/403s, set a dedicated
-          # LLK_KNOWLEDGE_TOKEN secret and swap the line below to use it.
-          token: ${{ secrets.AI_GH_TOKEN }}
+          # Dedicated token with read access to the private llk_code_gen repo.
+          # (AI_GH_TOKEN is scoped to tt-metal only and 404s on this repo.)
+          token: ${{ secrets.LLK_KNOWLEDGE_TOKEN }}
           path: .llk-review-knowledge-src
           sparse-checkout: dashboard/pr_review/knowledge
           sparse-checkout-cone-mode: false
