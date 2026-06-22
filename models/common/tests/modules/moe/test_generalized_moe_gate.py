@@ -18,7 +18,6 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import skip_for_blackhole
 
 
 def _generalized_golden(
@@ -67,7 +66,6 @@ def _grouped_golden(input_tensor, bias_tensor, eps=1e-20, scaling_factor=2.5, en
     return top8_scores / (torch.sum(top8_scores, dim=-1, keepdim=True) + eps) * scaling_factor, top8_indices
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
@@ -261,7 +259,6 @@ def test_generalized_moe_gate(device, batch_size, enable_sigmoid, seed, topk, ou
     ), "Normalized scores are not consistent with the device's own top-8 selection"
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("output_softmax", [False, True])
 @pytest.mark.parametrize("topk", [8, 6, 4])
@@ -406,7 +403,6 @@ def test_generalized_moe_gate_512_global(device, batch_size, enable_sigmoid, see
     ), f"512 normalized scores not consistent with device selection.\n dev={dev_scores}\n expected={expected}"
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201])
