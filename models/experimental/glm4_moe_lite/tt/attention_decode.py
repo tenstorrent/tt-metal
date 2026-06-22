@@ -37,6 +37,12 @@ def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -
     profile[key] = float(profile.get(key, 0.0)) + float(elapsed_s)
 
 
+# One-time guard so the decode-config dump fires once per process (it would otherwise
+# print on every layer × every decode step / trace-capture pass). Enable with
+# GLM4_MOE_LITE_DECODE_DEBUG=1 to compare KV-cache size + FlashMLA config across ISLs.
+_DECODE_CFG_PRINTED = False
+
+
 # FlashMLA → kv_b2 → w_o op-chain tuning constants (edit to retune without touching function bodies).
 _KVB2_INPUT_L1 = True
 
@@ -423,6 +429,32 @@ def flash_mla_and_output(
         exp_approx_mode=False,
         max_cores_per_head_batch=mla_max_cores,
     )
+
+    global _DECODE_CFG_PRINTED
+    if not _DECODE_CFG_PRINTED and os.environ.get("GLM4_MOE_LITE_DECODE_DEBUG", "").strip() == "1":
+        _DECODE_CFG_PRINTED = True
+        cache_shape = list(kvpe_cache.shape)
+        block_size = int(kvpe_cache.shape[2])
+        blocks_per_seq = max(1, int(kvpe_cache.shape[0]) // max(1, batch))
+        max_kv_tokens = blocks_per_seq * block_size
+        cache_bytes = int(kvpe_cache.volume()) * int(kvpe_cache.element_size())
+        num_chunks = max(1, (max_kv_tokens + cfg.mla_k_chunk_size - 1) // cfg.mla_k_chunk_size)
+        print(
+            "[DECODE_DEBUG] KV cache: "
+            f"shape={cache_shape} dtype={kvpe_cache.dtype} "
+            f"block_size={block_size} blocks_per_seq={blocks_per_seq} "
+            f"max_kv_tokens={max_kv_tokens} size_MiB={cache_bytes / (1024 * 1024):.1f} "
+            f"(per-device, batch={batch})",
+            flush=True,
+        )
+        print(
+            "[DECODE_DEBUG] FlashMLA cfg: "
+            f"mla_max_cores={mla_max_cores} k_chunk_size={cfg.mla_k_chunk_size} "
+            f"num_k_chunks={num_chunks} core_scale={cfg.decode_mla_core_scale} "
+            f"heads_local={heads_local} kvpe_dim={kvpe_dim} scale={scale:.5f} "
+            f"flash_mla_memcfg={'L1' if cfg.decode_act_mc else 'DRAM'}",
+            flush=True,
+        )
     compute_kernel_config = cfg.mla_compute_kernel_config()
     # If DECODE_L1_ACT=1 → decode_act_mc is L1_MEMORY_CONFIG → FlashMLA output goes to L1; otherwise DRAM.
     flash_mla_memcfg = cfg.decode_act_mc or ttnn.DRAM_MEMORY_CONFIG
