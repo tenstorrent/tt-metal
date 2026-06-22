@@ -888,6 +888,8 @@ class LTXSpaceToDepthDownsample(Module):
         self.stride = stride
         self.in_channels = in_channels
         self.out_channels = out_channels
+        self.parallel_config = parallel_config
+        self.ccl_manager = ccl_manager
         prod = math.prod(stride)
         # Skip path groups (in_channels * prod) channels down to out_channels by mean-pooling.
         self.group_size = in_channels * prod // out_channels
@@ -915,6 +917,14 @@ class LTXSpaceToDepthDownsample(Module):
         x = ttnn.reshape(x, (B, d, h, w, C * p1 * p2 * p3))
         return x
 
+    def _fold_residual(self, x_full: ttnn.Tensor, B: int, d: int, h: int, w: int) -> ttnn.Tensor:
+        """Space-to-depth + mean-pool the skip path to out_channels (on the full, cropped tensor)."""
+        x_in = self._space_to_depth(x_full, B, d, h, w)
+        if self.group_size > 1:
+            x_in = ttnn.reshape(x_in, (B, d, h, w, self.out_channels, self.group_size))
+            x_in = ttnn.mean(x_in, dim=5)
+        return x_in
+
     def forward(
         self,
         x_BTHWC: ttnn.Tensor,
@@ -928,6 +938,19 @@ class LTXSpaceToDepthDownsample(Module):
         if p1 == 2:
             first_frame = x_BTHWC[:, :1, :, :, :]
             x_BTHWC = ttnn.concat([first_frame, x_BTHWC], dim=1)
+
+        # A per-device space-to-depth fold is only correct when each shard's spatial extent is
+        # divisible by the stride; otherwise a (p2, p3) patch straddles a shard boundary and the
+        # per-device zero-pad below injects garbage into the *interior* of the gathered latent
+        # (this corrupted the I2V conditioning latent at production resolutions). When that happens
+        # — global dim divisible by the stride but per-device dim not — gather the sharded spatial
+        # axes, fold on the full extent, then re-shard.
+        h_factor = self.parallel_config.height_parallel.factor
+        w_factor = self.parallel_config.width_parallel.factor
+        needs_h_gather = h_factor > 1 and p2 > 1 and x_BTHWC.shape[2] % p2 != 0
+        needs_w_gather = w_factor > 1 and p3 > 1 and x_BTHWC.shape[3] % p3 != 0
+        if needs_h_gather or needs_w_gather:
+            return self._forward_gathered(x_BTHWC, causal, logical_h, logical_w)
 
         B, T, H, W, C = x_BTHWC.shape
 
@@ -945,10 +968,7 @@ class LTXSpaceToDepthDownsample(Module):
         d, h, w = T // p1, H // p2, W // p3
 
         # Residual skip: space-to-depth the input, then mean-pool channel groups to out_channels.
-        x_in = self._space_to_depth(x_BTHWC, B, d, h, w)
-        if self.group_size > 1:
-            x_in = ttnn.reshape(x_in, (B, d, h, w, self.out_channels, self.group_size))
-            x_in = ttnn.mean(x_in, dim=5)
+        x_in = self._fold_residual(x_BTHWC, B, d, h, w)
 
         # Main path: stride-1 conv at full res, then space-to-depth.
         x = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
@@ -959,6 +979,70 @@ class LTXSpaceToDepthDownsample(Module):
         new_logical_h = (logical_h // p2) if logical_h else 0
         new_logical_w = (logical_w // p3) if logical_w else 0
         return x, new_logical_h, new_logical_w
+
+    def _all_gather_hw(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Gather the H/W-sharded tensor to full (replicated) spatial extent on every device."""
+        pc = self.parallel_config
+        if pc.height_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=2, mesh_axis=pc.height_parallel.mesh_axis, use_hyperparams=False)
+        if pc.width_parallel.factor > 1:
+            x = self.ccl_manager.all_gather(x, dim=3, mesh_axis=pc.width_parallel.mesh_axis, use_hyperparams=False)
+        return ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    def _reshard_hw(self, x: ttnn.Tensor, B: int, d: int, h: int, w: int) -> ttnn.Tensor:
+        """Re-shard a replicated (B, d, h, w, C) tensor back across the mesh, zero-padding each
+        spatial dim up to a multiple of its mesh factor (tail only) so the split divides evenly."""
+        pc = self.parallel_config
+        h_factor = pc.height_parallel.factor
+        w_factor = pc.width_parallel.factor
+        # mesh_partition slices each shard out of the replicated tensor; a sub-tile-wide shard can
+        # only be sliced in ROW_MAJOR (tilized slicing requires tile-aligned begin indices).
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        pad_h = (-h) % h_factor if h_factor > 1 else 0
+        pad_w = (-w) % w_factor if w_factor > 1 else 0
+        if pad_h or pad_w:
+            C = x.shape[-1]
+            x = ttnn.reshape(x, (B * d, h, w, C))
+            x = ttnn.pad(x, [(0, 0), (0, pad_h), (0, pad_w), (0, 0)], value=0.0)
+            x = ttnn.reshape(x, (B, d, h + pad_h, w + pad_w, C))
+        if h_factor > 1:
+            x = ttnn.mesh_partition(x, dim=2, cluster_axis=pc.height_parallel.mesh_axis)
+        if w_factor > 1:
+            x = ttnn.mesh_partition(x, dim=3, cluster_axis=pc.width_parallel.mesh_axis)
+        return x
+
+    def _forward_gathered(
+        self, x_BTHWC: ttnn.Tensor, causal: bool, logical_h: int, logical_w: int
+    ) -> tuple[ttnn.Tensor, int, int]:
+        """Sharding-safe space-to-depth: run the (sharded, halo-aware) conv, then gather H/W to the
+        full extent, fold + residual on the full tensor, and re-shard. Used when a per-device
+        spatial dim is not divisible by the stride (patch would straddle a shard boundary)."""
+        p1, p2, p3 = self.stride
+
+        # Conv first, while still sharded (its halo exchange handles shard boundaries correctly).
+        x_conv = self.conv(x_BTHWC, causal=causal, logical_h=logical_h, logical_w=logical_w)
+        x_conv = ttnn.to_layout(x_conv, ttnn.ROW_MAJOR_LAYOUT)
+
+        x_res_full = self._all_gather_hw(x_BTHWC)
+        x_conv_full = self._all_gather_hw(x_conv)
+
+        # Crop the mesh-factor padding so the fold operates on the true (logical) extent, which is
+        # divisible by the stride globally even when the per-device shards are not.
+        T = x_res_full.shape[1]
+        full_h = logical_h if logical_h > 0 else x_res_full.shape[2]
+        full_w = logical_w if logical_w > 0 else x_res_full.shape[3]
+        x_res_full = x_res_full[:, :, :full_h, :full_w, :]
+        x_conv_full = x_conv_full[:, :, :full_h, :full_w, :]
+
+        B = x_res_full.shape[0]
+        d, h, w = T // p1, full_h // p2, full_w // p3
+
+        x_in = self._fold_residual(x_res_full, B, d, h, w)
+        x = self._space_to_depth(x_conv_full, B, d, h, w)
+        x = ttnn.add(x, x_in)
+
+        x = self._reshard_hw(x, B, d, h, w)
+        return x, h, w
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pass  # Conv handles its own state via LTXCausalConv3d._prepare_torch_state
