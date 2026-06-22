@@ -45,7 +45,7 @@ void kernel_main() {
     Noc noc;
 
     // Get tile size from DFB interface
-    const uint32_t tile_size = cb_in0.get_tile_size();
+    const uint32_t tile_size = cb_in0.get_entry_size();
 
     // Create TensorAccessors for start and end tensors
     const auto start_tensor_accessor = TensorAccessor(tensor::start);

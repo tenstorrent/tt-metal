@@ -27,7 +27,7 @@ void kernel_main() {
                                                                 // could contain padding data, so we need to specify the
                                                                 // size of valid data we want to read in.
 
-    const auto s = TensorAccessor(ta::src);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
     DataflowBuffer cb_in0(dfb::in);

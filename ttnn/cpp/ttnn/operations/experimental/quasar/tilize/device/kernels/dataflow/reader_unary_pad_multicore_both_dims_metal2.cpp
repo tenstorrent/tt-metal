@@ -7,7 +7,7 @@
 //   reader_unary_pad_multicore_both_dims.cpp
 // Forked into the quasar tilize op directory so the legacy tilize_with_val_padding
 // consumers can continue using the original (un-migrated) copy. Logic is unchanged;
-// only the Metal 2.0 named-binding rewrite is applied (TensorAccessor(ta::src),
+// only the Metal 2.0 named-binding rewrite is applied (TensorAccessor(tensor::src),
 // DataflowBuffer(dfb::in/dfb::stage), named args). The c_1 staging buffer is a
 // scratchpad fake-CB: bound as a self-loop DFB (dfb::stage) purely to satisfy the
 // validator; it carries no real FIFO traffic (used only as an address source).
@@ -94,7 +94,7 @@ void kernel_main() {
 
     const auto pad_value = get_arg(args::pad_value);
 
-    const auto s = TensorAccessor(ta::src);
+    const auto s = TensorAccessor(tensor::src);
     Noc noc;
     DataflowBuffer cb_in0(dfb::in);
     DataflowBuffer cb_in1(dfb::stage);

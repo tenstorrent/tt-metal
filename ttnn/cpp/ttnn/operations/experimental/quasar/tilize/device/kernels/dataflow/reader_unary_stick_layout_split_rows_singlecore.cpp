@@ -20,7 +20,7 @@ void kernel_main() {
     const auto num_full_blocks_in_row = get_arg(args::num_full_blocks_in_row);
     const auto start_stick_id = get_arg(args::start_stick_id);
 
-    const auto s = TensorAccessor(ta::src);
+    const auto s = TensorAccessor(tensor::src);
 
     Noc noc;
     DataflowBuffer cb_in0(dfb::in);

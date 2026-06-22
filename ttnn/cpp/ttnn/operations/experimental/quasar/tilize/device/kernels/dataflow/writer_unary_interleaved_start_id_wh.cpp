@@ -19,9 +19,9 @@ void kernel_main() {
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(dfb::out);
+    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
 
-    const auto s = TensorAccessor(ta::dst);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
     DataflowBuffer cb(dfb::out);

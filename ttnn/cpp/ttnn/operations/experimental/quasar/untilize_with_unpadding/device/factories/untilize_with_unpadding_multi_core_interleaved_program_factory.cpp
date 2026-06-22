@@ -244,8 +244,15 @@ UntilizeWithUnpaddingMultiCoreInterleavedProgramFactory::create_program_artifact
         }
     }
 
-    // Declare the writer's vararg count (max over cores; per-node vararg vectors carry
-    // the actual per-core length). The writer is kernels[1] (reader is [0]).
+    // Every node must supply exactly num_runtime_varargs words, so pad each core's
+    // vararg vector up to the max with zeros. The padding is never read (the writer's
+    // loop is bounded by n_block_reps); this just satisfies the uniform-count contract.
+    for (auto& entry : writer_varargs) {
+        entry.second.resize(max_varargs, 0u);
+    }
+
+    // Declare the writer's vararg count (uniform max over cores). The writer is
+    // kernels[1] (reader is [0]).
     kernels[1].advanced_options.num_runtime_varargs = max_varargs;
 
     // ---- ProgramSpec ----

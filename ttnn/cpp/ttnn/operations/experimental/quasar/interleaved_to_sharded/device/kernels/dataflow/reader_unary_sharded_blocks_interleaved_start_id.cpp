@@ -33,7 +33,7 @@ void kernel_main() {
 
     constexpr uint32_t num_readers = get_arg(args::num_readers);
 
-    constexpr uint32_t tile_bytes = get_tile_size(dfb::in0);
+    constexpr uint32_t tile_bytes = get_arg(args::tile_bytes);
 
     Noc noc;
     DataflowBuffer cb_in(dfb::in0);

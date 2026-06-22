@@ -20,7 +20,7 @@ void kernel_main() {
     const uint32_t start_id_base = get_arg(args::start_id_base);
 
     // single-tile ublocks
-    const uint32_t tile_bytes = get_tile_size(dfb::out);
+    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
 
     const auto s = TensorAccessor(tensor::dst);
 

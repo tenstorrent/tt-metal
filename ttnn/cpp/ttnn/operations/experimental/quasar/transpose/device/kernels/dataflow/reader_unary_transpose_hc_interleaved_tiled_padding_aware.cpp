@@ -40,7 +40,7 @@ void kernel_main() {
 #ifdef NEEDS_PADDING
     DataflowBuffer cb_padding(dfb::padding);
 #endif
-    const uint32_t tile_bytes = cb.get_tile_size();
+    const uint32_t tile_bytes = cb.get_entry_size();
 
 // read a ublock of tiles from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
