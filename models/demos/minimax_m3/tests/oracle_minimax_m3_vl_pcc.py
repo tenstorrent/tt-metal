@@ -10,15 +10,27 @@ self-authored torch refs — we wrote both sides, so a shared misreading of the 
 silently. This script closes that gap by checking our refs against the REAL impl. Together they
 give: TTNN ==(device PCC)== our refs ==(this, exact)== real minimax_m3_vl.
 
-HOW TO RUN (separate env — does NOT touch the ttnn python_env, no checkpoint download, CPU only):
+This is a STANDALONE script, NOT a pytest test — the filename has no `test_` prefix on purpose, so
+the normal pytest suite (which runs in the ttnn python_env, pinned to an older transformers WITHOUT
+minimax_m3_vl) does NOT collect it. It needs transformers>=5.12, which we install into a throwaway
+env (we do NOT bump the repo's pinned transformers). CPU only, no checkpoint, no ttnn. Exits 0 on
+all-pass.
+
+HOW TO RUN — option A (uv, recommended; fetches deps into a cached ephemeral env):
 
     uv run --no-project --with "transformers>=5.12" --with "torch" --python 3.10 \
         python models/demos/minimax_m3/tests/oracle_minimax_m3_vl_pcc.py
 
-It is NOT a pytest test (the ttnn venv pins an older transformers without minimax_m3_vl). Exits 0
-on all-pass. Covers RMSNorm (gemma), DenseMLP + SparseMoeBlock (clamped swigluoai, router, shared,
-routed_scaling), and Attention (per-head QK-norm + partial RoPE + GQA). Pure torch (HF convention,
-no Meta-RoPE swizzle — that is TTNN-only). Expect PCC == 1.0 (both fp32, same weights).
+HOW TO RUN — option B (no uv; a one-off venv):
+
+    python3.10 -m venv /tmp/m3_oracle && /tmp/m3_oracle/bin/pip install -q "transformers>=5.12" torch
+    /tmp/m3_oracle/bin/python models/demos/minimax_m3/tests/oracle_minimax_m3_vl_pcc.py
+
+First run downloads transformers + torch (~GB, then cached). Covers RMSNorm (gemma), DenseMLP +
+SparseMoeBlock (clamped swigluoai, router, shared, routed_scaling), Attention (per-head QK-norm +
+partial RoPE + GQA). Pure torch (HF convention, no Meta-RoPE swizzle — that is TTNN-only).
+Expect PCC == 1.0 (both fp32, same weights). Pin an exact transformers version if you want a frozen
+golden (a future release could change minimax_m3_vl — in which case this test surfaces the drift).
 """
 
 import sys

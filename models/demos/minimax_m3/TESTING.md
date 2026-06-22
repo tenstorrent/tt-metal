@@ -84,16 +84,26 @@ grep -iE "ep-moe|pcc|PASS|FAIL" /tmp/ep_moe.log
 
 Our `*_vs_ref` tests compare TTNN against *self-authored* torch refs (we wrote both sides). This
 script closes the loop by checking those refs against the **upstream `transformers minimax_m3_vl`**
-(needs transformers ≥5.12, which our ttnn venv doesn't have). It runs in an **ephemeral env** — no
-touch to `python_env`, no checkpoint, CPU only:
+(needs transformers ≥5.12, which our ttnn venv doesn't have, and we don't bump the repo pin).
+
+It's a **standalone script, not a pytest test** (no `test_` prefix → the pytest suite skips it). Run
+it in a throwaway env — no touch to `python_env`, no checkpoint, CPU only. **Option A (uv):**
 
 ```bash
 uv run --no-project --with "transformers>=5.12" --with "torch" --python 3.10 \
     python models/demos/minimax_m3/tests/oracle_minimax_m3_vl_pcc.py
 ```
 
-Expect `PCC = 1.000000` on RMSNorm / DenseMLP / SparseMoeBlock / Attention (both fp32, same random
-weights). Together with the device tests: `TTNN ==(device PCC)== our refs ==(this, exact)== real M3`.
+**Option B (no uv):**
+
+```bash
+python3.10 -m venv /tmp/m3_oracle && /tmp/m3_oracle/bin/pip install -q "transformers>=5.12" torch
+/tmp/m3_oracle/bin/python models/demos/minimax_m3/tests/oracle_minimax_m3_vl_pcc.py
+```
+
+First run pulls transformers + torch (~GB, then cached). Expect `PCC = 1.000000` on RMSNorm /
+DenseMLP / SparseMoeBlock / Attention (both fp32, same random weights). Together with the device
+tests: `TTNN ==(device PCC)== our refs ==(this, exact)== real M3`.
 
 ---
 
