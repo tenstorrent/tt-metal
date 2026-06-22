@@ -1,21 +1,21 @@
 Hi @Nikola Vukobrat
 Task update from my side,
 BEV YUV Conv2d DRAM Bottleneck
-                     Ran the two BEV YUV conv2d configurations — Block A (1, 3, 1536, 1536) and Block C (1, 3, 1280, 2304) — in isolation, sliced the TTNN IR to extract the permute → reshape → conv2d → reshape → permute chain, Tracy-profiled both, and cross-verified the ops and timings against the full Block A and Block C ops performance reports. Both configurations show the same two ops accounting for over 90% of the chain’s runtime.
+                     Ran the two BEV YUV conv2d configurations — Block A (1, 3, 1536, 1536) and Block C (1, 3, 1280, 2304) — in isolation, sliced the TTNN IR to extract the permute → reshape → conv2d → reshape → permute chain, Tracy-profiled both, and cross-verified the ops and timings against the full Block A and Block C ops performance reports. Both configurations show the same two ops accounting for over 90% of the chain's runtime.
 
  MatmulDeviceOperation (inside ttnn.conv2d)
 | Config             | Input Shape          | FW Time  | FPU%   | PM_REQ_I_BW | IN0 X_PAD | Slowdown vs PM_IDEAL |
 | ------------------ | -------------------- | -------- | ------ | ----------- | --------- | -------------------- |
 | Conv2d 1 — Block A | `(1, 3, 1536, 1536)` | 6.431 ms | 0.008% | 277.03 GB/s | `32[3]`   | 11.8×                |
 | Conv2d 2 — Block C | `(1, 3, 1280, 2304)` | 7.925 ms | 0.008% | 277.03 GB/s | `32[3]`   | 11.6×                |
-An FPU utilization of 0.008% means the compute unit is essentially idle. The IN0 X_PAD = 32[3] column confirms the tile-padding overhead: in_channels=3 is padded to 32, so the matmul reads 32 values per activation row and discards 29 of them as zeros. The 277 GB/s bandwidth requirement is 96% of Wormhole’s 288 GB/s DRAM peak, indicating that DRAM is fully saturated while compute is not.
+An FPU utilization of 0.008% means the compute unit is essentially idle. The IN0 X_PAD = 32[3] column confirms the tile-padding overhead: in_channels=3 is padded to 32, so the matmul reads 32 values per activation row and discards 29 of them as zeros. The 277 GB/s bandwidth requirement is 96% of Wormhole's 288 GB/s DRAM peak, indicating that DRAM is fully saturated while compute is not.
 
 PermuteDeviceOperation (NCHW → NHWC before conv2d)
 | Config             | FW Time  | OUT X_PAD | DRAM Write | Real Data | Inflation |
 | ------------------ | -------- | --------- | ---------- | --------- | --------- |
 | Conv2d 1 — Block A | 6.855 ms | `32[3]`   | 151.0 MB   | 14.2 MB   | 10.63×    |
 | Conv2d 2 — Block C | 7.638 ms | `32[3]`   | 188.7 MB   | 17.7 MB   | 10.67×    |
-The permute moves C=3 from the row dimension to the column dimension. Since the tile width is always 32, each tile row is padded from 3 real values to 32, meaning 90.6% of every tile’s storage consists of zeros. The output tensor inflates from 14–17 MB to 151–188 MB, exceeds the per-core L1 capacity (1.7–2.1× above the 1,363 KB usable budget), and is therefore placed in DRAM. All downstream operations then read this oversized DRAM tensor.
+The permute moves C=3 from the row dimension to the column dimension. Since the tile width is always 32, each tile row is padded from 3 real values to 32, meaning 90.6% of every tile's storage consists of zeros. The output tensor inflates from 14–17 MB to 151–188 MB, exceeds the per-core L1 capacity (1.7–2.1× above the 1,363 KB usable budget), and is therefore placed in DRAM. All downstream operations then read this oversized DRAM tensor.
 
 
 From the TTNN IR, two standalone test cases were created in tt-metal:
@@ -32,3 +32,94 @@ Op-by-op breakdown with exact physical tensor sizes at each stage
 Total DRAM read/write amplification (~35×)
 All four Tracy profiling tables
 A flowchart showing every layout transition from NCHW input to NCHW output
+
+2. From the insights of tracy profiler integration into bev model, created branch contains tracy profiler script,  fix of process logs device and process ops post processing and docs contains steps by step guide to build the tracy profiler from source and run the resnet50 onnx benechmark and generate ops perf report and shared the branch and docs to Nicolai
+
+
+
+3. BEV YUV Conv2d DRAM Bottleneck — Method 1 Investigation
+
+Following up on the issue comment (https://github.com/tenstorrent/tt-metal/issues/46831#issuecomment-4691303095), a community member proposed Method 1: add an in_channels < TILE_WIDTH guard to use_matmul_for_1x1_conv() so that C=3 routes to the regular convolution path instead of the matmul path. The regular convolution path reads activations in ROW_MAJOR format with 8-element channel alignment, reducing per-pixel DRAM reads from 64 B to 16 B.
+Implemented the change and Tracy-profiled both Block A and Block C using the test_conv2d_only test case (isolated conv2d, ROW_MAJOR input, no slice configuration).
+
+End-to-End Results
+| Config             | Input Shape          | Path                          | Total Ops | Total Kernel Time | vs Baseline  |
+| ------------------ | -------------------- | ----------------------------- | --------- | ----------------- | ------------ |
+| Conv2d 1 — Block A | `(1, 3, 1536, 1536)` | Baseline (Matmul, TILE)       | 1         | 6.430 ms          | 1.00×        |
+| Conv2d 1 — Block A | `(1, 3, 1536, 1536)` | Method 1 (RegConv, ROW_MAJOR) | 30        | 17.190 ms         | 2.67× slower |
+| Conv2d 2 — Block C | `(1, 3, 1280, 2304)` | Baseline (Matmul, TILE)       | 1         | 7.923 ms          | 1.00×        |
+| Conv2d 2 — Block C | `(1, 3, 1280, 2304)` | Method 1 (RegConv, ROW_MAJOR) | 40        | 21.413 ms         | 2.70× slower |
+
+Method 1 correctly routes execution to the regular convolution path — the operation changes from MatmulDeviceOperation to Conv2dDeviceOperation, and the individual convolution kernels are 12.9–65.6× faster.
+
+However, the regular convolution path triggers DRAM slicing (6–8 slices × 5 ops = 30–40 total ops), and the associated infrastructure overhead dominates the runtime.
+
+Op Breakdown — Block A (6 Slices, 17.190 ms Total)
+| Op                           | Count | Total Kernel Time | % of Total |
+| ---------------------------- | ----- | ----------------- | ---------- |
+| `PaddedSliceDeviceOperation` | 6     | 5.582 ms          | 32.5%      |
+| `HaloDeviceOperation`        | 6     | 5.202 ms          | 30.3%      |
+| `SliceWriteDeviceOperation`  | 6     | 3.006 ms          | 17.5%      |
+| `Conv2dDeviceOperation`      | 6     | 2.996 ms          | 17.4%      |
+| `MoveDeviceOperation`        | 6     | 0.404 ms          | 2.3%       |
+The actual convolution compute accounts for only 17.4% of the total runtime. The surrounding slice infrastructure — PaddedSlice, Halo, SliceWrite, and Move — accounts for 82.6% of the execution time. HaloDeviceOperation alone consumes 5.2 ms (30.3%) despite being a mathematical no-op for a 1×1, stride=1, pad=0 convolution. It still dispatches a full kernel per slice while performing no useful work.
+
+
+4. BEV YUV Conv2d DRAM Bottleneck — Method 2 (Spatial Packing)
+
+The issue comment also mentioned kernel stride folding as a general technique: pack multiple spatial pixels into the channel dimension to amortize per-channel overhead. Built on that insight to design a spatial row-group packing scheme that eliminates the tile-padding waste without going through the DRAM-sliced regular conv path.
+
+Root cause recap: C=3 in NHWC TILE pads each tile row from 3 real values to 32, wasting 29/32 = 90.6% of every tile read. The packing factor K = TILE_WIDTH // gcd(C, TILE_WIDTH) = 32 for C=3, giving C×K = 96 = 3 × TILE_WIDTH — three full tile columns, zero padding waste.
+
+Activation packing flow (on-device, all steps in ROW_MAJOR unless noted):
+
+  [N, C, H, W]  ROW_MAJOR  DRAM
+       |
+       v  reshape [N, C*K, H/K, W]       -- free view (no data copy)
+       |
+       v  permute [N, H/K, W, C*K]       -- 17.7 MB  (vs 188.7 MB baseline)
+       |
+       v  reshape [1, 1, N*H/K*W, C*K]   -- free view
+       |
+       v  to_layout TILE                  -- 17.7 MB  (C*K=96 fills tiles 100%)
+       |
+       v  linear  [C*K → OC*K]           -- reads 17.7 MB activation
+       |
+       v  to_layout ROW_MAJOR             -- 17.7 MB
+       |
+       v  reshape [N, H/K, W, OC*K]      -- free view
+       |
+       v  permute [N, OC*K, H/K, W]      -- 14.2 MB
+       |
+       v  reshape [N, OC, H, W]          -- free view
+
+Weight packing: block-diagonal [C*K, OC*K] with K copies of the original [C, OC] weight on the diagonal, constructed using only TTIR-compatible ops (broadcast + arange + eq + typecast + multiply + permute + reshape), with no numpy loops or explicit zero tensors. A single permute [1,2,0,3] absorbs the W.T transposition, reducing the op count from 16 to 9.
+
+Bias packing: repeat_interleave(K) on the original [OC] bias gives [OC*K] where bias_packed[oc*K+k] = bias[oc].
+
+Tracy profiling results (test_conv2d_method2_approach2_dram_bottleneck vs test_conv2d_dram_bottleneck):
+
+| Config             | Input Shape          | Method          | Total Kernel Time | vs Baseline |
+| ------------------ | -------------------- | --------------- | ----------------- | ----------- |
+| Conv2d 1 — Block A | `(1, 3, 1536, 1536)` | Baseline        | 14.697 ms         | 1.00×       |
+| Conv2d 1 — Block A | `(1, 3, 1536, 1536)` | Method 2        | 1.789 ms          | **8.22×**   |
+| Conv2d 2 — Block C | `(1, 3, 1280, 2304)` | Baseline        | 16.764 ms         | 1.00×       |
+| Conv2d 2 — Block C | `(1, 3, 1280, 2304)` | Method 2        | 1.959 ms          | **8.56×**   |
+
+Method 2 op breakdown — Block A (1.789 ms total):
+| Op                        | Count | Kernel Time | % of Total |
+| ------------------------- | ----- | ----------- | ---------- |
+| `PermuteDeviceOperation`  | 2     | 0.991 ms    | 55%        |
+| `MatmulDeviceOperation`   | 1     | 0.433 ms    | 24%        |
+| `TilizeDeviceOperation`   | 1     | 0.187 ms    | 10%        |
+| `UntilizeDeviceOperation` | 1     | 0.178 ms    | 10%        |
+
+Method 2 op breakdown — Block C (1.959 ms total):
+| Op                        | Count | Kernel Time | % of Total |
+| ------------------------- | ----- | ----------- | ---------- |
+| `PermuteDeviceOperation`  | 2     | 0.974 ms    | 50%        |
+| `MatmulDeviceOperation`   | 1     | 0.550 ms    | 28%        |
+| `TilizeDeviceOperation`   | 1     | 0.225 ms    | 11%        |
+| `UntilizeDeviceOperation` | 1     | 0.209 ms    | 11%        |
+
+The MatmulDeviceOperation drops from 6.4–7.9 ms to 0.43–0.55 ms (14.8× improvement) because the packed activation has zero tile-padding waste. The new bottleneck is PermuteDeviceOperation at 50–55% of total time — this permute only moves 17.7 MB (not 188.7 MB) but uses the MultiCoreBlockedGeneric path (3 internal passes) because the last dimension changes.

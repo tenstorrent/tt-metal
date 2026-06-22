@@ -287,21 +287,51 @@ def _spatial_pack_factor(in_channels: int) -> int:
 
 
 def _make_packed_weight(torch_weight: torch.Tensor, in_channels: int, out_channels: int, K: int) -> torch.Tensor:
-    # Row-group packing: [N,C,H,W] → [N,C*K,H/K,W].
-    # Packed channel c'=c*K+k holds row-group k of original channel c.
-    # Required: W_packed[c*K+k, oc*K+k] = W[oc,c]  for all k, 0 elsewhere.
-    # Efficiently set via stride-K slicing: W_block[k::K, k::K] = W_orig.T
-    import numpy as np
+    # Required: W_packed[c*K+k, oc*K+k] = weight[oc,c,0,0]  for all k, 0 elsewhere.
+    #
+    # Implemented using the same 9 ops as docs/packed_weight_bias_ttir.mlir
+    # (maps 1-to-1 to TTIR ops, no numpy / no explicit zeros tensor / no loop):
+    #
+    #   broadcast  weight [OC,IC,1,1] → [OC,IC,K,K]        expand kH=kW=1 to K
+    #   arange     [1,1,K,K] row grid  val[0,0,k,*] = k    varies along dim 2
+    #   arange     [1,1,K,K] col grid  val[0,0,*,k] = k    varies along dim 3
+    #   eq         row == col          [1,1,K,K] bool       True on diagonal
+    #   typecast   bool → float32      [1,1,K,K]            1.0 / 0.0
+    #   multiply   w_bc * i_k          [OC,IC,K,K]          zero off-diagonal
+    #              (broadcast i_k [1,1,K,K] → [OC,IC,K,K] handled implicitly)
+    #   permute    [1,2,0,3]           [OC,IC,K,K]→[IC,K,OC,K]  absorbs W.T
+    #   reshape    [IC,K,OC,K]→[IC*K, OC*K]
 
-    W_orig = torch_weight.reshape(out_channels, in_channels).float().numpy()  # [OC, IC]
-    W_block = np.zeros((in_channels * K, out_channels * K), dtype=np.float32)
-    for k in range(K):
-        W_block[k::K, k::K] = W_orig.T  # W_orig.T[c, oc] = W_orig[oc, c] = W[oc, c]
-    return torch.from_numpy(W_block).to(torch.bfloat16)
+    # broadcast: [OC,IC,1,1] → [OC,IC,K,K]
+    w_bc = torch_weight.float().expand(out_channels, in_channels, K, K)
+
+    # arange row grid [1,1,K,K]: val[0,0,k,k'] = k  (varies along dim 2)
+    k_range = torch.arange(K, dtype=torch.int64)
+    k_row = k_range.reshape(1, 1, K, 1).expand(1, 1, K, K)
+
+    # arange col grid [1,1,K,K]: val[0,0,k,k'] = k'  (varies along dim 3)
+    k_col = k_range.reshape(1, 1, 1, K).expand(1, 1, K, K)
+
+    # eq: diagonal mask — True where row_index == col_index
+    diag_bool = k_row == k_col  # [1,1,K,K]
+
+    # typecast: bool → float32 → identity matrix I_K (1.0 on diagonal)
+    i_k = diag_bool.to(torch.float32)  # [1,1,K,K]
+
+    # multiply: zero off-diagonal (i_k broadcasts [1,1,K,K] → [OC,IC,K,K])
+    w_diag = w_bc * i_k  # [OC,IC,K,K]
+
+    # permute [1,2,0,3]: [OC,IC,K,K] → [IC,K,OC,K]  (absorbs W.T transposition)
+    #   result[ic,k,oc,k'] = w_diag[oc,ic,k,k'] = weight[oc,ic,0,0] if k==k'
+    w_perm = w_diag.permute(1, 2, 0, 3)
+
+    # reshape [IC,K,OC,K] → [IC*K, OC*K]
+    return w_perm.reshape(in_channels * K, out_channels * K).to(torch.bfloat16)
 
 
 def _make_packed_bias(torch_bias: torch.Tensor, out_channels: int, K: int) -> torch.Tensor:
-    # bias_packed[oc*K+k] = bias[oc]  →  repeat_interleave, not repeat
+    # Maps to TTIR: reshape [1,1,1,OC]→[OC] + repeat_interleave(K, dim=0) → [OC*K]
+    # bias_packed[oc*K+k] = bias[oc]
     return torch_bias.reshape(out_channels).repeat_interleave(K)
 
 
