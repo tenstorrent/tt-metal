@@ -25,6 +25,11 @@
 #include <dlfcn.h>
 #include <execinfo.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <fcntl.h>      // open (silence gcore output)
+#include <sys/prctl.h>  // PR_SET_DUMPABLE / PR_SET_PTRACER — see emule_asan_handle_coredump
+#include <sys/wait.h>   // waitpid (reap the gcore child)
+#endif
 
 // Identity thread-locals read by the trace; defined in emulated_program_runner.cpp.
 extern thread_local uint8_t my_x[2];
@@ -212,6 +217,56 @@ void emule_asan_print_trace() {
     std::fflush(stderr);
 }
 
+// Decide what happens to the core dump the imminent abort() would trigger, per the
+// TT_METAL_EMULE_ASAN_ALLOW_CORE env var. Called once, by the thread holding the panic
+// lock, so a multi-core kernel bug never spawns more than one dump.
+//
+// Unset (default): mark the process non-dumpable (PR_SET_DUMPABLE=0). The emulated
+// process maps GB-scale L1+DRAM, so each abort would otherwise dump a ~1.4 GB core; on
+// hosts whose core_pattern pipes to a crash handler (e.g. apport), `ulimit -c 0`/RLIMIT_CORE
+// is IGNORED, but PR_SET_DUMPABLE=0 the kernel honors regardless. So the suite is safe to
+// run anywhere with no LD_PRELOAD shim or external setup, and the trace above already
+// captures what a core would.
+//
+// Set (opt-in debugging): write a real core of this process via gcore, to
+// ./emule_asan_core.<pid> in the CWD. We dump it ourselves rather than rely on the kernel's
+// global core_pattern because that pipe (apport) silently drops cores from non-package
+// binaries. gdb/gcore chatter is silenced so the ASAN report stays readable. Best-effort:
+// if gcore is missing or ptrace is restricted, the process is left dumpable so a plain-file
+// core_pattern still produces a core, and we say so.
+void emule_asan_handle_coredump() {
+#if defined(__linux__)
+    if (std::getenv("TT_METAL_EMULE_ASAN_ALLOW_CORE") == nullptr) {
+        prctl(PR_SET_DUMPABLE, 0, 0, 0, 0);
+        return;
+    }
+    char pid[16];
+    std::snprintf(pid, sizeof(pid), "%d", static_cast<int>(getpid()));
+    prctl(PR_SET_PTRACER, -1, 0, 0, 0);  // PR_SET_PTRACER_ANY: let the gcore child attach
+    pid_t child = fork();
+    if (child == 0) {
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) {
+            dup2(devnull, 1);
+            dup2(devnull, 2);
+        }
+        execlp("gcore", "gcore", "-o", "emule_asan_core", pid, static_cast<char*>(nullptr));
+        _exit(127);  // gcore not on PATH
+    }
+    if (child > 0) {
+        int status = 0;
+        waitpid(child, &status, 0);
+        char cwd[1024];
+        const char* dir = (getcwd(cwd, sizeof(cwd)) != nullptr) ? cwd : ".";
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 0) {
+            fprintf(stderr, "  [emule ASAN] core written to %s/emule_asan_core.%s\n", dir, pid);
+        } else {
+            fprintf(stderr, "  [emule ASAN] gcore unavailable/failed; no core captured (needs gdb gcore + ptrace)\n");
+        }
+    }
+#endif
+}
+
 }  // namespace
 
 // Report one [ASAN ERROR] and abort. `fmt`/args are the printf-style error line
@@ -224,6 +279,9 @@ void emule_asan_print_trace() {
 extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...) {
     static std::mutex panic_mu;
     panic_mu.lock();  // intentionally never unlocked — the winner aborts holding it
+    // Suppress (default) or self-dump (TT_METAL_EMULE_ASAN_ALLOW_CORE) the core that the
+    // abort() below would trigger. Done under the lock so only the winning thread acts.
+    emule_asan_handle_coredump();
     if (fmt != nullptr) {
         va_list ap;
         va_start(ap, fmt);

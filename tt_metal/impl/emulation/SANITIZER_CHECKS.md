@@ -18,6 +18,9 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 - When the flag is off, every check is a no-op: host helpers return early, and
   the runner leaves the kernel's thread-local state pointers null so the in-kernel
   checks short-circuit.
+- The `abort()` writes **no core dump** by default (the emulated process maps GB-scale
+  L1+DRAM, so a core is ~13 GB). Set **`TT_METAL_EMULE_ASAN_ALLOW_CORE=1`** to capture
+  one for debugging instead — see *Diagnostic trace* below.
 
 **Where checks live (the three layers)**
 - **Host-side** — `[metal] tt_metal/impl/emulation/host_sanitizers.hpp` + call
@@ -64,6 +67,23 @@ lean non-ASAN cache. The kernel-frame `file:line` refers to the JIT-generated
 kernel source. For post-execution checks (Dirty CB, Object Intent) the kernel
 has already returned, so the trace shows kernel identity + the runner stack, not
 the offending kernel line.
+
+**Core dumps (`TT_METAL_EMULE_ASAN_ALLOW_CORE`).** `__emule_asan_panic` decides what
+happens to the core the `abort()` would otherwise produce:
+- **Unset (default) — no core.** The process is marked non-dumpable
+  (`prctl(PR_SET_DUMPABLE, 0)`). The emulated process maps GB-scale L1+DRAM (a core is
+  ~13 GB), and on hosts whose `core_pattern` pipes to a crash handler (e.g. apport)
+  `ulimit -c 0` / `RLIMIT_CORE` is *ignored* — `PR_SET_DUMPABLE=0` the kernel honors
+  regardless. So the suite is safe to run on any machine with no `LD_PRELOAD` shim or
+  external setup, and the trace above already captures what a core would.
+- **Set — capture a core.** A real core of the process is written to
+  `./emule_asan_core.<pid>` (CWD) via `gcore`. emule dumps it itself rather than relying
+  on the kernel `core_pattern`, because that global pipe (apport) silently drops cores
+  from non-package binaries. Best-effort: if `gcore`/ptrace is unavailable the process is
+  left dumpable (a plain-file `core_pattern` still works) and a note is printed. The core
+  is a standard ELF core — read it with `gdb <test-binary> emule_asan_core.<pid>`. Given
+  the ~13 GB size, use it on a single `--gtest_filter` test, not the whole suite. Done
+  once, under the panic lock, so a multi-core kernel bug never spawns more than one dump.
 
 ## Checks at a glance
 
