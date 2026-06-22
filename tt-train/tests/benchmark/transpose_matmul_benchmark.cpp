@@ -118,23 +118,16 @@ void run_matmul_bench(benchmark::State& state, bool transpose_a, bool transpose_
 
 }  // namespace
 
-// ============================================================================
-// A @ B (no transpose) — baseline
-// ============================================================================
 static void BM_AB(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/false, /*transpose_b=*/false);
 }
 
-// ============================================================================
-// A @ B^T (transpose_b=true)
-// ============================================================================
 static void BM_ABT(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/false, /*transpose_b=*/true);
 }
 
-// ============================================================================
-// A^T @ B (transpose_a=true) — exercises the compute-side transpose_wh_tile pass
-// ============================================================================
+// transpose_a adds a compute-side transpose_wh_tile pass — extra work beyond the stored-shape
+// change that transpose_b alone makes (see run_matmul_bench).
 static void BM_ATB(benchmark::State& state) {
     run_matmul_bench(state, /*transpose_a=*/true, /*transpose_b=*/false);
 }

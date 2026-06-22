@@ -117,8 +117,6 @@ protected:
 // two must be bit-identical. Any deviation is a core-path regression.
 // ---------------------------------------------------------------------------
 
-// InputAndWeightK: both in0 and in1 K-sliced from the same offsets entry. Mirrors the
-// moe_ffn dW_down/dW_gate/dW_up backward call pattern.
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     const uint32_t K_parent_in0 = 512, M = 128, K_parent_in1 = 512, N = 256;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -147,9 +145,8 @@ TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA) {
     EXPECT_EQ(max_abs_error(result, ref), 0.0F) << "variable(InputAndWeightK,tA) vs minimal not bit-exact";
 }
 
-// Non-tile-aligned matmul-M (176) on InputAndWeightK + transpose_a — the DeepSeek-16B/TP=8
-// dW_gate/dW_up bwd pattern (in0 stored [count, I/TP=176], read transposed). Verifies the
-// partial last M-tile (176 logical / 192 padded) is clipped correctly and pad rows stay zero.
+// Verifies the partial last M-tile (176 logical / 192 padded) is clipped correctly and its pad
+// rows stay zero. M=176 is the DeepSeek-16B/TP=8 dW_gate/dW_up bwd shape.
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndWeightK_TransposeA_NonTileAlignedM_176) {
     const uint32_t K_parent_in0 = 512, M = 176, K_parent_in1 = 512, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -205,9 +202,6 @@ float subregion_max_abs_error(
 }
 }  // namespace
 
-// InputAndOutputRow: read input rows [a, b), compute matmul, write into output rows [a, b)
-// of the parent. This is the moe_ffn forward call pattern (gate_proj / up_proj /
-// down_proj).
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow) {
     const uint32_t M_parent = 320, K = 128, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
@@ -316,9 +310,6 @@ TEST_F(VariableMatmulTest, InputAndOutputRow_DefaultExpectedMTiles_ReadsCorrectR
     EXPECT_EQ(untouched_err, 0.0F) << "variable(InputAndOutputRow, expected_M_tiles=0) corrupted untouched rows";
 }
 
-// InputAndOutputRow + transpose_b: the moe_ffn forward hot path (gate/up/down call with
-// transpose_b=true; weights stored [N, K], used as [K, N]). Kernel-level parity localizes a
-// regression vs the end-to-end MoE test. Reference transposes the weight to [K, N].
 TEST_F(VariableMatmulTest, MinimalParity_OnDeviceInputAndOutputRow_TransposeB) {
     const uint32_t M_parent = 320, K = 128, N = 64;
     auto* device = &ttml::autograd::ctx().get_device();
