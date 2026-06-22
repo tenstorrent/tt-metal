@@ -13,7 +13,7 @@ This box is **`bh-qbge-06` — a QB2 (4× Blackhole `p300c`, `/dev/tenstorrent/0
   - `google/gemma-4-26B-A4B-it` — 51.6 GB, the causal backbone oracle for #47461 (runs via transformers `gemma4`). Verified complete + openable.
   - `google/diffusiongemma-26B-A4B-it` — 51.7 GB, the target ckpt (stage-2 weight mapping + self-cond weight values).
   - `google/gemma-4-12B-it` — dense, the QB2 device-flow proof (smaller, no MoE skip).
-- **QB2 is present** (4× Blackhole, this box); **T3K (WH 1×8) is not** — but fitting 26B-A4B on QB2 (1×4) is itself net-new (#47487), and the in-repo gemma4 **12B** path is QB2-supported and can validate the on-device flow on this exact HW first.
+- **QB2 is present** (4× Blackhole, this box); fitting 26B-A4B on QB2 (1×4) is itself net-new (#47487), and the in-repo gemma4 **12B** path is QB2-supported and can validate the on-device flow on this exact HW first.
 
 So work proceeds **env-independent-first**: pure-torch reference logic + config
 + tests that run on CPU, with checkpoint/transformers-gated pieces scaffolded
@@ -52,7 +52,7 @@ Legend: ✅ done · 🚧 in progress · ⛔ blocked on environment · ⬜ not st
 
 ## Session 2026-06-22 — #47468 / #47461 / #47487 push (QB2-only)
 
-Goal: implement #47468 (torch ref + PCC harness), #47461 (causal backbone + self-cond loader), #47487 (QB2 fit) — **QB2 only, not Galaxy/T3K**.
+Goal: implement #47468 (torch ref + PCC harness), #47461 (causal backbone + self-cond loader), #47487 (QB2 fit) — **QB2 only, not Galaxy**.
 
 **Unblocked two stale blockers:** the canonical `modeling_/generation_/configuration_diffusion_gemma.py` are on transformers `main` (pulled to `/home/zni/dg_ref_src/`), and all three checkpoints are ungated + downloaded. This let the reference layer be reconciled to the **real** algorithm rather than plan-stated approximations.
 
