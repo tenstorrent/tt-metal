@@ -76,7 +76,9 @@ class _DecodeTuned:
 # Keyed (K, N) so only the exact measured shapes change; all others are untouched.
 _DECODE_MATMUL_TUNED: dict[tuple[int, int], _DecodeTuned] = {
     (2048, 768): _DecodeTuned(num_cores=8, in0_block_w=4, per_core_N=3, out_subblock_w=3),  # q_a: 28→13us (2.1x)
-    (768, 5120): _DecodeTuned(num_cores=40, in0_block_w=4, per_core_N=4, out_subblock_w=4),  # q_b: stage in0 in L1
+    # w_q_b_hp (HEAD_PARALLEL_ATTN, tp=4): 5 heads × qk_head_dim=256 = N=1280. Default ibw=4 gives
+    # 6.85µs; full-K ibw=24 on 40 cores (10×4) wins at 4.10µs (1.67x). Win is K-block size.
+    (768, 1280): _DecodeTuned(num_cores=40, in0_block_w=24, per_core_N=1, out_subblock_w=1),
     (1280, 2048): _DecodeTuned(
         num_cores=32, in0_block_w=4, per_core_N=2, out_subblock_w=2
     ),  # w_o (head-parallel): 23→11us (2.2x)
