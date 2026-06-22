@@ -74,7 +74,7 @@ class _E2EIslCase:
 
 
 # Standard 500-char baseline first, then tale ISL targets (voice floor ≈155; skip redundant 128).
-_TALE_ISL_TARGETS = (256, 512, 1024, 4096)
+_TALE_ISL_TARGETS = (256, 512, 1024, 4096, 8192)
 _E2E_ISL_CASES = (
     _E2EIslCase("standard_500c"),
     *(_E2EIslCase(f"tale_{n}", target_prompt_len=n) for n in _TALE_ISL_TARGETS),
