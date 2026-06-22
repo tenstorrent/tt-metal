@@ -17,7 +17,7 @@ Owner:
 from inspector_data import run as get_inspector_data
 from metal_device_id_mapping import run as get_metal_device_id_mapping
 from run_checks import run as get_run_checks
-from triage import ScriptConfig, log_check_location, log_warning_location, run_script
+from triage import ScriptConfig, log_check_location, run_script
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.tt_exalens_lib import read_word_from_device
@@ -31,8 +31,7 @@ script_config = ScriptConfig(
 def check_worker_l1_launch_value(location: OnChipCoordinate, tensix_fw_launch_values: dict[int, int]) -> None:
     expected_fw_launch_value = tensix_fw_launch_values.get(location._device.unique_id)
     if expected_fw_launch_value is None:
-        log_warning_location(location, "Skipping L1[0] check: missing Inspector build env data")
-        return
+        raise RuntimeError(f"Missing Inspector build env data for {location}")
 
     actual_value = read_word_from_device(location, 0)
     log_check_location(
