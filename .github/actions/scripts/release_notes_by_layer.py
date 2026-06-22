@@ -47,7 +47,7 @@ def changed_files(owner, repo, number, token):
             "Authorization": f"Bearer {token}",
             "Accept": "application/vnd.github+json",
         })
-        batch = json.load(urllib.request.urlopen(req))
+        batch = json.load(urllib.request.urlopen(req, timeout=30))
         files += [f["filename"] for f in batch]
         if len(batch) < 100:
             return files
