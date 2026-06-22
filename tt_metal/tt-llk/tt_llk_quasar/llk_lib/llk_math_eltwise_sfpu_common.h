@@ -170,8 +170,12 @@ inline constexpr std::uint32_t _sfpu_stochround_conversion_()
 /**
  * @brief Compile-time sfpmem type selector from a DataFormat.
  *
+ * Formats with no dedicated SFPU load/store mode (fp8, the MX block formats, 4-bit ints) map to
+ * sfpmem::DEFAULT — the implied/default format the producing engine left in the register-file
+ * format config (ISA: HW derives it from ALU_FORMAT_SPEC_REG / ACC_CTRL).
+ *
  * @tparam FMT: Data format to map
- * @return sfpmem type parameter for FMT.
+ * @return sfpmem type parameter for FMT, or sfpmem::DEFAULT for formats with no dedicated mode.
  * @note Runtime equivalent: @ref _sfpu_sfpmem_type_. Keep both in sync when adding a format.
  */
 template <DataFormat FMT>
@@ -193,12 +197,17 @@ inline constexpr std::uint32_t _sfpu_sfpmem_type_()
     {
         return ckernel::p_sfpu::sfpmem::INT32;
     }
+    else if constexpr (FMT == DataFormat::Int16)
+    {
+        return ckernel::p_sfpu::sfpmem::INT16;
+    }
+    else if constexpr (FMT == DataFormat::Int8)
+    {
+        return ckernel::p_sfpu::sfpmem::INT8;
+    }
     else if constexpr (FMT == DataFormat::UInt8)
     {
-        // INT8 (0b0101) preserves the previously-validated behavior. The ISA-correct unsigned-8
-        // mode is sfpmem::UINT8 (0b1011), but it is unproven on the emulator (cf. the UINT16
-        // datapath bug) — switch once validated.
-        return ckernel::p_sfpu::sfpmem::INT8;
+        return ckernel::p_sfpu::sfpmem::UINT8;
     }
     else if constexpr (FMT == DataFormat::UInt16)
     {
@@ -206,9 +215,9 @@ inline constexpr std::uint32_t _sfpu_sfpmem_type_()
     }
     else
     {
-        static_assert(
-            !std::is_same_v<decltype(FMT), DataFormat>,
-            "Unsupported DataFormat for sfpmem type determination"); // need the condition to depend on the template parameter... compiler things
+        // No dedicated SFPU mode (fp8, MX block formats, 4-bit ints): fall back to the implied/
+        // default register-file format. Matches the runtime overload's default case.
+        return ckernel::p_sfpu::sfpmem::DEFAULT;
     }
 }
 
@@ -235,9 +244,12 @@ inline std::uint32_t _sfpu_sfpmem_type_(DataFormat fmt)
             return ckernel::p_sfpu::sfpmem::FP32;
         case DataFormat::Int32:
             return ckernel::p_sfpu::sfpmem::INT32;
+        case DataFormat::Int16:
+            return ckernel::p_sfpu::sfpmem::INT16;
+        case DataFormat::Int8:
+            return ckernel::p_sfpu::sfpmem::INT8;
         case DataFormat::UInt8:
-            return ckernel::p_sfpu::sfpmem::INT8; // see template overload: INT8 (0b0101) preserves
-                                                  // behavior; true UINT8 (0b1011) unvalidated on emulator
+            return ckernel::p_sfpu::sfpmem::UINT8;
         case DataFormat::UInt16:
             return ckernel::p_sfpu::sfpmem::UINT16;
         default:

@@ -50,8 +50,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
 
-    // call custom LLK
+    // call custom LLK. The templated MUL/SUB scaffold is Blackhole-only; Wormhole has only the
+    // SUB-named wrapper, so MUL is exercised on BH alone (the test skips the MUL variant on non-BH).
+#ifdef ARCH_BLACKHOLE
+    _llk_math_bcast_cols_reuse_custom_<ELTWISE_BINARY_OP>(CT_DIM);
+#else
     _llk_math_sub_bcast_cols_reuse_custom_(CT_DIM);
+#endif
 
     _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
 }

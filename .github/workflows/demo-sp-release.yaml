@@ -85,7 +85,7 @@ jobs:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
-      enabled-skus: bh_galaxy,wh_llmbox_perf,bh_quietbox_2
+      enabled-skus: bh_galaxy,bh_loudbox
       model: deepseek_prefill
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       job-prefix: "[DeepSeek Prefill] "

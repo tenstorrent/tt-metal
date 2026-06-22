@@ -27,7 +27,7 @@ void kernel_main() {
     dfb.wait_front(1);
 
 #ifdef ZERO_DRAM
-    const auto out = TensorAccessor(ta::out);
+    const auto out = TensorAccessor(tensor::out);
     Noc noc;
     for (uint32_t p = page_start; p < page_end; ++p) {
         noc.async_write_zeros(out, page_size, {.page_id = p}, dfb);
