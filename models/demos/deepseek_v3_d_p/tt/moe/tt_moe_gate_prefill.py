@@ -18,6 +18,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class GateComputeMode(Enum):
@@ -47,12 +48,14 @@ class TtMoEGateConfig:
     mm_configs: dict = field(
         default_factory=lambda: {
             # Keyed by (sp_dim, per_device_emb_dim, n_routed_experts); forward() looks up the tuple.
+            # The seq-len element below is a placeholder — __post_init__ rewrites it to the actual
+            # per-chip sequence length (self.sp_dim) so the lookup tracks the real workload.
             # per_core_N = n_routed_experts / 32 (tile width). Missing key → TTNN auto-picks.
             (4096, DeepSeekV3Config.EMB_SIZE // 4, DeepSeekV3Config.NUM_ROUTED_EXPERTS): (
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
-                    out_subblock_h=2,
+                    out_subblock_h=1,
                     out_subblock_w=4,
                     out_block_h=2,
                     out_block_w=4,
@@ -66,7 +69,7 @@ class TtMoEGateConfig:
                 ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     compute_with_storage_grid_size=ttnn.CoreCoord(11, 10),
                     in0_block_w=56,
-                    out_subblock_h=2,
+                    out_subblock_h=1,
                     out_subblock_w=4,
                     out_block_h=2,
                     out_block_w=4,
@@ -79,7 +82,7 @@ class TtMoEGateConfig:
             "COMPUTE_CONFIG": ttnn.types.BlackholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
-                fp32_dest_acc_en=False,
+                fp32_dest_acc_en=True,
                 packer_l1_acc=False,
             ),
         }
@@ -103,6 +106,16 @@ class TtMoEGateConfig:
             else ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
         )
     )
+
+    def __post_init__(self):
+        # The mm_configs tuple keys are authored with a placeholder seq-len. Re-key them to the
+        # actual per-chip sequence length (sp_dim) so _device_matmul's lookup
+        # (sp_dim, per_device_emb_dim, n_routed_experts) hits the tuned program config instead of
+        # silently falling back to TTNN's default tiling.
+        self.mm_configs = {
+            ((self.sp_dim, *key[1:]) if isinstance(key, tuple) else key): value
+            for key, value in self.mm_configs.items()
+        }
 
     @property
     def num_cores(self):
@@ -267,6 +280,10 @@ class TtMoEGatePrefill(LightweightModule):
         """
         self.config = config
         self.mesh_device = mesh_device
+        # Shared per-mesh CCL singleton: provides persistent global semaphores for the gate's TP
+        # all-reduce so the op reuses them instead of allocating fresh L1 semaphores every layer
+        # (those leaked, pinning the L1 floor and clashing with the next layer's ring_mla CBs).
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.fallback_mode = fallback_mode
 
         if weight is not None and bias is not None:
@@ -423,11 +440,19 @@ class TtMoEGatePrefill(LightweightModule):
             program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-        if self.mesh_device.shape[self.config.ccl_config["TP_AXIS"]] > 1:
+        tp_axis = self.config.ccl_config["TP_AXIS"]
+        if self.mesh_device.shape[tp_axis] > 1:
+            # Pass persistent CCL semaphores (created once in TT_CCL) so all_reduce_async reuses them
+            # instead of internally allocating+leaking global semaphores in main L1 every call. The
+            # composite all-reduce needs barrier_semaphores of size 2 ([0]=reduce-scatter, [1]=all-gather),
+            # plus the reduce-scatter (3) and all-gather (2) semaphore vectors.
             logits = ttnn.experimental.all_reduce_async(
                 logits,
-                cluster_axis=self.config.ccl_config["TP_AXIS"],
+                cluster_axis=tp_axis,
                 mesh_device=self.mesh_device,
+                barrier_semaphores=self.tt_ccl.barrier_semaphore_handles[tp_axis],
+                rs_global_semaphores=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=tp_axis),
+                ag_global_semaphores=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=tp_axis),
                 num_links=self.config.ccl_config["NUM_LINKS"],
                 math_op=ttnn.ReduceType.Sum,
                 memory_config=ttnn.L1_MEMORY_CONFIG,

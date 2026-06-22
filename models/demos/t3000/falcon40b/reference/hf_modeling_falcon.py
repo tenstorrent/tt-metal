@@ -31,6 +31,7 @@ import torch.utils.checkpoint
 from torch import nn
 from torch.nn import BCEWithLogitsLoss, CrossEntropyLoss, LayerNorm, MSELoss
 from torch.nn import functional as F
+from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import (
     BaseModelOutputWithPastAndCrossAttentions,
     CausalLMOutputWithCrossAttentions,
@@ -937,7 +938,9 @@ class FalconModel(FalconPreTrainedModel):
     "The Falcon Model transformer with a language modeling head on top (linear layer with weights tied to the input embeddings).",
     FALCON_START_DOCSTRING,
 )
-class FalconForCausalLM(FalconPreTrainedModel):
+# transformers 5.x: PreTrainedModel no longer inherits GenerationMixin, so models
+# that call .generate() must inherit it explicitly (harmless/redundant on <5.x).
+class FalconForCausalLM(FalconPreTrainedModel, GenerationMixin):
     _tied_weights_keys = ["lm_head.weight"]
 
     def __init__(self, config: FalconConfig):

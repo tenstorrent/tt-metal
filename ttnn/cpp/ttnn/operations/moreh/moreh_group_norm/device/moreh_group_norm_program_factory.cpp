@@ -305,13 +305,18 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
+    // Pass tensor buffers as Buffer* (not raw ->address()) so the ProgramDescriptor framework
+    // registers them as buffer bindings and patches their addresses on program-cache hits. A raw
+    // address would be baked in on first dispatch and go stale when the tensor is reallocated.
+    // gamma/beta are input tensors and mean/rstd are output tensors of this op, so binding them is
+    // allowed by the framework. nullptr is fine for an absent optional (its CB/CT-arg is disabled).
     auto* const input_buf = input.buffer();
     auto* const output_buf = output.buffer();
-    const uint32_t mean_addr = mean_has_value ? mean.value().buffer()->address() : 0u;
-    const uint32_t rstd_addr = rstd_has_value ? rstd.value().buffer()->address() : 0u;
+    auto* const mean_buf = mean_has_value ? mean.value().buffer() : nullptr;
+    auto* const rstd_buf = rstd_has_value ? rstd.value().buffer() : nullptr;
 
-    const uint32_t gamma_addr = gamma_has_value ? gamma.value().buffer()->address() : 0u;
-    const uint32_t beta_addr = beta_has_value ? beta.value().buffer()->address() : 0u;
+    auto* const gamma_buf = gamma_has_value ? gamma.value().buffer() : nullptr;
+    auto* const beta_buf = beta_has_value ? beta.value().buffer() : nullptr;
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -325,17 +330,16 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
             TT_THROW("Core not in specified core ranges.");
         }
 
-        // BufferBinding fast cache-hit path is safe here because eps and the optional
-        // tensor presence flags are in compute_program_hash above — a cache hit
-        // guarantees identical attrs, so re-running create_descriptor() would just
-        // produce the same scalar values. The framework's fast path patches only the
-        // input/output buffer addresses (the only thing that legitimately changes
-        // call-to-call when the cache hits).
+        // On a program-cache hit the framework skips create_descriptor() and patches only the
+        // registered buffer bindings. The presence flags / eps being in the hash only guarantees
+        // identical SCALAR args — it does NOT keep the gamma/beta buffer addresses fresh. Those
+        // tensors can be reallocated call-to-call, so they must be bound as Buffer* (above) to be
+        // re-patched, not baked in as raw addresses.
         reader_desc.emplace_runtime_args(
             core,
             {input_buf,
-             gamma_addr,
-             beta_addr,
+             gamma_buf,
+             beta_buf,
              std::bit_cast<uint32_t>(scaler),
              std::bit_cast<uint32_t>(eps),
              tile_offset,
@@ -346,17 +350,10 @@ ProgramDescriptor MorehGroupNormOperation::create_descriptor(
              origin_w,
              block_size});
 
-        // writer
+        // writer — mean/rstd bound as Buffer* for the same cache-hit reason as gamma/beta above.
         writer_desc.emplace_runtime_args(
             core,
-            {output_buf,
-             mean_addr,
-             rstd_addr,
-             tile_offset,
-             num_rows_per_core,
-             num_inner_tiles,
-             num_groups,
-             block_size});
+            {output_buf, mean_buf, rstd_buf, tile_offset, num_rows_per_core, num_inner_tiles, num_groups, block_size});
 
         tile_offset += num_rows_per_core * num_inner_tiles;
     }

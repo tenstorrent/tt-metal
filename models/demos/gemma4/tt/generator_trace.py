@@ -178,7 +178,7 @@ def warmup_gemma4_batched_prefill_traces(
     *,
     enable_trace: bool,
     can_sample_on_device,
-    non_greedy_decoding_on_device,
+    greedy_only: bool = False,
 ) -> None:
     """Capture prefill traces for MoE models across batch sizes and trace ISLs.
 
@@ -240,7 +240,7 @@ def warmup_gemma4_batched_prefill_traces(
                 if not sampling_parameters_sweeped:
                     sampling_params = generator._create_sampling_params(
                         can_sample_on_device=can_sample_on_device,
-                        greedy_only=not non_greedy_decoding_on_device,
+                        greedy_only=greedy_only,
                         batch_size=batch_size,
                     )
                 else:
@@ -312,7 +312,7 @@ def warmup_gemma4_model_prefill(
     *,
     enable_trace,
     can_sample_on_device,
-    non_greedy_decoding_on_device,
+    greedy_only: bool = False,
 ) -> None:
     """Shared prefill warmup for standalone and vLLM Gemma4 generators."""
     enable_trace = maybe_disable_pli_prefill_trace(enable_trace, generator.model[0])
@@ -322,7 +322,7 @@ def warmup_gemma4_model_prefill(
             kv_cache,
             enable_trace=enable_trace,
             can_sample_on_device=can_sample_on_device,
-            non_greedy_decoding_on_device=non_greedy_decoding_on_device,
+            greedy_only=greedy_only,
         )
         return
     from models.tt_transformers.tt.generator import Generator
@@ -332,5 +332,5 @@ def warmup_gemma4_model_prefill(
         kv_cache=kv_cache,
         enable_trace=enable_trace,
         can_sample_on_device=can_sample_on_device,
-        greedy_only=not non_greedy_decoding_on_device,
+        greedy_only=greedy_only,
     )

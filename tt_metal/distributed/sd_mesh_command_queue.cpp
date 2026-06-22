@@ -72,7 +72,7 @@ SDMeshCommandQueue::SDMeshCommandQueue(
 std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     // Slow dispatch never records traces, so no trace is ever in progress. Return nullopt
     // ("not recording") rather than throwing, so callers can query trace state unconditionally
-    // (e.g. QueueDramCorePrefetcherRequest deciding capture-vs-send) under slow dispatch.
+    // (e.g. QueueTensorPrefetcherRequest deciding capture-vs-send) under slow dispatch.
     return std::nullopt;
 }
 
@@ -315,7 +315,7 @@ void SDMeshCommandQueue::enqueue_write_dram_core_counter(
     if (this->get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
-    // No lock_api_function_() here: the caller (DramCorePrefetcherManager) already holds
+    // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
     // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
     TT_FATAL(sub_device_ids.empty(), "Sub-device IDs are not supported for slow dispatch");

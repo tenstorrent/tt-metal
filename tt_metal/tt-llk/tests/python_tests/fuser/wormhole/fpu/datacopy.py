@@ -41,10 +41,11 @@ class DatacopyFpu(Fpu):
         golden_generator = get_golden_generator(DataCopyGolden)
         golden_tensor = golden_generator(
             source_tensor,
-            operation.output.data_format,
-            num_faces=operation.output.tile_shape.total_num_faces(),
+            config.sentinel.golden_math_format,
+            num_faces=operation.tile_shape.total_num_faces(),
             input_dimensions=compute_unit.src_a.dimensions,
-            face_r_dim=operation.output.tile_shape.face_r_dim,
+            face_r_dim=operation.tile_shape.face_r_dim,
+            tile_shape=operation.tile_shape,
         )
 
         return (tensor_a, tensor_b, golden_tensor)
@@ -59,7 +60,7 @@ class DatacopyFpu(Fpu):
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         data_copy_type = compute_unit.data_copy_type.cpp_enum_value
-        num_faces = operation.output.tile_shape.total_num_faces()
+        num_faces = operation.tile_shape.total_num_faces()
         _int_fpu_formats = {DataFormat.Int8, DataFormat.UInt8, DataFormat.Int32}
         is_int_fpu_en = (
             "true"
@@ -89,14 +90,14 @@ class DatacopyFpu(Fpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        stage = operation.stage_id
+        dest_sync = operation.dest_sync.cpp_enum_value
         dest_acc = config.dest_acc.cpp_enum_value
         broadcast_type = compute_unit.broadcast_type.cpp_enum_value
         unpack_to_dest = compute_unit.unpack_to_dest.cpp_enum_value
         data_copy_type = f"DataCopyType::{compute_unit.data_copy_type.name}"
 
         code = (
-            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, dest_sync{stage}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
+            f"    _llk_math_eltwise_unary_datacopy_<{data_copy_type}, {dest_sync}, {dest_acc}, {broadcast_type}, {unpack_to_dest}>(\n"
             f"        {block.tile_id_block}, {config.sentinel.math_format}, {config.sentinel.math_format}\n"
             f"    );\n"
         )
