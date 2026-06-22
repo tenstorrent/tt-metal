@@ -273,7 +273,8 @@ void verify_transfer(
 
     // No host-visible completion signal without a consumer op, so poll the
     // receiver backing tensor until the transfer lands.
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    constexpr auto kTimeout = std::chrono::milliseconds(1500);
+    const auto deadline = std::chrono::steady_clock::now() + kTimeout;
     bool all_match = false;
     std::vector<uint32_t> readback;
     while (std::chrono::steady_clock::now() < deadline) {
