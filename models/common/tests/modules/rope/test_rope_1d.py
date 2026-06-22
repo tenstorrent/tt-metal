@@ -27,7 +27,6 @@ from models.common.modules.lazy_weight import LazyWeight
 from models.common.modules.rope.rope_1d import Rope1DConfig, RotarySetup1D, prepare_rot_idxs
 from models.common.tensor_utils import get_rot_transformation_mat
 from models.common.utility_functions import comp_pcc, skip_for_wormhole_b0
-from models.common.utility_functions import is_galaxy
 
 # ============================================================================
 # Pure-torch RoPE reference (no TTTv1 dependency)
