@@ -172,7 +172,7 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::Float32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp32, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_fp32, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::Float32 && OUT == DataFormat::Int32)
     {
@@ -224,12 +224,12 @@ void call_unary_typecast_operation(std::uint32_t dst_index)
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::UInt32)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::UInt16 && OUT == DataFormat::Int32)
     {
         // Calls same kernel as the UInt32 case.
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS), dst_index, VectorMode::RC);
+        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_typecast_uint16_to_uint32, (APPROX_MODE, ITERATIONS, DST_ACCUM_MODE), dst_index, VectorMode::RC);
     }
     else if constexpr (IN == DataFormat::UInt32 && OUT == DataFormat::UInt16)
     {
