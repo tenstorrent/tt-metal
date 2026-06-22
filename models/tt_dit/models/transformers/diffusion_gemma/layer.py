@@ -33,10 +33,10 @@ import torch
 import ttnn
 
 from ....encoders.gemma4.attention import Gemma4Attention
+from ....layers.feedforward import GatedMLP
 from ....layers.module import Module, Parameter
 from ....layers.normalization import RMSNorm
 from ....parallel.config import DiTParallelConfig
-from .dense_mlp import DiffusionGemmaDenseMLP
 from .moe import DiffusionGemmaMoE
 
 
@@ -84,7 +84,7 @@ class DiffusionGemmaLayer(Module):
         )
 
         # Dense MLP (one of two parallel paths post-attention).
-        self.mlp = DiffusionGemmaDenseMLP(
+        self.mlp = GatedMLP(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             mesh_device=mesh_device,

@@ -23,11 +23,11 @@ from __future__ import annotations
 
 import ttnn
 
+from ...layers.feedforward import GatedMLP
 from ...layers.module import Module
 from ...layers.normalization import RMSNorm
 from ...parallel.config import DiTParallelConfig
 from .vision_attention import Gemma4VisionAttention
-from .vision_mlp import Gemma4VisionMLP
 
 
 class Gemma4VisionEncoderLayer(Module):
@@ -58,7 +58,7 @@ class Gemma4VisionEncoderLayer(Module):
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
         )
-        self.mlp = Gemma4VisionMLP(
+        self.mlp = GatedMLP(
             hidden_size=hidden_size,
             intermediate_size=intermediate_size,
             mesh_device=mesh_device,
