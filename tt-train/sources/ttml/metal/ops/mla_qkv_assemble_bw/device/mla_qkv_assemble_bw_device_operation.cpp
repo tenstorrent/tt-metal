@@ -46,6 +46,12 @@ void MLAQKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
     check_tensor(dK, "dK");
     check_tensor(dV, "dV");
 
+    // The program launches on dQ.device() and feeds raw buffer addresses from all three inputs into
+    // the TensorAccessors, so mixed-device inputs must fail here rather than dispatch invalid addresses.
+    TT_FATAL(
+        dQ.device() == dK.device() && dK.device() == dV.device(),
+        "MLAQKVAssembleBw: dQ, dK, and dV must be on the same device.");
+
     const auto dQ_shape = dQ.padded_shape();
     const auto dK_shape = dK.padded_shape();
     const auto dV_shape = dV.padded_shape();

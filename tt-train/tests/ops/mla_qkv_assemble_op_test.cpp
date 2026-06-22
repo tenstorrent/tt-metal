@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ops/mla_qkv_assemble_op.hpp"
+
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -13,6 +15,8 @@
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ops/binary_ops.hpp"
+#include "ops/unary_ops.hpp"
 #include "test_utils/random_data.hpp"
 
 class MLAQKVAssembleTest : public ::testing::Test {
@@ -23,6 +27,10 @@ protected:
 
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
+    }
+
+    void TearDown() override {
+        ttml::autograd::ctx().reset_graph();
     }
 };
 
@@ -156,6 +164,30 @@ void run_bw(const AssembleShape& shape) {
         << shape.name << " bw/dk_pe";
 }
 
+void run_autograd_wrapper_bw(const AssembleShape& shape) {
+    const uint32_t qk_head = shape.qk_nope_dim + shape.qk_rope_dim;
+    auto q_pre = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * qk_head, 7007U), /*requires_grad=*/true);
+    auto kv_up = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.n_heads * (shape.qk_nope_dim + shape.v_dim), 8008U),
+        /*requires_grad=*/true);
+    auto k_pe = ttml::autograd::create_tensor(
+        make_input(shape.batch, 1U, shape.seq_len, shape.qk_rope_dim, 9009U), /*requires_grad=*/true);
+
+    auto [q, k, v] = ttml::ops::mla_qkv_assemble(
+        q_pre, kv_up, k_pe, shape.n_heads, shape.qk_nope_dim, shape.qk_rope_dim, shape.v_dim);
+    auto loss = ttml::ops::add(ttml::ops::add(ttml::ops::mean(q), ttml::ops::mean(k)), ttml::ops::mean(v));
+    loss->backward();
+
+    const auto ref = reference_bw(q->get_grad(), k->get_grad(), v->get_grad(), shape);
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(q_pre->get_grad()), ref.dq_pre, 0.0, 0.0))
+        << shape.name << " autograd/dq_pre";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(kv_up->get_grad()), ref.dkv_up, 0.0, 0.0))
+        << shape.name << " autograd/dkv_up";
+    EXPECT_TRUE(xt::allclose(ttml::core::to_xtensor(k_pe->get_grad()), ref.dk_pe, /*rtol=*/5e-3, /*atol=*/5e-3))
+        << shape.name << " autograd/dk_pe";
+}
+
 const std::vector<AssembleShape>& shapes() {
     static const std::vector<AssembleShape> cases = {
         {"square_st1", 2, 32, 2, 32, 32, 32},
@@ -178,4 +210,8 @@ TEST_F(MLAQKVAssembleTest, BackwardMatchesReference) {
     for (const auto& shape : shapes()) {
         run_bw(shape);
     }
+}
+
+TEST_F(MLAQKVAssembleTest, AutogradWrapperBackwardMatchesReference) {
+    run_autograd_wrapper_bw({"wrapper_heads4", 2, 64, 4, 64, 32, 64});
 }
