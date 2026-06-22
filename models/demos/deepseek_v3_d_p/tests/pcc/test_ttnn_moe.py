@@ -710,6 +710,7 @@ def test_ds_moe(
     request,
     padded_percent,
 ):
+    num_links = 1  # Only temporarily here for debugging purpose (See #47650)
     run_model(
         variant,
         config_only,
@@ -807,6 +808,7 @@ def test_kimi_moe(
     gate_fallback_mode,
     request,
 ):
+    num_links = 1  # Only temporarily here for debugging purpose (See #47650)
     run_model(
         variant,
         config_only,

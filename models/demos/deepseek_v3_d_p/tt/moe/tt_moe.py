@@ -646,8 +646,12 @@ class TtMoe(LightweightModule):
         # call it should read `experts_per_chip` on every core. Log the distinct values,
         # then reset it to zero for the next forward. The semaphore only exists when an
         # overlap is enabled (see __init__); skip when it was not created.
+        #
+        # TODO(fbajraktari): To remove; Reset of the global semaphore should eventually
+        # be responsibility of combine op.
         if self.routed_expert_global_semaphore is not None:
             _sem_values = ttnn.read_global_semaphore_value(self.routed_expert_global_semaphore)
+            logger.debug(f"[TtMoe.forward] routed_expert semaphore values: {_sem_values}")
             logger.debug(
                 f"[TtMoe.forward] routed_expert semaphore (expect {self.experts_per_chip}): "
                 f"distinct={sorted(set(_sem_values))}, count={len(_sem_values)}"
