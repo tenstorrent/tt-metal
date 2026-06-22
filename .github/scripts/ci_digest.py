@@ -99,9 +99,14 @@ def summarize_run(data: dict) -> tuple[str, list[dict], list[dict], int]:
     return outcome, failed, infra, passing
 
 
-def _sev_emoji(status: str | None) -> str:
-    # infra (🟣) vs every other non-green status (🔴). SUCCESS never reaches here.
-    return "🟣" if status == "INFRA_FAILURE" else "🔴"
+def _sev_emoji(row: dict) -> str:
+    # 🟣 infra; ⌛️ a failure whose log was truncated/killed (log_complete is
+    # False — i.e. it timed out); 🔴 every other non-green status.
+    if row.get("status") == "INFRA_FAILURE":
+        return "🟣"
+    if row.get("log_complete") is False:
+        return "⌛️"
+    return "🔴"
 
 
 def _job_link(row: dict) -> str:
@@ -168,7 +173,7 @@ def _section(r: dict) -> list[str]:
     jobs = (r.get("real_jobs") or []) + (r.get("infra_jobs") or [])
     if jobs:
         rows = [
-            f"| {_sev_emoji(j.get('status'))} | {_job_link(j)} | {j.get('status') or '—'} | {_cat_cell(j)} | {_error_cell(j)} |"
+            f"| {_sev_emoji(j)} | {_job_link(j)} | {j.get('status') or '—'} | {_cat_cell(j)} | {_error_cell(j)} |"
             for j in jobs
         ]
         # Blank lines around the table are required for GFM to render it inside <details>.
@@ -424,6 +429,21 @@ class TestErrorCell(unittest.TestCase):
 
     def test_truncation(self):
         self.assertTrue(_error_cell({"error_message": "x" * 250}).endswith("…"))
+
+
+class TestSevEmoji(unittest.TestCase):
+    def test_infra(self):
+        self.assertEqual(_sev_emoji({"status": "INFRA_FAILURE"}), "🟣")
+
+    def test_incomplete_log_is_hourglass(self):
+        # log_complete is False → truncated/killed (timed out): ⌛️ instead of 🔴.
+        self.assertEqual(_sev_emoji({"status": "FAILED", "log_complete": False}), "⌛️")
+        self.assertEqual(_sev_emoji({"status": "TIMEOUT", "log_complete": False}), "⌛️")
+
+    def test_complete_or_unknown_log_is_red(self):
+        self.assertEqual(_sev_emoji({"status": "FAILED", "log_complete": True}), "🔴")
+        self.assertEqual(_sev_emoji({"status": "CRASHED"}), "🔴")  # absent (None) → 🔴
+        self.assertEqual(_sev_emoji({"status": "FAILED", "log_complete": None}), "🔴")
 
 
 if __name__ == "__main__":
