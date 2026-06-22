@@ -176,10 +176,14 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+    # llama3 70b test disabled due to hang, see: https://github.com/tenstorrent/tt-metal/issues/46704
+    # FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
+
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
+
+    CI=true pytest models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-b1-DP" --timeout 1000
 }
 
 test_suite_wh_6u_llama_long_stress_tests() {
