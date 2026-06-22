@@ -153,12 +153,18 @@ def test_tt_moe_gate(mesh_device, config_path: Path, seed: int):
     # (1) PRIMARY check — score self-consistency: the device's output weights are the correct
     #     (softmax/linear) normalization of the score at the experts IT selected. Tie-robust (uses
     #     dev's OWN selection), so it validates the module wiring + normalize regardless of any
-    #     selection ambiguity. (bf16-at-scale: exp/softmax over large logits amplifies bf16 noise → loose.)
+    #     selection ambiguity.
     dev_sel = torch.gather(score, -1, dev_idx)
     weights = torch.exp(dev_sel) if score_func == "softmax" else dev_sel  # softmax→exp-over-selected; else linear
     expected = weights / (weights.sum(-1, keepdim=True) + 1e-20) * scaling
+    # Kernel-op configs hold at the tight 1e-2. The pure-ttnn FALLBACK (n_group=1 with k∉{4,6,8} or N>512 —
+    # today only qwen35_397b, and the one path with no op-level test behind it) runs matmul→topk→softmax,
+    # whose bf16 noise the softmax exp-over-logits amplifies, so it alone needs 5e-2. Predicate mirrors
+    # TTMoEGate.use_fallback (tt_moe_gate.py).
+    use_fallback = n_group == 1 and (k not in (4, 6, 8) or num_experts > 512)
+    score_atol = 5e-2 if use_fallback else 1e-2
     assert torch.allclose(
-        dev_scores.sort(-1).values, expected.sort(-1).values, atol=5e-2
+        dev_scores.sort(-1).values, expected.sort(-1).values, atol=score_atol
     ), f"gate scores not consistent with the device's own selection.\n dev={dev_scores}\n expected={expected}"
 
     # (2) SELECTION vs golden.
@@ -184,12 +190,12 @@ def test_tt_moe_gate(mesh_device, config_path: Path, seed: int):
         ref_sorted_i = torch.gather(gold_idx, -1, ref_si)
         tt_sorted_w, tt_si = torch.sort(dev_scores, dim=-1, descending=True, stable=True)
         tt_sorted_i = torch.gather(dev_idx, -1, tt_si)
-        pcc_ok, pcc_msg = comp_pcc(ref_sorted_w, tt_sorted_w, 0.97)
+        pcc_ok, pcc_msg = comp_pcc(ref_sorted_w, tt_sorted_w, 0.99)
         accuracy = tt_sorted_i.eq(ref_sorted_i).float().mean().item()
         overlap = torch.stack([torch.isin(dev_idx[b], gold_idx[b]).float().mean() for b in range(batch)]).mean().item()
         logger.info(f"grouped: weights {pcc_msg} | index accuracy={accuracy:.3f} | mean overlap={overlap:.3f}")
         # Regression guards: a wrong grouping/wiring tanks both (the 16×16-vs-8×32 golden bug gave PCC 0.87 /
         # overlap 0.71); a correct 8×32 grouped op lands ~0.99 even on random data. Index *position*
         # accuracy is left as a log (boundary ties move positions without being a bug).
-        assert pcc_ok, f"grouped weights PCC below 0.97 — likely a grouping/wiring bug: {pcc_msg}"
+        assert pcc_ok, f"grouped weights PCC below 0.99 — likely a grouping/wiring bug: {pcc_msg}"
         assert overlap >= 0.9, f"grouped selection overlaps golden only {overlap:.3f} (< 0.9) — likely a wiring bug"
