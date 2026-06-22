@@ -63,8 +63,9 @@ struct VariableMatmulParams {
 struct VariableMatmulInputs {
     ttnn::Tensor input_tensor;   // logical [M, K] (stored [K, M] when transpose_a)
     ttnn::Tensor weight_tensor;  // logical [K, N] (stored [N, K] when transpose_b)
-    // Optional caller-provided output (write-at-offset): InputAndOutputRow writes each call's
-    // row range into it; matmul-N must equal its N.
+    // Caller-provided output (write-at-offset): required for InputAndOutputRow, which writes each
+    // call's row range into it (matmul-N must equal its N); must be nullopt for InputAndWeightK,
+    // which allocates its own output.
     std::optional<ttnn::Tensor> output_tensor;
     // 1-D UINT32 ROW_MAJOR device tensor of offsets; read on every call per offsets_role.
     ttnn::Tensor offsets_tensor;
