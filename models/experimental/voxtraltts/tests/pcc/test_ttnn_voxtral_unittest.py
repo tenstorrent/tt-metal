@@ -15,7 +15,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import audio_tokenizer_decode_reference
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
-from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 
 PREFILL_HIDDEN_PCC = 0.99

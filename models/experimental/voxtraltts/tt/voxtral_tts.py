@@ -170,15 +170,15 @@ class VoxtralTTSPipeline:
         acoustic_dtype: ttnn.DataType = ttnn.bfloat16,
         tokenizer_dtype: ttnn.DataType = ttnn.bfloat16,
         audio_tokenizer_optimizations: AudioTokenizerOptimizations | None = None,
-        use_paged_kv_cache: bool = False,
+        use_paged_kv_cache: bool = True,
         paged_block_size: int = 32,
     ) -> "VoxtralTTSPipeline":
         """Build TT TTS pipeline using the production default text optimization profile.
 
-        ``use_paged_kv_cache=True`` enables paged KV attention, which breaks the attention
-        CB page from ``seq_len × head_dim`` down to ``block_size × head_dim``.  This removes
-        the L1 SRAM CB size constraint that limits ``text_max_seq_len`` to 4096 on Blackhole.
-        With paged KV you can safely use ``text_max_seq_len=10000`` for ≤1500-word texts.
+        ``use_paged_kv_cache=True`` (default) enables paged KV attention for all sequence
+        lengths. Paged SDPA uses fixed-size KV blocks (``block_size × head_dim``) instead
+        of a single ``seq_len × head_dim`` attention CB. Set ``False`` only to exercise
+        the non-paged (default) attention path.
         ``paged_block_size`` must be a multiple of 32 (TILE row size); 32 is the safest choice.
         """
         full = _load_safetensors_state_dict(model_name_or_path)
