@@ -144,7 +144,9 @@ def test_falcon_decoder(
 
         position_embeddings = FalconRotaryEmbedding(configuration)(decoder_input, position_ids)
 
-    pytorch_out, pytorch_layer_present = torch_model(
+    # transformers 5.x decoder/attention returns (output, attn_weights), not the KV cache; the
+    # present KV lives in the in-place-updated `layer_past` (DynamicCache) under both <5 and 5.x.
+    pytorch_out, _ = torch_model(
         hidden_states=decoder_input,
         alibi=None,
         attention_mask=attention_mask,
@@ -197,12 +199,12 @@ def test_falcon_decoder(
     passed, pcc = assert_with_pcc(pytorch_out, tt_out.to(pytorch_out.dtype), expected_pcc)
     logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
     assert_with_pcc(
-        hf_cache_layer_kv(pytorch_layer_present, 0)[0].squeeze(1),
-        tt_layer_present[0].to(hf_cache_layer_kv(pytorch_layer_present, 0)[0].dtype),
+        hf_cache_layer_kv(layer_past, 0)[0].squeeze(1),
+        tt_layer_present[0].to(hf_cache_layer_kv(layer_past, 0)[0].dtype),
         expected_pcc,
     )
     assert_with_pcc(
-        hf_cache_layer_kv(pytorch_layer_present, 0)[1].squeeze(1),
-        tt_layer_present[1].to(hf_cache_layer_kv(pytorch_layer_present, 0)[1].dtype),
+        hf_cache_layer_kv(layer_past, 0)[1].squeeze(1),
+        tt_layer_present[1].to(hf_cache_layer_kv(layer_past, 0)[1].dtype),
         expected_pcc,
     )
