@@ -134,8 +134,8 @@
     export HF_MODEL=ACE-Step/Ace-Step1.5
     export HF_HOME=/localdev/blackhole_demos/huggingface_data
     export HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/hub
-    export ACE_STEP_CHECKPOINT_DIR=/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints
-    export ACESTEP_CHECKPOINTS_DIR=/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints
+    export ACE_STEP_CHECKPOINT_DIR="${ACE_STEP_CHECKPOINT_DIR:-/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints}"
+    export ACESTEP_CHECKPOINTS_DIR="${ACESTEP_CHECKPOINTS_DIR:-$ACE_STEP_CHECKPOINT_DIR}"
     pytest --timeout 900 models/experimental/ace_step_v1_5/tests/test_prompt_to_wav_e2e.py -k "15s"
   skus:
     bh_quietbox_2:

@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from models.experimental.ace_step_v1_5.utils.tt_device import (
+    _is_live_userspace_pid,
     ace_step_dit_rope_max_seq_len,
     ace_step_mesh_is_2d,
     ace_step_mesh_perf_log_default,
@@ -32,6 +33,11 @@ from models.experimental.ace_step_v1_5.ttnn_impl.dit_sampling_ttnn import _host_
 def test_resolve_mesh_sku_cli_overrides_env(monkeypatch):
     monkeypatch.setenv("MESH_DEVICE", "P150")
     assert resolve_ace_step_mesh_sku(cli_value="BH_QB") == "BH_QB"
+
+
+def test_is_live_userspace_pid_ignores_kernel_placeholder():
+    assert not _is_live_userspace_pid(0)
+    assert _is_live_userspace_pid(os.getpid())
 
 
 def test_mesh_shape_bh_qb():

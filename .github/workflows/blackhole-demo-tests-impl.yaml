@@ -184,6 +184,19 @@ jobs:
               resume_download=True,
           )
           PY
+      - name: Verify ACE-Step v1.5 checkpoints
+        if: ${{ contains(matrix.test-group.name, 'ACE-Step') }}
+        run: |
+          set -e
+          CKPT_DIR="${ACE_STEP_CHECKPOINT_DIR:-/localdev/blackhole_demos/huggingface_data/hub/ACE-Step-1.5-checkpoints}"
+          TURBO="$CKPT_DIR/acestep-v15-turbo"
+          if [ -f "$TURBO/model.safetensors" ] || compgen -G "$TURBO/model-*.safetensors" > /dev/null; then
+            echo "ACE-Step checkpoints present at $CKPT_DIR"
+            exit 0
+          fi
+          echo "::error::ACE-Step v1.5 checkpoints not found at $TURBO"
+          echo "::error::Re-run this workflow with workflow_dispatch and enable: Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)."
+          exit 1
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |

@@ -33,7 +33,14 @@ def _checkpoints_available() -> bool:
 def test_prompt_to_wav_bh_demo(tmp_path, monkeypatch, duration_label: str, duration_sec: int):
     """Turbo mesh smoke: LM preprocess → DiT denoise → VAE decode → WAV."""
     if not _checkpoints_available():
-        pytest.skip("ACE-Step v1.5 checkpoints not found; set ACE_STEP_CHECKPOINT_DIR.")
+        msg = (
+            "ACE-Step v1.5 checkpoints not found; set ACE_STEP_CHECKPOINT_DIR. "
+            "In Blackhole demo CI, re-run workflow_dispatch with "
+            "'Mount model cache volume read-write to regenerate TTNN cache (otherwise read-only)' enabled."
+        )
+        if os.environ.get("TT_GH_CI_INFRA", "").lower() in ("1", "true", "yes", "on"):
+            pytest.fail(msg)
+        pytest.skip(msg)
 
     demo_script = Path(__file__).resolve().parent.parent / "demo" / "run_prompt_to_wav.py"
     out = tmp_path / f"ace_step_bh_demo_{duration_label}.wav"

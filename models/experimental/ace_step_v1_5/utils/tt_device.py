@@ -192,7 +192,7 @@ def open_single_tt_device(
     mesh_sku: str | None = None,
 ) -> Any:
     """Open one TTNN device; applies single-chip env on multi-PCIe Blackhole hosts."""
-    ace_step_preflight_devices_available(mesh_sku=mesh_sku, device_id=device_id)
+    ace_step_preflight_devices_available(mesh_sku=mesh_sku, device_id=device_id, single_chip_only=True)
     visible_saved = _apply_preprocess_cluster_env(mesh_sku, device_id)
     if visible_saved is None:
         visible_saved = _apply_single_chip_open_env(device_id)
@@ -205,7 +205,7 @@ def open_single_tt_device(
         _restore_cluster_visibility(visible_saved)
         msg = str(exc)
         if "tt_tlb_alloc" in msg or "TLB window" in msg:
-            hint = _format_device_busy_hint(mesh_sku=mesh_sku, device_id=device_id)
+            hint = _format_device_busy_hint(mesh_sku=mesh_sku, device_id=device_id, single_chip_only=True)
             if hint:
                 raise RuntimeError(f"{msg}{hint}") from exc
         raise
@@ -227,6 +227,11 @@ def _read_proc_cmdline(pid: int) -> str:
         return "?"
 
 
+def _is_live_userspace_pid(pid: int) -> bool:
+    """True for a real process directory under ``/proc`` (skip kernel pid 0 placeholders)."""
+    return int(pid) > 0 and Path(f"/proc/{int(pid)}").is_dir()
+
+
 def ace_step_device_holders(device_ids: list[int] | None = None) -> list[tuple[int, int, str]]:
     """Return ``(chip_id, pid, cmdline)`` for foreign processes holding TT device TLBs."""
     if device_ids is None:
@@ -242,7 +247,7 @@ def ace_step_device_holders(device_ids: list[int] | None = None) -> list[tuple[i
             if not tok.isdigit():
                 continue
             pid = int(tok)
-            if pid == my_pid or (chip_id, pid) in seen:
+            if pid == my_pid or not _is_live_userspace_pid(pid) or (chip_id, pid) in seen:
                 continue
             seen.add((chip_id, pid))
             holders.append((chip_id, pid, _read_proc_cmdline(pid)))
@@ -253,10 +258,11 @@ def ace_step_preflight_devices_available(
     *,
     mesh_sku: str | None,
     device_id: int = 0,
+    single_chip_only: bool = False,
 ) -> None:
     """Fail fast when another process holds the chip(s) we need (avoids opaque TLB -12 errors)."""
     chip_ids = [int(device_id)]
-    if mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
+    if not single_chip_only and mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
         rows, cols = ace_step_mesh_shape(mesh_sku)
         if int(rows) * int(cols) > 1:
             chip_ids = list(range(int(rows) * int(cols)))
@@ -278,9 +284,9 @@ def ace_step_preflight_devices_available(
     )
 
 
-def _format_device_busy_hint(*, mesh_sku: str | None, device_id: int) -> str:
+def _format_device_busy_hint(*, mesh_sku: str | None, device_id: int, single_chip_only: bool = False) -> str:
     chip_ids = [int(device_id)]
-    if mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
+    if not single_chip_only and mesh_sku is not None and ace_step_needs_split_device(mesh_sku):
         rows, cols = ace_step_mesh_shape(mesh_sku)
         if int(rows) * int(cols) > 1:
             chip_ids = list(range(int(rows) * int(cols)))

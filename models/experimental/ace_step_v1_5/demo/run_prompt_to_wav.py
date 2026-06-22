@@ -538,7 +538,7 @@ def _run_pytorch_dit_denoise_mesh(
 ) -> torch.Tensor:
     """HF PyTorch DiT Euler loop — reference-quality denoise for long mesh clips."""
     import torch
-    from models.experimental.ace_step_v1_5.torch_ref._vendored_acestep.acestep.models.common.apg_guidance import (
+    from models.experimental.ace_step_v1_5.host_preprocess.acestep.models.common.apg_guidance import (
         MomentumBuffer,
     )
     from models.experimental.ace_step_v1_5.torch_ref.e2e_model import run_torch_denoise_loop
@@ -2126,6 +2126,8 @@ def main() -> None:
         frames_i = int(frames)
         c_lat = 64
         xt_tt: Any = None
+        enc_tt_pipe: Any = None
+        ctx_tt_pipe: Any = None
 
         if use_pytorch_dit:
             pred_latents = _run_pytorch_dit_denoise_mesh(
@@ -2983,8 +2985,6 @@ def main() -> None:
             )
 
     perf.emit_summary(label="demo_total")
-    from loguru import logger
-
     logger.success("Wrote: {}", run_out_path.resolve())
 
 
