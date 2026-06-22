@@ -291,7 +291,8 @@ void kernel_main() {
                 // overwrite this tile's L1 while the mcast send reads it.
                 cb_wait_front(cb_partial_sumsq, 1);
                 const uint32_t reduced_l1 = get_read_ptr(cb_partial_sumsq);
-                DEVICE_PRINT("ROOT send dst_l1={}\n", reduced_l1);
+                volatile tt_l1_ptr uint32_t* rp = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduced_l1);
+                DEVICE_PRINT("ROOT send dst_l1={} word0={:x} tilebytes={}\n", reduced_l1, rp[0], get_tile_size(cb_partial_sumsq));
                 // The mode-2 broadcast moves a cb_partial_sumsq tile (the global Σx²), so stride
                 // with THAT CB's tile size — decoupled from cb_partials_gathered (both carry the
                 // intermediate format today, but never assume they match).
@@ -311,10 +312,18 @@ void kernel_main() {
                 produced.up(noc, root_x, root_y, 1);
                 cb_pop_front(cb_local_sumsq, 1);
                 cb_reserve_back(cb_partial_sumsq, 1);
-                DEVICE_PRINT("PEER rank={} reserve wptr={}\n", my_rank, get_write_ptr(cb_partial_sumsq));
+                const uint32_t peer_wptr = get_write_ptr(cb_partial_sumsq);
+                volatile tt_l1_ptr uint32_t* pre = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_wptr);
+                DEVICE_PRINT("PEER rank={} reserve wptr={} PRE word0={:x}\n", my_rank, peer_wptr, pre[0]);
                 ReceiverPipe<data_ready_sem_id, consumed_sem_id, Staging::Counter, /*PRE_HANDSHAKE=*/true> receiver(
                     noc);
                 receiver.receive(root_x, root_y);
+                volatile tt_l1_ptr uint32_t* post = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_wptr);
+                DEVICE_PRINT("PEER rank={} POST receive word0={:x} word1={:x}\n", my_rank, post[0], post[1]);
+                noc_async_read_barrier();
+                noc_async_write_barrier();
+                volatile tt_l1_ptr uint32_t* post2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_wptr);
+                DEVICE_PRINT("PEER rank={} POST-barrier word0={:x}\n", my_rank, post2[0]);
                 cb_push_back(cb_partial_sumsq, 1);
             }
         } else if constexpr (transport_mode == 1) {
