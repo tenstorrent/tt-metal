@@ -44,7 +44,10 @@ def test_deepseek_v3_moe_perf_loudbox():
         expected_ns_8x1=36_272_143,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=39_194_517,
+        # Recalibrated 2026-06-21 on BH LoudBox 2x4 after the unified_routed_expert_ffn
+        # two-RISC (UP_SPLIT) read overlap sped up the gate/up weight stream (~10% MoE
+        # device-time drop, bit-exact). Was 39_194_517.
+        expected_ns_2x4=35_127_772,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
