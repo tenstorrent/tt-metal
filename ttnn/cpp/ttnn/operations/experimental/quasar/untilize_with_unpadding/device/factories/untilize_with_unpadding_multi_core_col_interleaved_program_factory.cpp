@@ -103,7 +103,8 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_col_multicore.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/dataflow/"
+        "reader_unary_interleaved_col_multicore.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
     reader_desc.compile_time_args = std::move(reader_compile_time_args);
@@ -126,7 +127,7 @@ tt::tt_metal::ProgramDescriptor UntilizeWithUnpaddingMultiCoreColInterleavedProg
 
     // compute
     const std::string compute_kernel(
-        "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_w.cpp");
+        "ttnn/cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/device/kernels/compute/untilize_w.cpp");
 
     if (!core_range.empty()) {
         KernelDescriptor compute_desc;

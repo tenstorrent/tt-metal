@@ -78,10 +78,10 @@ ProgramDescriptor ReshardSameHeightFactory<local_is_output>::create_descriptor(
     push_reshard_same_height_cb_pair(
         desc, cb_index, data_format, total_size, unit_size, all_cores, /*bound_buffer=*/local_buffer);
 
-    const std::string kernel_name =
-        local_is_output
-            ? "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_reader.cpp"
-            : "ttnn/cpp/ttnn/operations/data_movement/sharded/device/kernels/dataflow/reshard_same_height_writer.cpp";
+    const std::string kernel_name = local_is_output ? "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/"
+                                                      "kernels/dataflow/reshard_same_height_reader.cpp"
+                                                    : "ttnn/cpp/ttnn/operations/experimental/quasar/reshard/device/"
+                                                      "kernels/dataflow/reshard_same_height_writer.cpp";
 
     KernelDescriptor reader_desc;
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;

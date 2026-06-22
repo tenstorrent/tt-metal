@@ -134,7 +134,8 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     // Tilized writer
     KernelDescriptor writer_desc;
     writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
+        "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/dataflow/"
+        "writer_unary_interleaved_start_id.cpp";
     writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_desc.core_ranges = core_ranges;
     writer_desc.compile_time_args = std::move(writer_compile_time_args);
@@ -152,7 +153,8 @@ ProgramDescriptor TilizeSingleCoreProgramFactory::create_descriptor(
     }
 
     KernelDescriptor compute_desc;
-    compute_desc.kernel_source = "ttnn/cpp/ttnn/kernel/compute/tilize.cpp";
+    compute_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/experimental/quasar/tilize/device/kernels/compute/tilize.cpp";
     compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_desc.core_ranges = core_ranges;
     compute_desc.compile_time_args = std::move(compute_args);
