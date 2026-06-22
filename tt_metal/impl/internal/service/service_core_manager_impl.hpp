@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <stddef.h>
@@ -69,6 +70,12 @@ public:
 
     // Called on every EnqueueMeshWorkload - common case is no claims, in which case routing is skipped.
     bool has_any_claims() const;
+
+    // Monotonic version of the claimed-core set (bumped by claim(), and by release() when it removes a
+    // claim). EnqueueMeshWorkload stamps its cached service-vs-normal classification with this and
+    // reclassifies on a mismatch, so re-enqueuing a workload after its cores' claim state changed
+    // re-routes correctly or fails loudly with the mixing TT_FATAL instead of reusing a stale decision.
+    uint64_t generation() const;
     // True if `core` is claimed as a service core on `device_id`. Used at enqueue time to route
     // programs to the SD path and to device-scope placement/CB validation.
     bool is_service_core(ChipId device_id, CoreCoord core) const;
@@ -92,6 +99,7 @@ private:
 
     MetalEnvImpl& env_;
     std::unordered_map<ChipId, DeviceServiceState> devices_;
+    uint64_t generation_ = 0;  // bumped whenever claim()/release() changes the claimed-core set
 };
 
 }  // namespace tt::tt_metal::internal
