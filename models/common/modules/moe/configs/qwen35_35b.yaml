@@ -12,6 +12,7 @@ has_bias: false
 n_group: 1
 score_func: softmax
 routed_scaling_factor: 1.0
+gate_notes: "Qwen3.5 35B: softmax kept POST-topk (softmax-over-selected, the default softmax_position) — mathematically ≡ the model's softmax-over-all→top-8→renorm (global Z cancels, no bias). Set softmax_position: pre for the literal front softmax (numerically-stable exp over all experts)."
 
 compute:
   intermediate_size: 512

@@ -92,8 +92,8 @@ def test_tt_moe_gate(mesh_device, config_path: Path, seed: int):
     # score-correction bias (deepseek/noaux_tc): present iff config.score_correction_bias (EXPLICIT per-model).
     # Added to scores for SELECTION only (output weights stay unbiased). None → TTMoEGate feeds the op a zeros bias.
     gate_bias = (2 * torch.rand((num_experts,)) - 1) if gate_config.score_correction_bias else None
-    # router LINEAR bias (gpt-oss, config.router_bias): logits = Wx + b, flows into selection + weights.
-    proj_bias = (2 * torch.rand((num_experts,)) - 1) if gate_config.router_bias else None
+    # router LINEAR bias (gpt-oss, config.gate_proj_bias): logits = Wx + b, flows into selection + weights.
+    proj_bias = (2 * torch.rand((num_experts,)) - 1) if gate_config.gate_proj_bias else None
 
     # --- device module + inputs (config-driven entry point, mirrors TTMoEDecode) ---
     gate = TTMoEGate(
@@ -121,6 +121,7 @@ def test_tt_moe_gate(mesh_device, config_path: Path, seed: int):
         gate_bias,
         select_experts_k=k,
         score_func=score_func,
+        softmax_position=gate_config.softmax_position,
         scaling_factor=scaling,
         eps=gate_config.eps,
         n_group=n_group,

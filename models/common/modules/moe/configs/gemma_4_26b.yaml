@@ -22,7 +22,7 @@ routed_scaling_factor: 1.0
 #   step 2: hidden *= self.scale[hidden] * hidden_size**-0.5 — a learned per-dim input scale × 1/√hidden
 #   step 6b: top_k_weights *= per_expert_scale[selected] — a learned PER-EXPERT output scale ([num_experts]),
 #            NOT a scalar, so it can't be folded into routed_scaling_factor.
-gate_notes: "Gemma4: TTMoEGate does steps 3-6a (linear→softmax→top8→renorm). MISSING upstream: RMSNorm + per-dim input scale (×1/√hidden); MISSING downstream: per-expert output scale per_expert_scale[selected] (not a scalar)."
+gate_notes: "Gemma4: TTMoEGate does steps 3-6a (linear→softmax→top8→renorm). MISSING upstream: RMSNorm + per-dim input scale (×1/√hidden); MISSING downstream: per-expert output scale per_expert_scale[selected] (not a scalar). SOFTMAX kept POST-topk (softmax-over-selected, the default softmax_position) — mathematically ≡ the model's softmax-over-all→top8→renorm (global Z cancels, no bias); set softmax_position: pre for the literal front softmax (numerically-stable exp over all experts)."
 
 compute:
   intermediate_size: 704

@@ -21,10 +21,12 @@ the height-sharded layout the op needs is produced inside ``forward``.
 
 Gate-op selection (via ``n_group``):
   - ``n_group=1`` → ungrouped global top-k. With k ∈ {4,6,8} and ≤512 experts it uses the
-    ``generalized_moe_gate`` kernel (configurable ``topk`` + sigmoid/softmax; softmax-no-bias models use
-    ``enable_sigmoid=False, output_softmax=True`` since softmax-over-selected ≡ softmax-front + renormalize).
-    Any other k, OR >512 experts, takes a pure-ttnn fallback (``matmul → topk → softmax``) — so there is
-    NO expert-count ceiling for n_group=1.
+    ``generalized_moe_gate`` kernel (configurable ``topk`` + sigmoid/softmax; softmax-no-bias models default
+    to ``enable_sigmoid=False, output_softmax=True`` since softmax-over-selected ≡ softmax-front + renormalize.
+    ``config.softmax_position="pre"`` instead applies a full softmax over all experts up front — mathematically
+    equal absent a score-correction bias (the global Z cancels under renorm), a numerically-stable exp — and
+    takes the linear-renorm tail like sqrtsoftplus). Any other k, OR >512 experts, takes a pure-ttnn fallback
+    (``matmul → topk → softmax``) — so there is NO expert-count ceiling for n_group=1.
   - ``n_group=8`` → ``deepseek_moe_gate`` (grouped; sigmoid + bias). The kernel is HARDWIRED to 256 experts
     as 8 groups × 32, emitting top-8, so this path is EXACTLY 256-experts-select-8 (see ``__init__``).
 
@@ -78,7 +80,7 @@ class TTMoEGate:
         self.config = config
 
         # The config DECLARES which bias tensors a model has (`score_correction_bias` = the selection-only
-        # correction bias `torch_gate_bias`; `router_bias` = the router-LINEAR bias `torch_gate_proj_bias`).
+        # correction bias `torch_gate_bias`; `gate_proj_bias` = the router-LINEAR/projection bias `torch_gate_proj_bias`).
         # Nothing downstream re-checks: a missing bias is SILENTLY swapped for zeros (correction, line ~211)
         # or a bias-free matmul (router, forward), and a stray bias is used regardless of the flag — both
         # change routing while looking valid. Enforce the contract here so a miswired gate fails at
@@ -87,10 +89,10 @@ class TTMoEGate:
             raise ValueError("config.score_correction_bias=True requires torch_gate_bias, but none was given")
         if not config.score_correction_bias and torch_gate_bias is not None:
             raise ValueError("config.score_correction_bias=False forbids torch_gate_bias, but one was given")
-        if config.router_bias and torch_gate_proj_bias is None:
-            raise ValueError("config.router_bias=True requires torch_gate_proj_bias, but none was given")
-        if not config.router_bias and torch_gate_proj_bias is not None:
-            raise ValueError("config.router_bias=False forbids torch_gate_proj_bias, but one was given")
+        if config.gate_proj_bias and torch_gate_proj_bias is None:
+            raise ValueError("config.gate_proj_bias=True requires torch_gate_proj_bias, but none was given")
+        if not config.gate_proj_bias and torch_gate_proj_bias is not None:
+            raise ValueError("config.gate_proj_bias=False forbids torch_gate_proj_bias, but one was given")
         # ...and the right SHAPE: both biases are 1-D [num_routed_experts] (the device upload reshapes to
         # [1, N] / F.pads the last dim assuming exactly that). A [1, N] / [N, 1] / wrong-length tensor would
         # mis-pad or mis-broadcast into the wrong experts silently, so reject anything but [num_experts].
@@ -117,8 +119,20 @@ class TTMoEGate:
         # sqrtsoftplus (deepseek-v4) has no in-kernel op, so it is applied EXTERNALLY in forward() via
         # ttnn.sqrt(ttnn.softplus(.)) and fed to the op with enable_sigmoid=False (the op then just adds
         # bias, ranks, and linearly renormalizes -- same tail as the sigmoid path).
+        # `softmax_position` (softmax only) moves the softmax exp relative to the top-k. With NO score-
+        # correction bias the two placements are mathematically equal (the global Z cancels under renorm),
+        # differing only in how the exp is computed; they would DIVERGE with a selection bias, since ranking
+        # by softmax(logit)+bias ≠ logit+bias (softmax is nonlinear) picks different experts — but softmax
+        # models are bias-free, so this is moot in practice.
+        #   "post" (default) → the mapping above (output_softmax=True: exp-over-selected).
+        #   "pre"            → softmax over ALL experts is applied EXTERNALLY in forward() (same slot as
+        #                      sqrtsoftplus) and fed to the op with enable_sigmoid=False, output_softmax=False
+        #                      (LINEAR renorm over the selected) — so the exp is the stable full softmax,
+        #                      not the kernel's exp-over-raw-logit. Same op flags/tail as sqrtsoftplus.
         if score_func not in ("softmax", "sigmoid", "sqrtsoftplus"):
             raise ValueError(f"score_func must be 'softmax' | 'sigmoid' | 'sqrtsoftplus'; got {score_func!r}")
+        if score_func == "softmax" and config.softmax_position not in ("pre", "post"):
+            raise ValueError(f"softmax_position must be 'pre' | 'post'; got {config.softmax_position!r}")
         # n_group picks the backing op: 1 = generalized/ungrouped (kernel op or ttnn fallback),
         # 8 = deepseek_moe_gate (grouped). Only these two are wired.
         if n_group not in (1, 8):
@@ -170,10 +184,19 @@ class TTMoEGate:
         self.score_func = score_func
         self.scaling_factor = scaling_factor
         self.eps = eps
+        self.softmax_position = config.softmax_position  # "post" (default) | "pre" — softmax only
         self.enable_sigmoid = score_func == "sigmoid"
-        self.output_softmax = score_func == "softmax"
-        # external score transform applied to the logits before the op (None → the op's own scoring).
-        self.score_transform = "sqrtsoftplus" if score_func == "sqrtsoftplus" else None
+        # output_softmax = the exp-over-selected tail (in-op / ttnn.softmax(sel)). ONLY softmax-post takes it;
+        # softmax-pre, sigmoid, and sqrtsoftplus all use the LINEAR renorm tail.
+        self.output_softmax = score_func == "softmax" and self.softmax_position == "post"
+        # external score transform applied to the logits before the op (None → the op's own scoring):
+        # sqrtsoftplus → sqrt∘softplus; softmax-pre → full softmax over ALL experts (then linear renorm).
+        if score_func == "sqrtsoftplus":
+            self.score_transform = "sqrtsoftplus"
+        elif score_func == "softmax" and self.softmax_position == "pre":
+            self.score_transform = "softmax"
+        else:
+            self.score_transform = None
         self.use_fallback = use_fallback  # ungrouped + k∉{4,6,8} → pure-ttnn path (no kernel op)
 
         grid = mesh_device.compute_with_storage_grid_size()
@@ -454,12 +477,21 @@ class TTMoEGate:
         # per-forward ttnn.pad. Phantom columns are zero; the phantom bias (_PAD_NEG in tt_bias) ranks them
         # last regardless of their (bounded) score, so they never enter the top-k.
 
-        # 1a) external score transform (sqrtsoftplus, deepseek-v4): score = sqrt(softplus(logit)). Applied
-        #     here (no in-kernel op) and fed to the gate op with enable_sigmoid=False; the op then adds bias,
-        #     ranks, and linearly renormalizes. (Phantom cols are 0 → bounded score → ranked out by the bias.)
+        # 1a) external score transform fed to the op with enable_sigmoid=False + the LINEAR renorm tail. Both
+        #     transforms turn `logits` into the per-expert score; the op then adds bias, ranks, gathers, and
+        #     linearly renormalizes over the selected. (Phantom cols are 0 → bounded score → ranked out by
+        #     the _PAD_NEG bias.)
+        #       • sqrtsoftplus (deepseek-v4): score = sqrt(softplus(logit)).
+        #       • softmax-pre (softmax_position="pre"): score = softmax(logit) over ALL (padded) experts. The
+        #         linear renorm over the selected cancels softmax's global Z, so this is mathematically equal
+        #         to softmax-over-selected (softmax-post) absent a selection bias — but the exp is the stable
+        #         full softmax, not the kernel's exp-over-raw-logit. (Phantom cols get a bounded softmax prob;
+        #         Z cancels regardless.)
         if self.score_transform == "sqrtsoftplus":
             # standard softplus log(1+e^x): beta=1, threshold=20 (matches torch's defaults / the golden).
             logits = ttnn.sqrt(ttnn.softplus(logits, beta=1.0, threshold=20.0))
+        elif self.score_transform == "softmax":
+            logits = ttnn.softmax(logits, dim=-1)  # softmax over the full padded width; renorm tail cancels Z
 
         total_batch = logits.shape[2]
 
@@ -556,9 +588,14 @@ class TTMoEGate:
                 program_config=self.matmul_program_config,
             )
 
-        # 2) score = transform(logits): sqrt(softplus) | sigmoid | identity(softmax ranks by raw logit).
+        # 2) score = transform(logits): sqrt(softplus) | full softmax (softmax-pre) | sigmoid |
+        #    identity (softmax-post / sigmoid-less, ranks by the raw logit). softmax-pre does the exp here via
+        #    the stable full softmax over ALL experts; step 6 then LINEAR-renorms over the selected, which
+        #    cancels Z → mathematically equal to softmax-post (absent a selection bias).
         if self.score_transform == "sqrtsoftplus":
             scores = ttnn.sqrt(ttnn.softplus(logits, beta=1.0, threshold=20.0))
+        elif self.score_transform == "softmax":
+            scores = ttnn.softmax(logits, dim=-1)
         elif self.enable_sigmoid:
             scores = ttnn.sigmoid(logits)
         else:
@@ -594,6 +631,7 @@ class TTMoEGate:
         *,
         select_experts_k: int,
         score_func: str = "softmax",
+        softmax_position: str = "post",  # softmax only: "post" = exp-over-selected; "pre" = softmax over all + renorm
         scaling_factor: float = 1.0,
         eps: float = 1e-20,
         n_group: int = 1,
@@ -632,8 +670,18 @@ class TTMoEGate:
             )
         # ungrouped global top-k (inlined — the generalized op is no longer a deepseek-v3 dependency):
         # rank by (score + bias), gather the UNBIASED score at the selected experts, normalize, scale.
-        scores = torch.sigmoid(logits) if enable_sigmoid else logits  # [batch, num_experts]
+        # score over ALL experts: sigmoid → sigmoid(logit); softmax-pre → softmax(logit) over all experts
+        # (mirrors forward's external transform); softmax-post / sqrtsoftplus → the (already-transformed) logit.
+        if enable_sigmoid:
+            scores = torch.sigmoid(logits)  # [batch, num_experts]
+        elif score_func == "softmax" and softmax_position == "pre":
+            scores = torch.softmax(logits, dim=-1)
+        else:
+            scores = logits
         _, indices = torch.topk(scores + bias, select_experts_k, dim=-1, sorted=True)  # bias broadcasts [num_experts]
         sel = torch.gather(scores, -1, indices)
-        weights = torch.exp(sel) if score_func == "softmax" else sel  # softmax→exp-over-selected; else linear
+        # tail: softmax-POST is the only exp-over-selected; softmax-pre / sigmoid / sqrtsoftplus → linear renorm
+        # (softmax-pre already did the exp up front, so its renorm cancels the global Z → mathematically equal
+        # to softmax-post absent a selection bias).
+        weights = torch.exp(sel) if (score_func == "softmax" and softmax_position == "post") else sel
         return weights / (weights.sum(-1, keepdim=True) + eps) * scaling_factor, indices

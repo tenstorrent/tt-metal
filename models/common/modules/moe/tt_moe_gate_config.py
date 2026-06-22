@@ -5,7 +5,7 @@
 """Config for ``TTMoEGate`` (the routing front-end).
 
 Parsed from the same per-model YAML that ``TTMoEDecodeConfig`` reads — the gate-specific keys
-(``n_group``/``score_func``/``routed_scaling_factor``/``score_correction_bias``/``router_bias``/
+(``n_group``/``score_func``/``routed_scaling_factor``/``score_correction_bias``/``gate_proj_bias``/
 ``gate_matmul_compute``) are exactly the extra keys ``TTMoEDecodeConfig`` ignores. Mirrors the
 ``TTMoEDecode(mesh_device, config, torch_weights...)`` entry-point convention: ``TTMoEGate`` takes this
 config + the torch gate weight/bias(es), and builds everything on device internally.
@@ -24,9 +24,10 @@ _GATE_YAML_KEYS = (
     "batch_per_device",
     "n_group",
     "score_func",
+    "softmax_position",
     "routed_scaling_factor",
     "score_correction_bias",
-    "router_bias",
+    "gate_proj_bias",
     "gate_matmul_high_fidelity",
     "gate_matmul_compute",
     "gate_matmul_auto_program_config",
@@ -54,9 +55,20 @@ class TTMoEGateConfig(BaseModel):
     # --- gate semantics (see TTMoEGate) ---
     n_group: int = 1  # 1 → generalized (ungrouped) op; 8 → deepseek (grouped) op
     score_func: str = "softmax"  # "softmax" | "sigmoid" | "sqrtsoftplus"
+    # softmax ONLY (ignored otherwise) — where the softmax is applied relative to the top-k. With no score-
+    # correction bias both are mathematically equal (the global Z cancels under renorm), differing only in
+    # how the exp is computed (a selection bias would make them diverge, but softmax models are bias-free):
+    #   "post" (default) — rank by the raw logit, then softmax OVER THE SELECTED top-k (the kernel op's
+    #                      exp-over-selected / ttnn.softmax(sel) in the fallback). The original behavior.
+    #   "pre"            — softmax over ALL experts UP FRONT (same slot as sqrtsoftplus), then LINEAR renorm
+    #                      over the selected top-k. The exp is the numerically-stable full softmax
+    #                      (max-subtracted over all experts) instead of the kernel's exp-over-raw-logit.
+    softmax_position: str = "post"  # "post" | "pre"
     routed_scaling_factor: float = 1.0
     score_correction_bias: bool = False  # deepseek/noaux_tc: e_score_correction_bias (selection-only)
-    router_bias: bool = False  # gpt-oss: router LINEAR bias (into logits → selection AND weights)
+    gate_proj_bias: bool = (
+        False  # gpt-oss: model has a router LINEAR/projection bias b (logits = Wx + b → selection AND weights)
+    )
     # router-matmul COMPUTE kernel fidelity. Default HIGH fidelity (HiFi2 + fp32 accumulate): the deep gate
     # reduction drifts under the ttnn default (LoFi + bf16 accumulate) and flips near-tied experts at the
     # top-k boundary, so every gate gets high fidelity (the matmul is tiny → the cost is negligible). Set
