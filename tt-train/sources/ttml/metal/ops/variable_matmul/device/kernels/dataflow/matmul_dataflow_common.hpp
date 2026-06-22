@@ -110,15 +110,6 @@ void read_in0_block_sync(
  *
  * The CB ends up K-outer, N-inner (tile (k, n) at index k * N_block_tiles + n), which
  * is what the matmul compute kernel expects.
- *
- * DRAM access pattern:
- *  - Non-transpose ([K, N] storage): K-outer / N-inner iteration walks storage in
- *    row-major order → sequential DRAM reads.
- *  - Transpose_b ([N, K] storage): K-outer / N-inner iteration jumps K-tiles between
- *    sibling reads → page-thrashing strided pattern. For the transposed case we walk
- *    storage in row-major order (N-outer / K-inner) and compute write_ptr per tile so
- *    the CB layout stays K-outer / N-inner. Sequential DRAM bandwidth recovers ~10x
- *    on large-K weights (e.g. Mixtral H=4096, I=14336).
  */
 template <uint32_t K_block_tiles, uint32_t N_block_tiles, bool TransposeB, bool UseOffset, typename TensorAccessorType>
 void read_in1_block_sync(
