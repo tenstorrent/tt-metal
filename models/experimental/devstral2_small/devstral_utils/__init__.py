@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 # Shared helpers for Devstral-2 / Ministral3 TT demos (mesh, prefill padding, LM head, FP8 shim).

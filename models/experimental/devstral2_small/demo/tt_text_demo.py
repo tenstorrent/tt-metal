@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 # Tenstorrent demo: Devstral Small 2 (Mistral3) **text** LM on TT, with **autoregressive generation** using **TT** ``embed_tokens`` and **TT** ``TtMinistral3RotaryEmbedding`` inside ``TtMinistral3Model`` (via ``forward_prefill``), **TT** ``LMHead``, and on-device ``Sampling1D``.

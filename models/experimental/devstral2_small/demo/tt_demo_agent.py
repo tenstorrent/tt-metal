@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
 # Tenstorrent image/text chat demo via ``TtDevstral2SmallModel`` (Pixtral vision + projector + ``TtMinistral3`` LM), TT LM head, and on-device Sampling1D. **Per turn:** one full TT prefill of the current chat history (rebuilds KV cache) followed by a **traced TT decode** for each new token. The single-token decode trace is captured once per session and reused after each prefill refreshes KV contents.
