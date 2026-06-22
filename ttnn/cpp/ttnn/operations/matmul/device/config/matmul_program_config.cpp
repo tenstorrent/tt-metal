@@ -1182,13 +1182,8 @@ MatmulProgramConfig create_simple_matmul_program_config(
             }
         }
 
-        // When A has batch=1 and B has batch>1, in0_reuse keeps A in L1 and iterates over B
-        // batches without re-reading A from DRAM. This requires mcast_in0=false (B broadcasts
-        // spatially, A is locally owned per core). We must prevent mcast_in0=true from being
-        // selected even for wide shapes (N>M) or single-row grids, where it would normally be
-        // the spatial optimum. Forcing mcast_in0=false here trades spatial broadcast efficiency
-        // (B is larger to multicast when N>M) for correctness — mcast_in0=true has no batch
-        // reuse mechanism and would FATAL in the validator.
+        // A batch=1, B batch>1: force mcast_in0=false so in0_reuse can keep A in L1 across all
+        // B batches. mcast_in0=true has no batch-reuse path and would FATAL in the validator.
         const bool a_batch_broadcast =
             all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1;
 
