@@ -18,7 +18,7 @@ import torch
 from loguru import logger
 
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
-from models.experimental.voxtraltts.utils.test_common import (
+from models.experimental.voxtraltts.utils.common import (
     VOXTRAL_GOLDEN_CODES_DEFAULT_PATH,
     VOXTRAL_STANDARD_CHAR_TEXT,
     resolve_voxtral_model_name_or_skip,
