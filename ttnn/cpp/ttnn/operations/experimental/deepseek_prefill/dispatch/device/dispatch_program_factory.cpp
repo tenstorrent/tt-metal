@@ -344,8 +344,10 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
     // ===== FP8-scale path: fp32 scratch CBs for the fused per-token quantization =====
     // Mirrors per_token_cast_to_fp8: cb_scaler (reduce scaler), cb_abs (abs tiles for one 128-block),
     // cb_scale_tiles (col0 = per-token scales; compute -> writer), cb_inv_scale_tiles (col0 = 1/scale),
-    // cb_out_tile (divided tiles -> pack_untilize). cb_scale_tiles holds a full batch's scale blocks
-    // because the writer drains them only after the whole batch is untilized.
+    // cb_out_tile (divided tiles -> pack_untilize). cb_scale_tiles is double-buffered at batch
+    // granularity (2 x full batch's scale blocks): the writer drains a batch only after it is fully
+    // untilized, so double-buffering lets compute produce the next batch's scales in parallel
+    // (mirrors the c_11 payload CB) instead of stalling on scale-CB space.
     if (operation_attributes.use_fp8_scale) {
         constexpr uint32_t TILE_BYTES_FP32 = 32u * 32u * 4u;
         auto add_fp32_tile_cb = [&](tt::CBIndex cb_id, uint32_t num_tiles) {
@@ -361,7 +363,8 @@ tt::tt_metal::ProgramDescriptor create_at_tile_layout(
         };
         add_fp32_tile_cb(tt::CBIndex::c_12, 1);                          // cb_scaler
         add_fp32_tile_cb(tt::CBIndex::c_20, 2 * FP8_SCALE_TILES);        // cb_abs
-        add_fp32_tile_cb(tt::CBIndex::c_21, num_scale_blocks_dispatch);  // cb_scale_tiles (-> writer)
+        add_fp32_tile_cb(
+            tt::CBIndex::c_21, 2 * num_scale_blocks_dispatch);           // cb_scale_tiles (-> writer), double-buffered
         add_fp32_tile_cb(tt::CBIndex::c_22, 2);                          // cb_inv_scale_tiles
         add_fp32_tile_cb(tt::CBIndex::c_23, 2 * FP8_SCALE_TILES);        // cb_out_tile
     }

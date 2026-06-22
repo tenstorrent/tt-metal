@@ -43,6 +43,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "tools/profiler/kernel_profiler.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/dispatch/device/kernels/dataflow/dispatch_plan.hpp"
 
 #define ENABLE_DISPATCH_DEBUG 0
@@ -172,7 +173,10 @@ void kernel_main() {
 
 #ifdef FP8_SCALE
         // Per-token FP8 scales for this batch: num_scale_blocks fp32 tiles, col 0 = per-token scale.
-        cb_wait_front(cb_scale_id, num_scale_blocks);
+        {
+            DeviceZoneScopedN("DISPATCH-SCALE-WAIT");
+            cb_wait_front(cb_scale_id, num_scale_blocks);
+        }
         uint32_t scale_read_ptr = get_read_ptr(cb_scale_id);
 #endif
 
@@ -229,6 +233,7 @@ void kernel_main() {
 #ifdef FP8_SCALE
                     // Append this token's per-128-element scales (fp32 bits) after the header.
                     {
+                        DeviceZoneScopedN("DISPATCH-SCALE-GATHER");
                         volatile tt_l1_ptr uint32_t* meta_u = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_addr);
                         uint32_t col0 = scale_col0_index(token_t);
                         for (uint32_t b = 0; b < num_scale_blocks; ++b) {
@@ -297,6 +302,7 @@ void kernel_main() {
 #ifdef FP8_SCALE
                     // Append this token's per-128-element scales (fp32 bits) after the header.
                     {
+                        DeviceZoneScopedN("DISPATCH-SCALE-GATHER");
                         volatile tt_l1_ptr uint32_t* meta_u =
                             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xdev_metadata_scratch_addr);
                         uint32_t col0 = scale_col0_index(token_t);
