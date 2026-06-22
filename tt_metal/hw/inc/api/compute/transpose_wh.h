@@ -36,6 +36,7 @@ namespace ckernel {
     "Use compute_kernel_hw_startup(icb, ocb) once at the top of the kernel, then transpose_init(icb). See "
     "api/compute/transpose.h.")]] ALWI void
 transpose_wh_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
 
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)

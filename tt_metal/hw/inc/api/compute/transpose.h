@@ -6,6 +6,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
+#include "sanitizer/api.h"
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
 #include "llk_math_unary_datacopy_api.h"
@@ -34,6 +35,7 @@ namespace ckernel {
  */
 // clang-format on
 ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
+    LLK_SAN_FUNCTION();
     state_configure(icb, call_line);
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t src_format = get_operand_src_format(icb);
@@ -101,6 +103,7 @@ ALWI void transpose_init(uint32_t icb, uint32_t call_line = __builtin_LINE()) {
  */
 // clang-format on
 ALWI void transpose_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
+    LLK_SAN_FUNCTION();
 #if defined(TRISC_MATH) || defined(TRISC_UNPACK)
     const std::uint32_t dst_format = get_operand_dst_format(icb);
 
