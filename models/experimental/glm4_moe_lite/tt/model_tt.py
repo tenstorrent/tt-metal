@@ -40,7 +40,9 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import (
     _maybe_dram_shard_linear_weight,
     convert_decoder_layer_weights,
 )
-from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear
+from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear, sharded_decode_norm
+
+_SHARDED_DECODE_NORM = os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() == "1"
 from models.experimental.glm4_moe_lite.tt.tt_embedding import (
     convert_embedding_weight_to_tt,
     prefill_embed_memory_config,
@@ -1611,7 +1613,16 @@ class Glm4MoeLiteDenseOnlyTT:
         if _SIGNPOST_ENABLED:
             signpost("lm_head-start")
         t0 = time.perf_counter() if profile_on else 0.0
-        x = self.final_norm(x, mode="decode")
+        if _SHARDED_DECODE_NORM:
+            x = sharded_decode_norm(
+                self.final_norm,
+                x,
+                device=self.device,
+                width=int(self.hparams.hidden_size),
+                downstream_mc=ttnn.DRAM_MEMORY_CONFIG,
+            )
+        else:
+            x = self.final_norm(x, mode="decode")
         logits_tt = self._lm_head_linear(x, self.lm_head_w)  # [1,1,B,vocab]
         if profile_on:
             decode_profile["head_s"] = decode_profile.get("head_s", 0.0) + (time.perf_counter() - t0)
