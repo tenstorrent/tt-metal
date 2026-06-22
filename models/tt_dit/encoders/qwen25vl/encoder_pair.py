@@ -64,13 +64,13 @@ class Qwen25VlTokenizerEncoderPair:
             return torch_model
 
         # transformers 5.x moved the text hyperparameters from the top-level
-        # Qwen2_5_VLConfig into a nested `text_config`, and folded `rope_theta`
-        # into the rope params dict. Fall back to the top-level config for <5.x.
+        # Qwen2_5_VLConfig into a nested `text_config`, and normalized the rope kwargs
+        # (rope_theta, mrope_section, rope_scaling) into a single `rope_parameters` dict
+        # (the old top-level `rope_theta` / `rope_scaling` attributes are consumed). Read
+        # `rope_parameters` first, falling back to `rope_scaling` for <5.x configs.
         text_config = getattr(torch_model.config, "text_config", torch_model.config)
-        rope_params = getattr(text_config, "rope_scaling", None) or {}
-        rope_theta = getattr(text_config, "rope_theta", None)
-        if rope_theta is None:
-            rope_theta = rope_params["rope_theta"]
+        rope_params = getattr(text_config, "rope_parameters", None) or getattr(text_config, "rope_scaling", None) or {}
+        rope_theta = getattr(text_config, "rope_theta", None) or rope_params.get("rope_theta")
 
         model = Qwen25VlTextEncoder(
             vocab_size=text_config.vocab_size,
