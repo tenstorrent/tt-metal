@@ -48,6 +48,11 @@ def torch_model():
         transformers.models.falcon.modeling_falcon.FalconAttention(configuration, layer_idx=0).eval().to(torch.float32)
     )
     torch_model.load_state_dict(filtered_state_dict)
+    # transformers 5.x moved RoPE off FalconAttention onto FalconModel; re-attach a
+    # FalconRotaryEmbedding to torch_model where <5 had it, so both the reference forward and
+    # the ttnn parameter preprocessor (which derives cos/sin from this submodule) find it.
+    if not hasattr(torch_model, "rotary_emb"):
+        torch_model.rotary_emb = transformers.models.falcon.modeling_falcon.FalconRotaryEmbedding(configuration)
     return torch_model
 
 
