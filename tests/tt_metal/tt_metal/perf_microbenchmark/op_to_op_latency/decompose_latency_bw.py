@@ -235,6 +235,10 @@ def main() -> int:
     # math-to-math = global inter-op bubble (true latency); NOT the per-core gap (which
     # counts fast cores idling at done/go = op execution skew, reported separately).
     m2m = global_bubbles_us(pack_finish, unpack0, freq, args.min_prog_id)
+    # read-fill head: first read issued (READ_BEFORE_BARRIER) -> compute gets tile 0
+    # (TILE_IDX[0]). This is the first per-trid BATCH (N=trid_in_flight reads) landing +
+    # barrier + push, i.e. the reader latency that defers math start (grows with N, not CB depth).
+    read_fill = per_core_diff_us(unpack0, barriers["read_before"], freq, args.min_prog_id)
     r2w = per_core_diff_us(barriers["brisc_done"], barriers["ncrisc_done"], freq, args.min_prog_id)
     wtail = per_core_diff_us(barriers["write_after"], barriers["write_before"], freq, args.min_prog_id)
     rd_spread = completion_spread_us(barriers["ncrisc_done"], freq, args.min_prog_id)
@@ -263,6 +267,7 @@ def main() -> int:
         "op_to_op_last_us": round(o2o_last, 4),
         "math_to_math_us": round(median(m2m), 4),
         "math_to_math_max_us": round(vmax(m2m), 4),
+        "read_fill_head_us": round(median(read_fill), 4),
         "reader_to_writer_us": round(median(r2w), 4),
         "reader_to_writer_max_us": round(vmax(r2w), 4),
         "write_tail_us": round(median(wtail), 4),
