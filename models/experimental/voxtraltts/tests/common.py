@@ -444,7 +444,7 @@ def create_real_voxtral_text_model_or_skip(
     """
     import math
 
-    from models.tt_transformers.tt.common import PagedAttentionConfig
+    from models.experimental.voxtraltts.tt.text_backbone.common import PagedAttentionConfig
 
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     paged_cfg = None
