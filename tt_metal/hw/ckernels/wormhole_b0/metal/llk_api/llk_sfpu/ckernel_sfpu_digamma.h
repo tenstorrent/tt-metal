@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 #include "ckernel_sfpu_piecewise_rational.h"
 
@@ -81,7 +81,7 @@ inline void calculate_digamma() {
         // bf16-accurate. #45520 targets bf16 ULP; an fp32-accurate log here would collide
         // with the reciprocal's vConstFloatPrgm0, so fp32 large-x is intentionally left as-is.
         v_if(x > 102.0f) {
-            sfpi::vFloat inv_x = _sfpu_reciprocal_<2>(x);
+            sfpi::vFloat inv_x = sfpu_reciprocal_iter<2>(x);
             sfpi::vFloat inv_x2 = inv_x * inv_x;
             // ln(x) - inv_x*0.5 - inv_x2*(1/12 - inv_x2/120); 1/12 and 1/120 are in
             // vConstFloatPrgm1/Prgm2 (programmed in digamma_init).
