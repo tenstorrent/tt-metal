@@ -76,8 +76,13 @@ def _prompt_text(path: Path) -> str:
 
 def _prompt_ids(model_args, seq_len: int) -> torch.Tensor:
     ids = model_args.encode_prompt(_prompt_text(PROMPT_FILE), instruct=False)
-    assert len(ids) >= seq_len, f"{PROMPT_FILE} tokenized to {len(ids)} tokens, shorter than seq_len={seq_len}"
-    return torch.tensor(ids[:seq_len], dtype=torch.long).unsqueeze(0)
+    if len(ids) >= seq_len:
+        return torch.tensor(ids[:seq_len], dtype=torch.long).unsqueeze(0)
+    reps = (seq_len + len(ids) - 1) // len(ids)
+    logger.info(
+        f"Corpus shorter than seq_len={seq_len}; tiling ~{reps}x " f"({len(ids)} base tokens, PCC workload only)"
+    )
+    return torch.tensor((ids * reps)[:seq_len], dtype=torch.long).unsqueeze(0)
 
 
 def _pad_token_id(model_args) -> int:
@@ -222,7 +227,11 @@ def trust_remote_ministral(monkeypatch):
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.usefixtures("trust_remote_ministral", "ensure_gc")
 @pytest.mark.parametrize("mesh_device", [_mesh_device_param()], indirect=True)
-@pytest.mark.parametrize("seq_len", (128, 256, 512, 1024, 4096, 8192), ids=["128", "256", "512", "1k", "4k", "8k"])
+@pytest.mark.parametrize(
+    "seq_len",
+    (128, 256, 512, 1024, 4096, 8192, 16384, 32768, 65536, 131072, 262144),
+    ids=["128", "256", "512", "1k", "4k", "8k", "16k", "32k", "64k", "128k", "256k"],
+)
 @pytest.mark.parametrize("batch_size", (1,))
 @pytest.mark.parametrize(
     "device_params",
