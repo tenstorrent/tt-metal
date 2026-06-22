@@ -32,8 +32,22 @@ kv_cache contract param is accepted but unused.
 """
 import math
 import os
+from typing import Mapping, Optional
 
 import torch
+
+# Qwen3.5 reuses the Qwen3-VL vision architecture and its HF/vLLM multimodal processing, so the
+# image-side plumbing borrows Qwen3-VL's vLLM processor/info/dummy-inputs classes. These vLLM
+# imports only resolve in the inference-server environment (vLLM is not a tt-metal dependency),
+# exactly like models/demos/qwen3_vl/tt/generator_vllm.py — the text-only demo never imports this
+# module.
+from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.qwen3_vl import (
+    Qwen3VLDummyInputsBuilder,
+    Qwen3VLMultiModalProcessor,
+    Qwen3VLProcessingInfo,
+)
+from vllm.multimodal import MULTIMODAL_REGISTRY
 
 import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.common import create_tt_model
@@ -45,7 +59,16 @@ _PREFILL_WARMUP_BUCKET = 4096
 _BLOCK_SIZE = 64
 
 
-class Qwen35ForCausalLM(Generator):
+class TT_Qwen35ProcessingInfo(Qwen3VLProcessingInfo):
+    def get_supported_mm_limits(self) -> Mapping[str, Optional[int]]:
+        # Videos are not supported yet; serve a single image per request (B=1, max_concurrency=1).
+        return {"image": 1, "video": 0}
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Qwen3VLMultiModalProcessor, info=TT_Qwen35ProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
+)
+class Qwen35ForCausalLM(Generator, SupportsMultiModal):
     """vLLM-compatible wrapper for Qwen3.5-9B on Blackhole P150."""
 
     model_capabilities = {"supports_prefix_caching": False, "supports_async_decode": False}
@@ -103,25 +126,62 @@ class Qwen35ForCausalLM(Generator):
         args, model, _ = create_tt_model(
             mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len, hf_model=name_or_path
         )
+        # Attach the TT vision tower so prefill can splice image embeddings (multimodal path).
+        # No-op cost for text-only requests; get_image_features is only invoked when a request
+        # actually carries pixel_values.
+        model.init_vision_model()
         return cls([model], [args], mesh_device)
 
     def allocate_kv_cache(self, kv_cache_shape, dtype, num_layers):
         """Allocate paged KV (8 attn layers) + external GDN state; returns the 8 KV pairs."""
         return self.model[0].allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=1)
 
+    def _compute_vision_tokens(self, model, kwargs):
+        """Run the vision tower for this (single-user, B=1) request, if it carries images.
+
+        Mirrors the Qwen3-VL generator's multimodal check: pull this user's pixel_values +
+        image_grid_thw out of the vLLM kwargs, concatenate multiple images, and return the
+        packed image embeddings (ttnn [num_image_tokens, H]) for prefill to splice in. Returns
+        None for a text-only request, so the whole multimodal path is skipped.
+        """
+        has_images = (
+            "pixel_values" in kwargs and len(kwargs["pixel_values"]) > 0 and kwargs["pixel_values"][0] is not None
+        )
+        if not has_images:
+            return None
+
+        user_pixel_values = kwargs["pixel_values"][0]
+        user_image_grid_thw = kwargs["image_grid_thw"][0]
+        # Multiple images for this user arrive as lists; concat the patches and stack the grids.
+        if isinstance(user_pixel_values, list) and len(user_pixel_values) > 0:
+            user_pixel_values = torch.concat(user_pixel_values, dim=0)
+            user_image_grid_thw = torch.stack([g.to(dtype=torch.int32) for g in user_image_grid_thw], dim=0)
+        return model.get_image_features(user_pixel_values, user_image_grid_thw)
+
     def prefill_forward(self, tokens, page_table, kv_cache, prompt_lens, **kwargs):
         """All prefill is model-owned (Generator drives decode only)."""
         model = self.model[0]
+        vision_tokens = self._compute_vision_tokens(model, kwargs)
         if model.num_devices > 1:
-            return self._prefill_forward_tp(model, tokens, page_table, prompt_lens)
-        logits = prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace=kwargs.get("enable_trace", False))
+            return self._prefill_forward_tp(model, tokens, page_table, prompt_lens, vision_tokens=vision_tokens)
+        # Multimodal works WITH the captured trace here: prefill_dispatch routes to the traced
+        # path, which splices the image rows via a fixed-shape ttnn.where over persistent buffers
+        # (compiled at warmup, updated per request by copy_host_to_device — no request-time compile).
+        logits = prefill_dispatch(
+            model,
+            tokens,
+            page_table,
+            prompt_lens,
+            use_trace=kwargs.get("enable_trace", False),
+            vision_tokens=vision_tokens,
+        )
         logits = ttnn.to_torch(logits)
         # The vLLM runner unpacks (logits, rope_deltas) because the HF config has mrope_section;
         # zero deltas are correct for our text-only port.
         rope_deltas = torch.zeros(logits.shape[0], dtype=torch.long)
         return logits, rope_deltas
 
-    def _prefill_forward_tp(self, model, tokens, page_table, prompt_lens):
+    def _prefill_forward_tp(self, model, tokens, page_table, prompt_lens, vision_tokens=None):
         """TP (B=1) paged prefill via the model-owned masked fixed-bucket path.
 
         prefill_traced_chunked rounds the prompt up to a fixed bucket and masks the GDN to the
@@ -132,7 +192,13 @@ class Qwen35ForCausalLM(Generator):
         T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
         if tokens.shape[1] > T:
             tokens = tokens[:, :T]
-        logits = model.prefill_traced_chunked(tokens, page_table, actual_len=T)  # [1,1,vocab] replicated
+        # Multimodal is supported on TP too: prefill_traced_chunked splices the image rows via a
+        # fixed-shape ttnn.where over hidden-sharded persistent buffers (the vision rows are
+        # gathered to full hidden on host, placed along seq, then re-sharded), so no request-time
+        # compile clobbers the parked trace.
+        logits = model.prefill_traced_chunked(
+            tokens, page_table, actual_len=T, vision_tokens=vision_tokens
+        )  # [1,1,vocab] replicated
         logits = (
             ttnn.to_torch(logits, mesh_composer=ttnn.ConcatMeshToTensor(model.mesh_device, dim=0))
             .reshape(-1, model.args.vocab_size)[:1]
