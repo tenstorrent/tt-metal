@@ -452,9 +452,9 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
             const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
 
             const uint32_t input_tensor_Wt = input_tensor_shape[3] / tt::constants::TILE_WIDTH;
-            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t input_tensor_Ht = input_tensor_shape[2] / tt::constants::TILE_HEIGHT;
             const uint32_t output_tensor_Wt = output_tensor_shape[3] / tt::constants::TILE_WIDTH;
-            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+            const uint32_t output_tensor_Ht = output_tensor_shape[2] / tt::constants::TILE_HEIGHT;
             TT_ASSERT(!(input_tensor_shape[3] % tt::constants::TILE_WIDTH));
             TT_ASSERT(!(output_tensor_shape[3] % tt::constants::TILE_WIDTH));
 
