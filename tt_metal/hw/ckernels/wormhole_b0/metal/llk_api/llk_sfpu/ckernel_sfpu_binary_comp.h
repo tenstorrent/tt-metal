@@ -7,7 +7,9 @@
 
 #include <type_traits>
 
+#include "ckernel.h"
 #include "ckernel_addrmod.h"
+#include "lltt.h"
 #include "sfpi.h"
 
 namespace ckernel::sfpu {
@@ -284,6 +286,13 @@ inline void calculate_binary_comp_uint(const uint dst_index_in0, const uint dst_
 // Integer equality comparisons: eq(a,b) and ne(a,b).
 // XOR a and b; the result is zero if a == b. A conditional store writes
 // the appropriate integer 0 or 1 result.
+//
+// The seven-instruction body is recorded into the replay buffer once (with the
+// live tile offsets) and re-issued per iteration via lltt::replay, shrinking the
+// Trisc instruction footprint of the unrolled loop. The recording must stay in
+// this function because the tile offsets only become known at compute time.
+constexpr uint binary_eq_int_replay_len = 7;
+
 template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP, DataFormat DATA_FORMAT>
 inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
     static_assert(
@@ -302,18 +311,25 @@ inline void calculate_binary_eq_int(const uint dst_index_in0, const uint dst_ind
     constexpr uint default_result = is_eq ? p_sfpu::LCONST_0 : one;
     constexpr uint equal_result = is_eq ? one : p_sfpu::LCONST_0;
 
+    const uint off_in0 = dst_index_in0 * dst_tile_size;
+    const uint off_in1 = dst_index_in1 * dst_tile_size;
+    const uint off_out = dst_index_out * dst_tile_size;
+
     TTI_SFPLOADI(one, sfpi::SFPLOADI_MOD0_USHORT, 0x0001);
+
+    // Record the body without executing it, then replay it per iteration.
+    lltt::record<lltt::NoExec>(0, binary_eq_int_replay_len);
+    TT_SFPLOAD(a, ld_st_mod, ADDR_MOD_3, off_in0);
+    TT_SFPLOAD(b, ld_st_mod, ADDR_MOD_3, off_in1);
+    TT_SFPSTORE(default_result, ld_st_mod, ADDR_MOD_3, off_out);
+    TTI_SFPXOR(0, b, a, 0);
+    TTI_SFPSETCC(0, a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+    TT_SFPSTORE(equal_result, ld_st_mod, ADDR_MOD_2, off_out);
+    TTI_SFPENCC(0, 0, 0, 0);
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(a, ld_st_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
-        TT_SFPLOAD(b, ld_st_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
-        TT_SFPSTORE(default_result, ld_st_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
-
-        TTI_SFPXOR(0, b, a, 0);
-        TTI_SFPSETCC(0, a, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
-        TT_SFPSTORE(equal_result, ld_st_mod, ADDR_MOD_2, dst_index_out * dst_tile_size);
-        TTI_SFPENCC(0, 0, 0, 0);
+        lltt::replay(0, binary_eq_int_replay_len);
     }
 }
 }  //  namespace ckernel::sfpu
