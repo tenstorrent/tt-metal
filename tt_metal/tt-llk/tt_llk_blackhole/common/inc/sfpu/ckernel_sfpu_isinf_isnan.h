@@ -23,10 +23,10 @@ inline sfpi::vFloat _calculate_isinf_(const sfpi::vFloat& in)
     // SFPU microcode
     sfpi::vInt exp   = sfpi::exexp(in);
     sfpi::vInt man   = sfpi::exman(in);
-    sfpi::vFloat out = sfpi::vConst0;
+    sfpi::vFloat out = 0.0f;
     v_if (exp == 128 && man == 0)
     {
-        out = sfpi::vConst1;
+        out = 1.0f;
     }
     v_endif;
     return out;
@@ -45,11 +45,11 @@ inline sfpi::vFloat _calculate_isposinf_(const sfpi::vFloat& in)
     // SFPU microcode
     sfpi::vInt exp     = sfpi::exexp(in);
     sfpi::vInt man     = sfpi::exman(in);
-    sfpi::vFloat out   = sfpi::vConst0;
-    sfpi::vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000; // returns 0 for +ve value
-    v_if (signbit == 0 && exp == 128 && man == 0)
+    sfpi::vInt sgn     = sfpi::exsgn(in);
+    sfpi::vFloat out   = 0.0f;
+    v_if (sgn == 0 && exp == 128 && man == 0)
     {
-        out = sfpi::vConst1;
+        out = 1.0f;
     }
     v_endif;
     return out;
@@ -68,11 +68,11 @@ inline sfpi::vFloat _calculate_isneginf_(const sfpi::vFloat& in)
     // SFPU microcode
     sfpi::vInt exp     = sfpi::exexp(in);
     sfpi::vInt man     = sfpi::exman(in);
-    sfpi::vFloat out   = sfpi::vConst0;
-    sfpi::vInt signbit = sfpi::reinterpret<sfpi::vInt>(in) & 0x80000000; // returns 0x80000000 for -ve value
-    v_if (signbit == 0x80000000 && exp == 128 && man == 0)
+    sfpi::vInt sgn     = sfpi::exsgn(in);
+    sfpi::vFloat out   = 0.0f;
+    v_if (sgn != 0 && exp == 128 && man == 0)
     {
-        out = sfpi::vConst1;
+        out = 1.0f;
     }
     v_endif;
     return out;
@@ -90,10 +90,10 @@ inline sfpi::vFloat _calculate_isnan_(const sfpi::vFloat& in)
     // SFPU microcode
     sfpi::vInt exp   = sfpi::exexp(in);
     sfpi::vInt man   = sfpi::exman(in);
-    sfpi::vFloat out = sfpi::vConst0;
+    sfpi::vFloat out = 0.0f;
     v_if (exp == 128 && man != 0)
     {
-        out = sfpi::vConst1;
+        out = 1.0f;
     }
     v_endif;
     return out;
@@ -105,12 +105,12 @@ inline sfpi::vFloat _calculate_isfinite_(const sfpi::vFloat& v)
     // SFPU microcode
     // A number is finite if it's neither infinity nor NaN
     sfpi::vInt exp      = sfpi::exexp(v);
-    sfpi::vFloat result = sfpi::vConst1; // Assume finite (1.0f) by default
+    sfpi::vFloat result = 1.0f; // Assume finite by default
 
     // If exponent is 128, the number is either infinity or NaN (not finite)
     v_if (exp == 128)
     {
-        result = sfpi::vConst0;
+        result = 0.0f;
     }
     v_endif;
 
@@ -123,29 +123,30 @@ inline void _calculate_sfpu_isinf_isnan_()
     // SFPU microcode
     for (int d = 0; d < ITERATIONS; d++)
     {
-        sfpi::vFloat in = sfpi::dst_reg[0];
+        sfpi::vFloat val = sfpi::dst_reg[0];
 
         if constexpr (operation == SfpuType::isinf)
         {
-            sfpi::dst_reg[0] = _calculate_isinf_<APPROXIMATION_MODE>(in);
+            val = _calculate_isinf_<APPROXIMATION_MODE>(val);
         }
         else if constexpr (operation == SfpuType::isposinf)
         {
-            sfpi::dst_reg[0] = _calculate_isposinf_<APPROXIMATION_MODE>(in);
+            val = _calculate_isposinf_<APPROXIMATION_MODE>(val);
         }
         else if constexpr (operation == SfpuType::isneginf)
         {
-            sfpi::dst_reg[0] = _calculate_isneginf_<APPROXIMATION_MODE>(in);
+            val = _calculate_isneginf_<APPROXIMATION_MODE>(val);
         }
         else if constexpr (operation == SfpuType::isnan)
         {
-            sfpi::dst_reg[0] = _calculate_isnan_<APPROXIMATION_MODE>(in);
+            val = _calculate_isnan_<APPROXIMATION_MODE>(val);
         }
         else if constexpr (operation == SfpuType::isfinite)
         {
-            sfpi::dst_reg[0] = _calculate_isfinite_<APPROXIMATION_MODE>(in);
+            val = _calculate_isfinite_<APPROXIMATION_MODE>(val);
         }
 
+        sfpi::dst_reg[0] = val;
         sfpi::dst_reg++;
     }
 }
