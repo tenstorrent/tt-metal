@@ -118,6 +118,8 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
                         ReducePool.Sum,
                         ReducePool.Average,
                     ):
+                        if pool_type == ReducePool.Average and in_fmt.is_integer():
+                            continue
                         combinations.append(
                             (fmt, acc, dest_sync, dimensions, pool_type)
                         )
