@@ -230,7 +230,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_cluster_axis") = nb::none(),
             nb::arg("fsdp_multi_device_global_semaphore") = std::vector<GlobalSemaphore>{},
             nb::arg("persistent_weight_buffer") = nb::none(),
-            nb::arg("fsdp_topology") = nb::none()});
+            nb::arg("fsdp_topology") = nb::none(),
+            nb::arg("fuse_swiglu") = false});
 }
 
 }  // namespace ttnn::operations::experimental::ccl

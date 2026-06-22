@@ -414,9 +414,9 @@ grid_12_8_configs = {
     # Concat-shapes grid sweep — bh_4x8_sp0_tp1 (TP8_SP4), K_global=6144
     # Source: 1024_TP8_X_both_06_21_26.csv.  Swept 2026-06-22.
     # All ops: AllGatherMinimalMatmulAsyncOp (agmm).
-    (1152, 6144, 4608): (8, 8, 9, (4, 1)),  # 445.2 µs, −2.7% vs 12×9 — ff1 xc-merged plain
-    (1024, 6144, 4608): (4, 8, 9, (4, 1)),  # 423.4 µs, −2.1% vs 12×9 — ff1 spatial plain
-    (128, 6144, 4608): (2, 6, 14, (2, 2)),  # 388.1 µs (+8.5% vs 12×9 winner) — 12×9 preferred
+    (1152, 6144, 4608): (3, 8, 10, (3, 1)),  # fused swiglu optimized — ff1 xc-merged plain
+    (1024, 6144, 4608): (3, 6, 10, (3, 1)),  # fused swiglu optimized — ff1 spatial plain
+    (128, 6144, 4608): (2, 8, 6, (2, 2)),  # fused swiglu optimized — 12×9 preferred
     (1152, 6144, 2304): (3, 8, 10, (3, 1)),  # 273.0 µs, −7.1% vs 12×9 — attn to_qkv xc-merged
     (1024, 6144, 2304): (3, 8, 10, (3, 1)),  # 252.6 µs, −6.4% vs 12×9 — attn to_qkv spatial
     (1024, 6144, 768): (8, 8, 3, (4, 1)),  # 194.5 µs, ≈flat vs 12×9 (194.3) — attn to_out spatial
