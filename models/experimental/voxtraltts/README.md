@@ -406,7 +406,11 @@ e.g : text_prefill, text_decode, acoustic_forward, audio_decode
 
 Full TT inference demo: text (or pre-computed codes/latents) → `.wav` on device. Trace replay is **on by default** on P150 and BH QB2.
 
+<<<<<<< Updated upstream
 With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `utils/test_common.py`), voice `casual_male`, `text_max_seq_len=4096`, and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run exactly this default path (`CI=true` also sets `warmup_iters=0` to skip the untimed warmup pass).
+=======
+With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `tests/common.py`), voice `casual_male`, `text_max_seq_len=4096`, and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run the same default path with `warmup_iters=1` so the timed `run` pass uses trace replay (compile/capture happen on the untimed warmup pass).
+>>>>>>> Stashed changes
 
 #### Prerequisites
 
@@ -437,7 +441,7 @@ export MESH_DEVICE=P150x4
 python models/experimental/voxtraltts/demo/demo.py
 ```
 
-Long prompts on 1×4 may use sentence-aligned chunking automatically when the word count exceeds the trace chunk threshold.
+All text prompts run as a **single AR pass** on both P150 (1×1) and P150x4 (1×4) — no sentence chunking.
 
 #### Customizing a local run
 
@@ -474,7 +478,7 @@ Run `python models/experimental/voxtraltts/demo/demo.py --help` for the live lis
 | `--text-max-seq-len` | `4096` | Maximum text tokens for prefill / KV cache length. For contexts **> 4096** on P150, also pass `--use-paged-kv-cache` |
 | `--max-speech-tokens` | `5000` | Upper bound on autoregressive acoustic frames. The demo **auto-raises** this from word count (~8 tokens/word). Set `64` for smoke tests; set `0` to use the auto-estimate only |
 | `--seed` | `0` | RNG seed for flow-matching noise (reproducible acoustic sampling) |
-| `--warmup-iters` | `1` (`0` when `CI=true`) | Number of untimed warmup passes before the measured run (skipped when trace is disabled via `--no-decode-trace`) |
+| `--warmup-iters` | `1` | Untimed warmup passes before the measured run (compile + trace capture; set `0` to skip). Skipped when trace is disabled via `--no-decode-trace` |
 
 **KV cache / long prompts (`--mode text`)**
 
@@ -497,12 +501,12 @@ Run `python models/experimental/voxtraltts/demo/demo.py --help` for the live lis
 | *(default)* | production opts | BFP8 weights + HiFi2 decode matmuls + fused paths (best RTF) |
 | `--hf-aligned-text` | off (flag) | HF-aligned text decode: BF16/HiFi4 settings (slower; higher PCC — use for accuracy debugging) |
 
-**Trace and chunking (`--mode text`)**
+**Trace (`--mode text`)**
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | *(default)* | trace **on** | `VOXTRAL_DECODE_TRACE=1` — traced AR text-decode replay (best RTF). On 1×1, 2CQ stays off unless env sets it |
-| `--no-decode-trace` | off (flag) | Disable trace replay and 2CQ; slower direct forward per AR step (same single-pass chunking as trace on 1×1) |
+| `--no-decode-trace` | off (flag) | Disable trace replay and 2CQ; slower direct forward per AR step |
 
 #### CPU reference demo (no TT hardware)
 
@@ -526,11 +530,10 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 | `HF_MODEL` | `mistralai/Voxtral-4B-TTS-2603` | Model weights path or HF repo ID (used when `--model` is omitted; same as other models pipelines) |
 | `VOXTRAL_TTS_MODEL` | — | Optional override if `HF_MODEL` is set to a different model in a shared shell |
 | `MESH_DEVICE` | unset → `P150` (1×1) | Compute mesh: `P150` (1×1 submesh on QB2) or `P150x4` (QB2 tensor-parallel text) |
-| `CI` | unset | When `true`, demo uses `warmup_iters=0` (CI pipelines set this; no other demo flags required) |
+| `CI` | unset | Set by CI pipelines for other model paths (e.g. `local_files_only` weight load); does not change demo warmup |
 | `VOXTRAL_DECODE_TRACE` | `1` | Traced AR text-decode replay. Set `0` or pass `--no-decode-trace` to disable |
 | `VOXTRAL_DECODE_TRACE_2CQ` | — | Not read at runtime; use `--no-decode-trace-2cq` or `configure_decode_trace(decode_trace_2cq=False)` |
 | `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size in bytes (passed to device open) |
-| `VOXTRAL_TP_CHUNK_MAX_WORDS` | `50` on 1×4 | Sentence-chunk word limit on multi-device mesh (override for chunking experiments) |
 | `VOXTRAL_OUTPUT_HPF_HZ` | `80` | High-pass filter cutoff (Hz) applied to saved `.wav` to remove sub-speech rumble. Set `0` to disable |
 
 ---
@@ -742,7 +745,7 @@ export VOXTRAL_AUDIO_TOKENIZER_MATMUL_PROGCFG_OFF=1   # disable Tier 1 configs
 ## 9. Work in progress
 
 - Optimization for **BH QB2** is still in progress.
-- During QB2 testing, audible artifacts/noise are observed near the end of each chunk due to the current chunking mechanism. Root-cause analysis is underway, and a fix will be implemented based on the findings.
+- During QB2 testing on 1×4, very long single-pass prompts may hit END_AUDIO early if TP text decode drifts; root-cause analysis is underway.
 
 ## 10. References
 
