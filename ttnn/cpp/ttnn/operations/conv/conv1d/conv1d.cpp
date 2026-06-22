@@ -7,6 +7,7 @@
 #include <array>
 #include <variant>
 
+#include <tt_stl/assert.hpp>
 #include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -31,6 +32,7 @@ Conv1dResult conv1d(
     const std::optional<const Conv1dConfig>& conv_config,
     const std::optional<const DeviceComputeKernelConfig>& compute_config,
     const std::optional<const MemoryConfig>& memory_config,
+    const std::optional<const Conv1dSliceConfig>& slice_config,
     bool return_output_dim,
     bool return_weights_and_bias) {
     // reshape input tensor to 4D, if it is not already
@@ -54,6 +56,20 @@ Conv1dResult conv1d(
         };
     };
 
+    // Conv1d reshapes the input to [N, 1, input_length, C], so the height dimension is always 1.
+    // DRAM slicing is therefore only meaningful along the width dimension (DRAM_WIDTH, i.e. input_length);
+    // DRAM_HEIGHT would produce a single degenerate slice and silently collapse back to L1.
+    // When no slice config is provided, preserve the historical conv1d behaviour of forcing L1_FULL.
+    // Forwarding nullopt instead would route by input location (conv2d's default), sending DRAM/host
+    // inputs through the DRAM slicing path - which breaks existing auto_shard / shard_layout=None
+    // callers (the slicing path requires a shard layout). So conv1d opts in to DRAM slicing explicitly.
+    const ttnn::prim::Conv2dSliceConfig effective_slice_config = slice_config.value_or(
+        ttnn::prim::Conv2dSliceConfig{.slice_type = ttnn::prim::Conv2dSliceConfig::SliceType::L1_FULL});
+    TT_FATAL(
+        effective_slice_config.slice_type != ttnn::prim::Conv2dSliceConfig::SliceType::DRAM_HEIGHT,
+        "Conv1D does not support DRAM_HEIGHT slicing because the convolution height is always 1. "
+        "Use DRAM_WIDTH slicing (slices along input_length) or L1_FULL.");
+
     auto [output_tensor, output_dimensions, weights_and_bias] =
         std::get<static_cast<int>(ConvResultType::OUTPUT_DIM_WEIGHTS_AND_BIAS)>(ttnn::conv2d(
             input_tensor_4d,
@@ -74,9 +90,7 @@ Conv1dResult conv1d(
             conv_config,
             compute_config,
             memory_config,
-            ttnn::prim::Conv2dSliceConfig{
-                .slice_type =
-                    ttnn::prim::Conv2dSliceConfig::SliceType::L1_FULL},  // Conv1D doesn't support DRAM Slicing. Only L1
+            effective_slice_config,
             true,
             true));
 
