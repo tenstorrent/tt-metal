@@ -125,7 +125,7 @@ def convert_vision_block_hf_to_meta(state_dict, n_heads, n_kv_heads, head_dim, n
     indirect=True,
 )
 @pytest.mark.parametrize("token_budget", [140 * 9, 280 * 9, 560 * 9, 1120 * 9])
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 # Model and attention prefill tests should run both with and without paged attention to debug any issues that may occur with default attention
 def test_vision_attention_inference(
     mesh_device,
