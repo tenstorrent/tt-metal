@@ -813,15 +813,19 @@ class TtTransformer(LightweightModule):
             B == self.args.max_batch_size
         ), f"Batch size {B} must be equal to max_batch_size {self.args.max_batch_size}"
 
-        # qwen3.6 batch-distribution: the decode activation is REPLICATED across all
-        # 32 devices (the 4 mesh columns are the H/4 tensor-parallel split, NOT
-        # data-parallel batch groups), so EVERY device runs all N users with
-        # my_batch_idx=0..N-1. page_table / current_pos must therefore be REPLICATED
-        # too (every device holds all N rows) — the llama70b column-shard convention
-        # (dims=(None,-2)/(None,0), 8 users/column) routes B>1 users to wrong pages /
-        # out-of-range rows. Force the replicated path and disable the L1-sharded
-        # column-split branches for qwen3.6 at B>1. (B==1 already replicated.)
-        if self.is_qwen36 and B > 1:
+        # qwen3.6 batch-distribution: depends on FA_BATCH_DP mode.
+        #
+        # Without BATCH-DP (QWEN36_FA_BATCH_DP=0): 4 columns are pure TP — every
+        # device processes all N users, so page_table/current_pos must be REPLICATED
+        # (dims=(None,None)) and the L1-sharded column-split branches must be off.
+        #
+        # With BATCH-DP (default, QWEN36_FA_BATCH_DP=1): reduce_scatter on cluster_
+        # axis=1 splits the N=32 users across 4 columns (8/col). page_table and
+        # current_pos must be COLUMN-SHARDED (dims=(None,0)) so each column gets its
+        # own 8 rows — paged_fused_update_cache asserts page_table.shape[0] == N
+        # where N is the per-column user count (8 after reduce_scatter).
+        _qwen36_batch_dp = self.is_qwen36 and B > 1 and os.environ.get("QWEN36_FA_BATCH_DP", "1") == "1"
+        if self.is_qwen36 and B > 1 and not _qwen36_batch_dp:
             is_cur_pos_sharded = False
             is_page_table_sharded = False
 
@@ -856,9 +860,14 @@ class TtTransformer(LightweightModule):
         if is_cur_pos_sharded:
             cur_pos_shard_dim = 1
             current_pos = current_pos.repeat(self.args.sub_core_grids.num_cores(), 1)
-        # qwen3.6: replicate current_pos at B>1 (see note above). Non-qwen36
-        # keeps the llama70b column-shard (dims=(None,0)) at B>1.
-        cur_pos_dims = (None, None) if (self.is_qwen36 or B == 1) else (None, cur_pos_shard_dim)
+        # qwen3.6: shard dim-0 across cols when BATCH-DP active (each col gets 8
+        # positions for its 8 users); replicate otherwise. Non-qwen36 uses llama70b
+        # column-shard (dims=(None,0)) at B>1.
+        cur_pos_dims = (
+            (None, 0)
+            if _qwen36_batch_dp
+            else ((None, None) if (self.is_qwen36 or B == 1) else (None, cur_pos_shard_dim))
+        )
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
@@ -877,9 +886,12 @@ class TtTransformer(LightweightModule):
                 ]
                 page_table = torch.cat(repeated_page_table_chunks, dim=0)
 
-            # qwen3.6: replicate page_table at B>1 (see note above). Non-qwen36
-            # keeps the llama70b column-shard (dims=(None,-2)) at B>1.
-            page_table_dims = (None, None) if (self.is_qwen36 or B == 1) else (None, -2)
+            # qwen3.6: shard dim-0 across cols when BATCH-DP active (each col gets 8
+            # page_table rows for its 8 users); replicate otherwise. Non-qwen36 uses
+            # llama70b column-shard (dims=(None,-2)) at B>1.
+            page_table_dims = (
+                (None, 0) if _qwen36_batch_dp else ((None, None) if (self.is_qwen36 or B == 1) else (None, -2))
+            )
             page_table = ttnn.from_torch(
                 page_table,
                 device=None,

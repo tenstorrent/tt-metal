@@ -174,15 +174,33 @@ class TT_CCL:
         self.barrier_semaphore_idx = [0, 0]
 
     def reinit_semaphores(self):
-        """Recreate all CCL semaphores at fresh L1 addresses.
+        """Recreate all CCL semaphores at genuinely fresh L1 addresses.
 
-        ttnn.synchronize_device drains the worker dispatch queue but does NOT
-        clear the ETH fabric's internal ring-buffer / fetch-queue state, which
-        is keyed on the L1 semaphore address. Reusing the same addresses on the
-        next user's prefill collective causes the ETH ring to see stale state and
-        hang. Allocating NEW semaphores at NEW L1 addresses sidesteps this —
-        identical to the vision-CCL fix (manager.py _init_semaphores).
+        The ETH fabric's internal ring-buffer state is keyed on the L1 semaphore
+        address. Replacing Python semaphore objects without keeping the old ones
+        alive allows Python GC to free the old L1 addresses, which the allocator
+        then immediately reuses for the "new" semaphores — making the reinit a
+        no-op from the ETH ring's perspective.
+
+        Fix: retire old semaphore objects into _retired_semaphores so their L1
+        addresses are never freed. New semaphores always get addresses beyond the
+        current high-water mark. Cost: ~2.5 KB of L1 per user (2 slots × 5
+        semaphore types × 2 axes × 128 B) — negligible for ≤ hundreds of users.
         """
+        if not hasattr(self, "_retired_semaphores"):
+            self._retired_semaphores = []
+        # Retire old handles so their L1 addresses are not freed/reused.
+        retired = {
+            "barrier": self.barrier_semaphore_handles,
+            "gather": self.gather_semaphore_handles,
+        }
+        if self.mode == "prefill":
+            retired["from"] = getattr(self, "from_semaphore_handles", [[], []])
+            retired["to"] = getattr(self, "to_semaphore_handles", [[], []])
+            retired["reduce"] = getattr(self, "reduce_semaphore_handles", [[], []])
+        self._retired_semaphores.append(retired)
+
+        # Allocate new semaphores — addresses guaranteed fresh (old ones still live).
         self.barrier_semaphore_handles = [[], []]
         if self.mode == "prefill":
             self.from_semaphore_handles = [[], []]
@@ -742,6 +760,10 @@ class TT_CCL:
             else self.get_prefill_reduce_scatter_buffers()
         )
         self.all_gather_buffers = self.get_prefill_all_gather_buffers()
+        # Reinit semaphores at fresh L1 addresses so the ETH ring sees no stale
+        # state from the previous user's prefill. Old semaphore objects are retired
+        # (not freed) to prevent L1 address reuse — see reinit_semaphores().
+        self.reinit_semaphores()
 
     def get_decode_reduce_scatter_buffers(self, dtype=ttnn.bfloat8_b, num_buffers=None):
         """
