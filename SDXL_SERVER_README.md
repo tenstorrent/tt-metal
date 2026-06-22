@@ -7,7 +7,7 @@ A standalone SDXL inference server that reproduces tt-media-server functionality
 ### 1. Start the Server
 
 ```bash
-cd /home/tt-admin/tt-metal
+cd "$TT_METAL_HOME"
 ./launch_sdxl_server.sh
 ```
 
@@ -21,7 +21,7 @@ All workers ready. Server is accepting requests.
 In a **new terminal**:
 
 ```bash
-cd /home/tt-admin/tt-metal
+cd "$TT_METAL_HOME"
 python image_test.py "Photograph of an orange Volcano on a tropical island while someone suntans on a beach with a friendly dinosaur"
 ```
 
@@ -32,7 +32,7 @@ Output saved to: `output.jpg`
 ```bash
 python image_test.py \
   "Photograph of an orange Volcano on a tropical island while someone suntans on a beach with a friendly dinosaur" \
-  --compare /home/tt-admin/tt-inference-server/reference_image.jpg \
+  --compare /path/to/reference_image.jpg \
   --output test_output.jpg
 ```
 
@@ -133,11 +133,11 @@ python image_test.py "Your prompt" \
 
 ### Environment Variables (Set by launch script)
 ```bash
-PYTHONPATH=/home/tt-admin/tt-metal
+PYTHONPATH=$TT_METAL_HOME
 TT_VISIBLE_DEVICES=0,1,2,3
-TT_METAL_HOME=/home/tt-admin/tt-metal
+TT_METAL_HOME=<path to your tt-metal checkout>
 TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=7,7
-HF_HOME=/mnt/MLPerf/tt_dnn-models/hf_home
+HF_HOME=$HOME/.cache/huggingface
 TT_MM_THROTTLE_PERF=5
 ```
 
@@ -174,7 +174,7 @@ class SDXLConfig:
 
 **Error**: `Python environment not found`
 ```bash
-cd /home/tt-admin/tt-metal
+cd "$TT_METAL_HOME"
 ./create_venv.sh
 ```
 

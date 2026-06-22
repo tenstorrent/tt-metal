@@ -76,14 +76,20 @@ echo "  LD_LIBRARY_PATH: $LD_LIBRARY_PATH"
 # Check devices
 echo ""
 echo "Checking TT devices..."
-TT_SMI_VENV="/home/tt-admin/tt-smi/venv"
+# Resolve tt-smi: prefer an explicit TT_SMI_VENV, else use tt-smi from PATH
+# (tt-installer puts it there). No machine-specific default path.
+TT_SMI_VENV="${TT_SMI_VENV:-}"
+_TT_SMI_ACTIVATED=0
 
-if [ ! -f "${TT_SMI_VENV}/bin/activate" ]; then
-    echo "Warning: tt-smi venv not found at ${TT_SMI_VENV}"
+if [ -n "${TT_SMI_VENV}" ] && [ -f "${TT_SMI_VENV}/bin/activate" ]; then
+    source "${TT_SMI_VENV}/bin/activate"
+    _TT_SMI_ACTIVATED=1
+fi
+
+if [ "${_TT_SMI_ACTIVATED}" != "1" ] && ! command -v tt-smi >/dev/null 2>&1; then
+    echo "Warning: tt-smi not found (set TT_SMI_VENV or put tt-smi on PATH)"
 else
     # Use tt-smi snapshot for non-interactive device listing
-    source "${TT_SMI_VENV}/bin/activate"
-
     echo "Available devices:"
     tt-smi -s --snapshot_no_tty 2>/dev/null | python3 -c "
 import sys, json
@@ -105,7 +111,7 @@ except Exception as e:
     sys.exit(1)
 " || echo "Warning: Could not verify TT devices"
 
-    deactivate
+    [ "${_TT_SMI_ACTIVATED}" = "1" ] && deactivate
 fi
 
 # Parse --clear-cache flag (must happen before server starts)

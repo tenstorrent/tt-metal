@@ -22,8 +22,8 @@ class SDXLRunner:
     model loading, warmup, and inference execution.
 
     Based on:
-    - /home/tt-admin/tt-inference-server/tt-media-server/tt_model_runners/sdxl_generate_runner_trace.py
-    - /home/tt-admin/tt-metal/models/demos/stable_diffusion_xl_base/demo/demo.py
+    - tt-inference-server: tt-media-server/tt_model_runners/sdxl_generate_runner_trace.py
+    - tt-metal: models/demos/stable_diffusion_xl_base/demo/demo.py
     """
 
     def __init__(self, worker_id: int, config: SDXLConfig):
