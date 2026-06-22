@@ -12,6 +12,10 @@ using namespace ckernel;
 using namespace ckernel::trisc;
 using namespace ckernel::math;
 
+// Debug: EBREAK in _reduce_row_transpose_fpu_ after cfg setup for this tile index.
+inline std::uint32_t g_llk_math_reduce_tile_idx              = 0;
+constexpr std::uint32_t LLK_REDUCE_TRANSPOSE_EBREAK_TILE_IDX = 1;
+
 /**
  * @brief Emit the pool instruction (GMPOOL for MAX, GAPOOL for SUM/AVG) matching the reduce pool type.
  *
@@ -32,6 +36,220 @@ void tti_pool_instr_func()
     else
     {
         TTI_GAPOOL(CLR_SRC, POOL_SIZE, ADDR_MOD, MAX_POOL_IDX_EN, DST_ADDR);
+    }
+}
+
+/**
+ * @brief Enable SrcA/SrcB format override before reduce-row MOV/transpose glue.
+ *
+ * Quasar @ref _configure_mov_ops_explicit_alu_data_format_state_ already leaves override enabled for
+ * MOV_OPS_EXPLICIT_FMT; this enter/exit pair scopes override to the MOV sequence (WH parity).
+ * Zero_Flag_disabled_src is not exposed in Quasar alu_config_t (unlike WH).
+ */
+inline void _reduce_row_transpose_alu_cfg_enter_()
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
+
+    cfg_rmw(ALU_FORMAT_SPEC_REG_SrcA_override_RMW, 1);
+    cfg_rmw(ALU_FORMAT_SPEC_REG_SrcB_override_RMW, 1);
+    // cfg_rmw(ALU_ACC_CTRL_Fp32_enabled_RMW, 1);
+    // cfg_rmw(ALU_ACC_CTRL_INT8_math_enabled_RMW, 0);
+    cfg_rmw(ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW, 1);
+}
+
+/**
+ * @brief Disable SrcA/SrcB format override after reduce-row MOV/transpose glue.
+ */
+inline void _reduce_row_transpose_alu_cfg_exit_()
+{
+    TTI_STALLWAIT(p_stall::STALL_CFG, 0, p_stall::WAIT_SFPU, p_stall::MATH);
+
+    cfg_rmw(ALU_FORMAT_SPEC_REG_SrcA_override_RMW, 0);
+    cfg_rmw(ALU_FORMAT_SPEC_REG_SrcB_override_RMW, 0);
+    // cfg_rmw(ALU_ACC_CTRL_Fp32_enabled_RMW, 0);
+    // cfg_rmw(ALU_ACC_CTRL_INT8_math_enabled_RMW, 1);
+    cfg_rmw(ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW, 0);
+}
+
+/**
+ * @brief One-time prime of the SrcB transpose region (and engine latch) with zeros,
+ *        so the first real hi16 MOVB2D in _reduce_row_transpose_fpu_ doesn't read
+ *        power-on garbage. Must transpose KNOWN-ZERO data, not raw dest.
+ */
+inline void _reduce_row_transpose_warmup_()
+{
+    constexpr std::uint32_t warmup_scratch_row = 16; // any in-tile row the real pool will overwrite
+
+    tensix_sync();
+    _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
+    _reduce_row_transpose_alu_cfg_enter_();
+
+    // Clear SrcA AND SrcB memory (note: CLR_AB, not just CLR_A)
+    // TTI_ZEROSRC(0, 0, 0, 0, p_zerosrc::READ_BANK, p_zerosrc::CURR_BANK, p_zerosrc::CLR_AB);
+
+    // Guarantee the source datums are zero before we transpose them
+    // TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, warmup_scratch_row);
+
+    // Dummy transpose of zeros: flushes the transpose-engine latch and leaves
+    // SrcB[16:31] holding a known zero column before the first real use.
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, warmup_scratch_row);
+    // TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, warmup_scratch_row);
+
+    tensix_sync();
+    _reduce_row_transpose_alu_cfg_exit_();
+    _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
+    tensix_sync();
+}
+
+/**
+ * @brief Int32 half-dest row transpose at an explicit dest row (row-reduce uses row 0).
+ *
+ * Required whenever reading/writing int32 dest datums: each 32-bit value is split across
+ * DEST_NORM (hi16) and DEST_32B_LOW (lo16). A single MOVD2B cannot see the full word.
+ */
+inline void _reduce_row_transpose_fpu_(const std::uint32_t dest_addr = 0)
+{
+    tensix_sync();
+    _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
+    _reduce_row_transpose_alu_cfg_enter_();
+
+    TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+
+    // Step 1: Read lo16 from dest into SrcB rows 16-31 and transpose.
+    TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, dest_addr);
+    TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, dest_addr);
+
+    // Step 2: Cache transposed lo16 from SrcB rows 16-31 into SrcA rows 0-15.
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+    TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+
+    // Step 3: Read hi16 from dest into SrcB rows 16-31 and transpose.
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, dest_addr);
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, dest_addr);
+
+    // Step 4: Write transposed hi16 back to dest from SrcB rows 16-31.
+    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW16_OFFSET + 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, dest_addr + 0);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, dest_addr + 4);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, dest_addr + 8);
+    TTI_MOVB2D(p_mov::DEST_NORM, p_mov_src_to_dest::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_mov_src_to_dest::MOV_4_ROWS, p_movb2d::BCAST_OFF, dest_addr + 12);
+
+    // Step 5: Write cached lo16 from SrcA back to dest lo16 address space.
+    TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, dest_addr + 0);
+    TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, dest_addr + 8);
+
+    tensix_sync();
+    _reduce_row_transpose_alu_cfg_exit_();
+    _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
+    tensix_sync();
+}
+
+// // Quasar Int32 half-dest row transpose: hi16 → SrcB[0:15], lo16 → SrcB[16:31], write both back
+// // without SrcA cache (matches llk_math_transpose_dest.h 32-bit within-face pattern).
+// inline void _reduce_row_transpose_fpu_()
+// {
+//     _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
+//     _reduce_row_transpose_alu_cfg_enter_();
+
+//     // Pool leaves 16 row sums in dest row 0 (cols 0-15). MOV_1_ROW covers 8 elements per read.
+//     // Step 1: Read hi16 from dest row 0 → SrcB rows 0,8 (transposed).
+//     TTI_MOVD2B(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
+//     TTI_MOVD2B(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
+
+//     // Step 2: Read lo16 from dest row 0 → SrcB rows 16,24 (transposed).
+//     TTI_MOVD2B(p_mov::DEST_32B_LOW, 16, ADDR_MOD_0, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 0);
+//     TTI_MOVD2B(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_movd2b::MOV_8_ROWS, p_movd2b::TRANSPOSE_ON, 8);
+
+//     // Step 3: Write transposed hi16 back to dest from SrcB rows 0,8.
+//     TTI_MOVB2D(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
+//     TTI_MOVB2D(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
+
+//     // Step 4: Write transposed lo16 back to dest from SrcB rows 16,24.
+//     TTI_MOVB2D(p_mov::DEST_32B_LOW, 16, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 0);
+//     TTI_MOVB2D(p_mov::DEST_32B_LOW, 24, ADDR_MOD_0, p_mov_src_to_dest::MOV_8_ROWS, p_movb2d::BCAST_OFF, 8);
+
+//     _reduce_row_transpose_alu_cfg_exit_();
+//     _llk_math_srcAB_hw_configure_<false , false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
+
+//     // MOVB2D advances the dest counter; reset so the caller's CR_D+32 lands on face2 (row 32).
+// }
+
+/**
+ * @brief Pool one pair of input faces (one output face row) into dest at an explicit row offset.
+ *
+ * Int32-dest reduce only (LoFi exact-integer accumulation; no fidelity multi-pass).
+ */
+template <PoolType POOL_TYPE, std::uint8_t DST_ADDR>
+inline void _reduce_row_pool_face_pair_()
+{
+    tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, DST_ADDR>();
+    tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, DST_ADDR>();
+}
+
+/**
+ * @brief Perform reduce-row at runtime for Int32 dest using FPU transpose glue (not replay buffer).
+ */
+template <PoolType POOL_TYPE>
+inline void _llk_math_reduce_row_int32_fpu_(const TensorShape& tensor_shape)
+{
+    _reduce_row_pool_face_pair_<POOL_TYPE, 0>();
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+    _reduce_row_transpose_fpu_();
+
+    if (tensor_shape.num_faces_r_dim > 1)
+    {
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 32, p_setrwc::SET_D);
+        TTI_SETRWC(p_setrwc::CLR_A, p_setrwc::CR_D, 0, p_setrwc::SET_B);
+
+        _reduce_row_pool_face_pair_<POOL_TYPE, 0>();
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+        _reduce_row_transpose_fpu_();
+    }
+
+    TTI_SETRWC(p_setrwc::CLR_A, 0, 0, p_setrwc::SET_BD);
+}
+
+/**
+ * @brief Perform reduce-scalar at runtime for Int32 dest using FPU transpose glue (not replay buffer).
+ *
+ * Flow: pool 4 faces -> 1x16 int32 row at scratch -> hi/lo transpose -> MOVD2B/MOVB2A column into
+ * SrcA -> final pool to dest[0]. Hi/lo transpose is required for int32 dest layout (each datum
+ * spans hi/lo address spaces), not because partial sums exceed 16 bits.
+ */
+template <PoolType POOL_TYPE>
+inline void _llk_math_reduce_scalar_int32_fpu_(const TensorShape& tensor_shape)
+{
+    constexpr std::uint32_t scratch_dst_addr = 16;
+
+    for (std::uint32_t face = 0; face < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face++)
+    {
+        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
+    }
+
+    tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, scratch_dst_addr>();
+
+    // WH parity: AB counters at 0; MOVD2B uses explicit scratch_dst_addr operand.
+    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, p_setrwc::SET_AB);
+
+    // 1 int32 row -> 16 int32 rows in dest[scratch, scratch+15].
+    _reduce_row_transpose_fpu_(scratch_dst_addr);
+
+    // MOVD2A: arg `src` is offset from dest counter; arg `dst` is SrcA row (see move_d2a_fixed_face).
+
+    TTI_MOVD2A(p_mov::DEST_NORM, 0, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, 0);
+    TTI_MOVD2A(p_mov::DEST_NORM, 8, ADDR_MOD_0, p_movd2a::MOV_8_ROWS, 8);
+
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, scratch_dst_addr);
+
+    if constexpr (POOL_TYPE == PoolType::MAX)
+    {
+        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCA_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
+    }
+    else
+    {
+        TTI_STALLWAIT(p_stall::STALL_MATH, 0, 0, p_stall::SRCB_VLD);
+        tti_pool_instr_func<POOL_TYPE, p_gpool::CLR_SRCAB_VLD, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0>();
     }
 }
 
@@ -346,14 +564,17 @@ inline void _llk_math_reduce_addrmod_()
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
  * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc
+ * @param en_int32_dest: When true for REDUCE_ROW/REDUCE_SCALAR SUM/AVG, skip MOV-glue MOP and use SFPU at execute time.
  * @note On the unpack thread, pair with @ref _llk_unpack_reduce_init_ (T0); on the pack thread, pair with @ref _llk_pack_reduce_mask_config_ (T2).
  * @note @ref _llk_math_reduce_ runs the configured reduction with matching template args.
  */
 template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
-inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
+inline void _llk_math_reduce_init_(const TensorShape& tensor_shape, const bool en_int32_dest = false)
 {
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     _llk_math_reduce_addrmod_<REDUCE_DIMENSION, MATH_FIDELITY_TYPE>();
+
+    const bool use_int32_fpu_glue = en_int32_dest && (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW || REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR);
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_COL)
     {
@@ -361,11 +582,26 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
     {
-        _llk_math_reduce_row_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+        if (!use_int32_fpu_glue)
+        {
+            _llk_math_reduce_row_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+        }
+        else
+        {
+            // TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, 16);
+            _reduce_row_transpose_warmup_(); // prime SrcB once for the FPU glue path
+        }
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
     {
-        _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+        if (!use_int32_fpu_glue)
+        {
+            _llk_math_reduce_scalar_mop_config_<POOL_TYPE, MATH_FIDELITY_TYPE>(tensor_shape);
+        }
+        else
+        {
+            // _reduce_row_transpose_warmup_();  // prime SrcB transpose engine once for the FPU glue path
+        }
     }
 
     // Reset all counters
@@ -377,13 +613,44 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape)
  *
  * @param tile_idx: Tile index into the destination register. If dest reg in 16-bit mode -> values = [0 - 8] in double buffering mode, values = [0 - 16] in
  * full mode. If dest reg in 32-bit mode -> values = [0 - 4] in double buffering mode, values = [0 - 8] in full mode
+ * @param tensor_shape: Tile shape; required when en_int32_dest is true for REDUCE_ROW/REDUCE_SCALAR.
+ * @param en_int32_dest: When true for REDUCE_ROW/REDUCE_SCALAR, runs the runtime FPU glue path instead of the MOP.
  * @note Call @ref _llk_math_reduce_init_ with matching template args before this function.
  */
-inline void _llk_math_reduce_(const std::uint32_t tile_idx)
+template <PoolType POOL_TYPE, ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
+inline void _llk_math_reduce_(const std::uint32_t tile_idx, const TensorShape& tensor_shape = DEFAULT_TENSOR_SHAPE, const bool en_int32_dest = false)
 {
+    g_llk_math_reduce_tile_idx = tile_idx;
     _set_dst_write_addr_<DstTileShape::Tile32x32>(tile_idx);
-    // Run MOP
-    ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+
+    const bool use_int32_fpu_glue = en_int32_dest && (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW || REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR);
+
+    if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW)
+    {
+        if (use_int32_fpu_glue)
+        {
+            _llk_math_reduce_row_int32_fpu_<POOL_TYPE>(tensor_shape);
+        }
+        else
+        {
+            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+        }
+    }
+    else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)
+    {
+        if (use_int32_fpu_glue)
+        {
+            _llk_math_reduce_scalar_int32_fpu_<POOL_TYPE>(tensor_shape);
+        }
+        else
+        {
+            ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+        }
+    }
+    else
+    {
+        ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);
+    }
 
     // Since only 1 face of srcB is used for constant values,
     // can clear data valid after all operations are done

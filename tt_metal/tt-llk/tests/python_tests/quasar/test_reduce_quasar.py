@@ -24,7 +24,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli
+from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -69,6 +69,16 @@ def generate_pool_type_and_math_fidelity_combinations():
     ]
 
 
+def generate_int8_pool_type_and_math_fidelity_combinations():
+    # Int8 reduce is exact-integer accumulation: only LoFi is meaningful (no
+    # mantissa multi-pass), and Average has no integer-divide path on HW, so
+    # only Max/Sum are exercised.
+    return [
+        (ReducePool.Max, MathFidelity.LoFi),
+        (ReducePool.Sum, MathFidelity.LoFi),
+    ]
+
+
 @pytest.mark.quasar
 @parametrize(
     formats=input_output_formats(
@@ -80,16 +90,30 @@ def generate_pool_type_and_math_fidelity_combinations():
             DataFormat.MxInt4,
             DataFormat.MxInt2,
         ],
+    )
+    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)],
+    # Int8 reduce uses int32 dest accumulation
+    dest_acc=lambda formats: (
+        [DestAccumulation.Yes]
+        if formats.input_format == DataFormat.Int8
+        else [DestAccumulation.No, DestAccumulation.Yes]
     ),
-    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
-    pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
+    reduce_dim=[ReduceDimension.Column, ReduceDimension.Row, ReduceDimension.Scalar],
+    pool_type_and_math_fidelity=lambda formats: (
+        generate_int8_pool_type_and_math_fidelity_combinations()
+        if formats.input_format == DataFormat.Int8
+        else generate_pool_type_and_math_fidelity_combinations()
+    ),
     dest_sync_mode=[DestSync.Half, DestSync.Full],
     # MX formats REQUIRE implied_math_format=Yes on Quasar (bypass format inference pipeline)
     implied_math_format=lambda formats: (
-        [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
-        if not formats.input_format.is_mx_format()
-        else [ImpliedMathFormat.Yes]
+        [ImpliedMathFormat.No]
+        if formats.input_format == DataFormat.Int8
+        else (
+            [ImpliedMathFormat.Yes]
+            if formats.input_format.is_mx_format()
+            else [ImpliedMathFormat.No, ImpliedMathFormat.Yes]
+        )
     ),
 )
 def test_reduce_quasar(
@@ -124,11 +148,17 @@ def test_reduce_quasar(
 
     input_dimensions = [64, 64]
 
+    if formats.input_format == DataFormat.Int8:
+        stimuli_spec = StimuliSpec.uniform(low=-127, high=127)
+    else:
+        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=stimuli_spec,
+        spec_B=stimuli_spec,
     )
 
     if pool_type in [
@@ -196,10 +226,7 @@ def test_reduce_quasar(
         ),
         dest_acc=dest_acc,
         # MX formats require disable_format_inference to match C++ IMPLIED_MATH_FORMAT setting
-        disable_format_inference=(
-            implied_math_format == ImpliedMathFormat.Yes
-            and formats.input_format.is_mx_format()
-        ),
+        disable_format_inference=formats.input_format.is_mx_format(),
     )
 
     res_from_L1 = configuration.run().result
