@@ -556,7 +556,26 @@ def test_multimodal_demo_text(
 
     if should_run_bertscore(is_ci_env, mesh_device, model_args[0].base_model_name):
         expected_output = load_expected_text(input_prompts, model_args[0].base_model_name, max_batch_size)
+        # transformers 5.x forwards the tokenizer's `model_max_length` straight to the Rust
+        # `tokenizers` truncation backend. bert_score's `sent_encode` calls
+        # `encode(..., truncation=True, max_length=tokenizer.model_max_length)`, and the
+        # deberta scoring tokenizer has no explicit limit, so it falls back to the sentinel
+        # VERY_LARGE_INTEGER (1e30), which overflows the Rust usize -> "int too big to convert".
+        # Clamp the sentinel to deberta's real positional limit before scoring.
+        import bert_score.utils as _bert_score_utils
         from bert_score import score as bert_score
+
+        if not getattr(_bert_score_utils, "_tt_sent_encode_patched", False):
+            _orig_sent_encode = _bert_score_utils.sent_encode
+
+            def _tt_safe_sent_encode(tokenizer, sent):
+                mml = getattr(tokenizer, "model_max_length", None)
+                if mml is None or mml > 1_000_000:
+                    tokenizer.model_max_length = 512
+                return _orig_sent_encode(tokenizer, sent)
+
+            _bert_score_utils.sent_encode = _tt_safe_sent_encode
+            _bert_score_utils._tt_sent_encode_patched = True
 
         candidates = non_trace_generated_texts
         references = expected_output

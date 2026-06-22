@@ -38,6 +38,10 @@ class TtPrefillPipelineConfig:
     shared_expert_activations_dtype: ttnn.DataType = ttnn.bfloat16
     shared_expert_weights_dtype: ttnn.DataType = ttnn.bfloat8_b
     weight_cache_path: Optional[Path] = None
+    # Route the MoE routing all-gather's global semaphores to L1_SMALL (instead of pinning the main-L1
+    # floor and clashing with the next layer's MLA static CBs). Requires the mesh opened with
+    # l1_small_size > 0. Enable for Kimi (single expert group, device gate). See TtMoERoutingSetup.
+    routing_use_l1_small_for_semaphores: bool = False
     # Static model-dimension constants for the variant being built
     # (DeepSeekV3Config | KimiK26Config). Drives expert counts, dense-layer
     # count, route groups, etc. in the TT layer code.
@@ -128,6 +132,7 @@ class TtDeepSeekPrefillPipeline:
             is_chunked=True,
             slot_num=self.config.num_users,
             kv_only_last_layer=self.config.kv_only_last_layer,
+            routing_use_l1_small_for_semaphores=self.config.routing_use_l1_small_for_semaphores,
         )
         self.model_built = True
 

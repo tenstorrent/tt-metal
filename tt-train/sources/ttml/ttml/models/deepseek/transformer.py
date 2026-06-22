@@ -60,7 +60,10 @@ class DeepSeekBlock(AbstractModuleBase):
         self.attn_norm = RMSNormLayer(config.dim)
         self.ffn_norm = RMSNormLayer(config.dim)
 
-    def forward(self, x: ttml.autograd.Tensor, mask: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        x = ttml.ops.binary.add(x, self.attn(self.attn_norm(x), mask))
+    def forward(self, x: ttml.autograd.Tensor, mask: ttml.autograd.Tensor = None) -> ttml.autograd.Tensor:
+        # `mask` is accepted (and unused) only to satisfy the shared block(input, mask)
+        # contract used by memory_efficient_runner. MLA is causal-only and generates its
+        # causal mask on chip, so nothing is forwarded to attention.
+        x = ttml.ops.binary.add(x, self.attn(self.attn_norm(x)))
         x = ttml.ops.binary.add(x, self.ffn(self.ffn_norm(x)))
         return x

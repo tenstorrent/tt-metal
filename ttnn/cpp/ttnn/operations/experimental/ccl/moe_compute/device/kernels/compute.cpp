@@ -4,6 +4,7 @@
 
 #include "moe_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
@@ -224,6 +225,10 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
+    // compute_kernel_hw_startup must be the first compute API call; the has_bias block below
+    // issues compute work, so the startup is hoisted above it (otherwise it would be mid-kernel).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
         // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
@@ -295,8 +300,7 @@ void kernel_main() {
             detail::pack_init_activation<activation_type>();
 
             // Initialize matmul for W0
-            mm_block_init(
-                cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+            matmul_block_init(cb_s2c_in, cb_r2c_w0_w1, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert

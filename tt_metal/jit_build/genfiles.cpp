@@ -124,7 +124,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
-    //  - TensorBindings are emitted into the ta namespace
+    //  - TensorBindings are emitted into the tensor namespace
     //
     // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
@@ -178,13 +178,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
-            content << "namespace ta {\n";
+            content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
                         << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
-            content << "}  // namespace ta\n";
+            content << "}  // namespace tensor\n";
         }
     }
     write_file(path, content.str());
@@ -374,6 +374,9 @@ void emit_formats_array(
 using hw_format_t = std::underlying_type_t<DataFormat>;
 constexpr hw_format_t kHwInt16 = 9;        // host Int16 is 13 (UInt16 owns 9 on host)
 constexpr hw_format_t kHwMxFp4_2x_B = 24;  // host MxFp4_2x_B is 29 (UInt32 owns 24 on host)
+constexpr hw_format_t kHwMxInt8 = 2;       // host MxInt8 is 12 (Bfp8 owns 2 on host)
+constexpr hw_format_t kHwMxInt4 = 3;       // host MxInt4 is 16 (Bfp4 owns 3 on host)
+constexpr hw_format_t kHwMxInt2 = 11;      // host MxInt2 is 17 (Bfp2 owns 11 on host)
 
 void emit_formats_array(
     std::ostream& out,
@@ -385,6 +388,9 @@ void emit_formats_array(
         switch (f) {
             case DataFormat::Int16: return kHwInt16;
             case DataFormat::MxFp4_2x_B: return kHwMxFp4_2x_B;
+            case DataFormat::MxInt8: return kHwMxInt8;
+            case DataFormat::MxInt4: return kHwMxInt4;
+            case DataFormat::MxInt2: return kHwMxInt2;
             default: return static_cast<hw_format_t>(f);
         }
     };
