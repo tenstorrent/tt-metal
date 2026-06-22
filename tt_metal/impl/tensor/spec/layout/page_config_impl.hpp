@@ -4,39 +4,85 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/fmt.hpp>
-#include <tt-metalium/experimental/tensor/spec/layout/page_config.hpp>
 
-#include <tt-metalium/shape2d.hpp>
 #include <memory>
 #include <numeric>
+#include <optional>
+#include <variant>
+
+#include <tt-metalium/shape2d.hpp>
+#include <tt-metalium/tile.hpp>
+
+#include <tt-metalium/experimental/tensor/spec/layout/alignment.hpp>
+#include <tt-metalium/experimental/tensor/spec/layout/layout.hpp>
+#include <tt-metalium/experimental/tensor/spec/memory_config/memory_config.hpp>
+#include <tt-metalium/experimental/tensor/tensor_types.hpp>
 
 namespace tt::tt_metal {
 
-namespace {
-namespace CMAKE_UNIQUE_NAMESPACE {
-size_t rm_element_size_bytes(DataType dtype) {
-    switch (dtype) {
-        case DataType::BFLOAT16: return sizeof(bfloat16);
-        case DataType::FLOAT32: return sizeof(float);
-        case DataType::INT32: return sizeof(int32_t);
-        case DataType::UINT32: return sizeof(uint32_t);
-        case DataType::UINT16: return sizeof(uint16_t);
-        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
-        case DataType::UINT8: return sizeof(uint8_t);
-        case DataType::BFLOAT8_B:
-        case DataType::BFLOAT4_B:
-            // To store block floats in RowMajor layout, we use a fallback and store full floats instead
-            return sizeof(float);
+// ------------------------------------------------------------------------------------------------
+// RowMajorPageConfig and TilePageConfig: internal implementation types.
+// These are NOT part of the public PageConfig API. Access them via PageConfig::impl().
+// ------------------------------------------------------------------------------------------------
 
-        default: TT_THROW("Unsupported data type!");
-    }
-}
+class RowMajorPageConfig {
+public:
+    RowMajorPageConfig(const Tile& tile = Tile());
 
-// Maximum possible device memory alignment for all devices and buffer types.
-constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
+    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
+    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
 
-}  // namespace CMAKE_UNIQUE_NAMESPACE
-}  // namespace
+    Shape2D get_page_shape(
+        const Shape2D& physical_size,
+        DataType dtype,
+        const MemoryConfig& memory_config,
+        const std::optional<Shape2D>& physical_shard_size) const;
+    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
+
+    // Emits a deprecation warning; prefer raw_tile() for internal/reflection use.
+    const Tile& get_tile() const;
+    const Tile& raw_tile() const { return tile_; }
+
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+
+    bool operator==(const RowMajorPageConfig&) const = default;
+    bool operator!=(const RowMajorPageConfig&) const = default;
+
+private:
+    // This is currently needed for compatibility reasons.
+    // Each time tile is specified, a warning will be issued. This should be removed soon.
+    Tile tile_;
+};
+
+class TilePageConfig {
+public:
+    TilePageConfig(const Tile& tile = Tile());
+
+    Alignment create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const;
+    void validate_alignment(const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const;
+
+    Shape2D get_page_shape(
+        const Shape2D& physical_size,
+        DataType dtype,
+        const MemoryConfig& memory_config,
+        const std::optional<Shape2D>& physical_shard_size) const;
+    size_t get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const;
+
+    const Tile& get_tile() const;
+    const Tile& raw_tile() const { return tile_; }
+
+    Alignment get_required_shard_shape_alignment() const;
+    Alignment get_recommended_shard_shape_alignment(DataType dtype) const;
+
+    bool operator==(const TilePageConfig&) const = default;
+    bool operator!=(const TilePageConfig&) const = default;
+
+private:
+    Tile tile_;
+};
+
+using PageConfigVariant = std::variant<RowMajorPageConfig, TilePageConfig>;
 
 // ------------------------------------------------------------------------------------------------
 // PageConfigImpl: the internal page-config API, reachable from within tt_metal via impl().
@@ -44,7 +90,7 @@ constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
 
 class PageConfigImpl {
 public:
-    explicit PageConfigImpl(const PageConfig::Config& config) : config_(config) {}
+    explicit PageConfigImpl(const PageConfigVariant& config) : config_(config) {}
 
     PageConfigImpl(Layout layout, const std::optional<Tile>& tile) {
         if (layout == Layout::ROW_MAJOR) {
@@ -97,6 +143,12 @@ public:
         return std::visit([&](const auto& config) { return config.get_tile(); }, config_);
     }
 
+    // Returns the stored tile without triggering the RowMajor deprecation warning.
+    // Use this for reflection and hashing.
+    Tile raw_tile() const {
+        return std::visit([](const auto& config) { return config.raw_tile(); }, config_);
+    }
+
     Alignment get_required_shard_shape_alignment() const {
         return std::visit(
             [&](const auto& config) constexpr { return config.get_required_shard_shape_alignment(); }, config_);
@@ -107,10 +159,10 @@ public:
             [&](const auto& config) constexpr { return config.get_recommended_shard_shape_alignment(dtype); }, config_);
     }
 
-    const PageConfig::Config& config() const { return config_; }
+    const PageConfigVariant& config() const { return config_; }
 
 private:
-    PageConfig::Config config_;
+    PageConfigVariant config_;
 };
 
 }  // namespace tt::tt_metal

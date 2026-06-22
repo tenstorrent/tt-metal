@@ -14,7 +14,31 @@
 
 namespace tt::tt_metal {
 
-PageConfig::PageConfig(const Config& config) : impl_(std::make_unique<PageConfigImpl>(config)) {}
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+size_t rm_element_size_bytes(DataType dtype) {
+    switch (dtype) {
+        case DataType::BFLOAT16: return sizeof(bfloat16);
+        case DataType::FLOAT32: return sizeof(float);
+        case DataType::INT32: return sizeof(int32_t);
+        case DataType::UINT32: return sizeof(uint32_t);
+        case DataType::UINT16: return sizeof(uint16_t);
+        case DataType::FP8_E4M3: return sizeof(float8_e4m3);
+        case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::BFLOAT8_B:
+        case DataType::BFLOAT4_B:
+            // To store block floats in RowMajor layout, we use a fallback and store full floats instead
+            return sizeof(float);
+
+        default: TT_THROW("Unsupported data type!");
+    }
+}
+
+// Maximum possible device memory alignment for all devices and buffer types.
+constexpr uint32_t RECOMMENDED_MEMORY_ALIGNMENT_BYTES = 64;
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // namespace
 
 PageConfig::PageConfig(Layout layout) : PageConfig(layout, std::nullopt) {}
 
@@ -47,32 +71,9 @@ const PageConfigImpl& PageConfig::impl() const {
     return *impl_;
 }
 
-Alignment PageConfig::create_default_alignment(DataType dtype, const MemoryConfig& memory_config) const {
-    return impl().create_default_alignment(dtype, memory_config);
-}
-
-void PageConfig::validate_alignment(
-    const Alignment& alignment, DataType dtype, const MemoryConfig& memory_config) const {
-    impl().validate_alignment(alignment, dtype, memory_config);
-}
-
-Shape2D PageConfig::get_page_shape(
-    const Shape2D& physical_size,
-    DataType dtype,
-    const MemoryConfig& memory_config,
-    const std::optional<Shape2D>& physical_shard_size) const {
-    return impl().get_page_shape(physical_size, dtype, memory_config, physical_shard_size);
-}
-
-size_t PageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
-    return impl().get_page_size_bytes(page_shape, dtype);
-}
-
 Layout PageConfig::get_layout() const { return impl().get_layout(); }
 
 Tile PageConfig::get_tile() const { return impl().get_tile(); }
-
-Alignment PageConfig::get_required_shard_shape_alignment() const { return impl().get_required_shard_shape_alignment(); }
 
 Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) const {
     return impl().get_recommended_shard_shape_alignment(dtype);
@@ -81,9 +82,7 @@ Alignment PageConfig::get_recommended_shard_shape_alignment(DataType dtype) cons
 bool PageConfig::operator==(const PageConfig& other) const { return impl().config() == other.impl().config(); }
 bool PageConfig::operator!=(const PageConfig& other) const { return !(*this == other); }
 
-std::tuple<const PageConfig::Config&> PageConfig::attribute_values() const {
-    return std::forward_as_tuple(impl().config());
-}
+std::tuple<Layout, Tile> PageConfig::attribute_values() const { return {impl().get_layout(), impl().raw_tile()}; }
 
 TilePageConfig::TilePageConfig(const Tile& tile) : tile_(tile) {}
 
