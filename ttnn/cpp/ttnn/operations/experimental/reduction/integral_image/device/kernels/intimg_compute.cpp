@@ -22,6 +22,8 @@
 
 #include "api/compute/bcast.h"
 
+#include "api/dataflow/circular_buffer.h"
+
 #include "common.hpp"
 
 namespace {
@@ -80,6 +82,8 @@ FORCE_INLINE void cumsum_cube_axis_2(
     uint32_t cb_axis_2_buffer,
     bool save_last_tile,
     uint32_t block_depth) {
+    CircularBuffer input_cb(cb_input);
+    CircularBuffer acc_cb(cb_acc);
     ReadCBGuard start_cb_read_guard{cb_start, ONE_TILE};
 
     bool enable_reload = false;
@@ -89,29 +93,29 @@ FORCE_INLINE void cumsum_cube_axis_2(
         WriteCBGuard cumsum_stage_cb_write_guard{cb_cumsum_stage_0, ONE_TILE};
         tile_regs_acquire();
         const uint32_t cb_op = enable_reload ? cb_acc : cb_start;
-        cb_wait_front(cb_input, ONE_TILE);
+        input_cb.wait_front(ONE_TILE);
 
         add_tiles_init(cb_input, cb_op);
         add_tiles(cb_input, cb_op, FIRST_TILE, FIRST_TILE, WORKING_REG);
 
-        cb_pop_front(cb_input, ONE_TILE);
+        input_cb.pop_front(ONE_TILE);
         if (enable_reload) {
-            cb_pop_front(cb_acc, ONE_TILE);
+            acc_cb.pop_front(ONE_TILE);
         }
 
         tile_regs_commit();
         tile_regs_wait();
 
-        cb_reserve_back(cb_acc, ONE_TILE);
+        acc_cb.reserve_back(ONE_TILE);
         pack_reconfig_data_format(cb_acc);
         pack_tile(WORKING_REG, cb_acc);
-        cb_push_back(cb_acc, ONE_TILE);
+        acc_cb.push_back(ONE_TILE);
 
         tile_regs_release();
 
         tile_regs_acquire();
 
-        cb_wait_front(cb_acc, ONE_TILE);
+        acc_cb.wait_front(ONE_TILE);
         copy_tile_init(cb_acc);
         copy_tile(cb_acc, FIRST_TILE, WORKING_REG);
 
@@ -132,7 +136,7 @@ FORCE_INLINE void cumsum_cube_axis_2(
         enable_reload = true;
     }
 
-    cb_pop_front(cb_acc, ONE_TILE);
+    acc_cb.pop_front(ONE_TILE);
 }
 
 FORCE_INLINE void cumsum_cube_axis_3(uint32_t cb_cumsum_stage_wip, uint32_t cb_cumsum_output, uint32_t block_depth) {
@@ -162,7 +166,8 @@ FORCE_INLINE void propagate_tile_into_cube(
     uint32_t cb_cumsum_stage_b,
     bool save_last_tile,
     uint32_t block_depth) {
-    cb_wait_front(cb_axis_2_buffer, ONE_TILE);
+    CircularBuffer axis_2_buffer_cb(cb_axis_2_buffer);
+    axis_2_buffer_cb.wait_front(ONE_TILE);
     for (uint32_t tile_i = 0; tile_i < block_depth; ++tile_i) {
         ReadCBGuard cb_cumsum_stage_0_guard{cb_cumsum_stage_a, ONE_TILE};
         WriteCBGuard cb_cumsum_stage_1_guard{cb_cumsum_stage_b, ONE_TILE};
@@ -179,7 +184,7 @@ FORCE_INLINE void propagate_tile_into_cube(
         if ((tile_i == block_depth - 1)) {  // when last tile in block gets propagated on, finally release the axis 2
                                             // buffer CB and save last tile only when there's a specific request. it
                                             // must be released to get ready for the processing of the next row chunk.
-            cb_pop_front(cb_axis_2_buffer, ONE_TILE);
+            axis_2_buffer_cb.pop_front(ONE_TILE);
             if (save_last_tile) {
                 WriteCBGuard axis_2_buffer_cb_guard{cb_axis_2_buffer, ONE_TILE};
                 pack_reconfig_data_format(cb_axis_2_buffer);

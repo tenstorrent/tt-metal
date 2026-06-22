@@ -196,19 +196,6 @@ MeshTensor& DeviceStorage::get_mesh_tensor() {
         mesh_tensor_holder_->state_);
 }
 
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
-    return std::visit(
-        ttsl::overloaded{
-            [](const MeshTensorHolder::Allocated& allocated) -> std::shared_ptr<distributed::MeshBuffer> {
-                return allocated.mesh_tensor_.mesh_buffer_invariant_breaking();
-            },
-            [](const MeshTensorHolder::DeallocatedTombStone& tombstone) -> std::shared_ptr<distributed::MeshBuffer> {
-                return tombstone.mesh_buffer_;
-            },
-            [](const auto&) -> std::shared_ptr<distributed::MeshBuffer> { TT_THROW("Tensor is not allocated"); }},
-        mesh_tensor_holder_->state_);
-}
-
 const std::shared_ptr<DeviceStorage::MeshTensorHolder>& DeviceStorage::get_root_mesh_tensor() const {
     return root_mesh_tensor_holder_ ? root_mesh_tensor_holder_ : mesh_tensor_holder_;
 }
