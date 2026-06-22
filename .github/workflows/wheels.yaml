@@ -208,11 +208,24 @@ jobs:
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
           # Log ccache stats inside the container right after each wheel compiles. CIBW_AFTER_BUILD
           # runs in the build container after compilation (before repair/test), so ccache is still
-          # configured and populated; the output is captured in the cibuildwheel build log.
-          CIBW_AFTER_BUILD: "ccache -sv"
+          # configured and populated. On Linux the host filesystem is mounted in the container at
+          # /host, so we write the stats to /host/tmp/ccache-wheel-stats.txt (= /tmp on the host)
+          # and cat it so the output also appears in the cibuildwheel build log. A later host step
+          # reads that file and appends it to the GitHub Job Summary.
+          CIBW_AFTER_BUILD: "ccache -sv > /host/tmp/ccache-wheel-stats.txt 2>&1 && cat /host/tmp/ccache-wheel-stats.txt"
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_TEST_SKIP: ${{ inputs.build-type == 'ASan' && '*' || '' }}
           CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
+
+      - name: 📊 ccache stats summary
+        if: always()
+        run: |
+          if [ -f /tmp/ccache-wheel-stats.txt ]; then
+            echo "## ccache stats" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/ccache-wheel-stats.txt >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: 📦 Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
