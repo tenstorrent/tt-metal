@@ -446,8 +446,11 @@ void ControlPlane::init_control_plane(
         // Generate corner pinning for full host galaxy systems
         std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
-        // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
-        if (cluster.is_ubb_galaxy()) {
+        // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D.
+        // Skip for mock/emulated clusters: they have no physical rack, so the corner ASIC
+        // positions {1,1}..{4,1} are derived host-dependently from the get_ubb_id decode and
+        // may be absent from the synthesized topology.
+        if (cluster.is_ubb_galaxy() && !cluster.is_mock_or_emulated()) {
             for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
                 const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
                 const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
@@ -559,8 +562,11 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // bisect a device.
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
-    // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
-    if (cluster.is_ubb_galaxy()) {
+    // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D.
+    // Skip for mock/emulated clusters: they have no physical rack, so the corner ASIC
+    // positions {1,1}..{4,1} are derived host-dependently from the get_ubb_id decode and
+    // may be absent from the synthesized topology.
+    if (cluster.is_ubb_galaxy() && !cluster.is_mock_or_emulated()) {
         for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
             const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
             const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
