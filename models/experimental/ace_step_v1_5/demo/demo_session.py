@@ -12,22 +12,34 @@ from typing import Any
 
 @dataclass
 class CachedPreprocess:
-    """Host-side condition tensors reused when prompt/duration/seed match."""
+    """Host-side condition tensors reused when prompt/duration/seed/lyrics match."""
 
     prompt: str
     duration_sec: float
     seed: int
+    lyrics: str
+    instrumental: bool
     frames: int
     enc_hs: Any
     enc_mask: Any
     ctx_lat: Any
     null_emb: Any
 
-    def matches(self, *, prompt: str, duration_sec: float, seed: int) -> bool:
+    def matches(
+        self,
+        *,
+        prompt: str,
+        duration_sec: float,
+        seed: int,
+        lyrics: str,
+        instrumental: bool,
+    ) -> bool:
         return (
             self.prompt == str(prompt)
             and float(self.duration_sec) == float(duration_sec)
             and int(self.seed) == int(seed)
+            and self.lyrics == str(lyrics)
+            and bool(self.instrumental) == bool(instrumental)
         )
 
 
@@ -59,9 +71,23 @@ class AceStepDemoSession:
 
             self.session_perf = SessionPerfState()
 
-    def can_reuse_preprocess(self, *, prompt: str, duration_sec: float, seed: int) -> bool:
+    def can_reuse_preprocess(
+        self,
+        *,
+        prompt: str,
+        duration_sec: float,
+        seed: int,
+        lyrics: str,
+        instrumental: bool,
+    ) -> bool:
         cached = self.cached_preprocess
-        return cached is not None and cached.matches(prompt=prompt, duration_sec=duration_sec, seed=seed)
+        return cached is not None and cached.matches(
+            prompt=prompt,
+            duration_sec=duration_sec,
+            seed=seed,
+            lyrics=lyrics,
+            instrumental=instrumental,
+        )
 
     def store_preprocess(
         self,
@@ -69,6 +95,8 @@ class AceStepDemoSession:
         prompt: str,
         duration_sec: float,
         seed: int,
+        lyrics: str,
+        instrumental: bool,
         frames: int,
         enc_hs: Any,
         enc_mask: Any,
@@ -79,6 +107,8 @@ class AceStepDemoSession:
             prompt=str(prompt),
             duration_sec=float(duration_sec),
             seed=int(seed),
+            lyrics=str(lyrics),
+            instrumental=bool(instrumental),
             frames=int(frames),
             enc_hs=enc_hs,
             enc_mask=enc_mask,

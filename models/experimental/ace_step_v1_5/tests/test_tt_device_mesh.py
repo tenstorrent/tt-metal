@@ -392,14 +392,35 @@ def test_cached_preprocess_reuse():
         prompt="main prompt",
         duration_sec=15.0,
         seed=0,
+        lyrics="[Instrumental]",
+        instrumental=True,
         frames=375,
         enc_hs=object(),
         enc_mask=object(),
         ctx_lat=object(),
         null_emb=object(),
     )
-    assert session.can_reuse_preprocess(prompt="main prompt", duration_sec=15.0, seed=0)
-    assert not session.can_reuse_preprocess(prompt="other", duration_sec=15.0, seed=0)
+    assert session.can_reuse_preprocess(
+        prompt="main prompt",
+        duration_sec=15.0,
+        seed=0,
+        lyrics="[Instrumental]",
+        instrumental=True,
+    )
+    assert not session.can_reuse_preprocess(
+        prompt="other",
+        duration_sec=15.0,
+        seed=0,
+        lyrics="[Instrumental]",
+        instrumental=True,
+    )
+    assert not session.can_reuse_preprocess(
+        prompt="main prompt",
+        duration_sec=15.0,
+        seed=0,
+        lyrics="verse one",
+        instrumental=False,
+    )
 
 
 def test_emit_session_summary_rollup(monkeypatch):

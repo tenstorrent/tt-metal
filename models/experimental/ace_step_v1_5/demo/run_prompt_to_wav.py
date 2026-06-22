@@ -159,11 +159,55 @@ def _finalize_condition_trace_tensors(
     return enc_owned, ctx_owned
 
 
-def _build_t_schedule(*, infer_steps: int, variant: str) -> list[float]:
-    """Build diffusion timestep schedule (shift=1.0; turbo uses discrete tables)."""
+def _build_generation_params(
+    *,
+    caption: str,
+    args: argparse.Namespace,
+    infer_steps: int,
+    gs: float,
+    use_adg: bool,
+    cfg_interval_start: float,
+    cfg_interval_end: float,
+    use_ttnn_5hz_lm: bool,
+    lm_repetition_penalty: float,
+    audio_cover_strength: float = 1.0,
+    params_cls: type | None = None,
+):
+    """Build handler ``GenerationParams`` matching ``torch_ref/run_prompt_to_wav.py``."""
+    if params_cls is None:
+        from models.experimental.ace_step_v1_5.utils.acestep_preprocess_shim import GenerationParams as params_cls
+
+    return params_cls(
+        task_type="text2music",
+        caption=str(caption),
+        lyrics=str(args.lyrics),
+        instrumental=bool(args.instrumental),
+        reference_audio=None,
+        duration=float(args.duration_sec),
+        inference_steps=int(infer_steps),
+        guidance_scale=float(gs),
+        shift=float(args.shift),
+        seed=int(args.seed),
+        thinking=bool(args.thinking),
+        use_cot_metas=bool(args.use_cot_metas),
+        use_cot_caption=bool(args.use_cot_caption),
+        use_cot_language=bool(args.use_cot_language),
+        use_constrained_decoding=True,
+        use_adg=bool(use_adg),
+        cfg_interval_start=float(cfg_interval_start),
+        cfg_interval_end=float(cfg_interval_end),
+        lm_cfg_scale=1.0 if use_ttnn_5hz_lm else 2.0,
+        lm_repetition_penalty=float(lm_repetition_penalty),
+        timesteps=None,
+        audio_cover_strength=float(audio_cover_strength),
+    )
+
+
+def _build_t_schedule(*, infer_steps: int, variant: str, shift: float = 1.0) -> list[float]:
+    """Build diffusion timestep schedule (turbo uses discrete tables when shift≈1)."""
     variant_l = (variant or "").lower()
     is_turbo = "turbo" in variant_l
-    shift = 1.0
+    shift = float(shift)
 
     infer_steps = int(infer_steps)
     if infer_steps <= 1:
@@ -897,6 +941,43 @@ def main() -> None:
             "when the 5 Hz LM runs on this pass."
         ),
     )
+    ap.add_argument("--shift", type=float, default=1.0, help="Flow-matching timestep shift (default: 1.0).")
+    ap.add_argument(
+        "--thinking",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable 5 Hz LM Chain-of-Thought (default: on; matches torch_ref).",
+    )
+    ap.add_argument(
+        "--use-cot-metas",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Let 5 Hz LM infer BPM/key/etc. via CoT (default: on).",
+    )
+    ap.add_argument(
+        "--use-cot-caption",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Let 5 Hz LM rewrite the caption via CoT (default: off; keep user prompt).",
+    )
+    ap.add_argument(
+        "--use-cot-language",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Let 5 Hz LM detect vocal language via CoT (default: on).",
+    )
+    ap.add_argument(
+        "--lyrics",
+        type=str,
+        default="[Instrumental]",
+        help='Lyrics text (default: "[Instrumental]"). Use with ``--no-instrumental`` for vocals.',
+    )
+    ap.add_argument(
+        "--instrumental",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Generate instrumental audio (default: on). Pass ``--no-instrumental`` for vocal tracks.",
+    )
     args = ap.parse_args()
 
     from models.experimental.ace_step_v1_5.utils.official_lm_preprocess import configure_acestep_logging
@@ -1233,21 +1314,17 @@ def main() -> None:
         print(status, flush=True)
         if not ok:
             raise RuntimeError("5 Hz LM (local HF) initialize failed")
-        params = GenerationParams(
-            task_type="text2music",
+        params = _build_generation_params(
             caption=args.prompt,
-            lyrics="[Instrumental]",
-            instrumental=True,
-            reference_audio=None,
-            duration=float(args.duration_sec),
-            inference_steps=int(infer_steps),
-            thinking=True,
-            use_constrained_decoding=True,
-            use_adg=use_adg,
-            guidance_scale=gs,
+            args=args,
+            infer_steps=int(infer_steps),
+            gs=float(gs),
+            use_adg=bool(use_adg),
             cfg_interval_start=cfg_interval_start,
             cfg_interval_end=cfg_interval_end,
-            shift=1.0,
+            use_ttnn_5hz_lm=False,
+            lm_repetition_penalty=1.0,
+            params_cls=GenerationParams,
         )
         config = GenerationConfig(batch_size=1, use_random_seed=False, seeds=[int(args.seed)], audio_format="wav")
         out_dir = Path(args.out).resolve().parent
@@ -1397,6 +1474,8 @@ def main() -> None:
         prompt=run_prompt,
         duration_sec=float(args.duration_sec),
         seed=int(args.seed),
+        lyrics=str(args.lyrics),
+        instrumental=bool(args.instrumental),
     )
     if reuse_preprocess:
         cached = demo_session.cached_preprocess
@@ -1434,29 +1513,27 @@ def main() -> None:
             flush=True,
         )
     else:
-        params = GenerationParams(
-            task_type="text2music",
+        params = _build_generation_params(
             caption=run_prompt,
-            lyrics="[Instrumental]",
-            instrumental=True,
-            reference_audio=None,
-            duration=float(args.duration_sec),
-            inference_steps=int(infer_steps),
-            guidance_scale=gs,
-            lm_cfg_scale=1.0 if use_ttnn_5hz_lm else 2.0,
+            args=args,
+            infer_steps=int(infer_steps),
+            gs=float(gs),
+            use_adg=bool(use_adg),
+            cfg_interval_start=cfg_interval_start,
+            cfg_interval_end=cfg_interval_end,
+            use_ttnn_5hz_lm=bool(use_ttnn_5hz_lm),
             lm_repetition_penalty=_resolve_lm_repetition_penalty(
                 cli_value=getattr(args, "lm_repetition_penalty", None),
                 split_device=bool(split_device),
                 duration_sec=float(args.duration_sec),
             ),
-            use_adg=use_adg,
-            cfg_interval_start=cfg_interval_start,
-            cfg_interval_end=cfg_interval_end,
-            shift=1.0,
-            thinking=True,
-            use_constrained_decoding=True,
-            timesteps=None,
             audio_cover_strength=float(_mesh_audio_cover_strength),
+        )
+        print(
+            f"[ace_step_v1_5] GenerationParams: lyrics={args.lyrics!r} instrumental={bool(args.instrumental)} "
+            f"thinking={bool(args.thinking)} cot_metas={bool(args.use_cot_metas)} "
+            f"cot_caption={bool(args.use_cot_caption)} cot_language={bool(args.use_cot_language)}",
+            flush=True,
         )
         config = GenerationConfig(
             batch_size=1,
@@ -1727,6 +1804,8 @@ def main() -> None:
                 prompt=run_prompt,
                 duration_sec=float(args.duration_sec),
                 seed=int(args.seed),
+                lyrics=str(args.lyrics),
+                instrumental=bool(args.instrumental),
                 frames=int(frames),
                 enc_hs=enc_hs,
                 enc_mask=enc_mask,
@@ -1739,6 +1818,7 @@ def main() -> None:
     t_schedule = _build_t_schedule(
         infer_steps=int(infer_steps),
         variant=str(args.variant),
+        shift=float(args.shift),
     )
     timesteps_host = np.asarray(t_schedule + [0.0], dtype=np.float32)
 
@@ -1837,6 +1917,8 @@ def main() -> None:
             prompt=run_prompt,
             duration_sec=float(args.duration_sec),
             seed=int(args.seed),
+            lyrics=str(args.lyrics),
+            instrumental=bool(args.instrumental),
             frames=int(frames),
             enc_hs=enc_hs,
             enc_mask=enc_mask,
