@@ -21,7 +21,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 using namespace ckernel;
 
-template <uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols>
+template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t rows, std::uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
@@ -36,12 +36,12 @@ void sub_exp_block_bcast_cols_inplace() {
     in0_cb_obj.wait_front(rows * cols);
     in1_cb_obj.wait_front(rows);
 
-    constexpr uint32_t dst_tiles = 1;       // SUB_EXP_GRANULARITY;
-    constexpr uint32_t granularity = cols;  // #>> LOG2_SUB_EXP_GRANULARITY;
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t u = 0; u < granularity; u++) {
+    constexpr std::uint32_t dst_tiles = 1;       // SUB_EXP_GRANULARITY;
+    constexpr std::uint32_t granularity = cols;  // #>> LOG2_SUB_EXP_GRANULARITY;
+    for (std::uint32_t i = 0; i < rows; ++i) {
+        for (std::uint32_t u = 0; u < granularity; u++) {
             tile_regs_acquire();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
+            for (std::uint32_t j = 0; j < dst_tiles; ++j) {
                 sub_tiles_bcast_cols(in0_cb, in1_cb, j, i, j);
                 exp_tile<true>(j);
             }
@@ -51,7 +51,7 @@ void sub_exp_block_bcast_cols_inplace() {
             in0_cb_obj.reserve_back(dst_tiles);
 
             tile_regs_wait();
-            for (uint32_t j = 0; j < dst_tiles; ++j) {
+            for (std::uint32_t j = 0; j < dst_tiles; ++j) {
                 pack_tile(j, in0_cb);
             }
             tile_regs_release();
@@ -61,7 +61,8 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols, bool first_call) {
+void add_block_bcast_rows_inplace(
+    std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t rows, std::uint32_t cols, bool first_call) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles consumed
@@ -69,7 +70,7 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     CircularBuffer in0_cb_obj(in0_cb);
     CircularBuffer in1_cb_obj(in1_cb);
 
-    uint32_t num_tiles = rows * cols;
+    std::uint32_t num_tiles = rows * cols;
     if (first_call) {
         init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb, in0_cb);
     } else {
@@ -78,8 +79,8 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     }
     in0_cb_obj.wait_front(num_tiles);
     in1_cb_obj.wait_front(cols);
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t j = 0; j < cols; ++j) {
+    for (std::uint32_t i = 0; i < rows; ++i) {
+        for (std::uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
             add_tiles_bcast_rows(in0_cb, in1_cb, 0, j, 0);
             tile_regs_commit();
@@ -97,7 +98,7 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     }
     in1_cb_obj.pop_front(cols);
 }
-void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
+void mul_block_inplace(std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
@@ -108,7 +109,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     mul_tiles_init(in0_cb, in1_cb);
     in0_cb_obj.wait_front(num_tiles);
     in1_cb_obj.wait_front(num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         mul_tiles(in0_cb, in1_cb, 0, i, 0);
         tile_regs_commit();
@@ -124,7 +125,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
         in0_cb_obj.push_back(1);
     }
 }
-void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t rows, uint32_t cols) {
+void mul_block_bcast_cols_inplace(std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t rows, std::uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -133,12 +134,12 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     CircularBuffer in0_cb_obj(in0_cb);
     CircularBuffer in1_cb_obj(in1_cb);
 
-    uint32_t num_tiles = rows * cols;
+    std::uint32_t num_tiles = rows * cols;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
     in0_cb_obj.wait_front(num_tiles);
     in1_cb_obj.wait_front(rows);
-    for (uint32_t i = 0; i < rows; ++i) {
-        for (uint32_t j = 0; j < cols; ++j) {
+    for (std::uint32_t i = 0; i < rows; ++i) {
+        for (std::uint32_t j = 0; j < cols; ++j) {
             tile_regs_acquire();
             mul_tiles_bcast_cols(in0_cb, in1_cb, 0, i, 0);
             tile_regs_commit();
@@ -156,7 +157,7 @@ void mul_block_bcast_cols_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
     in1_cb_obj.pop_front(rows);
 }
 
-void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
+void eqz_block_inplace(std::uint32_t in0_cb, std::uint32_t num_tiles) {
     // Precondition: in0_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
 
@@ -166,7 +167,7 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
     eqz_tile_init();
     copy_tile_to_dst_init_short(in0_cb);
     in0_cb_obj.wait_front(num_tiles);
-    for (uint32_t i = 0; i < num_tiles; i++) {
+    for (std::uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         copy_tile(in0_cb, 0, 0);
         eqz_tile(0);
@@ -184,7 +185,7 @@ void eqz_block_inplace(uint32_t in0_cb, uint32_t num_tiles) {
     }
 }
 
-void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
+void recip_block_inplace(std::uint32_t in_cb, std::uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     CircularBuffer in_cb_obj(in_cb);
@@ -193,7 +194,7 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     recip_tile_init();
 
     in_cb_obj.wait_front(num_tiles);
-    for (uint32_t i = 0; i < num_tiles; ++i) {
+    for (std::uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
         copy_tile(in_cb, 0, 0);
         recip_tile(0);
@@ -210,8 +211,8 @@ void recip_block_inplace(uint32_t in_cb, uint32_t num_tiles) {
     }
 }
 
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t in_cb, uint32_t scale_cb, uint32_t out_cb>
-void reduce_c(uint32_t rows, uint32_t cols) {
+template <PoolType pool_type, ReduceDim reduce_dim, std::uint32_t in_cb, std::uint32_t scale_cb, std::uint32_t out_cb>
+void reduce_c(std::uint32_t rows, std::uint32_t cols) {
     // Precondition: in_cb has rows*cols produced. in_cb has tiles in row-major order
     // Precondition: scale_cb has 1 produced
     // Precondition: out_cb has rows free
@@ -227,28 +228,28 @@ void reduce_c(uint32_t rows, uint32_t cols) {
 }
 
 template <
-    uint32_t Ht,
-    uint32_t Wt,
-    uint32_t K,
-    uint32_t logWt,
-    uint32_t logk,
-    uint32_t input_cb_index,
-    uint32_t expert_mask_cb_index,
-    uint32_t masked_input_cb_index,
-    uint32_t index_cb_index,
-    uint32_t input_transposed_cb_index,
-    uint32_t index_transposed_cb_index,
-    uint32_t values_cb_index,
-    uint32_t output_ind_cb_index,
-    uint32_t tile_width,
+    std::uint32_t Ht,
+    std::uint32_t Wt,
+    std::uint32_t K,
+    std::uint32_t logWt,
+    std::uint32_t logk,
+    std::uint32_t input_cb_index,
+    std::uint32_t expert_mask_cb_index,
+    std::uint32_t masked_input_cb_index,
+    std::uint32_t index_cb_index,
+    std::uint32_t input_transposed_cb_index,
+    std::uint32_t index_transposed_cb_index,
+    std::uint32_t values_cb_index,
+    std::uint32_t output_ind_cb_index,
+    std::uint32_t tile_width,
     bool first_call>
 void mask_and_topk() {
     // dest indices for where to unpack the tiles for the llk
     // the input goes in index 0,1 and the index goes in index 2,3
-    constexpr uint32_t input_dest_start = 0;
-    constexpr uint32_t index_dest_start = 2;
-    constexpr uint32_t input_dest_end = 1;
-    constexpr uint32_t index_dest_end = 3;
+    constexpr std::uint32_t input_dest_start = 0;
+    constexpr std::uint32_t index_dest_start = 2;
+    constexpr std::uint32_t input_dest_end = 1;
+    constexpr std::uint32_t index_dest_end = 3;
     ckernel::topk_tile_init();
 
     CircularBuffer input_cb(input_cb_index);
@@ -261,20 +262,19 @@ void mask_and_topk() {
     CircularBuffer output_ind_cb(output_ind_cb_index);
 
     if (first_call) {
-        compute_kernel_hw_startup(input_cb_index, input_transposed_cb_index);
         transpose_init(input_cb_index);
     }
 
     // The expert mask is the same for all rows, so wait for all Wt tiles once before the loop.
     expert_mask_cb.wait_front(Wt);
 
-    for (uint32_t ht = 0; ht < Ht; ++ht) {
+    for (std::uint32_t ht = 0; ht < Ht; ++ht) {
         bool ascending = false;
         input_transposed_cb.reserve_back(Wt);
         index_transposed_cb.reserve_back(Wt);
 
         // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
-        for (uint32_t wt = 0; wt < Wt; wt += 2) {
+        for (std::uint32_t wt = 0; wt < Wt; wt += 2) {
             input_cb.wait_front(2);
             index_cb.wait_front(2);
 
@@ -335,13 +335,13 @@ void mask_and_topk() {
         // first iteration we compare 0th and 1st tile, then 2nd and 3rd, etc. We get the sorted top 32 values in each
         // pair. second iteration we compare 0th and 2nd tile, then 4th and 6th, etc. logWt iteration we compare 0th and
         // Wt/2 tile single buffer as we can pack tiles back in-place
-        for (uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
+        for (std::uint32_t m_iter = 0; m_iter < logWt; ++m_iter) {
             bool a = false;
             input_transposed_cb.wait_front(Wt);
             index_transposed_cb.wait_front(Wt);
 
-            for (uint32_t left_ind = 0; left_ind < Wt - (1 << m_iter); left_ind += 2 << m_iter) {
-                uint32_t right_ind = left_ind + (1 << m_iter);
+            for (std::uint32_t left_ind = 0; left_ind < Wt - (1 << m_iter); left_ind += 2 << m_iter) {
+                std::uint32_t right_ind = left_ind + (1 << m_iter);
                 tile_regs_acquire();
 
                 copy_tile_to_dst_init_short_with_dt(index_transposed_cb_index, input_transposed_cb_index);
@@ -356,7 +356,7 @@ void mask_and_topk() {
                 // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
                 ckernel::topk_merge(0, m_iter, K);
                 // sort within the larger 32 values
-                ckernel::topk_rebuild(0, (uint32_t)a, m_iter, K, logk, true);
+                ckernel::topk_rebuild(0, (std::uint32_t)a, m_iter, K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();
@@ -383,14 +383,14 @@ void mask_and_topk() {
             index_transposed_cb.push_back(Wt);
         }
 
-        constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
+        constexpr std::uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
 
         // transpose value tiles and pack into output buffer
         reconfig_data_format_srca(input_transposed_cb_index);
         transpose_init(input_transposed_cb_index);
         pack_reconfig_data_format(input_transposed_cb_index);
         input_transposed_cb.wait_front(Kt);
-        for (uint32_t i = 0; i < Kt; ++i) {
+        for (std::uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
             transpose_tile(input_transposed_cb_index, i, 0);
             tile_regs_commit();
@@ -411,7 +411,7 @@ void mask_and_topk() {
         transpose_init(index_transposed_cb_index);
         pack_reconfig_data_format(index_transposed_cb_index);
         index_transposed_cb.wait_front(Kt);
-        for (uint32_t i = 0; i < Kt; ++i) {
+        for (std::uint32_t i = 0; i < Kt; ++i) {
             tile_regs_acquire();
             transpose_tile(index_transposed_cb_index, i, 0);
             tile_regs_commit();
@@ -432,29 +432,31 @@ void mask_and_topk() {
 }
 
 void kernel_main() {
-    constexpr uint32_t input_cb_index = get_compile_time_arg_val(0);
-    constexpr uint32_t topk_mask_cb_index = get_compile_time_arg_val(1);
-    constexpr uint32_t expert_mask_cb_index = get_compile_time_arg_val(2);
-    constexpr uint32_t scale_cb_index = get_compile_time_arg_val(3);
-    constexpr uint32_t index_cb_index = get_compile_time_arg_val(4);
-    constexpr uint32_t input_transposed_cb_index = get_compile_time_arg_val(5);
-    constexpr uint32_t index_transposed_cb_index = get_compile_time_arg_val(6);
-    constexpr uint32_t values_cb_index = get_compile_time_arg_val(7);
-    constexpr uint32_t output_ind_cb_index = get_compile_time_arg_val(8);
-    constexpr uint32_t out_cb_index = get_compile_time_arg_val(9);
+    constexpr std::uint32_t input_cb_index = get_compile_time_arg_val(0);
+    constexpr std::uint32_t topk_mask_cb_index = get_compile_time_arg_val(1);
+    constexpr std::uint32_t expert_mask_cb_index = get_compile_time_arg_val(2);
+    constexpr std::uint32_t scale_cb_index = get_compile_time_arg_val(3);
+    constexpr std::uint32_t index_cb_index = get_compile_time_arg_val(4);
+    constexpr std::uint32_t input_transposed_cb_index = get_compile_time_arg_val(5);
+    constexpr std::uint32_t index_transposed_cb_index = get_compile_time_arg_val(6);
+    constexpr std::uint32_t values_cb_index = get_compile_time_arg_val(7);
+    constexpr std::uint32_t output_ind_cb_index = get_compile_time_arg_val(8);
+    constexpr std::uint32_t out_cb_index = get_compile_time_arg_val(9);
 
-    constexpr uint32_t Ht = get_compile_time_arg_val(10);
-    constexpr uint32_t Wt = get_compile_time_arg_val(11);
-    constexpr uint32_t K = get_compile_time_arg_val(12);
-    constexpr uint32_t logk = get_compile_time_arg_val(13);
-    constexpr uint32_t logWt = get_compile_time_arg_val(14);
+    constexpr std::uint32_t Ht = get_compile_time_arg_val(10);
+    constexpr std::uint32_t Wt = get_compile_time_arg_val(11);
+    constexpr std::uint32_t K = get_compile_time_arg_val(12);
+    constexpr std::uint32_t logk = get_compile_time_arg_val(13);
+    constexpr std::uint32_t logWt = get_compile_time_arg_val(14);
 
-    constexpr uint32_t cb_cur_max = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_cur_sum = get_compile_time_arg_val(16);
-    constexpr uint32_t tile_width = get_compile_time_arg_val(17);
-    constexpr uint32_t masked_input_cb_index = get_compile_time_arg_val(18);
+    constexpr std::uint32_t cb_cur_max = get_compile_time_arg_val(15);
+    constexpr std::uint32_t cb_cur_sum = get_compile_time_arg_val(16);
+    constexpr std::uint32_t tile_width = get_compile_time_arg_val(17);
+    constexpr std::uint32_t masked_input_cb_index = get_compile_time_arg_val(18);
 
-    constexpr uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
+    constexpr std::uint32_t Kt = K % tile_width == 0 ? K / tile_width : K / tile_width + 1;
+
+    compute_kernel_hw_startup(input_cb_index, input_transposed_cb_index);
 
     // Apply expert_mask to each input tile pair and run top-k on the masked values.
     mask_and_topk<
