@@ -180,15 +180,49 @@ def test_wan_transformer_block(
     logger.info(
         f"Running TT model with spatial shape {tt_spatial.shape}, prompt shape {tt_prompt.shape}, rope_cos shape {tt_rope_cos.shape}, rope_sin shape {tt_rope_sin.shape}"
     )
-    tt_spatial_out = tt_model(
-        spatial_1BND=tt_spatial,
-        prompt_1BLP=tt_prompt,
-        temb_1BTD=tt_temb,
-        N=spatial_seq_len,
-        rope_cos=tt_rope_cos,
-        rope_sin=tt_rope_sin,
-        trans_mat=tt_trans_mat,
-    )
+    # Timing: warmup + N iterations. Single call by default (correctness mode);
+    # set WAN_BLOCK_BENCH_ITERS=<N> to time N iters after 2 warmup iters.
+    bench_iters = int(os.environ.get("WAN_BLOCK_BENCH_ITERS", "0"))
+    if bench_iters > 0:
+        import time as _time
+
+        # Warmup (compile + program cache fill)
+        for _ in range(2):
+            tt_spatial_out = tt_model(
+                spatial_1BND=tt_spatial,
+                prompt_1BLP=tt_prompt,
+                temb_1BTD=tt_temb,
+                N=spatial_seq_len,
+                rope_cos=tt_rope_cos,
+                rope_sin=tt_rope_sin,
+                trans_mat=tt_trans_mat,
+            )
+            ttnn.synchronize_device(mesh_device)
+        # Timed iterations
+        t0 = _time.perf_counter()
+        for _ in range(bench_iters):
+            tt_spatial_out = tt_model(
+                spatial_1BND=tt_spatial,
+                prompt_1BLP=tt_prompt,
+                temb_1BTD=tt_temb,
+                N=spatial_seq_len,
+                rope_cos=tt_rope_cos,
+                rope_sin=tt_rope_sin,
+                trans_mat=tt_trans_mat,
+            )
+        ttnn.synchronize_device(mesh_device)
+        avg_ms = (_time.perf_counter() - t0) / bench_iters * 1000
+        logger.info(f"BENCH: avg block fwd = {avg_ms:.3f} ms over {bench_iters} iters")
+    else:
+        tt_spatial_out = tt_model(
+            spatial_1BND=tt_spatial,
+            prompt_1BLP=tt_prompt,
+            temb_1BTD=tt_temb,
+            N=spatial_seq_len,
+            rope_cos=tt_rope_cos,
+            rope_sin=tt_rope_sin,
+            trans_mat=tt_trans_mat,
+        )
 
     spatial_concat_dims = [None, None]
     spatial_concat_dims[sp_axis] = 2
