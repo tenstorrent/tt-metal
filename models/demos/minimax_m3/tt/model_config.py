@@ -6,13 +6,14 @@
 MiniMax-M2 ModelArgs class that's compatible with tt_transformers interface
 """
 
+import json
 import os
 from pathlib import Path
 
 import torch
 from loguru import logger
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoTokenizer
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
@@ -83,25 +84,29 @@ class ModelArgs:
             logger.info("Using dummy weights mode - skipping HuggingFace config loading")
 
         else:
-            # Load HF config to get model parameters
-            self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+            # Load HF config to get model parameters. M3's published config is VL-wrapped
+            # (model_type=minimax_m3_vl); the TEXT-backbone dims live under `.text_config`, so we
+            # unwrap it and keep the wrapper (vision dims etc.) as `self.vl_config` for later.
+            cfg = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+            self.vl_config = cfg
+            self.hf_config = getattr(cfg, "text_config", cfg)
             # Set key attributes that tt_transformers expects
             self.vocab_size = self.hf_config.vocab_size
             self.n_layers = getattr(self.hf_config, "num_hidden_layers", 32)
-            # MiniMax-M2 sets head_dim (128) independently of hidden_size/num_attention_heads
-            # (3072/48 = 64 != 128), so read it directly from the config.
+            # head_dim (128) is set independently of hidden_size/num_attention_heads, so read it
+            # directly from the config.
             self.head_dim = getattr(
                 self.hf_config, "head_dim", self.hf_config.hidden_size // self.hf_config.num_attention_heads
             )
             self.rope_theta = getattr(self.hf_config, "rope_theta", 10000.0)
-            self.rope_scaling = None  # MiniMax-M2 has no rope_scaling in its config
+            self.rope_scaling = getattr(self.hf_config, "rope_scaling", None)
 
         # Add missing attributes that Generator expects
         self.max_prefill_chunk_size = 128 * 1024
         self.model_name = Path(self.model_path).name
-        assert self.model_name in [
-            "MiniMax-M3",
-        ], f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Make sure you're using standard huggingface naming convention for your model checkpoint e.g MiniMaxAI/MiniMax-M2"  # Model identifier
+        assert self.model_name.startswith(
+            "MiniMax-M3"
+        ), f"Unrecognized model name {self.model_name} inferred from model path {self.model_path}. Expected a MiniMax-M3* checkpoint dir (e.g. MiniMax-M3 or MiniMax-M3-ref)."  # Model identifier
         self.max_context_len = max_seq_len  # Context length for tt_transformers compatibility
 
         if self.dummy_weights:
@@ -228,32 +233,53 @@ class ModelArgs:
             # Return dummy state dict for testing
             return {}
         else:
-            # Load actual MiniMax-M2 weights directly from safetensors files
-            # Check if we have a cached torch_state_dict.pt file
-            model = AutoModelForCausalLM.from_pretrained(
-                weights_path,
-                trust_remote_code=True,  # MiniMax-M2 ships its modeling code with the checkpoint
-                torch_dtype="auto"
-                # Note that the default setting is torch.dtype.float32, but model weights are
-                # may come in any dtype. If the model weights are in torch.dtype.bfloat16, this would result in 2x memory usage from an
-                # unnecessary cast.
-            )
-            state_dict = model.state_dict()
+            # M3 ships NO modeling code (the checkpoint carries only config + multimodal
+            # processors; no AutoModel in auto_map), so AutoModelForCausalLM.from_pretrained
+            # CANNOT build it. Read the bf16 safetensors directly: keep only the text backbone
+            # (`language_model.*`) and strip that prefix -> the M2-style keys the model expects
+            # (`model.*` / `lm_head.*`); drop the multimodal tensors (vision_tower /
+            # multi_modal_projector / patch_merge_mlp). The checkpoint has no mtp/nextn weights.
+            state_dict = ModelArgs._load_text_backbone_safetensors(weights_path)
+
             # Convert HF QKV weights to Meta format for RoPE compatibility (if requested).
-            # MiniMax-M2 uses PARTIAL rotary (rotary_dim < head_dim), so only the rotary
-            # slice of each head is interleaved; the shared full-head permute would be
-            # wrong (drops attention PCC vs HF from ~0.999 to ~0.926).
+            # M3 uses PARTIAL rotary (rotary_dim < head_dim), so only the rotary slice of each
+            # head is interleaved (the shared full-head permute would be wrong); the helper also
+            # swizzles the per-head q/k-norm gains so per-head QK-norm stays consistent (see
+            # weights.py / test_attention_vs_ref.py).
             if convert_to_meta_format:
                 logger.info("Converting QKV weights from HuggingFace to Meta format for RoPE (partial rotary)")
-                rotary_dim = getattr(model.config, "rotary_dim", model.config.head_dim)
-                state_dict = convert_hf_qkv_to_meta_format_partial(state_dict, model.config.head_dim, rotary_dim)
-            if state_dict["model.norm.weight"].dtype != torch.bfloat16:
-                # Convert to bfloat16 if needed
-                state_dict = {
-                    k: v.to(torch.bfloat16) if v.dtype == torch.float32 else v
-                    for k, v in tqdm(state_dict.items(), desc="Converting to bfloat16")
-                }
+                cfg = AutoConfig.from_pretrained(weights_path, trust_remote_code=True)
+                tc = getattr(cfg, "text_config", cfg)
+                rotary_dim = getattr(tc, "rotary_dim", tc.head_dim)
+                state_dict = convert_hf_qkv_to_meta_format_partial(state_dict, tc.head_dim, rotary_dim)
             return state_dict
+
+    @staticmethod
+    def _load_text_backbone_safetensors(weights_path):
+        """Read the M3 bf16 safetensors and return the text-backbone state dict.
+
+        Keeps `language_model.*` (the text backbone), strips that prefix so keys match what the
+        model expects (`model.embed_tokens.weight`, `model.layers.N.*`, `model.norm.weight`,
+        `lm_head.weight`), and drops the multimodal tensors. Loads shards lazily from the index.
+        """
+        from safetensors.torch import load_file
+
+        weights_path = str(weights_path)
+        index_path = os.path.join(weights_path, "model.safetensors.index.json")
+        with open(index_path) as f:
+            weight_map = json.load(f)["weight_map"]
+        shards = sorted(set(weight_map.values()))
+
+        PREFIX = "language_model."
+        state_dict = {}
+        for shard in tqdm(shards, desc="Loading M3 bf16 safetensors (text backbone)"):
+            shard_sd = load_file(os.path.join(weights_path, shard))
+            for k, v in shard_sd.items():
+                if not k.startswith(PREFIX):
+                    continue  # drop vision_tower / multi_modal_projector / patch_merge_mlp
+                new_k = k[len(PREFIX) :]  # language_model.model.X -> model.X ; language_model.lm_head -> lm_head
+                state_dict[new_k] = v.to(torch.bfloat16) if v.dtype == torch.float32 else v
+        return state_dict
 
     def weight_cache_path(self, dtype):
         """Return weight cache path for the model"""
