@@ -609,6 +609,7 @@
 - name: TT-DiT common unit tests, shared amongst all models.
   cmd: |
     pytest --timeout 10000 models/tt_dit/tests/unit/
+    pytest tests/ttnn/unit_tests/operations/conv/test_conv1d_depthwise.py -k test_conv1d_depthwise_smoke
   model: dit-common
   skus:
     wh_n150:

@@ -47,9 +47,9 @@ SMOKE = [
     (1, 256, 64, 12, 1),
     (1, 256, 64, 12, 2),
     (1, 512, 32, 12, 1),
+    (1, 19205, 48, 4, 1),  # large shape from stage B
     (1, 512, 16, 12, 2),
     (1, 300, 24, 12, 1),
-    (1, 320, 48, 4, 1),
     (1, 600, 128, 29, 1),
 ]
 
@@ -154,7 +154,7 @@ def test_conv1d_depthwise_mesh(mesh_device, C, T_pad, K, stride):
 # Topology: single Blackhole device, l1_small_size=32768 (the vocoder's setting); shape is a real
 # STAGE_C upsample tail.
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-def test_stock_conv1d_l1_oom_vs_depthwise(device, device_params):
+def test_stock_conv1d_l1_oom_vs_depthwise(device, device_params, expect_error):
     C, T_pad, K, stride = 64, 28841, 12, 1
     torch.manual_seed(0)
     x = torch.randn(1, T_pad, C, dtype=torch.float32)
@@ -168,7 +168,7 @@ def test_stock_conv1d_l1_oom_vs_depthwise(device, device_params):
         device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
     )
     conv_config = ttnn.Conv1dConfig(weights_dtype=ttnn.float32, shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED)
-    with pytest.raises(RuntimeError):  # TT_THROW: static circular buffers beyond max L1 size
+    with expect_error(RuntimeError, "beyond max L1 size"):  # TT_THROW: static circular buffers
         ttnn.conv1d(
             input_tensor=ttnn.reshape(x_tt, (1, T_pad, 1, C)),
             weight_tensor=weight,
