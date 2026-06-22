@@ -30,11 +30,15 @@ The full model must support the context length advertised by the HF config. Star
 
 Also preserve the rest of the advertised model capability contract established by earlier stages: cache/state semantics, layer kinds, mode switches, and the externally visible generation behavior. Do not reduce the advertised model capability to make bringup, tests, profiling, or serving easier. A reduction is acceptable only when a hard physical device limit prevents the advertised capability from fitting or running, such as device DRAM capacity for weights + KV/cache/state + required persistent buffers. If reduced, record the byte calculation or failed capacity probe, the largest feasible supported value, and the exact construction/serving setting that uses it.
 
+Batch handling is part of the capability contract. Optimize primarily for batch-1 single-user latency, but do not hard-code batch 1 into the model, generator, cache, page tables, position handling, sampling, or output formatting. Support larger batches through the same low-level API and test up to batch 32 when the target hardware, memory, and harness allow it. If batch 32 cannot run, record the largest tested batch and the hard physical limit.
+
 ## How To Approach It
 
 Read the HuggingFace reference model and the reports for the working TTNN blocks before writing the wrapper. Understand the whole autoregressive path: input IDs, embeddings, masks, position IDs, cache layout, block calls, logits, sampling, and generated token feedback.
 
 Keep setup-time work outside the hot runtime path: weight conversion, dtype choices, tensor layout preparation, cache construction, and tokenizer loading should not be hidden inside a measured prefill or decode forward.
+
+Do not use repeated full-stack model runs as the normal debugging loop. After one or two expensive full-model failures, build a reduced reproducer before continuing: for example, load the same full-model wrapper with one real layer of each kind, real tensor shapes, real cache/page-table shapes, real terminal norm/LM head/sampling, and a short prompt/generation length. Use that reduced full-model path to localize wrapper, trace, cache, page-table, LM-head, or sampling bugs, then return to the all-layer model for final evidence. If the reduced reproducer cannot expose the failure, record why before spending more full-stack runs.
 
 Avoid hidden host fallback in a single prefill or decode pass. The final decode path uses traced TTNN execution. Teacher-forcing readiness runs through traced decode. Eager decode is useful only while debugging and is not completion evidence. When adding trace capture/replay or debugging trace execution failures, use `$tt-enable-tracing`.
 
@@ -107,6 +111,10 @@ Compare full-model behavior against the HuggingFace reference with real weights.
 - sequence lengths tested and any measured capacity limits;
 - watcher, fallback, or runtime-integrity checks appropriate to the environment.
 
+Run correctness from the smallest useful surface to the full gate. Start with a short smoke check on the reduced full-model probe when the all-layer gate is slow, then move to the complete all-layer model after the smoke check passes. If a test, prompt, or command fails, rerun that failing item directly while debugging; do not rerun the whole suite after every edit. Once the targeted failure is fixed, rerun the smoke check, then rerun the full all-layer correctness gate for final evidence.
+
+Include both batch-1 and larger-batch correctness coverage. Batch 1 is the primary latency target, but the model must still handle batch dimensions correctly. Add at least one batch >1 test for prefill, decode, cache/page-table indexing, token feedback, and output formatting; test up to batch 32 when the hardware and harness allow it.
+
 For instruction/chat models, prefer a teacher-forcing reference generated from a normal chat-template prompt over raw book text. In tt-metal autoports, use the DeepSeek AIME24 prompt set rendered by the HF tokenizer chat template as the main readiness reference, for example:
 
 ```bash
@@ -141,7 +149,7 @@ Add a focused split-sampling trace test before marking the stage complete:
 - prove the delivered path is not rebuilding tokens, positions, RoPE indices, masks, or page tables on the host every token; if a per-token host refresh remains, the stage is incomplete;
 - alternate greedy and non-greedy-capable sampling params if the generator caches trace ids by sampling mode.
 
-Build the fast probe before any repeated debugging loop: a reduced variant (one layer of each kind, short generation, real shapes) with a documented runtime of a couple of minutes or less. Repeating a multi-minute full-model pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations.
+Build the fast probe before any repeated debugging loop: a reduced full-model variant (one layer of each kind, short generation, real tensor/cache/page-table shapes, and the real terminal path) with a documented runtime of a couple of minutes or less. Repeating a multi-minute all-layer pass to answer single-bit questions wastes the budget the debugging loop needs; the probe pays for itself within a few iterations. This probe is for debugging only. Final correctness and performance evidence still comes from the complete all-layer model.
 
 When full-model accuracy is poor, debug the new wrapper first: embeddings, final norm, LM head/tied weights, positions, masks, cache indexing, prompt lengths, page tables, and sampling all commonly fail outside the decoder itself. If the failure spans several of these boundaries and the causal chain is unclear, use `$autofix`; it will run `$autodebug` if needed, then verify or refute each proposed bug before keeping any fix. Escalate back into decoder precision or fidelity only when evidence points there.
 
@@ -167,7 +175,7 @@ Do not compare a sampling-inclusive serving result against a teacher-forcing/log
 
 Treat host steps between decode iterations as implementation bugs to remove from the steady-state path, not just performance terms to report. Add counters for trace replays, token-input refreshes, current-position/RoPE refreshes, page-table refreshes, synchronizations, and readbacks, then drive the steady-state refresh counts to zero except where the caller-visible API truly requires a readback or the scheduler changes state. If current-position/RoPE refreshes happen once per generated token, the full model still has a host-stepped decode loop; fix it with device-side state advance where possible before claiming optimized full-model performance.
 
-Measure the reported batch-1 TTFT and trace-verified decode t/s/u with the same workload shape as the vLLM primary single-user profile (prompt 128 / generate 128 by default unless the project specifies otherwise), separate from the accuracy workload, and record the workload shape next to every number. Compare this to `vllm_benchmark.json` in later stages. The CI serving-burst 100/100/32 benchmark is a concurrent serving profile and is not a direct replacement for batch-1 full-model timing.
+Measure the primary batch-1 TTFT and trace-verified decode t/s/u with the same workload shape as the vLLM primary single-user profile (prompt 128 / generate 128 by default unless the project specifies otherwise), separate from the accuracy workload, and record the workload shape next to every number. Compare this to `vllm_benchmark.json` in later stages. The larger-batch or concurrent-serving checks prove capability and serving behavior; they are not a replacement for the batch-1 latency target.
 
 If performance regresses badly from block-level evidence, inspect data movement between embeddings, blocks, final norm, LM head, and sampling before changing precision.
 
@@ -192,6 +200,7 @@ Done means all of these are true and recorded:
 - state-dict mapping, tied-embedding behavior if relevant, and real-weight loading behavior;
 - KV-cache, page-table or position handling, prompt lengths, and repeated decode reuse;
 - context contract: HF-advertised context, full-model supported context, and any hard-physical-limit reduction evidence;
+- batch contract: batch-1 primary path, largest batch tested up to 32, and any hard-physical-limit reduction evidence;
 - full-model accuracy and qualitative generation evidence;
 - split-sampling trace evidence: model trace to logits, internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, current-position coherence, and page-table refresh coverage;
 - determinism or repeated-run coverage appropriate to the implementation risk, including logit reproducibility across runs and batch positions;

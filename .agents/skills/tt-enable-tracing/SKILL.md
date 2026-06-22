@@ -193,7 +193,7 @@ These are mechanism signatures, not model properties. When generated or served o
 | Greedy output nondeterministic across runs, or wrong after a sampled request | Trace cache keyed too coarsely - sampling mode/params are not part of the trace key, so replay reuses another mode's captured graph | Alternate greedy and sampled requests back-to-back; log which trace id each replay uses |
 | Wrong output at exactly the capture position, correct afterwards | Capture recorded the cache update but never executed it | Execute the trace once immediately after capture, then validate the capture-position cache entry |
 | One device/replica diverges after layer N while single-chip is clean | Collective-variant divergence on that axis (numerics or ordering of the reduce path) | Compare per-device outputs at layer boundaries; swap the collective variant for the failing axis |
-| Serving output repetitive or garbled while the standalone generator is clean | Stale async-decode state across requests: outputs read before refresh, or per-request state not reset | Serve the same prompt twice with a different prompt between; diff against the batch-1 generator output |
+| Serving output repetitive or garbled while the standalone generator is clean | Stale async-decode state across requests: outputs read before refresh, or per-request state not reset | Serve the same prompt twice with a different prompt between; diff against the single-request generator output, then run a multi-request smoke test |
 
 ## Evidence To Leave
 
