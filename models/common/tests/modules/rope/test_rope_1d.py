@@ -291,7 +291,7 @@ def _list_init_test_cases() -> list[pytest.param]:
     "mesh_shape,batch_size,head_dim,max_seq_len,rope_theta,rope_scaling_str,use_qk_fused",
     _list_init_test_cases(),
 )
-@skip_for_wormhole_b0("Failing on wh_llmbox for 7+ days; refs #FIXME")
+@skip_for_wormhole_b0("Failing on wh_llmbox for 7+ days; refs #46879")
 def test_rope_1d_decode_forward_vs_reference(
     ttnn_mesh_device: ttnn.MeshDevice,
     mesh_shape,
