@@ -41,7 +41,8 @@ set(TTNN_CORE_SRCS
     core/tensor/tensor_attributes.cpp
     core/tensor/tensor_impl.cpp
     core/tensor/tensor_ops.cpp
-    core/tensor/socket_services.cpp
+    core/services/h2d_socket_service.cpp
+    core/services/d2h_socket_service.cpp
     cpp/ttnn/operations/experimental/core_subset_write/copy_to_device_filtered.cpp
     core/tensor/tensor_utils.cpp
     core/tensor/unit_mesh/unit_mesh_utils.cpp
@@ -170,9 +171,11 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/deepseek_prefill/post_combine_reduce/post_combine_reduce_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/moe_gate_mm/moe_gate_mm_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/moe/deepseek_moe_gate/deepseek_moe_gate_nanobind.cpp
+    cpp/ttnn/operations/experimental/deepseek/moe/generalized_moe_gate/generalized_moe_gate_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_large_indices/topk_large_indices_nanobind.cpp
     cpp/ttnn/operations/experimental/topk_router_gpt/topk_router_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek/mla/matmul_wo/matmul_wo_nanobind.cpp
+    cpp/ttnn/operations/experimental/indexer_score/indexer_score_nanobind.cpp
     cpp/ttnn/operations/experimental/ccl/moe_gpt/moe_gpt_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine_nanobind.cpp
@@ -183,6 +186,20 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/isin/isin_nanobind.cpp
     cpp/ttnn/operations/experimental/adaptive_pool/adaptive_pools_nanobind.cpp
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/quasar_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/pad/pad_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/tilize/tilize_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/move/move_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/untilize_with_unpadding/untilize_with_unpadding_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/slice/slice_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/transpose/transpose_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/reshard/reshard_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/pool_generic/generic_pools_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/matmul/matmul_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/binary/binary_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/fold/fold_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/moe_grouped_topk/moe_grouped_topk_nanobind.cpp
     cpp/ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.cpp
@@ -336,6 +353,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn-nanobind/global_semaphore.cpp
     cpp/ttnn-nanobind/hd_socket.cpp
     cpp/ttnn-nanobind/h2d_stream_service.cpp
+    cpp/ttnn-nanobind/d2h_stream_service.cpp
     cpp/ttnn-nanobind/counter_channel.cpp
     cpp/ttnn-nanobind/mesh_socket.cpp
     cpp/ttnn-nanobind/profiler.cpp

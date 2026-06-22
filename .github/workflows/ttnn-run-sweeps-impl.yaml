@@ -35,6 +35,9 @@ on:
       measure-memory:
         type: string
         default: "false"
+      fail-on-test-failure:
+        type: string
+        default: "false"
       mesh-shape:
         type: string
         default: ""
@@ -187,6 +190,10 @@ jobs:
 
           if [[ -n "$SUITE_NAME" ]]; then
             CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          if [[ "${{ inputs.fail-on-test-failure }}" == "true" ]]; then
+            CMD+=("--fail-on-test-failure")
           fi
 
           # Two-pass run: COL first, then ROW. Skip a pass when the matching

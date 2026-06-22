@@ -65,7 +65,13 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
     def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
         return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
 
-    def warmup_model_prefill(self, kv_cache, enable_trace, can_sample_on_device, greedy_only: bool = False):
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device,
+        greedy_only: bool = False,
+    ):
         warmup_gemma4_model_prefill(
             self,
             kv_cache,

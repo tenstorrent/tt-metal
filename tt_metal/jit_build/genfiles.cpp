@@ -124,7 +124,7 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     // Emit the header content:
     //  - DFB accessors are emitted into the dfb namespace
     //  - Semaphore accessors are emitted into the sem namespace
-    //  - TensorBindings are emitted into the ta namespace
+    //  - TensorBindings are emitted into the tensor namespace
     //
     // NOTE: DFB and Semaphore accessors are emitted as constexpr variables, i.e. as implicit CTAs.
     //       This is a design decision; we could alternatively emit them as implicit CRTAs.
@@ -178,13 +178,13 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             //
             // Per-binding type alias (`<name>_t`) lets the framework extend the underlying token
             // template with extra metadata in the future without touching kernel source.
-            content << "namespace ta {\n";
+            content << "namespace tensor {\n";
             for (const auto& entry : ta_entries) {
                 content << "using " << entry.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
                         << entry.cta_offset << "u, " << entry.addr_crta_offset << "u>;\n";
                 content << "constexpr " << entry.name << "_t " << entry.name << "{};\n";
             }
-            content << "}  // namespace ta\n";
+            content << "}  // namespace tensor\n";
         }
     }
     write_file(path, content.str());
