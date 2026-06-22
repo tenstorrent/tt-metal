@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 
 from models.experimental.voxtraltts.demo.decode_trace_2cq import reset_decode_trace_config
-from models.experimental.voxtraltts.tests.common import (
+from models.experimental.voxtraltts.utils.test_common import (
     close_voxtral_runtime_mesh,
     open_voxtral_runtime_mesh,
     voxtral_resolve_physical_device_id,

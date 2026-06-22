@@ -19,7 +19,7 @@ from models.experimental.voxtraltts.reference.functional import (
     extract_layer_weights,
     text_decoder_layer as reference_text_decoder_layer,
 )
-from models.experimental.voxtraltts.tests.common import create_real_voxtral_text_model_or_skip
+from models.experimental.voxtraltts.utils.test_common import create_real_voxtral_text_model_or_skip
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
 from models.experimental.voxtraltts.tt.text_backbone.common import Mode
 

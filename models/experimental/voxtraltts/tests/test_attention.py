@@ -12,7 +12,7 @@ from models.experimental.voxtraltts.reference.functional import (
     text_attention as reference_text_attention,
 )
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
-from models.experimental.voxtraltts.tests.common import (
+from models.experimental.voxtraltts.utils.test_common import (
     load_acoustic_fm_layer_weights_or_skip,
     load_audio_tokenizer_state_dict_or_skip,
     resolve_voxtral_model_name_or_skip,

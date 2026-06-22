@@ -21,7 +21,8 @@ from models.experimental.voxtraltts.reference.voxtral_config import (
     DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN,
     voxtral_num_codebooks,
 )
-from models.experimental.voxtraltts.tests.common import (
+from models.experimental.voxtraltts.utils.test_common import (
+    VOXTRAL_GOLDEN_CODES_DEFAULT_PATH,
     VOXTRAL_STANDARD_CHAR_TEXT,
     log_per_step_code_match,
     resolve_voxtral_model_name_or_skip,
@@ -144,7 +145,7 @@ def test_ttnn_voxtral_tts_staged_pcc(device, reset_seeds, request):
     gc.collect()
 
 
-_GOLDEN_CODES_PATH = Path(__file__).resolve().parent.parent / "reference_outputs" / "voxtral_golden_codes.refpt"
+_GOLDEN_CODES_PATH = VOXTRAL_GOLDEN_CODES_DEFAULT_PATH
 
 
 def _load_golden_fixture() -> dict:
@@ -153,7 +154,7 @@ def _load_golden_fixture() -> dict:
     if not path.exists():
         pytest.skip(
             f"golden codes fixture missing: {path}. Generate once with "
-            "models/experimental/voxtraltts/tests/generate_voxtral_golden_codes.py and commit it."
+            "models/experimental/voxtraltts/reference/reference_outputs/generate_voxtral_golden_codes.py and commit it."
         )
     raw = torch.load(path, map_location="cpu")
     if not (isinstance(raw, dict) and "codes_b37t" in raw):

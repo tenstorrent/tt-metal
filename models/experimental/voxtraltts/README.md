@@ -134,12 +134,13 @@ models/experimental/voxtraltts/
 │   │   ├── text_attention_golden.pt
 │   │   └── text_decoder_layer_golden.pt
 │   ├── voxtral_config.py        #   Model config dataclasses + weight loading
-│   └── voxtral_request.py       #   Tokenizer + SpeechRequest construction (mistral-common)
-├── tests/                       # All tests (unit, PCC, perf)
+│   ├── voxtral_request.py       #   Tokenizer + SpeechRequest construction (mistral-common)
+│   └── reference_outputs/       #   Golden codes fixture + generator script
+│       ├── generate_voxtral_golden_codes.py
+│       └── voxtral_golden_codes.refpt
+├── conftest.py                  #   Pytest plugin loader (fixtures live in utils/conftest.py)
+├── tests/                       # Test modules only (unit, PCC, perf)
 │   ├── audio_tokenizer_workload.py       #   Audio tokenizer test workload helpers
-│   ├── common.py                         #   Shared device/model setup utilities
-│   ├── conftest.py                       #   Pytest fixtures
-│   ├── generate_voxtral_golden_codes.py  #   Script to regenerate committed golden codes
 │   ├── pcc/                     #   E2E waveform PCC + quality-metric tests
 │   │   ├── test_ttnn_voxtral_unittest.py        #   TTNN-level unit tests
 │   │   ├── test_voxtral_e2e_debug.py            #   Free-run diagnostic (informational)
@@ -153,7 +154,6 @@ models/experimental/voxtraltts/
 │   │   ├── test_voxtral_tts_perf_inference.py           #   Inference throughput perf
 │   │   ├── test_voxtral_tts_stage_device_perf.py        #   Per-stage device perf
 │   │   └── test_voxtral_tts_stage_perf_run.py           #   Per-stage perf run
-│   ├── reference_outputs/       #   Committed reference outputs (voxtral_golden_codes.refpt)
 │   ├── test_acoustic_model.py                      #   Acoustic model PCC tests (Euler steps, FM layers)
 │   ├── test_attention.py                           #   Attention unit tests
 │   ├── test_audio_tokenizer_*.py                   #   Audio tokenizer component unit tests
@@ -165,19 +165,48 @@ models/experimental/voxtraltts/
 │   └── test_voxtral_tts_pipeline_component_pcc.py #   Pipeline component PCC
 ├── tt/                          # TTNN on-device implementations
 │   ├── acoustic_model.py        #   Acoustic flow-matching head
-│   ├── attention.py             #   Grouped-query attention (prefill + decode)
+│   ├── attention.py             #   GQA attention (acoustic / audio tokenizer paths)
 │   ├── audio_tokenizer/         #   Audio tokenizer decode (encoder + decoder stack)
-│   ├── mlp.py                   #   SwiGLU MLP
-│   ├── rmsnorm.py               #   RMSNorm
-│   ├── text_decoder_layer.py    #   Single text decoder layer
-│   ├── text_model.py            #   Text backbone (Transformer)
+│   │   ├── conv.py
+│   │   ├── embedding.py
+│   │   ├── model.py
+│   │   ├── quantizer.py
+│   │   └── transformer.py
+│   ├── mlp.py                   #   SwiGLU MLP (acoustic / shared primitives)
+│   ├── rmsnorm.py               #   RMSNorm (acoustic path)
+│   ├── text_attention.py        #   Voxtral text attention (extends text_backbone; interleaved-wo decode opt)
+│   ├── text_backbone/           #   Vendored text transformer framework (no tt_transformers runtime dep)
+│   │   ├── attention.py         #   Base GQA attention (prefill + decode)
+│   │   ├── ccl.py               #   Collective comms helpers (all-gather / all-reduce)
+│   │   ├── common.py            #   Mode, mesh helpers, paged-attention config
+│   │   ├── decoder.py           #   Transformer decoder block
+│   │   ├── distributed_norm.py  #   TP-aware norm wrappers
+│   │   ├── embedding.py         #   Token embeddings
+│   │   ├── lm_head.py           #   LM head + sampling logits
+│   │   ├── load_checkpoints.py  #   HF checkpoint key remapping / load
+│   │   ├── mlp.py               #   SwiGLU MLP
+│   │   ├── mixtral_mlp.py       #   Mixtral MoE MLP (unused on Voxtral dense text)
+│   │   ├── mixtral_moe.py       #   Mixtral MoE router (unused on Voxtral dense text)
+│   │   ├── model.py             #   Full text Transformer (prefill + decode)
+│   │   ├── model_config.py      #   Program configs, mem configs, optimisation hooks
+│   │   ├── prefetcher.py        #   Weight prefetch for decode
+│   │   ├── prefetcher/          #   Prefetcher YAML config
+│   │   ├── rmsnorm.py           #   RMSNorm
+│   │   └── rope.py              #   RoPE setup + rotation mats
+│   ├── text_decoder_layer.py    #   HF/Voxtral checkpoint key remapping for text weights
+│   ├── text_layer_trace.py      #   Text-decode trace capture helpers
+│   ├── text_mlp.py              #   Voxtral text MLP (extends text_backbone; fused-SiLU decode opt)
+│   ├── text_model.py            #   VoxtralTTTextModel wrapper over text_backbone Transformer
+│   ├── text_rmsnorm.py          #   FP32-promoting RMSNorm for text stack (HF-faithful)
 │   ├── voxtral_tt_args.py       #   Model args, program configs, optimisation presets
 │   └── voxtral_tts.py           #   VoxtralTTSPipeline (top-level inference entry point)
 └── utils/
     ├── audio_tokenizer_optimizations.py  #   Optimisation preset factories
     ├── config_helpers.py                 #   Compute kernel configs (acoustic, semantic, …)
+    ├── conftest.py                       #   Pytest fixtures (device mesh, trace reset)
     ├── debug_trace.py                    #   Debug and trace utilities
-    └── rng.py                            #   RNG helpers for FM noise
+    ├── rng.py                            #   RNG helpers for FM noise
+    └── test_common.py                    #   Shared test/demo helpers (prompt text, mesh, model loaders)
 ```
 
 ---
@@ -281,7 +310,7 @@ Or run individually:
 | `test_ttnn_voxtral_tts_golden_acoustic_pcc` | Text + acoustic + tokenizer (teacher-forced) | PCC ≥ 0.97 | **0.979** |
 | `test_ttnn_voxtral_tts_staged_pcc` | Free-run diagnostic (full AR, no golden feedback) | informational | — |
 
-**`test_ttnn_voxtral_tts_golden_codes_pcc`** — Audio tokenizer in isolation. Same as a teacher-forced run, except the golden-truth acoustic codes are saved offline in `tests/reference_outputs/voxtral_golden_codes.refpt`. At test time those fixed `[1, 37, T]` codes are fed to both the CPU reference tokenizer and the TT audio tokenizer; the final waveforms are compared with PCC. No text model or acoustic model runs — this gates only the audio decoder path.
+**`test_ttnn_voxtral_tts_golden_codes_pcc`** — Audio tokenizer in isolation. Same as a teacher-forced run, except the golden-truth acoustic codes are saved offline in `reference/reference_outputs/voxtral_golden_codes.refpt`. At test time those fixed `[1, 37, T]` codes are fed to both the CPU reference tokenizer and the TT audio tokenizer; the final waveforms are compared with PCC. No text model or acoustic model runs — this gates only the audio decoder path.
 
 **`test_ttnn_voxtral_tts_acoustic_pcc`** — Acoustic model in isolation. Precomputed golden text hidden states from the reference fixture are fed directly as input to both CPU and TT acoustic models each step, with the same FM noise seed and no text model or code feedback. Each side produces its own acoustic codes; both code streams are decoded through the **same reference tokenizer** (held constant so only the acoustic implementation differs). The resulting waveforms are compared with PCC.
 
@@ -296,13 +325,13 @@ pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_tt
 pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_staged_pcc -sv --timeout=0
 ```
 
-E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `tests/common.py`) and `voxtral_text_hf_aligned_optimizations` for numerical fidelity.
+E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `utils/test_common.py`) and `voxtral_text_hf_aligned_optimizations` for numerical fidelity.
 
 **PCC environment overrides**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `VOXTRAL_GOLDEN_CODES_PT` | `tests/reference_outputs/voxtral_golden_codes.refpt` | Path to golden codes + text hiddens fixture |
+| `VOXTRAL_GOLDEN_CODES_PT` | `reference/reference_outputs/voxtral_golden_codes.refpt` | Path to golden codes + text hiddens fixture |
 | `VOXTRAL_ACOUSTIC_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_acoustic_pcc` |
 | `VOXTRAL_PIPELINE_TF_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_golden_acoustic_pcc` |
 | `VOXTRAL_DECODE_TRACE` | `1` | Enable traced text-decode replay (set `0` to disable) |
@@ -312,7 +341,7 @@ E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` i
 Regenerate the golden fixture (one-time, then commit):
 
 ```bash
-python models/experimental/voxtraltts/tests/generate_voxtral_golden_codes.py
+python models/experimental/voxtraltts/reference/reference_outputs/generate_voxtral_golden_codes.py
 ```
 
 #### Component / module PCC
@@ -379,7 +408,7 @@ e.g : text_prefill, text_decode, acoustic_forward, audio_decode
 
 Full TT inference demo: text (or pre-computed codes/latents) → `.wav` on device. Trace replay is **on by default** on P150 and BH QB2.
 
-With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `tests/common.py`), voice `casual_male`, `text_max_seq_len=4096`, and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run exactly this default path (`CI=true` also sets `warmup_iters=0` to skip the untimed warmup pass).
+With no CLI flags, the demo uses the shared ~500-character standard prompt (`VOXTRAL_STANDARD_CHAR_TEXT` in `utils/test_common.py`), voice `casual_male`, `text_max_seq_len=4096`, and `max_speech_tokens=5000` (auto-raised from word count when needed). CI jobs run exactly this default path (`CI=true` also sets `warmup_iters=0` to skip the untimed warmup pass).
 
 #### Prerequisites
 
