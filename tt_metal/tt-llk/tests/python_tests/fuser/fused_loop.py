@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .block_data import BlockData
+    from .pack_node import PackNode
 
 from helpers.llk_params import L1Accumulation, PerfRunType
 
@@ -36,6 +37,7 @@ class FusedLoop:
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
+        pack_node: "PackNode",
         block: "BlockData",
     ) -> str:
         code = ""
@@ -46,7 +48,7 @@ class FusedLoop:
             return code
         code += f"for (std::uint32_t tile_x = 0; tile_x < {block.block_tiles_x}; tile_x++) {{\n"
         code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
-        if operation.pack_l1_accumulation == L1Accumulation.Yes:
+        if pack_node.pack_l1_accumulation == L1Accumulation.Yes:
             code += (
                 f"std::uint32_t l1_tile_id = tile_y * {block.tile_count_x} + tile_x;\n"
             )
@@ -57,7 +59,7 @@ class FusedLoop:
         )
         block.tile_id_global = "l1_tile_id"
         block.tile_id_block = "dest_tile_id"
-        code += operation.math.packer().pack(operation, config, None, block)
+        code += pack_node.packer.pack(pack_node, operation, config, block)
         code += "}\n"
         code += "}\n"
         return code
@@ -79,13 +81,13 @@ class LoopBlock(FusedLoop):
                 f"{block.tile_count_x} * {block.block_y} + {block.block_x}"
             )
             block.tile_id_block = "0"
-            return compute_unit.unpacker().perf_set_valid(
+            return compute_unit.unpacker.perf_set_valid(
                 operation, config, compute_unit, block
             )
         code += f"std::uint32_t tile_id = {block.tile_count_x} * {block.block_y} + {block.block_x};\n"
         block.tile_id_global = "tile_id"
         block.tile_id_block = "0"
-        code += compute_unit.unpacker().unpack(operation, config, compute_unit, block)
+        code += compute_unit.unpacker.unpack(operation, config, compute_unit, block)
         return code
 
     def math_loop(
@@ -101,7 +103,7 @@ class LoopBlock(FusedLoop):
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ):
-            return compute_unit.unpacker().perf_clear_valid(
+            return compute_unit.unpacker.perf_clear_valid(
                 operation, config, compute_unit, block
             )
         block.tile_id_global = (
@@ -127,13 +129,11 @@ class LoopBlockRow(FusedLoop):
         block.tile_id_global = "tile_id"
         block.tile_id_block = f"tile_y * {block.block_tiles_x}"
         if config.perf_run_type == PerfRunType.MATH_ISOLATE:
-            code += compute_unit.unpacker().perf_set_valid(
+            code += compute_unit.unpacker.perf_set_valid(
                 operation, config, compute_unit, block
             )
         else:
-            code += compute_unit.unpacker().unpack(
-                operation, config, compute_unit, block
-            )
+            code += compute_unit.unpacker.unpack(operation, config, compute_unit, block)
         code += "}\n"
         return code
 
@@ -156,7 +156,7 @@ class LoopBlockRow(FusedLoop):
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ):
-            code += compute_unit.unpacker().perf_clear_valid(
+            code += compute_unit.unpacker.perf_clear_valid(
                 operation, config, compute_unit, block
             )
         else:
@@ -181,16 +181,14 @@ class LoopTileByTile(FusedLoop):
         block.tile_id_global = f"{block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
         block.tile_id_block = f"tile_y * {block.block_tiles_x} + tile_x"
         if config.perf_run_type == PerfRunType.MATH_ISOLATE:
-            code += compute_unit.unpacker().perf_set_valid(
+            code += compute_unit.unpacker.perf_set_valid(
                 operation, config, compute_unit, block
             )
         else:
             code += f"std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x);\n"
             block.tile_id_global = "tile_id"
             block.tile_id_block = f"tile_y * {block.block_tiles_x} + tile_x"
-            code += compute_unit.unpacker().unpack(
-                operation, config, compute_unit, block
-            )
+            code += compute_unit.unpacker.unpack(operation, config, compute_unit, block)
         code += "}\n"
         code += "}\n"
         return code
@@ -213,7 +211,7 @@ class LoopTileByTile(FusedLoop):
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
         ):
-            code += compute_unit.unpacker().perf_clear_valid(
+            code += compute_unit.unpacker.perf_clear_valid(
                 operation, config, compute_unit, block
             )
         else:

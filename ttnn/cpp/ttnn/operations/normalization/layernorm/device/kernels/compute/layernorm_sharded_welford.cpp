@@ -30,17 +30,17 @@
  *     is assigned is `num_tiles_per_allgather_worker`)
  *   - Each core computes its partial mean and variance of its slices
  *     for all rows it is assigned (using Welford's algorithm) and pushes
- *     the interleaved mean and variance results to `cb_ex_partial`.
+ *     the interleaved mean and variance results to `cb_ex_partial_id`.
  *     This produces 1 mean tile and 1 variance tile per tile row
- *   - The reader kernels populate `cb_ex_external` with the core's
+ *   - The reader kernels populate `cb_ex_external_id` with the core's
  *     partial result + the other partial results from cores in the
  *     same core row for each row the core is assigned
  *   - Each core combines all partial results for its row(s) in
- *     `cb_ex_external` into `cb_ex`. `cb_ex` contains 1 mean tile
+ *     `cb_ex_external_id` into `cb_ex_id`. `cb_ex_id` contains 1 mean tile
  *     followed by 1 tile of 1/sqrt(var + eps) for each assigned row
  *   - The core row's sender core (the first column of cores) collects
  *     all of these combined tiles and multicasts to all cores in the row
- *     into `cb_ex_global`
+ *     into `cb_ex_global_id`
  * 2. Two-stage reduce:
  *   - Used for width-sharded tensors, where each core has a
  *     tensor-height-tall slice of the tensor
@@ -51,10 +51,10 @@
  *     in its core row. This is the first stage of the reduce.
  *   - Second stage of the reduce: The reader kernels add the
  *     first stage's combined results into the second stage readers'
- *     `cb_ex_external`. The results in `cb_ex_external` are combined
+ *     `cb_ex_external_id`. The results in `cb_ex_external_id` are combined
  *     in the same way.
  *   - The final combined results are collected by the sender core
- *     and multicasted to all cores into `cb_ex_global`
+ *     and multicasted to all cores into `cb_ex_global_id`
  *
  * After one of the two reduce paths above, the rest of the layernorm
  * calculation is done using the global mean and 1/sqrt(var + eps) results.
@@ -127,41 +127,51 @@ void kernel_main() {
     // ---------------------------------------------------------------------------
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_gamma_id = tt::CBIndex::c_5;
+    constexpr uint32_t cb_beta_id = tt::CBIndex::c_6;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;          // x minus mean
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_18;        // x minus mean
-    constexpr uint32_t cb_ex_partial = tt::CBIndex::c_8;  // Interleaved E[x] and Var[x] partial results
-    constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // Interleaved E[x] and Var[x] global reduce
-    constexpr uint32_t cb_ex_external = tt::CBIndex::c_10;
-    constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // Interleaved E[x] and Var[x] final global mcast result
-    constexpr uint32_t cb_transpose = tt::CBIndex::c_22;  // Transpose interleaved E[x] and Var[x] to columns
-                                                          // (workaround for bug in transpose_wh_dest)
-    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_xmm_id = tt::CBIndex::c_18;     // x minus mean
+    constexpr uint32_t cb_ex_partial_id = tt::CBIndex::c_8;  // Interleaved E[x] and Var[x] partial results
+    constexpr uint32_t cb_ex_id = tt::CBIndex::c_9;          // Interleaved E[x] and Var[x] global reduce
+    constexpr uint32_t cb_ex_external_id = tt::CBIndex::c_10;
+    constexpr uint32_t cb_ex_global_id = tt::CBIndex::c_15;  // Interleaved E[x] and Var[x] final global mcast result
+    constexpr uint32_t cb_transpose_id = tt::CBIndex::c_22;  // Transpose interleaved E[x] and Var[x] to columns
+                                                             // (workaround for bug in transpose_wh_dest)
+    constexpr uint32_t cb_fusion_id = tt::CBIndex::c_18;     // stream gamma/beta
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
     constexpr uint32_t cb_reciprocals = tt::CBIndex::c_25;  // LUT of pre-computed reciprocals for Welford's algorithm
 
-    CircularBuffer cb_gamma_obj(cb_gamma);
-    CircularBuffer cb_beta_obj(cb_beta);
-    CircularBuffer cb_xmm_obj(cb_xmm);
-    CircularBuffer cb_ex_partial_obj(cb_ex_partial);
-    CircularBuffer cb_ex_obj(cb_ex);
-    CircularBuffer cb_ex_external_obj(cb_ex_external);
-    CircularBuffer cb_ex_global_obj(cb_ex_global);
-    CircularBuffer cb_transpose_obj(cb_transpose);
-    CircularBuffer cb_fusion_obj(cb_fusion);
-    CircularBuffer cb_out_obj(cb_out);
+    CircularBuffer cb_gamma(cb_gamma_id);
+    CircularBuffer cb_beta(cb_beta_id);
+    CircularBuffer cb_xmm(cb_xmm_id);
+    CircularBuffer cb_ex_partial(cb_ex_partial_id);
+    CircularBuffer cb_ex(cb_ex_id);
+    CircularBuffer cb_ex_external(cb_ex_external_id);
+    CircularBuffer cb_ex_global(cb_ex_global_id);
+    CircularBuffer cb_transpose(cb_transpose_id);
+    CircularBuffer cb_fusion(cb_fusion_id);
+    CircularBuffer cb_out(cb_out_id);
 
-    constexpr uint32_t cb_im = (do_gamma | do_beta) ? cb_x : cb_out;
-    CircularBuffer cb_im_obj(cb_im);
-    constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
-    CircularBuffer cb_outgamma_obj(cb_outgamma);
+    constexpr uint32_t cb_im_id = (do_gamma | do_beta) ? cb_x : cb_out_id;
+    CircularBuffer cb_im(cb_im_id);
+    constexpr uint32_t cb_outgamma_id = do_beta ? cb_fusion_id : cb_out_id;
+    CircularBuffer cb_outgamma(cb_outgamma_id);
 #ifdef FUSE_PRE_ADD
-    constexpr uint32_t cb_in = cb_x;
+    constexpr uint32_t cb_in_id = cb_x;
 #else
-    constexpr uint32_t cb_in = cb_in0;
+    constexpr uint32_t cb_in_id = cb_in0;
 #endif
-    CircularBuffer cb_in_obj(cb_in);
+    CircularBuffer cb_in(cb_in_id);
+
+    // Welford-fp32 alias of cb_in_id. When welford_fp32_alias is true, cb_x_welford_named points
+    // to c_29, a separate buffer index sharing cb_in_id's SRAM but configured with UnpackToDestFp32,
+    // so Welford's transpose_wh_tile preserves fp32 precision in DEST. The two aliased indices
+    // have independent read/write pointers so the fused path pushes both side by side; the non-fused
+    // path reads c_0 (sharded) without read/write pointer manipulation, and so does the alias.
+    constexpr bool welford_fp32_alias = get_named_compile_time_arg_val("welford_fp32_alias") != 0;
+    constexpr auto cb_x_welford_named = get_named_compile_time_arg_val("cb_x_welford");
+    constexpr auto cb_x_welford_id = welford_fp32_alias ? cb_x_welford_named : cb_in_id;
+    CircularBuffer cb_x_welford(cb_x_welford_id);
 
     // ---------------------------------------------------------------------------
     // Derived quantities
@@ -230,9 +240,9 @@ void kernel_main() {
     // Op initialization
     // ---------------------------------------------------------------------------
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in0, cb_in1, cb_in);
+    binary_op_init_common(cb_in0, cb_in1, cb_in_id);
 #else
-    unary_op_init_common(cb_in, cb_ex_partial);
+    unary_op_init_common(cb_in_id, cb_ex_partial_id);
 #endif
 
     // ---------------------------------------------------------------------------
@@ -241,7 +251,15 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
     add_tiles_init(cb_in0, cb_in1);
-    cb_in_obj.reserve_back(num_tiles_per_block);
+    cb_in.reserve_back(num_tiles_per_block);
+    if constexpr (welford_fp32_alias) {
+        // Must be done in the compute kernel: on the fused path compute is the producer of cb_in_id
+        // via the add_tiles -> pack_tile sequence below; the reader never writes cb_in_id.
+        // cb_x_welford_id shares cb_in_id's SRAM but has its own read/write pointers, so reserve and push
+        // both indices side by side. pack_tile writes once via cb_in_id's wr_ptr; the alias lets the
+        // welford section wait_front on c_29 independently of cb_in_id.
+        cb_x_welford.reserve_back(num_tiles_per_block);
+    }
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -253,23 +271,36 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                pack_tile(sbi, cb_in);
+                pack_tile(sbi, cb_in_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
         index_h_offset += block_wt;
     }
-    cb_in_obj.push_back(num_tiles_per_block);
-    cb_in_obj.wait_front(num_tiles_per_block);
+    cb_in.push_back(num_tiles_per_block);
+    cb_in.wait_front(num_tiles_per_block);
+    if constexpr (welford_fp32_alias) {
+        cb_x_welford.push_back(num_tiles_per_block);
+        cb_x_welford.wait_front(num_tiles_per_block);
+    }
 #endif
 
     // ---------------------------------------------------------------------------
     // Compute E[x] and Var[x] using Welford's algorithm
     // ---------------------------------------------------------------------------
-    reconfig_data_format_srca(cb_in);
-    cb_ex_partial_obj.reserve_back(num_block_ht_result_tiles);
-    transpose_wh_init_short(cb_in);
+    reconfig_data_format_srca(cb_x_welford_id);
+    cb_ex_partial.reserve_back(num_block_ht_result_tiles);
+    // Full transpose_wh_init when the alias is active. cb_x_welford_id's buffer index isn't
+    // visible to binary_op_init_common / unary_op_init_common at the top of kernel_main (only
+    // cb_in0/cb_in_id is), so we run the full init once to program all hw config registers
+    // (pack, math hw_configure) for it. For the non-alias path cb_x_welford_id == cb_in_id and
+    // transpose_wh_init_short suffices.
+    if constexpr (welford_fp32_alias) {
+        transpose_wh_init(cb_x_welford_id, cb_ex_partial_id);
+    } else {
+        transpose_wh_init_short(cb_x_welford_id);
+    }
     welford_init();
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_ht; i++) {
@@ -279,13 +310,36 @@ void kernel_main() {
 
         // Do the full Welford tiles
         for (uint32_t w = 0; w < num_full_welford_tiles; w++) {
-            transpose_wh_tile(cb_in, w + index_h_offset, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                // SFPU replay slots [0, 32) currently hold the welford recurrence (welford uses
+                // the full 32-slot math-thread replay buffer; the recovery block below re-records
+                // all of it after each transpose). transpose_wh_init_short re-records slots
+                // [16, 32) with the transpose-dest setup so transpose_wh_tile below can replay them.
+                transpose_wh_init_short(cb_x_welford_id);
+            }
+            transpose_wh_tile(cb_x_welford_id, w + index_h_offset, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                // transpose_wh_tile took the UnpackToDestFp32 path. Its math-side init clobbered
+                // the welford recurrence at SFPU replay slots [16, 32).
+                // welford_init<WelfordInitMode::PreserveStats>() re-records all 32 slots with
+                // the welford recurrence; PreserveStats keeps the running mean / M2 accumulator
+                // in LREG4/5. UNPACK A is left in transpose=1;
+                // welford_update is pure SFPU and does not consume that state, and the next
+                // iteration's transpose_wh_init_short reprograms it.
+                welford_init<WelfordInitMode::PreserveStats>();
+            }
             welford_update<per_core_recip_lut_size>(welford_input_dst, sample_idx, *p_reciprocals);
             sample_idx += tile_width;
         }
         // Do the partial Welford tile, if any
         if (partial_welford_tile_w > 0) {
-            transpose_wh_tile(cb_in, block_wt - 1, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                transpose_wh_init_short(cb_x_welford_id);
+            }
+            transpose_wh_tile(cb_x_welford_id, block_wt - 1, welford_input_dst);
+            if constexpr (welford_fp32_alias) {
+                welford_init<WelfordInitMode::PreserveStats>();
+            }
             welford_update_rows<per_core_recip_lut_size>(
                 welford_input_dst, sample_idx, 0, partial_welford_tile_w, *p_reciprocals);
         }
@@ -295,30 +349,35 @@ void kernel_main() {
         // So we transpose to an intermediate CB downstream
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(welford_mean_dst, cb_ex_partial);
-        pack_tile(welford_var_dst, cb_ex_partial);
+        pack_tile(welford_mean_dst, cb_ex_partial_id);
+        pack_tile(welford_var_dst, cb_ex_partial_id);
         tile_regs_release();
         index_h_offset += block_wt;
     }
-    cb_ex_partial_obj.push_back(num_block_ht_result_tiles);
-    cb_ex_partial_obj.wait_front(num_block_ht_result_tiles);
+    cb_ex_partial.push_back(num_block_ht_result_tiles);
+    cb_ex_partial.wait_front(num_block_ht_result_tiles);
 
     // ---------------------------------------------------------------------------
     // Combine Welford local partials with external partials
-    // cb_ex <-- cb_ex_external, cb_ex_partial
+    // cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
     // If reduction is single-stage, or this core is a second-stage reader,
-    // then cb_ex contains mean and 1/sqrt(var + eps) interleaved.
-    // Otherwise, cb_ex contains mean and var interleaved.
+    // then cb_ex_id contains mean and 1/sqrt(var + eps) interleaved.
+    // Otherwise, cb_ex_id contains mean and var interleaved.
     // ---------------------------------------------------------------------------
-    reconfig_data_format_srca(cb_ex_partial);
+    reconfig_data_format_srca(cb_ex_partial_id);
     if constexpr (is_allgather_worker) {
-        cb_ex_obj.reserve_back(2 * num_tiles_per_allgather_worker);
+        cb_ex.reserve_back(2 * num_tiles_per_allgather_worker);
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
             norm::kernel_util::compute::combine_welford_partials(
                 cb_ex_external,
                 cb_ex,
                 num_blocks_combine,
-                [&](uint32_t b) {
+                [num_blocks_combine,
+                 is_second_stage_reader,
+                 num_blocks_first_stage,
+                 second_stage_w,
+                 block_w,
+                 last_block_w](uint32_t b) {
                     return get_next_set_size(
                         b,
                         num_blocks_combine,
@@ -337,177 +396,177 @@ void kernel_main() {
                 // between first stage (row) and second stage (column) (if row major).
                 // The factor of 2 is because each block has 2 tiles (mean, var).
                 constexpr uint32_t num_second_stage_tiles = 2 * (num_blocks_second_stage - 1);
-                cb_ex_external_obj.wait_front(num_second_stage_tiles);
-                cb_ex_external_obj.pop_front(num_second_stage_tiles);
+                cb_ex_external.wait_front(num_second_stage_tiles);
+                cb_ex_external.pop_front(num_second_stage_tiles);
             }
         }
-        cb_ex_obj.push_back(2 * num_tiles_per_allgather_worker);
-        cb_ex_obj.wait_front(2 * num_tiles_per_allgather_worker);
+        cb_ex.push_back(2 * num_tiles_per_allgather_worker);
+        cb_ex.wait_front(2 * num_tiles_per_allgather_worker);
     }
 
     // ---------------------------------------------------------------------------
     // Receive the global reduce result and transpose back to columns
     // ---------------------------------------------------------------------------
-    cb_ex_global_obj.wait_front(num_block_ht_result_tiles);
-    cb_transpose_obj.reserve_back(num_block_ht_result_tiles);
-    transpose_wh_init_short(cb_ex_global);
+    cb_ex_global.wait_front(num_block_ht_result_tiles);
+    cb_transpose.reserve_back(num_block_ht_result_tiles);
+    transpose_wh_init_short(cb_ex_global_id);
     uint32_t processed_tiles = 0;
     while (processed_tiles < num_block_ht_result_tiles) {
         uint32_t tiles_to_load = std::min(num_block_ht_result_tiles - processed_tiles, num_dest_regs);
         tile_regs_acquire();
         for (uint32_t i = 0; i < tiles_to_load; i++) {
-            transpose_wh_tile(cb_ex_global, processed_tiles + i, i);
+            transpose_wh_tile(cb_ex_global_id, processed_tiles + i, i);
         }
         tile_regs_commit();
         tile_regs_wait();
         for (uint32_t i = 0; i < tiles_to_load; i++) {
-            pack_tile(i, cb_transpose);
+            pack_tile(i, cb_transpose_id);
         }
         tile_regs_release();
         processed_tiles += tiles_to_load;
     }
-    cb_transpose_obj.push_back(num_block_ht_result_tiles);
-    cb_ex_global_obj.pop_front(num_block_ht_result_tiles);
+    cb_transpose.push_back(num_block_ht_result_tiles);
+    cb_ex_global.pop_front(num_block_ht_result_tiles);
 
-    cb_transpose_obj.wait_front(num_block_ht_result_tiles);
+    cb_transpose.wait_front(num_block_ht_result_tiles);
 
     // ---------------------------------------------------------------------------
     // Compute x - E[x]
     // ---------------------------------------------------------------------------
     if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(cb_in, cb_transpose);
+        reconfig_data_format(cb_in_id, cb_transpose_id);
     }
     index_h_offset = 0;
-    sub_bcast_cols_init_short(cb_in, cb_transpose);
-    cb_xmm_obj.reserve_back(num_tiles_per_block);
+    sub_bcast_cols_init_short(cb_in_id, cb_transpose_id);
+    cb_xmm.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         const auto mean_idx = 2 * i;
-        cb_transpose_obj.wait_front(mean_idx + 1);
+        cb_transpose.wait_front(mean_idx + 1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_wt; w++) {
                 index = w + index_subblock_w_offset;
-                sub_tiles_bcast_cols(cb_in, cb_transpose, index, mean_idx, w);
+                sub_tiles_bcast_cols(cb_in_id, cb_transpose_id, index, mean_idx, w);
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                pack_tile(sbi, cb_xmm);
+                pack_tile(sbi, cb_xmm_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
-        cb_in_obj.pop_front(block_wt);
+        cb_in.pop_front(block_wt);
         // Don't pop transpose buffer until after the mul below
     }
-    cb_xmm_obj.push_back(num_tiles_per_block);
+    cb_xmm.push_back(num_tiles_per_block);
 #ifndef FUSE_PRE_ADD
-    reconfig_data_format_srca(cb_in, cb_xmm);
+    reconfig_data_format_srca(cb_in_id, cb_xmm_id);
 #endif
-    cb_xmm_obj.wait_front(num_tiles_per_block);
+    cb_xmm.wait_front(num_tiles_per_block);
 
     if constexpr (do_gamma == 0 && do_beta == 0) {
-        pack_reconfig_data_format(cb_out);
+        pack_reconfig_data_format(cb_out_id);
     }
 
     // ---------------------------------------------------------------------------
     // Scale by 1/sqrt(Var[x] + eps)
     // ---------------------------------------------------------------------------
     if constexpr (FLOAT32_DTYPE) {
-        reconfig_data_format(cb_xmm, cb_transpose);
+        reconfig_data_format(cb_xmm_id, cb_transpose_id);
     }
-    mul_bcast_cols_init_short(cb_xmm, cb_transpose);
+    mul_bcast_cols_init_short(cb_xmm_id, cb_transpose_id);
     index_h_offset = 0;
-    cb_im_obj.reserve_back(num_tiles_per_block);
+    cb_im.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_ht; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_wt; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles_bcast_cols(cb_xmm, cb_transpose, index, /*1/sqrt(var+eps) idx*/ 1, w);
+                mul_tiles_bcast_cols(cb_xmm_id, cb_transpose_id, index, /*1/sqrt(var+eps) idx*/ 1, w);
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                pack_tile(sbi, cb_im);
+                pack_tile(sbi, cb_im_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_wt;
         }
         index_h_offset += block_wt;
-        cb_transpose_obj.pop_front(2);
+        cb_transpose.pop_front(2);
     }
-    cb_im_obj.push_back(num_tiles_per_block);
-    cb_xmm_obj.pop_front(num_tiles_per_block);
+    cb_im.push_back(num_tiles_per_block);
+    cb_xmm.pop_front(num_tiles_per_block);
 
     // ---------------------------------------------------------------------------
     // Scale by gamma
     // ---------------------------------------------------------------------------
-    cb_im_obj.wait_front(num_tiles_per_block);
+    cb_im.wait_front(num_tiles_per_block);
     if constexpr (do_gamma) {
-        reconfig_data_format(cb_im, cb_gamma);
+        reconfig_data_format(cb_im_id, cb_gamma_id);
         if constexpr (do_beta == 0) {
-            pack_reconfig_data_format(cb_out);
+            pack_reconfig_data_format(cb_out_id);
         }
-        mul_bcast_rows_init_short(cb_im, cb_gamma);
-        cb_gamma_obj.wait_front(block_wt);
+        mul_bcast_rows_init_short(cb_im_id, cb_gamma_id);
+        cb_gamma.wait_front(block_wt);
         index_h_offset = 0;
-        cb_outgamma_obj.reserve_back(num_tiles_per_block);
+        cb_outgamma.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_ht; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset;
-                    mul_tiles_bcast_rows(cb_im, cb_gamma, index + index_h_offset, index, w);
+                    mul_tiles_bcast_rows(cb_im_id, cb_gamma_id, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                    pack_tile(sbi, cb_outgamma);
+                    pack_tile(sbi, cb_outgamma_id);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
             }
             index_h_offset += block_wt;
         }
-        cb_outgamma_obj.push_back(num_tiles_per_block);
-        cb_im_obj.pop_front(num_tiles_per_block);
-        cb_outgamma_obj.wait_front(num_tiles_per_block);
+        cb_outgamma.push_back(num_tiles_per_block);
+        cb_im.pop_front(num_tiles_per_block);
+        cb_outgamma.wait_front(num_tiles_per_block);
     }
 
     // ---------------------------------------------------------------------------
     // Add beta
     // ---------------------------------------------------------------------------
     if constexpr (do_beta) {
-        reconfig_data_format(cb_fusion, cb_beta);
-        pack_reconfig_data_format(cb_out);
-        add_bcast_rows_init_short(cb_fusion, cb_beta);
-        cb_beta_obj.wait_front(block_wt);
+        reconfig_data_format(cb_fusion_id, cb_beta_id);
+        pack_reconfig_data_format(cb_out_id);
+        add_bcast_rows_init_short(cb_fusion_id, cb_beta_id);
+        cb_beta.wait_front(block_wt);
         index_h_offset = 0;
-        cb_out_obj.reserve_back(num_tiles_per_block);
+        cb_out.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_ht; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
                 tile_regs_acquire();
                 for (uint32_t w = 0; w < subblock_wt; w++) {
                     index = w + index_subblock_w_offset;
-                    add_tiles_bcast_rows(cb_fusion, cb_beta, index + index_h_offset, index, w);
+                    add_tiles_bcast_rows(cb_fusion_id, cb_beta_id, index + index_h_offset, index, w);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t sbi = 0; sbi < subblock_wt; sbi++) {
-                    pack_tile(sbi, cb_out);
+                    pack_tile(sbi, cb_out_id);
                 }
                 tile_regs_release();
                 index_subblock_w_offset += subblock_wt;
             }
             index_h_offset += block_wt;
         }
-        cb_out_obj.push_back(num_tiles_per_block);
-        cb_fusion_obj.pop_front(num_tiles_per_block);
-        cb_out_obj.wait_front(num_tiles_per_block);
+        cb_out.push_back(num_tiles_per_block);
+        cb_fusion.pop_front(num_tiles_per_block);
+        cb_out.wait_front(num_tiles_per_block);
     }
 }

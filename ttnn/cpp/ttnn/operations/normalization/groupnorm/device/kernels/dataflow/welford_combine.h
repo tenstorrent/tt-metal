@@ -12,34 +12,9 @@
 #pragma once
 
 #include <cstdint>
-#include <cstring>
 #include <type_traits>
 
-/// @brief Helper functions for float <-> bfloat16 conversion.
-namespace detail {
-/**
- * @brief Convert bfloat16 (uint16_t) to float for arithmetic.
- * @param bf16 bfloat16 value as uint16_t.
- * @return float representation.
- */
-inline float bfloat16_to_float(uint16_t bf16) {
-    uint32_t float_bits = static_cast<uint32_t>(bf16) << 16;
-    float result;
-    std::memcpy(&result, &float_bits, sizeof(float));
-    return result;
-}
-
-/**
- * @brief Convert float to bfloat16 (stored as uint16_t).
- * @param f Float value.
- * @return bfloat16 representation as uint16_t.
- */
-inline uint16_t float_to_bfloat16(float f) {
-    uint32_t float_bits;
-    std::memcpy(&float_bits, &f, sizeof(float));
-    return static_cast<uint16_t>(float_bits >> 16);
-}
-}  // namespace detail
+#include "api/numeric/bfloat16.h"
 
 /**
  * @brief Struct to hold Welford stats for a single subgroup (mean, variance, count).
@@ -122,21 +97,21 @@ inline WelfordStats<uint16_t> combine_welford_stats(T means, T vars) {
         "T must be uint16_t* or volatile uint16_t*");
 
     WelfordStats<float> overall;
-    overall.mean = detail::bfloat16_to_float(means[0]);
-    overall.variance = detail::bfloat16_to_float(vars[0]);
+    overall.mean = bf16_to_fp32(means[0]);
+    overall.variance = bf16_to_fp32(vars[0]);
     overall.count = COUNT_PER_VALUE;
 
     for (uint32_t i = 1; i < ARRAY_SIZE; ++i) {
         WelfordStats<float> next;
-        next.mean = detail::bfloat16_to_float(means[i * STRIDE]);
-        next.variance = detail::bfloat16_to_float(vars[i * STRIDE]);
+        next.mean = bf16_to_fp32(means[i * STRIDE]);
+        next.variance = bf16_to_fp32(vars[i * STRIDE]);
         next.count = COUNT_PER_VALUE;
         overall = combine(overall, next);
     }
 
     WelfordStats<uint16_t> result;
-    result.mean = detail::float_to_bfloat16(overall.mean);
-    result.variance = detail::float_to_bfloat16(overall.variance);
+    result.mean = fp32_to_bf16_truncate(overall.mean);
+    result.variance = fp32_to_bf16_truncate(overall.variance);
     result.count = overall.count;
 
     return result;

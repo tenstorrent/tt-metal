@@ -4,6 +4,7 @@
 
 #include "api/numeric/bfloat16.h"
 #include <stdint.h>
+#include <type_traits>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
@@ -63,6 +64,12 @@ void kernel_main() {
     constexpr uint32_t core_id = get_compile_time_arg_val(args_base + 13);
     constexpr uint32_t ids_per_batch = get_compile_time_arg_val(args_base + 14);
     constexpr uint32_t num_cores = get_compile_time_arg_val(args_base + 15);
+    // Local sort-index width must match the index CB format / fp32_dest_acc_en chosen by the host:
+    // 32-bit (Int32) on Quasar, 16-bit (UInt16) on WH/BH.
+    constexpr bool use_32bit_index = get_compile_time_arg_val(args_base + 16) == 1;
+    // Number of running cores / users. The final-indices CB holds one stick per user (no longer
+    // hard-coded to 32), so this kernel waits/pops exactly `num_users` sticks.
+    constexpr uint32_t num_users = get_compile_time_arg_val(args_base + 17);
     constexpr uint32_t k_chunk_size = num_cores * sizeof(uint32_t);     // 4 bytes per uint32_t
     constexpr uint32_t p_chunk_size = num_cores * sizeof(uint16_t);     // 2 bytes per uint16_t
     constexpr uint32_t temp_chunk_size = num_cores * sizeof(uint16_t);  // 2 bytes per uint16_t
@@ -126,13 +133,14 @@ void kernel_main() {
     CoreLocalMem<volatile uint16_t> rand_values(cb_rand.get_read_ptr());
     uint16_t rand = rand_values[0];
     // wait for compute kernel
-    cb_final_indices.wait_front(32);
+    cb_final_indices.wait_front(num_users);
     cb_local_values.wait_front(1);
     cb_local_indices.wait_front(1);
     // Read producer-written compute outputs from these CBs in L1.
     CoreLocalMem<volatile uint16_t> local_values(cb_local_values.get_read_ptr());
 
-    CoreLocalMem<volatile uint16_t> local_indices(cb_local_indices.get_read_ptr());
+    using local_index_t = std::conditional_t<use_32bit_index, uint32_t, uint16_t>;
+    CoreLocalMem<volatile local_index_t> local_indices(cb_local_indices.get_read_ptr());
 
     CoreLocalMem<volatile uint32_t> final_indices(cb_final_indices.get_read_ptr() + core_id * final_indices_stick_size);
 
@@ -226,7 +234,7 @@ void kernel_main() {
     cb_rand.pop_front(1);
     cb_local_values.pop_front(1);
     cb_local_indices.pop_front(1);
-    cb_final_indices.pop_front(32);
+    cb_final_indices.pop_front(num_users);
 
     const auto s_out = TensorAccessor(dst_args, dst_addr);
     // Write individual core result - output buffer should handle alignment

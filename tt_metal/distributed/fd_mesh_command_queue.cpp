@@ -10,11 +10,11 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <tt-metalium/allocator.hpp>
+#include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <array>
-#include <cstring>
 #include <functional>
 #include <optional>
 #include <type_traits>
@@ -27,6 +27,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "dispatch/dispatch_settings.hpp"
+#include "dispatch/data_collection.hpp"
 #include "event/dispatch.hpp"
 #include "hal_types.hpp"
 #include "mesh_config.hpp"
@@ -55,6 +56,9 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <distributed/mesh_device_impl.hpp>
 #include "dispatch/simple_trace_allocator.hpp"
+#if defined(TT_UMD_BUILD_SIMULATION)
+#include "buffers/simulator_direct_write.hpp"
+#endif
 
 namespace tt::tt_metal {
 struct ProgramCommandSequence;
@@ -75,6 +79,25 @@ void for_each_local(MeshDevice* mesh_device, const Container& container, Func&& 
     });
 }
 // NOLINTEND(cppcoreguidelines-missing-std-forward)
+
+void record_program_sub_device_for_range(
+    MeshDevice* mesh_device, const MeshCoordinateRange& device_range, uint64_t runtime_id, SubDeviceId sub_device_id) {
+    // Skip programs that didn't opt into a user-defined sub-device manager.
+    const uint64_t active_manager_id = *mesh_device->get_active_sub_device_manager_id();
+    if (active_manager_id == *mesh_device->get_default_sub_device_manager_id()) {
+        return;
+    }
+    const uint32_t num_available_worker_cores =
+        mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, sub_device_id);
+    for_each_local(mesh_device, device_range, [&](const MeshCoordinate& coord) {
+        tt::RecordProgramSubDevice(
+            mesh_device->impl().get_device(coord)->id(),
+            active_manager_id,
+            runtime_id,
+            sub_device_id,
+            num_available_worker_cores);
+    });
+}
 
 [[maybe_unused]] MeshCoordinate get_local_start_coord(MeshDevice* mesh_device, const MeshCoordinateRange& range) {
     for (const auto& coord : range) {
@@ -406,6 +429,8 @@ void FDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
             mesh_workload.impl().get_program_binary_status(mesh_device_id),
             std::pair<bool, int>(unicast_go_signals, num_virtual_eth_cores));
 
+        record_program_sub_device_for_range(mesh_device_, device_range, program.get_runtime_id(), sub_device_id);
+
         this->write_program_cmds_to_subgrid(
             device_range,
             program_cmd_seq,
@@ -474,6 +499,52 @@ void FDMeshCommandQueue::enqueue_write_shard_to_core(
         id_,
         expected_num_workers_completed_,
         sub_device_ids);
+
+    if (blocking) {
+        this->finish_nolock(sub_device_ids);
+    }
+}
+
+void FDMeshCommandQueue::enqueue_write_dram_core_counter(
+    tt::stl::Span<const DeviceMemoryAddress> targets,
+    uint32_t value,
+    bool blocking,
+    tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ZoneScoped;
+
+    // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
+    // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
+    // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
+
+    if (this->get_target_device_type() == tt::TargetDevice::Mock ||
+        this->get_target_device_type() == tt::TargetDevice::Emule) {
+        return;
+    }
+
+    in_use_ = true;
+    TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture.");
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+
+    for (const auto& target : targets) {
+        if (!mesh_device_->impl().is_local(target.device_coord)) {
+            continue;
+        }
+        IDevice* device = mesh_device_->impl().get_device(target.device_coord);
+        // target.address is the full device destination (the caller pre-applies the
+        // DRAM L1 NOC offset). Use the unchecked write: the DRAM-banked bounds check
+        // in write_to_core rejects programmable DRAM-core (DRISC) L1. `value` is copied
+        // inline into the command region by write_to_core_unchecked before it returns.
+        device_dispatch::write_to_core_unchecked(
+            device,
+            target.virtual_core_coord,
+            &value,
+            target.address,
+            sizeof(value),
+            id_,
+            expected_num_workers_completed_,
+            sub_device_ids);
+    }
 
     if (blocking) {
         this->finish_nolock(sub_device_ids);
@@ -591,12 +662,24 @@ bool FDMeshCommandQueue::write_shard_to_device(
         return false;
     }
 
-    in_use_ = true;
     TT_FATAL(!trace_id_.has_value(), "Writes are not supported during trace capture. trace id: {}", trace_id_.value());
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
-    auto shard_view = device_buffer->view(region.value_or(BufferRegion(0, device_buffer->size())));
+    auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));
+    auto shard_view = device_buffer->view(region_value);
 
+#if defined(TT_UMD_BUILD_SIMULATION)
+    const tt_sim::DirectWriteGuard tt_sim_direct_write_guard{
+        .target = this->get_target_device_type(),
+        .cq_idle = !in_use_.load(std::memory_order_acquire),
+        .rtoptions = &MetalContext::instance(mesh_device_->impl().get_context_id()).rtoptions(),
+    };
+    if (tt_sim::try_direct_write(tt_sim_direct_write_guard, *shard_view, src, region_value, logical_core_filter)) {
+        return false;
+    }
+#endif
+
+    in_use_ = true;
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     return buffer_dispatch::write_to_device_buffer(
         src,
@@ -1359,6 +1442,8 @@ void FDMeshCommandQueue::record_end() {
                 sub_device_id,
                 ProgramBinaryStatus::Committed,
                 std::pair<bool, int>(mesh_node.unicast_go_signals, num_virtual_eth_cores));
+
+            record_program_sub_device_for_range(mesh_device_, range, node.program_runtime_id, sub_device_id);
 
             // Issue dispatch commands for this program
             program_dispatch::write_program_command_sequence(

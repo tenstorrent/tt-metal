@@ -40,46 +40,49 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 ## Tier 1 Models
 | Model | Systems |
 |-------|---------|
-| Llama3.3-70B | WH Galaxy, BH Galaxy |
-| Qwen3-32B | WH Galaxy, BH Galaxy |
-| Deepseek | WH Galaxy |
-| GPT-OSS | WH Galaxy |
-| llama3.1-8B | N150, P150 |
-| Whisper | N150, P150 |
+| Llama3.1-8B | WH N150, BH P150 |
+| Llama3.1-8B-DP | WH Galaxy |
+| Llama3.3-70B | WH Galaxy |
+| Qwen3-32B | WH Galaxy |
+| GPT-OSS 120B | WH Galaxy, BH Galaxy, BH QuietBox 2 |
+| Whisper | WH N150, BH P150 |
+| Gemma-4-12B | BH QuietBox 2 |
+| Gemma-4-26B-A4B | BH QuietBox 2 |
+| Gemma-4-31B | BH QuietBox 2 |
 ## Tier 2 Models
 | Model | Systems |
 |-------|---------|
-| GPT-OSS 120B batch=1 | WH Galaxy |
-| GPT-OSS 20B | WH LoudBox |
-| Llama70B (TTT) | WH/BH LoudBox |
-| Qwen3-32B (TTT) | WH/BH LoudBox |
-| Qwen2.5 32B (TTT) | WH LoudBox |
-| Qwen2.5-Coder-32B (TTT) | WH LoudBox |
-| llama90B-VL | WH LoudBox |
-| Qwen2.5-72B-VL | WH LoudBox |
-| Shallow-UNet | N150, N300, WH LoudBox |
-| Mistral-7B | N150 |
-| Mixtral 8x7B | WH LoudBox |
-| Gemma-3-4B | N150 |
-| Gemma-3-27B | WH LoudBox |
-| Gemma-4-E2B | N150 |
-| Gemma-4-E4B | N150 |
-| Gemma-4-26B-A4B | WH LoudBox |
-| Gemma-4-31B | WH LoudBox |
+| GPT-OSS 20B | WH LLMBox, BH P150, BH QuietBox 2 |
+| Llama3.1-8B | WH LLMBox, BH QuietBox 2 |
+| Llama3.1-8B-DP | WH LLMBox, BH P300 |
+| Llama3.3-70B | WH LLMBox, BH QuietBox 2 |
+| Qwen3-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen2.5-32B | WH LLMBox, BH QuietBox 2 |
+| Qwen2.5-Coder-32B | WH LLMBox |
+| Qwen2.5-72B-VL | WH LLMBox, BH QuietBox 2 |
+| Llama90B-VL | WH LLMBox |
+| Shallow-UNet | WH N150, WH LLMBox |
+| Mistral-7B | WH N150 |
+| Mixtral-8x7B | WH LLMBox |
+| Gemma-3-4B | WH N150 |
+| Gemma-3-27B | WH LLMBox |
+| Gemma-4-E2B | WH N150, BH P150 |
+| Gemma-4-E4B | WH N150, BH P150, BH P300, BH QuietBox 2 |
+| Gemma-4-26B-A4B | WH LLMBox |
+| Gemma-4-31B | WH LLMBox |
 ## Tier 3 Models
 | Model | Systems |
 |-------|---------|
-| Falcon-7B | N150 |
-| Falcon-40B | WH LoudBox |
-| Mamba | N150 |
-| Llama 1B | N150 |
-| Llama 3B | N150 |
-| Llama 11B-VL | WH LoudBox |
-| QwQ-32B | WH LoudBox |
-| Qwen 2.5-7B | N150, N300 |
-| Qwen 2.5-72B | WH LoudBox |
-| Qwen2.5-VL-32B | WH LoudBox |
-| Phi-3 | N150 |
+| Falcon-7B | WH N150 |
+| Falcon-40B | WH LLMBox |
+| Llama3.2-1B | WH N150 |
+| Llama3.2-3B | WH N150 |
+| Llama3.2-11B-Vision | WH LLMBox |
+| QwQ-32B | WH LLMBox |
+| Qwen2.5-7B | WH N300 |
+| Qwen2.5-VL-32B | WH LLMBox, BH QuietBox 2 |
+| Mamba-2.8B | WH N150 |
+| Phi-3-mini | WH N150 |
 
 
 # Pipelines
@@ -137,7 +140,6 @@ Captures device timing for a single layer of each target model, used to track pe
 
 | Pipeline | Workflow |
 |----------|----------|
-| Models post-commit | [`[internal] models tests impl`](../.github/workflows/models-post-commit.yaml) |
 | PR Gate | [`PR Gate`](../.github/workflows/pr-gate.yaml) |
 | Merge Gate | [`Merge Gate`](../.github/workflows/merge-gate.yaml) |
 | vLLM nightly tests | [`vLLM nightly tests`](../.github/workflows/vllm-nightly-tests.yaml) |

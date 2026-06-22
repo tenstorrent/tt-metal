@@ -21,24 +21,66 @@
  *************************************************************************/
 
 /**
- * Configure the unpacker hardware with explicit face geometry for operand A.
+ * Configure the unpacker hardware for operands A and B.
  *
- * Unlike the two-argument overload, which derives face_r_dim and num_faces for
- * operand A from its operand metadata, this overload accepts caller-supplied
- * values for unpA_face_r_dim and unpA_num_faces. This is useful when the
- * operand A tile layout differs from what is recorded in the CB interface
- * (e.g. non-standard tile dimensions or partial-face unpacking).
- * Operand B face geometry is still derived from its operand metadata.
+ * Face geometry (face_r_dim, num_faces) and tile size for both operands are
+ * derived from the CB metadata associated with each operand id. This is the
+ * primary entry point: callers no longer need to thread face geometry through
+ * the API, since per-CB face geometry is recorded in the CB descriptor at
+ * program creation time.
  *
  * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
- * @tparam disable_src_zero_flag When true, disables the source-zero optimisation flag.
  * @param  unpA_operand          Operand index for unpack source A (In0).
  * @param  unpB_operand          Operand index for unpack source B (In1).
- * @param  unpA_face_r_dim       Row dimension of each face for operand A (overrides operand metadata).
+ */
+template <bool is_fp32_dest_acc_en>
+inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
+    // In0 -> unpA
+    // In1 -> unpB
+    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
+    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
+
+    // unpA -> srcA
+    // unpB -> srcB
+    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
+    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
+    const uint32_t unpB_num_faces = get_operand_num_faces(unpB_operand_id);
+    const uint32_t unpB_face_r_dim = get_operand_face_r_dim(unpB_operand_id);
+
+    // Currently, there is a constraint that tile size is equal to the fifo page size
+    // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
+    const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
+    const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
+
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+        unpack_src_format[unpA_operand_id],
+        unpack_src_format[unpB_operand_id],
+        unpack_dst_format[unpA_operand_id],
+        unpack_dst_format[unpB_operand_id],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces,
+        unpA_tile_size,
+        unpB_tile_size);
+}
+
+/**
+ * @deprecated Operand A face geometry (face_r_dim, num_faces) is now derived from the CB metadata. Use the
+ * llk_unpack_hw_configure(unpA_operand, unpB_operand) overload instead. This explicit-face-geometry overload
+ * is retained only for backwards compatibility and will be removed.
+ *
+ * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
+ * @param  unpA_operand          Input operand index for unpack source A.
+ * @param  unpB_operand          Input operand index for unpack source B.
+ * @param  unpA_face_r_dim       Face row dimension for operand A (overrides operand metadata).
  * @param  unpA_num_faces        Number of faces for operand A (overrides operand metadata).
  */
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
-inline void llk_unpack_hw_configure(
+template <bool is_fp32_dest_acc_en>
+[[deprecated(
+    "Operand A face geometry is now derived from CB metadata; use the "
+    "llk_unpack_hw_configure(unpA_operand, unpB_operand) overload instead.")]] inline void
+llk_unpack_hw_configure(
     const std::uint32_t unpA_operand,
     const std::uint32_t unpB_operand,
     const std::uint32_t unpA_face_r_dim,
@@ -56,7 +98,7 @@ inline void llk_unpack_hw_configure(
     const uint32_t unpA_tile_size = get_local_cb_interface(unpA_operand_id).fifo_page_size;
     const uint32_t unpB_tile_size = get_local_cb_interface(unpB_operand_id).fifo_page_size;
 
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
         unpack_src_format[unpA_operand_id],
         unpack_src_format[unpB_operand_id],
         unpack_dst_format[unpA_operand_id],
@@ -69,32 +111,42 @@ inline void llk_unpack_hw_configure(
         unpB_tile_size);
 }
 
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
-inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std::uint32_t unpB_operand) {
-    // In0 -> unpA
-    // In1 -> unpB
-    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
-    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
-
-    // unpA -> srcA
-    // unpB -> srcB
-    const uint32_t unpA_num_faces = get_operand_num_faces(unpA_operand_id);
-    const uint32_t unpA_face_r_dim = get_operand_face_r_dim(unpA_operand_id);
-
-    llk_unpack_hw_configure<is_fp32_dest_acc_en, disable_src_zero_flag>(
-        unpA_operand, unpB_operand, unpA_face_r_dim, unpA_num_faces);
-}
-
-template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
+/**
+ * Single-operand convenience overload that configures both unpack sources from
+ * the same operand id. Equivalent to calling the two-operand overload with
+ * unpA_operand == unpB_operand.
+ *
+ * @tparam is_fp32_dest_acc_en   Enable FP32 accumulation in the destination register.
+ * @param  unpA_operand          Operand index used for both unpack source A and B.
+ */
+template <bool is_fp32_dest_acc_en>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
-    llk_unpack_hw_configure<is_fp32_dest_acc_en, disable_src_zero_flag>(unpA_operand, unpA_operand);
+    llk_unpack_hw_configure<is_fp32_dest_acc_en>(unpA_operand, unpA_operand);
 }
 
+/**
+ * Determine whether the unpacker must be reconfigured when switching operands, i.e. whether the
+ * source or destination data format differs between the two operands.
+ *
+ * @param old_operand Currently configured operand id.
+ * @param new_operand Candidate operand id to switch to.
+ * @return True if the src or dst data format differs between the operands.
+ */
 inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_operand) {
     return (unpack_src_format[old_operand] != unpack_src_format[new_operand]) ||
            (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]);
 }
 
+/**
+ * Reconfigure the srcA unpacker for a new operand's data format.
+ *
+ * Face geometry (face_r_dim, num_faces) and tile size are derived from the new operand's CB metadata.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
+ * @tparam to_from_int8        Whether the reconfiguration crosses an int8 format boundary.
+ * @param  srca_new_operand    New operand id to configure srcA for.
+ */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_operand) {
@@ -109,6 +161,16 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
 }
 
+/**
+ * Reconfigure the srcB unpacker for a new operand's data format.
+ *
+ * Face geometry (face_r_dim, num_faces) and tile size are derived from the new operand's CB metadata.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
+ * @tparam to_from_int8        Whether the reconfiguration crosses an int8 format boundary.
+ * @param  srcb_new_operand    New operand id to configure srcB for.
+ */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_operand) {
@@ -123,6 +185,17 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }
 
+/**
+ * Conditionally reconfigure the srcA unpacker when switching operands. Reprograms only when the CBs
+ * differ, an explicit dim/stride target is requested, or the face geometry changed between the old
+ * and new operands.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
+ * @tparam to_from_int8        Whether the reconfiguration crosses an int8 format boundary.
+ * @param  srca_old_operand    Currently configured srcA operand id.
+ * @param  srca_new_operand    New srcA operand id to switch to.
+ */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srca(
@@ -142,6 +215,17 @@ inline void llk_unpack_reconfig_data_format_srca(
     }
 }
 
+/**
+ * Conditionally reconfigure the srcB unpacker when switching operands. Reprograms only when the CBs
+ * differ, an explicit dim/stride target is requested, or the face geometry changed between the old
+ * and new operands.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
+ * @tparam to_from_int8        Whether the reconfiguration crosses an int8 format boundary.
+ * @param  srcb_old_operand    Currently configured srcB operand id.
+ * @param  srcb_new_operand    New srcB operand id to switch to.
+ */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format_srcb(
@@ -161,16 +245,35 @@ inline void llk_unpack_reconfig_data_format_srcb(
     }
 }
 
+/**
+ * Reconfigure both srcA and srcB unpackers for new operands and refresh the zero-source flag.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
+ * @tparam to_from_int8        Whether the reconfiguration crosses an int8 format boundary.
+ * @param  srca_new_operand    New srcA operand id.
+ * @param  srcb_new_operand    New srcB operand id.
+ */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_new_operand, const std::uint32_t srcb_new_operand) {
     llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(srcb_new_operand);
-    _llk_unpack_reconfig_zero_src_flag_(
-        unpack_dst_format[get_operand_id(srca_new_operand)], unpack_dst_format[get_operand_id(srcb_new_operand)]);
 }
 
+/**
+ * Conditionally reconfigure both srcA and srcB unpackers when switching operands (using the old
+ * operands to decide whether reprogramming is needed) and refresh the zero-source flag.
+ *
+ * @tparam is_fp32_dest_acc_en Enable FP32 accumulation in the destination register.
+ * @tparam dim_stride_target   Dimension/stride programming target for the unpacker.
+ * @tparam to_from_int8        Whether the reconfiguration crosses an int8 format boundary.
+ * @param  srca_old_operand    Currently configured srcA operand id.
+ * @param  srca_new_operand    New srcA operand id.
+ * @param  srcb_old_operand    Currently configured srcB operand id.
+ * @param  srcb_new_operand    New srcB operand id.
+ */
 // TODO NC: Clean up as the part of tt-metal#34499
 template <bool is_fp32_dest_acc_en, p_dim_stride_target dim_stride_target, bool to_from_int8 = false>
 inline void llk_unpack_reconfig_data_format(
@@ -182,11 +285,15 @@ inline void llk_unpack_reconfig_data_format(
         srca_old_operand, srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, dim_stride_target, to_from_int8>(
         srcb_old_operand, srcb_new_operand);
-    _llk_unpack_reconfig_zero_src_flag_(
-        unpack_dst_format[get_operand_id(srca_new_operand)], unpack_dst_format[get_operand_id(srcb_new_operand)]);
 }
 
+/**
+ * Disable unpacker debug features.
+ */
 // TODO NC: Remove as a part of tt-metal#36411
 inline void llk_unpack_dbg_feature_disable() { _llk_unpack_dbg_feature_disable_(); }
 
+/**
+ * Mark srcB as holding dummy-valid data so the math thread can proceed without a real srcB unpack.
+ */
 inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcb_dummy_valid_(); }

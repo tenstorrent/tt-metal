@@ -11,6 +11,7 @@ import argparse
 import os
 import shlex
 import subprocess
+import sys
 import time
 from datetime import timedelta
 from pathlib import Path
@@ -304,6 +305,9 @@ def main() -> int:
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as fh:
             print(df_md, file=fh)
 
+    # Return error code 1 if any tests have failed
+    return 1 if any(s["run status"] == "❌" for s in model_status) else 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

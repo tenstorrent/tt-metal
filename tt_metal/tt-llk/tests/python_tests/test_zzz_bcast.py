@@ -48,10 +48,10 @@ from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
 supported_formats = [
-    # DataFormat.Int32,
-    # DataFormat.UInt32,
-    # DataFormat.UInt16,
-    # DataFormat.Float32,
+    DataFormat.Int32,
+    DataFormat.UInt32,
+    DataFormat.UInt16,
+    DataFormat.Float32,
     DataFormat.Float16_b,
     DataFormat.Bfp8_b,
 ]
@@ -89,6 +89,22 @@ def test_unpack_bcast(
         DataFormat.UInt32,
     ):
         pytest.skip("32-bit formats require dest accumulation")
+
+    if (
+        get_chip_architecture() == ChipArchitecture.BLACKHOLE
+        and formats.input_format
+        in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
+    ):
+        pytest.skip("Unsupported for BH yet")
+
+    if (
+        dest_acc == DestAccumulation.Yes
+        and formats.input_format == DataFormat.UInt16
+        and broadcast_type == BroadcastType.None_
+    ):
+        pytest.skip(
+            "Data copy mechanism for SFPU (expects in low-bits) and Packer (expects in high-bits) conflict"
+        )
 
     # --- Skips from bugs --------------------------------------------------
 

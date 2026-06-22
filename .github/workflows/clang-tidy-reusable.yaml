@@ -27,15 +27,23 @@ on:
         type: string
         default: ""
         description: "Specific target(s) to scan (space-separated). If empty, scans all targets."
+      post-pr-suggestions:
+        required: false
+        type: boolean
+        default: false
+        description: "Export clang-tidy fixes and post inline review suggestions on the PR diff"
 
 jobs:
   clang-tidy:
     name: 🤖 Clang Tidy ${{ inputs.scan-targets && format('({0})', inputs.scan-targets) || '' }}
     timeout-minutes: 240
-    runs-on: tt-ubuntu-2204-xlarge-stable
+    runs-on: tt-ubuntu-2204-large-stable
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
+    permissions:
+      pull-requests: write
+      contents: write # to allow posting inline PR review suggestions and auto-closing conversations
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.ci-build-docker-image }}
+      image: ${{ inputs.ci-build-docker-image }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
@@ -68,13 +76,14 @@ jobs:
           REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
           REDIS_HOST="${{ vars.REDIS_HOST }}"
           REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
-          )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          # ccache 4.13 bug: read-only is std::optional<bool>; the write gate checks
+          # `if (entry.config.read_only)` which is true whenever the optional HAS a value —
+          # including when that value is false.  Omit the property entirely unless we
+          # actually want read-only mode; ccache's default when absent is writable.
+          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+          if [ "${{ vars.REDIS_IS_READONLY }}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
@@ -104,6 +113,10 @@ jobs:
             echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
           } >> "$GITHUB_ENV"
           echo "ctcache S3 folder: ct${CT_VERSION}"
+          # Pre-resolve the ctcache binary once so the per-TU wrapper script
+          # skips a repeated PATH scan across thousands of invocations.
+          CTCACHE_BIN=$(command -v clang-tidy-cache || true)
+          echo "CTCACHE_BIN=${CTCACHE_BIN}" >> "$GITHUB_ENV"
 
           # Diagnose connectivity at the HTTP level before boto3
           # 403 from curl is expected (Garage rejects unsigned requests) — confirms proxy reaches Garage
@@ -147,6 +160,7 @@ jobs:
 
       - name: Check out repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           clean: true
@@ -154,23 +168,38 @@ jobs:
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work
 
-      # Shim approach: cmake always sees the same command text ("./clang-tidy-shim;...")
-      # so Ninja never force-rebuilds TUs just because the analysis tool changed.
-      # During prereq builds the shim is a no-op; for analysis it delegates to ctcache.
-      - name: Create shim (no-op for prereq builds)
+      - name: 📦 Restore CPM source cache
+        id: cpm-cache
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .cpmcache.tar.zst
+          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          restore-keys: cpm-z22-
+
+      - name: Unpack CPM cache
         run: |
-          cat > ./clang-tidy-shim << 'SHIMEOF'
-          #!/bin/bash
-          exec /usr/bin/true "$@"
-          SHIMEOF
-          chmod +x ./clang-tidy-shim
+          [ -f .cpmcache.tar.zst ] && tar -I 'zstd -T0' -xf .cpmcache.tar.zst || true
+
+      - name: Pre-create fixes dir
+        run: mkdir -p .build/clang-tidy/fixes
 
       - name: 🔧 CMake configure
         run: |
-          CLANG_TIDY_CMD="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
-          cmake --preset clang-tidy \
-            -DCMAKE_CXX_CLANG_TIDY="$CLANG_TIDY_CMD" \
-            -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
+          cmake --preset clang-tidy-fix-parallel \
+            -DCMAKE_CXX_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*" \
+            -DCMAKE_C_CLANG_TIDY="$(pwd)/cmake/clang-tidy-export-fixes-wrapper.sh;$(pwd)/.build/clang-tidy/fixes;--warnings-as-errors=*"
+
+      - name: Pack CPM cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        run: |
+          [ -d .cpmcache ] && tar -I 'zstd -T0 --ultra -22' -cf .cpmcache.tar.zst .cpmcache || true
+
+      - name: Save CPM source cache
+        if: steps.cpm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: .cpmcache.tar.zst
+          key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
 
       - name: Prepare ccache summary
         run: ccache -z
@@ -182,47 +211,58 @@ jobs:
           echo "Building prerequisite targets (will not be analyzed): ${{ inputs.prereq-targets }}"
           for target in ${{ inputs.prereq-targets }}; do
             echo "Building target: $target"
-            cmake --build --preset clang-tidy --target "$target"
+            cmake --build --preset clang-tidy-fix-parallel --target "$target"
           done
-
-      - name: Activate analysis shim
-        run: |
-          # Overwrite the no-op shim with the real analysis wrapper.
-          # The filename stays ./clang-tidy-shim so Ninja's command hash is unchanged.
-          # Gate on both: clang-tidy-cache installed AND S3 probe succeeded.
-          if command -v clang-tidy-cache &>/dev/null && [ "${CTCACHE_S3_OK:-0}" = "1" ]; then
-            cat > ./clang-tidy-shim << 'SHIMEOF'
-          #!/bin/bash
-          exec clang-tidy-cache clang-tidy-20 "$@"
-          SHIMEOF
-            chmod +x ./clang-tidy-shim
-            echo "ctcache shim active (S3 folder: ${CTCACHE_S3_FOLDER:-ctcache})"
-          else
-            cat > ./clang-tidy-shim << 'SHIMEOF'
-          #!/bin/bash
-          exec clang-tidy-20 "$@"
-          SHIMEOF
-            chmod +x ./clang-tidy-shim
-            if ! command -v clang-tidy-cache &>/dev/null; then
-              echo "::warning::clang-tidy-cache not found — running clang-tidy-20 directly (no result caching)"
-            else
-              echo "::warning::Garage S3 unreachable at probe time — falling back to direct clang-tidy-20 (no result caching)"
-            fi
-          fi
 
       - name: 🔍 Analyze code with clang-tidy
         timeout-minutes: 120
         run: |
+          # For PR suggestion jobs: allow clang-tidy violations (they become inline comments).
+          # For all other jobs: violations fail the build.
+          _ALLOW_VIOLATIONS="${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' }}"
           if [ -n "${{ inputs.scan-targets }}" ]; then
             echo "Scanning specific targets: ${{ inputs.scan-targets }}"
             for target in ${{ inputs.scan-targets }}; do
               echo "Scanning target: $target"
-              cmake --build --preset clang-tidy --target "$target"
+              cmake --build --preset clang-tidy-fix-parallel --target "$target" \
+                || [ "$_ALLOW_VIOLATIONS" = "true" ]
             done
           else
             echo "Scanning all targets"
-            cmake --build --preset clang-tidy
+            cmake --build --preset clang-tidy-fix-parallel \
+              || [ "$_ALLOW_VIOLATIONS" = "true" ]
           fi
+
+      - name: Apply clang-tidy fixes to working tree
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && !cancelled() }}
+        run: |
+          FIXES_DIR=".build/clang-tidy/fixes"
+          if ls "$FIXES_DIR"/*.yaml 2>/dev/null | grep -q .; then
+            if command -v clang-apply-replacements-20 &>/dev/null; then
+              clang-apply-replacements-20 "$FIXES_DIR"
+            else
+              clang-apply-replacements "$FIXES_DIR"
+            fi
+          else
+            echo "No fix files found in $FIXES_DIR — nothing to suggest"
+          fi
+
+      - name: Post inline clang-tidy suggestions on PR
+        if: ${{ inputs.post-pr-suggestions && github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false && !cancelled() }}
+        env:
+          REVIEWDOG_GITHUB_API_TOKEN: ${{ github.token }}
+        run: |
+          # /tmp is noexec (--tmpfs /tmp). Install reviewdog to /usr/local/bin instead.
+          curl -sfL https://raw.githubusercontent.com/reviewdog/reviewdog/master/install.sh \
+            | sh -s -- -b /usr/local/bin v0.21.0
+          git diff | reviewdog \
+            -f diff \
+            -name clang-tidy \
+            -reporter github-pr-review \
+            -filter-mode diff_context \
+            -level warning \
+            -fail-level none \
+            -fail-on-error false
 
       - name: Publish Ccache summary
         if: always()

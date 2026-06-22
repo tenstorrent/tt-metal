@@ -119,7 +119,7 @@ void kernel_main() {
         noc_async_writes_flushed(/*noc=*/1);
 
     } else {
-        noc_semaphore_wait_min(sync_semaphore_ptr, 1);
+        noc_semaphore_wait(sync_semaphore_ptr, 1);
     }
 
     // read dense token counts
@@ -132,7 +132,7 @@ void kernel_main() {
     // read activations
     cb_reserve_back(token_activations_cb_id, 1);
     const uint32_t token_activations_l1_addr = get_write_ptr(token_activations_cb_id);
-    const uint64_t token_activations_noc_addr = get_noc_addr(0, token_activations_addrgen, /*offset=*/0, /*noc=*/1);
+    const uint64_t token_activations_noc_addr = token_activations_addrgen.get_noc_addr(0, /*offset=*/0, /*noc=*/1);
     noc_async_read(
         token_activations_noc_addr, token_activations_l1_addr, aligned_token_activations_page_size_bytes, /*noc=*/1);
 
@@ -148,7 +148,7 @@ void kernel_main() {
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
     for (uint32_t e = 0, l1_offset = 0, maps_page = 0; e < num_local_experts; ++e) {
         const uint64_t dense_token_maps_noc_addr =
-            get_noc_addr(maps_page++, dense_token_maps_addrgen, /*offset=*/0, /*noc=*/1);
+            dense_token_maps_addrgen.get_noc_addr(maps_page++, /*offset=*/0, /*noc=*/1);
         noc_async_read(
             dense_token_maps_noc_addr,
             dense_token_maps_l1_addr + l1_offset,

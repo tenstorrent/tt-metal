@@ -1636,8 +1636,10 @@ def test_unary_cosh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
 
     if ttnn_dtype == ttnn.bfloat16:
         assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
-    else:
+    elif ttnn_dtype == ttnn.bfloat8_b:
         assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=2)
 
 
 @pytest.mark.parametrize(
@@ -1666,9 +1668,11 @@ def test_unary_sinh_ttnn(input_shapes, torch_dtype, ttnn_dtype, device):
     golden_tensor = golden_function(in_data)
 
     if ttnn_dtype == ttnn.bfloat16:
-        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=5)
-    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    elif ttnn_dtype == ttnn.bfloat8_b:
         assert_with_pcc(ttnn.to_torch(output_tensor), golden_tensor, pcc=0.999)
+    else:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=3)
 
 
 @pytest.mark.parametrize(
@@ -2096,10 +2100,10 @@ def test_unary_bitcast_ttnn(
     ),
 )
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol",
+    "torch_dtype, ttnn_dtype",
     [
-        (torch.bfloat16, ttnn.bfloat16, 0.04),
-        (torch.float32, ttnn.float32, 0.015),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
     ],
 )
 @pytest.mark.parametrize(
@@ -2111,7 +2115,7 @@ def test_unary_bitcast_ttnn(
     ],
 )
 @pytest.mark.parametrize("scalar", [0.25, 0.38, 0.5, 0.85])
-def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, device, atol):
+def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, device):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(low, high)
     input_tensor_a = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -2121,19 +2125,22 @@ def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, de
     golden_function = ttnn.get_golden_function(ttnn.logit)
     golden_tensor = golden_function(in_data, eps=scalar)
 
-    assert_allclose(output_tensor, golden_tensor, rtol=1e-05, atol=atol)
+    if ttnn_dtype == ttnn.bfloat16:
+        assert_with_ulp(output_tensor, golden_tensor, ulp_threshold=1)
+    else:
+        assert_allclose(output_tensor, golden_tensor, rtol=1e-6, atol=1e-6)
 
 
 @pytest.mark.parametrize("input_shape", (torch.Size([3, 128, 32]),))
 @pytest.mark.parametrize(
-    "torch_dtype, ttnn_dtype, atol",
+    "torch_dtype, ttnn_dtype",
     [
-        (torch.bfloat16, ttnn.bfloat16, 0.04),
-        (torch.float32, ttnn.float32, 0.016),
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
     ],
 )
 @pytest.mark.parametrize("eps", [0.0, 1.0, None])
-def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, eps, atol):
+def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, eps):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(-1, 1.1)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
@@ -2142,21 +2149,16 @@ def test_unary_logit_edge_cases(input_shape, torch_dtype, ttnn_dtype, device, ep
     output_tensor = ttnn.to_torch(output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.logit)
     golden_tensor = golden_function(in_data, eps=eps)
-    if eps is None:
-        golden_nonfinite = ~torch.isfinite(golden_tensor)
-        output_nonfinite = ~torch.isfinite(output_tensor)
 
-        # Verify non-finite values occur at the same indices
-        assert torch.equal(golden_nonfinite, output_nonfinite), f"Non-finite values don't match at the same indices."
-
-        # For finite values, check all of them
+    if ttnn_dtype == ttnn.bfloat16:
+        assert torch.equal(
+            ~torch.isfinite(golden_tensor), ~torch.isfinite(output_tensor)
+        ), "Non-finite values don't match at the same indices."
         finite_mask = torch.isfinite(golden_tensor) & torch.isfinite(output_tensor)
         if finite_mask.any():
-            assert torch.allclose(
-                output_tensor[finite_mask], golden_tensor[finite_mask], equal_nan=True, rtol=1e-05, atol=atol
-            )
+            assert_with_ulp(output_tensor[finite_mask], golden_tensor[finite_mask], ulp_threshold=1)
     else:
-        assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-05, atol=atol)
+        assert torch.allclose(output_tensor, golden_tensor, equal_nan=True, rtol=1e-6, atol=1e-6)
 
 
 @pytest.mark.parametrize(

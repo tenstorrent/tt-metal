@@ -24,6 +24,27 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(bias.layout() == tt::tt_metal::Layout::TILE, "Bias tensor must be TILE layout");
     TT_FATAL(scores.logical_shape() == bias.logical_shape(), "Scores and bias must have the same shape");
 
+    const uint32_t experts = scores.logical_shape()[-1];
+
+    if (attributes.n_groups == 1) {
+        // Single expert group: grouped routing collapses to a plain top-k over all experts.
+        // topk_groups / summed_experts_per_group are unused by the kernel on this path. The expert
+        // count is variable (any tile-aligned width, e.g. Kimi's 384), not hardcoded to DeepSeek.
+        TT_FATAL(experts % 32 == 0, "Number of experts must be a multiple of the tile width (32). Got {}", experts);
+        TT_FATAL(attributes.n_activated_experts > 0, "n_activated_experts must be > 0");
+        TT_FATAL(
+            attributes.n_activated_experts <= 64,
+            "n_activated_experts must be <= 64 (topk limit). Got {}",
+            attributes.n_activated_experts);
+        TT_FATAL(
+            attributes.n_activated_experts <= experts,
+            "n_activated_experts ({}) must be <= experts ({})",
+            attributes.n_activated_experts,
+            experts);
+        return;
+    }
+
+    // Grouped path (e.g. DeepSeek). Group routing currently assumes one tile (32 experts) per group.
     TT_FATAL(
         attributes.summed_experts_per_group == 2,
         "summed_experts_per_group must be 2 at the moment. Got {}",
@@ -32,7 +53,7 @@ void MoeGroupedTopkDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(attributes.n_groups == 8, "n_groups must be 8 at the moment. Got {}", attributes.n_groups);
     TT_FATAL(attributes.topk_groups == 4, "topk_groups must be 4 at the moment. Got {}", attributes.topk_groups);
 
-    TT_FATAL(scores.logical_shape()[-1] == 256, "Experts must be 256. Got {}", scores.logical_shape()[-1]);
+    TT_FATAL(experts == 256, "Experts must be 256. Got {}", experts);
 
     TT_FATAL(
         attributes.n_activated_experts == 8,

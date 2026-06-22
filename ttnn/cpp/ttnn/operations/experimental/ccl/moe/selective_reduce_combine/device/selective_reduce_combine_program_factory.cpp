@@ -43,6 +43,63 @@ std::vector<uint32_t> data_parallel_split(
     return data_parallel_sizes_bytes;
 }
 
+SelectiveReduceCombineWorkerLayout compute_worker_layout(
+    const Tensor& input_tensor,
+    const uint32_t hidden_size,
+    const uint32_t num_token_parallel_cores,
+    const uint32_t num_data_parallel_cores_attr) {
+    const auto fabric_max_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto input_dtype = input_tensor.dtype();
+    const uint32_t max_packet_size_bytes = input_dtype == tt::tt_metal::DataType::BFLOAT16
+                                               ? std::bit_floor(fabric_max_packet_size_bytes)
+                                               : fabric_max_packet_size_bytes;
+    const uint32_t token_size_bytes = hidden_size * input_tensor.element_size();
+    auto data_parallel_sizes_bytes =
+        data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores_attr);
+    const uint32_t num_data_parallel_cores = static_cast<uint32_t>(data_parallel_sizes_bytes.size());
+    return {
+        .data_parallel_sizes_bytes = std::move(data_parallel_sizes_bytes),
+        .num_data_parallel_cores = num_data_parallel_cores,
+        .num_worker_cores = num_token_parallel_cores * num_data_parallel_cores,
+    };
+}
+
+
+tt::tt_fabric::FabricMuxConfig get_fabric_mux_config(
+    const uint32_t num_full_size_channels,
+    const uint32_t num_header_only_channels,
+    uint8_t num_buffers_full_size_channels,
+    uint8_t num_buffers_header_only_channels,
+    const size_t buffer_size_bytes_full_size_channel,
+    const uint32_t l1_unreserved_base_address,
+    const std::optional<uint32_t>& occupied_l1_tensor_addr) {
+    TT_FATAL(
+        num_buffers_full_size_channels > 0 && num_buffers_header_only_channels > 0,
+        "Not enough L1 space for mux core memory requirements given current occupancy. Likely too many experts per "
+        "device");
+
+    const auto config = tt::tt_fabric::FabricMuxConfig(
+        num_full_size_channels,
+        num_header_only_channels,
+        num_buffers_full_size_channels,
+        num_buffers_header_only_channels,
+        buffer_size_bytes_full_size_channel,
+        l1_unreserved_base_address);
+
+    if (occupied_l1_tensor_addr.has_value() && config.get_memory_map_end_address() > *occupied_l1_tensor_addr) {
+        return get_fabric_mux_config(
+            num_full_size_channels,
+            num_header_only_channels,
+            --num_buffers_full_size_channels,
+            --num_buffers_header_only_channels,
+            buffer_size_bytes_full_size_channel,
+            l1_unreserved_base_address,
+            occupied_l1_tensor_addr);
+    }
+
+    return config;
+}
+
 auto launch_mux_workers(
     const MeshDevice& mesh_device,
     const CoreRangeSet& mux_core_range_set,
@@ -53,29 +110,24 @@ auto launch_mux_workers(
     Program& program) {
     const auto num_header_only_channels = tt::div_up(num_workers, num_links);
     const auto num_full_size_channels = tt::div_up(num_workers, num_links);
-    constexpr auto num_buffers_full_size_channels = 15;
-    constexpr auto num_buffers_header_only_channels = 15;
+
+    constexpr uint8_t num_buffers_full_size_channels = 15;
+    constexpr uint8_t num_buffers_header_only_channels = 15;
 
     const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
     const auto l1_unreserved_base_address =
         mesh_device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+
+    const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
+
+    auto mux_kernel_config = get_fabric_mux_config(
         num_full_size_channels,
         num_header_only_channels,
         num_buffers_full_size_channels,
         num_buffers_header_only_channels,
         buffer_size_bytes_full_size_channel,
-        l1_unreserved_base_address);
-
-    const auto occupied_l1_tensor_addr = mesh_device.lowest_occupied_compute_l1_address();
-    if (occupied_l1_tensor_addr.has_value()) {
-        TT_FATAL(
-            mux_kernel_config.get_memory_map_end_address() <= *occupied_l1_tensor_addr,
-            "Mux L1 memory [base={:#x}, end={:#x}] overlaps with L1 tensor {:#x} and is in danger of being clobbered.",
-            l1_unreserved_base_address,
-            mux_kernel_config.get_memory_map_end_address(),
-            *occupied_l1_tensor_addr);
-    }
+        l1_unreserved_base_address,
+        occupied_l1_tensor_addr);
 
     // Calculate required vs available mux cores for fabric communication (one core per link per neighbor)
     const uint32_t needed_cores = num_links * neighbors.size();
@@ -257,8 +309,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto hidden_size = operation_attributes.hidden_size;
 
     const auto total_tokens = batch_size * seq_size;
-    // Eventually map number of experts to device
-    const auto experts = operation_attributes.experts;
 
     const auto num_links = operation_attributes.num_links;
     auto topology = operation_attributes.topology;
@@ -274,9 +324,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const uint32_t num_devices_total = mesh_view.num_devices();
     const bool double_buffer_source = compute_cores_by_ring_id.has_value();
 
-    // NOTE: shared experts are slightly delicate since they show up as an additional entry in the mapping tensor the
-    // result is fractional experts per device so div_up is required to get the right value here.
-    const uint32_t experts_per_device = tt::div_up(experts, num_devices_total);
+    // physical experts per device, replicated shared experts are counted per device
+    const uint32_t experts_per_device = dense_token_maps_tensor.logical_shape()[0];
 
     const auto input_dtype = input_tensor.dtype();
     const auto& dense_token_maps_tensor_spec = dense_token_maps_tensor.tensor_spec();
@@ -299,11 +348,11 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // in validate mux_core_range_set.size() == 2(directions) * num_links
     const auto& mux_core_range_set = operation_attributes.mux_core_range_set;
 
-    const auto data_parallel_sizes_bytes =
-        detail::data_parallel_split(token_size_bytes, max_packet_size_bytes, num_data_parallel_cores);
-
-    num_data_parallel_cores = data_parallel_sizes_bytes.size();
-    const auto num_worker_cores = num_token_parallel_cores * num_data_parallel_cores;
+    const auto worker_layout =
+        detail::compute_worker_layout(input_tensor, hidden_size, num_token_parallel_cores, num_data_parallel_cores);
+    const auto& data_parallel_sizes_bytes = worker_layout.data_parallel_sizes_bytes;
+    num_data_parallel_cores = worker_layout.num_data_parallel_cores;
+    const auto num_worker_cores = worker_layout.num_worker_cores;
     const std::vector<CoreCoord> sender_cores(worker_cores.begin(), worker_cores.begin() + num_worker_cores);
     const ttnn::CoreRangeSet needed_worker_core_range_set(sender_cores);
 
@@ -459,6 +508,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     // Writer compute sync: when used from MoE, use matmul's data-ready semaphore; else create local (standalone).
     const uint32_t writer_compute_sync_semaphore_id = compute_sync_semaphore_id;
 
+    const uint32_t num_workers_per_link = num_worker_cores / num_links;
+
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
@@ -468,6 +519,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"packet_header_cb_id", client_interface_cb_id},
         {"num_token_parallel_cores", num_token_parallel_cores},
         {"num_data_parallel_cores", num_data_parallel_cores},
+        {"num_workers_per_link", num_workers_per_link},
         {"use_init_semaphore", use_init_semaphore},
         {"noc_x_start", start_coord.x},
         {"noc_y_start", start_coord.y},
@@ -524,7 +576,6 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         writer_config);
 
     const auto termination_master_semaphore_id = CreateSemaphore(program, {needed_worker_core_range_set}, 0);
-    const uint32_t num_workers_per_link = num_worker_cores / num_links;
 
     const auto idx = std::views::iota(std::size_t{0}, sender_cores.size());
     auto termination_master_cores = idx |
@@ -639,8 +690,7 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore) {
-    tt::tt_metal::UpdateDynamicCircularBufferAddress(
-        program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
     for (const auto& core : cores) {
         auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);

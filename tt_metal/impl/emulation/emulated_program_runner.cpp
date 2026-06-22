@@ -7,6 +7,11 @@
 #include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <csignal>
+#if defined(__x86_64__) && defined(__linux__)
+#include <ucontext.h>
+#include <sys/ucontext.h>
+#endif
 
 #include <bit>
 #include <atomic>
@@ -75,8 +80,12 @@
 // We use the real type directly here.
 using __emule_cb_state = tt_emule::CBSyncState;
 
-thread_local std::vector<uint32_t> __rt_args;
-thread_local std::vector<uint32_t> __common_rt_args;
+// Point into this core's L1 at kernel_config_base + rta_offset[proc_idx],
+// where WriteRuntimeArgsToDevice already wrote the bytes. nullptr = sentinel
+// (kernel declared no rt-args for this RISC).
+thread_local uint32_t* __rt_args = nullptr;
+thread_local uint32_t* __common_rt_args = nullptr;
+
 thread_local tt_emule::Core* __core = nullptr;
 thread_local tt_emule::Device* __device = nullptr;
 
@@ -137,11 +146,12 @@ thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = n
 // Match firmware declarations: uint16_t[NUM_NOCS][NUM_DRAM_BANKS], etc.
 // ---------------------------------------------------------------------------
 static constexpr uint32_t NUM_NOCS = 2;
-static constexpr uint32_t MAX_NUM_BANKS = 32;
+// L1 banks scale with worker grid: 64 on WH-N150, 140 on BH P100/P150.  Must
+// match the array size declared by the JIT side in
+// `include/jit_hw/internal/dataflow/dataflow_api_addrgen.h`.
+static constexpr uint32_t MAX_NUM_BANKS = 256;
 // Wormhole has 32 CBs; JIT header cb_api.h sizes unpack_tile_size[32].
 static constexpr uint32_t EMULE_NUM_CBS = 32;
-// Emulation simplification: each worker is its own L1 bank.
-static constexpr uint32_t EMULE_NUM_L1_BANKS = 1;
 // Semaphore alignment in L1 (must match firmware layout).
 static constexpr uint32_t EMULE_SEM_ALIGN = 16;
 
@@ -185,16 +195,33 @@ extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
 
 // Resolve a NOC address (encoded 64-bit) to a host pointer.
 // Real firmware encoding: y in bits [47:42], x in bits [41:36], addr in bits [35:0]
+//
+// The L1_SLOT_MASK is applied ONLY for WORKER cores. Two reasons:
+//  1. The mask handles a worker-kernel pattern where the L1 offset is a
+//     truncated host pointer (from `get_write_ptr()`) rather than a
+//     firmware-style L1 offset. Worker L1 slots are 2 MB-aligned, so the
+//     masked low bits recover the in-slot offset.
+//  2. DRAM banks are GB-scale (2 GB on Wormhole views, 4 GB on Blackhole)
+//     and the kernel-side per-bank addrgen helper produces an `addr` field
+//     that is the true in-bank offset (already includes
+//     `bank_to_dram_offset[bank_index]`). Masking to 2 MB silently aliases
+//     any DRAM access >= 2 MB to an offset within the first 2 MB of the bank.
 extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     uint32_t noc_x = (noc_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t noc_y = (noc_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
-    uint64_t l1_offset = noc_addr & NOC_LOCAL_MASK;
+    uint64_t local_addr = noc_addr & NOC_LOCAL_MASK;  // 36 bits, raw
+
+    static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
+    static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 
     if (__emule_core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
         auto it = __emule_core_map->find(key);
         if (it != __emule_core_map->end()) {
-            return it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
+            uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
+                                  ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
+                                  : static_cast<uint32_t>(local_addr);
+            return it->second->l1_ptr(offset);
         }
     }
     return nullptr;
@@ -202,7 +229,15 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
 
 // Resolve multicast: iterate over rectangle of cores and memcpy to each.
 // Real firmware encoding: x_start [53:48], y_start [59:54], x_end [41:36], y_end [47:42], addr [35:0]
-extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size) {
+//
+// `include_self`: silicon's NOC_CMD_BRCST_SRC_INCLUDE bit. When the API is
+// `noc_async_write_multicast_loopback_src` (or _set_multicast_loopback_src),
+// silicon sets the bit and the sender NIU receives its own packet ->
+// include_self=true. When the API is `noc_async_write_multicast` (non-loopback),
+// silicon clears the bit and the sender NIU drops the packet at itself ->
+// include_self=false. Sender coords come from the TLS that thread launch
+// wires up (my_x[0], my_y[0]).
+extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src, uint32_t size, bool include_self) {
     uint32_t x_end = (mcast_addr >> NOC_LOCAL_BITS) & NOC_NODE_MASK;
     uint32_t y_end = (mcast_addr >> (NOC_LOCAL_BITS + NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
     uint32_t x_start = (mcast_addr >> (NOC_LOCAL_BITS + 2 * NOC_NODE_ID_BITS)) & NOC_NODE_MASK;
@@ -213,6 +248,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     // than a firmware-style L1 offset.  Worker L1 slots are 2 MB-aligned, so
     // masking with SLOT_MASK extracts the true within-slot offset.  For
     // firmware-style offsets (< 2 MB) this is a no-op.
+    // Multicast targets only WORKER cores (DRAM cores are skipped by the role
+    // check in the delivery loop below), so the mask is L1-correct here.
     static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
     static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
     l1_offset &= L1_SLOT_MASK;
@@ -221,9 +258,17 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
         return;
     }
 
+    // Sender coordinates (from the TLS that thread launch wires up). Used to
+    // skip self when include_self=false (non-loopback multicast).
+    uint32_t self_x = my_x[0];
+    uint32_t self_y = my_y[0];
+
     uint32_t delivered = 0;
     for (uint32_t x = std::min(x_start, x_end); x <= std::max(x_start, x_end); x++) {
         for (uint32_t y = std::min(y_start, y_end); y <= std::max(y_start, y_end); y++) {
+            if (!include_self && x == self_x && y == self_y) {
+                continue;
+            }
             uint64_t key = (uint64_t(x) << 32) | y;
             auto it = __emule_core_map->find(key);
             if (it != __emule_core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
@@ -267,6 +312,9 @@ namespace tt::tt_metal::emule {
 // Shared types used across subfunctions
 // ---------------------------------------------------------------------------
 
+// Mirrors RTA_CRTA_NO_ARGS_SENTINEL in tt_metal/hw/inc/hostdev/rta_constants.h.
+constexpr uint16_t kRtaCrtaNoArgsSentinel = 0xFFFF;
+
 struct KernelInfo {
     // size 1 for normal kernels; size 4 for Quasar compute (one per TRISC).
     // Either 4 distinct compiled variants (compile-time TRISC_* guards) or 4
@@ -274,12 +322,15 @@ struct KernelInfo {
     // the launcher iterates and sets __emule_trisc_id per variant.
     std::vector<std::function<void()>> variants;
     bool run_all_variants = false;
-    std::vector<uint32_t> rt_args;
-    std::vector<uint32_t> common_rt_args;
     uint8_t processor_id = 0;  // RISC-V processor ID (mhartid); used for DFB role resolution
     uint8_t thread_idx = 0;    // Index within this kernel's processor list → __emule_my_thread_id
     bool is_tensix = false;    // true for Tensix/compute kernels (DFB mask uses bits 8-23)
     uint32_t num_threads = 1;  // number of engines (for get_num_threads())
+    // L1 address of rt-args = kernel_config_base + rta_offset_in_kc (per-RISC,
+    // read from kg->launch_msg). Sentinel = kernel has no args on this RISC.
+    uint32_t kernel_config_base = 0;
+    uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
 };
 
 // Captures a Metal 2.0 kernel's named bindings. Drives both the JIT wrapper's
@@ -295,8 +346,8 @@ struct Metal2BindingsSnapshot {
     };
 
     bool is_metal2 = false;
-    std::vector<std::string> named_runtime_args;
-    std::vector<std::string> named_common_runtime_args;
+    std::vector<std::string> runtime_arg_names;
+    std::vector<std::string> common_runtime_arg_names;
     std::map<std::string, uint32_t> dfb_accessors;
     std::map<std::string, uint16_t> sem_accessors;
     std::vector<TaEntry> ta_accessors;
@@ -316,10 +367,10 @@ struct Metal2BindingsSnapshot {
             s += ":ta:" + ta.name + "=" + std::to_string(ta.cta_offset) + "," +
                  std::to_string(ta.addr_crta_offset);
         }
-        for (const auto& name : named_runtime_args) {
+        for (const auto& name : runtime_arg_names) {
             s += ":rta:" + name;
         }
-        for (const auto& name : named_common_runtime_args) {
+        for (const auto& name : common_runtime_arg_names) {
             s += ":crta:" + name;
         }
         return s;
@@ -339,12 +390,13 @@ struct PendingKernelInfo {
     // Parallels KernelInfo::variants but holds cache keys pending compile-resolution.
     std::vector<std::string> variant_cache_keys;
     bool run_all_variants = false;
-    std::vector<uint32_t> rt_args;
-    std::vector<uint32_t> common_rt_args;
     uint8_t processor_id = 0;
     uint8_t thread_idx = 0;    // Index within this kernel's processor list
     bool is_tensix = false;
     uint32_t num_threads = 1;
+    uint32_t kernel_config_base = 0;
+    uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
+    uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
 };
 
 // DFB allocation info for a single DFB on a core. Only dfb_id and base_addr
@@ -491,28 +543,26 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 //   1. `asm volatile("csrr %0, mhartid" : "=r"(V));` → `V = __processor_id;`
 //      (x86 assembler rejects RISC-V CSR instructions; the runner sets the
 //      __processor_id TLS before each kernel launch.)
-//   2. `asm volatile("fence" ::: "memory");` → `__sync_synchronize();`
-//      (Host memory barrier is the closest emulation-side equivalent.)
+//   2. `asm volatile("fence" ::: "memory");` or bare `asm volatile("fence");`
+//      → `__sync_synchronize();` (Host memory barrier is the closest
+//      emulation-side equivalent; the clobber list is optional — e.g. the
+//      embedding_backward compute kernel's ARCH_BLACKHOLE cache-flush fence
+//      omits it.)
 //   3. `reinterpret_cast<T*>(get_arg_val<uint32_t>(N))` →
 //      `reinterpret_cast<T*>((uintptr_t)__emule_local_l1_to_ptr(get_arg_val<uint32_t>(N)))`
 //      (Quasar kernels pass raw L1 firmware offsets as runtime args; x86 needs
 //      translation through the per-thread __emule_bridge_l1 base pointer.)
 // Reads from `src_path`, writes the patched source to `out_path`, and throws
 // on any I/O failure.
-static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
-    std::ifstream in(src_path);
-    if (!in) {
-        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
-    }
-    std::stringstream ss;
-    ss << in.rdbuf();
-    std::string src = ss.str();
-
+// Apply the x86 portability rewrites to one source string in place. These are
+// the constructs that compile on the RISC-V baremetal target but not on the
+// 64-bit host: RISC-V inline asm and L1-pointer/address reinterpret_casts.
+static void apply_x86_rewrites(std::string& src) {
     static const std::regex mhartid_re(
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
     src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
 
-    static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*:::\s*"memory"\s*\)\s*;)");
+    static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*(:::\s*"memory"\s*)?\)\s*;)");
     src = std::regex_replace(src, fence_re, "__sync_synchronize();");
 
     static const std::regex l1_arg_ptr_re(
@@ -527,6 +577,67 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
         src, l1_named_arg_ptr_re,
         "reinterpret_cast<$1>((uintptr_t)__emule_local_l1_to_ptr(static_cast<uint32_t>(get_arg($2))))");
 
+    // reinterpret_cast<uint32_t>(ptr): an L1 pointer collapsed to its 32-bit
+    // device address (no-op on silicon, "cast loses information" on the host).
+    // emule L1 addresses are the low 32 bits of host pointers, so truncate via
+    // uintptr_t. Arg allows one nested-paren level; requiring '>' after uint32_t
+    // skips the pointer-typed reinterpret_cast<T*> forms handled above.
+    static const std::regex ptr_to_l1_addr_re(
+        R"(reinterpret_cast<\s*(?:std::)?uint32_t\s*>\s*\(\s*((?:[^()]|\([^()]*\))*?)\s*\))");
+    src = std::regex_replace(
+        src, ptr_to_l1_addr_re, "static_cast<uint32_t>(reinterpret_cast<uintptr_t>($1))");
+}
+
+// Patch `src_path` into `out_path`, then recurse into the quoted project headers
+// it #includes (a shared `*_common.hpp` can hold the offending casts too). Each
+// patched header is written into `out_dir` under its include name; since the
+// top-level patched_kernel.cpp also lives there, the compiler finds the patched
+// copy before the original on the `-I kernel_dir` path. Includes resolved
+// elsewhere (emule api/, system) or escaping `out_dir` are left alone; `done`
+// guards cycles.
+static void preprocess_tu_recursive(
+    const std::string& src_path,
+    const std::string& out_path,
+    const std::string& out_dir,
+    std::set<std::string>& done) {
+    std::ifstream in(src_path);
+    if (!in) {
+        throw std::runtime_error("preprocess_kernel_source_for_x86: cannot read " + src_path);
+    }
+    std::stringstream ss;
+    ss << in.rdbuf();
+    std::string src = ss.str();
+
+    apply_x86_rewrites(src);
+
+    const std::filesystem::path src_dir = std::filesystem::path(src_path).parent_path();
+    const std::filesystem::path out_dir_canon = std::filesystem::weakly_canonical(out_dir);
+
+    static const std::regex include_re(R"RE(#[ \t]*include[ \t]*"([^"]+)")RE");
+    for (std::sregex_iterator it(src.begin(), src.end(), include_re), end; it != end; ++it) {
+        const std::string inc_name = (*it)[1].str();
+        std::error_code ec;
+        const std::filesystem::path candidate = src_dir / inc_name;
+        if (!std::filesystem::exists(candidate, ec)) {
+            // Resolved via a -I path (emule api/, system headers) — not ours to patch.
+            continue;
+        }
+        const std::string canon = std::filesystem::weakly_canonical(candidate, ec).string();
+        if (canon.empty() || !done.insert(canon).second) {
+            continue;  // cycle / already patched
+        }
+        const std::filesystem::path out_inc = std::filesystem::weakly_canonical(
+            std::filesystem::path(out_dir) / inc_name);
+        // Refuse to write outside the temp dir (e.g. inc_name with leading "..").
+        const std::string out_inc_str = out_inc.string();
+        if (out_inc_str.compare(0, out_dir_canon.string().size(), out_dir_canon.string()) != 0) {
+            done.erase(canon);
+            continue;
+        }
+        std::filesystem::create_directories(out_inc.parent_path(), ec);
+        preprocess_tu_recursive(candidate.string(), out_inc_str, out_dir, done);
+    }
+
     std::ofstream out(out_path);
     if (!out) {
         throw std::runtime_error("preprocess_kernel_source_for_x86: cannot write " + out_path);
@@ -534,23 +645,46 @@ static void preprocess_kernel_source_for_x86(const std::string& src_path, const 
     out << src;
 }
 
+static void preprocess_kernel_source_for_x86(const std::string& src_path, const std::string& out_path) {
+    const std::string out_dir = std::filesystem::path(out_path).parent_path().string();
+    std::set<std::string> done;
+    preprocess_tu_recursive(src_path, out_path, out_dir, done);
+}
+
 static Metal2BindingsSnapshot build_metal2_snapshot(const tt::tt_metal::Kernel& kernel) {
     Metal2BindingsSnapshot s;
     s.is_metal2 = kernel.is_metal2_kernel();
-    s.named_runtime_args = kernel.get_named_runtime_args();
-    s.named_common_runtime_args = kernel.get_named_common_runtime_args();
+    s.runtime_arg_names = kernel.get_runtime_arg_names();
+    s.common_runtime_arg_names = kernel.get_common_runtime_arg_names();
     kernel.process_dataflow_buffer_local_accessor_handles(
         [&s](const std::string& name, uint16_t id) { s.dfb_accessors[name] = id; });
     kernel.process_semaphore_local_accessor_handles(
         [&s](const std::string& name, uint16_t id) { s.sem_accessors[name] = id; });
     kernel.process_tensor_binding_handles(
-        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off) {
+        // Match the genfiles.cpp pattern: drop num_runtime_field_crta_words. Emule's
+        // snapshot doesn't yet model per-binding runtime CRTA words, and the
+        // downstream `named_crta_words` math in emit_metal2_namespaces still assumes
+        // 1 word per binding — so a dynamic-shape kernel would silently get its
+        // CRTAs decoded at the wrong offsets. Static-shape kernels pass
+        // num_rt_words == 0 and are unaffected. Fail loudly on dynamic-shape until
+        // snapshot + cache key + get_common_vararg offset math are wired up to
+        // consume the per-binding count.
+        [&s](const std::string& name, uint32_t cta_off, uint32_t addr_crta_off, uint32_t num_rt_words) {
+            TT_FATAL(
+                num_rt_words == 0,
+                "Emule does not yet support dynamic-shape Metal 2.0 tensor bindings "
+                "(binding '{}' has num_runtime_field_crta_words={}). Wire the per-"
+                "binding word count through Metal2BindingsSnapshot::TaEntry, the "
+                "cache key, and emit_metal2_namespaces' get_common_vararg base "
+                "before enabling this path.",
+                name,
+                num_rt_words);
             s.ta_accessors.push_back({name, cta_off, addr_crta_off});
         });
     return s;
 }
 
-// Emits args::/dfb::/sem::/ta:: namespaces into the JIT wrapper, replacing
+// Emits args::/dfb::/sem::/tensor:: namespaces into the JIT wrapper, replacing
 // kernel_args_generated.h + kernel_bindings_generated.h that upstream's JIT
 // build produces. Must stay text-equivalent to genfiles.cpp's
 // write_kernel_{args,bindings}_generated_header.
@@ -558,7 +692,7 @@ static void emit_metal2_namespaces(
     std::ostream& f,
     const Metal2BindingsSnapshot& s,
     const std::unordered_map<std::string, uint32_t>& named_compile_args) {
-    const bool has_args = !s.named_runtime_args.empty() || !s.named_common_runtime_args.empty() ||
+    const bool has_args = !s.runtime_arg_names.empty() || !s.common_runtime_arg_names.empty() ||
                           !named_compile_args.empty();
     if (has_args) {
         f << "#include \"experimental/kernel_args.h\"\n";
@@ -576,12 +710,12 @@ static void emit_metal2_namespaces(
     if (has_args) {
         f << "namespace args {\n";
         uint32_t rta_offset = 0;
-        for (const auto& name : s.named_runtime_args) {
+        for (const auto& name : s.runtime_arg_names) {
             f << "constexpr ::experimental::RtaArg<uint32_t> " << name << "{" << rta_offset << "};\n";
             rta_offset += sizeof(uint32_t);
         }
         uint32_t crta_offset = 0;
-        for (const auto& name : s.named_common_runtime_args) {
+        for (const auto& name : s.common_runtime_arg_names) {
             f << "constexpr ::experimental::CrtaArg<uint32_t> " << name << "{" << crta_offset << "};\n";
             crta_offset += sizeof(uint32_t);
         }
@@ -609,13 +743,13 @@ static void emit_metal2_namespaces(
         f << "}  // namespace sem\n";
     }
     if (!s.ta_accessors.empty()) {
-        f << "namespace ta {\n";
+        f << "namespace tensor {\n";
         for (const auto& ta : s.ta_accessors) {
             f << "using " << ta.name << "_t = ::tensor_accessor::TensorAccessorBindingToken<"
               << ta.cta_offset << "u, " << ta.addr_crta_offset << "u>;\n";
             f << "constexpr " << ta.name << "_t " << ta.name << "{};\n";
         }
-        f << "}  // namespace ta\n";
+        f << "}  // namespace tensor\n";
     }
 
     // Vararg helpers — always emitted for Metal 2.0 kernels (mirrors
@@ -623,9 +757,9 @@ static void emit_metal2_namespaces(
     // TensorBinding addresses, varargs], so get_common_vararg's base skips
     // past both the named CRTAs and the binding section.
     if (s.is_metal2) {
-        const uint32_t named_rta_words = static_cast<uint32_t>(s.named_runtime_args.size());
+        const uint32_t named_rta_words = static_cast<uint32_t>(s.runtime_arg_names.size());
         const uint32_t named_crta_words =
-            static_cast<uint32_t>(s.named_common_runtime_args.size() + s.ta_accessors.size());
+            static_cast<uint32_t>(s.common_runtime_arg_names.size() + s.ta_accessors.size());
         f << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { "
           << "return get_arg_val<uint32_t>(" << named_rta_words << " + idx); }\n";
         f << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { "
@@ -809,9 +943,15 @@ static tt::umd::SWEmuleChip* get_sw_emulated_chip(ChipId device_id) {
 // populate_bank_mapping: Set up DRAM/L1 bank arrays from SoC descriptor.
 // ---------------------------------------------------------------------------
 static void populate_bank_mapping(
-    tt::umd::SWEmuleChip* sw_emu, ChipId device_id, tt_emule::Core*& dram_core_out, uint32_t& num_dram_channels_out) {
+    tt::umd::SWEmuleChip* sw_emu,
+    IDevice* device,
+    ChipId device_id,
+    tt_emule::Core*& dram_core_out,
+    uint32_t& num_dram_channels_out,
+    uint32_t& num_l1_banks_out) {
     dram_core_out = nullptr;
     num_dram_channels_out = 0;
+    num_l1_banks_out = 0;
     if (!sw_emu) {
         return;
     }
@@ -820,38 +960,89 @@ static void populate_bank_mapping(
     auto dram_channels = soc.get_dram_cores();
     num_dram_channels_out = static_cast<uint32_t>(dram_channels.size());
 
-    if (!dram_channels.empty() && !dram_channels[0].empty()) {
-        auto& dc = dram_channels[0][0];
-        dram_core_out = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
+    if (num_dram_channels_out > 0) {
+        dram_core_out = sw_emu->get_dram_channel_backing(0);
     }
 
     // Populate bank mapping arrays using metal_SocDescriptor (matches host write path).
     auto& metal_soc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
     num_dram_channels_out = static_cast<uint32_t>(metal_soc.get_num_dram_views());
+    TT_FATAL(
+        num_dram_channels_out <= MAX_NUM_BANKS,
+        "emule: num_dram_channels ({}) exceeds MAX_NUM_BANKS ({}); bump the constant or implement dynamic backing",
+        num_dram_channels_out,
+        MAX_NUM_BANKS);
 
     // noc_xy encoding: (y << 6) | x (matching Blackhole firmware encoding).
+    // Per-NOC preferred coords: get_preferred_worker_core_for_dram_view's noc arg
+    // selects the view's worker_endpoint[noc] subchannel. On Wormhole the two
+    // subchannels coincide (worker_endpoint=[n,n]); on Blackhole they are distinct
+    // NOC ports of the same physical bank.
+    //
+    // The kernel-side extern is declared [NUM_NOCS][NUM_DRAM_BANKS] where the JIT
+    // define NUM_DRAM_BANKS == num_dram_channels_out, so the kernel's [noc][bank]
+    // row stride is the actual bank count — NOT this array's static MAX_NUM_BANKS
+    // dimension. Lay the table out flat with that same actual-count stride (matching
+    // silicon's [noc*num_banks + bank] vector) so noc=1 rows align. A 2D [noc][bank]
+    // write would stride by MAX_NUM_BANKS and the kernel's noc=1 reads would land on
+    // uninitialized zeros → coord (0,0) → wrong (DRAM) backing.
+    uint16_t* dram_tbl = &dram_bank_to_noc_xy[0][0];
     std::memset(dram_bank_to_noc_xy, 0, sizeof(dram_bank_to_noc_xy));
     std::memset(bank_to_dram_offset, 0, sizeof(bank_to_dram_offset));
     for (uint32_t ch = 0; ch < num_dram_channels_out && ch < MAX_NUM_BANKS; ch++) {
-        auto dc = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0 /* NOC 0 */);
-        uint16_t noc_xy = (static_cast<uint16_t>(dc.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc.x);
-        dram_bank_to_noc_xy[0][ch] = noc_xy;  // NOC 0
-        dram_bank_to_noc_xy[1][ch] = noc_xy;  // NOC 1 (same for emulation)
+        auto dc0 = metal_soc.get_preferred_worker_core_for_dram_view(ch, 0 /* NOC 0 */);
+        auto dc1 = metal_soc.get_preferred_worker_core_for_dram_view(ch, 1 /* NOC 1 */);
+        uint16_t noc_xy0 = (static_cast<uint16_t>(dc0.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc0.x);
+        uint16_t noc_xy1 = (static_cast<uint16_t>(dc1.y) << NOC_NODE_ID_BITS) | static_cast<uint16_t>(dc1.x);
+        dram_tbl[0 * num_dram_channels_out + ch] = noc_xy0;
+        dram_tbl[1 * num_dram_channels_out + ch] = noc_xy1;
         bank_to_dram_offset[ch] = static_cast<int32_t>(metal_soc.get_address_offset(ch));
 
         log_debug(
             tt::LogMetal,
-            "  DRAM bank[{}]: core({},{}) noc_xy=0x{:04x} offset=0x{:x}",
+            "  DRAM bank[{}]: NOC0=({},{}) NOC1=({},{}) noc_xy0=0x{:04x} noc_xy1=0x{:04x} offset=0x{:x}",
             ch,
-            dc.x,
-            dc.y,
-            noc_xy,
+            dc0.x,
+            dc0.y,
+            dc1.x,
+            dc1.y,
+            noc_xy0,
+            noc_xy1,
             bank_to_dram_offset[ch]);
     }
 
-    // L1 bank mapping — for now, all worker cores use themselves as bank 0.
+    // L1 bank mapping — mirror the host allocator's bank distribution so the
+    // kernel-side `interleaved_addr_gen::get_bank_index<L1>(id)` lands on the
+    // same worker core that `SWEmuleChip::write_to_device` wrote a given page
+    // to.  Without this, every page maps to bank 0 (a single core) while the
+    // host scatters across all worker cores — interleaved-L1 → sharded paths
+    // read all zeros.
+    // Flat actual-count stride, same rationale as dram_bank_to_noc_xy above: the
+    // kernel reads l1_bank_to_noc_xy[noc][bank] with stride NUM_L1_BANKS (== the JIT
+    // define == num_l1_banks_out), not MAX_NUM_BANKS.
+    uint16_t* l1_tbl = &l1_bank_to_noc_xy[0][0];
     std::memset(l1_bank_to_noc_xy, 0, sizeof(l1_bank_to_noc_xy));
     std::memset(bank_to_l1_offset, 0, sizeof(bank_to_l1_offset));
+    if (device) {
+        const auto& allocator = device->allocator();
+        num_l1_banks_out = allocator->get_num_banks(BufferType::L1);
+        TT_FATAL(
+            num_l1_banks_out <= MAX_NUM_BANKS,
+            "emule: num_l1_banks ({}) exceeds MAX_NUM_BANKS ({}); bump the constant or implement dynamic backing",
+            num_l1_banks_out,
+            MAX_NUM_BANKS);
+        for (uint32_t b = 0; b < num_l1_banks_out && b < MAX_NUM_BANKS; ++b) {
+            auto logical = allocator->get_logical_core_from_bank_id(b);
+            auto virt = device->virtual_core_from_logical_core(logical, CoreType::WORKER);
+            uint16_t noc_xy = (static_cast<uint16_t>(virt.y) << NOC_NODE_ID_BITS) |
+                              static_cast<uint16_t>(virt.x);
+            l1_tbl[0 * num_l1_banks_out + b] = noc_xy;  // NOC 0
+            l1_tbl[1 * num_l1_banks_out + b] = noc_xy;  // NOC 1 (same target in emule)
+            // Intentionally leave bank_to_l1_offset[b] = 0.  emule's per-core
+            // L1 mmap starts at byte 0 with no firmware-reserved prefix, so
+            // silicon's `allocator->get_bank_offset(L1, b)` isn't applicable.
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -945,11 +1136,53 @@ static std::map<std::string, std::string> build_kernel_defines(
     Kernel& kernel,
     detail::ProgramImpl& impl,
     uint32_t num_dram_channels,
+    uint32_t num_l1_banks,
     const std::string& worker_col_map_str,
     const std::string& worker_row_map_str,
     uint32_t emule_sem_base) {
     std::map<std::string, std::string> defines;
     kernel.process_defines([&](const std::string& k, const std::string& v) { defines[k] = v; });
+
+    // Opt-in deadlock-watchdog timeout. Off by default so <chrono> stays out of
+    // the kernel include graph (~1s faster cold JIT compile; see
+    // tt-emule include/jit_hw/emule_wait.h). Set TT_EMULE_WAIT_TIMEOUT=1 to
+    // restore the bounded cv.wait_for + per-op hang diagnostic. Routed through
+    // the defines map (not a bare -D) so it lands in both the wrapper and the
+    // JIT cache key — toggling it invalidates stale cached .so files.
+    if (std::getenv("TT_EMULE_WAIT_TIMEOUT")) {
+        defines["EMULE_WAIT_TIMEOUT"] = "1";
+    }
+
+    // Opt-in deep-SFPU override. TT_EMULE_DEEP_SFPU=sqrt,sigmoid promotes those
+    // shadowed SFPU ops from their layer-1 libm shadow to the deep path (the real
+    // silicon ckernel_sfpu_<op>.h run on emule's faithful sfpi backend — see
+    // tt-emule docs/sfpu-deep-path.md). Each comma-separated name becomes an
+    // EMULE_DEEP_SFPU_<UPPER> define. Routed through the defines map so it lands
+    // in the JIT cache key (toggling invalidates stale cached .so). Ops with no
+    // layer-1 shadow take the deep path automatically and need no opt-in.
+    if (const char* deep = std::getenv("TT_EMULE_DEEP_SFPU")) {
+        const std::string list(deep);
+        size_t start = 0;
+        while (start <= list.size()) {
+            const size_t comma = list.find(',', start);
+            const size_t end = (comma == std::string::npos) ? list.size() : comma;
+            std::string op;
+            for (size_t i = start; i < end; ++i) {
+                const char c = list[i];
+                if (c == ' ' || c == '\t') {
+                    continue;  // trim whitespace
+                }
+                op.push_back((c >= 'a' && c <= 'z') ? static_cast<char>(c - 'a' + 'A') : c);
+            }
+            if (!op.empty()) {
+                defines["EMULE_DEEP_SFPU_" + op] = "1";
+            }
+            if (comma == std::string::npos) {
+                break;
+            }
+            start = comma + 1;
+        }
+    }
 
     auto arch = MetalContext::instance().get_cluster().arch();
     if (arch == ARCH::QUASAR) {
@@ -960,9 +1193,40 @@ static std::map<std::string, std::string> build_kernel_defines(
         defines["ARCH_BLACKHOLE"] = "1";
     }
 
-    defines["NUM_DRAM_BANKS"] = std::to_string(num_dram_channels ? num_dram_channels : 1);
-    defines["NUM_L1_BANKS"] = std::to_string(EMULE_NUM_L1_BANKS);
+    {
+        uint32_t num_dram = num_dram_channels ? num_dram_channels : 1;
+        uint32_t num_l1 = num_l1_banks ? num_l1_banks : 1;
+        defines["NUM_DRAM_BANKS"] = std::to_string(num_dram);
+        defines["NUM_L1_BANKS"] = std::to_string(num_l1);
+        // Mirror tt_metal/jit_build/build_env_manager.cpp:118-129. Upstream
+        // `interleaved_addr_gen::get_bank_offset_index<DRAM>` chooses bit-shift
+        // when banks are a power of two and a constant divisor otherwise.
+        // Without these defines, non-pow2 bank counts (12 on WH-N150) silently
+        // fall through to a 0-bit shift and every page lands in bank 0.
+        auto is_pow2 = [](uint32_t n) { return n > 0 && (n & (n - 1)) == 0; };
+        auto log2u = [](uint32_t n) {
+            uint32_t l = 0;
+            while ((1u << l) < n) {
+                ++l;
+            }
+            return l;
+        };
+        if (is_pow2(num_dram)) {
+            defines["LOG_BASE_2_OF_NUM_DRAM_BANKS"] = std::to_string(log2u(num_dram));
+        } else {
+            defines["IS_NOT_POW2_NUM_DRAM_BANKS"] = "1";
+        }
+        if (is_pow2(num_l1)) {
+            defines["LOG_BASE_2_OF_NUM_L1_BANKS"] = std::to_string(log2u(num_l1));
+        } else {
+            defines["IS_NOT_POW2_NUM_L1_BANKS"] = "1";
+        }
+    }
     defines["NUM_NOCS"] = std::to_string(NUM_NOCS);
+    // Upstream tensor/dspec.h gates `get_common_arg_addr` as a forward-decl
+    // under KERNEL_BUILD; emule's jit_kernel_stubs.hpp provides the definition.
+    // Without KERNEL_BUILD, dspec.h emits a stub that collides with emule's.
+    defines["KERNEL_BUILD"] = "1";
     defines["DRAM_ALIGNMENT"] = std::to_string(hal::get_dram_alignment());
     defines["L1_ALIGNMENT"] = std::to_string(hal::get_l1_alignment());
     defines["EMULE_WORKER_COL_MAP"] = worker_col_map_str;
@@ -974,27 +1238,79 @@ static std::map<std::string, std::string> build_kernel_defines(
     }
     defines["EMULE_SEM_ALIGN"] = std::to_string(EMULE_SEM_ALIGN);
 
-    // Collect CB tile sizes from program for constexpr get_tile_size().
+    // Collect CB tile sizes + per-CB tile shape from program for the constexpr
+    // get_tile_size() / get_tile_r_dim() / get_tile_c_dim() metadata. The shape
+    // (height/width) is the ground truth for thin tiles (e.g. Tile([1,16])) —
+    // the emulated reduce/unpack primitives bound their iteration by it instead
+    // of assuming a full 32x32 tile. Default 32x32 when a CB has no Tile spec.
     const auto& core_range_set = kernel.core_range_set();
     if (!core_range_set.ranges().empty()) {
         auto first_core = core_range_set.ranges().begin()->start_coord;
         auto cb_impls = impl.circular_buffers_on_core(first_core);
         uint32_t tile_sizes[EMULE_NUM_CBS] = {};
+        // Per-CB data format → emule's analog of genfiles.cpp::compute_data_formats()
+        // (which bakes unpack_src_format[]/pack_dst_format[] into chlkc_descriptors.h).
+        // 255 == tt::DataFormat::Invalid marks unconfigured slots (mirrors the host's
+        // std::optional<DataFormat> empty state); consumers fall back to the page_size
+        // heuristic for those. tile_r_dim/tile_c_dim carry the per-CB tile shape
+        // (height/width) for thin tiles; default 32x32 when a CB has no Tile spec.
+        uint8_t cb_formats[EMULE_NUM_CBS];
+        uint32_t tile_r_dim[EMULE_NUM_CBS];
+        uint32_t tile_c_dim[EMULE_NUM_CBS];
+        for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
+            cb_formats[i] = static_cast<uint8_t>(tt::DataFormat::Invalid);
+            tile_r_dim[i] = tt::constants::TILE_HEIGHT;
+            tile_c_dim[i] = tt::constants::TILE_WIDTH;
+        }
         for (auto& cb_impl : cb_impls) {
             for (uint8_t idx : cb_impl->local_buffer_indices()) {
                 if (idx < EMULE_NUM_CBS) {
-                    tile_sizes[idx] = cb_impl->page_size(idx);
+                    // Calculate tile size from the CB's data format.
+                    const auto& tile = cb_impl->tile(idx);
+                    tile_sizes[idx] = tile.has_value() ? tile->get_tile_size(cb_impl->data_format(idx))
+                                                       : Tile().get_tile_size(cb_impl->data_format(idx));
+                    cb_formats[idx] = static_cast<uint8_t>(cb_impl->data_format(idx));
+                    if (tile.has_value()) {
+                        tile_r_dim[idx] = tile->get_height();
+                        tile_c_dim[idx] = tile->get_width();
+                    }
                 }
             }
         }
-        std::ostringstream ts;
+        std::ostringstream ts, df, tr, tc;
         for (uint32_t i = 0; i < EMULE_NUM_CBS; i++) {
             if (i) {
                 ts << ',';
+                df << ',';
+                tr << ',';
+                tc << ',';
             }
             ts << tile_sizes[i];
+            df << static_cast<uint32_t>(cb_formats[i]);
+            tr << tile_r_dim[i];
+            tc << tile_c_dim[i];
         }
         defines["EMULE_TILE_SIZES"] = ts.str();
+        defines["EMULE_CB_DATA_FORMATS"] = df.str();
+        defines["EMULE_TILE_R_DIM"] = tr.str();
+        defines["EMULE_TILE_C_DIM"] = tc.str();
+    }
+
+    // Thread the compute kernel's resolved fp32_dest_acc_en / dst_full_sync_en
+    // into its TU, mirroring silicon genfiles.cpp::emit_compute_scalar_descriptors.
+    // dest_helpers.hpp::DEST_AUTO_LIMIT must resolve identically in a program's
+    // reader and compute kernels (e.g. multi-core H-reduce interleaves input
+    // tiles in chunks of DEST_AUTO_LIMIT). The factory already injects
+    // ENABLE_FP32_DEST_ACC/DST_SYNC_FULL into the reader's defines; without this
+    // the compute TU falls back to the jit_kernel_stubs defaults (bf16/SyncFull
+    // → 16) instead of the program's real mode, scrambling the chunked reduce.
+    if (kernel.get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+        const auto kernel_config = kernel.config();
+        if (const auto* cc = std::get_if<ComputeConfig>(&kernel_config)) {
+            defines["DST_ACCUM_MODE"] = cc->fp32_dest_acc_en ? "1" : "0";
+            defines["ENABLE_FP32_DEST_ACC"] = cc->fp32_dest_acc_en ? "1" : "0";
+            defines["DST_SYNC_FULL"] = cc->dst_full_sync_en ? "1" : "0";
+        }
     }
     return defines;
 }
@@ -1069,6 +1385,7 @@ static TriscMode detect_quasar_trisc_mode(bool is_quasar_compute, const std::str
 static void collect_kernels(
     detail::ProgramImpl& impl,
     uint32_t num_dram_channels,
+    uint32_t num_l1_banks,
     const std::string& worker_col_map_str,
     const std::string& worker_row_map_str,
     uint32_t emule_sem_base,
@@ -1079,9 +1396,26 @@ static void collect_kernels(
     std::vector<std::string>& inline_src_temps) {
     static const char* trisc_define_names[] = {"TRISC_UNPACK", "TRISC_MATH", "TRISC_PACK", "TRISC_ISOLATE_SFPU"};
 
-    const uint32_t num_pct = MetalContext::instance().hal().get_programmable_core_type_count();
+    const auto& hal = MetalContext::instance().hal();
+    const uint32_t num_pct = hal.get_programmable_core_type_count();
     for (uint32_t pct = 0; pct < num_pct; ++pct) {
         auto& kernels = impl.get_kernels(pct);
+        // (kernel_id, logical_core) → kg: a kernel that runs on cores in
+        // multiple KGs has distinct per-KG launch_msg layouts, so keying by
+        // kernel alone picks the wrong one for half the cores.
+        std::map<std::pair<KernelHandle, CoreCoord>, KernelGroup*> kernel_core_to_kg;
+        for (const auto& kg : impl.get_kernel_groups(pct)) {
+            for (const auto& cr : kg->core_ranges.ranges()) {
+                for (auto x = cr.start_coord.x; x <= cr.end_coord.x; ++x) {
+                    for (auto y = cr.start_coord.y; y <= cr.end_coord.y; ++y) {
+                        CoreCoord lc(x, y);
+                        for (auto kid : kg->kernel_ids) {
+                            kernel_core_to_kg.emplace(std::make_pair(kid, lc), kg.get());
+                        }
+                    }
+                }
+            }
+        }
         for (auto& [kernel_id, kernel] : kernels) {
             const auto& ksrc = kernel->kernel_source();
             std::string src_path = resolve_kernel_source_path(ksrc, inline_src_temps);
@@ -1089,9 +1423,8 @@ static void collect_kernels(
             auto compile_args = kernel->compile_time_args();
             auto named_compile_args = kernel->named_compile_time_args();
             auto defines = build_kernel_defines(
-                *kernel, impl, num_dram_channels, worker_col_map_str, worker_row_map_str, emule_sem_base);
-
-            auto& common_rt = kernel->common_runtime_args();
+                *kernel, impl, num_dram_channels, num_l1_banks,
+                worker_col_map_str, worker_row_map_str, emule_sem_base);
 
             // Tensix/compute kernels use bits 8+ in the DFB RISC mask (TENSIX_RISC_OFFSET),
             // while DM kernels use bits 0-7 directly.
@@ -1108,23 +1441,7 @@ static void collect_kernels(
             // bodies and the downstream `where_tile` reads stale data. Define
             // all three so the kernel's `#ifdef TRISC_*` blocks execute exactly
             // once on the unified thread.
-            //
-            // EXCEPT for tilize kernels: emule's host-side
-            // `tilize_with_val_padding` already produces tiled data, so an
-            // additional kernel-side tilize would re-tilize and corrupt the
-            // layout. Skip TRISC defines when the kernel source mentions
-            // `llk_unpack_tilize` (the tilize compute path).
-            bool is_tilize_kernel = false;
             if (is_tensix && !is_quasar_compute) {
-                std::ifstream kscan(src_path);
-                if (!kscan) {
-                    throw std::runtime_error(
-                        "collect_kernels: cannot read kernel source for TRISC-define gating: " + src_path);
-                }
-                std::string content((std::istreambuf_iterator<char>(kscan)), std::istreambuf_iterator<char>());
-                is_tilize_kernel = content.find("llk_unpack_tilize") != std::string::npos;
-            }
-            if (is_tensix && !is_quasar_compute && !is_tilize_kernel) {
                 defines["TRISC_UNPACK"] = "1";
                 defines["TRISC_MATH"] = "1";
                 defines["TRISC_PACK"] = "1";
@@ -1210,23 +1527,42 @@ static void collect_kernels(
 
             ProcIdList procs = compute_proc_ids_and_thread_count(*kernel, qdm, qck);
 
+            const uint32_t processor_index = hal.get_processor_index(
+                kernel->get_kernel_programmable_core_type(),
+                kernel->get_kernel_processor_class(),
+                kernel->get_kernel_processor_type(0));
+
             const auto& core_range_set = kernel->core_range_set();
             for (const auto& core_range : core_range_set.ranges()) {
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
                     for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; ++y) {
                         CoreCoord logical_core(x, y);
-                        auto& rt_args_data = kernel->runtime_args(logical_core);
+                        // KG lookup is per (kernel, logical_core): same kernel
+                        // on different cores may sit in different KGs with
+                        // distinct kernel_config layouts.
+                        auto kg_it = kernel_core_to_kg.find({kernel_id, logical_core});
+                        uint32_t kernel_config_base = 0;
+                        uint16_t rta_off = kRtaCrtaNoArgsSentinel;
+                        uint16_t crta_off = kRtaCrtaNoArgsSentinel;
+                        if (kg_it != kernel_core_to_kg.end()) {
+                            auto kc = kg_it->second->launch_msg.view().kernel_config();
+                            kernel_config_base = static_cast<uint32_t>(kc.kernel_config_base()[pct]);
+                            auto rta = kc.rta_offset()[processor_index];
+                            rta_off = rta.rta_offset();
+                            crta_off = rta.crta_offset();
+                        }
                         uint8_t tidx = 0;
                         for (uint8_t proc_id : procs.proc_ids) {
                             pending_core_kernels[logical_core].push_back(PendingKernelInfo{
                                 variant_cache_keys,
                                 run_all_variants,
-                                rt_args_data,
-                                common_rt,
                                 proc_id,
                                 tidx++,
                                 is_tensix,
-                                procs.num_threads});
+                                procs.num_threads,
+                                kernel_config_base,
+                                rta_off,
+                                crta_off});
                         }
                     }
                 }
@@ -1307,21 +1643,33 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
         }
         // Add DRAM cores (UMD SoC descriptor coords)
         auto& umd_soc = sw_emu->get_soc_descriptor();
-        for (auto& dc_vec : umd_soc.get_dram_cores()) {
-            for (auto& dc : dc_vec) {
-                auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
+        auto dram_cores = umd_soc.get_dram_cores();
+        for (uint32_t ch = 0; ch < dram_cores.size(); ch++) {
+            auto* core = sw_emu->get_dram_channel_backing(ch);
+            for (auto& dc : dram_cores[ch]) {
                 uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
                 (*core_map)[key] = core;
             }
         }
-        // Add DRAM cores (metal_SocDescriptor preferred worker coords)
+        // Add DRAM cores (metal_SocDescriptor preferred worker coords). Register BOTH
+        // NOC0 and NOC1 preferred coords (on Wormhole they differ per view) so
+        // __emule_resolve_noc_addr can route either. Key the backing by the coord's
+        // umd LOGICAL channel (the physical DRAM channel) — not the metal dram-view
+        // index: several views alias one physical channel (at different offsets), and
+        // the host write path resolves the same LOGICAL channel. Keying by view index
+        // would split one channel across multiple backings → host/kernel read mismatch.
         {
+            auto& umd = sw_emu->get_soc_descriptor();
             auto& msoc = MetalContext::instance().get_cluster().get_soc_desc(device_id);
-            for (uint32_t ch = 0; ch < msoc.get_num_dram_views() && ch < MAX_NUM_BANKS; ch++) {
-                auto dc = msoc.get_preferred_worker_core_for_dram_view(ch, 0);
-                auto* core = sw_emu->get_core(tt_xy_pair(dc.x, dc.y));
-                uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
-                (*core_map)[key] = core;
+            for (uint32_t view = 0; view < msoc.get_num_dram_views() && view < MAX_NUM_BANKS; view++) {
+                for (uint32_t noc = 0; noc < NUM_NOCS; noc++) {
+                    auto dc = msoc.get_preferred_worker_core_for_dram_view(view, noc);
+                    auto lg = umd.translate_coord_to(
+                        tt_xy_pair(dc.x, dc.y), CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+                    auto* core = sw_emu->get_dram_channel_backing(static_cast<uint32_t>(lg.x));
+                    uint64_t key = (uint64_t(dc.x) << 32) | dc.y;
+                    (*core_map)[key] = core;
+                }
             }
         }
     } else if (!core_map) {
@@ -1336,10 +1684,10 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
 // Initialize CB-sync state on a core from the program's circular buffer list.
 static void init_core_cb_sync(tt_emule::Core* core, detail::ProgramImpl& impl, const CoreCoord& logical_core) {
     core->reset_cb_sync();
-    auto cb_impls = impl.circular_buffers_on_core(logical_core);
-    for (auto& cb_impl : cb_impls) {
+    bool configured[EMULE_NUM_CBS] = {};
+    auto configure = [&](const std::shared_ptr<CircularBufferImpl>& cb_impl, const CoreCoord& lc) {
         for (uint8_t idx : cb_impl->local_buffer_indices()) {
-            if (idx >= EMULE_NUM_CBS) {
+            if (idx >= EMULE_NUM_CBS || configured[idx]) {
                 continue;
             }
             uint32_t cb_addr = cb_impl->address();
@@ -1347,17 +1695,24 @@ static void init_core_cb_sync(tt_emule::Core* core, detail::ProgramImpl& impl, c
             uint32_t num_pages = (page_size > 0) ? cb_impl->num_pages(idx) : 0;
             uint8_t* base = (page_size > 0) ? core->l1_ptr(cb_addr) : nullptr;
             core->init_cb_sync(idx, base, page_size, num_pages);
+            configured[idx] = true;
             log_debug(
                 tt::LogMetal,
                 "  Core({},{}) CB[{}]: addr=0x{:x} page_size={} num_pages={} base={:p}",
-                logical_core.x,
-                logical_core.y,
-                idx,
-                cb_addr,
-                page_size,
-                num_pages,
-                (void*)base);
+                lc.x, lc.y, idx, cb_addr, page_size, num_pages, (void*)base);
         }
+    };
+    // Pass 1: CBs allocated on this core take precedence (own addresses).
+    for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
+        configure(cb_impl, logical_core);
+    }
+    // Pass 2: register the remaining program CBs at their global L1 address so a
+    // kernel can get_write_ptr() a CB allocated only on a remote core (silicon CB
+    // addresses are program-global). Needed for multi-core topk, where local cores
+    // NOC-write into the final core's final_*_cb. Used only as cross-core NOC
+    // targets here; the masked L1 offset is what __emule_resolve_noc_addr routes.
+    for (auto& cb_impl : impl.circular_buffers()) {
+        configure(cb_impl, logical_core);
     }
 }
 
@@ -1393,12 +1748,18 @@ static std::vector<DFBAllocInfo> allocate_dfbs_on_core(
     tt_emule::Core* core,
     const CoreCoord& logical_core,
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dfb_impls) {
-    // Reset L1 bump allocator so DFB allocations don't accumulate across runs.
-    core->reset_l1_bump();
     core->reset_dfb_sync();
     if (dfb_impls.empty()) {
+        // No DFBs to allocate (always the case on WH/BH; DFBs are Quasar-only),
+        // so the L1 bump allocator never grows and there's nothing to reset.
+        // Skipping reset also leaves the mmap-init zeros at MEM_ZEROS_BASE
+        // undisturbed for kernels that NOC-read the region.
         return {};
     }
+    // DFB fallback path (Quasar): start the bump allocator at 0.  When Quasar
+    // bring-up needs to protect MEM_ZEROS from bump-allocator overlap, dispatch
+    // its per-arch MEM_ZEROS_BASE here.
+    core->reset_l1_bump();
     if (!core->tile_counters()) {
         core->init_tile_counters(4);
     }
@@ -1637,16 +1998,175 @@ static std::vector<std::unique_ptr<tt_emule::EmuleDFBInterface[]>> build_per_thr
 // ---------------------------------------------------------------------------
 // launch_cores: Spawn concurrent threads per core, each runs its kernels.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// RISC-V-faithful integer divide/modulo fault recovery on x86 hosts.
+//
+// The real Tensix cores are RISC-V, where integer div/rem faults are DEFINED and
+// non-trapping (RISC-V ISA M-extension):
+//   - divide by zero: `divu x,0 -> all-ones`, `div x,0 -> -1`, `rem(u) x,0 -> x`
+//   - signed overflow (`div INT_MIN,-1`): quotient = INT_MIN, remainder = 0
+// emule JIT-compiles each kernel to x86, where `div`/`idiv` raises #DE -> SIGFPE
+// (si_code FPE_INTDIV for /0, FPE_INTOVF for INT_MIN/-1) and aborts. Kernels
+// legitimately hit /0 on idle/degenerate cores: e.g. binary_ng's no_bcast reader
+// computes `start_tile_id % (D*N*C*Ht*Wt)` and the host hands idle cores all-zero
+// dims, so the divisor is 0 and the (dead) result is never used. To match silicon we
+// trap the SIGFPE, write RISC-V's defined result into the saved register image, and
+// step the saved RIP past the faulting instruction.
+//
+// Scope/caveats: (1) the handler is process-global for the lifetime of launch_cores,
+// so any host thread that faults in that window is also "recovered" — acceptable
+// because only kernel threads run div-heavy code then; (2) a *genuine* kernel div bug
+// becomes silent-wrong-output rather than a crash, but that is exactly what silicon
+// would do (no trap). See docs/riscv-intdiv-by-zero.md in the tt-emule repo.
+#if defined(__x86_64__) && defined(__linux__)
+namespace {
+
+// Length in bytes of the div/idiv at `p`, or 0 if it is not a *recoverable* one.
+// We recover only the 32-bit and 64-bit `F7 /6,/7` forms — the only integer-divide
+// widths a RISC-V-derived kernel compiled to x86 emits (RV32/RV64 have no 8/16-bit
+// divide; C integer promotion never yields one either). 8-bit (`F6`) and 16-bit
+// (`0x66`-prefixed) forms are declined (return 0 -> abort) rather than risk a wrong
+// partial-register write-back. Handles optional legacy + REX prefixes and
+// ModRM/SIB/disp for a memory operand. Sets *width to 32 or 64.
+size_t emule_decode_divlen(const uint8_t* p, int* width) {
+    size_t i = 0;
+    bool opsize16 = false, rexw = false;
+    while (p[i] == 0x67 || p[i] == 0x66 || p[i] == 0x2e || p[i] == 0x3e || p[i] == 0x26 || p[i] == 0x64 ||
+           p[i] == 0x65 || p[i] == 0x36 || p[i] == 0xf0 || p[i] == 0xf2 || p[i] == 0xf3) {
+        if (p[i] == 0x66) {
+            opsize16 = true;  // operand-size override
+        }
+        ++i;
+    }
+    if ((p[i] & 0xf0) == 0x40) {  // REX
+        if (p[i] & 0x08) {
+            rexw = true;  // REX.W
+        }
+        ++i;
+    }
+    if (p[i] != 0xf7) {  // F7 = 16/32/64-bit DIV/IDIV; F6 (8-bit) is not a RISC-V width
+        return 0;
+    }
+    ++i;
+    uint8_t modrm = p[i];
+    uint8_t reg = (modrm >> 3) & 0x7;
+    if (reg != 6 && reg != 7) {  // /6 = DIV, /7 = IDIV
+        return 0;
+    }
+    uint8_t mod = modrm >> 6;
+    uint8_t rm = modrm & 0x7;
+    ++i;  // ModRM
+    if (mod != 3) {                          // memory operand
+        if (rm == 4) {                       // SIB present
+            uint8_t base = p[i] & 0x7;
+            ++i;
+            if (mod == 0 && base == 5) {
+                i += 4;  // disp32, no base
+            }
+        }
+        if (mod == 1) {
+            i += 1;  // disp8
+        } else if (mod == 2) {
+            i += 4;  // disp32
+        } else if (mod == 0 && rm == 5) {
+            i += 4;  // RIP-relative disp32
+        }
+    }
+    *width = rexw ? 64 : (opsize16 ? 16 : 32);
+    if (*width == 16) {
+        return 0;  // 16-bit div: not a RISC-V width; partial-register fix-up would be unsafe
+    }
+    return i;
+}
+
+void emule_sigfpe_handler(int sig, siginfo_t* info, void* uc_void) {
+    if (sig == SIGFPE && (info->si_code == FPE_INTDIV || info->si_code == FPE_INTOVF)) {
+        auto* uc = static_cast<ucontext_t*>(uc_void);
+        greg_t* regs = uc->uc_mcontext.gregs;
+        auto* rip = reinterpret_cast<const uint8_t*>(regs[REG_RIP]);
+        int width = 0;
+        size_t len = emule_decode_divlen(rip, &width);
+        if (len > 0) {
+            // x86 dividend low half is in (R|E)AX; quotient lands in (R|E)AX, rem in (R|E)DX.
+            const greg_t dividend = regs[REG_RAX];
+            if (info->si_code == FPE_INTDIV) {
+                // div/rem by zero — RISC-V: quotient = all-ones, remainder = dividend.
+                if (width == 64) {
+                    regs[REG_RAX] = static_cast<greg_t>(~0ULL);
+                    regs[REG_RDX] = dividend;
+                } else {  // 32-bit writes zero-extend the full 64-bit reg
+                    regs[REG_RAX] = static_cast<greg_t>(static_cast<uint32_t>(~0U));
+                    regs[REG_RDX] = static_cast<greg_t>(static_cast<uint32_t>(dividend));
+                }
+            } else {
+                // FPE_INTOVF: signed INT_MIN / -1 — RISC-V: quotient = dividend (INT_MIN), rem = 0.
+                if (width == 64) {
+                    regs[REG_RAX] = dividend;
+                    regs[REG_RDX] = 0;
+                } else {
+                    regs[REG_RAX] = static_cast<greg_t>(static_cast<uint32_t>(dividend));
+                    regs[REG_RDX] = 0;
+                }
+            }
+            regs[REG_RIP] = reinterpret_cast<greg_t>(rip + len);
+            return;
+        }
+    }
+    // Not a recoverable integer divide/overflow: fall back to default disposition.
+    signal(sig, SIG_DFL);
+    raise(sig);
+}
+
+// Installs the handler for the duration of kernel execution, restoring the
+// previous disposition afterward so emule does not permanently alter the host.
+struct EmuleSigfpeGuard {
+    struct sigaction prev_ {};
+    bool installed_ = false;
+    EmuleSigfpeGuard() {
+        struct sigaction sa {};
+        sa.sa_sigaction = emule_sigfpe_handler;
+        sa.sa_flags = SA_SIGINFO;  // synchronous, thread-directed; handler never re-faults
+        sigemptyset(&sa.sa_mask);
+        installed_ = (sigaction(SIGFPE, &sa, &prev_) == 0);
+    }
+    ~EmuleSigfpeGuard() {
+        if (installed_) {
+            sigaction(SIGFPE, &prev_, nullptr);
+        }
+    }
+    EmuleSigfpeGuard(const EmuleSigfpeGuard&) = delete;
+    EmuleSigfpeGuard& operator=(const EmuleSigfpeGuard&) = delete;
+};
+
+}  // namespace
+#endif  // __x86_64__ && __linux__
+
 static void launch_cores(
     std::vector<CoreSetup>& core_setups,
     uint8_t* dram_data,
     std::unordered_map<uint64_t, tt_emule::Core*>* core_map_ptr) {
+#if defined(__x86_64__) && defined(__linux__)
+    EmuleSigfpeGuard sigfpe_guard;
+#endif
     std::vector<std::thread> core_threads;
     std::vector<std::exception_ptr> core_exceptions(core_setups.size());
 
+    // Startup barrier modeling silicon's simultaneous multi-core dispatch. emule
+    // spawns kernel threads sequentially, so without it an early thread can run its
+    // whole kernel (including cross-core semaphore increments) before a later peer
+    // has executed its prologue — e.g. racing ahead of an argmax reducer's k=0
+    // done_sem reset. Releasing all threads from one barrier restores "all cores
+    // start together".
+    size_t total_kernel_threads = 0;
+    for (const auto& cs : core_setups) {
+        total_kernel_threads += cs.ki_list->size();
+    }
+    std::atomic<uint32_t> kernel_start_barrier{0};
+
     for (size_t core_idx = 0; core_idx < core_setups.size(); ++core_idx) {
         core_threads.emplace_back(
-            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx]]() {
+            [&cs = core_setups[core_idx], dram_data, core_map_ptr, &core_ep = core_exceptions[core_idx],
+             &kernel_start_barrier, total_kernel_threads]() {
                 try {
                     auto* core = cs.core;
                     uint8_t* l1_data = core->l1_data();
@@ -1681,11 +2201,19 @@ static void launch_cores(
                                               lx,
                                               ly,
                                               kidx,
+                                              &kernel_start_barrier,
+                                              total_kernel_threads,
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
-                            __rt_args = ki.rt_args;
-                            __common_rt_args = ki.common_rt_args;
+                            __rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
+                                      ki.kernel_config_base + ki.rta_offset_in_kc))
+                                : nullptr;
+                            __common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
+                                      ki.kernel_config_base + ki.crta_offset_in_kc))
+                                : nullptr;
                             __emule_bridge_l1 = l1_data;
                             __emule_bridge_dram = dram_data;
                             __emule_cbs = cb_array;
@@ -1707,10 +2235,17 @@ static void launch_cores(
                             __emule_num_threads = ki.num_threads;
                             __emule_my_thread_id = ki.thread_idx;
 
+                            // Startup barrier (declared in launch_cores): all
+                            // kernel threads start together.
+                            kernel_start_barrier.fetch_add(1, std::memory_order_acq_rel);
+                            while (kernel_start_barrier.load(std::memory_order_acquire) < total_kernel_threads) {
+                                std::this_thread::yield();
+                            }
+
                             log_debug(
                                 tt::LogMetal,
-                                "  Launching kernel[{}] on logical ({},{}) phys ({},{}) rt_args={} common_rt_args={}",
-                                kidx, lx, ly, px, py, ki.rt_args.size(), ki.common_rt_args.size());
+                                "  Launching kernel[{}] on logical ({},{}) phys ({},{}) rta_off=0x{:x} crta_off=0x{:x}",
+                                kidx, lx, ly, px, py, ki.rta_offset_in_kc, ki.crta_offset_in_kc);
 
                             try {
                                 for (size_t t = 0; t < ki.variants.size(); ++t) {
@@ -1724,6 +2259,8 @@ static void launch_cores(
                             }
 
                             __core = nullptr;
+                            __rt_args = nullptr;
+                            __common_rt_args = nullptr;
                             __emule_bridge_l1 = nullptr;
                             __emule_bridge_dram = nullptr;
                             __emule_cbs = nullptr;
@@ -1784,7 +2321,8 @@ void execute_program_emulated(IDevice* device, Program& program) {
     // Phase 0: Populate bank mapping arrays
     tt_emule::Core* dram_core = nullptr;
     uint32_t num_dram_channels = 0;
-    populate_bank_mapping(sw_emu, device_id, dram_core, num_dram_channels);
+    uint32_t num_l1_banks = 0;
+    populate_bank_mapping(sw_emu, device, device_id, dram_core, num_dram_channels, num_l1_banks);
 
     // Build worker coordinate mapping strings
     std::string worker_col_map_str, worker_row_map_str;
@@ -1815,6 +2353,7 @@ void execute_program_emulated(IDevice* device, Program& program) {
     collect_kernels(
         impl,
         num_dram_channels,
+        num_l1_banks,
         worker_col_map_str,
         worker_row_map_str,
         emule_sem_base,
@@ -1831,7 +2370,9 @@ void execute_program_emulated(IDevice* device, Program& program) {
     for (auto& [logical_core, pending_list] : pending_core_kernels) {
         for (auto& pk : pending_list) {
             KernelInfo ki{
-                {}, pk.run_all_variants, pk.rt_args, pk.common_rt_args, pk.processor_id, pk.thread_idx, pk.is_tensix, pk.num_threads};
+                {}, pk.run_all_variants, pk.processor_id, pk.thread_idx,
+                pk.is_tensix, pk.num_threads,
+                pk.kernel_config_base, pk.rta_offset_in_kc, pk.crta_offset_in_kc};
             ki.variants.reserve(pk.variant_cache_keys.size());
             for (const auto& key : pk.variant_cache_keys) {
                 ki.variants.push_back(resolved_fns.at(key));

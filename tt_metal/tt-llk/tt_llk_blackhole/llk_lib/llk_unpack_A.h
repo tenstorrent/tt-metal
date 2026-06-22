@@ -14,10 +14,27 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+/**
+ * @brief Program the unpacker MOP for a single-operand (A) unpack.
+ *
+ * Selects the UNPACR instruction sequence based on broadcast type, dest-reuse mode and
+ * whether data is unpacked straight to the dest register, covering transpose-of-faces and
+ * 32-bit-to-dest paths.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param transpose_of_faces: Whether faces are reordered (transposed) during the unpack.
+ * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
@@ -51,7 +68,7 @@ inline void _llk_unpack_A_mop_config_(
     static constexpr std::uint32_t srcb_set_z_2           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 2, 0b0001); // set srcB ch0_z = 2
     static constexpr std::uint32_t srcb_clear_z           = TT_OP_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0001); // set srcB ch0_z = 0
 
-    if (unpack_to_dest && is_32bit_input(unpack_src_format, unpack_dst_format))
+    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
         if (transpose_of_faces && num_faces == 4)
         {
@@ -187,6 +204,26 @@ inline void _llk_unpack_A_mop_config_(
     }
 }
 
+/**
+ * @brief Initialize the unpacker for a single-operand (A) unpack.
+ *
+ * Configures the within-face transpose register and per-unpacker datum count, then programs
+ * the MOP for the requested broadcast/dest-reuse/unpack-to-dest mode.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param transpose_of_faces: Nonzero to reorder (transpose) faces during the unpack.
+ * @param within_face_16x16_transpose: Nonzero to enable the 16x16 within-face transpose (haloize mode).
+ * @param face_r_dim: Number of rows per face.
+ * @param num_faces: Number of faces in the tile, valid values = <1, 2, 4>.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @note Call @ref _llk_unpack_A_uninit_ to restore the modified datum-count state.
+ * @ref _llk_unpack_A_ is the matching execute call.
+ * @ref _llk_math_eltwise_unary_datacopy_init_ is the matching init on the math thread (datacopy/transpose consumer).
+ */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
@@ -208,20 +245,67 @@ inline void _llk_unpack_A_init_(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
 
+    if constexpr (BType == BroadcastType::NONE)
+    {
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            face_r_dim,
+            llk::san::IGNORE,
+            num_faces,
+            llk::san::IGNORE);
+    }
+    else
+    {
+        // If using broadcast UnpackA uses UNP_B... yeah i know...
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            face_r_dim,
+            llk::san::IGNORE,
+            num_faces);
+    }
+    llk::san::operation_init<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
+
     // Set transpose register to prevent state pollution
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(within_face_16x16_transpose);
 
-    // TODO NC: Find out why we need to disable src zero flags for uint16 dst format #960
-    // bool disable_src_zero_flag_val = disable_src_zero_flag || (static_cast<uint>(unpack_dst_format) == static_cast<uint>(DataFormat::UInt16));
-    // cfg_reg_rmw_tensix<ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW>(disable_src_zero_flag_val ? 1 : 0);
-
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE || unpack_to_dest) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    if constexpr ((BType == BroadcastType::ROW || BType == BroadcastType::SCALAR) && unpack_to_dest) // ROW and SCALAR bcast will only unpack a single row
+    // x-start/x-end is per-unpacker state, so program it on exactly the unpacker(s) the MOP issues a
+    // real (non-ZEROSRC) UNPACR against; a zeroed source does not read L1, so its X counter is unused.
+    // The unpack-to-dest (SrcA) path is only taken when the input is actually 32-bit; otherwise the MOP
+    // falls through to the normal/broadcast path, so gate on the shared should_unpack_to_dest() predicate
+    // the MOP uses, so the two cannot diverge.
+    if (should_unpack_to_dest(unpack_to_dest, unpack_src_format, unpack_dst_format))
     {
-        config_unpacker_x_end<UNP_SEL>(1);
+        // SrcA -> dest. ROW and SCALAR broadcast only unpack a single row; everything else a full face.
+        if constexpr (BType == BroadcastType::ROW || BType == BroadcastType::SCALAR)
+        {
+            config_unpacker_x_end<p_setadc::UNP_A>(1);
+        }
+        else
+        {
+            config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
+        }
     }
-    else // base case is to upk the entire face
+    else
     {
+        //   plain datacopy            -> SrcA           (unpacker A)
+        //   acc_to_dest, no reuse      -> SrcA and SrcB  (both)
+        //   acc_to_dest DEST_TO_SRCA   -> SrcB only      (SrcA comes from DEST, e.g. hardswish x*hardsigmoid(x))
+        //   acc_to_dest DEST_TO_SRCB   -> SrcA only      (SrcB comes from DEST)
+        //   broadcast                  -> SrcB
+        constexpr bool reads_srca =
+            (BType == BroadcastType::NONE) && !(acc_to_dest && binary_reuse_dest == EltwiseBinaryReuseDestType::DEST_TO_SRCA);
+        constexpr bool reads_srcb =
+            (BType != BroadcastType::NONE) || (acc_to_dest && binary_reuse_dest != EltwiseBinaryReuseDestType::DEST_TO_SRCB);
+        constexpr std::uint32_t UNP_SEL = (reads_srca && reads_srcb) ? p_setadc::UNP_AB : (reads_srca ? p_setadc::UNP_A : p_setadc::UNP_B);
         config_unpacker_x_end<UNP_SEL>(face_r_dim);
     }
 
@@ -233,15 +317,39 @@ inline void _llk_unpack_A_init_(
     _llk_unpack_A_mop_config_<BType, acc_to_dest, binary_reuse_dest, unpack_to_dest>(transpose_of_faces > 0, num_faces, unpack_src_format, unpack_dst_format);
 }
 
+/**
+ * @brief Restore unpacker datum-count state after single-operand (A) unpacking.
+ *
+ * Resets the X-dimension address counter for the unpacker used by this broadcast mode back to
+ * a full face worth of datums.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @param face_r_dim: Number of rows per face, used to compute the restored datum count.
+ * @note Call @ref _llk_unpack_A_init_ with matching template args before this function.
+ */
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_A_uninit_(const std::uint32_t face_r_dim)
+inline void _llk_unpack_A_uninit_()
 {
-    // Unpack A is used for all single unpacker operations, except bcast, since bcast HW feature is only available on unpacker B
-    constexpr std::uint32_t UNP_SEL = (BType == BroadcastType::NONE) ? p_setadc::UNP_A : p_setadc::UNP_B;
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(UNP_SEL, face_r_dim * FACE_C_DIM - 1, 0x0);
 }
 
+/**
+ * @brief Unpack a single tile (operand A) from L1 into the SrcA/SrcB or dest register.
+ *
+ * Programs the operand base address into the active config context, synchronizes with the
+ * unpacker via semaphores, and runs the configured MOP. When unpacking 32-bit datums to dest,
+ * also manages the dest write address and completion handshake.
+ *
+ * @tparam BType: Broadcast type, values = <NONE/COL/ROW/SCALAR>
+ * @tparam acc_to_dest: Accumulate the operand into the dest register rather than overwriting it.
+ * @tparam binary_reuse_dest: Reuse dest as a source operand, values = <NONE/DEST_TO_SRCA/DEST_TO_SRCB>
+ * @tparam unpack_to_dest: Unpack directly into the dest register (32-bit datums).
+ * @param address: L1 address of the source tile.
+ * @param unpack_src_format: Source data format of the operand in L1.
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @note Call @ref _llk_unpack_A_init_ with matching template args before this function, and
+ *       @ref _llk_unpack_A_uninit_ after it to restore modified state.
+ * @ref _llk_math_eltwise_unary_datacopy_ on the math thread consumes the tile unpacked here.
+ */
 template <
     BroadcastType BType                          = BroadcastType::NONE,
     bool acc_to_dest                             = false,
@@ -250,6 +358,35 @@ template <
 inline void _llk_unpack_A_(const std::uint32_t address, const std::uint32_t unpack_src_format = 0, const std::uint32_t unpack_dst_format = 0)
 {
     LLK_ASSERT(is_valid_L1_address(address), "L1 address must be in valid L1 memory region");
+
+    if constexpr (BType == BroadcastType::NONE)
+    {
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE);
+    }
+    else
+    {
+        // If using broadcast UnpackA uses UNP_B... yeah i know...
+        llk::san::unpack_operand_check(
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            unpack_src_format,
+            llk::san::IGNORE,
+            unpack_dst_format,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE,
+            llk::san::IGNORE);
+    }
+    llk::san::operation_check<llk::san::Operation::UnpackA>(BType, acc_to_dest, binary_reuse_dest, unpack_to_dest, unpack_src_format, unpack_dst_format);
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);

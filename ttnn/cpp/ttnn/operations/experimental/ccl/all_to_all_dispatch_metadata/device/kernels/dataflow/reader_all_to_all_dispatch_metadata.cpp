@@ -15,41 +15,43 @@ void kernel_main() {
     constexpr uint32_t indices_tensor_cb_id = get_compile_time_arg_val(1);
     constexpr uint32_t mapping_tensor_cb_id = get_compile_time_arg_val(2);
 
-    constexpr uint32_t input_pages = get_compile_time_arg_val(5);
-    constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
-    constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
+    [[maybe_unused]] constexpr uint32_t input_pages = get_compile_time_arg_val(5);
+    [[maybe_unused]] constexpr uint32_t indices_pages = get_compile_time_arg_val(6);
+    [[maybe_unused]] constexpr uint32_t mapping_pages = get_compile_time_arg_val(7);
 
     constexpr uint32_t input_page_size = get_compile_time_arg_val(10);
     constexpr uint32_t indices_page_size = get_compile_time_arg_val(11);
     constexpr uint32_t mapping_page_size = get_compile_time_arg_val(12);
     constexpr uint32_t metadata_page_size = get_compile_time_arg_val(14);
 
-    constexpr uint32_t num_devices = get_compile_time_arg_val(15);
-    constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
+    [[maybe_unused]] constexpr uint32_t num_devices = get_compile_time_arg_val(15);
+    [[maybe_unused]] constexpr uint32_t selected_experts_k = get_compile_time_arg_val(18);
     constexpr uint32_t num_shared_experts = get_compile_time_arg_val(20);
 
     constexpr uint32_t tokens_per_device = get_compile_time_arg_val(21);
 
-    constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
-    constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
+    constexpr tt::tt_fabric::Topology topology = (tt::tt_fabric::Topology)get_compile_time_arg_val(23);
 
-    constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
-    constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
+    [[maybe_unused]] constexpr uint32_t src_mesh_id = get_compile_time_arg_val(24);
+    [[maybe_unused]] constexpr uint32_t src_chip_id = get_compile_time_arg_val(25);
 
-    constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
-    constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
+    [[maybe_unused]] constexpr uint32_t mesh_rows = get_compile_time_arg_val(26);
+    [[maybe_unused]] constexpr uint32_t mesh_cols = get_compile_time_arg_val(27);  // ew_dim
+
+    [[maybe_unused]] constexpr uint32_t aligned_indices_page_size = get_compile_time_arg_val(29);
+    [[maybe_unused]] constexpr uint32_t aligned_mapping_page_size = get_compile_time_arg_val(30);
     constexpr uint32_t aligned_metadata_page_size = get_compile_time_arg_val(32);
 
     constexpr uint32_t metadata_buffer_id = get_compile_time_arg_val(35);
 
-    constexpr bool write_page_by_page = get_compile_time_arg_val(36);
+    [[maybe_unused]] constexpr bool write_page_by_page = get_compile_time_arg_val(36);
     constexpr uint32_t linearized_mesh_coord = get_compile_time_arg_val(37);
 
     constexpr uint32_t dispatch_devices = get_compile_time_arg_val(38);
 
     // scores tensor compile time args
     constexpr uint32_t scores_tensor_cb_id = get_compile_time_arg_val(39);
-    constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
+    [[maybe_unused]] constexpr uint32_t scores_pages = get_compile_time_arg_val(40);
     constexpr uint32_t scores_page_size = get_compile_time_arg_val(41);
     constexpr uint32_t aligned_output_scores_page_size = get_compile_time_arg_val(44);
 
@@ -65,7 +67,7 @@ void kernel_main() {
     uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t scores_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t mapping_tensor_address = get_arg_val<uint32_t>(rt_ags++);
-    uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
+    [[maybe_unused]] uint32_t output_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     uint32_t metadata_tensor_address = get_arg_val<uint32_t>(rt_ags++);
     [[maybe_unused]] uint32_t scores_out_tensor_address = get_arg_val<uint32_t>(rt_ags++);
 
@@ -89,7 +91,8 @@ void kernel_main() {
     const auto indices_addr_gen = TensorAccessor(indices_args, indices_tensor_address, indices_page_size);
     const auto scores_addr_gen = TensorAccessor(scores_args, scores_tensor_address, scores_page_size);
     const auto mapping_addr_gen = TensorAccessor(mapping_args, mapping_tensor_address, mapping_page_size);
-    const auto metadata_addr_gen = TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
+    [[maybe_unused]] const auto metadata_addr_gen =
+        TensorAccessor(metadata_args, metadata_tensor_address, metadata_page_size);
 
     if (token_start_idx == token_end_idx) {
         return;
@@ -143,7 +146,7 @@ void kernel_main() {
         // Read input token (or portion of it in payload split mode)
         // In non-split mode: payload_offset=0, payload_size=input_page_size (reads full page)
         // In split mode: reads only this worker's portion
-        uint64_t input_page_noc_addr = get_noc_addr(i, input_addr_gen);
+        uint64_t input_page_noc_addr = input_addr_gen.get_noc_addr(i);
         l1_write_addr = get_write_ptr(input_tensor_cb_id);
         noc_async_read(input_page_noc_addr + payload_offset, l1_write_addr, payload_size);
 
@@ -174,7 +177,10 @@ void kernel_main() {
         // Wait for all other devices to finish dispatching their input tokens and metadata.
         // The writer now writes metadata directly to the sharded output tensor on the drain sync tilizer core,
         // so we no longer need to copy from the intermediate buffer to the final output here.
-        noc_semaphore_wait((uint32_t*)global_semaphore_address, dispatch_devices);
-        noc_semaphore_set((uint32_t*)global_semaphore_address, 0);
+        constexpr uint32_t expected_dispatch_device_inc =
+            (topology == tt::tt_fabric::Topology::Linear) ? (dispatch_devices - 1) : dispatch_devices;
+        auto* global_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_address);
+        noc_semaphore_wait(global_semaphore_ptr, expected_dispatch_device_inc);
+        noc_semaphore_set(global_semaphore_ptr, 0);
     }
 }

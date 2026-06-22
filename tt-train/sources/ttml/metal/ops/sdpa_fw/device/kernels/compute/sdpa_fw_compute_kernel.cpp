@@ -32,13 +32,16 @@
 // For standard mode: num_rows_per_core = rows to process
 // For balanced mode: num_rows_per_core = num_pairs (each pair = 2 rows)
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
-constexpr uint32_t block_size = get_compile_time_arg_val(1);       // size of block (derived from vWt)
+constexpr uint32_t block_size = get_compile_time_arg_val(1);       // SFPU block size (cap = dst_size - 1)
 constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim in query/key (d_qk/TILE_W)
 constexpr uint32_t vWt = get_compile_time_arg_val(3);              // num tile in inner dim in value (d_v/TILE_W)
 constexpr uint32_t Ht = get_compile_time_arg_val(4);               // num_seq_len / TILE_H
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(5);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-1e9F
+[[maybe_unused]] constexpr uint32_t Sk_chunk_t =
+    get_compile_time_arg_val(8);  // multi-tile K/V chunking factor (1 = single-tile inner loop)
+constexpr uint32_t pv_block_size = get_compile_time_arg_val(9);  // PV matmul_block ct_dim (cap = dst_size)
 constexpr uint32_t pairs_per_seq = Ht / 2;
 
 constexpr uint32_t cb_query = tt::CBIndex::c_0;
@@ -76,11 +79,23 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     const uint32_t q_row_tile = global_row_idx % Ht;  // position within sequence (0 to Ht-1)
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // For causal mask / balanced: only process K/V tiles up to and including the diagonal
-    const uint32_t num_kv_tiles_to_process = q_row_tile + 1;
+    // Causal / balanced: process K/V tiles up to and including the diagonal tile of this row.
+    // The number of K tiles is rounded UP to the next multiple of Sk_chunk_t (the program
+    // factory asserts Ht % Sk_chunk_t == 0, so this round-up never reads past the sequence).
+    // The "trailing" tiles strictly past the diagonal inside the diagonal chunk are masked
+    // out via the all-(-1e9) mask tile (cb_attn_mask[1]).
+    const uint32_t num_kv_tiles_to_process = round_up(q_row_tile + 1U, Sk_chunk_t);
 #else
-    // For non-causal: process all K/V tiles
+    // Non-causal: process every K/V chunk in the sequence.
     const uint32_t num_kv_tiles_to_process = Ht;
+#endif
+    const uint32_t num_kv_chunks = num_kv_tiles_to_process / Sk_chunk_t;
+
+#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
+    // Chunk that contains the diagonal tile and the position of the diagonal inside it.
+    // For Sk_chunk_t == 1 this is just (q_row_tile, 0) and the post-diagonal branch never fires.
+    const uint32_t diag_chunk = q_row_tile / Sk_chunk_t;
+    const uint32_t diag_pos_in_chunk = q_row_tile % Sk_chunk_t;
 #endif
 
     // set up ping pong buffers
@@ -91,76 +106,145 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
     uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
-    const uint32_t matmul_accum_reg = 0;
-    for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
-        cb_wait_front(cb_key, qWt);
+    for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+        cb_wait_front(cb_key, Sk_chunk_t * qWt);
 
         reconfig_data_format(cb_query, cb_key);
-        mm_init_short(cb_query, cb_key, /* transpose */ 1);
-        tile_regs_acquire();
-        for (uint32_t tile_idx = 0; tile_idx < qWt; tile_idx++) {
-            matmul_tiles(
-                cb_query,
-                cb_key,
-                /* tile_idx */ tile_idx,
-                /* tile_idx */ tile_idx,
-                /* dst_reg_idx*/ matmul_accum_reg);
-        }
+        pack_reconfig_data_format(cb_attention_weights);
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-        // For causal mask: apply triangular mask on diagonal tile (h == q_row_tile)
-        // Scaling is deferred to after max-subtraction for better precision
-        if (h == q_row_tile) {
-            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
+        // ====== Block matmul QK^T, then packer L1-accumulate mask stamp ======
+        //
+        // Phase 1: matmul_block produces all Sk_chunk_t score tiles into DST[0..Sk_chunk_t-1] and
+        // packs them to cb_attention_weights (FP32 CB) unmasked. K is col-major in cb_key (feat
+        // outer, seq inner) so matmul_block's MOP steps in1_idx by +Sk_chunk_t per feat
+        // (TTNN's `matmul_blocks` idiom in `compute_common.hpp`).
+        //
+        // Phase 2 (diagonal chunk only): mask is *L1-accumulated* onto the already-packed
+        // scores using TTNN's `apply_causal_mask_lightweight` pattern from
+        // `compute_common.hpp`. We pop+reserve cb_attention_weights to re-enter reserved state
+        // on the same physical L1 slots (CB is single-buffered, size=Sk_chunk_t, so the wr_ptr
+        // wraps back). Then `pack_reconfig_l1_acc(1)` enables the packer's read-modify-write:
+        // read FP32 score from L1, add the DST tile (mask) in FP32, write back FP32. Score
+        // stays at full FP32 precision the whole time — no DST→SRC conversion truncation
+        // to TF32.
+        matmul_block_init(
+            cb_query,
+            cb_key,
+            /* transpose */ 1,
+            /* ct_dim */ Sk_chunk_t,
+            /* rt_dim */ 1,
+            /* kt_dim */ qWt);
+        tile_regs_acquire();
+        {
+            // One matmul_block call does ONE K-step (1 Q tile × ct_dim K tiles → ct_dim
+            // accumulated outputs). Iterate qWt times to contract the full feature dim.
+            uint32_t q_idx = 0;
+            uint32_t k_idx = 0;
+            for (uint32_t feat = 0; feat < qWt; ++feat) {
+                matmul_block(
+                    cb_query,
+                    cb_key,
+                    /* in0 (Q) tile_idx */ q_idx,
+                    /* in1 (K) tile_idx */ k_idx,
+                    /* dst_idx */ 0,
+                    /* transpose */ 1,
+                    /* ct_dim */ Sk_chunk_t,
+                    /* rt_dim */ 1,
+                    /* kt_dim */ qWt);
+                q_idx += 1U;
+                k_idx += Sk_chunk_t;
+            }
         }
-        // Non-diagonal tiles: no mask and no scaling needed here
-#elif defined(USE_ATTN_MASK)
-        apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits);
-#endif
-        // NO MASK / non-diagonal: scores pass through unscaled.
-        // Scale is applied in apply_exp_inplace_and_find_exp_sum after max subtraction.
         tile_regs_commit();
         tile_regs_wait();
-        cb_reserve_back(cb_attention_weights, onetile);
-        pack_reconfig_data_format(cb_attention_weights);
-        pack_tile(matmul_accum_reg, cb_attention_weights);
+        cb_reserve_back(cb_attention_weights, Sk_chunk_t);
+        for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+            pack_tile(n, cb_attention_weights);
+        }
+        cb_push_back(cb_attention_weights, Sk_chunk_t);
         tile_regs_release();
-        cb_push_back(cb_attention_weights, onetile);
-#ifdef USE_ATTN_MASK
-        // For USE_ATTN_MASK: each mask tile is unique, pop after use
-        cb_pop_front(cb_attn_mask, onetile);
+
+        if (k_chunk == diag_chunk) {
+            // Re-enter reserved state on the same L1 slots (single-buffered CB wraps back).
+            cb_wait_front(cb_attention_weights, Sk_chunk_t);
+            cb_pop_front(cb_attention_weights, Sk_chunk_t);
+            cb_reserve_back(cb_attention_weights, Sk_chunk_t);
+
+            // Unpacker → mask CB (BF16); packer stays on cb_attention_weights (FP32).
+            copy_tile_to_dst_init_short(cb_attn_mask);
+            pack_reconfig_l1_acc(1);
+            for (uint32_t n = diag_pos_in_chunk; n < Sk_chunk_t; ++n) {
+                // n == diag_pos_in_chunk → mask[0] (causal diagonal pattern).
+                // n  > diag_pos_in_chunk → mask[1] (all -1e9, strictly past the diagonal).
+                const uint32_t mask_tile_idx = (n == diag_pos_in_chunk) ? 0U : 1U;
+                tile_regs_acquire();
+                copy_tile(cb_attn_mask, mask_tile_idx, /* dst */ 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                // pack_tile<true> packs DST[0] to cb_attention_weights[n]; with l1_acc=1 the
+                // packer reads the existing FP32 score, adds the FP32 mask in DST, writes FP32.
+                pack_tile</* out_of_order */ true>(/* dst */ 0, cb_attention_weights, /* offset */ n);
+                tile_regs_release();
+            }
+            pack_reconfig_l1_acc(0);
+
+            cb_push_back(cb_attention_weights, Sk_chunk_t);
+        }
+#else
+        // USE_ATTN_MASK (provided mask) — uses a per-`n` matmul_tiles + apply_mask_on_reg path.
+        // The per-n mask is unique (no reusable transformed tiles) and apply_mask_on_reg operates
+        // on a single DST tile + scratch, which fits comfortably here. K is laid out col-major
+        // in cb_key (uniform reader layout), so the K tile index is `feat*Sk_chunk_t + n`.
+        constexpr uint32_t matmul_accum_reg = 0U;
+        for (uint32_t n = 0; n < Sk_chunk_t; ++n) {
+            matmul_init(cb_query, cb_key, /* transpose */ 1);
+            tile_regs_acquire();
+            for (uint32_t tile_idx = 0; tile_idx < qWt; ++tile_idx) {
+                matmul_tiles(
+                    cb_query,
+                    cb_key,
+                    /* Q tile */ tile_idx,
+                    /* K tile (col-major within chunk): tile (n, feat) at CB pos feat*Sk_chunk_t + n */
+                    tile_idx * Sk_chunk_t + n,
+                    /* dst */ matmul_accum_reg);
+            }
+            apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, minus_one_bits, custom_inf_bits, /* mask_tile_idx */ n);
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_reserve_back(cb_attention_weights, onetile);
+            pack_tile(matmul_accum_reg, cb_attention_weights);
+            tile_regs_release();
+            cb_push_back(cb_attention_weights, onetile);
+        }
+
+        // Every mask tile is unique per (row, k tile). Pop the whole chunk's worth so the
+        // reader can stage the next chunk.
+        cb_pop_front(cb_attn_mask, Sk_chunk_t);
 #endif
-        // Note: For CAUSAL_MASK/BALANCED_PARALLELISM, we reuse the same mask tile - don't pop it here
+        // CAUSAL_MASK/BALANCED_PARALLELISM: the two mask tiles stay permanently fronted; no pop.
 
-        // pop key data to make space for next key chunk
-        cb_pop_front(cb_key, qWt);
+        // Done with this chunk's K block.
+        cb_pop_front(cb_key, Sk_chunk_t * qWt);
 
-        /**
-         * to find current max value we need to perform both reduce_max and eltwise max with previous result.
-         * if do_eltwise_max:
-         *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
-         * else:
-         *  cur_max = max(qk, dim=-1)
-         */
-        update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW>(
+        // Online softmax step over this chunk (max, exp, partial sum) and PV matmul.
+        update_cur_row_max_value<PoolType::MAX, ReduceDim::REDUCE_ROW, Sk_chunk_t>(
             cb_attention_weights,
             cb_reduction_scaler,
             alias_cb_cur_max,
             alias_cb_prev_max,
-            /* if it first reduction in a row*/ h > 0);
+            /* do_eltwise_max */ k_chunk > 0);
 
-        apply_exp_inplace_and_find_exp_sum<scaler_bits>(cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
+        apply_exp_inplace_and_find_exp_sum<scaler_bits, Sk_chunk_t>(
+            cb_attention_weights, alias_cb_cur_max, alias_cb_cur_sum_exp);
 
-        matmul_qk_by_v(vWt, block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
-        cb_pop_front(cb_attention_weights, onetile);
-        cb_pop_front(cb_value, vWt);
+        matmul_qk_by_v<Sk_chunk_t>(vWt, pv_block_size, cb_attention_weights, cb_value, alias_cb_cur_mm_out);
 
-        /* if we process not first row of K and V:
-         * we need to update exp_max_diff = exp(cur_max_value - prev_max_value)
-         * we need to update previous exp sum with exp_max_diff and add it to current exp sum
-         * we need to update previous matmul output with exp_max_diff and add it to current matmul output
-         */
-        if (h > 0) {
+        cb_pop_front(cb_attention_weights, Sk_chunk_t);
+        cb_pop_front(cb_value, Sk_chunk_t * vWt);
+
+        // Online correction against the previous chunk's running stats.
+        if (k_chunk > 0) {
             update_exp_max_diff<scaler_bits>(alias_cb_prev_max, alias_cb_cur_max, cb_exp_max_diff);
             cb_pop_front(alias_cb_prev_max, onetile);
 
@@ -243,13 +327,20 @@ void kernel_main() {
 
     init_sfpu(cb_query, cb_output);
     binary_op_init_common(cb_query, cb_key, cb_value);
-    mm_init(cb_query, cb_key, cb_attention_weights);
+    // binary_op_init_common above does the one-time HW config; each matmul site below
+    // re-establishes its state with reconfig_data_format + matmul_init.
+    matmul_init(cb_query, cb_key);
 
     cb_wait_front(cb_reduction_scaler, onetile);
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Wait for causal mask tile ONCE - it's generated by writer and will be reused for every diagonal
-    cb_wait_front(cb_attn_mask, onetile);
+    // Wait for the two pre-transformed causal mask tiles ONCE — generated by the writer and
+    // reused for every row:
+    //   tile[0] = causal-diagonal pattern (0.0 on/below diagonal, -1e9 above)
+    //   tile[1] = all -1e9 — used for K tiles strictly past the diagonal inside the diagonal
+    //             chunk when Sk_chunk_t > 1.
+    constexpr uint32_t kCausalMaskTilesFronted = 2U;
+    cb_wait_front(cb_attn_mask, kCausalMaskTilesFronted);
 #endif
 
 #ifdef BALANCED_PARALLELISM
@@ -287,7 +378,7 @@ void kernel_main() {
 #endif
 
 #if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
-    // Pop the causal mask tile after all rows are processed (was reused for every diagonal)
-    cb_pop_front(cb_attn_mask, onetile);
+    // Pop the two causal mask tiles after all rows are processed (reused for every diagonal/chunk).
+    cb_pop_front(cb_attn_mask, kCausalMaskTilesFronted);
 #endif
 }

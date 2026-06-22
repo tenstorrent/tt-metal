@@ -10,6 +10,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
+#include "tt-metalium/experimental/global_circular_buffer.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/unreachable.hpp"
 
@@ -286,9 +287,61 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
             if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
-                const auto& grid = program_config.compute_with_storage_grid_size;
-                check_tensor_in_grid(input_tensor_a, grid);
-                check_tensor_in_grid(input_tensor_b, grid);
+                // When an input is sharded, the factory uses shard_spec.grid directly as all_cores
+                // and ignores compute_with_storage_grid_size entirely. Validating the shard grid
+                // against the origin-anchored compute_with_storage_grid_size rectangle incorrectly
+                // rejects grids that don't start at (0,0) (e.g. column 1 in a multi-chain fused op).
+                // The only physical constraint is that the shard grid fits within the device grid.
+                // For non-sharded inputs the config grid drives split_work_to_cores, so the
+                // origin-anchored check is still correct there.
+                const auto& config_grid = program_config.compute_with_storage_grid_size;
+                const auto device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                auto effective_grid_a = input_tensor_a.memory_config().is_sharded() ? device_grid : config_grid;
+                auto effective_grid_b = input_tensor_b.memory_config().is_sharded() ? device_grid : config_grid;
+                check_tensor_in_grid(input_tensor_a, effective_grid_a);
+                check_tensor_in_grid(input_tensor_b, effective_grid_b);
+            }
+        },
+        chosen_program_config);
+}
+
+void validate_matmul_reuse_sharded_output_block_divisibility(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::Shape& a_shape_padded,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in0_tile,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    std::visit(
+        [&](const auto& program_config) {
+            using ProgramConfigType = std::decay_t<decltype(program_config)>;
+            if constexpr (std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                // Mirror the shard_spec priority in MatmulMultiCoreReuseOptimizedProgramFactory::create_descriptor:
+                // when in0 is L1-sharded its shard grid becomes the kernel grid; in1's grid is only consulted when
+                // in0 is not sharded. num_output_blocks must divide evenly across that grid or the factory fatals.
+                const Tensor* sharded = nullptr;
+                if (input_tensor_a.is_sharded() && input_tensor_a.memory_config().buffer_type() != BufferType::DRAM) {
+                    sharded = &input_tensor_a;
+                } else if (
+                    input_tensor_b.is_sharded() && input_tensor_b.memory_config().buffer_type() != BufferType::DRAM) {
+                    sharded = &input_tensor_b;
+                }
+                if (sharded == nullptr) {
+                    return;
+                }
+                const uint32_t B = get_batch_size(a_shape_padded);
+                const uint32_t Mt = operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, false);
+                const uint32_t Nt = operations::matmul::utilities::get_N_dim(b_shape_padded, in1_tile);
+                const uint32_t num_output_blocks =
+                    (B * Mt / program_config.per_core_M) * (Nt / program_config.per_core_N);
+                const uint32_t num_cores = sharded->shard_spec().value().grid.num_cores();
+                TT_FATAL(
+                    num_output_blocks % num_cores == 0,
+                    "MatmulMultiCoreReuseProgramConfig: num_output_blocks ({}) must be evenly divisible by the "
+                    "number of cores in the input shard grid ({})",
+                    num_output_blocks,
+                    num_cores);
             }
         },
         chosen_program_config);
@@ -296,6 +349,7 @@ void validate_matmul_sharded_operand_grids_within_program_compute_grid(
 
 void validate_matmul_work_distribution_and_gather_ring_topology(
     const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
     const ttnn::Shape& a_shape_padded,
     const ttnn::Shape& b_shape_padded,
     const tt::tt_metal::Tile& in0_tile,
@@ -395,10 +449,17 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseProgramConfig>) {
+                // The factory selects all_cores from the first available shard spec: in0, then in1,
+                // then output. Any of those can produce an offset grid (e.g. column 1 in a fused
+                // chain). Use the device grid as the extent whenever any operand is sharded so we
+                // don't incorrectly reject those grids against the origin-anchored config rect.
+                const auto device_extent = input_tensor_a.device()->compute_with_storage_grid_size();
+                const bool any_sharded = input_tensor_a.memory_config().is_sharded() ||
+                                         input_tensor_b.memory_config().is_sharded() || output_mem_config.is_sharded();
+                const auto effective_extent =
+                    any_sharded ? device_extent : program_config.compute_with_storage_grid_size;
                 check_output_shard_grid_within_extent(
-                    output_mem_config,
-                    program_config.compute_with_storage_grid_size,
-                    "MatmulMultiCoreReuseProgramConfig");
+                    output_mem_config, effective_extent, "MatmulMultiCoreReuseProgramConfig");
             } else {
                 (void)transpose_a;
                 (void)transpose_b;
@@ -466,6 +527,159 @@ void warn_if_allowed_worker_cores_missing(
             }
         },
         program_config.value());
+}
+
+// Cross-validate a DRAM-sender global_cb's geometry against the matmul + weight shape.
+// These catch silent-hang configs where the matmul reads more in1 pages than the prefetcher
+// pushes (e.g. activation K padded past weight K). Gated by the caller on the DRAM-sender path
+// because the worker-sender variant predates this work and uses different sizing/ordering
+// conventions (no bank IDs; gcb_size = N * max_tile_size).
+void validate_dram_sender_global_cb_gather_in0_geometry(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    const uint32_t ring_size = input_tensor_a.shard_spec().value().grid.num_cores();
+    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+    const uint32_t weight_N_tiles = b_shape_padded[-1] / in1_tile.get_width();
+    const uint32_t num_senders = gcb.sender_cores().num_cores();
+    const uint32_t num_recv = gcb.receiver_cores().num_cores();
+    const uint32_t recv_per_bank = static_cast<uint32_t>(program_config.num_global_cb_receivers);
+
+    TT_FATAL(
+        num_senders > 0 && num_recv == num_senders * recv_per_bank,
+        "global_cb receiver count ({}) must equal num_senders ({}) * "
+        "num_global_cb_receivers ({})",
+        num_recv,
+        num_senders,
+        recv_per_bank);
+    TT_FATAL(
+        num_recv == ring_size,
+        "global_cb receiver count ({}) must equal in0 (activation) ring_size "
+        "({} = num_cores of in0.shard_spec.grid). Receivers and matmul workers "
+        "must be the same set of cores.",
+        num_recv,
+        ring_size);
+
+    // Semantic check: bank b must push to exactly the receivers at ring
+    // positions [b*recv_per_bank, (b+1)*recv_per_bank). If satisfied, the
+    // bank-to-receivers union also equals the activation grid as a set, so
+    // we don't need a separate set-equality assertion (CoreRangeSet::operator==
+    // compares ranges literally, which is brittle when one side is merged
+    // into rectangles and the other is a flat list of single-core ranges).
+    const auto& act_grid = input_tensor_a.shard_spec().value().grid;
+    const auto ring_walk = tt::tt_metal::corerange_to_cores(act_grid, std::nullopt, /*row_wise=*/true);
+    const auto& mapping = gcb.sender_receiver_core_mapping();
+    TT_FATAL(
+        mapping.size() * recv_per_bank == ring_walk.size(),
+        "global_cb sender_receiver mapping ({} senders * {} receivers each) "
+        "doesn't cover the matmul ring ({} cores)",
+        mapping.size(),
+        recv_per_bank,
+        ring_walk.size());
+    for (size_t bank_idx = 0; bank_idx < mapping.size(); ++bank_idx) {
+        const auto bank_recvs =
+            tt::tt_metal::corerange_to_cores(mapping[bank_idx].second, std::nullopt, /*row_wise=*/true);
+        TT_FATAL(
+            bank_recvs.size() == recv_per_bank,
+            "Sender at bank index {} owns {} receivers; expected "
+            "num_global_cb_receivers={}",
+            bank_idx,
+            bank_recvs.size(),
+            recv_per_bank);
+        for (size_t k = 0; k < recv_per_bank; ++k) {
+            const size_t ring_pos = bank_idx * recv_per_bank + k;
+            TT_FATAL(
+                bank_recvs[k] == ring_walk[ring_pos],
+                "global_cb bank {}'s receiver at index {} is core {} but the "
+                "matmul ring walk expects core {} at ring position {}. The "
+                "bank-to-receivers mapping must place bank b's receivers at "
+                "ring positions [b*num_global_cb_receivers, (b+1)*num_global_cb_receivers).",
+                bank_idx,
+                k,
+                bank_recvs[k],
+                ring_walk[ring_pos],
+                ring_pos);
+        }
+    }
+    TT_FATAL(
+        weight_K_tiles % ring_size == 0,
+        "Weight K must be divisible by ring_size in tiles for gather_in0 + global_cb. "
+        "Got weight_K_tiles={}, ring_size={} (remainder={}). The activation grid would "
+        "pad K past the weight K, and the matmul would wait forever for in1 pages the "
+        "prefetcher never pushes.",
+        weight_K_tiles,
+        ring_size,
+        weight_K_tiles % ring_size);
+    TT_FATAL(
+        weight_N_tiles % num_senders == 0,
+        "Weight N ({} tiles) must be divisible by num_senders ({}) so it shards "
+        "evenly across the DRAM banks the global_cb senders cover",
+        weight_N_tiles,
+        num_senders);
+    const uint32_t per_bank_N_tiles = weight_N_tiles / num_senders;
+    TT_FATAL(
+        per_bank_N_tiles % recv_per_bank == 0,
+        "Weight per-bank N ({} tiles) must be divisible by num_global_cb_receivers ({})",
+        per_bank_N_tiles,
+        recv_per_bank);
+    const uint32_t per_recv_N_tiles = per_bank_N_tiles / recv_per_bank;
+    TT_FATAL(
+        per_recv_N_tiles == program_config.per_core_N,
+        "Matmul per_core_N ({}) must equal weight per-receiver N ({} = per_bank_N_tiles {} "
+        "/ num_global_cb_receivers {})",
+        program_config.per_core_N,
+        per_recv_N_tiles,
+        per_bank_N_tiles,
+        recv_per_bank);
+}
+
+// Receiver-contiguous counterpart of the cross-check above. The recv-contig weight is an
+// NdShardSpec tensor (num_shards == ring_size) with a strided bank->ring mapping, so the
+// K-row-major "bank b owns ring positions [b*rpb, (b+1)*rpb)" convention does not apply and
+// the bank-walk assertion is intentionally omitted. The two silent-hang guards still hold:
+// the weight K-tiles must divide ring_size, and per_core_N must equal the per-receiver N
+// (N_tiles / ring_size) so the matmul's in1 page size matches what the prefetcher pushes.
+void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
+    const tt::tt_metal::experimental::GlobalCircularBuffer& gcb,
+    const Tensor& input_tensor_a,
+    const ttnn::Shape& b_shape_padded,
+    const tt::tt_metal::Tile& in1_tile,
+    const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config) {
+    const uint32_t ring_size = input_tensor_a.shard_spec().value().grid.num_cores();
+    const uint32_t num_recv = gcb.receiver_cores().num_cores();
+    TT_FATAL(
+        num_recv == ring_size,
+        "global_cb receiver count ({}) must equal in0 (activation) ring_size ({}). Receivers and matmul "
+        "workers must be the same set of cores.",
+        num_recv,
+        ring_size);
+
+    const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
+    const uint32_t weight_N_tiles = b_shape_padded[-1] / in1_tile.get_width();
+    TT_FATAL(
+        weight_K_tiles % ring_size == 0,
+        "Weight K ({} tiles) must be divisible by ring_size ({}) for receiver-contiguous gather_in0 + "
+        "global_cb (remainder {}). The activation grid pads K past the weight K and the matmul would "
+        "wait forever for in1 pages the prefetcher never pushes.",
+        weight_K_tiles,
+        ring_size,
+        weight_K_tiles % ring_size);
+    TT_FATAL(
+        weight_N_tiles % ring_size == 0,
+        "Weight N ({} tiles) must be divisible by ring_size ({}) for receiver-contiguous gather_in0 + global_cb",
+        weight_N_tiles,
+        ring_size);
+    const uint32_t per_recv_N_tiles = weight_N_tiles / ring_size;
+    TT_FATAL(
+        per_recv_N_tiles == program_config.per_core_N,
+        "Matmul per_core_N ({}) must equal weight per-receiver N ({} = N_tiles {} / ring_size {}); otherwise "
+        "the matmul's in1 page size disagrees with what the recv-contig prefetcher pushes.",
+        program_config.per_core_N,
+        per_recv_N_tiles,
+        weight_N_tiles,
+        ring_size);
 }
 
 }  // namespace
@@ -655,8 +869,11 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
+    validate_matmul_reuse_sharded_output_block_divisibility(
+        input_tensor_a, input_tensor_b, a_shape_padded, b_shape_padded, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_work_distribution_and_gather_ring_topology(
         input_tensor_a,
+        input_tensor_b,
         a_shape_padded,
         b_shape_padded,
         in0_tile,
@@ -883,8 +1100,15 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
+                            // Receiver-contiguous Tensor prefetcher: in1 is an NdShardSpec DRAM
+                            // weight (reported as ND_SHARDED) whose data is delivered via the
+                            // global CB receivers, not read directly per its DRAM layout. The
+                            // weight's own layout is irrelevant to the matmul in this case.
+                            (attributes.global_cb.has_value() &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
-                        "Input tensor B must be width sharded or DRAM interleaved when using gather_in0.");
+                        "Input tensor B must be width sharded, DRAM interleaved, or a DRAM weight fed "
+                        "via a global circular buffer when using gather_in0.");
                     if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
                         if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
                             TT_FATAL(
@@ -920,11 +1144,39 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             "Num global CB receivers must be 1 when global CB is not provided.");
                     }
 
+                    // Cross-check program_config against the in1 weight shape (silent-hang guards),
+                    // gated on the DRAM-sender path. The two DRAM-sender weight layouts have
+                    // different bank->ring conventions, so dispatch per in1 memory_layout():
+                    //   * WIDTH_SHARDED (K-row-major): each bank holds one wide (K, N/num_banks)
+                    //     shard feeding the contiguous ring positions [b*rpb, (b+1)*rpb).
+                    //   * ND_SHARDED (receiver-contiguous): an NdShardSpec weight with round-robin
+                    //     shard placement and a strided bank->ring mapping.
+                    // NdShardSpec reports memory_layout() == ND_SHARDED (see MemoryConfig(BufferType,
+                    // NdShardSpec)); the prefetcher manager and validator key on the same enum.
+                    if (attributes.global_cb.has_value() && input_tensor_a.is_sharded() &&
+                        tt::tt_metal::experimental::sender_core_type(attributes.global_cb.value()) ==
+                            tt::tt_metal::experimental::SenderCoreType::Dram) {
+                        const auto in1_layout = input_tensor_b.memory_config().memory_layout();
+                        if (in1_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+                            validate_dram_sender_global_cb_gather_in0_geometry(
+                                attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        } else if (in1_layout == TensorMemoryLayout::ND_SHARDED) {
+                            validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
+                                attributes.global_cb.value(), input_tensor_a, b_shape_padded, in1_tile, program_config);
+                        } else {
+                            TT_FATAL(
+                                false,
+                                "gather_in0 matmul with a DRAM-sender global CB requires in1 to be WIDTH_SHARDED "
+                                "(K-row-major) or ND_SHARDED (receiver-contiguous), but got {}.",
+                                in1_layout);
+                        }
+                    }
+
                     TT_FATAL(!optional_bias.has_value(), "Bias is not supported when using gather_in0.");
                 } else {
-                    auto grid_1d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                    check_tensor_in_grid(input_tensor_a, grid_1d);
-                    check_tensor_in_grid(input_tensor_b, grid_1d);
+                    const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
+                    check_tensor_in_grid(input_tensor_a, device_grid_1d);
+                    check_tensor_in_grid(input_tensor_b, device_grid_1d);
                 }
                 if (program_config.mcast_in0 || program_config.gather_in0) {
                     if (input_tensor_a.is_sharded()) {
@@ -1188,9 +1440,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
                                      operations::matmul::MatmulMultiCoreReuseMultiCastProgramConfig>) {
-                auto grid_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                check_tensor_in_grid(input_tensor_a, grid_2d);
-                check_tensor_in_grid(input_tensor_b, grid_2d);
+                const tt::tt_metal::CoreCoord device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+                check_tensor_in_grid(input_tensor_a, device_grid);
+                check_tensor_in_grid(input_tensor_b, device_grid);
                 if (input_tensor_a.memory_config().is_sharded()) {
                     TT_FATAL(program_config.fuse_batch, "Batch fusion is required when input A is sharded");
                     auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
@@ -1268,10 +1520,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 if (input_tensor_b.memory_config().is_sharded()) {
                     TT_FATAL(!program_config.transpose_mcast, "Transpose MCAST not supported when input B is sharded");
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout();
+                    // ND_SHARDED in1 in DRAM is read via the generic TensorAccessor path: the program
+                    // factory's in1_is_sharded only covers WIDTH/HEIGHT, so ND falls through to the
+                    // interleaved-style reader, which addresses the NdShardSpec layout from the accessor
+                    // args. The width/height-specific validation below is gated on those layouts, so ND
+                    // DRAM in1 skips it (no shard_spec() access).
+                    const bool in1_is_nd_dram = tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
+                                                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
                     TT_FATAL(
                         tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-                        "Input B memory layout must be WIDTH_SHARDED or HEIGHT_SHARDED, got: {}",
+                            tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || in1_is_nd_dram,
+                        "Input B memory layout must be WIDTH_SHARDED, HEIGHT_SHARDED, or DRAM ND_SHARDED, got: {}",
                         tensor_b_memory_layout);
                     if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         // Height-sharded in1 is only supported for DRAM batched matmuls
@@ -1642,7 +1901,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                                 ShardOrientation::ROW_MAJOR};
-                            mem_config = mem_config.with_shard_spec(shard_spec);
+                            mem_config = tt::tt_metal::MemoryConfig(
+                                mem_config.memory_layout(), mem_config.buffer_type(), shard_spec);
                         }
                     }
                     // support for multi-tensor output
@@ -1688,7 +1948,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         ShardOrientation::ROW_MAJOR};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -1729,20 +1992,34 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
+                    // The output CB is globally allocated against the output tensor on the factory's
+                    // work grid {start_core, start_core + num_blocks - 1}, so the output shard grid
+                    // computed here must match it exactly. Mirror the factory's start_core derivation
+                    // (allowed_worker_cores is the single source of truth for core placement) rather
+                    // than trusting a user-supplied output shard grid, which need not agree.
+                    const CoreCoord start_core =
+                        program_config.allowed_worker_cores.has_value()
+                            ? program_config.allowed_worker_cores.value().bounding_box().start_coord
+                            : CoreCoord{0, 0};
                     CoreRangeSet all_cores;
                     ShardOrientation shard_orientation;
                     if (program_config.transpose_mcast) {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_y - 1, num_blocks_x - 1})});
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_y - 1, start_core.y + num_blocks_x - 1})});
                         shard_orientation = ShardOrientation::COL_MAJOR;
                     } else {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_x - 1, num_blocks_y - 1})});
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_x - 1, start_core.y + num_blocks_y - 1})});
                         shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -1770,14 +2047,22 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         shard_orientation = input_tensor_b.shard_spec().value().orientation;
                     }
 
-                    auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
-                    CoreRangeSet all_cores =
-                        num_cores_to_corerangeset(num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
+                    CoreRangeSet all_cores;
+                    if (attributes.output_mem_config.shard_spec().has_value()) {
+                        all_cores = attributes.output_mem_config.shard_spec()->grid;
+                    } else {
+                        auto cwsg_2d = program_config.allowed_worker_cores.value().bounding_box().grid_size();
+                        all_cores = num_cores_to_corerangeset(
+                            num_cores, cwsg_2d, shard_orientation == ShardOrientation::ROW_MAJOR);
+                    }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(

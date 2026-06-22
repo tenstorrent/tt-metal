@@ -10,7 +10,10 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.common.sampling._utils import is_default_value, is_power_of_2, upper_power_of_2
+from models.common.sampling._utils import compact_debug_list as _compact_debug_list
+from models.common.sampling._utils import is_default_value, is_llama33_70b_model, is_power_of_2
+from models.common.sampling._utils import log_sampling_debug as _log_sampling_debug
+from models.common.sampling._utils import upper_power_of_2
 from models.common.sampling.tt_log_probs import LogProbsCalculator
 
 
@@ -50,15 +53,15 @@ class TTSampling(LightweightModule):
     def _is_force_argmax_sampling(self, k, p, temp):
         """Detect whether all users request deterministic greedy decoding.
 
-        When every user in the batch has k=1 (top-1), p=1.0 (no top-p filter),
+        When every user in the batch has k=1 (top-1), p=0.0 or p=1.0 (no top-p filter),
         and temp=1.0 (no temperature scaling), we can skip the full top-k / top-p /
         temperature / RNG pipeline and use a single all-gather + argmax instead.
         This is significantly faster because argmax needs only one all-gather of the
         full logits tensor vs. three gathers (values, indices, sampled tokens) in the
         normal path.
 
-        Note: p=1.0 here is the *caller's* convention ("keep all tokens"), distinct
-        from the internal device default of p=0 which also means "no filtering."
+        Note: callers may represent greedy rows with p=1.0, while the
+        device argmax-style representation uses p=0.0.
         The model config must also set allow_force_argmax=True for this to activate.
 
         Changing this state between decode steps invalidates captured traces, so
@@ -67,7 +70,7 @@ class TTSampling(LightweightModule):
         return (
             self._allow_force_argmax_sampling
             and is_default_value(k, 1)
-            and is_default_value(p, 1.0)
+            and (is_default_value(p, 1.0) or is_default_value(p, 0.0))
             and is_default_value(temp, 1.0)
         )
 
@@ -97,6 +100,7 @@ class TTSampling(LightweightModule):
     ):
         super().__init__()
         self.mesh_device = mesh_device
+        self._sampling_debug_enabled = is_llama33_70b_model(args)
         # Multi-step reduction is supported only on single device
         self.multi_step_reduction = list(mesh_device.shape) == [1, 1]
         self.tt_ccl = tt_ccl
@@ -130,6 +134,13 @@ class TTSampling(LightweightModule):
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self.sub_core_grid_topk = getattr(args, "sub_core_grid_topk", None)
         self.start_core = getattr(args, "start_core", ttnn.CoreCoord(0, 0))
+        self._sampling_sub_core_grids = (
+            ttnn.num_cores_to_corerangeset_in_subcoregrids(
+                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
+            )
+            if self.sub_core_grids is not None
+            else None
+        )
 
         # sampling_dp > 1 when multiple mesh groups each sample users independently
         # (e.g. GPT-OSS on [4,8]: 4 rows × 32 users; Llama Galaxy on [8,4]: 4 cols × 8 users)
@@ -368,6 +379,18 @@ class TTSampling(LightweightModule):
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "TTSampling reset params",
+            force_argmax=self._force_argmax_sampling,
+            empty_slots=_compact_debug_list(empty_slots),
+            top_k=_compact_debug_list(k),
+            top_p=_compact_debug_list(p),
+            temperature=_compact_debug_list(temp),
+            enable_log_probs=_compact_debug_list(enable_log_probs),
+            num_logprobs=_compact_debug_list(num_logprobs),
+            sampling_dp=self._sampling_dp,
+        )
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
             # copy_host_to_device_tensor writes per-row shards correctly.
@@ -425,6 +448,16 @@ class TTSampling(LightweightModule):
         Returns:
             Sampled token indices tensor
         """
+        _log_sampling_debug(
+            self._sampling_debug_enabled,
+            "TTSampling forward",
+            force_argmax=self._force_argmax_sampling,
+            logits_shape=list(x.shape),
+            tt_out_tok_shape=list(tt_out_tok.shape) if tt_out_tok is not None else None,
+            max_top_k=self.max_top_k,
+            multi_step_reduction=self.multi_step_reduction,
+            sampling_dp=self._sampling_dp,
+        )
         if self._force_argmax_sampling:
             logger.info("Forcing argmax sampling")
             # Gather the output across all devices and untilize the tensor (for argmax)
@@ -456,7 +489,6 @@ class TTSampling(LightweightModule):
                 dim=-1,
                 output_tensor=tt_out_tok,
                 keepdim=False,
-                use_multicore=True,
             )
             # Argmax path: logprobs not supported (force-argmax is disabled
             # when logprobs are enabled via format_sampling_params guard).
@@ -588,7 +620,7 @@ class TTSampling(LightweightModule):
         ttnn.manual_seed(
             seeds=self.seeds_tt_tensor,
             user_ids=self.user_ids_tt_tensor,
-            sub_core_grids=self.sub_core_grids,
+            sub_core_grids=self._sampling_sub_core_grids,
         )
         # Perform the actual sampling with top-k, top-p, and temperature
         tt_out_tok = ttnn.sampling(
@@ -597,11 +629,7 @@ class TTSampling(LightweightModule):
             k=self.k_tensor,
             p=self.p_tensor,
             temp=self.temp_tensor,
-            sub_core_grids=ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, self.max_batch_size, self.sub_core_grids, row_wise=True
-            )
-            if self.sub_core_grids is not None
-            else None,
+            sub_core_grids=self._sampling_sub_core_grids,
             output_tensor=tt_out_tok,
         )
 

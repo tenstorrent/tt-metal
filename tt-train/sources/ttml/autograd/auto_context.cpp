@@ -7,6 +7,7 @@
 #include <optional>
 
 #include "core/tt_profiler.hpp"
+#include "ttnn_fixed/distributed/tt_metal.hpp"
 
 namespace ttml::autograd {
 
@@ -63,6 +64,14 @@ void AutoContext::close_profiler() {
 
 void AutoContext::close_device() {
     m_device = nullptr;
+    // Drop the process-global fabric config that open_device_mesh may have
+    // installed via enable_fabric(). Without this, fabric stays armed for
+    // the remainder of the process and any subsequent default 1x1 open on a
+    // host where mmio_chip_ids().size() != all_chip_ids().size() trips the
+    // "Fabric is being used but Device i is not active" check in
+    // tt_metal/impl/device/device_manager.cpp. Going TO DISABLED while no
+    // devices are open is explicitly supported (see metal_env.cpp).
+    ttnn_fixed::distributed::disable_fabric();
 }
 
 ttnn::distributed::MeshDevice& AutoContext::get_device() {

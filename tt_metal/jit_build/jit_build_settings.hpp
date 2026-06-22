@@ -67,7 +67,7 @@ public:
         std::function<void(const std::string& accessor_name, uint16_t semaphore_id)>) const {}
 
     // TensorBinding callback emits the codegen-relevant fields only:
-    //  - accessor_name: kernel-side identifier, used as the symbol name in the `ta::` namespace
+    //  - accessor_name: kernel-side identifier, used as the symbol name in the `tensor::` namespace
     //  - cta_offset: starting word index of this binding's CTA payload in the kernel's
     //    positional compile-time-args buffer
     //  - addr_crta_offset: byte offset of the implicit base-address CRTA within the kernel's
@@ -88,11 +88,11 @@ public:
     // section of the dispatch buffer.
     // Returned by const-ref rather than via a process_* callback because the concrete storage
     // is already an ordered vector — the callback indirection would just force a copy.
-    virtual const std::vector<std::string>& get_named_runtime_args() const {
+    virtual const std::vector<std::string>& get_runtime_arg_names() const {
         static const std::vector<std::string> k_empty;
         return k_empty;
     }
-    virtual const std::vector<std::string>& get_named_common_runtime_args() const {
+    virtual const std::vector<std::string>& get_common_runtime_arg_names() const {
         static const std::vector<std::string> k_empty;
         return k_empty;
     }

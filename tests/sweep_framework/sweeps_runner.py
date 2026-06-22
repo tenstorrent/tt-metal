@@ -60,6 +60,7 @@ class SweepsConfig:
     arch_name: str | None = None
     main_proc_verbose: bool = False
     trace_params: bool = False
+    fail_on_test_failure: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -85,6 +86,7 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
         trace_params=args.trace_params,
+        fail_on_test_failure=args.fail_on_test_failure,
     )
 
     # Validate and set ARCH_NAME
@@ -172,6 +174,8 @@ def get_timeout(test_module_name):
                 try:
                     timeout = int(line.split("=")[-1].strip())
                 except (ValueError, IndexError):
+                    # Malformed/unparseable TIMEOUT line — keep the default
+                    # timeout already assigned and stop scanning.
                     break
     return timeout
 
@@ -506,6 +510,28 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
         result["peak_l1_memory_device"] = None
 
 
+# Signatures of a device-level hang that the child process catches and *returns*
+# as a normal exception (status=False) rather than triggering the Python-side
+# watchdog timeout. Once the mesh hangs in fetch-queue dispatch, every subsequent
+# vector throws the same error, so we must reset the device (and, under
+# skip-on-timeout, abort the rest of the suite) instead of spinning for the
+# entire job and getting the runner cancelled on the wall-clock cap.
+_DEVICE_HANG_SIGNATURES = (
+    "device timeout in fetch queue wait",
+    "potential hang detected",
+    "completion reader queue is not empty",
+    "device hang or timeout occurred",
+)
+
+
+def _is_device_hang_message(message) -> bool:
+    """Return True if a returned exception message indicates a device hang."""
+    if not message:
+        return False
+    msg = str(message).lower()
+    return any(sig in msg for sig in _DEVICE_HANG_SIGNATURES)
+
+
 def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
@@ -558,6 +584,31 @@ def _execute_vector_with_retry(
                 main_proc_runner,
             )
             _populate_result_from_response(result, response, config, suite_name, input_hash)
+
+            # The child returned a result, but it may carry a device-hang
+            # exception (e.g. "device timeout in fetch queue wait, potential
+            # hang detected"). The Python watchdog never fired because the
+            # child responded within the timeout, yet the mesh is now wedged
+            # and every later vector will throw the same error. Treat this like
+            # a hang: kill/reset the device and (under skip-on-timeout) abort
+            # the suite so we recover instead of spinning for the whole job.
+            if _is_device_hang_message(result.get("message")):
+                logger.error(
+                    f"DEVICE HANG detected for input_hash='{input_hash}': {result.get('message')}. "
+                    f"Resetting devices and aborting suite."
+                )
+                _kill_child(p, timeout_before_rejoin)
+                p = None
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(result.get("message", "DEVICE HANG"))
+                reset_util.reset()
+                if child_mode:
+                    p = Process(target=run, args=(module_name, input_queue, output_queue, config))
+                    p.start()
+                result["_child_process"] = p
+                result["_abort_suite"] = config.skip_on_timeout
+                return result
+
             result["_child_process"] = p
             result["_abort_suite"] = False
             return result
@@ -702,6 +753,41 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                             results.append(skipped_result)
                             suite_pbar.update()
                         break
+            except tt_smi_util.ResetFailed as e:
+                # Every reset mechanism failed: the device is wedged and cannot be
+                # recovered on this host. Continuing would re-hang + re-reset every
+                # remaining vector and burn the whole job timeout, so abort the
+                # suite now (regardless of skip-on-timeout) and mark the rest NOT_RUN.
+                logger.error(f"Device reset failed unrecoverably: {e}. Aborting remaining tests in suite.")
+                result["status"] = TestStatus.FAIL_CRASH_HANG
+                result["exception"] = str(e)
+                # This path breaks before the common footer that stamps this; set it here
+                # so the abort record carries original_vector_data like every other result.
+                result["original_vector_data"] = original_vector_data
+                result["e2e_perf"] = None
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+                result["host"] = get_hostname()
+                result["user"] = get_username()
+                results.append(result)
+                suite_pbar.update()
+                for j in range(i + 1, len(test_vectors)):
+                    remaining_vector = test_vectors[j]
+                    skipped_result = dict()
+                    skipped_result["input_hash"] = header_info[j].get("input_hash", "N/A")
+                    skipped_result["start_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                    skipped_result["original_vector_data"] = remaining_vector.copy()
+                    skipped_result["status"] = TestStatus.NOT_RUN
+                    skipped_result["exception"] = "SKIPPED DUE TO UNRECOVERABLE DEVICE RESET"
+                    skipped_result["e2e_perf"] = None
+                    skipped_result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
+                    skipped_result["timestamp"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d_%H-%M-%S")
+                    skipped_result["host"] = get_hostname()
+                    skipped_result["user"] = get_username()
+                    results.append(skipped_result)
+                    suite_pbar.update()
+                p = None
+                break
             except Exception as e:
                 logger.exception(f"Unexpected error executing vector: {e}")
                 result["status"] = TestStatus.FAIL_ASSERT_EXCEPTION
@@ -736,6 +822,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
         try:
             next(main_proc_context)
         except StopIteration:
+            # generator already exhausted (device already closed) — nothing left to clean up
             pass
         logger.info("Device closed in main process mode")
 
@@ -772,7 +859,7 @@ def run_sweeps(
             "initiated_by": get_initiated_by(),
             "host": get_hostname(),
             "card_type": config.arch_name,
-            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LLMBox)
+            "runner_label": os.getenv("RUNNER_LABEL"),  # CI runner label (e.g., N150, N300, BH-LoudBox)
             "run_type": "sweeps",
             "run_contents": config.run_contents,
             "git_author": get_git_author(),
@@ -914,6 +1001,25 @@ def run_sweeps(
                 logger.info(
                     f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})"
                 )
+
+    # Derive failure from actual per-test statuses, not from export_results() return value
+    # (export_results unconditionally returns "success" for file-based destinations).
+    if config.fail_on_test_failure and status_counts:
+        from tests.sweep_framework.framework.statuses import TestStatus
+
+        fail_status_names = {
+            TestStatus.FAIL_ASSERT_EXCEPTION.name,
+            TestStatus.FAIL_CRASH_HANG.name,
+            TestStatus.FAIL_L1_OUT_OF_MEM.name,
+            TestStatus.FAIL_WATCHER.name,
+            TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF.name,
+        }
+        failed_count = sum(count for name, count in status_counts.items() if name in fail_status_names)
+        if failed_count > 0:
+            final_status = "failure"
+            logger.error(f"{failed_count} test case(s) failed/crashed/hung")
+
+    return final_status
 
 
 def get_module_names(config: SweepsConfig):
@@ -1115,6 +1221,13 @@ if __name__ == "__main__":
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). Outputs to generated/ttnn/reports/operation_parameters/",
     )
 
+    parser.add_argument(
+        "--fail-on-test-failure",
+        action="store_true",
+        required=False,
+        help="Exit with non-zero status if any test case fails, crashes, or hangs. Use in CI to mark the job as failed.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
 
     # Argument validation
@@ -1160,7 +1273,7 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    run_sweeps(
+    final_status = run_sweeps(
         module_names,
         config=config,
     )
@@ -1170,3 +1283,7 @@ if __name__ == "__main__":
 
     if config.measure_device_perf:
         disable_profiler()
+
+    if config.fail_on_test_failure and final_status == "failure":
+        logger.error("Exiting with failure: one or more test cases did not pass (--fail-on-test-failure)")
+        sys.exit(1)

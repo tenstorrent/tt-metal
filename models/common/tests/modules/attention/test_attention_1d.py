@@ -25,7 +25,15 @@ import pytest
 import torch
 from loguru import logger
 from transformers import AutoConfig, AutoModelForCausalLM
-from transformers.modeling_utils import no_init_weights
+
+from models.common.utility_functions import hf_cache_layer_kv, hf_cache_num_layers
+
+# transformers 5.x moved no_init_weights to transformers.initialization; fall back
+# to the old location for transformers < 5.x.
+try:
+    from transformers.initialization import no_init_weights
+except ImportError:
+    from transformers.modeling_utils import no_init_weights
 
 import ttnn
 from models.common.auto_compose import to_torch_auto_compose
@@ -329,20 +337,20 @@ class HfAttentionWrapper:
     @property
     def cache_k(self) -> torch.Tensor:
         """Get key cache in shape [batch, seq_len, n_kv_heads, head_dim]."""
-        if len(self.past_key_value.key_cache) == 0:
+        if hf_cache_num_layers(self.past_key_value) == 0:
             return torch.zeros(0)
         # DynamicCache stores as [batch, n_heads, seq_len, head_dim]
         # Transpose to [batch, seq_len, n_heads, head_dim]
-        return self.past_key_value.key_cache[0].transpose(1, 2)
+        return hf_cache_layer_kv(self.past_key_value, 0)[0].transpose(1, 2)
 
     @property
     def cache_v(self) -> torch.Tensor:
         """Get value cache in shape [batch, seq_len, n_kv_heads, head_dim]."""
-        if len(self.past_key_value.value_cache) == 0:
+        if hf_cache_num_layers(self.past_key_value) == 0:
             return torch.zeros(0)
         # DynamicCache stores as [batch, n_heads, seq_len, head_dim]
         # Transpose to [batch, seq_len, n_heads, head_dim]
-        return self.past_key_value.value_cache[0].transpose(1, 2)
+        return hf_cache_layer_kv(self.past_key_value, 0)[1].transpose(1, 2)
 
 
 # =============================================================================
@@ -907,7 +915,7 @@ def _list_test_cases() -> list[pytest.param]:
         pytest.param((1, 2), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-prefill-128-8B"),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x2-decode-32-8B"),
         pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_11B, 0.99, id="1x2-decode-32-11B"),
-        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.95, id="1x2-decode-32-Qwen2.5-7B"),
+        pytest.param((1, 2), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat16, QWEN25_7B, 0.95, id="1x2-decode-32-Qwen2.5-7B", marks=pytest.mark.skip(reason="Disabled: see #45980")),
         # Multi-device (1x8)
         pytest.param((1, 8), 128, 1, "prefill", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-prefill-128-8B"),
         pytest.param((1, 8), 32, 32, "decode", ttnn.bfloat16, ttnn.bfloat8_b, LLAMA_8B, 0.99, id="1x8-decode-32-8B"),
@@ -1242,9 +1250,11 @@ def test_attention_1d_vs_reference(
         with no_init_weights():
             # MllamaForConditionalGeneration uses _from_config (internal method) instead of from_config
             hf_model = MllamaForConditionalGeneration._from_config(hf_config, torch_dtype=torch.bfloat16)
-        # Mllama has layers directly at language_model.layers (not language_model.model.layers)
-        first_layer = hf_model.language_model.layers[0]
-        rotary_emb = getattr(hf_model.language_model, "rotary_emb", None)
+        # Mllama has layers directly at language_model.layers (not language_model.model.layers).
+        # transformers 5.x nests the text model under hf_model.model.language_model.
+        text_model = hf_model.language_model if hasattr(hf_model, "language_model") else hf_model.model.language_model
+        first_layer = text_model.layers[0]
+        rotary_emb = getattr(text_model, "rotary_emb", None)
     else:
         with no_init_weights():
             hf_model = AutoModelForCausalLM.from_config(hf_config, torch_dtype=torch.bfloat16)

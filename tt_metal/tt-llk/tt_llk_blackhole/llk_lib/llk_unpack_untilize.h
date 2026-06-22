@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// DEPRECATED: The unpack-based untilize LLK has poor performance and is deprecated in favor of the
+// pack_untilize LLK (llk_pack_untilize.h). It is retained only for the legacy untilize compute API and
+// is scheduled for removal; see tt-metal#22904.
+
 #pragma once
 
 #include <cstdint>
@@ -13,10 +17,18 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_unpack_common.h"
+#include "sanitizer/api.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
 
+/**
+ * @brief Program the unpacker MOP/replay buffer for an untilize operation.
+ *
+ * Builds a replay buffer that unpacks SrcA rows while advancing the per-tile offset address and
+ * resetting the Z counter, and configures the unpack template to reload the offset address into
+ * the correct config context between iterations.
+ */
 inline void _llk_unpack_untilize_mop_config_()
 {
     constexpr std::uint32_t replay_buf_len = 6;
@@ -53,8 +65,34 @@ inline void _llk_unpack_untilize_mop_config_()
     tmp.program();
 }
 
+/**
+ * @brief Initialize the unpacker for an untilize operation.
+ *
+ * Disables face transpose, saves the unpacker stride/tile-dim config into scratch GPRs, programs
+ * the 1x16-row stride and tile dimensions for untilize, loads the tile size and clears the tile
+ * offset GPR, then programs the untilize MOP.
+ *
+ * @param unpack_dst_format: Destination data format the operand is converted to.
+ * @param tile_size: Size of one tile, stored to the tile-size GPR for per-tile offset stepping.
+ * @param face_r_dim: Rows per face.
+ * @note Call @ref _llk_unpack_untilize_uninit_ to restore the default unpacker config.
+ * @ref _llk_unpack_untilize_pass_ is the matching execute call.
+ * @ref _llk_math_eltwise_unary_datacopy_init_ (A2D) is the matching init on the math thread.
+ */
 inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, const std::uint32_t tile_size, const std::uint32_t face_r_dim = FACE_R_DIM)
 {
+    llk::san::unpack_operand_check(
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        unpack_dst_format,
+        llk::san::IGNORE,
+        face_r_dim,
+        llk::san::IGNORE,
+        llk::san::IGNORE,
+        llk::san::IGNORE);
+    llk::san::operation_init<llk::san::Operation::UnpackUntilize>();
+
     // Always include setup calls first for safety (as recommended by maintainer)
     // Disable transpose when unused
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(0);
@@ -97,8 +135,20 @@ inline void _llk_unpack_untilize_init_(const std::uint32_t unpack_dst_format, co
     _llk_unpack_untilize_mop_config_();
 }
 
+/**
+ * @brief Restore unpacker state after an untilize operation.
+ *
+ * Waits for the unpacker to go idle, reinitializes the address counters, and reverts the
+ * X-dimension datum count, tile X-dim, descriptor and Y stride back to the default face layout.
+ *
+ * @param unpack_dst_format: Destination data format used to recompute the restored Y stride.
+ * @param face_r_dim: Rows per face, used to compute the restored datum count and Y stride.
+ * @note Call @ref _llk_unpack_untilize_init_ before this function.
+ */
 inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, const std::uint32_t face_r_dim)
 {
+    llk::san::operation_uninit<llk::san::Operation::UnpackUntilize>();
+
     const DataFormat dst_format           = static_cast<DataFormat>(unpack_dst_format & 0x3);
     const std::uint32_t unpA_ch1_x_stride = dst_format == DataFormat::Float32 ? 4 : dst_format == DataFormat::Float16 ? 2 : 1;
     const std::uint32_t unpA_ch1_y_stride = FACE_C_DIM * face_r_dim * unpA_ch1_x_stride;
@@ -112,8 +162,6 @@ inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, 
     // Wait for cfg to be free to edit
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
-    // TODO NC: Issue tt-llk#1036 will make this transient
-    TT_SETADCXX(p_setadc::UNP_A, face_r_dim * FACE_C_DIM - 1, 0x0);
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     TTI_WRCFG(p_gpr_unpack::FACE_DIM_16x16, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
     cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFF>(1);
@@ -122,9 +170,24 @@ inline void _llk_unpack_untilize_uninit_(const std::uint32_t unpack_dst_format, 
     TTI_NOP;
 }
 
+/**
+ * @brief Run one untilize pass (top or bottom faces) over a row of tiles.
+ *
+ * Selects the top or bottom faces by the template flag, programs the base address, and unpacks the
+ * block row by row into SrcA, running the MOP in chunks sized to the 2-row face stride and
+ * resetting the tile offset between rows, with semaphore sync and config-context switching.
+ *
+ * @tparam first_pass: Select the top faces (true) or bottom faces (false) of each tile.
+ * @param base_address: L1 base address of the tile row to untilize.
+ * @param block_tile_cols: Number of tile columns in the block row.
+ * @note Call @ref _llk_unpack_untilize_init_ before this function, and
+ *       @ref _llk_unpack_untilize_uninit_ after the final pass to restore modified state.
+ */
 template <bool first_pass = true>
 inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const std::uint32_t block_tile_cols)
 {
+    llk::san::operation_check<llk::san::Operation::UnpackUntilize>();
+
     std::uint32_t rem_blocks_in_row = block_tile_cols;
 
     // Program srcA and srcB base addresses

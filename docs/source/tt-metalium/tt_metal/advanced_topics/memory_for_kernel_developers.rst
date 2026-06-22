@@ -229,7 +229,7 @@ As interleaved memory is the most common allocation scheme. Instead of manually 
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_reserve_back(cb_in0, 1);
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_tile(i, in0, cb_in0_addr); // read the i-th tile from the interleaved buffer
+        noc_async_read_page(i, in0, cb_in0_addr); // read the i-th tile from the interleaved buffer
 
         noc_async_read_barrier();
         cb_push_back(cb_in0, 1);
@@ -271,7 +271,7 @@ As allocation type and scheme is known at compile time. The same ``TensorAccesso
     for (uint32_t i = 0; i < n_tiles; i++) {
         cb_reserve_back(cb_in0, 1);
         uint32_t cb_in0_addr = get_write_ptr(cb_in0);
-        noc_async_read_tile(i, in0, cb_in0_addr);
+        noc_async_read_page(i, in0, cb_in0_addr);
 
         noc_async_read_barrier();
         cb_push_back(cb_in0, 1);

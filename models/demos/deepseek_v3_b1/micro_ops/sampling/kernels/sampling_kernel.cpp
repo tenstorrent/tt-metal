@@ -42,8 +42,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
         get_named_compile_time_arg_val("sampling_num_senders"),
         get_named_compile_time_arg_val("sampling_expected_remote_incs"),
-        get_named_compile_time_arg_val("sampling_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
+        get_named_compile_time_arg_val("sampling_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
         get_named_compile_time_arg_val("sampling_mesh_mode"),
         get_named_compile_time_arg_val("sampling_stage1_sender"),
         get_named_compile_time_arg_val("sampling_stage1_receiver"),
@@ -69,7 +69,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
         get_named_compile_time_arg_val("sampling_softmax_exp_cb"),
         get_named_compile_time_arg_val("sampling_scaler_cb"),
-        get_named_compile_time_arg_val("sampling_temp_cb"),
+        get_named_compile_time_arg_val("sampling_probs_out_cb"),
         get_named_compile_time_arg_val("sampling_inv_temp_bf16"),
         get_named_compile_time_arg_val("sampling_topk_in_scores_cb"),
         get_named_compile_time_arg_val("sampling_topk_in_indices_cb"),
@@ -102,10 +102,10 @@ void kernel_main() {
     uint32_t brisc_rt_arg_idx = 0;
     using SamplingWriterCTArgs = deepseek_b1_ops::TopKSampling::WriterCTArgs<
         get_named_compile_time_arg_val("sampling_winner_page_bytes"),
-        get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"),
-        0,
-        0,
-        0,
+        get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr"),
+        0,  // SocketMode
+        0,  // SocketCBId
+        0,  // SocketPageSizeBytes
         get_named_compile_time_arg_val("sampling_topk_k"),
         get_named_compile_time_arg_val("sampling_softmax_out_cb"),
         get_named_compile_time_arg_val("sampling_rand_cb"),
@@ -118,11 +118,16 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_rand_output_addr"),
         get_named_compile_time_arg_val("sampling_inv_temp_bf16"),
         get_named_compile_time_arg_val("sampling_softmax_in_cb"),
-        get_named_compile_time_arg_val("sampling_temp_cb"),
-        0,
+        get_named_compile_time_arg_val("sampling_probs_out_cb"),
+        0,  // DeferSocketOutput
         get_named_compile_time_arg_val("sampling_enable_metadata"),
         get_named_compile_time_arg_val("sampling_copy_probabilities"),
-        get_named_compile_time_arg_val("sampling_metadata_address")>;
+        get_named_compile_time_arg_val("sampling_metadata_address"),
+        get_named_compile_time_arg_val("sampling_copy_probabilities_to_q"),
+        get_named_compile_time_arg_val("sampling_p_bcast_cb"),
+        get_named_compile_time_arg_val("sampling_rand_bcast_cb"),
+        get_named_compile_time_arg_val("sampling_probs_out_cb"),
+        get_named_compile_time_arg_val("sampling_mask_cb")>;
 
     deepseek_b1_ops::TopKSampling::WriterArgs args{
         .final_noc_x = get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),
@@ -142,7 +147,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_max_cb"),
         get_named_compile_time_arg_val("sampling_sum_cb"),
         get_named_compile_time_arg_val("sampling_scaler_cb"),
-        get_named_compile_time_arg_val("sampling_temp_cb"),
+        get_named_compile_time_arg_val("sampling_probs_out_cb"),
         get_named_compile_time_arg_val("sampling_rand_cb"),
         get_named_compile_time_arg_val("sampling_seed"),
         get_named_compile_time_arg_val("sampling_topk_k"),
@@ -160,7 +165,11 @@ void kernel_main() {
         get_named_compile_time_arg_val("sampling_stage1_row_elements"),
         get_named_compile_time_arg_val("sampling_stage1_num_input_tiles"),
         get_named_compile_time_arg_val("sampling_stage2_row_elements"),
-        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles")>;
+        get_named_compile_time_arg_val("sampling_stage2_num_input_tiles"),
+        get_named_compile_time_arg_val("sampling_mask_cb"),
+        get_named_compile_time_arg_val("sampling_enable_metadata"),
+        get_named_compile_time_arg_val("sampling_metadata_address"),
+        get_named_compile_time_arg_val("sampling_inv_temp_bf16")>;
     deepseek_b1_ops::TopKSampling::ComputeArgs args{};
     deepseek_b1_ops::TopKSampling::
         Op<SamplingComputeCTArgs, Core::is_active_core, Core::is_final_core, Core::is_mesh_sender_core>
@@ -193,8 +202,7 @@ void kernel_main() {
         // Single-device loop barrier: final core releases non-final cores for next iteration.
         // This prevents receiver semaphore increments from later iterations racing ahead.
         if constexpr (!SamplingReaderCTArgs::mesh_mode) {
-            const uint32_t local_ready_sem_addr =
-                get_semaphore(get_named_compile_time_arg_val("sampling_local_ready_semaphore_id"));
+            const uint32_t local_ready_sem_addr = get_named_compile_time_arg_val("sampling_local_ready_semaphore_addr");
             auto local_ready_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(local_ready_sem_addr);
             if constexpr (Core::is_final_core) {
                 constexpr uint32_t num_dests = get_named_compile_time_arg_val("sampling_loop_num_dests");

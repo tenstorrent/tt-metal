@@ -9,12 +9,11 @@
 
 # For max allowed timeout refer to .github/time_budget.yaml
 
-# Entries are grouped per-model into three buckets:
-#   - e2e tests:       batch-1 / batch-32 single-DP performance
-#   - data-parallel:   --data_parallel >= 2 performance
-#   - device-perf:     test_device_perf.py prefill + decode
-# Stress tests are intentionally absent — see the commented-out block at
-# the bottom of this file. Stress is moving to a separate pipeline.
+# This pipeline holds Blackhole demo / performance tests that have not yet been
+# migrated to the tier 1/2/3 pipelines
+# (tests/pipeline_reorg/models_{e2e,unit,device_perf}_tests.yaml) — currently a
+# mix of diffusion / vision demos plus a few model e2e tests. The Llama / Qwen
+# LLM e2e, data-parallel, and device-perf entries have been migrated out.
 
 # All entries that read HF model checkpoints / tt_cache use the canonical HF_HOME convention
 # (matches tests/pipeline_reorg/models_e2e_tests.yaml on the Wormhole side):
@@ -23,120 +22,6 @@
 #   TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/<org>--<model>
 # Exceptions: bh_p300 (LFC) entries keep file-path / HF_HUB_CACHE form because the LFC
 # server hosts checkpoints in a layout that does not match the canonical hub cache.
-
-- name: whisper performance
-  cmd: pytest models/demos/audio/whisper/demo/demo.py --input-path="models/demos/audio/whisper/demo/dataset/conditional_generation" -k "conditional_generation" --timeout=600
-  skus:
-    bh_p150_perf:
-      timeout: 10
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
-
-- name: whisper nightly
-  cmd: pytest models/demos/audio/whisper/tests/test_whisper_modules.py --timeout=600
-  skus:
-    bh_p150:
-      timeout: 10
-  owner_id: U05RWH3QUPM # Salar Hosseini
-  team: models
-  model-name: whisper
-
-- name: unet-shallow performance
-  cmd: pytest -sv models/experimental/functional_unet/tests/test_unet_perf.py -k "test_unet_trace_perf and not test_unet_trace_perf_multi_device"
-  skus:
-    bh_p150_perf:
-      timeout: 5
-  owner_id: U06ECNVR0EN # Evan Smal
-  team: models
-  model-name: unet-shallow
-
-# ─── qwen2.5-32b-instruct ───────────────────────────────────────────────────
-
-- name: qwen2.5-32b-instruct e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=Qwen/Qwen2.5-32B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-32B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: qwen2.5-32b-instruct
-
-# ─── qwen2.5-72b-instruct ───────────────────────────────────────────────────
-
-- name: qwen2.5-72b-instruct e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=Qwen/Qwen2.5-72B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-72B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: qwen2.5-72b-instruct
-
-# ─── qwen2.5-vl-32b-instruct ────────────────────────────────────────────────
-
-- name: qwen2.5-vl-32b-instruct e2e tests
-  cmd: |
-    set -e
-    uv pip install -r models/demos/qwen25_vl/requirements.txt
-    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-VL-32B-Instruct
-    export MESH_DEVICE=T3K
-    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: qwen2.5-vl-32b-instruct
-
-# ─── qwen2.5-vl-72b ─────────────────────────────────────────────────────────
-
-- name: qwen2.5-vl-72b e2e tests
-  cmd: |
-    set -e
-    uv pip install -r models/demos/qwen25_vl/requirements.txt
-    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen2.5-VL-72B-Instruct
-    pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: qwen2.5-vl-72b
-
-# ─── qwen3-vl-32b ───────────────────────────────────────────────────────────
-
-- name: qwen3-vl-32b e2e tests
-  cmd: |
-    set -e
-    uv pip install -r models/demos/qwen3_vl/requirements.txt
-    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-VL-32B-Instruct
-    pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py -v
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: qwen3-vl-32b
 
 # ─── mistral-small-3.1-24b ──────────────────────────────────────────────────
 
@@ -149,58 +34,11 @@
     export MESH_DEVICE=T3K
     pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
   skus:
-    bh_loudbox:
+    bh_quietbox_2:
       timeout: 10
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: mistral-small-3.1-24b
-
-# ─── gpt-oss ────────────────────────────────────────────────────────────────
-
-- name: gpt-oss-20b e2e tests
-  cmd: |
-    set -e
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=openai/gpt-oss-20b
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-20b
-    pytest --timeout=600 models/demos/gpt_oss/demo/text_demo.py -k "performance"
-  skus:
-    bh_loudbox:
-      timeout: 15
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-  model-name: gpt-oss-20b
-
-- name: gpt-oss-120b e2e tests
-  cmd: |
-    set -e
-    uv pip install -r models/demos/gpt_oss/requirements.txt
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=openai/gpt-oss-120b
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/openai--gpt-oss-120b
-    pytest --timeout=1200 models/demos/gpt_oss/demo/text_demo.py -k "performance"
-  skus:
-    bh_loudbox:
-      timeout: 30
-  owner_id: U08TJ70UFRT # Harry Andrews
-  team: models
-  model-name: gpt-oss-120b
-
-# ─── Mochi ──────────────────────────────────────────────────────────────────
-
-- name: Mochi pipeline performance
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    pytest --timeout=1500 models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0"
-  skus:
-    bh_loudbox:
-      timeout: 20
-  owner_id: U09ELB03XRU # Stephen Osborne
-  team: models
-  model-name: mochi
 
 # ─── stable_diffusion_xl ────────────────────────────────────────────────────
 
@@ -216,228 +54,6 @@
   owner_id: U09LK84G4TF # Nikola Milicevic
   team: models
   model-name: stable_diffusion_xl
-
-# ─── llama3.1-8b ────────────────────────────────────────────────────────────
-
-- name: llama3.1-8b e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-    pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci and not stress" --max_seq_len 131072
-  skus:
-    bh_p150_perf:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-1" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
-  skus:
-    bh_deskbox:
-      timeout: 20
-    bh_llmbox:
-      timeout: 20
-    bh_quietbox_2:
-      timeout: 20
-    bh_loudbox:
-      timeout: 20
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b e2e tests (LFC)
-  cmd: |
-    set -e
-    export HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-1" --data_parallel 1 --max_seq_len 131072 --use_prefetcher True
-  skus:
-    bh_p300:
-      timeout: 20
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b data-parallel tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
-  skus:
-    bh_deskbox:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b data-parallel tests (LFC)
-  cmd: |
-    set -e
-    export HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 2 --max_seq_len 131072
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b data-parallel tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4 --max_seq_len 131072
-  skus:
-    bh_llmbox:
-      timeout: 10
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b data-parallel tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 4 --max_seq_len 131072
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --data_parallel 8 --max_seq_len 131072
-  skus:
-    bh_loudbox:
-      timeout: 20
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b device-perf tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
-  skus:
-    bh_deskbox:
-      timeout: 20
-    bh_llmbox:
-      timeout: 20
-    bh_quietbox_2:
-      timeout: 20
-    bh_loudbox:
-      timeout: 20
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: llama3.1-8b
-
-- name: llama3.1-8b device-perf tests (LFC)
-  cmd: |
-    set -e
-    export HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_8b-2-131072-2-10-1-1-False"
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 600 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_8b-2-131072-2-2-1-1-False"
-  skus:
-    bh_p300:
-      timeout: 20
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: llama3.1-8b
-
-# ─── llama3.3-70b ───────────────────────────────────────────────────────────
-
-- name: llama3.3-70b e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.3-70B-Instruct
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072
-  skus:
-    bh_llmbox:
-      timeout: 10
-    bh_loudbox:
-      timeout: 10
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U03PUAKE719 # Miguel Tairum
-  team: models
-  model-name: llama3.3-70b
-
-- name: llama3.3-70b device-perf tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.3-70B-Instruct
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-llama3_70b-2-131072-2-2-1-1-False"
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-llama3_70b-2-131072-2-10-1-1-False"
-  skus:
-    bh_llmbox:
-      timeout: 30
-    bh_loudbox:
-      timeout: 30
-    bh_quietbox_2:
-      timeout: 30
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: llama3.3-70b
-
-# ─── qwen3-32b ──────────────────────────────────────────────────────────────
-
-- name: qwen3-32b e2e tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=Qwen/Qwen3-32B
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-32B
-    pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 32768
-  skus:
-    bh_llmbox:
-      timeout: 10
-    bh_loudbox:
-      timeout: 10
-    bh_quietbox_2:
-      timeout: 10
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: qwen3-32b
-
-- name: qwen3-32b device-perf tests
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    export HF_MODEL=Qwen/Qwen3-32B
-    export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/Qwen--Qwen3-32B
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "prefill-qwen3_32b-2-32768-2-2-1-1-False"
-    TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 pytest --timeout 900 models/tt_transformers/tests/test_device_perf.py -k "decode-qwen3_32b-2-32768-2-10-1-1-False"
-  skus:
-    bh_llmbox:
-      timeout: 30
-    bh_loudbox:
-      timeout: 30
-    bh_quietbox_2:
-      timeout: 30
-  owner_id: U08GELBB1AP # Ambrose Ling
-  team: models
-  model-name: qwen3-32b
 
 # ─── Flux.1-dev ─────────────────────────────────────────────────────────────
 
@@ -463,18 +79,6 @@
     bh_quietbox_2:
       timeout: 10
   owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: flux.1-dev
-
-- name: Flux.1-dev BH LoudBox performance (bh_2x4sp0tp1)
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "bh_2x4sp0tp1" --timeout=600
-  skus:
-    bh_loudbox:
-      timeout: 10
-  owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: flux.1-dev
 
@@ -505,18 +109,6 @@
     bh_quietbox_2:
       timeout: 20
   owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  model-name: wan2.2-t2v-a14b
-
-- name: Wan2.2-T2V-A14B BH LoudBox performance
-  cmd: |
-    set -e
-    export HF_HOME=/localdev/blackhole_demos/huggingface_data
-    pytest models/tt_dit/tests/models/wan2_2/test_performance_wan.py -k "bh_2x4_sp1tp0 and resolution_480p and t2v" --timeout=1200
-  skus:
-    bh_loudbox:
-      timeout: 20
-  owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
 
@@ -573,80 +165,3 @@
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
-
-# ─── Stress tests (DISABLED) ────────────────────────────────────────────────
-#
-# Stress tests are moving to a separate pipeline. The original entries are
-# preserved here, commented out, so they can be migrated wholesale once the
-# new pipeline is ready. Uncomment to revert temporarily.
-#
-# - name: llama3.1-8b 1-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --timeout=1800
-#   skus:
-#     bh_p150:
-#       timeout: 30
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 2-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 2 --max_generated_tokens 22000
-#   skus:
-#     bh_deskbox:
-#       timeout: 30
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 2-device stress (LFC)
-#   cmd: |
-#     set -e
-#     export HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 2 --max_generated_tokens 22000
-#   skus:
-#     bh_p300:
-#       timeout: 30
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 4-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 4 --max_generated_tokens 22000
-#   skus:
-#     bh_llmbox:
-#       timeout: 40
-#     bh_quietbox_2:
-#       timeout: 40
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b
-#
-# - name: llama3.1-8b 8-device stress
-#   cmd: |
-#     set -e
-#     export HF_HOME=/localdev/blackhole_demos/huggingface_data
-#     export HF_MODEL=meta-llama/Llama-3.1-8B-Instruct
-#     export TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/tt_cache/meta-llama--Llama-3.1-8B-Instruct
-#     pytest --timeout 3600 models/tt_transformers/demo/simple_text_demo.py -k "performance and stress" --data_parallel 8 --max_generated_tokens 22000
-#   skus:
-#     bh_loudbox:
-#       timeout: 70
-#   owner_id: U03PUAKE719 # Miguel Tairum
-#   team: models
-#   model-name: llama3.1-8b

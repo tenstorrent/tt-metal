@@ -18,9 +18,6 @@ from helpers.llk_params import (
     EltwiseBinaryReuseDestType,
     EnforceFP32Accumulation,
     MathFidelity,
-    PerfRunType,
-    ReduceDimension,
-    ReducePool,
     Transpose,
     UnpackToDest,
 )
@@ -46,8 +43,6 @@ class ComputeNode:
         broadcast_type: BroadcastType = BroadcastType.None_,
         data_copy_type: DataCopyType = DataCopyType.A2D,
         reuse_dest: EltwiseBinaryReuseDestType = EltwiseBinaryReuseDestType.NONE,
-        reduce_dim: ReduceDimension = None,
-        reduce_pool: ReducePool = ReducePool.Max,
         math_fidelity: MathFidelity = MathFidelity.LoFi,
         enforce_fp32_accumulation: EnforceFP32Accumulation = EnforceFP32Accumulation.No,
         clear_fp32_dst_acc: ClearFP32DstAcc = ClearFP32DstAcc.No,
@@ -68,8 +63,6 @@ class ComputeNode:
         self.unpack_transpose_within_face = unpack_transpose_within_face
         self.broadcast_type = broadcast_type
         self.reuse_dest = reuse_dest
-        self.reduce_dim = reduce_dim
-        self.reduce_pool = reduce_pool
         self.math_fidelity = math_fidelity
         self.enforce_fp32_accumulation = enforce_fp32_accumulation
         self.clear_fp32_dst_acc = clear_fp32_dst_acc
@@ -94,7 +87,26 @@ class ComputeNode:
         if self.src_a is None and self.src_b is None:
             return
 
-    def unpack(
+    def unpack_reconfig(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+    ):
+        if self.unpacker is None or config.skip_unpack_init:
+            return ""
+        return config.sentinel.configure_unpack(config, operation, self)
+
+    def unpack_init(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        block: BlockData,
+    ):
+        if self.unpacker is None or config.skip_unpack_init:
+            return ""
+        return self.unpacker.init(operation, config, self, block)
+
+    def unpack_run(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
@@ -102,80 +114,68 @@ class ComputeNode:
     ):
         if self.unpacker is None:
             return ""
+        return self.unpacker.loop.unpack_loop(operation, config, self, block)
 
-        code = ""
-        skip_init = config.perf_run_type in (
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.MATH_ISOLATE,
-        )
-        if not skip_init:
-            code += config.sentinel.configure_unpack(config, operation, self)
-            code += self.unpacker().init(operation, config, self, block)
-
-        code += self.unpacker().loop.unpack_loop(operation, config, self, block)
-        if not skip_init:
-            code += self.unpacker().uninit(operation, config, self, block)
-
-        return code
-
-    def fpu_calculate(
+    def unpack_uninit(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         block: BlockData,
     ):
-        if self.fpu is None:
+        if self.unpacker is None or config.skip_unpack_init:
             return ""
+        return self.unpacker.uninit(operation, config, self, block)
 
-        code = ""
-        skip_init = config.perf_run_type in (
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        )
-        if not skip_init:
-            code += config.sentinel.configure_math(config, operation, self)
-            code += self.fpu.init(operation, config, self, block)
+    def math_reconfig(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+    ):
+        if config.skip_math_init or self.fpu is None:
+            return ""
+        return config.sentinel.configure_math(config, operation, self)
 
-        code += self.fpu.loop.math_loop(operation, config, self, block)
-        if not skip_init:
-            code += self.fpu.uninit(operation, config, self, block)
-
-        return code
-
-    def sfpu_calculate(
+    def math_init(
         self,
         operation: "FusedOperation",
         config: "GlobalConfig",
         block: BlockData,
     ):
-        if self.sfpu is None:
+        if config.skip_math_init:
             return ""
-
-        if config.perf_run_type in (
-            PerfRunType.UNPACK_ISOLATE,
-            PerfRunType.PACK_ISOLATE,
-            PerfRunType.L1_CONGESTION,
-        ):
-            return ""
-
-        code = self.sfpu.init(operation, config, self, block)
-        code += self.sfpu.calculate(operation, config, self, block)
-        code += self.sfpu.uninit(operation, config, self, block)
-        return code
-
-    def math_calculate(
-        self,
-        operation: "FusedOperation",
-        config: "GlobalConfig",
-        block: BlockData,
-    ) -> str:
         if self.fpu is not None:
-            return self.fpu_calculate(operation, config, block)
+            return self.fpu.init(operation, config, self, block)
         elif self.sfpu is not None:
-            return self.sfpu_calculate(operation, config, block)
-        else:
-            raise ValueError("fpu and sfpu are not defined")
+            return self.sfpu.init(operation, config, self, block)
+        return ""
+
+    def math_run(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        block: BlockData,
+    ):
+        if self.fpu is not None:
+            return self.fpu.loop.math_loop(operation, config, self, block)
+        elif self.sfpu is not None:
+            if config.skip_math_init:
+                return ""
+            return self.sfpu.calculate(operation, config, self, block)
+        return ""
+
+    def math_uninit(
+        self,
+        operation: "FusedOperation",
+        config: "GlobalConfig",
+        block: BlockData,
+    ):
+        if config.skip_math_init:
+            return ""
+        if self.fpu is not None:
+            return self.fpu.uninit(operation, config, self, block)
+        elif self.sfpu is not None:
+            return self.sfpu.uninit(operation, config, self, block)
+        return ""
 
     def golden(
         self,
@@ -188,7 +188,7 @@ class ComputeNode:
         config: "GlobalConfig",
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if self.unpacker is not None:
-            unpacked_tensor_a, unpacked_tensor_b = self.unpacker().golden(
+            unpacked_tensor_a, unpacked_tensor_b = self.unpacker.golden(
                 input_tensor_a, input_tensor_b, operation, config, self
             )
 
@@ -204,14 +204,27 @@ class ComputeNode:
             )
 
         if self.sfpu is not None:
+            tile_dims = (
+                operation.tile_shape.total_row_dim(),
+                operation.tile_shape.total_col_dim(),
+            )
+            num_faces = operation.tile_shape.total_num_faces()
             tilized_dst = tilize_block(
                 tensor_dst,
                 operation.max_output_dimensions,
-                operation.output.data_format,
+                config.sentinel.golden_math_format,
+                num_faces=num_faces,
+                tile_dimensions=tile_dims,
             )
 
-            tile_count_x = operation.output.tile_count_x
-            tile_count_y = operation.output.tile_count_y
+            tile_count_x = (
+                operation.max_output_dimensions[1]
+                // operation.tile_shape.total_col_dim()
+            )
+            tile_count_y = (
+                operation.max_output_dimensions[0]
+                // operation.tile_shape.total_row_dim()
+            )
             block_tiles_x = operation.block_tiles_x
             block_tiles_y = operation.block_tiles_y
 
@@ -237,7 +250,10 @@ class ComputeNode:
                     return
 
                 block_tensor = tilized_dst[block_tile_ids, :].clone().flatten()
-                block_dims = (block_tile_cnt * 32, 32)
+                block_dims = (
+                    block_tile_cnt * operation.tile_shape.total_row_dim(),
+                    operation.tile_shape.total_col_dim(),
+                )
 
                 block_tensor = self.sfpu.golden(
                     block_tensor,
@@ -276,8 +292,10 @@ class ComputeNode:
 
             tensor_dst = untilize_block(
                 tilized_dst.flatten(),
-                operation.output.data_format,
+                config.sentinel.golden_math_format,
                 operation.max_output_dimensions,
+                tile_dimensions=tile_dims,
+                num_faces=num_faces,
             ).reshape(operation.max_output_dimensions)
 
         return (
@@ -288,7 +306,9 @@ class ComputeNode:
 
     def __str__(self):
         if self.fpu is not None:
-            unpacker = f"{self.unpacker.__name__}" if self.unpacker is not None else ""
+            unpacker = (
+                f"{type(self.unpacker).__name__}" if self.unpacker is not None else ""
+            )
             return f"{unpacker}, {self.fpu}, {self.math_fidelity}"
         elif self.sfpu:
             return f"{self.sfpu}"

@@ -13,10 +13,9 @@ import ttnn
 from models.common.utility_functions import (
     is_blackhole,
     is_llk_assert_enabled,
-    skip_for_blackhole,
     skip_for_slow_dispatch,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_numeric_metrics, assert_equal
 from ttnn.operations.activations import get_golden_function_for_activation
 
 
@@ -424,7 +423,6 @@ def pad_to_dram_banks(num, tile_w, lcm=32 * 12):
     return padded_number
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("k", [1024])
 @pytest.mark.parametrize("n", [1280])
 @pytest.mark.parametrize("has_bias", [False, True])
@@ -1128,7 +1126,6 @@ def _skip_unless_fused_full_mn_tiny_tile_supported(transpose_tile, tile_w, tile_
         pytest.skip("Unsupported tiny-tile combination (see _TINY_TILE_SUPPORTED_COMBOS).")
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize(
     "m,k,n,tile_h,tile_w,transpose_tile",
     [
@@ -1159,7 +1156,6 @@ def test_linear_fused_non_broadcast_bias_2d_mcast_tiny_tile(mesh_device, m, k, n
     )
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize(
     "m,k,n,tile_h,tile_w,transpose_tile",
     [
@@ -1190,7 +1186,6 @@ def test_linear_fused_non_broadcast_bias_1d_mcast_tiny_tile(mesh_device, m, k, n
     )
 
 
-@skip_for_blackhole("TinyTile Matmul needs to be fixed on BH. Issue #31385")
 @pytest.mark.parametrize("m,k,n", [(32, 32, 32), (32, 64, 32)])
 @pytest.mark.parametrize("transpose_mcast", [False, True])
 @pytest.mark.parametrize("mesh_device", [(1, NUM_DEVICES)], indirect=True)
@@ -3801,3 +3796,122 @@ def test_matmul_compute_output_specs_with_allowed_worker_cores(
     )
     output_specs = ttnn.MatmulDeviceOperation.compute_output_specs(attributes, tensor_args)
     assert len(output_specs) >= 1
+
+
+# ND shards spread over this many DRAM cores. Kept below any real device's DRAM
+# bank count so round-robin patterns with more shards genuinely wrap.
+_ND_IN1_NUM_DRAM_SHARD_CORES = 4
+
+
+@pytest.mark.parametrize(
+    "m, k, n, grid_size",
+    [
+        (512, 512, 512, (4, 4)),
+        (256, 1024, 768, (4, 2)),
+    ],
+)
+@pytest.mark.parametrize(
+    # (K-splits, N-splits): 8 shards over 4 cores. Either wrapping the N dim
+    # round-robin or a 2D K-by-N split keeps the layout genuinely ND_SHARDED.
+    "k_splits, n_splits",
+    [(1, 8), (2, 4)],
+)
+def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits):
+    """2D-multicast matmul with an ND_SHARDED (NdShardSpec) DRAM in1.
+
+    ND_SHARDED in1 is not handled by the WIDTH/HEIGHT-sharded in1 reader, so the
+    matmul program factory falls through to the generic TensorAccessor path, which
+    addresses the NdShardSpec layout from the accessor args. This exercises the
+    in1-sharded memory-layout validation in MatmulDeviceOperation, which accepts
+    ND_SHARDED only when in1 lives in DRAM.
+
+    A weight is ND_SHARDED (rather than canonicalized to WIDTH/HEIGHT) when its
+    shards don't map one-contiguous-slab-per-core: either more shards than grid
+    cores (round-robin wrap, as in the receiver-contiguous DRAM prefetcher where
+    ring_size > num_banks) or a genuine 2D K-by-N split. Runs the identical matmul
+    with in1 interleaved vs. ND-sharded in DRAM and checks the ND output matches
+    both torch and the interleaved output.
+    """
+    grid_x, grid_y = grid_size
+    if device.dram_grid_size().x < _ND_IN1_NUM_DRAM_SHARD_CORES:
+        pytest.skip("needs at least _ND_IN1_NUM_DRAM_SHARD_CORES DRAM banks")
+    if k % (grid_x * 32) or m % (grid_y * 32) or n % (grid_x * 32):
+        pytest.skip("dims must be tile-aligned to the 2D-mcast grid")
+    if (k // 32) % k_splits or (n // 32) % n_splits:
+        pytest.skip("K/N (in tiles) must be divisible by the shard split")
+
+    in0 = torch.randn([1, 1, m, k]).bfloat16()
+    in1 = torch.randn([1, 1, k, n]).bfloat16()
+    pt_out = (in0.float() @ in1.float())[0, 0]
+
+    in0_t = ttnn.from_torch(
+        in0, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # in1, interleaved in DRAM (reference path).
+    in1_interleaved = ttnn.from_torch(
+        in1, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+
+    # in1, ND-sharded across a fixed set of DRAM cores. With 8 shards over 4 cores
+    # this can't reduce to a one-slab-per-core width/height shard, so it stays ND.
+    dram_grid = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(_ND_IN1_NUM_DRAM_SHARD_CORES - 1, 0))}
+    )
+    nd_shard_spec = ttnn.NdShardSpec(ttnn.Shape([k // k_splits, n // n_splits]), dram_grid)  # default ROUND_ROBIN_1D
+    in1_nd = ttnn.from_torch(
+        in1,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard_spec),
+    )
+    assert in1_nd.memory_config().memory_layout == ttnn.TensorMemoryLayout.ND_SHARDED
+
+    per_core_M = m // grid_y // 32
+    per_core_N = n // grid_x // 32
+    out_subblock_h, out_subblock_w, _ = find_max_subblock(per_core_M, per_core_N)
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=k // grid_x // 32,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=True,
+    )
+
+    def run(in1_t):
+        out_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=ttnn.bfloat16,
+            compute_kernel_config=compute_kernel_config,
+        )
+        return ttnn.to_torch(out_t)[0, 0]
+
+    out_interleaved = run(in1_interleaved)
+    out_nd = run(in1_nd)
+
+    assert_numeric_metrics(
+        pt_out,
+        out_nd,
+        atol=0.004 * k,
+        rtol=0.227 * k,
+        frobenius_threshold=0.001 * k,
+        pcc_threshold=0.999,
+        check_ulp=False,
+    )
+    # Same weight, same matmul program; only in1's DRAM layout differs, so the ND
+    # read must reproduce the interleaved read bit-for-bit.
+    assert_equal(out_interleaved, out_nd)

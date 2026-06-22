@@ -35,6 +35,9 @@ on:
       measure-memory:
         type: string
         default: "false"
+      fail-on-test-failure:
+        type: string
+        default: "false"
       mesh-shape:
         type: string
         default: ""
@@ -80,6 +83,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -128,8 +132,8 @@ jobs:
           # set so each pass only sees vectors for its own mesh axis.
           cd /work
           python3 tests/sweep_framework/split_vectors_by_axis.py
-          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ | head -20; echo "::endgroup::"
-          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ | head -20; echo "::endgroup::"
+          echo "::group::COL partition"; ls tests/sweep_framework/vectors_export_col/ 2>/dev/null | head -20 || true; echo "::endgroup::"
+          echo "::group::ROW partition"; ls tests/sweep_framework/vectors_export_row/ 2>/dev/null | head -20 || true; echo "::endgroup::"
       - name: Run ttnn sweeps (batch)
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
@@ -186,6 +190,10 @@ jobs:
 
           if [[ -n "$SUITE_NAME" ]]; then
             CMD+=(--suite-name "$SUITE_NAME")
+          fi
+
+          if [[ "${{ inputs.fail-on-test-failure }}" == "true" ]]; then
+            CMD+=("--fail-on-test-failure")
           fi
 
           # Two-pass run: COL first, then ROW. Skip a pass when the matching

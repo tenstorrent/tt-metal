@@ -81,16 +81,15 @@ union subordinate_map_t {
             volatile uint8_t neo3_trisc1;
             volatile uint8_t neo3_trisc2;
             volatile uint8_t neo3_trisc3;
-            uint8_t pad[12];
         };
-    } __attribute__((packed));
-} __attribute__((packed));
+    };
+};
 
 constexpr uint8_t MaxProcessorsPerCoreType = 24;
 constexpr uint8_t MaxProcessorsForThreadingVariables =
     16;  // 8 DMs + 4 compute engine slots; round up to multiple of 8 for alignment
 constexpr uint8_t MaxDMProcessorsPerCoreType = 8;
-constexpr uint8_t MaxNumKernels = MaxDMProcessorsPerCoreType+1; // +1 for the compute kernel.
+constexpr uint8_t MaxNumKernels = MaxDMProcessorsPerCoreType + 4;  // +4 for the 4 TRISCs per engine.
 constexpr uint8_t NumTensixDispatchClasses = 3;
 constexpr uint8_t NumEthDispatchClasses = 2;
 constexpr uint8_t NumDramDispatchClasses = 1;

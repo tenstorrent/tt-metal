@@ -25,11 +25,16 @@
 #include "api/debug/waypoint.h"
 #include "api/lock.h"
 
+#if __has_include("chlkc_descriptors.h")
+#include "chlkc_descriptors.h"
+#define DFB_DESCRIPTORS_DEFINED
+#endif
+
 // Opaque handle for a DataflowBuffer binding (declared in kernel_bindings_generated.h).
 // The user will never directly interact with this type.
 //
-// The user's host code declares a local_accessor_name when binding a DFB endpoint to a kernel.
-// The user then uses that local_accessor_name to construct a DataflowBuffer in the kernel code.
+// The user's host code declares an accessor_name when binding a DFB endpoint to a kernel.
+// The user then uses that accessor_name to construct a DataflowBuffer in the kernel code.
 //
 // Usage example:
 //   // (Host code declares "my_dfb_name" as the DFB local accessor name for this kernel.)
@@ -91,16 +96,121 @@ public:
     void pop_front(uint16_t num_entries) { pop_front_impl(num_entries); }
     // Explicit sync APIs end
 
-#ifndef ARCH_QUASAR
 #ifndef COMPILE_FOR_TRISC
+#ifndef ARCH_QUASAR
     bool pages_reservable_at_back(int32_t num_pages) const;
     bool pages_available_at_front(int32_t num_pages) const;
-#ifdef DATA_FORMATS_DEFINED
-    uint32_t get_tile_size() const;
-    uint32_t get_tile_hw() const;
-    DataFormat get_dataformat() const;
 #endif
-#else  // trisc
+#endif
+
+#ifdef DFB_DESCRIPTORS_DEFINED
+    // JIT descriptor values from chlkc_descriptors.h (indexed by logical_dfb_id_).
+    // PACK TRISC uses pack_* arrays; UNPACK/MATH TRISC and DM use unpack_*.
+    constexpr uint32_t get_tile_size() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_tile_size[logical_dfb_id_];
+#else
+        return unpack_tile_size[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_tile_r_dim() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_tile_r_dim[logical_dfb_id_];
+#else
+        return unpack_tile_r_dim[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_tile_c_dim() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_tile_c_dim[logical_dfb_id_];
+#else
+        return unpack_tile_c_dim[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_tile_hw() const { return get_tile_r_dim() * get_tile_c_dim(); }
+
+    constexpr uint32_t get_tile_num_faces() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_tile_num_faces[logical_dfb_id_];
+#else
+        return unpack_tile_num_faces[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_face_r_dim() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_tile_face_r_dim[logical_dfb_id_];
+#else
+        return unpack_tile_face_r_dim[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_partial_face() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_partial_face[logical_dfb_id_];
+#else
+        return unpack_partial_face[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_narrow_tile() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_narrow_tile[logical_dfb_id_];
+#else
+        return unpack_narrow_tile[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_num_faces_r_dim() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_num_faces_r_dim[logical_dfb_id_];
+#else
+        return unpack_num_faces_r_dim[logical_dfb_id_];
+#endif
+    }
+
+    constexpr uint32_t get_num_faces_c_dim() const {
+#if defined(UCK_CHLKC_PACK)
+        return pack_num_faces_c_dim[logical_dfb_id_];
+#else
+        return unpack_num_faces_c_dim[logical_dfb_id_];
+#endif
+    }
+
+    constexpr DataFormat get_dataformat() const {
+#if defined(UCK_CHLKC_PACK)
+        return static_cast<DataFormat>(pack_dst_format[logical_dfb_id_]);
+#else
+        return static_cast<DataFormat>(unpack_src_format[logical_dfb_id_]);
+#endif
+    }
+
+#if !defined(UCK_CHLKC_PACK)
+    constexpr DataFormat get_unpack_dst_format() const {
+        return static_cast<DataFormat>(unpack_dst_format[logical_dfb_id_]);
+    }
+#endif
+
+// pack_* format arrays are only emitted for PACK TRISC and DM (see genfiles.cpp).
+#if defined(UCK_CHLKC_PACK) || (!defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK))
+    constexpr DataFormat get_pack_src_format() const {
+        return static_cast<DataFormat>(pack_src_format[logical_dfb_id_]);
+    }
+#endif
+
+#if !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_UNPACK)
+    constexpr DataFormat get_pack_dst_format() const {
+        return static_cast<DataFormat>(pack_dst_format[logical_dfb_id_]);
+    }
+#endif
+
+#endif // DFB_DESCRIPTORS_DEFINED
+
+#ifdef COMPILE_FOR_TRISC
+#ifndef ARCH_QUASAR
     uint32_t get_tile_address(uint32_t tile_index);
     uint32_t read_tile_value(uint32_t tile_index, uint32_t element_offset);
 #endif
@@ -110,7 +220,7 @@ public:
 
 #ifndef COMPILE_FOR_TRISC
     // This should not be used on WH/BH if the read into/write out of the DFB uses transaction ids because the transaction ids are not tracked.
-    // Instead, use noc.async_write_barrier<Noc::BarrierMode::TXN_ID>(trid)
+    // Instead, use noc.async_write_barrier<NocOptions::TXN_ID>({.trid = trid})
     void write_barrier(const Noc &noc) const { write_barrier_impl(noc); }
 #endif
 
@@ -216,4 +326,13 @@ struct noc_traits_t<DataflowBuffer> {
 #include "internal/tt-2xx/dataflow_buffer.inl"
 #else
 #include "internal/tt-1xx/dataflow_buffer.inl"
+#endif
+
+#ifndef COMPILE_FOR_TRISC
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/noc_zero_l1.inl"
+#else
+#include "internal/tt-1xx/noc_zero_l1.inl"
+#endif
+#include "internal/noc_zero_dram.inl"
 #endif

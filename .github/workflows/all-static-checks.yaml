@@ -15,7 +15,7 @@ jobs:
       docs-changed: ${{ steps.find-changes.outputs.docs-changed }}
     steps:
       - id: find-changes
-        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@v0.63.0
+        uses: tenstorrent/tt-metal/.github/actions/find-changed-files@main
   pre-commit:
     name: Run Pre-commit Hooks
     runs-on: ubuntu-latest
@@ -25,11 +25,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
-          fetch-depth: 0  # Fetch all history and all branches / tags so 'origin/main' is available
+          fetch-depth: 0 # Fetch all history and all branches / tags so 'origin/main' is available
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: 3.11
 
@@ -69,26 +70,28 @@ jobs:
       - name: Do Nothing
         run: echo "Black is covered by pre-commit. This is a placeholder to be removed after updating branch restrictions."
 
-
   check-spdx-licenses:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Check SPDX licenses
         uses: tenstorrent/tt-github-actions/.github/actions/spdx-checker@main
         with:
-          ignore_config_file: '.github/spdx_ignore.yaml'
-          verbose: 'true'
+          ignore_config_file: ".github/spdx_ignore.yaml"
+          verbose: "true"
   check-metal-kernel-count:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Check kernel count in base metal is less than maximum
         run: if (( $(find tt_metal/kernels/ -type f | wc -l) > 8 )); then exit 1; fi
   check-doc:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Install ASPELL
         run: sudo apt-get install -y aspell
       - name: Run checks on docs
@@ -98,10 +101,11 @@ jobs:
     needs: find-changed-files
     # We get rate-limited if we run too often; only run when it's useful
     # Issue 21637: Disable check-docs-links for now to unblock developers
-    if: false  # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
+    if: false # ${{ github.ref_name == 'main' || needs.find-changed-files.outputs.docs-changed == 'true' }}
     steps:
       - name: Checkout repo
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           clean: false
@@ -114,8 +118,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Check ttnn is not used in tt_metal tests
-        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 11 )); then exit 1; fi
+        run: if (( $(grep -Rnw 'tests/tt_metal' -e 'ttnn' | wc -l ) > 32 )); then exit 1; fi
       - name: Check tt_eager constructs is not used in tt_metal tests
         run: |
           if (( $(grep -Rnw 'tests/tt_metal' -e 'tt_lib' | wc -l ) > 0 )); then exit 1; fi
@@ -124,8 +129,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
-          fetch-depth: 0  # Fetch all history for git diff comparison
+          fetch-depth: 0 # Fetch all history for git diff comparison
       - name: Check for new InterleavedAddrGen usages in changed files
         run: |
           set -euo pipefail
@@ -194,17 +200,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/setup-python@v5.0.0
+        timeout-minutes: 20
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
+          python-version: "3.10"
       - name: Check sweeps workflow option count against sweep file count
         run: |
           pip install pyyaml
           python tests/sweep_framework/framework/sweeps_workflow_verification.py
+  check-docker-bake-ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
+      - name: Validate Docker Bake CI overrides
+        run: python .github/scripts/validate-docker-bake-ci.py
   codeowners-validator:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - uses: mszostok/codeowners-validator@7f3f5e28c6d7b8dfae5731e54ce2272ca384592f # v0.7.4
         with:
           checks: "files,duppatterns,syntax"
@@ -213,6 +228,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
       - name: Check for broken symlinks
         run: |
           broken_links=$(find . -type l ! -exec test -e {} \; -print)

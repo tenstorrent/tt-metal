@@ -20,7 +20,7 @@ void kernel_main() {
 
     ////////// CALCULATE OFFSET AND WRITE TO DRAM //////////
     uint32_t dram_tile_id = tile_offset;
-    noc_async_write_tile(dram_tile_id, dram_writer, l1_read_addr);
+    noc_async_write_page(dram_tile_id, dram_writer, l1_read_addr);
     noc_async_write_barrier();
 
     cb_pop_front(cb_id_out0, 1);

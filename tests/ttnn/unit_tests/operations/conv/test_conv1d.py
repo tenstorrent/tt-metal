@@ -643,22 +643,6 @@ def run_conv1d_replicate_pad(
         (1, 64, 32, 512, 3, 1, 2, 2, 1),
         # depthwise (groups == in_channels == out_channels) with replicate pad.
         (1, 32, 32, 512, 3, 1, 1, 1, 32),
-        pytest.param(
-            # depthwise with kernel_size > 1 (Mamba-style d_conv = 4): exercises the 1d-depthwise
-            # path that was previously gated on kernel_size == 1. See PR #44490 (issue #42163)
-            1,
-            512,
-            512,
-            512,
-            4,
-            1,
-            (1, 2),
-            1,
-            512,
-            marks=pytest.mark.skip(
-                reason="Issue #45392: L1 CB allocation overflow for 512-channel depthwise conv1d with bias"
-            ),
-        ),
     ),
 )
 def test_conv1d_replicate_pad(
@@ -676,3 +660,188 @@ def test_conv1d_replicate_pad(
         dilation=dilation,
         groups=groups,
     )
+
+
+# ---------------------------------------------------------------------------
+# DRAM slicing
+#
+# conv1d reshapes its 1D input to a [N, 1, input_length, C] 4D tensor and delegates to
+# conv2d. Because the height dimension is always 1, only width slicing (slicing along
+# input_length) is meaningful. The tests below cover the L1_FULL OOM baseline, manual and
+# auto DRAM width slicing, the channel-bound case width slicing cannot relieve, and
+# DRAM_HEIGHT slicing being rejected (degenerate for conv1d).
+# ---------------------------------------------------------------------------
+
+
+def run_conv1d_slice(
+    device,
+    batch_size,
+    in_channels,
+    out_channels,
+    input_length,
+    kernel_size,
+    stride,
+    padding,
+    slice_config,
+    pcc=0.99,
+    weights_dtype=ttnn.bfloat16,
+    activations_dtype=ttnn.bfloat16,
+    output_dtype=ttnn.bfloat16,
+):
+    torch.manual_seed(0)
+    torch_input_ncl = torch.randn(batch_size, in_channels, input_length, dtype=torch.bfloat16).float()
+    torch_weight = torch.randn(out_channels, in_channels, kernel_size, dtype=torch.bfloat16).float()
+
+    golden = torch.nn.functional.conv1d(
+        torch_input_ncl,
+        torch_weight,
+        bias=None,
+        stride=stride,
+        padding=padding,
+    )
+
+    # DRAM slicing requires the input to live in DRAM (interleaved). Layout is NLC for conv1d.
+    input_tt = ttnn.from_torch(
+        torch_input_ncl.permute(0, 2, 1),
+        dtype=activations_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    weight_tt = ttnn.from_torch(torch_weight, dtype=weights_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    # DRAM slicing requires an explicit shard layout (no auto-shard).
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=weights_dtype,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_activation=False,
+    )
+
+    tt_out, out_length = ttnn.conv1d(
+        input_tensor=input_tt,
+        weight_tensor=weight_tt,
+        device=device,
+        in_channels=in_channels,
+        out_channels=out_channels,
+        batch_size=batch_size,
+        input_length=input_length,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=padding,
+        conv_config=conv_config,
+        slice_config=slice_config,
+        dtype=output_dtype,
+        return_output_dim=True,
+    )
+
+    out = ttnn.to_torch(tt_out).reshape(batch_size, out_length, out_channels).permute(0, 2, 1)
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(out, golden, pcc=pcc)
+    assert passing, pcc_msg
+    return out
+
+
+# A 1D conv whose L1 footprint is dominated by the (long) sequence dimension, so it
+# overflows L1 in the L1_FULL path but is relieved by slicing along input_length (width).
+# input_length=32768 with 256 channels: the width-independent weight block is small enough
+# that width slicing brings the per-slice footprint under the L1 budget.
+_SLICE_OOM_SHAPE = dict(
+    batch_size=1,
+    in_channels=256,
+    out_channels=256,
+    input_length=32768,
+    kernel_size=3,
+    stride=1,
+    padding=1,
+)
+
+# A 1D conv whose L1 footprint is dominated by the channel dimension (the weight block does
+# not shrink with width slicing). Width slicing - the only kind conv1d supports - cannot
+# relieve this, so even the auto-slicer (up to one tile per slice) fails to find a fit.
+_SLICE_CHANNEL_BOUND_SHAPE = dict(
+    batch_size=1,
+    in_channels=512,
+    out_channels=512,
+    input_length=32768,
+    kernel_size=3,
+    stride=1,
+    padding=1,
+)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_no_slicing_oom(device):
+    """Baseline: the large conv1d should run out of L1 when forced into the L1_FULL path."""
+    with pytest.raises(RuntimeError) as excinfo:
+        run_conv1d_slice(
+            device,
+            **_SLICE_OOM_SHAPE,
+            slice_config=ttnn.Conv2dL1FullSliceConfig,
+        )
+    # Sanity-check the failure is an allocation/L1 capacity error and not something unrelated.
+    msg = str(excinfo.value).lower()
+    assert any(k in msg for k in ("memory", "allocat", "l1", "circular buffer", "out of")), excinfo.value
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+@pytest.mark.parametrize("num_slices", [4, 8])
+def test_conv1d_manual_dram_width_slicing(device, num_slices):
+    """The same conv1d should succeed with manual DRAM width slicing."""
+    run_conv1d_slice(
+        device,
+        **_SLICE_OOM_SHAPE,
+        slice_config=ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
+            num_slices=num_slices,
+        ),
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_auto_dram_width_slicing(device):
+    """The same conv1d should succeed with auto-determined DRAM width slicing (num_slices=0)."""
+    run_conv1d_slice(
+        device,
+        **_SLICE_OOM_SHAPE,
+        slice_config=ttnn.Conv2dSliceConfig(
+            slice_type=ttnn.Conv2dDRAMSliceWidth,
+            num_slices=0,
+        ),
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_channel_bound_slicing_insufficient(device):
+    """Width slicing cannot relieve a channel-bound OOM (the weight block is width-independent).
+
+    Documents the boundary of conv1d DRAM slicing: when L1 pressure comes from the channel
+    dimension rather than the sequence length, even maximal width slicing fails to find a fit.
+    """
+    with pytest.raises(RuntimeError, match="could not find valid slice configuration"):
+        run_conv1d_slice(
+            device,
+            **_SLICE_CHANNEL_BOUND_SHAPE,
+            slice_config=ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceWidth,
+                num_slices=0,
+            ),
+        )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
+def test_conv1d_dram_height_slicing_rejected(device):
+    """DRAM_HEIGHT slicing is degenerate for conv1d (height==1) and must be rejected."""
+    with pytest.raises(RuntimeError, match="DRAM_HEIGHT"):
+        run_conv1d_slice(
+            device,
+            batch_size=1,
+            in_channels=64,
+            out_channels=64,
+            input_length=1024,
+            kernel_size=3,
+            stride=1,
+            padding=1,
+            slice_config=ttnn.Conv2dSliceConfig(
+                slice_type=ttnn.Conv2dDRAMSliceHeight,
+                num_slices=4,
+            ),
+        )

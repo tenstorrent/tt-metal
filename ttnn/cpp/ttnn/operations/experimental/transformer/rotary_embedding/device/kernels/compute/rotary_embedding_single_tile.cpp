@@ -14,12 +14,8 @@
 #include "api/compute/bcast.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
 #include "ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-
-ALWI void ACQ() { acquire_dst(); }
-ALWI void REL() { release_dst(); }
 
 template <uint32_t in0_cb, uint32_t out_cb>
 ALWI void UNTILIZE_ONE_TILE() {
@@ -81,32 +77,34 @@ void kernel_main() {
 #endif
 
     cb_wait_front(trans_mat_cb, onetile);
-    mm_init(in_cb, trans_mat_cb, rotated_in_interm_cb);
-    // Binary ops (mul, add) below need their own init path; without this the
-    // math-thread register routing stays in matmul mode and mixed-precision
-    // binaries (e.g. bf16 x bfp8) produce incorrect results.
     binary_op_init_common(rotated_in_interm_cb, updated_sin_cb, sin_interm_cb);
 
     for (uint32_t i = 0; i < num_rows; ++i) {
         // rotated = in @ trans_mat  (HF rotate_half on a single 32x32 tile)
         cb_wait_front(in_cb, onetile);
-        cb_reserve_back(rotated_in_interm_cb, onetile);
         reconfig_data_format(in_cb, trans_mat_cb);
         pack_reconfig_data_format(rotated_in_interm_cb);
-        mm_init_short(in_cb, trans_mat_cb);
-        ACQ();
+        matmul_init(in_cb, trans_mat_cb);
+
+        tile_regs_acquire();
         matmul_tiles(in_cb, trans_mat_cb, 0, 0, 0);
+        tile_regs_commit();
+
+        cb_reserve_back(rotated_in_interm_cb, onetile);
+
+        tile_regs_wait();
         pack_tile(0, rotated_in_interm_cb);
-        REL();
+        tile_regs_release();
+
         cb_push_back(rotated_in_interm_cb, onetile);
 
         // sin_interim = rotated * sin
         cb_wait_front(rotated_in_interm_cb, onetile);
         cb_wait_front(updated_sin_cb, onetile);
-        cb_reserve_back(sin_interm_cb, onetile);
         reconfig_data_format(rotated_in_interm_cb, updated_sin_cb);
         pack_reconfig_data_format(sin_interm_cb);
-        ACQ();
+
+        tile_regs_acquire();
 #ifdef DECODE_MODE
         mul_bcast_rows_init_short(rotated_in_interm_cb, updated_sin_cb);
         mul_tiles_bcast_rows(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
@@ -114,20 +112,27 @@ void kernel_main() {
         mul_tiles_init(rotated_in_interm_cb, updated_sin_cb);
         mul_tiles(rotated_in_interm_cb, updated_sin_cb, 0, 0, 0);
 #endif
-        pack_tile(0, sin_interm_cb);
-        REL();
-        cb_push_back(sin_interm_cb, onetile);
+        tile_regs_commit();
+
         cb_pop_front(rotated_in_interm_cb, onetile);
 #ifndef DECODE_MODE
         cb_pop_front(updated_sin_cb, onetile);
 #endif
 
+        cb_reserve_back(sin_interm_cb, onetile);
+
+        tile_regs_wait();
+        pack_tile(0, sin_interm_cb);
+        tile_regs_release();
+
+        cb_push_back(sin_interm_cb, onetile);
+
         // cos_interim = in * cos
         cb_wait_front(updated_cos_cb, onetile);
-        cb_reserve_back(cos_interm_cb, onetile);
         reconfig_data_format(in_cb, updated_cos_cb);
         pack_reconfig_data_format(cos_interm_cb);
-        ACQ();
+
+        tile_regs_acquire();
 #ifdef DECODE_MODE
         mul_bcast_rows_init_short(in_cb, updated_cos_cb);
         mul_tiles_bcast_rows(in_cb, updated_cos_cb, 0, 0, 0);
@@ -135,27 +140,41 @@ void kernel_main() {
         mul_tiles_init(in_cb, updated_cos_cb);
         mul_tiles(in_cb, updated_cos_cb, 0, 0, 0);
 #endif
-        pack_tile(0, cos_interm_cb);
-        REL();
-        cb_push_back(cos_interm_cb, onetile);
+        tile_regs_commit();
+
         cb_pop_front(in_cb, onetile);
 #ifndef DECODE_MODE
         cb_pop_front(updated_cos_cb, onetile);
 #endif
 
+        cb_reserve_back(cos_interm_cb, onetile);
+
+        tile_regs_wait();
+        pack_tile(0, cos_interm_cb);
+        tile_regs_release();
+
+        cb_push_back(cos_interm_cb, onetile);
+
         // out = cos_interim + sin_interim
         cb_wait_front(cos_interm_cb, onetile);
         cb_wait_front(sin_interm_cb, onetile);
-        cb_reserve_back(out_cb, onetile);
         reconfig_data_format(cos_interm_cb, sin_interm_cb);
         pack_reconfig_data_format(out_cb);
         add_tiles_init(cos_interm_cb, sin_interm_cb);
-        ACQ();
+
+        tile_regs_acquire();
         add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
-        pack_tile(0, out_cb);
-        REL();
-        cb_push_back(out_cb, onetile);
+        tile_regs_commit();
+
         cb_pop_front(cos_interm_cb, onetile);
         cb_pop_front(sin_interm_cb, onetile);
+
+        cb_reserve_back(out_cb, onetile);
+
+        tile_regs_wait();
+        pack_tile(0, out_cb);
+        tile_regs_release();
+
+        cb_push_back(out_cb, onetile);
     }
 }
