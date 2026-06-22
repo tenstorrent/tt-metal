@@ -20,7 +20,7 @@ from scipy.io import wavfile
 import ttnn
 
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_MODEL, load_voxtral_config
-from models.experimental.voxtraltts.utils.test_common import (
+from models.experimental.voxtraltts.utils.common import (
     VOXTRAL_STANDARD_CHAR_TEXT,
     close_voxtral_runtime_mesh,
     open_voxtral_runtime_mesh,
@@ -40,7 +40,7 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
 # A. Argument groups  (Llama DemoArgs pattern: model / tt / data)
 # ---------------------------------------------------------------------------
 
-# Shared standard prompt (same as PCC / perf tests in ``utils/test_common.py``).
+# Shared standard prompt (same as PCC / perf tests in ``utils/common.py``).
 DEMO_DEFAULT_TEXT = VOXTRAL_STANDARD_CHAR_TEXT
 DEMO_DEFAULT_VOICE = "cheerful_female"
 DEMO_DEFAULT_TEXT_MAX_SEQ_LEN = 65536
@@ -145,10 +145,11 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
         help="Path to a .pt file with pre-computed latents (required for --mode latents).",
     )
     p.add_argument(
-        "--use-paged-kv-cache",
-        action="store_true",
-        default=False,
-        help="Enable paged KV cache to bypass L1 CB size limit. Allows text_max_seq_len>4096 on Blackhole P150.",
+        "--no-paged-kv-cache",
+        action="store_false",
+        dest="use_paged_kv_cache",
+        default=True,
+        help="Disable paged KV attention (default: paged on for all sequence lengths).",
     )
     p.add_argument(
         "--paged-block-size", type=int, default=32, help="KV block size for paged attention (multiple of 32)."
@@ -354,7 +355,7 @@ def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
 
 
 def _speech_prompt_seq_len(text: str, voice: str, model_name_or_path: str) -> int:
-    from models.experimental.voxtraltts.utils.test_common import speech_prompt_seq_len
+    from models.experimental.voxtraltts.utils.common import speech_prompt_seq_len
 
     return speech_prompt_seq_len(text, model_name=model_name_or_path, voice=voice)
 

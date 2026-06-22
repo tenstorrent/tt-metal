@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""``VoxtralTTAcousticModel`` component tests vs ``FlowMatchingAudioTransformerRef``.
+"""``VoxtralTTAcousticModel`` module tests vs ``FlowMatchingAudioTransformerRef``.
 
-Continuous tensors: PCC (``comp_pcc``).  Discrete forward codes: exact match fraction vs CPU.
-FM noise is synchronized (``torch.randn`` uploaded to TT) whenever CPU and TT are compared.
+Full model-card depth: complete FM ``forward()`` and all Euler steps (``n_decoding_steps`` from
+params.json, default 8) for one acoustic frame — not partial/op-level bring-up.
 """
 
 from __future__ import annotations
@@ -18,18 +18,16 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.cpu_flow_matching_acoustic import (
-    AudioSpecialTokens,
     FlowMatchingAudioTransformerRef,
     build_audio_model_args_from_voxtral_config,
 )
 from models.experimental.voxtraltts.reference.cpu_reference import VoxtralCPUReference
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
-from models.experimental.voxtraltts.utils.test_common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.common import resolve_voxtral_model_name_or_skip
 from models.experimental.voxtraltts.tt.acoustic_model import VoxtralTTAcousticModel
 from models.experimental.voxtraltts.tt.voxtral_tts import ACOUSTIC_CFG_ALPHA_DEFAULT
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.experimental.voxtraltts.tt.acoustic_model import acoustic_fm_noise_seed
-from models.tt_transformers.tt.common import Mode
 
 _E2E_DEMO_TEXT = (
     "Voxtral is a four billion parameter open weight text to speech model "
@@ -42,8 +40,6 @@ _E2E_DEMO_TEXT = (
 )
 _E2E_DEMO_VOICE = "casual_male"
 
-ACOUSTIC_VELOCITY_PCC = 0.99
-ACOUSTIC_SEMANTIC_LOGITS_PCC = 0.99
 ACOUSTIC_EULER_STATE_PCC = 0.99
 # Discrete acoustic code match (cols 1–36). TT FM Euler can flip ``round()`` at boundaries (~32/36 today).
 ACOUSTIC_FORWARD_ACOUSTIC_MATCH_FRAC = 0.88
@@ -69,64 +65,14 @@ def _load_tt(mesh_device, model_name_or_path: str) -> VoxtralTTAcousticModel:
     )
 
 
-def _align_to_ref_shape(ref_t: torch.Tensor, tt_t: torch.Tensor) -> torch.Tensor:
-    """Trim TT tensor logical extents to reference (ttnn may pad)."""
-    out = tt_t
-    for dim, size in enumerate(ref_t.shape):
-        if dim < out.dim() and out.shape[dim] > size:
-            sl = [slice(None)] * out.dim()
-            sl[dim] = slice(0, size)
-            out = out[tuple(sl)]
-    return out.reshape(ref_t.shape)
-
-
-def _reference_predict_velocity_debug(
+def _model_card_euler_steps(
     ref: FlowMatchingAudioTransformerRef,
-    x_t: torch.Tensor,
-    llm_h: torch.Tensor,
-    t_emb: torch.Tensor,
-) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-    """Same tensor stepping as ``FlowMatchingAudioTransformerRef._predict_velocity`` + intermediates."""
-    debug: dict[str, torch.Tensor] = {}
-    time_dtype = ref.time_projection.weight.dtype
-    llm_dtype = ref.llm_projection.weight.dtype
-    input_dtype = ref.input_projection.weight.dtype
-
-    t_emb_p = ref.time_projection(t_emb.to(dtype=time_dtype)).to(dtype=input_dtype)
-    llm_p = ref.llm_projection(llm_h.to(dtype=llm_dtype)).to(dtype=input_dtype)
-    x_t_p = x_t.to(dtype=input_dtype)
-    p0 = ref.input_projection(x_t_p.unsqueeze(1))
-    debug["proj_input"] = p0.float()
-    debug["proj_time"] = t_emb_p.unsqueeze(1).float()
-    debug["proj_llm"] = llm_p.unsqueeze(1).float()
-
-    h = torch.cat([p0, t_emb_p.unsqueeze(1), llm_p.unsqueeze(1)], dim=1)
-    debug["concat_input"] = h.unsqueeze(1).float()
-
-    for i in ref.layers_ids:
-        layer = ref.layers[str(i)]
-        n1 = layer.attention_norm(h)
-        debug[f"layer{i}.attn_norm"] = n1.unsqueeze(1).float()
-        a = layer.attention(n1)
-        debug[f"layer{i}.attn_out"] = a.unsqueeze(1).float()
-        h = h + a
-        debug[f"layer{i}.post_attn"] = h.unsqueeze(1).float()
-        n2 = layer.ffn_norm(h)
-        debug[f"layer{i}.ffn_norm"] = n2.unsqueeze(1).float()
-        f = layer.feed_forward(n2)
-        debug[f"layer{i}.ffn_out"] = f.unsqueeze(1).float()
-        h = h + f
-        debug[f"layer{i}.post_ffn"] = h.unsqueeze(1).float()
-
-    h = ref.norm(h)
-    debug["final_norm"] = h.unsqueeze(1).float()
-    v = ref.acoustic_codebook_output(h[:, 0, :])
-    debug["velocity"] = v.unsqueeze(1).unsqueeze(1).float()
-    return v.float(), debug
-
-
-def _acoustic_debug_pcc_enabled() -> bool:
-    return os.environ.get("VOXTRAL_ACOUSTIC_DEBUG_PCC", "").lower() in ("1", "true", "yes", "on")
+    tt_model: VoxtralTTAcousticModel,
+) -> int:
+    """Euler integration steps per acoustic frame (model card / ``n_decoding_steps``)."""
+    n_steps = len(ref._timesteps) - 1
+    assert n_steps == tt_model._n_decoding_steps, f"Euler depth mismatch: ref={n_steps} tt={tt_model._n_decoding_steps}"
+    return n_steps
 
 
 def _forward_debug(msg: str) -> None:
@@ -250,38 +196,6 @@ def _assert_forward_matches_cpu(
         f"{label}: acoustic code match {n_match}/{n_acoustic} ({acoustic_match:.4f}) "
         f"below {min_acoustic_match_frac}"
     )
-
-
-def _tt_upload_velocity_inputs(
-    tt_model: VoxtralTTAcousticModel,
-    mesh_device: ttnn.MeshDevice,
-    x_t: torch.Tensor,
-    llm_h: torch.Tensor,
-    t_emb: torch.Tensor,
-) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    mem = tt_model._matmul_act_mem_config
-    tt_xt = ttnn.from_torch(
-        x_t.unsqueeze(1).to(torch.bfloat16),
-        device=mesh_device,
-        dtype=tt_model.dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem,
-    )
-    tt_te = ttnn.from_torch(
-        t_emb.unsqueeze(1).to(torch.bfloat16),
-        device=mesh_device,
-        dtype=tt_model.dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem,
-    )
-    tt_llm = ttnn.from_torch(
-        llm_h.unsqueeze(1).to(torch.bfloat16),
-        device=mesh_device,
-        dtype=tt_model.dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=mem,
-    )
-    return tt_xt, tt_te, tt_llm
 
 
 def _reference_decode_one_frame_continuous(
@@ -415,162 +329,6 @@ def _tt_decode_one_frame_continuous(
     return scaled_host, step_states
 
 
-def _ordered_debug_keys(keys: list[str]) -> list[str]:
-    """Pipeline order for PCC rows so the first ``LOW`` matches the first diverging stage."""
-    keys_set = set(keys)
-    layer_ids: list[int] = []
-    for k in keys_set:
-        if k.startswith("layer") and k.endswith(".attn_norm"):
-            try:
-                layer_ids.append(int(k.split(".")[0][len("layer") :]))
-            except ValueError:
-                pass
-    layer_ids = sorted(set(layer_ids))
-    stage_suffixes = ("attn_norm", "attn_out", "post_attn", "ffn_norm", "ffn_out", "post_ffn")
-    ordered: list[str] = []
-    for head in ("proj_input", "proj_time", "proj_llm", "concat_input"):
-        if head in keys_set:
-            ordered.append(head)
-    for i in layer_ids:
-        for suf in stage_suffixes:
-            k = f"layer{i}.{suf}"
-            if k in keys_set:
-                ordered.append(k)
-    for tail in ("final_norm", "velocity"):
-        if tail in keys_set:
-            ordered.append(tail)
-    rest = sorted(keys_set.difference(ordered))
-    return ordered + rest
-
-
-def _per_op_pcc_report(
-    ref: FlowMatchingAudioTransformerRef,
-    x_t: torch.Tensor,
-    llm_h: torch.Tensor,
-    t_emb: torch.Tensor,
-) -> str:
-    """CPU reference intermediate keys for pytest failure hints."""
-    _, ref_dbg = _reference_predict_velocity_debug(ref, x_t, llm_h, t_emb)
-    lines = ["  CPU reference velocity stages (TT per-op debug not in model):"]
-    for k in _ordered_debug_keys(list(ref_dbg.keys())):
-        lines.append(f"  {k}")
-    return "\n".join(lines)
-
-
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-@torch.no_grad()
-def test_acoustic_predict_velocity_pcc(mesh_device, reset_seeds):
-    """TT FM velocity matches CPU reference (Pearson correlation >= 0.99)."""
-    model_name_or_path = resolve_voxtral_model_name_or_skip()
-    try:
-        ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
-    except Exception as exc:  # pragma: no cover
-        pytest.skip(f"Acoustic load failed: {exc}")
-
-    torch.manual_seed(0)
-    b = 1
-    n_acoustic = cfg.audio_model_args.n_acoustic_codebook
-    d_llm = cfg.audio_model_args.acoustic_transformer_args.input_dim
-
-    x_t = torch.randn(b, n_acoustic, dtype=torch.bfloat16)
-    llm_h = torch.randn(b, d_llm, dtype=torch.bfloat16)
-    t_scalar = torch.tensor([[0.25]], dtype=torch.bfloat16).expand(b, 1)
-    t_emb = ref.time_embedding(t_scalar).to(torch.bfloat16)
-
-    reference_velocity = ref._predict_velocity(x_t, llm_h, t_emb).float()
-    tt_xt, tt_te, tt_llm = _tt_upload_velocity_inputs(tt_model, mesh_device, x_t, llm_h, t_emb)
-    tt_out = tt_model.predict_velocity_tt(tt_xt, tt_te, tt_llm)
-    tt_velocity = ttnn.to_torch(tt_out).float().reshape(b, -1)
-    ttnn.deallocate(tt_out)
-
-    passing, pcc_val = comp_pcc(reference_velocity, tt_velocity, pcc=ACOUSTIC_VELOCITY_PCC)
-
-    extra = ""
-    if not passing or _acoustic_debug_pcc_enabled():
-        table = _per_op_pcc_report(ref, x_t, llm_h, t_emb)
-        extra = "\n\nPer-op PCC (forward order; first LOW = diverging stage):\n" + table
-        if _acoustic_debug_pcc_enabled():
-            logger.info(extra)
-
-    assert passing, (
-        f"Acoustic predict_velocity PCC failed: PCC={float(pcc_val):.6f} "
-        f"(required >= {ACOUSTIC_VELOCITY_PCC})." + extra
-    )
-
-
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-@torch.no_grad()
-def test_acoustic_semantic_logits_pcc(mesh_device, reset_seeds):
-    """TT semantic linear: global + ref-top-k + watch {855,6114,6286} vs CPU reference."""
-    model_name_or_path = resolve_voxtral_model_name_or_skip()
-    try:
-        ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
-    except Exception as exc:  # pragma: no cover
-        pytest.skip(f"Acoustic load failed: {exc}")
-
-    torch.manual_seed(0)
-    bsz = 1
-    d_llm = cfg.audio_model_args.acoustic_transformer_args.input_dim
-    llm_h = torch.randn(bsz, d_llm, dtype=torch.bfloat16)
-
-    w_dtype = ref.semantic_codebook_output.weight.dtype
-    ref_logits = ref.semantic_codebook_output(llm_h.to(dtype=w_dtype)).float()
-    ref_logits[:, ref._empty_audio_token_id] = float("-inf")
-    tail = len(AudioSpecialTokens.all_special_tokens()) + ref.model_args.semantic_codebook_size
-    ref_logits[:, tail:] = float("-inf")
-
-    tt_llm = ttnn.from_torch(
-        llm_h.unsqueeze(1),
-        device=mesh_device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
-    sem_logits_tt = tt_model.semantic_logits_tt(tt_llm)
-    ttnn.deallocate(tt_llm)
-    tt_logits = ttnn.to_torch(sem_logits_tt).float()
-    ttnn.deallocate(sem_logits_tt)
-    if tt_logits.dim() == 4:
-        tt_logits = tt_logits.squeeze(1)
-    if tt_logits.dim() == 3:
-        tt_logits = tt_logits.squeeze(1)
-    tt_logits = tt_logits[..., : tt_model._sem_vocab_size]
-    tt_logits = _align_to_ref_shape(ref_logits, tt_logits)
-
-    passing, pcc_val = comp_pcc(ref_logits, tt_logits, pcc=ACOUSTIC_SEMANTIC_LOGITS_PCC)
-    assert passing, (
-        f"Semantic logits PCC failed: PCC={float(pcc_val):.6f} (required >= {ACOUSTIC_SEMANTIC_LOGITS_PCC}). "
-        f"ref.shape={tuple(ref_logits.shape)} tt.shape={tuple(tt_logits.shape)}."
-    )
-    assert torch.equal(ref_logits.argmax(dim=-1), tt_logits.argmax(dim=-1)), (
-        f"Semantic argmax mismatch: ref={ref_logits.argmax(dim=-1).tolist()} " f"tt={tt_logits.argmax(dim=-1).tolist()}"
-    )
-
-    watch = (855, 6114, 6286)
-    watch_ok = [i for i in watch if i < ref_logits.shape[-1]]
-    if watch_ok:
-        ref_watch = ref_logits[:, watch_ok]
-        tt_watch = tt_logits[:, watch_ok]
-        watch_pass, watch_pcc = comp_pcc(ref_watch, tt_watch, pcc=0.999)
-        watch_max_diff = float((tt_watch - ref_watch).abs().max().item())
-        assert watch_pass, (
-            f"Watch-index logits PCC failed at {watch_ok}: PCC={float(watch_pcc):.6f} "
-            f"max|Δ|={watch_max_diff:.4f} ref={ref_watch.tolist()} tt={tt_watch.tolist()}"
-        )
-
-    top_k = min(10, ref_logits.shape[-1])
-    ref_top_idx = torch.topk(ref_logits[0], k=top_k).indices
-    ref_topk = ref_logits[:, ref_top_idx]
-    tt_topk = tt_logits[:, ref_top_idx]
-    topk_pass, topk_pcc = comp_pcc(ref_topk, tt_topk, pcc=0.999)
-    assert topk_pass, f"Ref-top-{top_k} logits PCC failed: PCC={float(topk_pcc):.6f} " f"idx={ref_top_idx.tolist()}"
-
-
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @pytest.mark.parametrize(
@@ -610,6 +368,8 @@ def test_acoustic_forward_matches_cpu_reference(mesh_device, reset_seeds, hidden
     ref_out = _reference_forward_synced(ref, llm_h, cfg_alpha, noise_seed=noise_seed)
     tt_out = _tt_forward_synced(tt_model, mesh_device, llm_h, cfg_alpha, noise_seed=noise_seed)
 
+    _model_card_euler_steps(ref, tt_model)
+
     ref_scaled, _ = _reference_decode_one_frame_continuous(ref, llm_h, cfg_alpha, noise_seed=noise_seed)
     tt_scaled, _ = _tt_decode_one_frame_continuous(tt_model, llm_h, cfg_alpha, noise_seed=noise_seed)
     ok_pcc, pcc_val = comp_pcc(ref_scaled, tt_scaled, pcc=ACOUSTIC_EULER_STATE_PCC)
@@ -631,7 +391,7 @@ def test_acoustic_forward_matches_cpu_reference(mesh_device, reset_seeds, hidden
 @pytest.mark.parametrize("mesh_device", [1], indirect=True)
 @torch.no_grad()
 def test_acoustic_decode_euler_stepwise_pcc(mesh_device, reset_seeds):
-    """Each Euler step sampled state and final pre-round scaled values: PCC >= 0.99 vs CPU."""
+    """Every Euler step + final pre-round scaled values at full model-card FM depth vs CPU."""
     model_name_or_path = resolve_voxtral_model_name_or_skip()
     try:
         ref, cfg = _load_reference_model(model_name_or_path)
@@ -647,6 +407,10 @@ def test_acoustic_decode_euler_stepwise_pcc(mesh_device, reset_seeds):
 
     ref_scaled, ref_steps = _reference_decode_one_frame_continuous(ref, llm_h, cfg_alpha, noise_seed=noise_seed)
     tt_scaled, tt_steps = _tt_decode_one_frame_continuous(tt_model, llm_h, cfg_alpha, noise_seed=noise_seed)
+
+    n_euler = _model_card_euler_steps(ref, tt_model)
+    assert len(ref_steps) == n_euler
+    assert len(tt_steps) == n_euler
 
     lines: list[str] = []
     for i, (ref_s, tt_s) in enumerate(zip(ref_steps, tt_steps)):
@@ -680,71 +444,3 @@ def test_acoustic_decode_euler_stepwise_pcc(mesh_device, reset_seeds):
     assert (
         code_match >= ACOUSTIC_FORWARD_ACOUSTIC_MATCH_FRAC
     ), f"Euler discrete code match {code_match:.4f} below {ACOUSTIC_FORWARD_ACOUSTIC_MATCH_FRAC}\n" + "\n".join(lines)
-
-
-@pytest.mark.timeout(3600)
-@pytest.mark.parametrize("mesh_device", [1], indirect=True)
-@torch.no_grad()
-def test_acoustic_all_layers_attention_mlp_pcc(mesh_device, reset_seeds):
-    """Attention + MLP PCC for every FM layer."""
-    model_name_or_path = resolve_voxtral_model_name_or_skip()
-    try:
-        ref, cfg = _load_reference_model(model_name_or_path)
-        tt_model = _load_tt(mesh_device, model_name_or_path)
-    except Exception as exc:
-        pytest.skip(f"Acoustic load failed: {exc}")
-
-    n_ref = len(ref.layers_ids)
-    n_tt = len(tt_model.attn_norms)
-    assert n_ref == n_tt, f"layer count mismatch: ref n_layers={n_ref} tt attn_norms={n_tt}"
-
-    dim = cfg.audio_model_args.acoustic_transformer_args.dim
-    bsz, seq = 1, 3
-
-    for layer_idx in ref.layers_ids:
-        torch.manual_seed(1)
-        x_attn = torch.randn(bsz, seq, dim, dtype=torch.bfloat16)
-        layer = ref.layers[str(layer_idx)]
-        n = layer.attention_norm(x_attn)
-        ref_attn = layer.attention(n)
-
-        x_tt = ttnn.from_torch(
-            x_attn.unsqueeze(1),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        attn_norm = tt_model.attn_norms[layer_idx](x_tt, mode=Mode.DECODE)
-        out_tt = tt_model.attentions[layer_idx](attn_norm, None, None, attention_mask=None)
-        ttnn.deallocate(attn_norm)
-        tt_attn = ttnn.to_torch(out_tt).float().reshape(bsz, seq, dim)
-        ttnn.deallocate(out_tt)
-
-        passing_a, pcc_a = comp_pcc(ref_attn.float(), tt_attn, pcc=ACOUSTIC_VELOCITY_PCC)
-        assert passing_a, (
-            f"Layer {layer_idx} attention PCC failed: PCC={float(pcc_a):.6f} " f"(required >= {ACOUSTIC_VELOCITY_PCC})."
-        )
-
-        torch.manual_seed(2)
-        x_mlp = torch.randn(bsz, seq, dim, dtype=torch.bfloat16)
-        n2 = layer.ffn_norm(x_mlp)
-        ref_mlp = layer.feed_forward(n2)
-
-        x_mlp_tt = ttnn.from_torch(
-            x_mlp.unsqueeze(1),
-            device=mesh_device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        normed_tt = tt_model.ffn_norms[layer_idx](x_mlp_tt, mode=Mode.DECODE)
-        mlp_tt = tt_model.mlps[layer_idx](normed_tt)
-        ttnn.deallocate(normed_tt)
-        tt_mlp = ttnn.to_torch(mlp_tt).float().reshape(bsz, seq, dim)
-        ttnn.deallocate(mlp_tt)
-
-        passing_m, pcc_m = comp_pcc(ref_mlp.float(), tt_mlp, pcc=ACOUSTIC_VELOCITY_PCC)
-        assert passing_m, (
-            f"Layer {layer_idx} MLP PCC failed: PCC={float(pcc_m):.6f} " f"(required >= {ACOUSTIC_VELOCITY_PCC})."
-        )
