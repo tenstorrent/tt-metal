@@ -56,6 +56,13 @@ def check_binary_integrity(
                     False,
                     f"Section {section_name} not found in ELF file {dispatcher_core_data.firmware_path}.",
                 )
+            elif section.address is None:
+                log_check_risc(
+                    risc_name,
+                    location,
+                    False,
+                    f"Section {section_name} doesn't have an address in ELF file {dispatcher_core_data.firmware_path}.",
+                )
             else:
                 address: int = section.address
                 read_data = bytearray(len(section.data))

@@ -18,6 +18,7 @@ class TriageSession:
         self._broken_devices: set[Device] = set()
         self._broken_cores: set[RiscLocation] = set()
         self._halted_cores: set[RiscLocation] = set()
+        self._cores_reset_state: dict[RiscLocation, bool] = {}
 
     def add_broken_device(self, device: Device) -> None:
         with self._lock:
@@ -46,6 +47,14 @@ class TriageSession:
     def add_halted_core(self, location: OnChipCoordinate, risc_name: str) -> None:
         with self._lock:
             self._halted_cores.add(RiscLocation(location, None, risc_name))
+
+    def is_core_reset_state(self, location: OnChipCoordinate, risc_name: str) -> bool | None:
+        with self._lock:
+            return self._cores_reset_state.get(RiscLocation(location, None, risc_name), None)
+
+    def save_core_reset_state(self, location: OnChipCoordinate, risc_name: str, reset: bool) -> None:
+        with self._lock:
+            self._cores_reset_state[RiscLocation(location, None, risc_name)] = reset
 
     @property
     def halted_cores(self) -> set[RiscLocation]:
