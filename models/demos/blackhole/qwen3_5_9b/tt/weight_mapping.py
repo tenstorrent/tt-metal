@@ -10,8 +10,8 @@ framework Embedding / final RMSNorm / LM head look up are renamed —
 and every per-layer weight passes through RAW under ``layers.{i}.``. That is exactly
 what the per-module weight loaders consume: attention/gdn/mlp/weights.py read the raw
 transformers submodule names (``self_attn.q_proj``, ``linear_attn.in_proj_qkv``,
-``linear_attn.conv1d``, ``mlp.gate_proj``, ...) after layer.py's substate() strips the
-``layers.{i}.{self_attn|linear_attn|mlp}.`` prefix. This MUST match the test path
+``linear_attn.conv1d``, ``mlp.gate_proj``, ...) after layer.py calls submodule_state_dict()
+(defined below) to strip the ``layers.{i}.{self_attn|linear_attn|mlp}.`` prefix. This MUST match the test path
 (tests/unit/test_model.py::_remap_hf_state_dict), which feeds the TT model these same
 raw layer keys — so the production load path and the validated test path agree.
 
@@ -23,6 +23,18 @@ gone — keep linear_attn weights raw.)
 from typing import Dict
 
 import torch
+
+
+def submodule_state_dict(state: Dict[str, torch.Tensor], key: str) -> Dict[str, torch.Tensor]:
+    """Return the sub-dict of entries whose keys start with ``key.``, with that prefix removed.
+
+    Used by layer.py to slice the raw ``layers.{i}.`` state dict (see module docstring) into the
+    per-submodule ``self_attn`` / ``linear_attn`` / ``mlp`` state dicts the attention/gdn/mlp
+    weight loaders consume.
+    """
+    prefix = f"{key}."
+    prefix_len = len(prefix)
+    return {k[prefix_len:]: v for k, v in state.items() if k.startswith(prefix)}
 
 
 def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:

@@ -1,5 +1,3 @@
-from enum import Enum
-
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
@@ -14,11 +12,6 @@ from .operations import (
     solve_unit_lower_triangular,
 )
 from .weights import load_gdn_weights
-
-
-class Mode(Enum):
-    PREFILL = "prefill"
-    DECODE = "decode"
 
 
 class Qwen35RMSNormGated(LightweightModule):

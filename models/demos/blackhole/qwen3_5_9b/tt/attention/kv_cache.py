@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-KV cache initialization for Gemma4 attention with TP support.
+KV cache initialization for Qwen3.5 attention with TP support.
 
 Per-device cache uses local KV head count (num_kv_heads // tp).
 Follows gpt-oss kv_cache.py pattern.
@@ -11,7 +11,7 @@ Follows gpt-oss kv_cache.py pattern.
 import torch
 
 import ttnn
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
+from models.demos.blackhole.qwen3_5_9b.utils.general_utils import get_cache_file_name
 
 
 def init_kv_cache(
@@ -31,7 +31,7 @@ def init_kv_cache(
 
     Args:
         mesh_device: TT device or mesh device
-        config: Gemma4AttentionConfig for this layer
+        config: Qwen35ModelArgs for this layer
         max_batch_size: Maximum batch size
         max_seq_len: Maximum sequence length
         paged_attention_config: Optional paged attention config

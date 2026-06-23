@@ -26,7 +26,7 @@ class MLPWeights:
 
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None) -> MLPWeights:
-    """state_dict is the per-layer mlp substate: keys 'gate_proj.weight', 'down_proj.weight', 'up_proj.weight'."""
+    """state_dict is the per-layer mlp submodule state dict: keys 'gate_proj.weight', 'down_proj.weight', 'up_proj.weight'."""
 
     if tensor_cache_path is not None:
         os.makedirs(tensor_cache_path, exist_ok=True)

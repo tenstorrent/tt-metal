@@ -86,7 +86,7 @@ def _build_pair(mesh_device, cfg, args, layer_num):
     """Matched (HF, TT) decoder layers sharing one set of random weights.
 
     The HF Qwen3_5DecoderLayer is the golden; its state_dict is re-prefixed with `layers.{n}.` (what
-    layer.py's substate/_make_norm look up) and handed to the TT block, so both compute with identical
+    layer.py's submodule_state_dict/_make_norm look up) and handed to the TT block, so both compute with identical
     weights. TT_CCL only on a real mesh (it drives the reduce-scatters); the weight cache stays None —
     caching random weights would corrupt a later re-run."""
     hf_layer = Qwen3_5DecoderLayer(cfg, layer_idx=layer_num).to(torch.float32).eval()

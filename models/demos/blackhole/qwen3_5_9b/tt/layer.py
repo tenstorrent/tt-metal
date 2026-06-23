@@ -17,7 +17,7 @@ from models.common.rmsnorm import RMSNorm
 from models.demos.blackhole.qwen3_5_9b.tt.attention import Qwen35Attention
 from models.demos.blackhole.qwen3_5_9b.tt.gdn import Qwen35GatedDeltaNet
 from models.demos.blackhole.qwen3_5_9b.tt.mlp import Qwen35MLP
-from models.demos.blackhole.qwen3_5_9b.utils.substate import substate
+from models.demos.blackhole.qwen3_5_9b.tt.weight_mapping import submodule_state_dict
 from models.tt_transformers.tt.common import Mode
 
 
@@ -62,7 +62,7 @@ class Qwen35DecoderLayer(LightweightModule):
             # path reads; a paged (vLLM) deployment rebinds it later via set_paged_kv_cache.
             self.attention = Qwen35Attention(
                 mesh_device,
-                substate(state_dict, f"layers.{layer_num}.self_attn"),
+                submodule_state_dict(state_dict, f"layers.{layer_num}.self_attn"),
                 args,
                 tt_ccl,
                 create_kv_cache=True,
@@ -72,7 +72,7 @@ class Qwen35DecoderLayer(LightweightModule):
             # GDN carries its own conv + recurrent state internally (no external KV cache, no RoPE).
             self.attention = Qwen35GatedDeltaNet(
                 args,
-                substate(state_dict, f"layers.{layer_num}.linear_attn"),
+                submodule_state_dict(state_dict, f"layers.{layer_num}.linear_attn"),
                 mesh_device,
                 tt_ccl=tt_ccl,
                 tensor_cache_path=cache,
@@ -80,7 +80,7 @@ class Qwen35DecoderLayer(LightweightModule):
 
         self.feed_forward = Qwen35MLP(
             mesh_device,
-            substate(state_dict, f"layers.{layer_num}.mlp"),
+            submodule_state_dict(state_dict, f"layers.{layer_num}.mlp"),
             args,
             tensor_cache_path=cache,
             tt_ccl=tt_ccl,

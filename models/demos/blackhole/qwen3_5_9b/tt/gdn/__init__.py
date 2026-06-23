@@ -6,6 +6,6 @@ chunk/conv/triangular-solve helpers in operations.py, weight loading in weights.
 Re-exports the public classes so callers import them straight from the package
 (e.g. tt/layer.py uses Qwen35GatedDeltaNet).
 """
-from .gdn import Mode, Qwen35GatedDeltaNet, Qwen35RMSNormGated
+from .gdn import Qwen35GatedDeltaNet, Qwen35RMSNormGated
 
-__all__ = ["Qwen35GatedDeltaNet", "Qwen35RMSNormGated", "Mode"]
+__all__ = ["Qwen35GatedDeltaNet", "Qwen35RMSNormGated"]
