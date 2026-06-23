@@ -280,6 +280,32 @@ __attribute__((noinline)) void signal_host_buffer_full(uint32_t control_buffer_i
     } while (profiler_control_buffer[control_buffer_index_for_dram] == DRAM_PROFILER_ADDRESS_STALLED);
 }
 
+__attribute__((noinline)) void do_quick_push(uint32_t riscID, uint32_t send_size) {
+    uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+    uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+    uint32_t pageSize =
+        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
+    int hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER + riscID;
+    int dramProfilerAddressIndex = DRAM_PROFILER_ADDRESS;
+    if constexpr (NON_DROPPING) {
+        dramProfilerAddressIndex = kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0 + riscID;
+    }
+    uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                               PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                           profiler_control_buffer[hostIndex] * sizeof(uint32_t);
+
+    const auto s = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        profiler_control_buffer[dramProfilerAddressIndex],
+        pageSize);
+
+    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+
+    profiler_noc_async_write_posted(
+        reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data), dram_bank_dst_noc_addr, send_size);
+}
+
 __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
 #if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
@@ -288,12 +314,8 @@ __attribute__((noinline)) void finish_profiler() {
         return;
     }
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
-    uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
     bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
     int dramProfilerAddressIndex = DRAM_PROFILER_ADDRESS;
-
-    uint32_t pageSize =
-        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
     NocRegisterStateSave noc_state;
     for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
@@ -317,10 +339,6 @@ __attribute__((noinline)) void finish_profiler() {
             uint32_t currEndIndexAll = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
             uint32_t currEndIndexGuaranteed = CUSTOM_MARKERS + profiler_control_buffer[hostIndex];
             uint32_t send_size = 0;
-            uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
-                                       PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                                   hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                                   profiler_control_buffer[hostIndex] * sizeof(uint32_t);
 
             if constexpr (NON_DROPPING) {
                 // Send everything
@@ -329,10 +347,6 @@ __attribute__((noinline)) void finish_profiler() {
                     // Host index is reset because we got a new DRAM buffer
                     profiler_control_buffer[hostIndex] = 0;
                     currEndIndexAll = profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
-                    dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
-                                      PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                                  hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                                  profiler_control_buffer[hostIndex] * sizeof(uint32_t);
                 }
             }
 
@@ -351,18 +365,7 @@ __attribute__((noinline)) void finish_profiler() {
             }
 
             if (do_noc && is_dram_set) {
-                const auto s = TensorAccessor(
-                    tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
-                    profiler_control_buffer[dramProfilerAddressIndex],
-                    pageSize);
-
-                uint64_t dram_bank_dst_noc_addr =
-                    s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
-
-                profiler_noc_async_write_posted(
-                    reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex].data),
-                    dram_bank_dst_noc_addr,
-                    send_size);
+                do_quick_push(dramProfilerAddressIndex, riscID, send_size);
             }
         }
     }
@@ -397,7 +400,6 @@ __attribute__((noinline)) void quick_push() {
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
 
     uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
-    uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
     profiler_data_buffer[myRiscID].data[ID_LH] =
         (profiler_data_buffer[myRiscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | myRiscID);
@@ -416,18 +418,6 @@ __attribute__((noinline)) void quick_push() {
         }
     }
 
-    uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
-                               PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                           HOST_BUFFER_END_INDEX * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
-                           profiler_control_buffer[HOST_BUFFER_END_INDEX] * sizeof(uint32_t);
-
-    const auto s = TensorAccessor(
-        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
-        profiler_control_buffer[DRAM_PROFILER_ADDRESS],
-        PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram);
-
-    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
-
     for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
     }
@@ -438,11 +428,7 @@ __attribute__((noinline)) void quick_push() {
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC -
                             (PROFILER_L1_GUARANTEED_MARKER_COUNT / 2) * PROFILER_L1_MARKER_UINT32_SIZE) {
         NocRegisterStateSave noc_state;
-        profiler_noc_async_write_posted(
-            reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID].data),
-            dram_bank_dst_noc_addr,
-            wIndex * sizeof(uint32_t));
-
+        do_quick_push(DRAM_PROFILER_ADDRESS, myRiscID, wIndex * sizeof(uint32_t));
         profiler_noc_async_flush_posted_write();
         profiler_control_buffer[HOST_BUFFER_END_INDEX] = currEndIndex;
     } else {
