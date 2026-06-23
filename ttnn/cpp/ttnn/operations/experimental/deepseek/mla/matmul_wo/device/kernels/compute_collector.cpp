@@ -19,11 +19,11 @@ void kernel_main() {
     const auto collector_core_id = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_4;
+    constexpr auto cb_s2c_in2_id = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_out_id = tt::CBIndex::c_4;
 
-    CircularBuffer cb_s2c_in2_cb(cb_s2c_in2);
-    CircularBuffer cb_s2c_out_cb(cb_s2c_out);
+    CircularBuffer cb_s2c_in2(cb_s2c_in2);
+    CircularBuffer cb_s2c_out(cb_s2c_out);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -34,32 +34,32 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Collector core
     //-------------------------------------------------------------------------
-    reconfig_data_format_srca(cb_s2c_in2);
-    reconfig_data_format_srcb(cb_s2c_in2);
-    pack_reconfig_data_format(cb_s2c_out);
+    reconfig_data_format_srca(cb_s2c_in2_id);
+    reconfig_data_format_srcb(cb_s2c_in2_id);
+    pack_reconfig_data_format(cb_s2c_out_id);
 
-    binary_op_init_common(cb_s2c_in2, cb_s2c_in2, cb_s2c_out);
+    binary_op_init_common(cb_s2c_in2_id, cb_s2c_in2_id, cb_s2c_out_id);
 
-    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2);
+    binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id);
 
     cb_s2c_out_cb.reserve_back(num_iters);
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
-        cb_s2c_in2_cb.wait_front(num_cores);
+        cb_s2c_in2.wait_front(num_cores);
 
         tile_regs_acquire();
         for (uint32_t k = 0; k < num_cores; ++k) {
             binary_dest_reuse_tiles<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
-                cb_s2c_in2, k, 0 /*dst_tile_index*/);
+                cb_s2c_in2_id, k, 0 /*dst_tile_index*/);
         }
         tile_regs_commit();
 
         tile_regs_wait();
-        pack_tile(0, cb_s2c_out);
+        pack_tile(0, cb_s2c_out_id);
         tile_regs_release();
 
-        cb_s2c_in2_cb.pop_front(num_cores);
+        cb_s2c_in2.pop_front(num_cores);
     }
 
-    cb_s2c_out_cb.push_back(num_iters);
+    cb_s2c_out.push_back(num_iters);
 }
