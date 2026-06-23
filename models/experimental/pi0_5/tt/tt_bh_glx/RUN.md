@@ -269,10 +269,38 @@ The annotator adds 3 columns to every row: `STAGE`, `LAYER`, `SUBSTAGE`.
 > corrupt `DEVICE KERNEL DURATION`** per the TP=8 note above), since trace
 > replay is deterministic so any iter's row gives identical timing.
 
+> **Additional caveat — CCLs are NOT in the suffix-less canonical rows.**
+> The annotator's "canonical inference" is just the last ~1518 rows of the
+> CSV by host timestamp (one inference's worth of ops). But CCL ops
+> (`AllGatherDeviceOperation`, `ReduceScatterDeviceOperation`) live at
+> *stage boundaries* — AllGather at the END of vision, ReduceScatter at each
+> prefill MLP layer — not at the tail of the inference. By the time the last
+> op of the inference (a denoise-step-5 tail op) runs, the CCL ops finished
+> much earlier and are in the middle of the CSV.
+>
+> Result: filtering on `STAGE == "siglip"` (exact suffix-less match) returns
+> the SigLIP encoder ops but NOT the AllGather that ends SigLIP. Filtering
+> on `STAGE == "vlm_prefill"` returns the prefill matmuls but NOT the
+> ReduceScatters between them. All those CCL ops are tagged with
+> `_warmup{N}` suffixes. **To get CCLs, strip the suffix before grouping**
+> (see the drill-down recipes below).
+
+### Multi-device caveat — TL;DR
+
+| What you might do | What you actually get | What to do instead |
+|---|---|---|
+| Filter `STAGE == "siglip"` | SigLIP non-CCL ops, ~80% of total | Filter `STAGE ~ /^siglip/` (regex prefix match) |
+| Filter suffixless STAGE only | Tail of inference, no CCLs | Strip `_warmup\d+$` and `_trace_capture$` from STAGE, then group |
+| Sum kernel times by suffixless STAGE | Underestimate (missing CCLs) | Use the annotator's stdout summary (`TOTAL/inference 28.32 ms`) which already filtered correctly, OR use the strip-and-group recipe below |
+
 ### 4. Useful drill-down recipes
 
+**The strip-and-group pattern.** Multi-device CSVs require stripping the
+`_warmup{N}` and `_trace_capture` suffixes from `STAGE` before grouping —
+otherwise CCL ops drop out (see the second caveat above).
+
 Per-stage kernel-time breakdown on device 1 (any iter — trace replay is
-deterministic, so each iter has identical kernel times):
+deterministic, so each iter has identical kernel times; divide by 4 iters):
 
 ```bash
 CSV=generated/profiler/reports/<TS>/ops_perf_results_<TS>_annotated_v4.csv
@@ -282,28 +310,44 @@ awk -F, '
     sum[s] += $22; cnt[s]++
   }
   END {
-    for (s in sum) printf "  %-22s  total %7.3f ms  /  %d ops total\n", s, sum[s]/1e6, cnt[s]
-  }' "$CSV" | sort
+    order = "prefix_setup siglip vlm_prefill denoise_step_1 denoise_step_2 denoise_step_3 denoise_step_4 denoise_step_5"
+    n = split(order, arr, " ")
+    total = 0
+    for (i = 1; i <= n; i++) {
+      s = arr[i]
+      if (s in sum) { printf "  %-22s %7.3f ms/iter  (%d ops total)\n", s, sum[s]/4/1e6, cnt[s]; total += sum[s]/4 }
+    }
+    printf "  %-22s %7.3f ms/iter\n", "TOTAL", total/1e6
+  }' "$CSV"
 ```
 
 Top-10 slowest matmuls in `vlm_prefill` on device 1:
 
 ```bash
 awk -F, 'NR>1 && $7=="1" && $1 ~ /^vlm_prefill/ && $4=="MatmulDeviceOperation" && $22+0<1e8 {
-  printf "%s/L%-2s\t%7.1f us\n", $1, $2, $22/1000
+  s = $1; sub(/_warmup[0-9]+$/, "", s); sub(/_trace_capture$/, "", s)
+  printf "%s/L%-2s\t%7.1f us\n", s, $2, $22/1000
 }' "$CSV" | sort -t$'\t' -k2 -rn | head -10
 ```
 
-CCL (cross-chip) ops per iter on device 1:
+CCL (cross-chip) ops per iter on device 1 — strip the suffix to catch ALL of
+them, then divide by 4 iters per device:
 
 ```bash
-awk -F, 'NR>1 && $7=="1" && $4 ~ /AllGather|AllReduce|ReduceScatter/ && $22+0<1e8 && $22+0>0 {
-  c[$4]++; s[$4]+=$22
+awk -F, 'NR>1 && $7=="1" && $4 ~ /AllGather|ReduceScatter/ && $22+0<1e8 && $22+0>0 {
+  s = $1; sub(/_warmup[0-9]+$/, "", s); sub(/_trace_capture$/, "", s)
+  key = $4 "/" s
+  c[key]++; sum[key]+=$22
 }
 END {
-  for (k in c) printf "  %-30s %3d ops/4iters  %7.3f ms/iter\n", k, c[k], s[k]/1e6/4
-}' "$CSV"
+  printf "  %-50s %12s %s\n", "OP CODE / STAGE", "ops/iter", "ms/iter"
+  for (k in c) printf "  %-50s %12.2f %7.3f\n", k, c[k]/4, sum[k]/4/1e6
+}' "$CSV" | (head -1; sort -k3 -rn)
 ```
+
+Expected CCL summary per iter on a sane device (3-cam, commit `38ac051ee68`):
+~73 CCL ops totaling ~3.0-3.3 ms of kernel time (AllGather inside vision,
+ReduceScatter × 18 in prefill MLPs, plus per-step reductions in denoise).
 
 ### 5. Wall-clock vs kernel-time gap
 
