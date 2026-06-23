@@ -75,6 +75,7 @@ void kernel_main() {
 #endif
 
     CircularBuffer cb_eps_obj(cb_eps);
+    CircularBuffer cb_scaler_obj(cb_scaler);
     CircularBuffer cb_in_obj(cb_in);
     CircularBuffer cb_inb_obj(cb_inb);
     CircularBuffer cb_out_obj(cb_out);
@@ -116,10 +117,12 @@ void kernel_main() {
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
             FLOAT32_REDUCTION,
-            policies::FullBlockWithPopPolicy>(cb_in, cb_inb, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
+            policies::FullBlockWithPopPolicy>(
+            cb_in_obj, cb_inb_obj, cb_scaler_obj, cb_ex_obj, W, Wt, block_size, tile_width);
 #else
-        numeric::row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
-            cb_in, cb_scaler, cb_ex, W, Wt, block_size, tile_width);
+        numeric::
+            row_wise_mean<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION, policies::FullBlockWithPopPolicy>(
+                cb_in_obj, cb_scaler_obj, cb_ex_obj, W, Wt, block_size, tile_width);
 #endif
 #endif  // !RMS ifdef end
         // Start of
