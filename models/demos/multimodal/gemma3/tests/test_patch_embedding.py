@@ -99,7 +99,7 @@ def test_conv2d_inference(
     assert H * W == HW, "HW is not a perfect square — can't reshape"
     tt_output_torch = tt_output_torch.permute(0, 2, 1)
     tt_output_torch = tt_output_torch.reshape(B, C, H, W)
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
     non_zero_indices = tt_output_torch.ne(0).nonzero(as_tuple=True)
     tt_output_torch = tt_output_torch[non_zero_indices]
