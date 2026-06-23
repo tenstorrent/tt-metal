@@ -14,9 +14,9 @@
 // and the LLK compute macros take the dfb accessor directly instead of `.get_cb_id()`.
 //
 // Defines (set by the program factory):
-//   ELTWISE_OP_TYPE / ELTWISE_OP / ELTWISE_OP_INIT  — the binary op (ADD => add_tiles).
-//   PACK_RELU                                       — fuse a RELU on the packer (no-bcast fast path).
-//   PROCESS_POST_ACTIVATIONS(i)                     — optional SFPU post-activation chain.
+//   ELTWISE_OP_TYPE / ELTWISE_OP            — the binary op (ADD => add_tiles).
+//   PACK_RELU                               — fuse a RELU on the packer (no-bcast fast path).
+//   PROCESS_POST_ACTIVATIONS(i)             — optional SFPU post-activation chain.
 //
 // Runtime arg: num_tiles (this core's shard tile count).
 // Compile-time arg: num_tiles_per_cycle (tiles processed per DST acquire; bounded by DST capacity).

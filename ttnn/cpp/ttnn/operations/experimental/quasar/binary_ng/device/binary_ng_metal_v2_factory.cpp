@@ -65,20 +65,19 @@ constexpr const char* kShardedWriterDfb =
 constexpr const char* kShardedComputeDfb =
     "ttnn/cpp/ttnn/operations/experimental/quasar/binary_ng/device/kernels_dfb/compute/eltwise_binary_no_bcast_dfb.cpp";
 
-// Per-core shard tile count for a sharded tensor, mirroring the real factory's ShardShapeGenerator:
-// the (tile-rounded) shard height-in-tiles * width-in-tiles. For HEIGHT/WIDTH/BLOCK sharding the end
-// cores may carry a smaller shard; we round each per-core shard up to whole tiles. For the ResNet50
-// config shards are even, so every core gets the same count.
-uint32_t shard_tiles_for_core(const Tensor& tensor, const ShardSpec& shard_spec, CoreCoord core, CoreCoord end_core) {
+// Tile count for one full shard: (tile-rounded) shard height-in-tiles * width-in-tiles. Every core
+// processes this same count, including a partial end core under an uneven shard. That is correct
+// because a sharded buffer allocates the full rounded-up shard on every core: the trailing tiles on a
+// partial core are allocated L1 with no host page mapped, so computing the add on them is in-bounds and
+// never reaches the logical output. The selector pins equal shard shapes across a, b, and the output
+// memory_config (and the TT_FATAL below cross-checks the per-tensor counts), so the three tensors
+// over-allocate identically. This matches the descriptor factory, which also uses the full shard tile
+// count when the a/b/c shard specs are equal.
+uint32_t full_shard_tiles(const Tensor& tensor, const ShardSpec& shard_spec) {
     const uint32_t tile_h = tensor.tensor_spec().tile().get_height();
     const uint32_t tile_w = tensor.tensor_spec().tile().get_width();
     const uint32_t shard_ht = tt::round_up(shard_spec.shape[0], tile_h) / tile_h;
     const uint32_t shard_wt = tt::round_up(shard_spec.shape[1], tile_w) / tile_w;
-    // The admitted slice has even shards across the grid, so every core has the same tile count.
-    // Uneven end-core handling would mirror the descriptor factory's ShardShapeGenerator if wider
-    // shapes are admitted; until then core/end_core are unused.
-    (void)core;
-    (void)end_core;
     return shard_ht * shard_wt;
 }
 
@@ -111,14 +110,22 @@ ProgramArtifacts create_sharded_artifacts(
     const uint32_t b_tile_bytes = static_cast<uint32_t>(b_tile.get_tile_size(b_df));
     const uint32_t c_tile_bytes = static_cast<uint32_t>(c_tile.get_tile_size(c_df));
 
-    // Worker grid = the op's shard grid (set by get_worker_grid from the sharded inputs).
     const ShardSpec a_shard = *a.shard_spec();
     const ShardSpec b_shard = *b.shard_spec();
     const ShardSpec c_shard = *c.shard_spec();
-    const CoreRangeSet& grid = op.worker_grid;
+
+    // Place work on exactly the shard grid -- the cores that physically own a shard -- NOT
+    // op.worker_grid. get_worker_grid() returns the full sub-device worker set for a sharded output (a
+    // superset of the shard grid); the descriptor factory only tolerates that by sending dummy zero
+    // runtime args to non-shard cores. This DFB factory places a kernel on every target core, so a
+    // non-shard core would run a compute that writes a full shard into a borrowed L1 address the tensor
+    // does not own there. The selector (matches_metal_v2_slice) pins a_shard.grid == b_shard.grid and
+    // a_shard.grid == the output memory_config's shard grid, and for in-place add_ the output aliases a,
+    // so a_shard.grid is the common core set for a, b, and the output. The per-tensor full_shard_tiles
+    // equality TT_FATAL below additionally guards an explicit output tensor whose shard shape diverges.
+    const CoreRangeSet& grid = a_shard.grid;
     const auto cores = corerange_to_cores(grid, std::nullopt, /*row_wise=*/true);
-    TT_FATAL(!cores.empty(), "binary_ng Metal 2.0 sharded factory: empty worker grid");
-    const CoreCoord end_core = a_shard.grid.ranges().rbegin()->end_coord;
+    TT_FATAL(!cores.empty(), "binary_ng Metal 2.0 sharded factory: empty shard grid");
 
     // -----------------------------------------------------------------------------------------
     // Tensor parameters: declare a, b, c with their exact specs (ValidateTensorArgs requires full
@@ -136,14 +143,12 @@ ProgramArtifacts create_sharded_artifacts(
     const m2::KernelSpecName WRITER{"binary_ng_sharded_writer"};
     const m2::KernelSpecName COMPUTE{"binary_ng_sharded_compute"};
 
-    // DFB num_entries == one full shard so the borrowed ring spans the resident shard. Use the max
-    // per-core tile count (even shards => uniform). entry_size == that tensor's tile bytes.
-    uint32_t a_shard_tiles = 0, b_shard_tiles = 0, c_shard_tiles = 0;
-    for (const auto& core : cores) {
-        a_shard_tiles = std::max(a_shard_tiles, shard_tiles_for_core(a, a_shard, core, end_core));
-        b_shard_tiles = std::max(b_shard_tiles, shard_tiles_for_core(b, b_shard, core, end_core));
-        c_shard_tiles = std::max(c_shard_tiles, shard_tiles_for_core(c, c_shard, core, end_core));
-    }
+    // DFB num_entries == one full shard so the borrowed ring spans the resident shard. The selector
+    // guarantees a/b/c share one shard spec, so each tensor's full shard tile count is uniform across
+    // the grid. entry_size == that tensor's tile bytes.
+    const uint32_t a_shard_tiles = full_shard_tiles(a, a_shard);
+    const uint32_t b_shard_tiles = full_shard_tiles(b, b_shard);
+    const uint32_t c_shard_tiles = full_shard_tiles(c, c_shard);
     TT_FATAL(
         a_shard_tiles == b_shard_tiles && a_shard_tiles == c_shard_tiles,
         "binary_ng Metal 2.0 sharded factory: a/b/c shard tile counts must match (no-broadcast) but got {} {} {}",
@@ -299,7 +304,7 @@ ProgramArtifacts create_sharded_artifacts(
     compute_args.reserve(cores.size());
     for (const auto& core : cores) {
         const m2::NodeCoord node{static_cast<uint32_t>(core.x), static_cast<uint32_t>(core.y)};
-        const uint32_t n = shard_tiles_for_core(c, c_shard, core, end_core);
+        const uint32_t n = c_shard_tiles;
         reader_args.push_back({node, {{"num_tiles", n}}});
         writer_args.push_back({node, {{"num_tiles", n}}});
         compute_args.push_back({node, {{"num_tiles", n}}});

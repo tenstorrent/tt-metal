@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -91,6 +91,22 @@ _BLOCK_GRID = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 1))})
 _BLOCK_SHARD = [32, 32]
 _BLOCK_SHAPE = torch.Size([2 * 32, 4 * 32])
 
+# Uneven height shard: the tensor is 3 tiles tall but the shard is 2 tiles tall over a 2-core column,
+# so the last core holds 1 logical tile + 1 allocated padding tile. The selector admits this (matching
+# a/b/c specs) and the DFB factory processes the full rounded-up shard (2 tiles) on every core. The
+# padding tile is allocated L1 with no host page mapped, so over-processing it is in-bounds and the
+# logical output stays correct. A 2-core column fits both Wormhole (8x8) and the Quasar simulator (8x4).
+_UNEVEN_HEIGHT_GRID = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))})  # 2 cores
+_UNEVEN_HEIGHT_SHARD = [2 * 32, 32]  # 2 tiles tall per shard
+_UNEVEN_HEIGHT_SHAPE = torch.Size([3 * 32, 32])  # 3 tiles total -> end core: 1 logical + 1 padding
+
+# Uneven block shard: a 2x2 shard ([64, 64]) over a 2x2 core grid, but the tensor is 3x3 tiles, so the
+# boundary-row and boundary-column cores carry partial shards (the corner core is partial in both dims).
+# Same partial-end-core mechanism as the height case, exercised on the 2D block layout. Fits 8x4.
+_UNEVEN_BLOCK_GRID = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 1))})  # 2x2 cores
+_UNEVEN_BLOCK_SHARD = [2 * 32, 2 * 32]  # 2x2 tiles per shard
+_UNEVEN_BLOCK_SHAPE = torch.Size([3 * 32, 3 * 32])  # 3x3 tiles -> boundary cores partial
+
 
 @pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16])
 @pytest.mark.parametrize("fuse_relu", [False, True])
@@ -128,6 +144,39 @@ def test_resnet_add_multitile_shard(device, dtype_tt):
     shard = [4 * 32, 32]  # 4 tiles tall per shard
     shape = torch.Size([4 * 4 * 32, 32])
     _run_resnet_add(device, dtype_tt, _height_sharded_config, shard, grid, shape, fuse_relu=True)
+
+
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16])
+@pytest.mark.parametrize("fuse_relu", [False, True])
+def test_resnet_add_uneven_height_sharded(device, dtype_tt, fuse_relu):
+    # Uneven height shard (partial end core). The selector admits it because a/b/c share one shard spec;
+    # the DFB factory over-processes the full rounded-up shard into allocated padding, so the logical
+    # output must still match the golden add.
+    _run_resnet_add(
+        device,
+        dtype_tt,
+        _height_sharded_config,
+        _UNEVEN_HEIGHT_SHARD,
+        _UNEVEN_HEIGHT_GRID,
+        _UNEVEN_HEIGHT_SHAPE,
+        fuse_relu,
+    )
+
+
+@pytest.mark.parametrize("dtype_tt", [ttnn.bfloat16])
+@pytest.mark.parametrize("fuse_relu", [False, True])
+def test_resnet_add_uneven_block_sharded(device, dtype_tt, fuse_relu):
+    # Uneven block shard: boundary-row/column cores carry partial shards (corner core partial in both
+    # dims). Same partial-end-core handling on the 2D block layout.
+    _run_resnet_add(
+        device,
+        dtype_tt,
+        _block_sharded_config,
+        _UNEVEN_BLOCK_SHARD,
+        _UNEVEN_BLOCK_GRID,
+        _UNEVEN_BLOCK_SHAPE,
+        fuse_relu,
+    )
 
 
 def test_resnet_add_program_cache_hit(device):
