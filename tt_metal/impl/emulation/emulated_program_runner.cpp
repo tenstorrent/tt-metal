@@ -59,6 +59,7 @@
 #include "tt_emule/device.hpp"
 #include "tt_emule/dfb_sync_state.hpp"
 #include "tt_emule/tile_counter.hpp"
+#include "jit_hw/internal/emule_thread_ctx.h"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <tt-logger/tt-logger.hpp>
@@ -138,6 +139,12 @@ thread_local uint32_t __emule_my_thread_id = 0;
 
 // Core map for cross-core NOC address resolution (shared across all threads).
 thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
+
+// Per-thread execution context — the single source of truth for an emulated
+// RISC's thread-local state, specialized by RISC type (see emule_thread_ctx.h).
+// Defined here, exported via -rdynamic so the JIT .so resolves it at dlopen; set
+// per kernel thread in the launch lambda below.
+thread_local ThreadCommonCtx* __emule_self = nullptr;
 
 // ---------------------------------------------------------------------------
 // Bank mapping arrays — populated from SoC descriptor before kernel launch.
@@ -2221,17 +2228,27 @@ static void launch_cores(
                             __processor_id = ki.processor_id;
                             __core = core;
                             __emule_core_map = core_map_ptr;
-                            my_x[0] = px;
-                            my_x[1] = px;
-                            my_y[0] = py;
-                            my_y[1] = py;
-                            __emule_logical_x = lx;
-                            __emule_logical_y = ly;
-
                             __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
                             __emule_trisc_id = 0;
                             __emule_num_threads = ki.num_threads;
                             __emule_my_thread_id = ki.thread_idx;
+
+                            // Per-thread execution context — single source of truth
+                            // for thread-local state (emule_thread_ctx.h), specialized
+                            // by RISC type; freed at lambda scope exit.
+                            std::unique_ptr<ThreadCommonCtx> emule_ctx =
+                                ki.is_tensix
+                                    ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
+                                    : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
+                            __emule_self = emule_ctx.get();
+                            // my_x/my_y stay runner-set globals (silicon-named; read
+                            // by unmodified upstream). The logical coords move into
+                            // the per-core CoreState the thread ctx points at.
+                            my_x[0] = px; my_x[1] = px;
+                            my_y[0] = py; my_y[1] = py;
+                            auto& cstate = core->core_state();
+                            cstate.logical_x = lx; cstate.logical_y = ly;
+                            emule_ctx->core = &cstate;
 
                             // Startup barrier (declared in launch_cores): all
                             // kernel threads start together.
@@ -2265,6 +2282,7 @@ static void launch_cores(
                             __emule_dfbs = nullptr;
                             __emule_tc_array = nullptr;
                             __emule_core_map = nullptr;
+                            __emule_self = nullptr;
                         });
                     }
 
