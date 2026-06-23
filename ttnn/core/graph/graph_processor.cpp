@@ -544,7 +544,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         // process only owns a local subset of the chips. MeshBuffer::get_device_buffer(coord)
         // dereferences a MaybeRemote and throws "Attempted to access remote device..." for a
         // coord owned by another host, so skip non-local coords. Each rank records only its
-        // local shards; rank 0 merges the per-host captures into one report afterwards.
+        // local shards.
         auto* const tensor_mesh_device = mesh_buffer.device();
         for (const auto& coord : t.device_storage().get_coords()) {
             if (tensor_mesh_device != nullptr && !tensor_mesh_device->is_local(coord)) {
