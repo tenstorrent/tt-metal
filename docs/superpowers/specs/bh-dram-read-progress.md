@@ -18,7 +18,8 @@ aggregate bytes/cycle = total_bytes / slowest-core-cycles.
 | commit | description |
 |--------|-------------|
 | `ca587a583cf` | docs: bh_dram_read op design spec |
-| `edc51d68467` | feat: add bh_dram_read op (one core per DRAM bank) — initial scaffold, serialized read-barrier-per-page kernel |
+| `edc51d68467` | feat: add bh_dram_read op (one core per DRAM bank) — initial scaffold (v1, serialized read-barrier-per-page kernel) |
+| `670053b020f` | perf: trid pipeline + max-packet over-read (v2, 188→344 GB/s); adds measurement script + this log |
 
 (Updated as work lands. Newer commits appended below once made.)
 
