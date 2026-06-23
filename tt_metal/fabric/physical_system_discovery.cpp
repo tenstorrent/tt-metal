@@ -41,15 +41,17 @@ std::string get_mobo_name() {
 TrayID get_tray_id_for_chip(
     tt::umd::Cluster& cluster, ChipId chip_id, const std::string& mobo_name, bool using_mock_cluster_desc) {
     static const std::unordered_map<std::string, std::vector<uint16_t>> mobo_to_bus_ids = {
+        {"H13DSG-O-CPU", {0x01, 0x21, 0x41, 0x61, 0x81, 0xa1, 0xc1, 0xe1}},
         {"SIENAD8-2L2T", {0xc1, 0x01, 0x41, 0x42}},
         {"X12DPG-QT6", {0xb1, 0xca, 0x31, 0x4b}},
     };
+
+    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
 
     if (using_mock_cluster_desc || !mobo_to_bus_ids.contains(mobo_name)) {
         return TrayID{0};
     }
     const auto& ordered_bus_ids = mobo_to_bus_ids.at(mobo_name);
-    auto bus_id = tt::tt_fabric::get_bus_id(cluster, chip_id);
     auto bus_id_it = std::find(ordered_bus_ids.begin(), ordered_bus_ids.end(), bus_id);
     TT_FATAL(bus_id_it != ordered_bus_ids.end(), "Bus ID {} not found.", bus_id);
     auto tray_id = std::distance(ordered_bus_ids.begin(), bus_id_it) + 1;
