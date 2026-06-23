@@ -5,13 +5,15 @@
 """TTMoEGate — the routing front-end that feeds ``TTMoEDecode``.
 
 ``TTMoEDecode.forward`` consumes a pre-computed routing decision per token
-(``tt_scores``/``tt_indices`` of shape ``[1, 1, batch, select_experts_k]``); this
+(``tt_scores``/``tt_indices`` of shape ``[batch, 1, 1, select_experts_k]`` — the
+``all_to_all_dispatch_metadata`` op requires the token, index, and score tensors to
+share their first three dims, and the token tensor is ``[batch, 1, 1, hidden]``); this
 module PRODUCES it from the router logits:
 
     hidden ──[router matmul: ttnn.matmul(h, W_gate)]──▶ logits[1,1,batch,num_experts]
            ──[reshape→16×16 height-shard, one token/core]──▶ gate-op input
            ──[generalized_moe_gate: (sigmoid|softmax)+top-k+normalize]──▶ (scores,indices)[batch,32,32]
-           ──[slice :k + view]──▶ (weights, indices)[1,1,batch,k]
+           ──[slice :k + view to the decode layout]──▶ (weights, indices)[batch,1,1,k]
 
 The device flow mirrors ``models/demos/deepseek_v3/tt/moe_gate.py`` (decode path):
 the gate op is single-token-per-core, so a variable ``batch`` is padded up to a
@@ -40,6 +42,7 @@ import torch
 
 import ttnn
 from models.common.modules.moe.tt_moe_gate_config import TTMoEGateConfig
+from models.common.utility_functions import is_blackhole
 
 _TOKEN_SHAPE = (16, 16)  # 256 experts laid out as a 16×16 face per token
 _SHARD_SHAPE = (32, 32)  # one 32×32 tile per core (the op's per-token shard)
@@ -169,6 +172,18 @@ class TTMoEGate:
             raise ValueError(
                 f"generalized_moe_gate kernel op supports topk {_KERNEL_TOPK}; got {select_experts_k} "
                 "(this k should have taken the ttnn fallback)"
+            )
+        # Blackhole: the generalized_moe_gate KERNEL op has no Blackhole LLK (only tt_llk_wormhole_b0 ships
+        # llk_*generalized_moe_gate*; the compute API header has no ARCH_BLACKHOLE branch), so the n_group=1
+        # kernel path (k∈{4,6,8}, N≤512) does not build on BH. Fail here with a clear reason instead of a
+        # cryptic kernel-compile error deep in the op. EXEMPT (both run on BH): the grouped deepseek_moe_gate
+        # (n_group=8, which DOES ship a Blackhole LLK) and the arch-portable ttnn fallback (use_fallback).
+        if n_group == 1 and not use_fallback and is_blackhole():
+            raise NotImplementedError(
+                f"TTMoEGate: the generalized_moe_gate kernel op is Wormhole-only (no Blackhole LLK yet), so "
+                f"the n_group=1 kernel path (k={select_experts_k}, N={num_experts} ≤ 512) is unsupported on "
+                "Blackhole. Run on Wormhole/Galaxy, or use a config that takes the ttnn fallback "
+                "(k∉{4,6,8} or N>512). Pending a BH LLK port (tracked follow-up)."
             )
 
         self.mesh_device = mesh_device
@@ -449,7 +464,10 @@ class TTMoEGate:
     # ------------------------------------------------------------------ device
     def forward(self, tt_x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """``tt_x``: hidden states ``[1, 1, batch, hidden_size]`` (L1/DRAM interleaved) →
-        ``(weights, indices)`` each ``[1, 1, batch, select_experts_k]``."""
+        ``(weights, indices)`` each ``[batch, 1, 1, select_experts_k]`` — the layout
+        ``TTMoEDecode``/``all_to_all_dispatch_metadata`` consumes (batch in dim 0, sharing
+        the token tensor's first three dims). The batch-in-dim-2 → batch-in-dim-0 move is a
+        metadata-only view (ROW_MAJOR, identical memory order)."""
         if self.use_fallback:
             return self._forward_fallback(tt_x)
         # 1) router projection → logits [1, 1, batch, num_experts]. With a router LINEAR bias (gpt-oss) it's
@@ -564,11 +582,13 @@ class TTMoEGate:
         weights = weights_chunks[0] if num_iters == 1 else ttnn.concat(weights_chunks, dim=0)
         indices = indices_chunks[0] if num_iters == 1 else ttnn.concat(indices_chunks, dim=0)
 
-        # 3) take the top-k (ranks 0..k-1 are the first k cols of row 0) → [1,1,batch,k].
-        # ROW_MAJOR output buffers make these views metadata-only (no device reshape_view), so the
-        # uint16 indices reshape without a dtype round-trip — same as moe_gate.py.
-        weights = ttnn.view(weights[:total_batch, 0, : self.k], (1, 1, total_batch, self.k))
-        indices = ttnn.view(indices[:total_batch, 0, : self.k], (1, 1, total_batch, self.k))
+        # 3) take the top-k (ranks 0..k-1 are the first k cols of row 0) → [batch,1,1,k], the layout
+        # TTMoEDecode/all_to_all_dispatch_metadata wants (batch in dim 0). ROW_MAJOR output buffers make
+        # these views metadata-only (no device reshape_view) — the slice is [total_batch, k] and dim 0 is
+        # already the batch, so the view to [total_batch,1,1,k] is the same memory in the same order (the
+        # uint16 indices reshape without a dtype round-trip — same as moe_gate.py).
+        weights = ttnn.view(weights[:total_batch, 0, : self.k], (total_batch, 1, 1, self.k))
+        indices = ttnn.view(indices[:total_batch, 0, : self.k], (total_batch, 1, 1, self.k))
         return weights, indices
 
     def _forward_fallback(self, tt_x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -576,7 +596,8 @@ class TTMoEGate:
         Mirrors the op's logic with stock ttnn ops, no 256-face / combine / padding: matmul → score
         transform → (+ score-correction bias for selection) → topk → gather unbiased scores → normalize
         (softmax-over-selected if output_softmax, else linear renorm) at the END → × scale. Output
-        ``(weights, indices)`` each ``[1, 1, batch, k]``, indices uint16 (like the op path)."""
+        ``(weights, indices)`` each ``[batch, 1, 1, k]`` (the decode/dispatch layout, like the op path),
+        indices uint16."""
         # 1) logits = Wx (+ router LINEAR bias). compute_kernel_config per-model (HiFi2 for deep gates).
         if self.tt_gate_proj_bias is None:
             logits = ttnn.matmul(
@@ -626,6 +647,13 @@ class TTMoEGate:
             weights = ttnn.multiply(weights, self.scaling_factor)
 
         indices = ttnn.typecast(topk_idx, ttnn.uint16)
+        # reshape [1,1,batch,k] → [batch,1,1,k] to match the op path / the decode dispatch layout. These are
+        # TILE-layout topk/softmax outputs, so a view can't move `batch` out of the tiled dims directly; go to
+        # ROW_MAJOR first (which all_to_all_dispatch_metadata needs anyway), and then — as on the op path — the
+        # view is metadata-only (identical byte order). batch lives in dim 2 here.
+        batch = weights.shape[2]
+        weights = ttnn.view(ttnn.to_layout(weights, ttnn.ROW_MAJOR_LAYOUT), (batch, 1, 1, self.k))
+        indices = ttnn.view(ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT), (batch, 1, 1, self.k))
         return weights, indices
 
     # ------------------------------------------------------------------ golden

@@ -41,7 +41,13 @@ def _config_id(path: Path) -> str:
     return path.stem
 
 
-@skip_for_blackhole("Skipped for now. BH performance verification will be tracked in a follow-up PR.")
+@skip_for_blackhole(
+    # WH/Galaxy-only for now: the generalized_moe_gate kernel op (n_group=1, the majority of configs) has no
+    # Blackhole LLK yet — only tt_llk_wormhole_b0 ships it — so that path doesn't build on BH (TTMoEGate.__init__
+    # raises NotImplementedError there). The grouped deepseek_moe_gate (n_group=8) and the ttnn fallback DO run on
+    # BH; a BH-guarded subset covering just those can be added once the generalized BH LLK lands (tracked follow-up).
+    "generalized_moe_gate has no Blackhole LLK yet (WH-only); the n_group=1 kernel-op gate can't build on BH."
+)
 @pytest.mark.parametrize(
     # 4×8 = 32-chip mesh (TG/Galaxy). TTMoEGate is a PER-DEVICE gate (no cross-chip comms): its weight +
     # op buffers replicate to every chip, so each chip runs the same one-token-per-core routing independently.
