@@ -36,9 +36,7 @@ struct SparseSDPAOperation {
 
     struct SparseSDPAProgramFactory {
         static tt::tt_metal::ProgramDescriptor create_descriptor(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
+            const operation_attributes_t& attrs, const tensor_args_t& t, tensor_return_value_t& output);
     };
 
     using program_factory_t = std::variant<SparseSDPAProgramFactory>;
