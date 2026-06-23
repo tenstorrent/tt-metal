@@ -15,6 +15,7 @@ Owner:
 """
 
 from dataclasses import dataclass
+from typing import cast
 import time
 
 from triage import ScriptPriority, triage_singleton, ScriptConfig, run_script
@@ -41,8 +42,8 @@ class HeartbeatSample:
 class ArcHeartbeatSampling:
     def __init__(self, run_checks: RunChecks):
         self.initial_samples: dict[Device, HeartbeatSample] = {
-            sample.device_description.device: sample.result
-            for sample in run_checks.run_per_device_check(self.get_heartbeat_sample)
+            sample.device_description.device: cast(HeartbeatSample, sample.result)
+            for sample in (run_checks.run_per_device_check(self.get_heartbeat_sample) or [])
         }
 
     def get_heartbeat_sample(self, device: Device) -> HeartbeatSample:
