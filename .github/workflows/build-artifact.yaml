@@ -592,7 +592,7 @@ jobs:
             build_args+=("--without-distributed")
           fi
           if [ "${{ inputs.profile }}" = "true" ]; then
-            build_args+=("--enable-time-trace")
+            build_args+=("--enable-time-trace" "--disable-unity-builds")
           fi
           if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
             build_args+=("--build-umd-tests")
