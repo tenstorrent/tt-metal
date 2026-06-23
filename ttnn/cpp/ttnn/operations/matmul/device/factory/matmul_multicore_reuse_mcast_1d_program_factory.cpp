@@ -2145,10 +2145,14 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
     uint32_t sync_cb_index = base_cb_index + 3;
-    uint32_t sync_cb_size_bytes = 16;
+    // One 16 B page per credit. Streaming pipelines one block ahead (lookahead 1), so up to two
+    // compute-done credits can be outstanding at once; size cb_sync for 2 pages in that case.
+    // Batched signals once per layer and needs only 1.
+    constexpr uint32_t sync_cb_page_bytes = 16;
+    uint32_t sync_cb_size_bytes = (stream_in1 ? 2u : 1u) * sync_cb_page_bytes;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
-            .set_page_size(sync_cb_index, sync_cb_size_bytes);
+            .set_page_size(sync_cb_index, sync_cb_page_bytes);
     tt_metal::CreateCircularBuffer(program, all_cores, sync_cb_config);
 
     uint32_t sync_cb2_index = base_cb_index + 4;
@@ -2308,7 +2312,16 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         mm_kernel_defines["ENABLE_GLOBAL_CB"] = "1";
         if (stream_in1) {
             // Consume in1 blocks in ring-rotated FIFO order as they arrive (matching a
-            // streaming prefetcher) instead of waiting for the whole tensor.
+            // streaming prefetcher) instead of waiting for the whole tensor. The reader pipelines
+            // one block ahead, so two blocks are in flight at once; the GCB must hold at least 2
+            // blocks/receiver or the reader deadlocks waiting for the prefetcher to deliver a
+            // block whose slot only frees after a later ack.
+            const uint32_t resident_blocks = global_cb->size() / (in1_block_num_tiles * in1_single_tile_size);
+            TT_FATAL(
+                resident_blocks >= 2,
+                "stream_in1 requires the global circular buffer to hold at least 2 in1 blocks per receiver "
+                "(it holds {}); increase the GCB window.",
+                resident_blocks);
             mm_in1_kernel_defines["STREAMING_IN1"] = "1";
             mm_kernel_defines["STREAMING_IN1"] = "1";
         }

@@ -147,18 +147,40 @@ void kernel_main() {
         // so the GCB only needs to hold a small live window instead of the whole tensor. (in1 is
         // never DRAM-resident on the GCB path, so this fully replaces the batched
         // wait_front(num_blocks) gate below.)
-        for (uint32_t block = 0; block < num_blocks; ++block) {
-            // Standard producer order (mirrors the DRAM path's reserve -> fill -> push): reserve
-            // the in1 CB slot, wait for the prefetcher to fill it in the GCB, then push the credit
-            // to compute. reserve_back before push keeps cb_in1's credit accounting correct even
-            // if the reader ever runs more than one block ahead of compute.
+        // Lookahead-1 software pipeline. Push order mirrors the DRAM path's reserve -> fill ->
+        // push (reserve the in1 CB slot, wait for the prefetcher to fill it in the GCB, then push
+        // the credit to compute). The key is that each block is staged to compute *before* we wait
+        // for compute to finish the previous one, so compute always has the next block ready and
+        // never stalls on the reader's per-block coordination (remote_cb_pop_front + reserve +
+        // remote_cb_wait_front). The ack — which frees the consumed block's GCB slot back to the
+        // prefetcher — trails the push by one block. This keeps two blocks in flight, so it needs
+        // the GCB to hold >= 2 blocks/receiver (enforced host-side) and cb_sync sized for 2
+        // outstanding credits.
+        // remote_cb_wait_front(n) is cumulative from the remote rd_ptr, which only advances on
+        // remote_cb_pop_front. So to stage block `pushed` while `acked` blocks have been popped,
+        // wait for (pushed - acked + 1) pages to be present, not 1. The lock-step version got away
+        // with wait_front(1) only because it popped between every wait. With lookahead 1, two
+        // blocks are in flight (pushed - acked peaks at 2), so the GCB must hold >= 2 (host-checked).
+        uint32_t acked = 0;
+        for (uint32_t pushed = 0; pushed < num_blocks; ++pushed) {
+            // Stage block `pushed` to compute (it may still be working on block `pushed - 1`).
             cb_in1.reserve_back(in1_block_num_tiles);
-            experimental::remote_cb_wait_front(remote_cb_id, 1);
+            experimental::remote_cb_wait_front(remote_cb_id, pushed - acked + 1);
             cb_in1.push_back(in1_block_num_tiles);
-
+            // Retire block `pushed - 1` once compute has consumed it, freeing its GCB slot.
+            if (pushed >= 1) {
+                cb_sync.wait_front(1);
+                experimental::remote_cb_pop_front(remote_cb_id, 1);
+                cb_sync.pop_front(1);
+                ++acked;
+            }
+        }
+        if (num_blocks > 0) {
+            // Epilogue: retire the last block.
             cb_sync.wait_front(1);
             experimental::remote_cb_pop_front(remote_cb_id, 1);
             cb_sync.pop_front(1);
+            ++acked;
         }
         if constexpr (needs_signaler) {
             if (b == 0) {
