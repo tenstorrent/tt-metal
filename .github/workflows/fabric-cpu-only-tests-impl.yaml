@@ -31,11 +31,17 @@ jobs:
           # Shard A (~6m20s): unit + phys-grouping + control-plane + t3k + wh-galaxy
           - name: "unit-phys-ctrl-t3k-wh"
             groups: "unit phys-grouping control-plane t3k wh-galaxy"
-          # Shard B (~5m): BH galaxy (split by topology / cluster mock)
+          # BH galaxy, sharded by topology / cluster mock to keep each within the per-step timeout.
           - name: "bh-slices"
             groups: "bh-6u bh-single-galaxy bh-dual-galaxy bh-pod-pipeline bh-misc"
-          - name: "bh-clusters"
-            groups: "bh-subtorus bh-subtorus-sc16 bh-sp4-glx bh-110c"
+          - name: "bh-sp4-glx"
+            groups: "bh-sp4-glx"
+          - name: "bh-subtorus"
+            groups: "bh-subtorus bh-subtorus-sc16"
+          - name: "bh-subtorus-sc20"
+            groups: "bh-subtorus-sc20"
+          - name: "bh-blitz-decode"
+            groups: "bh-blitz-decode"
     container:
       image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
