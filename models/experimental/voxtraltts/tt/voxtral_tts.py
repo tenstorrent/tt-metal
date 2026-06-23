@@ -261,12 +261,15 @@ class VoxtralTTSPipeline:
             return None
         max_num_blocks = self.paged_attention_config.max_num_blocks
         page_table_host = torch.arange(max_num_blocks, dtype=torch.int32).unsqueeze(0)  # [1, max_num_blocks]
+        from models.experimental.voxtraltts.utils.mesh import voxtral_replicate_mesh_mapper
+
         return ttnn.from_torch(
             page_table_host,
             device=self.mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=voxtral_replicate_mesh_mapper(self.mesh_device),
         )
 
     def _resolve_model_file(self, filename: str) -> Path:
@@ -501,10 +504,19 @@ class VoxtralTTSPipeline:
         return self.end_audio_id + self.acoustic._acoustic_special_token_offset
 
     def _semantic_is_end_audio(self, semantic_token: int) -> bool:
+        """True when col-0 semantic is the unshifted END_AUDIO id (matches CPU reference)."""
         token = int(semantic_token)
+        # TILE→host on col 0 can read garbage; real semantics are ≫32. END is id 1.
         if token > 32:
             return False
-        return token == self.end_audio_id or token == self._shifted_end_audio_id
+        return token == self.end_audio_id
+
+    def _shifted_codes_contain_end_audio(self, shifted_t37: torch.Tensor) -> bool:
+        """END in stacked model codes (col 0 is unshifted semantic from the acoustic head)."""
+        if shifted_t37.numel() == 0:
+            return False
+        sem_col = shifted_t37[:, 0]
+        return bool((sem_col == self.end_audio_id).any())
 
     def _mm_embed_host_to_device(self, x_embed_4d: torch.Tensor) -> ttnn.Tensor:
         """Upload ``[1,1,1,dim]`` MM embed; column-shard for TP text, replicate on 1×1."""
@@ -552,11 +564,11 @@ class VoxtralTTSPipeline:
         """ROW_MAJOR readback for ``[B,1,37]`` uint32 code rows (TILE→host corrupts col 0)."""
         if codes_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
             codes_rm = ttnn.to_layout(codes_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-            row = voxtral_to_torch_replicated(codes_rm).long().reshape(-1).cpu()
+            row = voxtral_to_torch_replicated(codes_rm).long().reshape(-1).cpu().clone()
             if codes_rm is not codes_tt and codes_rm.is_allocated():
                 ttnn.deallocate(codes_rm)
             return row
-        return voxtral_to_torch_replicated(codes_tt).long().reshape(-1).cpu()
+        return voxtral_to_torch_replicated(codes_tt).long().reshape(-1).cpu().clone()
 
     def _codes_tt_is_end_audio(self, codes_tt: ttnn.Tensor) -> bool:
         row = self._codes_tt_to_cpu_row(codes_tt)
@@ -590,7 +602,7 @@ class VoxtralTTSPipeline:
             ttnn.deallocate(shifted_rm)
 
         sem_col = stacked[:, 0]
-        eoa = ((sem_col == self.end_audio_id) | (sem_col == self._shifted_end_audio_id)).nonzero(as_tuple=False)
+        eoa = (sem_col == self.end_audio_id).nonzero(as_tuple=False)
         hit_end_audio = len(eoa) > 0
         cut = int(eoa[0].item()) if len(eoa) else int(stacked.shape[0])
         shifted_audio_tokens = stacked[:cut]
@@ -853,6 +865,7 @@ class VoxtralTTSPipeline:
         cfg_scalar = float(cfg_alpha.item())
         generated_codes: list[torch.Tensor] = []
         generated_codes_tt: list[ttnn.Tensor] = []
+        ar_stopped_on_end = False
         # The acoustic FM trace re-binds fixed buffer addresses each replay, which clobbers per-frame
         # device code clones accumulated across the loop: a stored clone reads back as a later step's
         # raw float FM sample (uint32 garbage on 1x1; mostly-silence + clipping spikes on 1x4 once a
@@ -865,7 +878,8 @@ class VoxtralTTSPipeline:
         def _stash_frame_codes(codes_tt: ttnn.Tensor) -> None:
             """Accumulate one frame's shifted ``[37]`` codes on host (trace-clobber-safe for 1x1 and 1x4)."""
             if _codes_host_accum:
-                generated_codes.append(voxtral_to_torch_replicated(codes_tt).long().reshape(-1).cpu())
+                # ROW_MAJOR readback: TILE→host corrupts semantic col 0 (false END_AUDIO stops).
+                generated_codes.append(self._codes_tt_to_cpu_row(codes_tt))
             else:
                 generated_codes_tt.append(ttnn.clone(codes_tt))
 
@@ -986,7 +1000,7 @@ class VoxtralTTSPipeline:
                 # finalize runs — codes_from_fm's semantic matmul allocates, and with an active trace
                 # that would clobber the trace output (TT_THROW "Tensor is not allocated" at concat).
                 acoustic_safe = ttnn.clone(acoustic_tt)
-                codes_tt = self.acoustic.codes_from_fm(_ac_bufs.llm_dev, acoustic_safe)
+                codes_tt, is_end_audio = self.acoustic.codes_from_fm(_ac_bufs.llm_dev, acoustic_safe)
                 if acoustic_safe.is_allocated():
                     ttnn.deallocate(acoustic_safe)
                 _stash_frame_codes(codes_tt)
@@ -1001,7 +1015,7 @@ class VoxtralTTSPipeline:
                     rng=acoustic_noise_rng,
                     scale=acoustic_noise_scale,
                 )
-                codes_tt = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
+                codes_tt, is_end_audio = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
                 ttnn.deallocate(llm_tile)
                 ttnn.deallocate(noise_tt)
                 _stash_frame_codes(codes_tt)
@@ -1016,7 +1030,7 @@ class VoxtralTTSPipeline:
                     rng=acoustic_noise_rng,
                     scale=acoustic_noise_scale,
                 )
-                codes_tt = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
+                codes_tt, is_end_audio = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
                 ttnn.deallocate(llm_tile)
                 ttnn.deallocate(noise_tt)
                 _stash_frame_codes(codes_tt)
@@ -1037,7 +1051,8 @@ class VoxtralTTSPipeline:
 
             if first_frame_s is None:
                 first_frame_s = time.perf_counter() - _t_entry
-            if not fixed_step_count and self._codes_tt_is_end_audio(codes_tt):
+            if not fixed_step_count and is_end_audio:
+                ar_stopped_on_end = True
                 break
 
             next_mm_embed_tt = self._audio_codes_tt_to_mm_embed_device_qb2(codes_tt)
@@ -1244,12 +1259,12 @@ class VoxtralTTSPipeline:
         elif generated_codes:
             stacked = torch.stack(generated_codes, dim=0)
             sem_col = stacked[:, 0]
-            eoa = ((sem_col == self.end_audio_id) | (sem_col == self._shifted_end_audio_id)).nonzero(as_tuple=False)
-            hit_end_audio = len(eoa) > 0
+            eoa = (sem_col == self.end_audio_id).nonzero(as_tuple=False)
             cut = int(eoa[0].item()) if len(eoa) else stacked.shape[0]
             shifted_audio_tokens = stacked[:cut]
             audio_tokens = shifted_audio_tokens - 2
             codes_b37t = audio_tokens.T.unsqueeze(0).long()
+            hit_end_audio = ar_stopped_on_end
             for tensor in generated_codes_tt:
                 if tensor.is_allocated():
                     ttnn.deallocate(tensor)
@@ -1532,12 +1547,12 @@ class VoxtralTTSPipeline:
                 # finalize runs — codes_from_fm's semantic matmul allocates, and with an active trace
                 # that would clobber the trace output (TT_THROW "Tensor is not allocated" at concat).
                 acoustic_safe = ttnn.clone(acoustic_tt)
-                codes_tt = self.acoustic.codes_from_fm(_ac_bufs.llm_dev, acoustic_safe)
+                codes_tt, is_end_audio = self.acoustic.codes_from_fm(_ac_bufs.llm_dev, acoustic_safe)
                 if acoustic_safe.is_allocated():
                     ttnn.deallocate(acoustic_safe)
                 generated_codes_tt.append(codes_tt)
-                ac_out = ttnn.to_torch(codes_tt).long().reshape(1, -1)
-                audio_codes = ac_out.to(torch.long)
+                code_row = self._codes_tt_to_cpu_row(codes_tt)
+                audio_codes = code_row.unsqueeze(0)
             else:
                 llm_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
                 noise_tt = self.acoustic.fm_noise_tt(
@@ -1546,20 +1561,21 @@ class VoxtralTTSPipeline:
                     rng=acoustic_noise_rng,
                     scale=acoustic_noise_scale,
                 )
-                codes_tt = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
+                codes_tt, is_end_audio = self.acoustic.forward(llm_tile, noise_tt, cfg_scalar)
                 ttnn.deallocate(llm_tile)
                 ttnn.deallocate(noise_tt)
                 generated_codes_tt.append(codes_tt)
                 if fixed_step_count and debug is None:
                     next_mm_embed_tt = self._audio_codes_tt_to_mm_embed_device(codes_tt)
                     audio_codes = None
+                    code_row = None
                 else:
-                    ac_out = ttnn.to_torch(codes_tt).long().reshape(1, -1)
-                    audio_codes = ac_out.to(torch.long)
+                    code_row = self._codes_tt_to_cpu_row(codes_tt)
+                    audio_codes = code_row.unsqueeze(0)
                     next_mm_embed_tt = self._audio_codes_tt_to_mm_embed_device(codes_tt)
             if _timing:
                 _t_ac = (time.perf_counter() - _t0) * 1000.0
-            if debug is not None:
+            if debug is not None and audio_codes is not None:
                 debug.set(f"step.{step_idx}.acoustic.codes", audio_codes.squeeze(0))
                 sem_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
                 sem_tt = self.acoustic.semantic_logits_tt(sem_tile)
@@ -1570,10 +1586,11 @@ class VoxtralTTSPipeline:
                     sem_host = sem_host.squeeze(1)
                 debug.set(f"step.{step_idx}.acoustic.semantic_logits", sem_host.squeeze(0))
 
-            generated_codes.append(audio_codes[0].detach().cpu())
+            if code_row is not None:
+                generated_codes.append(code_row)
             if first_frame_s is None:
                 first_frame_s = time.perf_counter() - _t_entry
-            if not fixed_step_count and int(audio_codes[0, 0].item()) == self.end_audio_id:
+            if not fixed_step_count and is_end_audio:
                 if next_mm_embed_tt is not None and next_mm_embed_tt.is_allocated():
                     ttnn.deallocate(next_mm_embed_tt)
                 break
@@ -1920,9 +1937,9 @@ class VoxtralTTSPipeline:
 
     def decode_waveform_from_codes_tt(self, codes_b37t: torch.Tensor) -> torch.Tensor:
         """``[B,37,T]`` int CPU codes → float32 waveform (latent + decoder + pretransform on TT)."""
-        codes_tt = ttnn.from_torch(
+        codes_tt = voxtral_from_torch(
             codes_b37t.to(torch.uint32).contiguous(),
-            device=self.mesh_device,
+            self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -1934,7 +1951,7 @@ class VoxtralTTSPipeline:
         ttnn.deallocate(latent_tt)
         wav_tt = self.audio_tokenizer.pretransform_decode_tt(mel_tt)
         ttnn.deallocate(mel_tt)
-        wav = ttnn.to_torch(wav_tt).float()
+        wav = voxtral_to_torch_replicated(wav_tt).float()
         if wav_tt.is_allocated():
             ttnn.deallocate(wav_tt)
         return wav
@@ -1997,7 +2014,7 @@ class VoxtralTTSPipeline:
         last_codes_tt = None
         for step in steps:
             llm_tile = self._acoustic_hidden_tile_copy(step.llm_hidden_tt)
-            codes_tt = self.acoustic.forward(llm_tile, step.noise_tt, cfg_scalar)
+            codes_tt, _ = self.acoustic.forward(llm_tile, step.noise_tt, cfg_scalar)
             if llm_tile.is_allocated():
                 ttnn.deallocate(llm_tile)
             self.text.decode_step_from_embeds_tt(
@@ -2035,7 +2052,7 @@ class VoxtralTTSPipeline:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         noise_tt = self.acoustic.fm_noise_tt(bsz, noise_seed)
-        codes_tt = self.acoustic.forward(llm_tt, noise_tt, cfg_scalar)
+        codes_tt, _ = self.acoustic.forward(llm_tt, noise_tt, cfg_scalar)
         ttnn.deallocate(llm_tt)
         ttnn.deallocate(noise_tt)
         codes = ttnn.to_torch(codes_tt).long().reshape(bsz, -1)

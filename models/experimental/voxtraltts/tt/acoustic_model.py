@@ -649,7 +649,7 @@ class VoxtralTTAcousticModel:
         llm_hidden_tt: ttnn.Tensor,
         noise_tt: ttnn.Tensor,
         cfg_scalar: float,
-    ) -> ttnn.Tensor:
+    ) -> tuple[ttnn.Tensor, bool]:
         """One acoustic frame on device → ``[B, 1, 1+n_acoustic]`` uint32 ROW_MAJOR discrete codes.
 
         Normal frames: ``ttnn.concat`` on device (requires matching ``memory_config``; skip ``ttnn.where``).
@@ -660,25 +660,25 @@ class VoxtralTTAcousticModel:
         bsz = int(llm_tile.shape[0])
 
         acoustic_tt = self._fm_decode_codes_tt(llm_tile, noise_tt, cfg_scalar)
-        codes = self._codes_from_fm(llm_tile, acoustic_tt, bsz)
+        codes, is_end = self._codes_from_fm(llm_tile, acoustic_tt, bsz)
         if owned_tile and llm_tile.is_allocated():
             ttnn.deallocate(llm_tile)
-        return codes
+        return codes, is_end
 
     def fm_decode_codes_tt(self, llm_hidden_tt: ttnn.Tensor, noise_tt: ttnn.Tensor, cfg_scalar: float) -> ttnn.Tensor:
         """Public alias for the traceable Euler-FM core (semantic + end-audio handling stay outside)."""
         return self._fm_decode_codes_tt(llm_hidden_tt, noise_tt, cfg_scalar)
 
-    def codes_from_fm(self, llm_hidden_tt: ttnn.Tensor, acoustic_tt: ttnn.Tensor) -> ttnn.Tensor:
+    def codes_from_fm(self, llm_hidden_tt: ttnn.Tensor, acoustic_tt: ttnn.Tensor) -> tuple[ttnn.Tensor, bool]:
         """Finalize discrete codes from a (possibly trace-produced) acoustic tensor: semantic argmax,
         end-audio masking, concat. Untraced (per-frame data-dependent host ``is_end`` branch)."""
         llm_tile = self._llm_hidden_tile_bf16(llm_hidden_tt)
-        codes = self._codes_from_fm(llm_tile, acoustic_tt, int(llm_tile.shape[0]))
+        codes, is_end = self._codes_from_fm(llm_tile, acoustic_tt, int(llm_tile.shape[0]))
         if llm_tile is not llm_hidden_tt and llm_tile.is_allocated():
             ttnn.deallocate(llm_tile)
-        return codes
+        return codes, is_end
 
-    def _codes_from_fm(self, llm_tile: ttnn.Tensor, acoustic_tt: ttnn.Tensor, bsz: int) -> ttnn.Tensor:
+    def _codes_from_fm(self, llm_tile: ttnn.Tensor, acoustic_tt: ttnn.Tensor, bsz: int) -> tuple[ttnn.Tensor, bool]:
         """Semantic argmax + end-audio mask + concat with the FM acoustic codes -> discrete codes."""
         llm_sem = ttnn.typecast(llm_tile, ttnn.float32, memory_config=self._semantic_dram_mem_config)
         masked_logits = self.semantic_logits_tt(llm_sem)
@@ -694,8 +694,9 @@ class VoxtralTTAcousticModel:
         semantic_code_tt = ttnn.to_layout(semantic_code_tt, ttnn.TILE_LAYOUT, memory_config=self._fm_dram_mem_config)
 
         is_end = ttnn.eq(semantic_code_tt, self._end_audio_token_id_tt)
+        is_end_audio = bool(voxtral_to_torch_replicated(is_end).reshape(-1).bool().any().item())
 
-        if voxtral_to_torch_replicated(is_end).reshape(-1).bool().any():
+        if is_end_audio:
             sem_i32 = ttnn.typecast(semantic_code_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ac_i32 = ttnn.typecast(acoustic_tt, ttnn.int32, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(semantic_code_tt)
@@ -719,7 +720,7 @@ class VoxtralTTAcousticModel:
             codes_tt = ttnn.concat([sem_u32, ac_masked], dim=2, memory_config=self._fm_dram_mem_config)
             ttnn.deallocate(sem_u32)
             ttnn.deallocate(ac_masked)
-            return ttnn.to_layout(codes_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=self._fm_dram_mem_config)
+            return ttnn.to_layout(codes_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=self._fm_dram_mem_config), True
 
         ttnn.deallocate(is_end)
         codes_tt = ttnn.concat(
@@ -729,7 +730,7 @@ class VoxtralTTAcousticModel:
         )
         ttnn.deallocate(semantic_code_tt)
         ttnn.deallocate(acoustic_tt)
-        return ttnn.to_layout(codes_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=self._fm_dram_mem_config)
+        return ttnn.to_layout(codes_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=self._fm_dram_mem_config), False
 
     def _llm_hidden_tile_bf16(self, llm_hidden_tt: ttnn.Tensor) -> ttnn.Tensor:
         work = llm_hidden_tt
