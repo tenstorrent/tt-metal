@@ -18,6 +18,9 @@ void BhDramReadDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "bh_dram_read: input tensor must be on device");
     TT_FATAL(input_tensor.memory_config().is_dram(), "bh_dram_read: input tensor must be in DRAM");
     TT_FATAL(!input_tensor.memory_config().is_sharded(), "bh_dram_read: input tensor must be DRAM-interleaved");
+    TT_FATAL(
+        input_tensor.layout() == tt::tt_metal::Layout::TILE,
+        "bh_dram_read: input tensor must be tilized (reads are tile-paged)");
 }
 
 BhDramReadDeviceOperation::spec_return_value_t BhDramReadDeviceOperation::compute_output_specs(
