@@ -1,78 +1,110 @@
 #!/bin/bash
-# Build piecewise LUT activation kernel for Quasar using LLK infrastructure
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 #
-# This script compiles the piecewise_lut_activation kernel for quasar
-# and extracts the ELFs for use with polaris/neosom simulator.
+# Standalone SFPI compile-only sanity check for the Quasar generic-LUT
+# eltwise tests. Compiles a per-eval-method Quasar tt-llk test source
+# (the same sources the pytest harness runs) for all three TRISC threads,
+# WITHOUT a device or simulator.
+#
+# This is a *syntax / SFPU-intrinsic* gate: it proves the selected source
+# compiles with the real qsr32 SFPI toolchain, mirroring the include/flag
+# set the pytest harness builds with (tests/python_tests/helpers/test_config.py).
+# For an end-to-end PCC run under the pinned sim, use run_quasar.sh instead.
 #
 # Usage:
-#   ./build_llk_quasar.sh [poly_degree] [num_segments] [activation]
+#   ./compile_llk_quasar.sh [eval_method] [activation]
+#
+#   eval_method : polynomial | rational | parity | expalu | newton_root
+#                 (default: polynomial)
+#   activation  : informational tag only, used to name the output dir
+#                 (default: gelu)
 #
 # Examples:
-#   ./build_llk_quasar.sh 1 4 gelu    # Linear, 4 segments (p1_s4)
-#   ./build_llk_quasar.sh 2 8 sigmoid # Quadratic, 8 segments (p2_s8)
+#   ./compile_llk_quasar.sh                      # polynomial, gelu
+#   ./compile_llk_quasar.sh rational atanh
+#   ./compile_llk_quasar.sh newton_root sqrt
+#   ./compile_llk_quasar.sh parity tanh
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TT_METAL_ROOT="/localdev/nkapre/tt-metal"
-LLK_TESTS_DIR="$TT_METAL_ROOT/tt_metal/third_party/tt_llk/tests"
-LLK_ROOT="$TT_METAL_ROOT/tt_metal/third_party/tt_llk"
-BUILD_DIR="/tmp/tt-llk-build"
-OUTPUT_DIR="$SCRIPT_DIR/quasar_elfs"
+TT_METAL_ROOT="${TT_METAL_HOME:-/localdev/nkapre/tt-metal}"
+LLK_TESTS_DIR="$TT_METAL_ROOT/tt_metal/tt-llk/tests"
+LLK_ROOT="$TT_METAL_ROOT/tt_metal/tt-llk"
+ARCH_LLK_ROOT="tt_llk_quasar"
+BUILD_DIR="/tmp/tt-llk-build-standalone"
 
-# Default parameters
-POLY_DEGREE="${1:-1}"
-NUM_SEGMENTS="${2:-4}"
-ACTIVATION="${3:-gelu}"
+# --- Arguments -------------------------------------------------------------
+EVAL_METHOD="${1:-polynomial}"
+ACTIVATION="${2:-gelu}"
 
-# Calculate LUT size
-LUT_SIZE=$(( (NUM_SEGMENTS + 1) + NUM_SEGMENTS * (POLY_DEGREE + 1) ))
+# Map eval_method -> Quasar test source. These are the SAME sources the pytest
+# harness compiles & runs; keep this table in sync if new methods are added.
+case "$EVAL_METHOD" in
+    poly|polynomial)
+        KERNEL_BASENAME="generic_lut_activation_quasar_test.cpp" ;;
+    rat|rational)
+        KERNEL_BASENAME="generic_lut_rational_quasar_test.cpp" ;;
+    parity)
+        KERNEL_BASENAME="generic_lut_parity_quasar_test.cpp" ;;
+    expalu|exponent_alu)
+        KERNEL_BASENAME="generic_lut_expalu_quasar_test.cpp" ;;
+    newton_root|newton|root)
+        KERNEL_BASENAME="generic_lut_newton_root_quasar_test.cpp" ;;
+    *)
+        echo "ERROR: unknown eval_method '$EVAL_METHOD'"
+        echo "       expected one of: polynomial | rational | parity | expalu | newton_root"
+        exit 2 ;;
+esac
 
-# Configuration name
-CONFIG_NAME="${ACTIVATION}_p${POLY_DEGREE}_s${NUM_SEGMENTS}"
+KERNEL_SRC="$LLK_TESTS_DIR/sources/quasar/$KERNEL_BASENAME"
+CONFIG_NAME="${EVAL_METHOD}_${ACTIVATION}"
+OUTPUT_DIR="$SCRIPT_DIR/quasar_elfs/$CONFIG_NAME"
 
 echo "=============================================="
-echo "Building LLK Quasar Piecewise LUT Activation"
+echo "Quasar LLK compile-only sanity check"
 echo "=============================================="
-echo ""
-echo "Configuration: $CONFIG_NAME"
-echo "  Polynomial degree: $POLY_DEGREE"
-echo "  Segments: $NUM_SEGMENTS"
-echo "  LUT size: $LUT_SIZE"
-echo "  Activation: $ACTIVATION"
+echo "  eval_method : $EVAL_METHOD"
+echo "  activation  : $ACTIVATION (tag only)"
+echo "  source      : $KERNEL_SRC"
 echo ""
 
-# Ensure SFPI symlink exists
-if [[ ! -L "$LLK_TESTS_DIR/sfpi" ]]; then
-    echo "Creating SFPI symlink..."
-    ln -sf "$TT_METAL_ROOT/runtime/sfpi" "$LLK_TESTS_DIR/sfpi"
-fi
-
-# Check if compiler exists
-GXX="$LLK_TESTS_DIR/sfpi/compiler/bin/riscv-tt-elf-g++"
-if [[ ! -f "$GXX" ]]; then
-    echo "ERROR: SFPI compiler not found at $GXX"
-    echo "Make sure tt-metal is built with SFPI toolchain"
+if [[ ! -f "$KERNEL_SRC" ]]; then
+    echo "ERROR: kernel source not found: $KERNEL_SRC"
     exit 1
 fi
 
+# --- SFPI toolchain --------------------------------------------------------
+# The pytest harness symlinks tests/sfpi -> runtime/sfpi; honour the same.
+if [[ ! -e "$LLK_TESTS_DIR/sfpi" ]]; then
+    echo "Creating SFPI symlink..."
+    ln -sf "$TT_METAL_ROOT/runtime/sfpi" "$LLK_TESTS_DIR/sfpi"
+fi
+GXX="$LLK_TESTS_DIR/sfpi/compiler/bin/riscv-tt-elf-g++"
+if [[ ! -f "$GXX" ]]; then
+    echo "ERROR: SFPI compiler not found at $GXX"
+    echo "       Make sure tt-metal is built with the SFPI toolchain."
+    exit 1
+fi
 echo "Compiler: $GXX"
 echo ""
 
-# Create output directory and build directory
-mkdir -p "$OUTPUT_DIR/$CONFIG_NAME"
-TEST_BUILD_DIR="$BUILD_DIR/piecewise_lut_$CONFIG_NAME"
+# --- Build dir + minimal build.h ------------------------------------------
+TEST_BUILD_DIR="$BUILD_DIR/$CONFIG_NAME"
 mkdir -p "$TEST_BUILD_DIR/obj"
-mkdir -p "$TEST_BUILD_DIR/elf"
+mkdir -p "$OUTPUT_DIR"
 
-# Generate build.h file (required by params.h)
-echo "Generating build.h..."
+# Minimal, valid build.h. It supplies ONLY the harness-provided symbols the
+# sources reference (RUNTIME_PARAMETERS / RuntimeParams, FormatConfig, the
+# dest/format constexprs). Every LUT_* / EXPALU_* / NEWTON_ROOT_* define is
+# guarded by #ifndef in the sources, so the per-method built-in defaults kick
+# in here -- this is purely a compile gate, not a numerically-configured run.
+# Layout mirrors a real harness-generated build.h.
 cat > "$TEST_BUILD_DIR/build.h" << 'BUILDH_EOF'
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
-//
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
-// AUTO-GENERATED CONFIGURATION HEADER FOR STANDALONE QUASAR BUILD
-
+// AUTO-GENERATED minimal config header for the standalone Quasar compile gate.
 #pragma once
 
 #include <array>
@@ -80,238 +112,140 @@ cat > "$TEST_BUILD_DIR/build.h" << 'BUILDH_EOF'
 
 #include "operand.h"
 #include "llk_defs.h"
-#include "llk_sfpu_types.h"
 #include "tensix_types.h"
 
-// Basic configuration
-constexpr std::uint32_t TILE_SIZE_CNT = 0x1000;
-constexpr std::uint32_t TILE_SIZE_PACK = 128;
-constexpr std::uint32_t TILE_SIZE_UNPACK_A = 128;
-constexpr std::uint32_t TILE_SIZE_UNPACK_B = 128;
+#define RUNTIME_PARAMETERS [[maybe_unused]] const struct RuntimeParams&
 
-// Data format configuration - FP32 for activation test
-constexpr bool is_fp32_dest_acc_en = true;
+constexpr bool l1_acc_en = 0;
 constexpr bool unpack_to_dest = false;
 
-// Single iteration format configuration
-constexpr auto UNPACK_A_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32);
-constexpr auto UNPACK_A_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32);
-constexpr auto MATH_FORMAT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32);
-constexpr auto PACK_IN = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32);
-constexpr auto PACK_OUT = static_cast<std::underlying_type_t<DataFormat>>(DataFormat::Float32);
+struct FormatConfig
+{
+    std::uint32_t unpack_A_src = 0;
+    std::uint32_t unpack_B_src = 0;
+    std::uint32_t unpack_S_src = 0;
+    std::uint32_t unpack_A_dst = 0;
+    std::uint32_t unpack_B_dst = 0;
+    std::uint32_t unpack_S_dst = 0;
+    std::uint32_t math = 0;
+    std::uint32_t sfpu_math = 0;
+    std::uint32_t pack_src = 0;
+    std::uint32_t pack_dst = 0;
+    std::uint32_t pack_S_src = 0;
+    std::uint32_t pack_S_dst = 0;
+};
 
-// Template parameters for datacopy (quasar uses ckernel::DataCopyType, not EltwiseUnaryDatacopyType)
-constexpr ckernel::DataCopyType DATA_COPY_TYPE = ckernel::DataCopyType::A2D;
-constexpr uint32_t UNPACKER_ENGINE_SEL = ckernel::p_unpacr::UNP_A;
-constexpr ckernel::DstSync dest_sync = ckernel::DstSync::SyncFull;
+constexpr bool is_fp32_dest_acc_en = true;
 
-// Buffer addresses (typical L1 layout for quasar)
-constexpr std::array<uint32_t, 1> buffer_A = {0x10000};
-constexpr std::array<uint32_t, 1> buffer_B = {0x20000};
-constexpr std::array<uint32_t, 1> buffer_Res = {0x30000};
+constexpr auto SFPU_UNARY_OPERATION = SfpuType::sigmoid;
+constexpr bool IMPLIED_MATH_FORMAT = true;
+constexpr auto DATA_COPY_TYPE = ckernel::DataCopyType::A2D;
+constexpr std::uint32_t UNPACKER_ENGINE_SEL = p_unpacr::UNP_A;
+constexpr auto dest_sync = ckernel::DstSync::SyncHalf;
 
-// Struct that has a runtime parameter layout
 struct RuntimeParams {
-    uint32_t TILE_CNT;
-    uint32_t DST_INDEX;
-    uint32_t TEST_FACE_R_DIM;
-    uint32_t TEST_FACE_C_DIM;
-    uint32_t num_faces;
+    std::uint32_t TILE_SIZE_PACK;
+    std::uint32_t TILE_SIZE_UNPACK_A;
+    std::uint32_t TILE_SIZE_UNPACK_B;
+    FormatConfig formats;
+    Operand buffer_A;
+    Operand buffer_B;
+    Operand buffer_Res;
+    std::uint32_t TILE_CNT;
+    std::uint32_t num_faces;
+    std::uint32_t num_faces_A;
+    std::uint32_t num_faces_B;
+    std::uint32_t TEST_FACE_R_DIM;
+    std::uint32_t TEST_FACE_C_DIM;
+    int DST_INDEX;
 };
 BUILDH_EOF
+# The rational source is the one method with NO #ifndef built-in LUT defaults
+# (the harness always injects RAT_* via GENERIC_LUT_DATA). Append a minimal
+# default rational LUT (1 segment, n1/d1) so the compile gate has the symbols
+# it needs. Numerically meaningless -- this is a syntax gate only.
+if [[ "$KERNEL_BASENAME" == "generic_lut_rational_quasar_test.cpp" ]]; then
+cat >> "$TEST_BUILD_DIR/build.h" << 'RATH_EOF'
 
-echo "  Created: $TEST_BUILD_DIR/build.h"
+// Minimal default rational LUT for the standalone compile gate (n1/d1, 1 seg).
+constexpr std::uint32_t RAT_NUM_SEGMENTS = 1;
+constexpr std::uint32_t RAT_NUM_DEGREE   = 1;
+constexpr std::uint32_t RAT_DEN_DEGREE   = 1;
+constexpr std::array<float, RAT_NUM_SEGMENTS + 1> RAT_BOUNDARIES = {-1.0f, 1.0f};
+constexpr std::array<float, RAT_NUM_SEGMENTS*(RAT_NUM_DEGREE + 1)> RAT_NUM_COEFFS = {0.0f, 1.0f};
+constexpr std::array<float, RAT_NUM_SEGMENTS*(RAT_DEN_DEGREE + 1)> RAT_DEN_COEFFS = {1.0f, 0.0f};
+RATH_EOF
+fi
+
+echo "Generated: $TEST_BUILD_DIR/build.h"
 echo ""
 
-# Build the kernel using LLK Makefile
+# --- Includes + flags (mirror tests/python_tests/helpers/test_config.py) ---
 cd "$LLK_TESTS_DIR"
 
-echo "Compiling for quasar..."
-echo "----------------------------------------------"
-
-# Set environment for the build
-export CHIP_ARCH=quasar
-
-# Include paths for quasar (order matters!)
 INCLUDES=(
     "-I$TEST_BUILD_DIR"
-    "-I$LLK_TESTS_DIR/helpers/include"
-    "-I$LLK_TESTS_DIR/hw_specific/quasar/inc"
-    "-I$LLK_ROOT/tt_llk_quasar/common/inc"
-    "-I$LLK_ROOT/tt_llk_quasar/common/inc/sfpu"
-    "-I$LLK_ROOT/tt_llk_quasar/llk_lib"
-    "-I$LLK_TESTS_DIR/sfpi/include"
-    "-I$LLK_TESTS_DIR/firmware/riscv/common"
+    "-Isfpi/include"
+    "-I../$ARCH_LLK_ROOT/llk_lib"
+    "-I../$ARCH_LLK_ROOT/common/inc"
+    "-I../$ARCH_LLK_ROOT/common/inc/sfpu"
+    "-I../common"
+    "-I../../hw/inc"
+    "-Ifirmware/riscv/common"
+    "-Ihelpers/include"
+    "-I../../hostdevcommon/api"
+    "-I../../hw/inc/internal/tt-2xx/quasar"
+    "-I../../hw/ckernels/quasar/metal/llk_api"
 )
 
-# Defines
 DEFINES=(
-    "-DARCH_QUASAR"
     "-DTENSIX_FIRMWARE"
     "-DENV_LLK_INFRA"
+    "-DKERNEL_BUILD"
     "-DENABLE_LLK_ASSERT"
-    "-DLLK_BOOT_MODE_TRISC"
-    "-DPOLY_DEGREE=$POLY_DEGREE"
-    "-DNUM_SEGMENTS=$NUM_SEGMENTS"
-    "-DLUT_SIZE=$LUT_SIZE"
+    "-DARCH_QUASAR"
+    # Harness sets this whenever formats are runtime (the default); the sources
+    # gate the `params.formats` local on it (#if defined(RUNTIME_FORMATS)).
+    "-DRUNTIME_FORMATS"
 )
 
-# Compiler flags (quasar uses blackhole SFPI for now)
-CFLAGS=(
+# qsr32: non-compute threads use -mcpu=tt-qsr32, compute uses -mcpu=tt-qsr32-tensix.
+CFLAGS_COMMON=(
     "-std=c++17"
-    "-mcpu=tt-bh-tensix"
-    "-g"
-    "-O3"
+    "-ftt-nttp" "-ftt-constinit" "-ftt-consteval" "-ftt-no-dyninit"
+    "-g" "-O3"
     "-ffast-math"
-    "-fno-use-cxa-atexit"
+    "-fno-exceptions" "-fno-rtti" "-fno-use-cxa-atexit"
     "-Wall"
-    "-fno-exceptions"
-    "-fno-rtti"
-    "-nostdlib"
-    "-fno-builtin"
 )
 
-KERNEL_SRC="$LLK_TESTS_DIR/sources/quasar/piecewise_lut_activation_quasar_test.cpp"
-
-echo "Source: $KERNEL_SRC"
-echo ""
-
-COMPILE_SUCCESS=true
-
-# Compile for each TRISC core
+echo "Compiling (compile-only) for all three TRISC threads..."
+echo "----------------------------------------------"
+COMPILE_OK=true
 for TRISC in unpack math pack; do
     TRISC_UPPER=$(echo "$TRISC" | tr '[:lower:]' '[:upper:]')
-    OUTPUT_OBJ="$TEST_BUILD_DIR/obj/kernel_$TRISC.o"
+    OBJ="$TEST_BUILD_DIR/obj/kernel_$TRISC.o"
+    if [[ "$TRISC" == "math" ]]; then MCPU="-mcpu=tt-qsr32-tensix"; else MCPU="-mcpu=tt-qsr32"; fi
 
-    echo "Compiling $TRISC core..."
-
-    if $GXX ${CFLAGS[*]} ${DEFINES[*]} ${INCLUDES[*]} \
+    echo "  [$TRISC] $MCPU"
+    if $GXX $MCPU "${CFLAGS_COMMON[@]}" "${DEFINES[@]}" "${INCLUDES[@]}" \
         -DLLK_TRISC_$TRISC_UPPER \
-        -c -o "$OUTPUT_OBJ" "$KERNEL_SRC" 2>&1; then
-        echo "  Created: $OUTPUT_OBJ"
+        -c -o "$OBJ" "$KERNEL_SRC" 2>&1; then
+        cp "$OBJ" "$OUTPUT_DIR/"
+        echo "    -> $OBJ"
     else
-        echo "  FAILED: $TRISC core compilation"
-        COMPILE_SUCCESS=false
+        echo "    FAILED: $TRISC"
+        COMPILE_OK=false
     fi
 done
 
 echo ""
-echo "----------------------------------------------"
-echo ""
-
-# Check what was generated
-if ls "$TEST_BUILD_DIR/obj"/*.o 1>/dev/null 2>&1; then
-    echo "Generated object files:"
-    ls -la "$TEST_BUILD_DIR/obj"/*.o
-    echo ""
-
-    # Copy object files to output directory
-    cp "$TEST_BUILD_DIR/obj"/*.o "$OUTPUT_DIR/$CONFIG_NAME/"
-    echo "Copied to: $OUTPUT_DIR/$CONFIG_NAME/"
-else
-    echo "No object files generated."
-fi
-
-echo ""
 echo "=============================================="
-echo "Build Summary"
-echo "=============================================="
-echo ""
-echo "Kernel source: $KERNEL_SRC"
-echo "Build directory: $TEST_BUILD_DIR"
-echo "Output directory: $OUTPUT_DIR/$CONFIG_NAME"
-echo ""
-
-if [[ "$COMPILE_SUCCESS" == "true" ]]; then
-    echo "Compilation SUCCESSFUL!"
-    echo ""
-
-    # Now link to create ELFs
-    echo "Linking ELFs..."
-    echo "----------------------------------------------"
-
-    # Build shared objects if they don't exist
-    SHARED_DIR="$BUILD_DIR/shared"
-    mkdir -p "$SHARED_DIR/obj"
-    mkdir -p "$SHARED_DIR/elf"
-
-    LINKER_SCRIPTS="$LLK_TESTS_DIR/helpers/ld"
-    HELPERS_SRC="$LLK_TESTS_DIR/helpers"
-    MEMORY_LD="$LINKER_SCRIPTS/memory.quasar.ld"
-    SECTIONS_LD="$LINKER_SCRIPTS/sections.ld"
-
-    LINK_FLAGS=(
-        "-fexceptions"
-        "-Wl,-z,max-page-size=16"
-        "-Wl,-z,common-page-size=16"
-        "-nostartfiles"
-    )
-
-    # Build tmu-crt0.o if not present
-    if [[ ! -f "$SHARED_DIR/obj/tmu-crt0.o" ]]; then
-        echo "Building tmu-crt0.o..."
-        $GXX -mcpu=tt-bh ${CFLAGS[*]} ${DEFINES[*]} ${INCLUDES[*]} \
-            -c -o "$SHARED_DIR/obj/tmu-crt0.o" "$HELPERS_SRC/tmu-crt0.S"
-    fi
-
-    # Build main_*.o for each TRISC
-    for TRISC in unpack math pack; do
-        TRISC_UPPER=$(echo "$TRISC" | tr '[:lower:]' '[:upper:]')
-        MAIN_OBJ="$SHARED_DIR/obj/main_$TRISC.o"
-
-        if [[ ! -f "$MAIN_OBJ" ]]; then
-            echo "Building main_$TRISC.o..."
-            $GXX ${CFLAGS[*]} ${DEFINES[*]} ${INCLUDES[*]} \
-                -DLLK_TRISC_$TRISC_UPPER \
-                -c -o "$MAIN_OBJ" "$HELPERS_SRC/src/trisc.cpp"
-        fi
-    done
-
-    LINK_SUCCESS=true
-
-    # Link each TRISC core ELF
-    for TRISC in unpack math pack; do
-        KERNEL_OBJ="$TEST_BUILD_DIR/obj/kernel_$TRISC.o"
-        MAIN_OBJ="$SHARED_DIR/obj/main_$TRISC.o"
-        CRT_OBJ="$SHARED_DIR/obj/tmu-crt0.o"
-        OUTPUT_ELF="$TEST_BUILD_DIR/elf/$TRISC.elf"
-        TRISC_LD="$LINKER_SCRIPTS/$TRISC.ld"
-
-        echo "Linking $TRISC.elf..."
-
-        if $GXX -mcpu=tt-bh-tensix -g -O3 -std=c++17 -ffast-math \
-            ${LINK_FLAGS[*]} \
-            "$CRT_OBJ" "$MAIN_OBJ" "$KERNEL_OBJ" \
-            -T"$MEMORY_LD" -T"$TRISC_LD" -T"$SECTIONS_LD" \
-            -o "$OUTPUT_ELF" 2>&1; then
-            echo "  Created: $OUTPUT_ELF"
-            cp "$OUTPUT_ELF" "$OUTPUT_DIR/$CONFIG_NAME/"
-        else
-            echo "  FAILED: $TRISC.elf linking"
-            LINK_SUCCESS=false
-        fi
-    done
-
-    echo ""
-    echo "----------------------------------------------"
-    echo ""
-
-    if [[ "$LINK_SUCCESS" == "true" ]]; then
-        echo "BUILD FULLY SUCCESSFUL!"
-        echo ""
-        echo "Generated ELF files:"
-        ls -la "$OUTPUT_DIR/$CONFIG_NAME/"*.elf 2>/dev/null || echo "  (no ELFs in output dir)"
-        ls -la "$TEST_BUILD_DIR/elf/"*.elf 2>/dev/null || echo "  (no ELFs in build dir)"
-    else
-        echo "LINKING FAILED - see errors above"
-        echo ""
-        echo "Object files are available at: $OUTPUT_DIR/$CONFIG_NAME/"
-    fi
+if [[ "$COMPILE_OK" == "true" ]]; then
+    echo "COMPILE OK: $EVAL_METHOD ($KERNEL_BASENAME)"
+    echo "Objects in: $OUTPUT_DIR"
+    exit 0
 else
-    echo "BUILD FAILED - see errors above"
-    echo ""
-    echo "Common issues:"
-    echo "  - Missing headers: check include paths"
-    echo "  - SFPI compiler not found: rebuild tt-metal"
+    echo "COMPILE FAILED: $EVAL_METHOD ($KERNEL_BASENAME) -- see errors above"
+    exit 1
 fi
-echo ""

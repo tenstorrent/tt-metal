@@ -1,0 +1,216 @@
+<!--
+SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+SPDX-License-Identifier: Apache-2.0
+-->
+
+# Quasar Eltwise Generic-LUT Flow
+
+This document is the reference for the **Quasar eltwise generic-LUT activation
+flow**: the end-to-end pipeline that builds a per-eval-method SFPU LUT kernel,
+compiles it with the qsr32 SFPI toolchain, runs it on the **craq-sim Quasar
+`ttsim`**, and PCC/ULP-compares the on-sim output against the
+tt-polynomial-fitter ground-truth golden.
+
+It covers the existing methods (`polynomial`, `rational`) and the three eval
+methods ported into the Quasar tree (`exponent_alu`, `newton_root`,
+`parity`/`adaptive`), with per-method compile/run/gap status, the
+Quasar-specific SFPU adaptation notes, and the **pinned, validated sim build**.
+
+## Pinned, validated simulator (load-bearing)
+
+All status in this document was validated against this exact sim build. Pin it.
+
+| Item                | Value                                                                              |
+|---------------------|------------------------------------------------------------------------------------|
+| craq-sim repo       | `/localdev/nkapre/craq-sim-quasar`                                                  |
+| SHA                 | `3ed587aa25499116dfb1a88eb0c04686cabd029b` (short `3ed587aa`)                       |
+| Branch              | `quasar` (tracks `remotes/origin/quasar`)                                           |
+| Pinned sim `.so`    | `/localdev/nkapre/craq-sim-quasar/src/_out/release_qsr/libttsim.so`                 |
+| SOC descriptor      | `tt_metal/soc_descriptors/quasar_32_arch.yaml`                                      |
+
+This is **the validated sim build** for the flow. The notes below (esp. the
+`SFPEXMAN` / `SFPADDEXP` / `SFPADDI` gaps) are properties of *this* `ttsim`
+build; a different SHA may behave differently.
+
+## The flow (4 stages)
+
+The `tt-llk` pytest harness owns the actual build + on-sim execution
+(`tt_metal/tt-llk/tests/python_tests/helpers/test_config.py` + `conftest.py`).
+The polaris_test scripts are a thin, documented driver that wires the pinned
+sim and the per-method env contract on top of that harness.
+
+```
+1. build SFPI         qsr32 SFPI toolchain (runtime/sfpi), per-TRISC compile
+                      of the selected Quasar test source (3 #ifdef sections:
+                      LLK_TRISC_UNPACK / _MATH / _PACK; only _MATH evaluates
+                      the LUT and lands params.h + the GENERIC_LUT_DATA header).
+        |
+2. compile per method  map eval_method -> Quasar test source; bake the fitter
+                      coefficients / metadata into build.h via the
+                      GENERIC_LUT_DATA TemplateParameter.
+        |
+3. run under craq-sim  pytest --run-simulator with the pinned libttsim.so,
+                      TT_METAL_SLOW_DISPATCH_MODE=1, CHIP_ARCH=quasar. Models
+                      the eltwise_unary_sfpu recipe:
+                      UNPACK -> SrcA -> FPU datacopy (MOVA2D) -> Dest ->
+                      SFPU(embedded LUT) -> PACK. The SFPU evaluator processes
+                      2 Dest rows per iteration (SFP_ROWS / _incr_counters_),
+                      not dst_reg[0..31].
+        |
+4. golden compare     golden = tt-polynomial-fitter ground_truth over the FULL
+                      original domain (faithful reduce+reconstruct when range
+                      reduction is enabled). Metric: calculate_pcc + binade ULP.
+                      Gate: PCC >= 0.99 in ground_truth mode.
+```
+
+### Single entry point: `run_quasar.sh`
+
+```
+./run_quasar.sh [-m EVAL_METHOD] [-a ACTIVATION] [-c CSV] [--compile-only] [--no-compile] [-t PCC]
+```
+
+For one `(activation, eval_method)` it: builds the config (maps the method to
+its Quasar test source + per-method env contract), runs the SFPI compile-only
+sanity gate (`compile_llk_quasar.sh`), runs the test under the pinned sim, and
+parses/gates the PCC/ULP the test prints. See `README.md` for the full option
+table; `compile_llk_quasar.sh [eval_method] [activation]` is the standalone
+compile-only gate (no device/sim).
+
+```
+./run_quasar.sh -m polynomial  -a gelu
+./run_quasar.sh -m rational    -a atanh -c <atanh_n8d8_s1_..._rational.csv>
+./run_quasar.sh -m newton_root -a sqrt
+./run_quasar.sh -m parity      -a tanh  --compile-only
+```
+
+### Pinned environment
+
+```
+TT_METAL_HOME=/localdev/nkapre/tt-metal
+TT_METAL_SIMULATOR=/localdev/nkapre/craq-sim-quasar/src/_out/release_qsr/libttsim.so
+TT_METAL_SLOW_DISPATCH_MODE=1   CHIP_ARCH=quasar     # forced by run_quasar.sh
+```
+
+## Eval-method coverage
+
+| eval_method     | Quasar test source                          | CSV env var      | compiles | runs on sim | status |
+|-----------------|---------------------------------------------|------------------|----------|-------------|--------|
+| `polynomial`    | `generic_lut_activation_quasar_test.cpp`    | `QUASAR_LUT_CSV` | yes      | yes         | existing — piecewise-polynomial (degree N / segments S), in-cascade reduce+reconstruct RR methods 1-8 (exp/log/cbrt/trig/tan + expalu_exp2/log2/pow) |
+| `rational`      | `generic_lut_rational_quasar_test.cpp`      | `QUASAR_LUT_CSV` | yes      | yes         | existing — P(x)/Q(x), iterative approx_recip + 2 Newton rounds, deferred reciprocal |
+| `exponent_alu`  | `generic_lut_expalu_quasar_test.cpp`        | `QUASAR_LUT_CSV` | yes      | yes         | **ported** — standalone bit-decompose + single reduced-domain Horner that BYPASSES the segment cascade (exp/log/pow + sqrt/rsqrt/cbrt) |
+| `newton_root`   | `generic_lut_newton_root_quasar_test.cpp`   | `QUASAR_NR_CSV`  | yes      | yes (sqrt, rsqrt) | **ported** — magic-seed + Newton/Householder. cbrt (N=3) branch written & compiles, not sim-validated (no newton_root cbrt CSV in fitter) |
+| `parity`        | `generic_lut_parity_quasar_test.cpp`        | `QUASAR_LUT_CSV` | yes      | yes         | **ported** — polynomial parity x²-Horner (POLY_PARITY_ODD/EVEN) + adaptive per-segment degree (SEGMENT_DEGREES[]); orthogonal modifiers of POLY_CASCADE |
+
+Sources: `tt_metal/tt-llk/tests/sources/quasar/`. Python goldens:
+`tt_metal/tt-llk/tests/python_tests/quasar/`.
+
+### Ported-method validation results (pinned sim)
+
+`exponent_alu` (`generic_lut_expalu_quasar_test.cpp`) — all variants PASS vs
+fitter ground_truth (fp32 / bf16 PCC):
+
+| variant  | mode                              | fp32 PCC    | bf16 PCC    |
+|----------|-----------------------------------|-------------|-------------|
+| exp      | mode 1 (exp_p4_s1)                | 0.99999717  | 0.99999486  |
+| sigmoid  | mode 1 + sigmoid compose          | 0.99999999  | 0.99999577  |
+| log2     | mode 2 (log2_p4_s1)               | 0.99999996  | 0.99998683  |
+| sqrt     | mode 3 root_n=2 (sqrt_p2_s1)      | 0.99999911  | 0.99995707  |
+| cbrt     | mode 3 root_n=3 odd-root sign     | 0.99999999  | 0.99999527  |
+| rsqrt    | mode 3 reciprocal path            | 0.99999999  | 0.99999996  |
+
+`newton_root` (`generic_lut_newton_root_quasar_test.cpp`):
+
+| variant | magic        | N | recip | iters | fp32 PCC      | bf16 PCC      | bf16 ULP |
+|---------|--------------|---|-------|-------|---------------|---------------|----------|
+| sqrt    | `0x5f1110a0` | 2 | no    | 2     | 0.99999996    | 0.99996       | max 1    |
+| rsqrt   | `0x5f3759df` | 2 | yes   | 2     | 0.9999999991  | 0.9999999616  | max 1    |
+
+`parity`/`adaptive` (`generic_lut_parity_quasar_test.cpp`) — 5/5 PASS:
+
+| variant                                        | PCC                |
+|------------------------------------------------|--------------------|
+| default odd-parity LUT, fp32, deg [3,5,5,3]    | 0.9999999866691556 |
+| default odd-parity LUT, bf16, deg [3,5,5,3]    | 0.9999968783334164 |
+| EVEN-parity single-seg cos CSV, deg [4]        | 0.9999993731679687 |
+| ODD-parity single-seg sin CSV, deg [5]         | 0.9999994620387233 |
+| real fitter sin_p3_s8 (parity=none fallback)   | 0.9999999809522045 |
+
+> **Metric note.** PCC ~1.0 is the load-bearing correctness signal. Raw fp32
+> ULP explodes near roots / for tiny-magnitude outputs even when PCC ~1.0
+> (project convention: bit-distance ULP near roots is a metric artifact, not a
+> kernel error). bf16 max ULP (1 on the Newton roots, 54-55% bit-exact) is the
+> meaningful tightness figure.
+
+## Quasar SFPU adaptation notes
+
+The qsr32 SFPU on this `ttsim` build differs from Blackhole; the ports required
+these substitutions (all numerically exact or numerically identical, documented
+inline in each source):
+
+- **`SFPADDI` removed** (ttsim aborts `tensix_execute_sfpaddi`). The `-O3`
+  instruction-combine pass folds `acc*x + c` (a separate SFPMUL/SFPMAD + an
+  SFPADD of a round constant's SFPLOADI) into a single `SFPADDI` immediate.
+  Every Horner step MUST be emitted as one **fused SFPMAD** via the
+  `fma_const()` helper (`__builtin_rvtt_sfpmad` with the constant as the
+  3rd/addend operand) so the backend never produces a standalone SFPADD to
+  fold. Used in all ported sources (poly/rational already followed this). Build
+  with `-mno-tt-tensix-optimize-combine` for the reciprocal composes.
+
+- **`SFPADDEXP` / `SFPDIVP2` missing** (newton_root). The Blackhole reference
+  uses `addexp(x, -1)` (exponent decrement = `x * 0.5`). On Quasar this op is
+  absent, so it is replaced by the multiply `x * 0.5f`. `0.5` is an exact fp32
+  value, so the result is **bit-identical** to the exponent decrement for all
+  finite normals.
+
+- **`SFPEXMAN` missing** (exponent_alu) — *contradicts the original task premise
+  that SFPEXMAN was present.* The Blackhole `exp_hw_eval` uses
+  `exman(ImplicitOne)` + `shft(Logical)` for the branch-free float→int
+  decompose; ttsim aborts `MissingSpecification: tensix_execute_sfpexman`. The
+  port re-derives the identical decompose with the sim-supported floor/round
+  path (`SFP_STOCH_RND` + `setexp`-based ldexp) — the same toolkit the rational
+  kernel uses (which already warns "Do NOT use exman"). Numerically identical;
+  on real Quasar silicon the `exman` path could be restored for speed.
+  `log_hw_eval` / `pow_hw_eval` never used exman.
+
+- **`exman` (FractionOnly) avoided generally** — use `setexp(in, 127)` like the
+  BH log kernel for the mantissa-in-[1,2) decompose.
+
+- **int→float path** — the only Quasar int→float route is `vSMag`
+  (`convert<vFloat>(convert<vSMag>(...))`); used for the cbrt N=3 int math.
+
+All other intrinsics (`reinterpret`, `vUInt >> 1`, integer MAGIC-i subtract,
+`setexp` / `exexp` / `setsgn`, `vConst1`, `exexp` decompose) exist on Quasar
+sfpi and are used verbatim.
+
+## Known gaps
+
+- **newton_root cbrt (N=3)**: kernel branch fully written & compiles, but **not
+  sim-validated** — no newton_root cbrt CSV exists in the fitter (all
+  `cbrt_*.csv` use poly/rational range reduction, not newton_root metadata).
+  Validate when such a CSV is produced.
+- **parity x²-Horner triggers only for parity-constrained fits**
+  (single-segment, origin-centered). Multi-segment fitter CSVs (e.g.
+  `sin_p3_s8`) correctly detect `parity=none` and use the natural-basis Horner
+  fallback (validated). This matches the embedded-kernel behavior.
+- **Environment / pin drift (test runner only, not the kernels)**: the harness
+  needs `tt-exalens==0.3.20` (`ParsedElfFile`); the shared `python_env` has
+  0.3.21 (renamed to `ElfFile`), which blocks conftest import for *all* quasar
+  tests until 0.3.20 is restored. `pytest-xdist==3.8.0` is also required
+  (`worker_id` fixture, `--maxschedchunk`). `run_quasar.sh` auto-detects a
+  python with these deps; override with `VENV_PY`.
+
+## File map
+
+| File                                                                                       | Role |
+|--------------------------------------------------------------------------------------------|------|
+| `polaris_test/run_quasar.sh`                                                                | single entry point (config → compile gate → sim run → golden compare) |
+| `polaris_test/compile_llk_quasar.sh`                                                        | per-eval-method SFPI compile-only gate (no device/sim) |
+| `polaris_test/README.md`                                                                    | usage / option tables / legacy-script deprecation |
+| `polaris_test/QUASAR_ELTWISE.md`                                                            | this document |
+| `tt_metal/tt-llk/tests/sources/quasar/generic_lut_activation_quasar_test.cpp`              | polynomial cascade + RR methods 1-8 (existing) |
+| `tt_metal/tt-llk/tests/sources/quasar/generic_lut_rational_quasar_test.cpp`                | rational P(x)/Q(x) (existing) |
+| `tt_metal/tt-llk/tests/sources/quasar/generic_lut_expalu_quasar_test.cpp`                  | exponent-ALU standalone evaluator (ported) |
+| `tt_metal/tt-llk/tests/sources/quasar/generic_lut_newton_root_quasar_test.cpp`             | Newton-root magic-seed (ported) |
+| `tt_metal/tt-llk/tests/sources/quasar/generic_lut_parity_quasar_test.cpp`                  | parity x²-Horner + adaptive degree (ported) |
+| `tt_metal/tt-llk/tests/python_tests/quasar/test_generic_lut_*_quasar.py`                   | per-method python goldens (fitter ground_truth, PCC/ULP) |
+| `tt_metal/tt-llk/tests/python_tests/quasar/quasar_sweep.sh`                                 | multi-activation sweep across fitter best configs |
