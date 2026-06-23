@@ -4,14 +4,13 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t num_units = get_arg_val<uint32_t>(0);
+    const auto num_units = get_arg(args::num_units);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_out(dfb::out);
 
     cb_out.wait_front(num_units);
 }

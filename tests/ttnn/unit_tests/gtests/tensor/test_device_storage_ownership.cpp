@@ -49,7 +49,7 @@ TEST_F(DeviceStorageOwnershipTest, DeviceStorage_DefaultConstructedState) {
     DeviceStorage storage;
 
     EXPECT_FALSE(storage.is_allocated());
-    EXPECT_TRUE(storage.is_uniform_storage());
+    EXPECT_THROW(storage.is_uniform_storage(), std::exception);
 }
 
 TEST_F(DeviceStorageOwnershipTest, DeviceStorage_ThrowsWhenConstructedFromMovedFromMeshTensor) {

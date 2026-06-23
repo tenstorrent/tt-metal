@@ -17,7 +17,6 @@
 
 #include "slice.hpp"
 #include "ttnn/operations/experimental/quasar/slice/device/slice_device_operation.hpp"
-#include "ttnn/operations/experimental/quasar/slice/device/slice_program_factory_tile.hpp"
 
 namespace ttnn::operations::experimental::quasar::detail {
 
@@ -161,19 +160,6 @@ void bind_slice_descriptor(nb::module_& mod) {
             &ttnn::prim::qsr::SliceDeviceOperation::compute_output_specs,
             nb::arg("operation_attributes"),
             nb::arg("tensor_args"));
-
-    nb::class_<ttnn::prim::qsr::SliceTileProgramFactory>(mod, "SliceTileProgramFactory")
-        .def_static(
-            "create_descriptor",
-            [](const ttnn::prim::qsr::SliceParams& operation_attributes,
-               const ttnn::prim::qsr::SliceInputs& tensor_args,
-               Tensor& tensor_return_value) {
-                return ttnn::prim::qsr::SliceTileProgramFactory::create_descriptor(
-                    operation_attributes, tensor_args, tensor_return_value);
-            },
-            nb::arg("operation_attributes"),
-            nb::arg("tensor_args"),
-            nb::arg("tensor_return_value"));
 }
 
 }  // namespace ttnn::operations::experimental::quasar::detail
