@@ -183,13 +183,13 @@ HuggingFace config of `model_source`; only `max_sequence_length` is taken from
 ```python
 completer = Qwen3GRPOCompleter(
     ctx=Qwen3CompletionCtx(
-        max_tokens_to_complete=32,
+        max_tokens_to_complete=256,
         temperature=1.0,
         completions_per_prompt=8,
     ),
     transformer_config=transformer_config,   # max_sequence_length only
     device_config={"enable_fsdp": True, "mesh_shape": [32, 1]},
-    model_source="Qwen/Qwen3-0.6B",
+    model_source="Qwen/Qwen3-32B",
 )
 ```
 
@@ -197,15 +197,7 @@ Unlike the Llama completer, `setup_device` opens a **named** mesh via
 `ttml.open_device_mesh` so an `"fsdp"` axis exists. After loading the (still
 replicated) HuggingFace weights it wraps each block plus the root model with
 `fully_shard`, so parameters, gradients, and optimizer state are sharded
-`1/N` across the FSDP axis. Generation uses a fixed-horizon full-recompute
-decode (no KV cache) to keep shapes constant under FSDP.
-
-> **Qwen3-32B note.** Running the full `Qwen/Qwen3-32B` on a galaxy is not yet
-> possible: construction and `fully_shard` both materialize full, replicated
-> parameters on a single chip before sharding, and 32B does not fit on one
-> Blackhole chip. This depends on the lazy/sharded weight-init work tracked in
-> [`docs/FSDP.md`](../../docs/FSDP.md). Validate on a small Qwen3 (e.g.
-> `Qwen/Qwen3-0.6B`) over the same `[32, 1]` FSDP mesh until then.
+`1/N` across the FSDP axis.
 
 ---
 
@@ -429,9 +421,11 @@ Device setup is handled by the completer constructor, not the trainer.
 When the completer opens a named mesh with an `"fsdp"` axis (size > 1), the
 `GRPOTrainer` automatically:
 
-1. Slices the batch across the whole mesh (dim 0) — so `batch_size` (one GRPO
-   group per prompt) and `micro_batch_size` must both be divisible by the
-   fsdp axis size.
+1. Slices each micro-batch across the whole mesh (dim 0): the across-mesh
+   micro-batch is `per_device_train_batch_size * num_devices` completions, with
+   `per_device_train_batch_size` landing on each device.
+   `per_device_train_batch_size * num_devices` must be divisible by
+   `num_generations` so each prompt's GRPO group stays intact within the batch.
 2. Synchronizes gradients with `ttml.sync_gradients(params, axis_names=("dp", "fsdp"))`
    each optimizer step. FSDP-managed parameters skip the `"fsdp"` axis (their
    gradients were already reduce-scattered by the FSDP backward hook); any
@@ -528,11 +522,11 @@ function, CSV logging via `GRPOMonitor` callback, and DDP on 2 devices.
 python3 boolq_training_example.py
 ```
 
-To train a small Qwen3 sharded across all 32 galaxy cards with FSDP:
+To train Qwen3 32B sharded across all 32 galaxy cards with FSDP:
 
 ```bash
 python3 boolq_training_example.py --model qwen3 \
-    --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_fsdp_validate.yaml
+    --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 ```
 
 ### Accuracy Evaluation

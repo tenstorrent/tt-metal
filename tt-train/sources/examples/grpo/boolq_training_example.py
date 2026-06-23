@@ -174,7 +174,7 @@ def parse_args():
         "--model_source",
         type=str,
         default=None,
-        help="HuggingFace model ID or local path. Overrides the per-model default " "(qwen3 default: Qwen/Qwen3-0.6B).",
+        help="HuggingFace model ID or local path. Overrides the per-model default " "(qwen3 default: Qwen/Qwen3-32B).",
     )
     parser.add_argument(
         "--max_seq_len",
@@ -198,11 +198,9 @@ if __name__ == "__main__":
     is_qwen3 = args.model == "qwen3"
 
     if is_qwen3:
-        model_id = args.model_source or "Qwen/Qwen3-0.6B"
-        default_config = "tt-train/configs/training_configs/grpo_boolq_qwen3_fsdp_validate.yaml"
+        model_id = args.model_source or "Qwen/Qwen3-32B"
     else:
         model_id = args.model_source or "meta-llama/Llama-3.2-1B-Instruct"
-        default_config = "tt-train/configs/training_configs/grpo_boolq_llama_1dev.yaml"
 
     tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 
