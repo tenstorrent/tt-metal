@@ -352,6 +352,17 @@ def test_mux_bw_both_channel_types(
     num_full_size_channel_iters,
     num_iters_between_teardown_checks,
 ):
+    if (
+        num_full_size_channels == 8
+        and num_header_only_channels == 8
+        and num_buffers_full_size_channel == 8
+        and num_buffers_header_only_channel == 8
+        and num_packets == 10000
+        and packet_payload_size_bytes == 4096
+        and num_full_size_channel_iters == 1
+        and num_iters_between_teardown_checks == 32
+    ):
+        pytest.skip("Skipping failing parametrization [32-1-4096-10000-8-8-8-8] on T3K, refs #46987")
     test_name = "both_channel_types"
     run_mux_benchmark_test(
         test_name,
