@@ -18,7 +18,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
 
 
-class TtJanusConv2dPatch(LightweightModule):
+class TtJanusProConv2dPatch(LightweightModule):
     """Conv2D Patching layer.
     Column parallel over unfolded input.
     Arguments:
