@@ -32,6 +32,7 @@ from models.common.utility_functions import comp_pcc, profiler, skip_for_blackho
 from models.demos.gpt_oss.tests.test_factory import TestFactory
 from models.demos.gpt_oss.tt.topk import TopKRouter
 from models.demos.gpt_oss.utils.general_utils import throughput_experts_supported_on_arch
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from tools.tracy.process_model_log import get_latest_ops_log_filename, run_device_profiler
 
@@ -705,7 +706,7 @@ def _run_router_single_device_test(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
@@ -797,7 +798,7 @@ def test_gpt_oss_router(
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-            "trace_region_size": 30000000,
+            TRACE_MODEL_KEY_PARAM: "gpt-oss-20b",
         }
     ],
     indirect=True,
