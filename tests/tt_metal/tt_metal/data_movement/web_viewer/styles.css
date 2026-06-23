@@ -138,33 +138,63 @@ header h1 {
     list-style: none;
 }
 
-#test-list li {
+#test-list .group-item {
     padding: 8px 10px;
     border-radius: 6px;
     font-size: 13px;
-    cursor: pointer;
-    transition: background 0.15s;
     margin-bottom: 2px;
 }
 
-#test-list li:hover {
+.group-header {
+    cursor: pointer;
+    font-weight: 500;
+    padding: 2px 0;
+    transition: color 0.15s;
+}
+
+.group-header:hover {
+    color: var(--accent-hover);
+}
+
+.group-item.expanded > .group-header {
+    color: var(--accent);
+}
+
+.sub-test-list {
+    list-style: none;
+    margin-top: 6px;
+    padding-left: 12px;
+    border-left: 1px solid var(--border);
+}
+
+.sub-test-list li {
+    padding: 5px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 400;
+    cursor: pointer;
+    transition: background 0.15s;
+    margin-bottom: 1px;
+}
+
+.sub-test-list li:hover {
     background: var(--bg-hover);
 }
 
-#test-list li.selected {
+.sub-test-list li.selected {
     background: var(--selected-bg);
-    border-left: 3px solid var(--accent);
-    padding-left: 7px;
+    border-left: 2px solid var(--accent);
+    padding-left: 6px;
 }
 
-#test-list li .test-tags {
+#test-list .group-item .test-tags {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
     margin-top: 4px;
 }
 
-#test-list li .test-tag {
+#test-list .group-item .test-tag {
     font-size: 10px;
     padding: 1px 6px;
     background: var(--chip-bg);
