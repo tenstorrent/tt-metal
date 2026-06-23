@@ -11,7 +11,7 @@ from tests.ttnn.utils_for_testing import assert_numeric_metrics
 from tests.ttnn.nightly.unit_tests.operations.reduction.utility_functions import ttnn_prod
 
 
-def get_tensors(input_shape, output_shape, device, npu_dtype=ttnn.bfloat16):
+def get_tensors(input_shape, output_shape, device, npu_dtype):
     torch.manual_seed(2023)
     cpu_dtype = torch.float32 if npu_dtype == ttnn.float32 else torch.bfloat16
     npu_layout = ttnn.TILE_LAYOUT
