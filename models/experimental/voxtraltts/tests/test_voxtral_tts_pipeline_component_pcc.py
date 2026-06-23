@@ -406,10 +406,7 @@ def _run_pipeline_inference_pcc_loop(
     cpu_hidden = cpu_prefill.hidden_states[-1][:, -1, :].squeeze(0).float()
     cpu_pkv = cpu_prefill.past_key_values
 
-    tt_embeds = pipe._build_voice_injected_embeds(prompt_ids, _DEMO_VOICE)
-    tt_hidden_tt = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
-    tt_hidden = pipe.text.hidden_tt_to_torch(tt_hidden_tt).float()
-    ttnn.deallocate(tt_hidden_tt)
+    tt_hidden = pipe.text_prefill_hidden(prompt_ids, _DEMO_VOICE)
     current_pos = prompt_len
 
     ok, msg = comp_pcc(cpu_hidden, tt_hidden, pcc=PREFILL_HIDDEN_PCC)
@@ -456,9 +453,8 @@ def _run_pipeline_inference_pcc_loop(
         if int(feedback[0, 0].item()) == cpu.end_audio_id:
             break
 
-        mm_embed = pipe._audio_codes_to_mm_embed(feedback)
         cpu_hidden, cpu_pkv = _cpu_text_decode_step(cpu, audio_codes_b37=feedback, past_key_values=cpu_pkv)
-        tt_hidden = pipe.text.decode_step_from_embeds(mm_embed, current_pos).float()
+        tt_hidden = pipe.text_decode_hidden_from_audio_codes(feedback, current_pos)
         current_pos += 1
 
         ok, msg = comp_pcc(cpu_hidden.float(), tt_hidden, pcc=TEXT_DECODE_STEP_PCC)

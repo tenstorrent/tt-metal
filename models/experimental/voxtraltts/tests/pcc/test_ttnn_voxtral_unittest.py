@@ -76,39 +76,8 @@ def _tt_text_decode_step_device_resident(
     audio_codes_b37: torch.Tensor,
     current_pos: int,
 ) -> torch.Tensor:
-    """MM embed + ``decode_step_from_embeds_tt``; host hidden slice for staged PCC (matches resident loop)."""
-    dim = pipe.text.inner.args.dim
-    mm_embed_tt = pipe._audio_codes_to_mm_embed_tt(audio_codes_b37)
-
-    dummy_token = torch.zeros(1, dtype=torch.int64)
-    current_pos_t = torch.tensor([current_pos], dtype=torch.int64)
-    _, current_pos_tt, rope_idxs, page_table = pipe.text.prepare_inputs_decode(dummy_token, current_pos_t)
-    rot_mats_global = pipe.text.inner.rope_setup.get_rot_mats(rope_idxs)
-    rot_mats_local = (
-        pipe.text.inner.rope_local_setup.get_rot_mats(rope_idxs)
-        if hasattr(pipe.text.inner, "rope_local_setup")
-        else None
-    )
-
-    next_hidden_tt = pipe.text.decode_step_from_embeds_tt(
-        mm_embed_tt,
-        current_pos_tt,
-        rot_mats_global,
-        rot_mats_local,
-        page_table,
-    )
-    if mm_embed_tt.is_allocated():
-        ttnn.deallocate(mm_embed_tt)
-
-    host = pipe.text.inner.concat_host_output(next_hidden_tt)
-    ttnn.deallocate(next_hidden_tt)
-    hidden = host[0, 0, 0, :dim].to(dtype=torch.bfloat16).float()
-
-    for _t in (current_pos_tt, page_table):
-        if _t is not None and hasattr(_t, "is_allocated") and _t.is_allocated():
-            ttnn.deallocate(_t)
-
-    return hidden
+    """Device-resident text decode on multi-device; host path on 1×1 (matches ``forward_device_resident``)."""
+    return pipe.text_decode_hidden_from_audio_codes(audio_codes_b37, current_pos)
 
 
 def _compare_acoustic_codes(
@@ -193,10 +162,7 @@ def test_ttnn_voxtral_tts_e2e_pcc(device, reset_seeds, request):
     cpu_hidden = cpu_prefill.hidden_states[-1][:, -1, :].squeeze(0).float()
     cpu_pkv = cpu_prefill.past_key_values
 
-    tt_embeds = pipe._build_voice_injected_embeds(prompt_ids, _DEMO_VOICE)
-    tt_hidden_tt = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
-    tt_hidden = pipe.text.hidden_tt_to_torch(tt_hidden_tt).float()
-    ttnn.deallocate(tt_hidden_tt)
+    tt_hidden = pipe.text_prefill_hidden(prompt_ids, _DEMO_VOICE)
     ok, msg = comp_pcc(cpu_hidden, tt_hidden, pcc=PREFILL_HIDDEN_PCC)
     _log_pcc("prefill hidden", float(msg), PREFILL_HIDDEN_PCC)
     assert ok, f"prefill hidden PCC failed: {msg}"

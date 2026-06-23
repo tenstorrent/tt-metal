@@ -17,10 +17,7 @@ from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     get_VoxtralTTArgs,
     voxtral_text_default_optimizations,
 )
-from models.experimental.voxtraltts.utils.mesh import (
-    voxtral_replicate_mesh_mapper,
-    voxtral_tp_shard_last_dim_mapper,
-)
+from models.experimental.voxtraltts.utils.mesh import voxtral_replicate_mesh_mapper, voxtral_tp_shard_last_dim_mapper
 
 
 def _swap_text_mlps(inner, state_dict, weight_cache_path, dtype) -> None:
@@ -295,17 +292,16 @@ class VoxtralTTTextModel:
             else:
                 x_tt = ttnn.to_memory_config(x_embed, embed_mem_cfg)
         else:
+            # MM decode embeds are column-sharded on TP meshes (matches ``embed_host`` / trace staging).
             x_4d = x_embed.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous()
-            mesh_mapper = voxtral_tp_shard_last_dim_mapper(self.inner.mesh_device, self.inner.args.cluster_shape)
-            if mesh_mapper is None:
-                mesh_mapper = voxtral_replicate_mesh_mapper(self.inner.mesh_device)
+            tp_mapper = voxtral_tp_shard_last_dim_mapper(self.inner.mesh_device, self.inner.args.cluster_shape)
             x_tt = ttnn.from_torch(
                 x_4d,
                 device=self.inner.mesh_device,
                 dtype=activation_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=self._decode_embed_input_mem_cfg,
-                mesh_mapper=mesh_mapper,
+                mesh_mapper=tp_mapper or voxtral_replicate_mesh_mapper(self.inner.mesh_device),
             )
 
         layer_hiddens: dict[str, torch.Tensor] = {}
