@@ -39,6 +39,7 @@ from pydantic import Field
 from .fpu.datacopy import DatacopyFpu
 from .fpu.eltwise import EltwiseFpu
 from .fpu.matmul import MatmulFpu
+from .fpu.matmul_no_mop import MatmulNoMopFpu
 from .fpu.reduce import ReduceFpu
 from .fpu.reduce_block_max import ReduceBlockMaxFpu
 from .fpu.reduce_block_max_runtime import ReduceBlockMaxRuntimeFpu
@@ -261,6 +262,17 @@ FPU_MAP = {
             _matmul_inner_dims,
         ],
     ),
+    "MatmulNoMop": (
+        lambda s: MatmulNoMopFpu(),
+        [
+            _no_reuse_dest,
+            _matmul_dim_check,
+            _forced_unpacker("MatmulUnpacker"),
+            _matmul_in0_16x16,
+            _matmul_in1_tile,
+            _matmul_inner_dims,
+        ],
+    ),
     "Reduce": (
         lambda s: ReduceFpu(s.reduce_dim, s.reduce_pool),
         [
@@ -312,6 +324,7 @@ OUTPUT_DIMS = {
     "Elwsub": _eltwise_dims,
     "Datacopy": _src_a_dims,
     "Matmul": _matmul_dims,
+    "MatmulNoMop": _matmul_dims,
     "Reduce": _src_a_dims,
     "ReduceBlockMax": _src_a_dims,
     "ReduceBlockMaxRuntime": _src_a_dims,
