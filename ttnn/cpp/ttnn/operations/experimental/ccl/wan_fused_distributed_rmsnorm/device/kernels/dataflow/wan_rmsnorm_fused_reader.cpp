@@ -51,16 +51,9 @@ void kernel_main() {
     // block_size-tile pushes that compute pops as it consumes. The resident
     // fast path reads the whole row once. See program_factory.
     constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(16);
-    // Barrier-read threshold: push+barrier the input read every this many tiles
-    // (caps in-flight DRAM reads to limit NoC/DRAM contention; also sets PRE's
-    // consumption granularity). Host heuristic = f(num readers, tile bytes), or
-    // WAN_BARRIER_TILES override. Subsumes the old per-block (RoPE) / whole-row
-    // (no-rope) input-read structure: threshold == block_size reproduces the
-    // RoPE finer push; threshold == num_tile_cols reproduces the whole-row push.
-    constexpr uint32_t input_barrier_tiles = get_compile_time_arg_val(17);
     // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
     // so the reader's first NoC op is the input read (starts streaming ASAP).
-    constexpr auto input_args = TensorAccessorArgs<18>();
+    constexpr auto input_args = TensorAccessorArgs<17>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
@@ -151,15 +144,15 @@ void kernel_main() {
                 }
             }
         } else {
-            // Barrier-read-threshold input read: push + barrier every
-            // input_barrier_tiles tiles. Caps in-flight DRAM reads (contention)
-            // and sets PRE's consumption granularity (compute overlap). The host
-            // heuristic picks the threshold from the active-reader count + tile
-            // bytes (Wormhole reference formula); WAN_BARRIER_TILES overrides.
+            // Resident input read: push + barrier every block_size tiles. A
+            // galaxy A/B (WAN_BARRIER_TILES sweep over rope/no-rope, small/large
+            // num_tile_cols incl. Wan 40-tile rows) showed block_size granularity
+            // is perf-neutral-to-faster vs the old f(rope, rows, num_tile_cols)
+            // heuristic and the whole-row deep read — so the heuristic was dropped.
             DeviceZoneScopedN("R_INPUT");
-            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += input_barrier_tiles) {
-                const uint32_t grp = ((num_tile_cols - col_tile) >= input_barrier_tiles) ? input_barrier_tiles
-                                                                                         : (num_tile_cols - col_tile);
+            for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
+                const uint32_t grp =
+                    ((num_tile_cols - col_tile) >= block_size) ? block_size : (num_tile_cols - col_tile);
                 cb_reserve_back(input_cb, grp);
                 uint32_t input_wr_ptr = get_write_ptr(input_cb);
                 for (uint32_t i = 0; i < grp; i++) {
