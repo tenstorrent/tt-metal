@@ -30,14 +30,11 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3_vl.tt.block import M3VLBlock
+from models.demos.minimax_m3_vl.tt.common import mesh_mapper
 from models.demos.minimax_m3_vl.tt.layernorm import M3VLLayerNorm
 from models.demos.minimax_m3_vl.tt.patch_embed import M3VLPatchEmbed
 from models.demos.minimax_m3_vl.tt.projector import M3VLProjector
 from models.demos.minimax_m3_vl.tt.rope import rope_cos_sin_padded
-
-
-def _is_mesh_device(device) -> bool:
-    return type(device).__name__ == "MeshDevice"
 
 
 class M3VLVisionModel(LightweightModule):
@@ -105,14 +102,13 @@ class M3VLVisionModel(LightweightModule):
     def _push_pixel_values(self, pixel_values: torch.Tensor) -> ttnn.Tensor:
         """Push flattened pixel_values (L, 1176) to device as (1, 1, L, 1176)."""
         L, D = pixel_values.shape
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if _is_mesh_device(self.device) else None
         return ttnn.from_torch(
             pixel_values.to(torch.bfloat16).view(1, 1, L, D).contiguous(),
             device=self.device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mesh_mapper(self.device),
         )
 
     def _stage_rope(self, image_grid_thw: torch.Tensor):
