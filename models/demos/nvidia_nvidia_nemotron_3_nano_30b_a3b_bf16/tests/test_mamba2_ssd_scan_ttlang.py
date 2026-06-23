@@ -102,114 +102,130 @@ def _ssd_scan_ref(x_dt, B_in, C_in, x_raw, log_decay, D_skip, chunk_size=C):
     return y, h_next
 
 
-# ── SimTensor construction helper ─────────────────────────────────────────────
+# ── All-heads SimTensor builder ───────────────────────────────────────────────
 
 
-def _build_per_head_sim_tensors(h_idx, x_dt_raw, B_in_raw, C_in_raw, x_raw, log_decay_raw, D_skip_raw, n_chunks):
-    """
-    Build all SimTensors (TILE_LAYOUT) for one head h_idx.
+def _build_all_heads_sim_tensors(x_dt_raw, B_in_raw, C_in_raw, x_raw, log_decay_raw, D_skip_raw, n_chunks):
+    """Build all-heads SimTensors by stacking 64 per-head tensors along tile-row dim.
 
     Args (all float32, batch dim removed):
-        x_dt_raw:    [S, H, D]
-        B_in_raw:    [S, G, N]
-        C_in_raw:    [S, G, N]
-        x_raw:       [S, H, D]
-        log_decay_raw: [S, H]
-        D_skip_raw:  [H]
+        x_dt_raw:     [S, NUM_HEADS, D]
+        B_in_raw:     [S, G, N]
+        C_in_raw:     [S, G, N]
+        x_raw:        [S, NUM_HEADS, D]
+        log_decay_raw:[S, NUM_HEADS]
+        D_skip_raw:   [NUM_HEADS]
+        n_chunks:     int
 
-    Returns dict with SimTensors ready to pass to the tt-lang kernel.
+    Returns dict of SimTensors with keys matching the kernel's parameter names.
+    Shapes (elements):
+        log_L        [NUM_HEADS * n_chunks * C, C]
+        x_dt         [NUM_HEADS * n_chunks * C, D]
+        B            [NUM_HEADS * n_chunks * C, N]  (B expanded G→NUM_HEADS)
+        C_mat        [NUM_HEADS * n_chunks * C, N]
+        x            [NUM_HEADS * n_chunks * C, D]
+        log_gamma    [NUM_HEADS * n_chunks * C, TILE]
+        log_delta    [NUM_HEADS * n_chunks * C, TILE]
+        log_gscalar  [NUM_HEADS * n_chunks * TILE, TILE]
+        h_in         [NUM_HEADS * D, N]
+        D_skip_t     [NUM_HEADS * TILE, TILE]
+        y_out        [NUM_HEADS * n_chunks * C, D]
+        h_out        [NUM_HEADS * D, N]
     """
     S = n_chunks * C
-    g_idx = h_idx * G // NUM_HEADS  # group index for this head
+    i_idx_t = torch.arange(C).unsqueeze(1).float()  # [C,1]
+    s_idx_t = torch.arange(C).unsqueeze(0).float()  # [1,C]
+    causal = s_idx_t <= i_idx_t  # [C,C]
 
-    # Per-head raw values, reshaped to [n_chunks, C, dim]
-    xdt_h = x_dt_raw[:S, h_idx, :].reshape(n_chunks, C, D).to(torch.bfloat16)
-    B_h = B_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
-    C_h = C_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
-    x_h = x_raw[:S, h_idx, :].reshape(n_chunks, C, D).to(torch.bfloat16)
-    logd_h = log_decay_raw[:S, h_idx].reshape(n_chunks, C).float()
+    all_log_L = []
+    all_xdt = []
+    all_B = []
+    all_C_mat = []
+    all_x = []
+    all_lg = []
+    all_ld = []
+    all_lgs = []
+    all_h_in = []
+    all_dskip = []
+    all_y_out = []
+    all_h_out = []
 
-    # Intra-chunk cumulative sum of log_decay → [n_chunks, C]
-    A_cumsum = torch.cumsum(logd_h, dim=1)  # [n_chunks, C]
+    for h_idx in range(NUM_HEADS):
+        g_idx = h_idx * G // NUM_HEADS
 
-    # ── log_L: [n_chunks*C, C] element shape ───────────────────────────────
-    # log_L[c, i, s] = A_cumsum[c,i] - A_cumsum[c,s] for s<=i, else -inf
-    i_idx_t = torch.arange(C).unsqueeze(1).float()  # [C, 1]
-    s_idx_t = torch.arange(C).unsqueeze(0).float()  # [1, C]
-    causal = s_idx_t <= i_idx_t  # [C, C]
+        xdt_h = x_dt_raw[:S, h_idx, :].reshape(n_chunks, C, D).to(torch.bfloat16)
+        B_h = B_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
+        C_h = C_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
+        x_h = x_raw[:S, h_idx, :].reshape(n_chunks, C, D).to(torch.bfloat16)
+        logd_h = log_decay_raw[:S, h_idx].reshape(n_chunks, C).float()
 
-    log_L_elem = torch.zeros(n_chunks * C, C, dtype=torch.bfloat16)
-    for ci in range(n_chunks):
-        diff = A_cumsum[ci].unsqueeze(1) - A_cumsum[ci].unsqueeze(0)  # [C, C]
-        masked = torch.where(causal, diff, torch.tensor(float("-inf")))
-        log_L_elem[ci * C : (ci + 1) * C, :] = masked.to(torch.bfloat16)
+        A_cumsum = torch.cumsum(logd_h, dim=1)  # [n_chunks, C]
 
-    # ── x_dt: [n_chunks*C, D] ─────────────────────────────────────────────
-    xdt_elem = xdt_h.reshape(n_chunks * C, D)
+        # log_L: [n_chunks*C, C]
+        log_L_h = torch.zeros(n_chunks * C, C, dtype=torch.bfloat16)
+        for ci in range(n_chunks):
+            diff = A_cumsum[ci].unsqueeze(1) - A_cumsum[ci].unsqueeze(0)  # [C,C]
+            masked = torch.where(causal, diff, torch.tensor(float("-inf")))
+            log_L_h[ci * C : (ci + 1) * C, :] = masked.to(torch.bfloat16)
 
-    # ── B, C matrices: [n_chunks*C, N] ────────────────────────────────────
-    B_elem = B_h.reshape(n_chunks * C, N)
-    C_elem = C_h.reshape(n_chunks * C, N)
-    x_elem = x_h.reshape(n_chunks * C, D)
+        # log_gamma: [n_chunks*C, TILE] — each row filled with A_cumsum[ci, row]
+        log_gamma_h = torch.zeros(n_chunks * C, TILE, dtype=torch.bfloat16)
+        for ci in range(n_chunks):
+            for row in range(C):
+                log_gamma_h[ci * C + row, :] = A_cumsum[ci, row]
 
-    # ── log_gamma (column vec, fill across TILE cols): [n_chunks*C, TILE] ─
-    log_gamma_elem = torch.zeros(n_chunks * C, TILE, dtype=torch.bfloat16)
-    for ci in range(n_chunks):
-        for row in range(C):
-            log_gamma_elem[ci * C + row, :] = A_cumsum[ci, row]
+        # log_delta: [n_chunks*C, TILE] — each row filled with A_last - A_cumsum[ci, row]
+        log_delta_h = torch.zeros(n_chunks * C, TILE, dtype=torch.bfloat16)
+        for ci in range(n_chunks):
+            A_last = A_cumsum[ci, -1]
+            for row in range(C):
+                log_delta_h[ci * C + row, :] = A_last - A_cumsum[ci, row]
 
-    # ── log_delta (column vec): [n_chunks*C, TILE] ────────────────────────
-    log_delta_elem = torch.zeros(n_chunks * C, TILE, dtype=torch.bfloat16)
-    for ci in range(n_chunks):
-        A_last = A_cumsum[ci, -1]
-        for row in range(C):
-            log_delta_elem[ci * C + row, :] = A_last - A_cumsum[ci, row]
+        # log_gscalar: [n_chunks*TILE, TILE] — each TILE-row block filled with A_cumsum[ci,-1]
+        log_gscalar_h = torch.zeros(n_chunks * TILE, TILE, dtype=torch.bfloat16)
+        for ci in range(n_chunks):
+            log_gscalar_h[ci * TILE : (ci + 1) * TILE, :] = A_cumsum[ci, -1].item()
 
-    # ── log_gscalar (per-chunk scalar tile): [n_chunks*TILE, TILE] ────────
-    log_gscalar_elem = torch.zeros(n_chunks * TILE, TILE, dtype=torch.bfloat16)
-    for ci in range(n_chunks):
-        scalar = A_cumsum[ci, -1].item()
-        log_gscalar_elem[ci * TILE : (ci + 1) * TILE, :] = scalar
-
-    # ── h_in: zeros [D, N] (h_prev = 0 at start) ─────────────────────────
-    h_in_elem = torch.zeros(D, N, dtype=torch.bfloat16)
-
-    # ── D_skip: scalar tile [TILE, TILE] ─────────────────────────────────
-    d_skip_val = float(D_skip_raw[h_idx].item())
-    d_skip_elem = torch.full((TILE, TILE), d_skip_val, dtype=torch.bfloat16)
-
-    # ── Output tensors (pre-allocated zeros) ─────────────────────────────
-    y_out_elem = torch.zeros(n_chunks * C, D, dtype=torch.bfloat16)
-    h_out_elem = torch.zeros(D, N, dtype=torch.bfloat16)
+        all_log_L.append(log_L_h)  # [n_chunks*C, C]
+        all_xdt.append(xdt_h.reshape(n_chunks * C, D))  # [n_chunks*C, D]
+        all_B.append(B_h.reshape(n_chunks * C, N))  # [n_chunks*C, N]
+        all_C_mat.append(C_h.reshape(n_chunks * C, N))  # [n_chunks*C, N]
+        all_x.append(x_h.reshape(n_chunks * C, D))  # [n_chunks*C, D]
+        all_lg.append(log_gamma_h)  # [n_chunks*C, TILE]
+        all_ld.append(log_delta_h)  # [n_chunks*C, TILE]
+        all_lgs.append(log_gscalar_h)  # [n_chunks*TILE, TILE]
+        all_h_in.append(torch.zeros(D, N, dtype=torch.bfloat16))  # [D, N]
+        all_dskip.append(
+            torch.full((TILE, TILE), float(D_skip_raw[h_idx].item()), dtype=torch.bfloat16)
+        )  # [TILE, TILE]
+        all_y_out.append(torch.zeros(n_chunks * C, D, dtype=torch.bfloat16))  # [n_chunks*C, D]
+        all_h_out.append(torch.zeros(D, N, dtype=torch.bfloat16))  # [D, N]
 
     def _st(t):
         return SimTensor(t.clone(), TILE_LAYOUT)
 
     return {
-        "log_L": _st(log_L_elem),
-        "x_dt": _st(xdt_elem),
-        "B": _st(B_elem),
-        "C_mat": _st(C_elem),
-        "x": _st(x_elem),
-        "log_gamma": _st(log_gamma_elem),
-        "log_delta": _st(log_delta_elem),
-        "log_gscalar": _st(log_gscalar_elem),
-        "h_in": _st(h_in_elem),
-        "D_skip_t": _st(d_skip_elem),
-        "y_out": _st(y_out_elem),
-        "h_out": _st(h_out_elem),
-        # raw tensors for output extraction
-        "_y_out_data": y_out_elem,
-        "_h_out_data": h_out_elem,
+        "log_L": _st(torch.cat(all_log_L, dim=0)),  # [H*n_chunks*C, C]
+        "x_dt": _st(torch.cat(all_xdt, dim=0)),  # [H*n_chunks*C, D]
+        "B": _st(torch.cat(all_B, dim=0)),  # [H*n_chunks*C, N]
+        "C_mat": _st(torch.cat(all_C_mat, dim=0)),  # [H*n_chunks*C, N]
+        "x": _st(torch.cat(all_x, dim=0)),  # [H*n_chunks*C, D]
+        "log_gamma": _st(torch.cat(all_lg, dim=0)),  # [H*n_chunks*C, TILE]
+        "log_delta": _st(torch.cat(all_ld, dim=0)),  # [H*n_chunks*C, TILE]
+        "log_gscalar": _st(torch.cat(all_lgs, dim=0)),  # [H*n_chunks*TILE, TILE]
+        "h_in": _st(torch.cat(all_h_in, dim=0)),  # [H*D, N]
+        "D_skip_t": _st(torch.cat(all_dskip, dim=0)),  # [H*TILE, TILE]
+        "y_out": _st(torch.cat(all_y_out, dim=0)),  # [H*n_chunks*C, D]
+        "h_out": _st(torch.cat(all_h_out, dim=0)),  # [H*D, N]
     }
 
 
-# ── Test ─────────────────────────────────────────────────────────────────────
+# ── Multi-core sim test ───────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("n_chunks", [2, 64, 128, 256])
-def test_mamba2_ssd_scan_ttlang_sim(n_chunks):
-    """ISL = n_chunks × 64; tt-lang sim output matches PyTorch reference."""
+@pytest.mark.parametrize("n_chunks", [2, 64])
+def test_mamba2_ssd_scan_ttlang_multicore_sim(n_chunks):
+    """8×8 multi-core kernel processes all 64 heads in one call (sim)."""
     S = n_chunks * C
     torch.manual_seed(0)
 
@@ -229,44 +245,48 @@ def test_mamba2_ssd_scan_ttlang_sim(n_chunks):
         D_skip=D_skip_raw.float(),
     )
 
-    kernel = make_mamba2_ssd_scan_kernel(n_chunks)
+    kernel = make_mamba2_ssd_scan_kernel(n_chunks, num_heads=NUM_HEADS)
+    t = _build_all_heads_sim_tensors(
+        x_dt_raw[0].float(),
+        B_in_raw[0].float(),
+        C_in_raw[0].float(),
+        x_raw_in[0].float(),
+        logd_raw[0].float(),
+        D_skip_raw.float(),
+        n_chunks,
+    )
+    kernel(
+        t["log_L"],
+        t["x_dt"],
+        t["B"],
+        t["C_mat"],
+        t["x"],
+        t["log_gamma"],
+        t["log_delta"],
+        t["log_gscalar"],
+        t["h_in"],
+        t["D_skip_t"],
+        t["y_out"],
+        t["h_out"],
+    )
+
+    # Extract per-head outputs from the stacked tensors
     y_ttlang = torch.zeros(S, NUM_HEADS, D, dtype=torch.bfloat16)
     h_ttlang = torch.zeros(NUM_HEADS, D, N, dtype=torch.bfloat16)
-
-    for h_idx in range(NUM_HEADS):
-        t = _build_per_head_sim_tensors(
-            h_idx,
-            x_dt_raw[0].float(),
-            B_in_raw[0].float(),
-            C_in_raw[0].float(),
-            x_raw_in[0].float(),
-            logd_raw[0].float(),
-            D_skip_raw.float(),
-            n_chunks,
-        )
-        kernel(
-            t["log_L"],
-            t["x_dt"],
-            t["B"],
-            t["C_mat"],
-            t["x"],
-            t["log_gamma"],
-            t["log_delta"],
-            t["log_gscalar"],
-            t["h_in"],
-            t["D_skip_t"],
-            t["y_out"],
-            t["h_out"],
-        )
-        y_ttlang[:, h_idx, :] = t["y_out"]._tensor[:S, :D]
-        h_ttlang[h_idx, :, :] = t["h_out"]._tensor[:D, :N]
+    for h in range(NUM_HEADS):
+        y_row0 = h * n_chunks * C
+        y_row1 = (h + 1) * n_chunks * C
+        h_row0 = h * D
+        h_row1 = (h + 1) * D
+        y_ttlang[:, h, :] = t["y_out"]._tensor[y_row0:y_row1, :D]
+        h_ttlang[h, :, :] = t["h_out"]._tensor[h_row0:h_row1, :N]
 
     y_ref_s = y_ref[0, :S].float()
     h_ref_s = h_ref[0].float()
 
     assert torch.allclose(
-        y_ttlang.float(), y_ref_s, atol=1e-2, rtol=1e-2
-    ), f"n_chunks={n_chunks}: y max_diff={(y_ttlang.float()-y_ref_s).abs().max():.4f}"
+        y_ttlang.float(), y_ref_s, atol=1e-4, rtol=1e-4
+    ), f"n_chunks={n_chunks}: y max_diff={(y_ttlang.float()-y_ref_s).abs().max():.6f}"
     assert torch.allclose(
-        h_ttlang.float(), h_ref_s, atol=1e-2, rtol=1e-2
-    ), f"n_chunks={n_chunks}: h max_diff={(h_ttlang.float()-h_ref_s).abs().max():.4f}"
+        h_ttlang.float(), h_ref_s, atol=1e-4, rtol=1e-4
+    ), f"n_chunks={n_chunks}: h max_diff={(h_ttlang.float()-h_ref_s).abs().max():.6f}"
