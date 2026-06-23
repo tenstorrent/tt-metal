@@ -10,7 +10,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     build_h2d_service,
     get_variant,
@@ -72,6 +71,11 @@ GATE_FALLBACK_MODE = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.defaul
 # cache for migration and skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
 PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
+# Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
+# L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
+# requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
+_ROUTING_USE_L1_SMALL_SEMAPHORES = VARIANT.name == "kimi_k2_6"
+_L1_SMALL_SIZE = 512 if _ROUTING_USE_L1_SMALL_SEMAPHORES else 0
 
 _shutdown = False
 
@@ -203,10 +207,8 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         # core after a producer push lands), copy backing -> fresh output, ack
         # consumed_counter. Returns tensors independent of the backing. This call
         # blocks until the next push arrives, so the loop is naturally idle-waiting.
-        tt_tokens, tt_metadata = h2d_socket_sync(
-            h2d_service,
-            H2D_SYNC_WORKER_CORES,
-            metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
+        tt_tokens, tt_metadata = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+            h2d_service, metadata_size_bytes=H2D_METADATA_SIZE_BYTES
         )
         # Decode per-iter PrefillMetadata (replicated across the mesh — first device view).
         meta_host = ttnn.to_torch(ttnn.get_device_tensors(tt_metadata)[0]).view(torch.int32).flatten()
@@ -284,7 +286,7 @@ def main() -> None:
         f"migration={'ON (KV chunk table publish)' if enable_migration else 'OFF'}"
     )
 
-    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG)
+    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
 
     hf_config = load_hf_config(VARIANT)
     hf_config.max_seq_len = MAX_SEQ_LEN
@@ -302,6 +304,7 @@ def main() -> None:
         weight_cache_path=cache_path,
         model_cfg=MODEL_CFG,
         kv_only_last_layer=KV_ONLY_LAST_LAYER,
+        routing_use_l1_small_for_semaphores=_ROUTING_USE_L1_SMALL_SEMAPHORES,
     )
 
     pipeline = TtDeepSeekPrefillPipeline(

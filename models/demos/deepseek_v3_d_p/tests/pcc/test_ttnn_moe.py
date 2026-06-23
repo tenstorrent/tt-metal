@@ -55,7 +55,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import (
     visualize_expert_dispatch_table,
 )
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.transformer_helpers import GOLDEN_LONGBOOK_TRACE, load_trace_gate_input
 from tests.ttnn.utils_for_testing import comp_pcc
+
+# First MoE layer in DeepSeek-V3 (metadata moe_layer_offset == 3); the golden
+# trace stores its post-attention RMSNorm output, i.e. the MoE block input.
+_MOE_LAYER_IDX = 3
 
 
 # dispatch_buffer_capacity_factor below is ceil(N/2) of the most conservative
@@ -228,8 +233,21 @@ def run_model(
     # ========================================
     profiler.start("input_creation")
 
+    # Prefer a realistic MoE-block input (post-attention RMSNorm of the first MoE
+    # layer) from the golden trace; fall back to synthetic noise when unavailable.
+    # Restricted to PCC runs on the DeepSeek hidden dim so perf baselines and the
+    # Kimi variant keep their established synthetic input.
     # currently cannot use ttnn.empty on x; because indices become ND beyond max dispatch token limit.
-    x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
+    x = None
+    if run_pcc_check and emb_dim == DeepSeekV3Config.EMB_SIZE:
+        total_tokens = dispatch_group_size * seq_len_per_chip
+        trace_input = load_trace_gate_input(
+            GOLDEN_LONGBOOK_TRACE, layer_idx=_MOE_LAYER_IDX, max_seq_len=total_tokens, dim=emb_dim
+        )
+        if trace_input is not None:
+            x = trace_input.reshape(dispatch_group_size, seq_len_per_chip, emb_dim).to(torch.bfloat16)
+    if x is None:
+        x = torch.randn(dispatch_group_size, seq_len_per_chip, emb_dim, dtype=torch.bfloat16)
     profiler.end("input_creation")
 
     # TtMoe.forward deallocates its input (tt_moe.py:522), so tt_x must be re-uploaded each iter.
@@ -349,7 +367,7 @@ def run_model(
     if gate_fallback_mode == GateComputeMode.HOST_ALL:
         target_recall = 0.99
     else:
-        target_recall = 0.90
+        target_recall = 0.977
 
     recall_result = validate_composed(
         tt_indices.view(1, n_sp_devices, seq_len_per_chip, -1),
@@ -379,8 +397,8 @@ def run_model(
     # fmt: off
     dense_checks = [
         ("shared_output", tt_intermediates.shared_output, torch_intermediates.shared_output, get_tp_mesh_composer(mesh_device), 0.997),
-        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.90),
-        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.94),
+        ("routed_output", tt_intermediates.routed_output, torch_intermediates.routed_output, get_tp_mesh_composer(mesh_device), 0.96),
+        ("final_output", tt_output, torch_output, get_tp_mesh_composer(mesh_device), 0.982),
     ]
     # fmt: on
 
@@ -599,6 +617,20 @@ def run_model(
             id="mesh-4x2",
         ),
         pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="fabric2d-mesh-4x2",
+        ),
+        pytest.param(
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
@@ -681,6 +713,32 @@ def test_ds_moe(
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="linear-8",
+        ),
+        pytest.param(
+            (4, 2),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(
+                    max_payload_size=DeepSeekV3Config.FABRIC_PAYLOAD_SIZE
+                ),
+            },
+            2 if is_blackhole() else 1,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 2), topology="mesh-4x2"),
+            id="mesh-4x2",
+        ),
         pytest.param(
             (8, 4),
             {

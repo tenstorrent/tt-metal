@@ -111,13 +111,18 @@ class CLIPEncoder(Module):
         )
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
+        # transformers 5.x flattened CLIPTextModel (the inner `text_model` wrapper
+        # was removed), so state_dict keys lost the `text_model.` prefix. The
+        # embeddings/encoder renames below are no-ops under 5.x (keys already match);
+        # final_layer_norm needs to handle both the prefixed (<5.x) and bare (>=5.x) form.
         rename_substate(state, "text_model.embeddings", "embeddings")
         rename_substate(state, "text_model.encoder", "encoder")
 
-        if "text_model.final_layer_norm.weight" in state:
-            state["final_layer_norm"] = state.pop("text_model.final_layer_norm.weight")
-        if "text_model.final_layer_norm.bias" in state:
-            state["final_layer_norm_bias"] = state.pop("text_model.final_layer_norm.bias")
+        for prefix in ("text_model.", ""):
+            if f"{prefix}final_layer_norm.weight" in state:
+                state["final_layer_norm"] = state.pop(f"{prefix}final_layer_norm.weight")
+                state["final_layer_norm_bias"] = state.pop(f"{prefix}final_layer_norm.bias")
+                break
         if "text_projection.weight" in state:
             state["text_projection"] = state.pop("text_projection.weight")
 

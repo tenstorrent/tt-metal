@@ -97,6 +97,15 @@ def test_unpack_bcast(
     ):
         pytest.skip("Unsupported for BH yet")
 
+    if (
+        dest_acc == DestAccumulation.Yes
+        and formats.input_format == DataFormat.UInt16
+        and broadcast_type == BroadcastType.None_
+    ):
+        pytest.skip(
+            "Data copy mechanism for SFPU (expects in low-bits) and Packer (expects in high-bits) conflict"
+        )
+
     # --- Skips from bugs --------------------------------------------------
 
     # TODO: pgardner - Column broadcast for tiny tiles needs kernel support

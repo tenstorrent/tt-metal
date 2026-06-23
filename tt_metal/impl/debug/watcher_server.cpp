@@ -517,8 +517,8 @@ void WatcherServer::Impl::init_device(ChipId device_id) {
     // Initialize DRAM cores debug values (Blackhole only)
     bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
     if (has_dram_fw) {
-        for (const auto& dram_core :
-             cluster.get_soc_desc(device_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& dram_core : soc_desc.get_metal_dram_cores(CoordSystem::TRANSLATED)) {
             write_watcher_init_val_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
         }
     }

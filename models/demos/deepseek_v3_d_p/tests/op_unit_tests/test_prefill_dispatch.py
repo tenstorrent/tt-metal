@@ -15,7 +15,7 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0
+from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tests.pcc.mesh_configs import ALL_MESH_CONFIGS
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -125,6 +125,8 @@ def test_ttnn_dispatch(
     use_fp8_output,
     verbose,
     run_pcc_check,
+    is_ci_env,
+    is_ci_v2_env,
 ):
     """Test TTNN dispatch operation against PyTorch reference."""
     num_devices = mesh_device.get_num_devices()
@@ -142,6 +144,15 @@ def test_ttnn_dispatch(
 
     if use_fp8_output and input_layout == ttnn.ROW_MAJOR_LAYOUT:
         pytest.skip("fp8 output not supported with row_major input layout")
+
+    # ROW_MAJOR perf coverage is redundant in CI; TILE (all paths) and ROW_MAJOR PCC still run.
+    if (is_ci_env or is_ci_v2_env) and not run_pcc_check and input_layout == ttnn.ROW_MAJOR_LAYOUT:
+        pytest.skip("ROW_MAJOR perf coverage does not run in CI")
+
+    # 1-link linear/ring coverage is redundant on BH in CI. `1 in shape` selects the 1D
+    # linear/ring meshes; 2D mesh / fabric2d (both dims > 1) and 2-link variants still run.
+    if (is_ci_env or is_ci_v2_env) and is_blackhole() and num_links == 1 and 1 in tuple(mesh_device.shape):
+        pytest.skip("1-link linear/ring coverage does not run on BH in CI")
 
     torch.manual_seed(42)
 

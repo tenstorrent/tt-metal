@@ -242,6 +242,7 @@ jobs:
         uses: mikepenz/release-changelog-builder-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          configuration: infra/release-changelog-config.json
           fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
           toTag: ${{ needs.create-tag.outputs.version }}
           failOnError: true
@@ -249,6 +250,11 @@ jobs:
       - name: Create empty changelog for dry run
         if: ${{ inputs.dry-run }}
         run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
+      - name: Group changelog by layer
+        if: ${{ !inputs.dry-run }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 .github/actions/scripts/release_notes_by_layer.py CHANGELOG.txt
       - name: Output changelog
         if: ${{ !inputs.dry-run }}
         run: cat CHANGELOG.txt

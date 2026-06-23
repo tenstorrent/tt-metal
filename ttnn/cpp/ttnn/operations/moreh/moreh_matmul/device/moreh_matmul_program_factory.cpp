@@ -449,10 +449,10 @@ tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::c
     ////////////////////////////////////////////////////////////////////////////
     //                      RuntimeArgs SetUp
     ////////////////////////////////////////////////////////////////////////////
-    const uint32_t input_addr = input.buffer()->address();
-    const uint32_t other_addr = other.buffer()->address();
+    auto* const input_buf = input.buffer();
+    auto* const other_buf = other.buffer();
     auto* const output_buf = output.buffer();
-    const uint32_t bias_addr = bias.has_value() ? bias.value().buffer()->address() : 0u;
+    auto* const bias_buf = bias.has_value() ? bias.value().buffer() : nullptr;
 
     for (uint32_t i = 0, num_tiles_written = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -474,25 +474,27 @@ tt::tt_metal::ProgramDescriptor MorehMatmulOperation::MultiCoreProgramFactory::c
             TT_THROW("Core not in specified core ranges");
         }
 
-        std::vector<uint32_t> reader_rt_args;
-        reader_rt_args.push_back(input_addr);
-        reader_rt_args.push_back(other_addr);
+        // Pass buffers as Buffer* so the ProgramDescriptor framework registers them as
+        // BufferBindings and patches their addresses on program-cache hits. Raw uint32_t
+        // addresses would be baked in once and go stale when inputs are reallocated.
+        KernelDescriptor::RTArgList reader_rt_args;
+        reader_rt_args.push_back(input_buf);
+        reader_rt_args.push_back(other_buf);
         reader_rt_args.push_back(num_tiles_written);
         reader_rt_args.push_back(num_output_tiles_per_core);
 
         // TODO: move some to compile args
-        reader_rt_args.insert(reader_rt_args.end(), input_stride.begin(), input_stride.end());
-        reader_rt_args.insert(reader_rt_args.end(), other_stride.begin(), other_stride.end());
-        reader_rt_args.insert(reader_rt_args.end(), output_stride.begin(), output_stride.end());
-        reader_rt_args.insert(reader_rt_args.end(), input_not_bcast.begin(), input_not_bcast.end());
-        reader_rt_args.insert(reader_rt_args.end(), other_not_bcast.begin(), other_not_bcast.end());
+        reader_rt_args.append(std::vector<uint32_t>(input_stride.begin(), input_stride.end()));
+        reader_rt_args.append(std::vector<uint32_t>(other_stride.begin(), other_stride.end()));
+        reader_rt_args.append(std::vector<uint32_t>(output_stride.begin(), output_stride.end()));
+        reader_rt_args.append(std::vector<uint32_t>(input_not_bcast.begin(), input_not_bcast.end()));
+        reader_rt_args.append(std::vector<uint32_t>(other_not_bcast.begin(), other_not_bcast.end()));
 
         if (bias.has_value()) {
-            reader_rt_args.push_back(bias_addr);
+            reader_rt_args.push_back(bias_buf);
         }
 
-        reader_desc.runtime_args.emplace_back(
-            core, KernelDescriptor::CoreRuntimeArgs(reader_rt_args.begin(), reader_rt_args.end()));
+        reader_desc.emplace_runtime_args(core, reader_rt_args);
 
         writer_desc.emplace_runtime_args(core, {output_buf, num_tiles_written, num_output_tiles_per_core});
         num_tiles_written += num_output_tiles_per_core;

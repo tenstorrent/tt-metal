@@ -204,10 +204,17 @@ class ComputeNode:
             )
 
         if self.sfpu is not None:
+            tile_dims = (
+                operation.tile_shape.total_row_dim(),
+                operation.tile_shape.total_col_dim(),
+            )
+            num_faces = operation.tile_shape.total_num_faces()
             tilized_dst = tilize_block(
                 tensor_dst,
                 operation.max_output_dimensions,
                 config.sentinel.golden_math_format,
+                num_faces=num_faces,
+                tile_dimensions=tile_dims,
             )
 
             tile_count_x = (
@@ -243,7 +250,10 @@ class ComputeNode:
                     return
 
                 block_tensor = tilized_dst[block_tile_ids, :].clone().flatten()
-                block_dims = (block_tile_cnt * 32, 32)
+                block_dims = (
+                    block_tile_cnt * operation.tile_shape.total_row_dim(),
+                    operation.tile_shape.total_col_dim(),
+                )
 
                 block_tensor = self.sfpu.golden(
                     block_tensor,
@@ -284,6 +294,8 @@ class ComputeNode:
                 tilized_dst.flatten(),
                 config.sentinel.golden_math_format,
                 operation.max_output_dimensions,
+                tile_dimensions=tile_dims,
+                num_faces=num_faces,
             ).reshape(operation.max_output_dimensions)
 
         return (

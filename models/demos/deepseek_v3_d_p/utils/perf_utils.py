@@ -12,8 +12,28 @@ from loguru import logger
 from tracy.common import PROFILER_ARTIFACTS_DIR
 from tracy.process_model_log import get_latest_ops_log_filename
 
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_ddr_speed
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.tt_transformers.tests.test_utils import merge_device_rows
+
+
+def adjust_margin_for_ddr_speed(margin: float, expected_speed: int = 16000) -> float:
+    """Return *margin* adjusted for the actual DDR speed reported by tt-smi.
+
+    - DDR speed < *expected_speed*  → double the margin (slower memory, looser threshold).
+    - DDR speed > *expected_speed*  → warn that baselines may need updating, keep margin.
+    - DDR speed == *expected_speed* or unavailable → keep margin unchanged.
+    """
+    ddr_speed = get_ddr_speed()
+    if ddr_speed is not None and ddr_speed < expected_speed:
+        logger.warning(
+            f"DDR speed is {ddr_speed} (expected {expected_speed}), increasing margin from {margin} to {margin * 2}"
+        )
+        return margin * 2
+    if ddr_speed is not None and ddr_speed > expected_speed:
+        logger.warning(f"DDR speed is {ddr_speed} (above expected {expected_speed}), baselines may need updating")
+    return margin
+
 
 # TP-collective ops: depend on TP=4 topology/bandwidth → take from 2x4
 # Everything else: depends on SP=8 tokens-per-chip and 8 experts/device → take from 8x1
