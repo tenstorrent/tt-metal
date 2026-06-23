@@ -252,7 +252,14 @@ def test_log_probs_calculation_shard_tensor_2d_mesh_1x8(mesh_device):
     for i in range(batch_size):
         torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(vocab_size)]
 
+    # Pin a few batch slots to tokens on different chips (4096 tokens/chip on 1×8).
+    pinned_tokens = [(0, 100), (1, 20000), (2, 30000), (3, 5000)]  # chips 0, 4, 7, 1
+    for batch_idx, token_id in pinned_tokens:
+        torch_tensor[:, :, batch_idx, token_id] = 10.0
+
     argmax_tensor = torch.argmax(torch_tensor.float(), dim=-1, keepdim=True)
+    for batch_idx, token_id in pinned_tokens:
+        assert argmax_tensor[0, 0, batch_idx, 0].item() == token_id
     indices_tensor = argmax_tensor.reshape(
         argmax_tensor.shape[0], argmax_tensor.shape[1], argmax_tensor.shape[-1], argmax_tensor.shape[-2]
     )
