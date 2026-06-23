@@ -447,14 +447,14 @@ void kernel_main() {
                     in0_sender_sem.wait(1);
                     in0_sender_sem.set(0);
 
-                        uint64_t in0_unicast_data_addr =
-                            get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                    uint64_t in0_unicast_data_addr =
+                        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
 
-                        /**
-                         * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
-                         * padded tiles. Use `current_block_bytes`.
-                         */
-                        noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                    /**
+                        * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
+                        * padded tiles. Use `current_block_bytes`.
+                        */
+                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
                     noc_obj.async_writes_flushed();
