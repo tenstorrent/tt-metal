@@ -45,11 +45,19 @@ def generate_blocks(
     diffusion_config: DiffusionConfig,
     vocab_size: int,
     *,
+    sampler: str = S.SAMPLER_MULTINOMIAL,
     generator: Optional[torch.Generator] = None,
     gumbel_noise_fn: Optional[BlockNoiseFn] = None,
     noise_tokens_fn: Optional[BlockNoiseFn] = None,
 ) -> Generation:
-    """Generate ``num_blocks`` canvases autoregressively, committing each."""
+    """Generate ``num_blocks`` canvases autoregressively, committing each.
+
+    ``generator`` seeds BOTH the per-block random canvas init AND (threaded into
+    ``denoise_block``) the per-step regenerated sample/renoise noise, so a single
+    seeded generator reproduces the whole generation. ``sampler`` selects the
+    HF-faithful ``multinomial`` (default) or ``gumbel``; pass the ``*_noise_fn``
+    hooks to inject the torch run's exact noise (token-for-token, R5).
+    """
     batch = prompt_tokens.shape[0]
     canvas_len = diffusion_config.canvas_length
     prompt_len = prompt_tokens.shape[1]
@@ -67,8 +75,10 @@ def generate_blocks(
             init_canvas,
             diffusion_config,
             vocab_size,
+            sampler=sampler,
             gumbel_noise_fn=gumbel_noise_fn(block) if gumbel_noise_fn else None,
             noise_tokens_fn=noise_tokens_fn(block) if noise_tokens_fn else None,
+            generator=generator,
         )
         committed = traj.committed  # [B, canvas_len] clean argmax
         committed_blocks.append(committed)

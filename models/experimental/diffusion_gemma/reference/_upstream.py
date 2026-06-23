@@ -51,6 +51,38 @@ def confident_upstream(logits: torch.Tensor, confidence_threshold: float) -> tor
     return torch.mean(token_entropy, dim=-1) < confidence_threshold
 
 
+# --- generation_diffusion_gemma.StableAndConfidentStoppingCriteria ----------
+class StableAndConfidentUpstream:
+    """Verbatim of HF ``StableAndConfidentStoppingCriteria``: stop when the argmax
+    canvas has been stable across ``stability_threshold`` steps AND the mean
+    per-example token entropy (of the processed logits) is below
+    ``confidence_threshold``. Per-example (returns a [B] bool); stateful rolling
+    argmax buffer init to -1."""
+
+    def __init__(self, stability_threshold: int, confidence_threshold: float):
+        self.stability_threshold = stability_threshold
+        self.confidence_threshold = confidence_threshold
+        self.argmax_canvas_history = None
+
+    def __call__(self, argmax_canvas: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+        if self.stability_threshold == 0:
+            stable = torch.ones((logits.shape[0],), device=logits.device, dtype=torch.bool)
+        else:
+            if self.argmax_canvas_history is None:
+                self.argmax_canvas_history = torch.full(
+                    (self.stability_threshold, argmax_canvas.shape[0], argmax_canvas.shape[1]),
+                    -1,
+                    dtype=argmax_canvas.dtype,
+                    device=argmax_canvas.device,
+                )
+            stable = (self.argmax_canvas_history == argmax_canvas[None, :, :]).all(dim=-1).all(dim=0)
+            self.argmax_canvas_history = torch.roll(self.argmax_canvas_history, shifts=-1, dims=0)
+            self.argmax_canvas_history[-1] = argmax_canvas
+        token_entropy = torch.distributions.Categorical(logits=logits).entropy()
+        confident = torch.mean(token_entropy, dim=-1) < self.confidence_threshold
+        return stable & confident
+
+
 # --- modeling_diffusion_gemma.DiffusionGemmaRMSNorm -------------------------
 def rmsnorm_upstream(hidden_states: torch.Tensor, weight: torch.Tensor | None, eps: float = 1e-6) -> torch.Tensor:
     """fp32 RMSNorm; ``weight=None`` is the scaleless (``with_scale=False``) variant."""

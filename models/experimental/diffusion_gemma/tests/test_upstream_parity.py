@@ -11,8 +11,10 @@ oracle cannot silently diverge from the released model.
 
 import torch
 
+from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference import _upstream as U
 from models.experimental.diffusion_gemma.reference import sampling as S
+from models.experimental.diffusion_gemma.reference.denoise_loop import denoise_block
 from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
 
 
@@ -56,6 +58,40 @@ def test_stopping_confidence_matches_upstream():
     ours_per_example = entropy.mean(dim=-1) < thresh
     theirs_per_example = U.confident_upstream(logits, thresh)  # (B,)
     assert torch.equal(ours_per_example, theirs_per_example)
+
+
+def test_stopping_criterion_halt_step_matches_upstream():
+    """The reference denoise loop must halt on the SAME step as HF's
+    StableAndConfidentStoppingCriteria (stability buffer + confidence). Build a
+    batch-1 trajectory that is high-entropy (no halt) for a few steps then becomes
+    peaked+stable, and check both fire together."""
+    B, L, V, K = 1, 8, 32, 3  # peaked from step K
+    target = 7
+    flat = torch.zeros(B, L, V)
+    peaked = torch.full((B, L, V), -1e4)
+    peaked[..., target] = 1e4
+
+    def logits_fn(canvas, step):
+        return peaked if step >= K else flat
+
+    cfg = DiffusionConfig(max_denoise_steps=12, entropy_stop_threshold=0.005, stable_steps_to_halt=1)
+    traj = denoise_block(logits_fn, S.random_canvas((B, L), V, generator=_gen(1)), cfg, V)
+
+    # Independently apply the vendored HF criterion to the same per-step argmax + temperature-scaled logits.
+    crit = U.StableAndConfidentUpstream(
+        stability_threshold=cfg.stable_steps_to_halt, confidence_threshold=cfg.entropy_stop_threshold
+    )
+    upstream_halt = None
+    for i in range(cfg.max_denoise_steps):
+        logits = logits_fn(None, i)
+        T = S.temperature_at_step(i, cfg.max_denoise_steps, cfg.temperature_start, cfg.temperature_end)
+        argmax = logits.argmax(dim=-1)
+        if bool(crit(argmax, logits / T).all()):
+            upstream_halt = i + 1  # 1-based step count, matching DenoiseTrajectory.num_steps
+            break
+
+    assert traj.halted and upstream_halt is not None
+    assert traj.num_steps == upstream_halt, f"reference halted at {traj.num_steps}, upstream at {upstream_halt}"
 
 
 def test_self_conditioning_matches_upstream():

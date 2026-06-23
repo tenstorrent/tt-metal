@@ -14,8 +14,10 @@ import torch
 from models.experimental.diffusion_gemma.config import DiffusionConfig
 from models.experimental.diffusion_gemma.reference import sampling as S
 from models.experimental.diffusion_gemma.reference.hf_reference import (
+    hf_reference_generate,
     is_hf_reference_available,
     load_hf_reference,
+    make_logits_fn,
     run_reference_trajectory,
 )
 from models.experimental.diffusion_gemma.tests.trajectory_pcc import compare_trajectories
@@ -79,6 +81,39 @@ def test_adapter_drives_trajectory_and_is_deterministic():
     # Faithful candidate must match the oracle on EVERY decision class — argmax,
     # sampled ids, accept mask, renoised canvas, per-token entropy.
     assert compare_trajectories(a, b).passed
+
+
+class _FakeRawHFModel:
+    """Stands in for a raw DiffusionGemmaForBlockDiffusion: has generate() + a
+    config with canvas_length, so the canvas-logits seam must reject it."""
+
+    class _Cfg:
+        canvas_length = 256
+
+    def __init__(self):
+        self.config = self._Cfg()
+
+    def generate(self, input_ids, **kw):
+        return {"sequences": input_ids, "kw": kw}
+
+
+def test_canvas_logits_seam_rejects_raw_hf_model():
+    """make_logits_fn / run_reference_trajectory must NOT accept a raw HF model
+    (its canvas is decoder_input_ids, not the first positional). Finding #2."""
+    raw = _FakeRawHFModel()
+    with pytest.raises(TypeError, match="canvas-logits callable"):
+        make_logits_fn(raw)
+    with pytest.raises(TypeError, match="canvas-logits callable"):
+        run_reference_trajectory(raw, torch.zeros(1, 8, dtype=torch.long), _cfg(), 32)
+
+
+def test_hf_reference_generate_delegates_to_model_generate():
+    """The real-HF oracle seam calls model.generate(input_ids, ...) and forwards kwargs."""
+    raw = _FakeRawHFModel()
+    ids = torch.arange(8).view(1, 8)
+    out = hf_reference_generate(raw, ids, max_new_tokens=256)
+    assert out["sequences"] is ids
+    assert out["kw"]["max_new_tokens"] == 256
 
 
 def test_harness_rejects_drifted_candidate():

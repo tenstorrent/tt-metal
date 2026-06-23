@@ -66,15 +66,20 @@ def denoise_block(
     config: DiffusionConfig,
     vocab_size: int,
     *,
+    sampler: str = S.SAMPLER_MULTINOMIAL,
     gumbel_noise_fn: Optional[NoiseFn] = None,
     noise_tokens_fn: Optional[NoiseFn] = None,
+    generator: Optional[torch.Generator] = None,
 ) -> DenoiseTrajectory:
     """Run one canvas's denoise trajectory.
 
     ``logits_fn(canvas, step)`` returns ``[B, L, vocab]`` for the current canvas.
     ``init_canvas`` is ``[B, L]`` (random token ids — the diffusion prior).
-    Optional ``gumbel_noise_fn(step)`` / ``noise_tokens_fn(step)`` inject the
-    torch run's exact noise for token-for-token PCC determinism (R5).
+    ``sampler`` is ``"multinomial"`` (HF-faithful oracle, default) or ``"gumbel"``
+    (device path). Optional ``gumbel_noise_fn(step)`` / ``noise_tokens_fn(step)``
+    inject the torch run's exact noise for token-for-token PCC determinism (R5,
+    forces the gumbel path); ``generator`` seeds regenerated noise otherwise so a
+    single seeded generator reproduces the whole trajectory.
     """
     canvas = init_canvas
     committed: Optional[torch.Tensor] = None
@@ -83,8 +88,12 @@ def denoise_block(
     # been stable across the last `stable_steps_to_halt` (HF `stability_threshold`)
     # steps AND the mean per-position entropy of the temperature-scaled logits is
     # below `entropy_stop_threshold` (HF `confidence_threshold`). HF keeps a rolling
-    # argmax buffer (init -1); we keep the last N argmaxes (whole-batch collapsed —
-    # per-request halting is #47557).
+    # argmax buffer (init -1); we keep the last N argmaxes.
+    # NOTE: whole-batch collapsed — we halt the loop when ALL rows satisfy the
+    # criterion, vs HF's PER-EXAMPLE finished-masking (a finished row is frozen and
+    # padded while others continue). Equivalent for batch=1 (the current scope);
+    # per-request halting/freezing for batch>1 is #47557. Parity vs the exact HF
+    # criterion is locked by tests/test_upstream_parity (batch-1).
     n_stable = config.stable_steps_to_halt
     argmax_history: List[torch.Tensor] = []
 
@@ -98,8 +107,10 @@ def denoise_block(
             temperature=temperature,
             entropy_budget=config.entropy_budget,
             vocab_size=vocab_size,
+            sampler=sampler,
             gumbel_noise=gumbel_noise_fn(step) if gumbel_noise_fn else None,
             noise_tokens=noise_tokens_fn(step) if noise_tokens_fn else None,
+            generator=generator,
         )
 
         entropy_mean = res.entropy.mean().item()

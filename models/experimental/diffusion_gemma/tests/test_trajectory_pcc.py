@@ -57,6 +57,23 @@ def test_self_comparison_passes():
     assert cmp.min_entropy_pcc == pytest.approx(1.0)  # per-token entropy PCC
 
 
+def test_entropy_abs_gate_catches_affine_error_pcc_misses():
+    """PCC is invariant to a constant offset/scale, so a systematic entropy error
+    (wrong log base / missing temperature) would pass PCC≈1 — the absolute gate
+    must still catch it (finding #3). Only the entropy abs-err should fail here."""
+    ref = _random_traj(seed=7)
+    # candidate identical to ref on every decision, but each per-token entropy is offset by +0.5
+    shifted_steps = [r._replace(entropy=r.entropy + 0.5) for r in ref.per_step]
+    cand = ref._replace(per_step=shifted_steps)
+
+    cmp = compare_trajectories(ref, cand)
+    assert min(cmp.per_step_entropy_pcc) > 0.99  # PCC blind to the constant offset
+    assert cmp.max_entropy_abs_err >= 0.49  # but the absolute gate sees it
+    assert not cmp.passed  # so the comparison fails
+    # every other decision class still matches (the failure is isolated to entropy magnitude)
+    assert cmp.min_argmax_agreement == 1.0 and cmp.min_canvas_agreement == 1.0 and cmp.min_accept_iou == 1.0
+
+
 def test_decision_level_fields_distinguish_drifted_trajectories():
     """Distinct trajectories must fail on EVERY decision class — sampled, accept,
     canvas, per-token entropy — not just the clean argmax."""

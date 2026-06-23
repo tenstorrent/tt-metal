@@ -27,14 +27,22 @@ from models.experimental.diffusion_gemma.reference.denoise_loop import DenoiseTr
 
 
 def _pearson(a: torch.Tensor, b: torch.Tensor) -> float:
-    """Pearson correlation of two 1-D sequences; 1.0 if both are constant-equal."""
-    a = a.flatten().to(torch.float64)
-    b = b.flatten().to(torch.float64)
-    a = a - a.mean()
-    b = b - b.mean()
+    """Pearson correlation of two 1-D sequences.
+
+    When either side is constant (zero variance) PCC is undefined; we define it as
+    1.0 iff the **original** (pre-centering) sequences are identical, else 0.0.
+    Comparing the *centered* tensors here would be wrong — e.g. all-1.0 vs all-2.0
+    both center to 0 and would false-pass (a constant offset/scale error in the
+    entropy values). Callers should also gate entropy on an absolute tolerance,
+    since PCC is invariant to affine transforms.
+    """
+    a0 = a.flatten().to(torch.float64)
+    b0 = b.flatten().to(torch.float64)
+    a = a0 - a0.mean()
+    b = b0 - b0.mean()
     denom = a.norm() * b.norm()
-    if denom == 0:  # one (or both) constant: defined as perfect iff identical
-        return 1.0 if torch.equal(a, b) else 0.0
+    if denom == 0:  # one (or both) constant: perfect iff the ORIGINALS are identical
+        return 1.0 if torch.equal(a0, b0) else 0.0
     return float((a @ b) / denom)
 
 
@@ -55,12 +63,14 @@ class TrajectoryComparison:
     per_step_accept_iou: List[float]  # accept mask IoU (intersection over union; 1.0 == identical)
     per_step_canvas_agreement: List[float]  # renoised canvas (the input to the next step)
     per_step_entropy_pcc: List[float]  # per-token entropy values, PCC per step
+    per_step_entropy_max_abs: List[float]  # per-token entropy max |Δ| per step (PCC is affine-blind)
     # Aggregates:
     min_argmax_agreement: float
     min_sampled_agreement: float
     min_accept_iou: float
     min_canvas_agreement: float
     min_entropy_pcc: float
+    max_entropy_abs_err: float  # worst per-token entropy |Δ| across steps
     committed_match: float
     entropy_trajectory_pcc: float  # PCC of the per-step *mean* entropy sequence (coarse summary)
     passed: bool
@@ -85,6 +95,7 @@ def compare_trajectories(
     min_accept_iou: float = 1.0,
     min_canvas_agreement: float = 1.0,
     min_per_step_entropy_pcc: float = 0.99,
+    max_entropy_abs_err_threshold: float = 1.0e-3,
     committed_match_threshold: float = 1.0,
     entropy_pcc_threshold: float = 0.99,
 ) -> TrajectoryComparison:
@@ -94,6 +105,13 @@ def compare_trajectories(
     clean argmax, Gumbel-sampled ids, accept mask, renoised canvas, per-token
     entropy. Token-for-token agreement requires the candidate to be driven with
     the reference run's exact injected noise (R5).
+
+    Entropy is gated on BOTH PCC and an **absolute** tolerance
+    (``max_entropy_abs_err_threshold``): PCC is invariant to a constant offset/scale,
+    so a systematic entropy error (e.g. wrong log base, missing temperature) would
+    pass PCC≈1 but is caught by the abs gate. Loosen the abs threshold for a
+    bf16/bfp8 device-vs-torch comparison (default 1e-3 suits the deterministic
+    injected-noise / self-compare case).
     """
     steps_match = ref.num_steps == cand.num_steps
     halted_match = ref.halted == cand.halted
@@ -106,6 +124,7 @@ def compare_trajectories(
     accept_iou = [_iou(rec(i)[0].accept_mask, rec(i)[1].accept_mask) for i in range(n)]
     canvas_agreement = [float((rec(i)[0].canvas == rec(i)[1].canvas).float().mean()) for i in range(n)]
     entropy_pcc_per_step = [_pearson(rec(i)[0].entropy, rec(i)[1].entropy) for i in range(n)]
+    entropy_abs_per_step = [float((rec(i)[0].entropy - rec(i)[1].entropy).abs().max()) for i in range(n)]
 
     committed_match = float((ref.committed == cand.committed).float().mean())
 
@@ -118,6 +137,7 @@ def compare_trajectories(
     min_iou = min(accept_iou) if accept_iou else 0.0
     min_can = min(canvas_agreement) if canvas_agreement else 0.0
     min_epcc = min(entropy_pcc_per_step) if entropy_pcc_per_step else 0.0
+    max_eabs = max(entropy_abs_per_step) if entropy_abs_per_step else 0.0
 
     passed = (
         steps_match
@@ -127,6 +147,7 @@ def compare_trajectories(
         and min_iou >= min_accept_iou
         and min_can >= min_canvas_agreement
         and min_epcc >= min_per_step_entropy_pcc
+        and max_eabs <= max_entropy_abs_err_threshold
         and committed_match >= committed_match_threshold
         and entropy_traj_pcc >= entropy_pcc_threshold
     )
@@ -138,11 +159,13 @@ def compare_trajectories(
         per_step_accept_iou=accept_iou,
         per_step_canvas_agreement=canvas_agreement,
         per_step_entropy_pcc=entropy_pcc_per_step,
+        per_step_entropy_max_abs=entropy_abs_per_step,
         min_argmax_agreement=min_arg,
         min_sampled_agreement=min_smp,
         min_accept_iou=min_iou,
         min_canvas_agreement=min_can,
         min_entropy_pcc=min_epcc,
+        max_entropy_abs_err=max_eabs,
         committed_match=committed_match,
         entropy_trajectory_pcc=entropy_traj_pcc,
         passed=passed,

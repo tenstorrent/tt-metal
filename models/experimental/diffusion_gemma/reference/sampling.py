@@ -210,8 +210,21 @@ class DenoiseStepResult(NamedTuple):
     canvas: torch.Tensor  # [B, L] updated canvas token ids (accepted=sampled, rejected=renoised)
     accept_mask: torch.Tensor  # [B, L] bool
     entropy: torch.Tensor  # [B, L]
-    sampled: torch.Tensor  # [B, L] Gumbel-max sampled ids
+    sampled: torch.Tensor  # [B, L] sampled ids (multinomial HF-faithful, or Gumbel-max device path)
     argmax: torch.Tensor  # [B, L] clean argmax (the commit value)
+
+
+# Sampler choices for the denoiser canvas (the intermediate that feeds the next
+# step). They are distribution-equivalent but NOT token-equal under a fixed seed,
+# and the sampled canvas cascades into the next forward — so pick deliberately:
+#   "multinomial" — HF-faithful: matches DiffusionGemma `_denoising_step`'s
+#                   torch.multinomial(softmax(processed_logits)). Use for the HF
+#                   reference / reconstructed torch oracle trajectory.
+#   "gumbel"      — argmax(logits/T + gumbel). Use for the DEVICE-comparison
+#                   trajectory with the torch run's *injected* Gumbel noise, so
+#                   on-device decisions are token-for-token comparable (R5).
+SAMPLER_MULTINOMIAL = "multinomial"
+SAMPLER_GUMBEL = "gumbel"
 
 
 def denoise_step(
@@ -220,18 +233,32 @@ def denoise_step(
     temperature: float,
     entropy_budget: float,
     vocab_size: int,
+    sampler: str = SAMPLER_MULTINOMIAL,
     gumbel_noise: Optional[torch.Tensor] = None,
     noise_tokens: Optional[torch.Tensor] = None,
+    generator: Optional[torch.Generator] = None,
     min_accept: int = 1,
 ) -> DenoiseStepResult:
     """Compose one denoise step over a ``[B, L, vocab]`` logits tensor.
 
     Returns the updated canvas plus the intermediate decisions, and the clean
-    argmax (committed at convergence, never the noisy sample).
+    argmax (committed at convergence, never the noisy sample). The clean argmax,
+    entropy, and accept mask are deterministic in ``logits`` (sampler-independent);
+    only ``sampled`` / ``canvas`` depend on the sampler.
+
+    ``sampler`` selects the HF-faithful ``multinomial`` (default) or ``gumbel``.
+    Passing ``gumbel_noise`` forces the gumbel path (device-injection). ``generator``
+    seeds the regenerated noise when neither ``gumbel_noise`` nor ``noise_tokens``
+    is injected, so a single seeded generator makes the trajectory reproducible.
     """
-    sampled = gumbel_max_sample(logits, temperature, noise=gumbel_noise)
+    if gumbel_noise is not None or sampler == SAMPLER_GUMBEL:
+        sampled = gumbel_max_sample(logits, temperature, noise=gumbel_noise, generator=generator)
+    elif sampler == SAMPLER_MULTINOMIAL:
+        sampled = sample_canvas(logits, temperature, generator=generator)
+    else:
+        raise ValueError(f"unknown sampler {sampler!r}; expected {SAMPLER_MULTINOMIAL!r} or {SAMPLER_GUMBEL!r}")
     entropy = token_entropy(logits, temperature=temperature)
     accept = entropy_budget_accept(entropy, entropy_budget, min_accept=min_accept)
-    canvas = renoise(sampled, accept, vocab_size, noise_tokens=noise_tokens)
+    canvas = renoise(sampled, accept, vocab_size, noise_tokens=noise_tokens, generator=generator)
     argmax = logits.argmax(dim=-1)
     return DenoiseStepResult(canvas=canvas, accept_mask=accept, entropy=entropy, sampled=sampled, argmax=argmax)

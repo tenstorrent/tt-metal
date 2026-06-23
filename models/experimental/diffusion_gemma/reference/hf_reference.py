@@ -7,13 +7,23 @@ The torch PCC oracle is the HF ``DiffusionGemmaForBlockDiffusion``
 (``model_type=diffusion_gemma``). It is **not importable** in every environment
 yet (it needs a ``transformers`` build that ships ``diffusion_gemma`` plus the
 gated checkpoint), so the HF model load is guarded behind
-:func:`is_hf_reference_available` / :func:`load_hf_reference`, which raise a
-clear error when unavailable.
+:func:`is_hf_reference_available` / :func:`load_hf_reference`.
 
-The *adapter* — wrapping any "canvas logits" model into the denoise-loop
-``logits_fn`` and driving a reference trajectory — is environment-independent
-and unit-tested against a mock model, so the real HF model (or the device model)
-is a drop-in once available.
+Two distinct seams — **do not conflate them**:
+
+1. :func:`hf_reference_generate` drives the **real** HF model. The real
+   ``DiffusionGemmaForBlockDiffusion`` is NOT a canvas-logits callable: its
+   ``forward`` takes the prompt as ``input_ids`` and the canvas as
+   ``decoder_input_ids`` (plus ``past_key_values`` / ``self_conditioning_logits`` /
+   decoder masks+positions), and its ``generate()`` owns the encode→denoise→commit
+   loop internally. So the HF oracle is obtained by calling ``model.generate(...)``
+   and reading ``sequences`` — NOT by feeding the canvas as the first positional.
+
+2. :func:`make_logits_fn` / :func:`run_reference_trajectory` wrap a **canvas-logits
+   callable** (``canvas[B,L] -> logits[B,L,vocab]``) — the mock, or the
+   reconstructed-from-gemma4 oracle — into the denoise loop. These **reject a raw
+   HF model** (it would silently mis-feed the canvas as ``input_ids``); use seam 1
+   for the real model.
 """
 
 from __future__ import annotations
@@ -65,8 +75,31 @@ def load_hf_reference(model_id_or_path: str, *, dtype=None, device: str = "cpu",
     return model.to(device).eval()
 
 
+def _is_raw_hf_model(model) -> bool:
+    """True for a raw ``DiffusionGemmaForBlockDiffusion`` (has ``generate`` +
+    block-diffusion forward) — which must NOT be used as a canvas-logits callable."""
+    return type(model).__name__ == "DiffusionGemmaForBlockDiffusion" or (
+        hasattr(model, "generate")
+        and hasattr(model, "config")
+        and hasattr(getattr(model, "config", None), "canvas_length")
+    )
+
+
 def make_logits_fn(model: CanvasLogitsModel, **model_kwargs):
-    """Wrap a canvas-logits model into the ``denoise_block`` ``logits_fn(canvas, step)``."""
+    """Wrap a **canvas-logits callable** (``canvas[B,L] -> logits[B,L,vocab]``) into
+    the ``denoise_block`` ``logits_fn(canvas, step)``.
+
+    Raises ``TypeError`` for a raw HF ``DiffusionGemmaForBlockDiffusion`` — that
+    model's first positional is the prompt ``input_ids`` (the canvas is
+    ``decoder_input_ids``), so feeding the canvas here would silently exercise the
+    wrong path. Use :func:`hf_reference_generate` for the real HF model.
+    """
+    if _is_raw_hf_model(model):
+        raise TypeError(
+            "make_logits_fn/run_reference_trajectory expect a canvas-logits callable, not a raw "
+            "DiffusionGemmaForBlockDiffusion (its canvas arg is `decoder_input_ids`, not the first "
+            "positional). Use hf_reference_generate(model, input_ids, ...) for the real HF oracle."
+        )
 
     def logits_fn(canvas: torch.Tensor, step: int) -> torch.Tensor:
         return model(canvas, **model_kwargs)
@@ -80,20 +113,49 @@ def run_reference_trajectory(
     diffusion_config: DiffusionConfig,
     vocab_size: int,
     *,
+    sampler: str = "multinomial",
     gumbel_noise_fn: Optional[NoiseFn] = None,
     noise_tokens_fn: Optional[NoiseFn] = None,
+    generator: Optional["torch.Generator"] = None,
     **model_kwargs,
 ) -> DenoiseTrajectory:
-    """Drive a full denoise trajectory from a canvas-logits model.
+    """Drive a full denoise trajectory from a **canvas-logits callable** (mock /
+    reconstructed-from-gemma4 oracle / device wrapper).
 
-    Works for the pure-torch oracle, the HF reference, or the device model — the
-    same trajectory can then be compared with ``tests/trajectory_pcc``.
+    ``sampler`` is HF-faithful ``"multinomial"`` by default or ``"gumbel"`` (device
+    path); inject ``gumbel_noise_fn`` for token-for-token determinism (R5). Rejects
+    a raw HF model (see :func:`make_logits_fn`); use :func:`hf_reference_generate`.
     """
     return denoise_block(
         make_logits_fn(model, **model_kwargs),
         init_canvas,
         diffusion_config,
         vocab_size,
+        sampler=sampler,
         gumbel_noise_fn=gumbel_noise_fn,
         noise_tokens_fn=noise_tokens_fn,
+        generator=generator,
     )
+
+
+def hf_reference_generate(model, input_ids, *, max_new_tokens=None, generation_config=None, **generate_kwargs):
+    """Run the **real** HF DiffusionGemma generation oracle and return its output.
+
+    Calls ``model.generate(input_ids, ...)`` — the canonical deterministic oracle
+    (fixed seed + fixed schedule per #47468). The model owns the encode→denoise→
+    commit loop internally, so this is the correct seam for the real HF model
+    (unlike the canvas-logits adapter above). Returns the ``DiffusionGemmaGeneration``
+    output; ``output.sequences`` are the committed token ids to PCC the device /
+    reconstructed e2e generation against.
+
+    NOTE: per-step trajectory records (entropy / accept / sampled) are not exposed
+    by ``generate()`` directly — capture them with a draft-capable streamer
+    (``streamer.put_draft``) or by hooking ``_denoising_step`` (follow-on); the
+    committed-sequence comparison is the primary HF-oracle check here.
+    """
+    kwargs = dict(generate_kwargs)
+    if max_new_tokens is not None:
+        kwargs["max_new_tokens"] = max_new_tokens
+    if generation_config is not None:
+        kwargs["generation_config"] = generation_config
+    return model.generate(input_ids, **kwargs)
