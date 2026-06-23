@@ -11,12 +11,11 @@
 
 namespace ttml::ops {
 
-// Fused MLA QKV assembly forward. See ``ttml::metal::mla_qkv_assemble_fw`` for
-// shape semantics. Backward support is intentionally left for a follow-up PR.
+// Autograd-aware fused MLA QKV assembly. Forward and backward each dispatch to a dedicated Metal op
+// (``ttml::metal::mla_qkv_assemble_fw`` / ``mla_qkv_assemble_bw``). See those for shape semantics.
 //
-// Returns {q, k, v}. Q is head-split but NOT yet RoPE'd; the caller
-// applies ``rope_trailing`` afterward.
-std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> mla_qkv_assemble_fw(
+// Returns {q, k, v}. Q is head-split but NOT yet RoPE'd; the caller applies ``rope_trailing`` afterward.
+std::tuple<autograd::TensorPtr, autograd::TensorPtr, autograd::TensorPtr> mla_qkv_assemble(
     const autograd::TensorPtr& q_pre,
     const autograd::TensorPtr& kv_up,
     const autograd::TensorPtr& k_pe,

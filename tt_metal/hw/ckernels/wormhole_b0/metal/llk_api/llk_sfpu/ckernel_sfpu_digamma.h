@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "sfpu/ckernel_sfpu_log.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 
 #include "ckernel_sfpu_piecewise_rational.h"
 
@@ -81,11 +81,12 @@ inline void calculate_digamma() {
         // bf16-accurate. #45520 targets bf16 ULP; an fp32-accurate log here would collide
         // with the reciprocal's vConstFloatPrgm0, so fp32 large-x is intentionally left as-is.
         v_if(x > 102.0f) {
-            sfpi::vFloat inv_x = _sfpu_reciprocal_<2>(x);
+            sfpi::vFloat inv_x = sfpu_reciprocal_iter<2>(x);
             sfpi::vFloat inv_x2 = inv_x * inv_x;
-            // ln(x) - inv_x*0.5 - inv_x2*(1/12 - inv_x2/120); 1/12 and 1/120 are in
-            // vConstFloatPrgm1/Prgm2 (programmed in digamma_init).
-            sfpi::vFloat bern = sfpi::vConstFloatPrgm1 - inv_x2 * sfpi::vConstFloatPrgm2;
+            // ln(x) - inv_x*0.5 - inv_x2*(1/12 - inv_x2/120). 1/12 and 1/120 are literals:
+            // the reciprocal owns vConstFloatPrgm0/1/2 for its Newton seed, so digamma has no
+            // free program-constant registers to hold them.
+            sfpi::vFloat bern = sfpi::vFloat(0.0833333333f) - inv_x2 * sfpi::vFloat(0.0083333333f);
             result = _calculate_log_body_no_init_(x) - inv_x * sfpi::vFloat(0.5f) - inv_x2 * bern;
             // digamma(+inf) = +inf; the log approximation clamps inf to a finite value, so
             // restore it explicitly (exp field all-ones, zero mantissa => infinity).
@@ -101,12 +102,9 @@ inline void calculate_digamma() {
 
 template <bool APPROXIMATION_MODE>
 void digamma_init() {
+    // sfpu_reciprocal_init programs vConstFloatPrgm0/1/2 with the reciprocal's Newton seed;
+    // all three stay reserved for it, so digamma must not repurpose Prgm1/Prgm2.
     sfpu_reciprocal_init();
-    // Bernoulli tail coefficients. Prgm0 is owned by the reciprocal above; Prgm1/Prgm2 are
-    // unused in the digamma path, so program them once here instead of materializing the
-    // literals on every loop iteration inside the large-x branch.
-    sfpi::vConstFloatPrgm1 = 0.0833333333f;  // 1/12
-    sfpi::vConstFloatPrgm2 = 0.0083333333f;  // 1/120
 }
 
 }  // namespace ckernel::sfpu
