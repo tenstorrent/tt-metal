@@ -247,8 +247,12 @@ def default_spec_for_format(stimuli_format: DataFormat) -> StimuliSpec:
             mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp6R]
         )
     if stimuli_format == DataFormat.MxFp6P:
-        return StimuliSpec.gaussian(
-            mean=0.1, std=0.05 * MX_FORMAT_MAX_NORMAL[DataFormat.MxFp6P]
+        # E2M3 has a very narrow normal range ([1.0, 7.5], ~3 binades). After the
+        # per-block shared-scale divide, a zero-mean Gaussian (as used by the wider
+        # MX formats) drops ~30% of elements into subnormals. Use a positive
+        # log-uniform band over the normal range instead: with low=0.9 keeping ~95% of elements normal.
+        return StimuliSpec.log_uniform(
+            low=0.9, high=MX_FORMAT_MAX_NORMAL[DataFormat.MxFp6P]
         )
     if stimuli_format == DataFormat.Bfp8_b:
         return StimuliSpec(distribution=_default_bfp8b_face)
