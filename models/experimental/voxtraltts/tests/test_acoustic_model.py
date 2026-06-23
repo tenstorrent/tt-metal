@@ -141,7 +141,7 @@ def _tt_forward_synced(
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    codes_tt = tt_model.forward(llm_tt, noise_tt, cfg_scalar)
+    codes_tt, _ = tt_model.forward(llm_tt, noise_tt, cfg_scalar)
     ttnn.deallocate(llm_tt)
     ttnn.deallocate(noise_tt)
     codes = ttnn.to_torch(codes_tt).long().reshape(bsz, -1)
