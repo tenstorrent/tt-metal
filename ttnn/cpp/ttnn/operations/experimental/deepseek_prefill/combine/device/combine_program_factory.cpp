@@ -1065,6 +1065,39 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         sender_noc_coords.emplace_back(noc_coord.x, noc_coord.y);
     }
 
+    // Global interleaved position of each untilizer core in rank-major / sender-minor order
+    // [S0.U0, S1.U0, S0.U1, S1.U1, …]: every untilizer core processes batches global_pos, +G,
+    // +2G, … of every expert (G = num_untilizer_cores, the total untilizer-core count).  Spreading
+    // consecutive batches of an expert across senders keeps either sender's forwarder from getting
+    // a monopoly of local (or remote) rows regardless of how dispatch clustered them; each sender's
+    // batch share is proportional to its untilizer-core count.  Indexed by untilizer idx so both
+    // the writer_untilize loop and the reader_untilize/compute loop below agree on the same value.
+    std::vector<uint32_t> untilizer_global_pos(num_untilizer_cores, 0);
+    {
+        uint32_t max_k = 0;
+        for (uint32_t s = 0; s < num_cores; s++) {
+            max_k = std::max(max_k, static_cast<uint32_t>(sender_untilizer_groups[s].size()));
+        }
+        std::vector<std::vector<uint32_t>> pos_by_sender_rank(num_cores);
+        for (uint32_t s = 0; s < num_cores; s++) {
+            pos_by_sender_rank[s].resize(sender_untilizer_groups[s].size());
+        }
+        uint32_t pos = 0;
+        for (uint32_t r = 0; r < max_k; r++) {
+            for (uint32_t s = 0; s < num_cores; s++) {
+                if (r < sender_untilizer_groups[s].size()) {
+                    pos_by_sender_rank[s][r] = pos++;
+                }
+            }
+        }
+        std::vector<uint32_t> rank_counter(num_cores, 0);
+        for (uint32_t idx = 0; idx < num_untilizer_cores; idx++) {
+            uint32_t s = untilizer_sender_map[idx];
+            uint32_t r = rank_counter[s]++;
+            untilizer_global_pos[idx] = pos_by_sender_rank[s][r];
+        }
+    }
+
     // Set runtime args for hybrid untilizer row cores.  Three layouts are possible:
     //   init_zeros && tile_layout: [output_addr, page_start, page_end, output_init_done_sem,
     //                               (sender_noc_x, sender_noc_y) * num_cores,
@@ -1122,8 +1155,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 writer_untilize_runtime_args.push_back(k_s);           // num_untilizer_cores
                 writer_untilize_runtime_args.push_back(expert_start);  // expert_start_idx
                 writer_untilize_runtime_args.push_back(expert_end);    // expert_end_idx
-                writer_untilize_runtime_args.push_back(s);             // sender_idx (this group's data chunk)
-                writer_untilize_runtime_args.push_back(num_cores);     // num_senders (data chunks per expert)
+                writer_untilize_runtime_args.push_back(untilizer_global_pos[untilizer_idx]);  // global batch start
+                writer_untilize_runtime_args.push_back(num_untilizer_cores);                  // global batch stride (G)
             }
 
             desc.kernels[writer_untilize_kernel_id].emplace_runtime_args(
@@ -1301,8 +1334,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             untilizer_rt_args.push_back(expert_start);
             untilizer_rt_args.push_back(expert_end);
             untilizer_rt_args.push_back(dispatched_metadata.buffer());
-            untilizer_rt_args.push_back(s);          // sender_idx (this group's data chunk)
-            untilizer_rt_args.push_back(num_cores);  // num_senders (data chunks per expert)
+            untilizer_rt_args.push_back(untilizer_global_pos[j]);  // global batch start
+            untilizer_rt_args.push_back(num_untilizer_cores);      // global batch stride (G)
             desc.kernels[reader_untilize_kernel_ids[j]].emplace_runtime_args(
                 untilizer_row_cores[j], untilizer_rt_args);
 
@@ -1317,8 +1350,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 compute_rt_args.push_back(expert_end);
                 compute_rt_args.push_back(local_core_id);
                 compute_rt_args.push_back(k_s);
-                compute_rt_args.push_back(s);          // sender_idx (this group's data chunk)
-                compute_rt_args.push_back(num_cores);  // num_senders (data chunks per expert)
+                compute_rt_args.push_back(untilizer_global_pos[j]);  // global batch start
+                compute_rt_args.push_back(num_untilizer_cores);      // global batch stride (G)
                 desc.kernels[untilize_compute_kernel_id].emplace_runtime_args(untilizer_row_cores[j], compute_rt_args);
             }
         }

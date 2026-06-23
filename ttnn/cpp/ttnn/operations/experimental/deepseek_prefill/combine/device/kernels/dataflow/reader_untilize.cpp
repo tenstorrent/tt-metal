@@ -9,14 +9,12 @@
 // core's group, then each untilizer core untilizes the tiles for its assigned expert batches.
 //
 // Expert range: every untilizer group now handles EVERY expert [expert_start_idx, expert_end_idx) =
-// [0, experts_per_chip).  The work is split across senders by DATA: each expert's batches are
-// divided into num_senders contiguous chunks and the owning sender (sender_idx) handles chunk
-// sender_idx (e.g. with 2 senders, sender 0 does the first half of every expert, sender 1 the
-// second half).
-//
-// Batch splitting within the group: the chunk's batches are distributed round-robin across the
-// k_s untilizer cores in the group.  Core i (local 0-based) processes the chunk's batches
-// i, i+k_s, i+2*k_s, …
+// [0, experts_per_chip).  The work is split across ALL untilizer cores by DATA via one global
+// round-robin: each core has a global interleaved position (rank-major, sender-minor:
+// [S0.U0, S1.U0, S0.U1, S1.U1, …]) and processes batches global_pos, +G, +2G, … of every expert,
+// where G = total untilizer cores.  Consecutive batches of an expert thus fan out across senders,
+// so neither sender's forwarder gets a monopoly of local (or remote) rows however dispatch
+// clustered them; a sender's batch share is proportional to its untilizer-core count.
 //
 // For each assigned batch:
 //   1. Read this batch's metadata pages from DRAM into cb_metadata_batch_id (consumed by
@@ -103,9 +101,9 @@ void kernel_main() {
     //   4: dispatched_metadata_addr    - DRAM base of the dispatched_metadata tensor; this kernel
     //                                    reads it locally so the sender no longer has to unicast
     //                                    per-batch metadata to this core
-    //   5: sender_idx                  - this untilizer group's owning-sender index; selects which
-    //                                    contiguous batch-chunk of each expert this group processes
-    //   6: num_senders                 - number of senders (data chunks each expert is split into)
+    //   5: untilizer_global_pos        - this core's position in the global interleaved untilizer
+    //                                    ordering; its batches are global_pos, +G, +2G, … per expert
+    //   6: total_untilizers            - G, total untilizer cores across all senders (global stride)
     // (sender NOC coords, data_ready and start semaphores are now consumed by the
     //  writer_untilize kernel on the same core — they no longer belong here.)
     uint32_t rt_idx = 0;
@@ -114,8 +112,12 @@ void kernel_main() {
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_idx++);
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t sender_idx = get_arg_val<uint32_t>(rt_idx++);
-    uint32_t num_senders = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_idx++);
+    uint32_t total_untilizers = get_arg_val<uint32_t>(rt_idx++);
+    // core_id / num_untilizer_cores (CT args 12/13) are no longer used for batch assignment under
+    // the global round-robin; kept as compile-time args so the arg layout stays stable.
+    (void)core_id;
+    (void)num_untilizer_cores;
 
     // ===== Step 1: Wait for the owning sender to multicast expert token counts + receive_buf_addr =====
     // Note: don't reset counter_ready_sem — writer_untilize on this same core also waits on it
@@ -176,26 +178,11 @@ void kernel_main() {
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        // Data split across senders: every sender's group processes EVERY expert, but only a
-        // contiguous chunk of that expert's batches.  Split the batches into num_senders chunks
-        // (sender 0 -> first chunk, sender 1 -> next, ...) so sender_idx owns
-        // [sender_batch_start, sender_batch_end).
-        uint32_t batches_per_sender = (actual_batches + num_senders - 1) / num_senders;
-        uint32_t sender_batch_start = sender_idx * batches_per_sender;
-        uint32_t sender_batch_end = sender_batch_start + batches_per_sender;
-        if (sender_batch_end > actual_batches) {
-            sender_batch_end = actual_batches;
-        }
-
-        // Round-robin batch assignment WITHIN this sender's chunk across the untilizer cores in
-        // its group.  Each untilizer core starts at sender_batch_start + core_id and strides by
-        // num_untilizer_cores, so within the chunk:
-        //   core 0 processes the chunk's batches 0, k, 2k, ...
-        //   core 1 processes the chunk's batches 1, k+1, 2k+1, ...
-        // where k = num_untilizer_cores.  This spreads the work evenly and ensures the owning
-        // sender can predict which untilizer core handles each batch.
-        for (uint32_t batch_idx = sender_batch_start + core_id; batch_idx < sender_batch_end;
-             batch_idx += num_untilizer_cores) {
+        // Global round-robin: this core handles batches untilizer_global_pos, +G, +2G, … of every
+        // expert (G = total_untilizers across all senders) — disjoint across cores, covering
+        // [0, actual_batches) exactly.  Must match writer_untilize / compute exactly so the
+        // c_0 / c_2 producer-consumer protocol stays in lockstep.
+        for (uint32_t batch_idx = untilizer_global_pos; batch_idx < actual_batches; batch_idx += total_untilizers) {
             uint32_t batch_tile_start = start_page_tiled + batch_idx * tiles_per_batch;
             uint32_t batch_token_start = batch_idx * read_batch_size;
             uint32_t batch_count = ((batch_token_start + read_batch_size) <= expert_tokens)

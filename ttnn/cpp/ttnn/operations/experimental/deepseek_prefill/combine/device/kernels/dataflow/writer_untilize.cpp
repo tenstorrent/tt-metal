@@ -144,10 +144,11 @@ void kernel_main() {
     //                                  back, atomically suck the value, and dec(-N).
     //   core_id                      - this untilizer's local index (0..k_s-1) inside the sender's
     //                                  group; used to pick our k_s-way slice of receive_buf.
-    //   num_untilizer_cores               - k_s, size of the owning sender's untilizer group (for round-robin)
+    //   num_untilizer_cores               - k_s, size of the owning sender's untilizer group
     //   expert_start_idx / expert_end_idx - expert range (now [0, experts_per_chip); every group does all experts)
-    //   sender_idx                        - owning-sender index; selects this group's batch-chunk per expert
-    //   num_senders                       - number of senders (data chunks each expert is split into)
+    //   untilizer_global_pos              - this core's position in the global interleaved untilizer
+    //                                       ordering; its batches are global_pos, +G, +2G, … per expert
+    //   total_untilizers                  - G, total untilizer cores across all senders (global stride)
     uint32_t counter_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_x = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t sender_noc_y = get_arg_val<uint32_t>(rt_args_idx++);
@@ -157,8 +158,11 @@ void kernel_main() {
     uint32_t num_untilizer_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t sender_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_senders = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
+    // num_untilizer_cores (k_s) no longer drives batch assignment under the global round-robin;
+    // core_id still selects this core's slice of the sender's receive_buf below.
+    (void)num_untilizer_cores;
 
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));
@@ -231,19 +235,11 @@ void kernel_main() {
 
         uint32_t actual_batches = (expert_tokens + read_batch_size - 1) / read_batch_size;
 
-        // Data split across senders: this group processes only its contiguous batch-chunk
-        // [sender_batch_start, sender_batch_end) of every expert (chunk sender_idx of num_senders).
-        // Must match reader_untilize / compute exactly so the c_2 / c_9 producer-consumer protocol
-        // and the per-row routing stay in lockstep.
-        uint32_t batches_per_sender = (actual_batches + num_senders - 1) / num_senders;
-        uint32_t sender_batch_start = sender_idx * batches_per_sender;
-        uint32_t sender_batch_end = sender_batch_start + batches_per_sender;
-        if (sender_batch_end > actual_batches) {
-            sender_batch_end = actual_batches;
-        }
-
-        for (uint32_t batch_idx = sender_batch_start + core_id; batch_idx < sender_batch_end;
-             batch_idx += num_untilizer_cores) {
+        // Global round-robin: this core handles batches untilizer_global_pos, +G, +2G, … of every
+        // expert (G = total_untilizers across all senders).  Must match reader_untilize / compute
+        // exactly so the c_2 / c_9 producer-consumer protocol and the per-row routing stay in
+        // lockstep.
+        for (uint32_t batch_idx = untilizer_global_pos; batch_idx < actual_batches; batch_idx += total_untilizers) {
             uint32_t batch_token_start = batch_idx * read_batch_size;
             uint32_t batch_count = ((batch_token_start + read_batch_size) <= expert_tokens)
                                        ? read_batch_size
