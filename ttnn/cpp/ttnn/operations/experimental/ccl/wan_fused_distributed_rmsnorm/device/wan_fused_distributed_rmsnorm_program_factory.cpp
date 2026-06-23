@@ -350,6 +350,7 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     const WanFusedDistributedRmsnormParams& args,
     const Tensor& input,
     const WanFusedDistributedRmsnormInputs& tensor_args) {
+    (void)tensor_args;  // page geometry no longer depends on rope/streaming detection
     WanFusedDistributedRmsnormSizing s;
     const auto& padded = input.padded_shape();
     const uint32_t W = padded[-1];
@@ -360,90 +361,32 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     // no fabric, no MUX, legacy writer path.
     s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
     s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows);
-    s.use_mux = !s.is_tp_1 && (s.num_workers > 1);
-    // CRITICAL: mirror create_at's num_links rounding so the stats-buffer geometry
-    // sized here (chunk_size_rows / num_chunks_per_device / page_size_bytes) agrees
-    // with the program factory's actual kernel layout. create_at rounds num_workers
-    // DOWN to a multiple of num_links_eff; if we skip that here, the two disagree
-    // whenever pick() isn't already link-aligned. e.g. num_tile_rows=38 picks 19
-    // workers -> rows_per_worker=2 -> chunk=2 here, but the factory rounds to 16 ->
-    // rows_per_worker=3 -> chunk=3. The buffer is then laid out for 2-row pages while
-    // the writer emits 3-row pages, so the AG scatters garbage into each chunk's last
-    // row (uniform 2x output on those rows). Shapes where pick() is already a multiple
-    // of num_links (e.g. 152 rows -> 64 workers) happen to agree, which is why only
-    // some shapes were corrupted.
-    {
+    // `use_mux` now means "uses the fabric-forwarder all-gather (+ DRAM scratch)".
+    // The MUX and legacy single-worker writers are gone — one fabric path.
+    s.use_mux = !s.is_tp_1;
+    // The forwarder round == one tile-row; sticks are coalesced across the
+    // forwarder's worker group, so chunk/window are not row-batching knobs here.
+    s.chunk_size_rows = 1u;
+    s.window_size = 1u;
+    if (s.use_mux) {
+        // num_forwarders = min(num_links, num_workers): one coalescing forwarder
+        // per independent routing plane. Each forwarder mcasts up to
+        // sticks_per_packet 128 B sticks per row-round; the DRAM scratch page IS
+        // one packet. Pages per device = num_forwarders * max_rounds, where a
+        // round is one tile-row of the worker group.
         const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
-        const uint32_t num_links_eff = s.use_mux ? std::min<uint32_t>(num_links_requested, s.num_workers) : 1u;
-        if (s.use_mux && num_links_eff > 1) {
-            s.num_workers = (s.num_workers / num_links_eff) * num_links_eff;
-            if (s.num_workers == 0) {
-                s.num_workers = num_links_eff;
-            }
-        }
+        const uint32_t num_forwarders = std::min<uint32_t>(num_links_requested, s.num_workers);
+        const uint32_t max_rounds = tt::div_up(s.num_tile_rows, s.num_workers);
+        // Pack as many 128 B fp32 sticks as fit one fabric packet. Reuse the
+        // existing page formula by setting window_size = sticks_per_packet:
+        // page_size_bytes = TILE_HEIGHT(=32) * window_size * 4 = sticks * 128.
+        const uint32_t sticks_per_packet =
+            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / 128u);
+        s.window_size = sticks_per_packet;
+        s.num_chunks_per_device = num_forwarders * max_rounds;
+        s.total_pages = args.ring_size * s.num_chunks_per_device;
+        s.page_size_bytes = TILE_HEIGHT * s.window_size * sizeof(float);
     }
-    const uint32_t rows_per_worker = tt::div_up(s.num_tile_rows, s.num_workers);
-    // Phase 9 packed-AG: one fabric mcast per chunk, so fewer chunks = fewer
-    // fabric round-trips. Aim for 1 chunk per worker (= rows_per_worker rows
-    // per packet) for the multichunk shape regime where each worker already
-    // has few rows. Cap at kMaxChunkSizeRows for L1 budget (chunk-sized CBs:
-    // input, stats_local, packed_gathered, stats_gathered all scale with
-    // chunk_size).
-    // Chunk cap = 1. A fuller sweep (rope + non-rope, real 38/152-tile-row sizes,
-    // chunk 1-4 at W up to 64) showed chunk=1 is best or tied EVERYWHERE: fabric/AG
-    // is only ~2us exposed so bigger chunks buy no amortization, and chunk>1 is ~10%
-    // SLOWER on the large (152-row) shapes (the prefetch-overlap win never
-    // materialized). So pin chunk=1; WAN_RMSNORM_FORCE_CHUNK still overrides for sweeps.
-    constexpr uint32_t kMaxChunkSizeRows = 1u;
-    // L1 budget cap: input_cb is double-buffered 2 * chunk * num_tile_cols
-    // bf16 tiles = chunk * num_tile_cols * 4 KB per worker. Other CBs add
-    // ~150 KB. Keep input_cb ≤ 512 KB so total ≤ 750 KB (half of L1):
-    //   chunk * num_tile_cols ≤ 128.
-    const uint32_t num_tile_cols_for_chunk_cap = std::max(1u, W / TILE_WIDTH);
-    const uint32_t chunk_h_cap = std::max(1u, 128u / num_tile_cols_for_chunk_cap);
-    s.chunk_size_rows =
-        std::min<uint32_t>(std::min<uint32_t>(std::max(1u, rows_per_worker), kMaxChunkSizeRows), chunk_h_cap);
-
-    // Clamp to a single resident row for per-head RoPE and for the streaming-low-L1
-    // fallback — MUST match the program factory so the stats buffer's window/pages
-    // agree. Non-clamped shapes keep the original (unrounded) chunk: the program
-    // uses its own num_links-rounded chunk for compute, and the AG tolerates that
-    // pre-existing window/chunk difference (only the CLAMPED cases need to match,
-    // and there both sides are trivially 1). Detect per-head RoPE / streaming from
-    // the same inputs the program factory uses.
-    const uint32_t num_tile_cols = std::max(1u, W / TILE_WIDTH);
-    const bool fuse_rope = tensor_args.transformation_mat.has_value() && tensor_args.rope_cos.has_value() &&
-                           tensor_args.rope_sin.has_value();
-    const bool per_head_rope =
-        fuse_rope && (tensor_args.rope_cos->logical_shape()[1] == args.num_heads_per_device);
-    bool streaming = false;
-    if (s.use_mux && !per_head_rope) {
-        const auto [c_fid, c_apx, c_fp32, c_pl1, c_dfs] =
-            get_compute_kernel_config_args(input.device()->arch(), args.compute_kernel_config);
-        const uint32_t block_size = get_dest_reg_count(args.compute_kernel_config);
-        const uint32_t in_b = tt::tile_size(datatype_to_dataformat_converter(input.dtype()));
-        const uint32_t out_b = tt::tile_size(datatype_to_dataformat_converter(args.dtype.value_or(input.dtype())));
-        const uint32_t interm_b =
-            c_fp32 ? tt::tile_size(tt::DataFormat::Float32) : tt::tile_size(tt::DataFormat::Float16_b);
-        streaming = decide_streaming_low_l1(
-            num_tile_cols, block_size, s.chunk_size_rows, in_b, interm_b, out_b, tensor_args.weight.has_value(),
-            args.per_head_norm);
-    }
-    if ((per_head_rope && !perhead_chunk_clamp_disabled()) || streaming) {
-        s.chunk_size_rows = 1u;
-    }
-    if (s.use_mux && force_chunk_size() > 0u) {
-        s.chunk_size_rows = force_chunk_size();
-    }
-    s.window_size = s.chunk_size_rows;
-    // Pages are addressed across the whole chip (not per-worker) so the
-    // buffer shape doesn't depend on num_workers. Each chunk a worker
-    // produces lands at a page index derived only from (device_idx, chunk
-    // index on this chip), which lets the caller spec the buffer without
-    // knowing the worker count.
-    s.num_chunks_per_device = s.use_mux ? tt::div_up(s.num_tile_rows, s.window_size) : 0u;
-    s.total_pages = s.use_mux ? args.ring_size * s.num_chunks_per_device : 0u;
-    s.page_size_bytes = s.use_mux ? TILE_HEIGHT * s.window_size * sizeof(float) : 0u;
     return s;
 }
 
@@ -562,62 +505,58 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // SKIP MUX entirely and use the legacy direct-fabric writer.
         num_workers = pick_num_workers_tp_gt_1(num_tile_rows);
     }
-    use_mux = !is_tp_1 && (num_workers > 1);
+    use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
 
-    // Multi-link MUX: allocate one MUX core per (direction, link). Workers are
-    // partitioned round-robin: worker i uses link (i % num_links_eff) for both
-    // its fwd and bwd MUX. We round num_workers down to a multiple of
-    // num_links_eff so each link's MUX has the same number of clients (the
-    // num_mux_clients CT arg in the writer is a single value).
+    // Forwarder model: one coalescing forwarder core per independent routing
+    // plane (num_forwarders = min(num_links, num_workers)). Each forwarder owns a
+    // contiguous worker group and holds fwd+bwd fabric. No MUX cores, no legacy
+    // single-worker path.
     const uint32_t num_links_requested = std::max<uint32_t>(1u, args.num_links);
-    uint32_t num_links_eff = use_mux ? std::min<uint32_t>(num_links_requested, num_workers) : 1u;
-    if (use_mux && num_links_eff > 1) {
-        num_workers = (num_workers / num_links_eff) * num_links_eff;
-        if (num_workers == 0) {
-            num_workers = num_links_eff;
-        }
-    }
-
-    const bool fwd_mux_valid = use_mux && forward_fabric_node_id.has_value();
-    const bool bwd_mux_valid = use_mux && backward_fabric_node_id.has_value();
-    const uint32_t num_mux_per_direction = use_mux ? num_links_eff : 0u;
-    const uint32_t num_mux_cores =
-        (fwd_mux_valid ? num_mux_per_direction : 0u) + (bwd_mux_valid ? num_mux_per_direction : 0u);
-    const uint32_t total_cores_needed = num_workers + num_mux_cores;
+    const uint32_t num_forwarders = use_mux ? std::min<uint32_t>(num_links_requested, num_workers) : 0u;
+    const uint32_t total_cores_needed = num_workers + num_forwarders;
     TT_FATAL(
         total_cores_needed <= max_cores,
-        "wan_fused_distributed_rmsnorm needs {} cores ({} workers + {} mux) but only {} available",
+        "wan_fused_distributed_rmsnorm needs {} cores ({} workers + {} forwarders) but only {} available",
         total_cores_needed,
         num_workers,
-        num_mux_cores,
+        num_forwarders,
         max_cores);
 
     const uint32_t num_tile_rows_per_worker = tt::div_up(num_tile_rows, num_workers);
+    const uint32_t workers_per_forwarder = use_mux ? tt::div_up(num_workers, num_forwarders) : num_workers;
+    const uint32_t max_rounds = num_tile_rows_per_worker;  // forwarder round == tile-row
 
-    // Layout: [worker_0..worker_N-1, fwd_mux_0..fwd_mux_L-1, bwd_mux_0..bwd_mux_L-1]
-    // where L = num_links_eff (only if that direction is valid).
+    // [worker_0..N-1, forwarder_0..F-1] on the device grid (row-major).
     const auto all_cores_vec = corerange_to_cores(core_grid, max_cores, /*row_major=*/true);
     std::vector<CoreCoord> worker_cores(all_cores_vec.begin(), all_cores_vec.begin() + num_workers);
-    std::vector<CoreCoord> fwd_mux_cores;  // size = num_links_eff if valid
-    std::vector<CoreCoord> bwd_mux_cores;
-    {
-        uint32_t next_core_idx = num_workers;
-        if (fwd_mux_valid) {
-            for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
-                fwd_mux_cores.push_back(all_cores_vec[next_core_idx++]);
-            }
-        }
-        if (bwd_mux_valid) {
-            for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
-                bwd_mux_cores.push_back(all_cores_vec[next_core_idx++]);
-            }
-        }
+    std::vector<CoreCoord> forwarder_cores;
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        forwarder_cores.push_back(all_cores_vec[num_workers + f]);
     }
 
     CoreRangeSet worker_core_set;
     for (const auto& c : worker_cores) {
         worker_core_set = worker_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
     }
+    CoreRangeSet forwarder_core_set;
+    for (const auto& c : forwarder_cores) {
+        forwarder_core_set = forwarder_core_set.merge(CoreRangeSet({CoreRange(c, c)}));
+    }
+    // Grid-wide set: the packet CB + sync semaphores are created here so their
+    // L1 address is identical on every worker and forwarder core — a worker
+    // learns its forwarder's packet base / sem addr from its OWN
+    // get_write_ptr(packet_cb) / get_semaphore(id), no cross-core address args.
+    const CoreRangeSet all_core_set({core_grid});
+
+    // Partition helpers: worker w -> forwarder (w / wpf), slot (w % wpf);
+    // contiguous tile-row split (worker w owns [w*rpw, min((w+1)*rpw, N))).
+    auto worker_forwarder = [&](uint32_t w) -> uint32_t { return use_mux ? (w / workers_per_forwarder) : 0u; };
+    auto worker_slot = [&](uint32_t w) -> uint32_t { return use_mux ? (w % workers_per_forwarder) : 0u; };
+    auto worker_num_rows = [&](uint32_t w) -> uint32_t {
+        const uint32_t s = std::min(w * num_tile_rows_per_worker, num_tile_rows);
+        const uint32_t e = std::min(s + num_tile_rows_per_worker, num_tile_rows);
+        return e - s;
+    };
 
     // chunk_size_rows: aim for ≥2 chunks per worker so Phase 5's double-buffered
     // input_cb can overlap chunk N+1's reader fill + chunk N+1's AG with chunk
@@ -689,9 +628,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     if (use_mux && force_chunk_size() > 0u) {
         chunk_size_rows = force_chunk_size();
     }
-    // Phase 9 packed-page AG: every chunk this chip processes maps to a distinct
-    // DRAM page. Page index = my_device_index * num_chunks_per_device + chunk_idx.
-    const uint32_t num_chunks_per_device = use_mux ? tt::div_up(num_tile_rows, chunk_size_rows) : 0u;
+    // Forwarder AG: DRAM pages per device = num_forwarders * max_rounds (one page
+    // per forwarder per row-round). Page idx = my_device*num_chunks_per_device +
+    // forwarder*max_rounds + round.
+    const uint32_t num_chunks_per_device = use_mux ? (num_forwarders * max_rounds) : 0u;
     // The streamed compute path handles only the whole-row reduce with one row
     // resident at a time (chunk_size_rows==1, enforced by the clamp above).
     TT_FATAL(
@@ -770,8 +710,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     //       col 0 here, so the existing post-reduce<AVG,REDUCE_ROW> chain
     //       runs unchanged on it.
     constexpr uint32_t stats_transposed_local_cb_id = tt::CBIndex::c_16;
-    constexpr uint32_t stats_packed_local_cb_id = tt::CBIndex::c_17;
-    constexpr uint32_t stats_packed_gathered_cb_id = tt::CBIndex::c_18;
+    constexpr uint32_t packet_cb_id = tt::CBIndex::c_17;  // forwarder coalesced packet (grid-wide, depth 2)
     constexpr uint32_t stats_transposed_gathered_cb_id = tt::CBIndex::c_19;
     constexpr uint32_t bias_cb_id = tt::CBIndex::c_20;
 
@@ -811,25 +750,34 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t stats_gathered_tiles = stats_gathered_rows * per_row_stats_count;
     create_cb(stats_gathered_cb_id, program, worker_core_set, fp32_tile_size, stats_gathered_tiles, fp32_format);
 
-    // Phase 9 packed-page AG: dedicated CBs only when the MUX writer runs.
-    // The legacy single-worker writer still uses the old whole-tile AG path
-    // so it doesn't need these; give it 1-slot stubs so compile-time
-    // arguments stay valid across both paths.
-    {
-        const uint32_t window = use_mux ? chunk_size_rows : 1u;
-        const uint32_t ring = use_mux ? args.ring_size : 1u;
-        const uint32_t page_size_bytes = use_mux ? TILE_HEIGHT * window * sizeof(float) : fp32_tile_size;
-        create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, window, fp32_format);
-        // packed CBs use page_size_bytes per slot, not the fp32 tile size.
-        tt::tt_metal::CircularBufferConfig packed_local_cfg =
-            tt::tt_metal::CircularBufferConfig(2u * page_size_bytes, {{stats_packed_local_cb_id, fp32_format}})
-                .set_page_size(stats_packed_local_cb_id, page_size_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, worker_core_set, packed_local_cfg);
-        tt::tt_metal::CircularBufferConfig packed_gathered_cfg =
-            tt::tt_metal::CircularBufferConfig(ring * page_size_bytes, {{stats_packed_gathered_cb_id, fp32_format}})
-                .set_page_size(stats_packed_gathered_cb_id, page_size_bytes);
-        tt::tt_metal::CreateCircularBuffer(program, worker_core_set, packed_gathered_cfg);
-        create_cb(stats_transposed_gathered_cb_id, program, worker_core_set, fp32_tile_size, ring, fp32_format);
+    // Transposed stat CBs on the worker cores. For is_tp_1 these are unused stubs
+    // (that path keeps stats in col 0 and reduces locally). chunk==1 so local is 1.
+    create_cb(stats_transposed_local_cb_id, program, worker_core_set, fp32_tile_size, 1u, fp32_format);
+    create_cb(
+        stats_transposed_gathered_cb_id,
+        program,
+        worker_core_set,
+        fp32_tile_size,
+        use_mux ? args.ring_size : 1u,
+        fp32_format);
+    uint32_t unit_packet_bytes = 0u;
+    if (use_mux) {
+        // Coalesced fabric packet, allocated on the WHOLE grid so its L1 address
+        // is identical on every worker + forwarder core (a worker writes its 128 B
+        // stick into its forwarder's copy at this same address; the forwarder reads
+        // its own). page == one fabric packet (sticks_per_packet * 128 B), depth 2.
+        const uint32_t sticks_per_packet =
+            std::max<uint32_t>(1u, tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / 128u);
+        unit_packet_bytes = sticks_per_packet * 128u;
+        TT_FATAL(
+            sticks_per_packet >= workers_per_forwarder,
+            "wan_fused_distributed_rmsnorm: fabric packet holds {} sticks but a forwarder group has {} workers",
+            sticks_per_packet,
+            workers_per_forwarder);
+        tt::tt_metal::CircularBufferConfig packet_cfg =
+            tt::tt_metal::CircularBufferConfig(2u * unit_packet_bytes, {{packet_cb_id, fp32_format}})
+                .set_page_size(packet_cb_id, unit_packet_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, all_core_set, packet_cfg);
     }
 
     // Per-token weight/bias is per-row: weight_cb holds chunk_size_rows
@@ -939,18 +887,27 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t output_cb_tiles = 2u * intermediate_cb_tiles;
     create_cb(output_cb_id, program, worker_core_set, output_tile_size, output_cb_tiles, output_format);
 
-    // Packet header CB — needed by the legacy writer's TP>1 fabric forwarder
-    // (it reserves 2 header slots from this CB). MUX path uses PacketHeaderPool
-    // and doesn't touch this CB, but the CT arg slot must still be valid.
-    // Size: 8 slots when fabric is in use, 1 slot otherwise.
+    // Packet header CB. The forwarder reserves 2 header slots (fwd+bwd) from it,
+    // so on the AG path it lives on the FORWARDER cores. is_tp_1's drain-only
+    // writer never touches it (1-slot stub on the worker cores).
     const uint32_t packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    const uint32_t packet_header_cb_tiles = (is_tp_1) ? 1u : 8u;
-    tt::tt_metal::CircularBufferConfig packet_header_cb_config =
-        tt::tt_metal::CircularBufferConfig(
-            packet_header_cb_tiles * packet_header_size_bytes,
-            {{reserved_packet_header_cb_id, tt::DataFormat::RawUInt32}})
-            .set_page_size(reserved_packet_header_cb_id, packet_header_size_bytes);
-    tt::tt_metal::CreateCircularBuffer(program, worker_core_set, packet_header_cb_config);
+    {
+        const uint32_t header_tiles = use_mux ? 4u : 1u;
+        const CoreRangeSet& header_cores = use_mux ? forwarder_core_set : worker_core_set;
+        tt::tt_metal::CircularBufferConfig packet_header_cb_config =
+            tt::tt_metal::CircularBufferConfig(
+                header_tiles * packet_header_size_bytes, {{reserved_packet_header_cb_id, tt::DataFormat::RawUInt32}})
+                .set_page_size(reserved_packet_header_cb_id, packet_header_size_bytes);
+        tt::tt_metal::CreateCircularBuffer(program, header_cores, packet_header_cb_config);
+    }
+
+    // Sync semaphores for the worker<->forwarder handshake. arrival (workers inc,
+    // forwarder waits) + go (forwarder incs, workers wait) are on-chip; created on
+    // the WHOLE grid so their L1 address is identical across workers + forwarders
+    // (kernels resolve via get_semaphore(id)). out_ready is the caller's
+    // GlobalSemaphore, fabric-inc'd by peer forwarders (resolved later).
+    const uint32_t arrival_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
+    const uint32_t go_sem_id = use_mux ? tt::tt_metal::CreateSemaphore(program, all_core_set, 0u) : 0u;
 
     // ------------------------------------------------------------------------
     // Reader kernel (on worker cores)
@@ -1005,33 +962,15 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         ReaderDataMovementConfig(reader_compile_args, ablation_defines()));
 
     // ------------------------------------------------------------------------
-    // FabricMuxConfig (only when use_mux: TP>1 AND num_workers>1)
-    // One MUX kernel per (direction, link); each has num_workers_per_link
-    // channels (one per worker assigned to that link).
-    // ------------------------------------------------------------------------
-    const size_t mux_base_l1_address = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    const size_t buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
-    const uint32_t num_workers_per_link = use_mux ? (num_workers / num_links_eff) : 0u;
-    std::unique_ptr<tt::tt_fabric::FabricMuxConfig> mux_kernel_config;
-    if (use_mux) {
-        mux_kernel_config = std::make_unique<tt::tt_fabric::FabricMuxConfig>(
-            /*num_full_size_channels=*/static_cast<uint8_t>(num_workers_per_link),
-            /*num_header_only_channels=*/0,
-            /*num_buffers_full_size_channel=*/1,
-            /*num_buffers_header_only_channel=*/0,
-            buffer_size_bytes_full_size_channel,
-            mux_base_l1_address);
-    }
-
-    // ------------------------------------------------------------------------
-    // Writer kernel (on worker cores). Three variants:
-    //   is_tp_1            → legacy writer with is_tp_1=1 (no fabric).
-    //   TP>1, num_workers=1 → legacy writer with is_tp_1=0 (direct fabric, single core).
-    //   TP>1, num_workers>1 → MUX writer.
+    // Writer kernel (on worker cores). Two variants:
+    //   is_tp_1 (ring==1 / per_head_norm)  → drain-only writer (no fabric; stats
+    //                                         stay local in compute).
+    //   AG path (ring>1, !per_head_norm)   → forwarder-model worker writer; the
+    //                                         per-link forwarder cores hold the fabric.
     // ------------------------------------------------------------------------
     KernelHandle writer_kernel_id;
     if (!use_mux) {
-        // Legacy single-core writer (works for both TP=1 and TP>1 single-worker).
+        // Drain-only writer for the is_tp_1 (no-AG) path.
         std::vector<uint32_t> writer_compile_args = {
             output_cb_id,
             num_tile_cols,
@@ -1071,48 +1010,29 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             worker_core_set,
             WriterDataMovementConfig(writer_compile_args, ablation_defines()));
     } else {
-        // MUX writer for TP>1 (Phase 9 packed-page AG): first 13 CT args,
-        // then 5 MUX CT args, then TensorAccessorArgs for output and stats
-        // scratch. The two transposed/packed CBs replace the whole-tile
-        // L1↔fabric path used in earlier phases.
+        // Forwarder-model worker writer (AG path): no fabric. Per row it pushes
+        // its 128 B stick into the forwarder's grid-uniform packet CB, waits the
+        // go-sem, reads the coalesced ring gather from DRAM into row-0 of the
+        // transposed-gathered tiles, and drains output. my_forwarder_index /
+        // my_slot are per-core runtime args (set in the rt loop).
         std::vector<uint32_t> writer_compile_args = {
             output_cb_id,
             num_tile_cols,
             block_size,
-            // Compute transposes its col-0 stat tile to ROW 0 and pushes it here.
-            // The writer packs the two contiguous 64 B face-rows (tile offsets
-            // {0, 1024}) with NoC copies — no strided col-0 extraction.
             stats_transposed_local_cb_id,
-            // The writer scatters gathered pages into ROW 0 of these tiles (two
-            // contiguous 64 B NoC copies); compute FPU-adds then transposes in DST.
             stats_transposed_gathered_cb_id,
-            // Packed-page staging + receive CBs.
-            stats_packed_local_cb_id,
-            stats_packed_gathered_cb_id,
             args.ring_size,
-            device_index,
-            num_targets_forward,
-            num_targets_backward,
-            chunk_size_rows,
-            num_chunks_per_device,
             head_dim_tiles,
             num_tile_rows,
+            max_rounds,
+            128u,  // stick_bytes (32 fp32)
+            num_chunks_per_device,
+            packet_cb_id,
+            arrival_sem_id,
+            go_sem_id,
         };
-        // Each link's MUX has num_workers_per_link clients; the writer kernel's
-        // num_mux_clients CT arg uses this per-link count (termination master
-        // waits for num_workers_per_link - 1 incs on its sem).
-        ttnn::ccl::fabric_mux_connection_ct_args(
-            num_workers_per_link,
-            tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-            *mux_kernel_config,
-            writer_compile_args);
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
-        // Persistent DRAM stats buffer accessor args (Phase 1).
         TensorAccessorArgs(stats_dram_buffer).append_to(writer_compile_args);
-        // Scalar/eps/trans_mat population args (writer populates these CBs so the
-        // reader starts the input read ASAP). Appended AFTER the accessors so the
-        // fixed/MUX/accessor CT indices above are unchanged; the kernel reads them
-        // at stats_dram_args.next_compile_time_args_offset().
         writer_compile_args.push_back(reduce_scalar_sum_cb_id);
         writer_compile_args.push_back(reduce_scalar_avg_cb_id);
         writer_compile_args.push_back(epsilon_cb_id);
@@ -1129,9 +1049,42 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
-            "wan_rmsnorm_fused_writer_mux.cpp",
+            "wan_rmsnorm_fused_worker_writer.cpp",
             worker_core_set,
             WriterDataMovementConfig(writer_compile_args, ablation_defines()));
+    }
+
+    // ------------------------------------------------------------------------
+    // Forwarder kernels (AG path): one per forwarder core (per-core CT args).
+    // ------------------------------------------------------------------------
+    std::vector<KernelHandle> forwarder_kernel_ids(num_forwarders, 0);
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        const uint32_t group_begin = f * workers_per_forwarder;
+        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+        const uint32_t group_size = group_end - group_begin;
+        std::vector<uint32_t> fwd_ct = {
+            packet_cb_id,
+            reserved_packet_header_cb_id,
+            args.ring_size,
+            device_index,
+            num_targets_forward,
+            num_targets_backward,
+            f,  // forwarder_index
+            num_forwarders,
+            group_size,
+            max_rounds,
+            128u,  // stick_bytes
+            num_chunks_per_device,
+            arrival_sem_id,
+            go_sem_id,
+        };
+        TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
+        forwarder_kernel_ids[f] = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
+            "wan_rmsnorm_fused_forwarder.cpp",
+            CoreRangeSet({CoreRange(forwarder_cores[f], forwarder_cores[f])}),
+            WriterDataMovementConfig(fwd_ct, ablation_defines()));
     }
 
     // ------------------------------------------------------------------------
@@ -1216,36 +1169,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // ------------------------------------------------------------------------
     // MUX kernels (only TP>1; one per (direction, link))
     // ------------------------------------------------------------------------
-    std::vector<KernelHandle> fwd_mux_kernel_ids(num_mux_per_direction, 0);
-    std::vector<KernelHandle> bwd_mux_kernel_ids(num_mux_per_direction, 0);
-    if (fwd_mux_valid || bwd_mux_valid) {
-        const auto mux_ct_args = mux_kernel_config->get_fabric_mux_compile_time_args();
-        for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
-            if (fwd_mux_valid) {
-                fwd_mux_kernel_ids[lnk] = tt::tt_metal::CreateKernel(
-                    program,
-                    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                    CoreRangeSet({CoreRange(fwd_mux_cores[lnk], fwd_mux_cores[lnk])}),
-                    tt::tt_metal::DataMovementConfig{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt::tt_metal::NOC::RISCV_0_default,
-                        .compile_args = mux_ct_args,
-                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-            }
-            if (bwd_mux_valid) {
-                bwd_mux_kernel_ids[lnk] = tt::tt_metal::CreateKernel(
-                    program,
-                    "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-                    CoreRangeSet({CoreRange(bwd_mux_cores[lnk], bwd_mux_cores[lnk])}),
-                    tt::tt_metal::DataMovementConfig{
-                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-                        .noc = tt::tt_metal::NOC::RISCV_0_default,
-                        .compile_args = mux_ct_args,
-                        .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
-            }
-        }
-    }
-
     // ------------------------------------------------------------------------
     // Common runtime args
     // ------------------------------------------------------------------------
@@ -1255,6 +1178,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t bias_addr = has_bias ? bias.value().buffer()->address() : 0;
     const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
     const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
+    const uint32_t trans_mat_addr_rt = fuse_rope ? trans_mat.value().buffer()->address() : 0u;
+    const uint32_t stats_dram_addr = use_mux ? stats_dram_buffer->address() : 0u;
 
     uint32_t out_ready_sem_bank_addr = 0;
     if (args.ring_size > 1) {
@@ -1264,173 +1189,88 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         out_ready_sem_bank_addr = args.multi_device_global_semaphore.at(0).address();
     }
 
-    // ------------------------------------------------------------------------
-    // MUX runtime args (TP>1 only). One termination master per (direction, link):
-    // the first worker assigned to each link (worker i = link itself). Workers
-    // are partitioned round-robin: worker i → link (i % num_links_eff).
-    // ------------------------------------------------------------------------
-    // Per-link termination master logical/virtual core.
-    std::vector<CoreCoord> link_master_logical(use_mux ? num_links_eff : 0u);
-    std::vector<CoreCoord> link_master_virtual(use_mux ? num_links_eff : 0u);
-    if (use_mux) {
-        for (uint32_t lnk = 0; lnk < num_links_eff; lnk++) {
-            link_master_logical[lnk] = worker_cores[lnk];  // worker_id == lnk
-            link_master_virtual[lnk] = mesh_device->worker_core_from_logical_core(link_master_logical[lnk]);
-        }
+    // Virtual (NoC) coords: workers write sticks / inc arrival on their forwarder;
+    // forwarders inc the go-sem on their workers.
+    std::vector<CoreCoord> forwarder_virtual(num_forwarders);
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        forwarder_virtual[f] = mesh_device->worker_core_from_logical_core(forwarder_cores[f]);
     }
-
-    std::vector<CoreCoord> fwd_mux_virtual(num_mux_per_direction, CoreCoord{0, 0});
-    std::vector<CoreCoord> bwd_mux_virtual(num_mux_per_direction, CoreCoord{0, 0});
-    for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
-        if (fwd_mux_valid) {
-            fwd_mux_virtual[lnk] = mesh_device->worker_core_from_logical_core(fwd_mux_cores[lnk]);
-        }
-        if (bwd_mux_valid) {
-            bwd_mux_virtual[lnk] = mesh_device->worker_core_from_logical_core(bwd_mux_cores[lnk]);
-        }
-    }
-
-    // Wire MUX kernel RT args: one set per (direction, link), each with the
-    // correct link_idx into the fabric.
-    if (fwd_mux_valid || bwd_mux_valid) {
-        const auto src_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-        for (uint32_t lnk = 0; lnk < num_mux_per_direction; lnk++) {
-            if (fwd_mux_valid) {
-                auto mux_rt_args = mux_kernel_config->get_fabric_mux_run_time_args(
-                    src_node_id, forward_fabric_node_id.value(), /*link_idx=*/lnk, program, {fwd_mux_cores[lnk]});
-                tt::tt_metal::SetRuntimeArgs(program, fwd_mux_kernel_ids[lnk], {fwd_mux_cores[lnk]}, mux_rt_args);
-            }
-            if (bwd_mux_valid) {
-                auto mux_rt_args = mux_kernel_config->get_fabric_mux_run_time_args(
-                    src_node_id, backward_fabric_node_id.value(), /*link_idx=*/lnk, program, {bwd_mux_cores[lnk]});
-                tt::tt_metal::SetRuntimeArgs(program, bwd_mux_kernel_ids[lnk], {bwd_mux_cores[lnk]}, mux_rt_args);
-            }
-        }
+    std::vector<CoreCoord> worker_virtual(num_workers);
+    for (uint32_t i = 0; i < num_workers; i++) {
+        worker_virtual[i] = mesh_device->worker_core_from_logical_core(worker_cores[i]);
     }
 
     // ------------------------------------------------------------------------
-    // Per-worker runtime args
+    // Per-worker runtime args (contiguous tile-row split).
     // ------------------------------------------------------------------------
-    // Captured inside the worker loop (use_mux branch); stored in
-    // shared_variables so override_runtime_arguments can refresh the stats
-    // scratch address each launch.
-    std::optional<size_t> stats_dram_addr_writer_arg_idx;
-    // Worker assignment. For the packed-page MUX path, distribute chip-global
-    // chunks across workers (each chunk = a contiguous block of chunk_size_rows
-    // tile-rows). The DRAM page index for a chunk is `device * num_chunks_per_device
-    // + chunk_idx`, so workers must align on chunk boundaries — they cannot
-    // straddle a chunk. Even distribution: first (num_chunks % num_workers)
-    // workers get (floor+1) chunks; the rest get floor.
-    // For the legacy writer path (use_mux = false), keep the row-based split.
-    const uint32_t base_chunks_per_worker = use_mux ? (num_chunks_per_device / num_workers) : 0u;
-    const uint32_t extra_chunks = use_mux ? (num_chunks_per_device % num_workers) : 0u;
+    std::optional<size_t> stats_dram_addr_writer_arg_idx;  // worker-writer stats_dram slot (override refresh)
     for (uint32_t i = 0; i < num_workers; i++) {
         const auto& core = worker_cores[i];
-        uint32_t tile_row_start;
-        uint32_t tile_row_end;
-        uint32_t worker_chunk_base = 0;
-        if (use_mux) {
-            // Even distribution by chunk.
-            const uint32_t this_worker_chunks = base_chunks_per_worker + (i < extra_chunks ? 1u : 0u);
-            worker_chunk_base = i * base_chunks_per_worker + std::min(i, extra_chunks);
-            tile_row_start = std::min(worker_chunk_base * chunk_size_rows, num_tile_rows);
-            tile_row_end = std::min(tile_row_start + this_worker_chunks * chunk_size_rows, num_tile_rows);
-        } else {
-            tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
-            tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
-        }
+        const uint32_t tile_row_start = std::min(i * num_tile_rows_per_worker, num_tile_rows);
+        const uint32_t tile_row_end = std::min(tile_row_start + num_tile_rows_per_worker, num_tile_rows);
         const uint32_t this_core_rows = tile_row_end - tile_row_start;
 
         std::vector<uint32_t> reader_rt_args = {
-            input_addr,
-            weight_addr,
-            bias_addr,
-            rope_cos_addr,
-            rope_sin_addr,
-            tile_row_start,
-            tile_row_end,
-        };
+            input_addr, weight_addr, bias_addr, rope_cos_addr, rope_sin_addr, tile_row_start, tile_row_end};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
-        std::vector<uint32_t> writer_rt_args = {
-            output_addr,
-            tile_row_start,
-            tile_row_end,
-        };
-        if (use_mux) {
-            // Round-robin link assignment: worker i uses link (i % num_links_eff).
-            // channel_id within the assigned MUX is i / num_links_eff.
-            const uint32_t link = i % num_links_eff;
-            const uint32_t channel_id_in_link = i / num_links_eff;
-            const bool is_term_master_of_link = (channel_id_in_link == 0);
-            writer_rt_args.push_back(out_ready_sem_bank_addr);
-            // Packed-page DRAM scratch base address + this worker's first
-            // chunk index on the chip. DRAM page idx for a (device, chunk)
-            // pair = device * num_chunks_per_device + chunk_idx. The buffer
-            // is allocated fresh per launch (regular device tensor), so
-            // override_runtime_arguments refreshes the address slot — record
-            // its index in the per-program rt args vector.
-            stats_dram_addr_writer_arg_idx = writer_rt_args.size();
-            writer_rt_args.push_back(stats_dram_buffer->address());
-            writer_rt_args.push_back(worker_chunk_base);
-            // trans_mat addr for the writer-side scalar/trans_mat population.
-            // Sits at stats_dram_addr_writer_arg_idx + 2; refreshed there in
-            // override_runtime_arguments. 0 when no RoPE (writer won't read it).
-            writer_rt_args.push_back(fuse_rope ? trans_mat.value().buffer()->address() : 0u);
-            ttnn::ccl::fabric_mux_connection_rt_args(
-                /*mux_connection_valid=*/fwd_mux_valid,
-                /*is_termination_master=*/is_term_master_of_link,
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                fwd_mux_valid ? fwd_mux_virtual[link] : CoreCoord{0, 0},
-                /*worker_id=*/channel_id_in_link,
-                core,
-                *mux_kernel_config,
-                program,
-                link_master_virtual[link],
-                writer_rt_args);
-            ttnn::ccl::fabric_mux_connection_rt_args(
-                /*mux_connection_valid=*/bwd_mux_valid,
-                /*is_termination_master=*/is_term_master_of_link,
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                bwd_mux_valid ? bwd_mux_virtual[link] : CoreCoord{0, 0},
-                /*worker_id=*/channel_id_in_link,
-                core,
-                *mux_kernel_config,
-                program,
-                link_master_virtual[link],
-                writer_rt_args);
+        std::vector<uint32_t> writer_rt_args;
+        if (!use_mux) {
+            // is_tp_1 drain-only writer: output_addr, start, end, trans_mat (rt[3]).
+            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt};
         } else {
-            // Legacy writer (is_tp_1 OR TP>1 single-worker). trans_mat addr at rt
-            // index 3 for the writer-side scalar/trans_mat population (0 = no RoPE,
-            // never read); refreshed in override_runtime_arguments.
-            writer_rt_args.push_back(fuse_rope ? trans_mat.value().buffer()->address() : 0u);
-            if (!is_tp_1) {
-                // TP>1 single-worker path: append out_ready_sem + direct fabric
-                // connection rt args (FabricConnectionManager layout).
-                writer_rt_args.push_back(out_ready_sem_bank_addr);
-                writer_rt_args.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
-                if (forward_fabric_node_id.has_value()) {
-                    const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-                    tt::tt_fabric::append_fabric_connection_rt_args(
-                        local_node_id, forward_fabric_node_id.value(), /*link_idx=*/0, program, {core}, writer_rt_args);
-                }
-                writer_rt_args.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
-                if (backward_fabric_node_id.has_value()) {
-                    const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-                    tt::tt_fabric::append_fabric_connection_rt_args(
-                        local_node_id,
-                        backward_fabric_node_id.value(),
-                        /*link_idx=*/0,
-                        program,
-                        {core},
-                        writer_rt_args);
-                }
-            }
+            // worker-writer: output, start, end, trans_mat, stats_dram (rt[4]),
+            // forwarder NoC x/y, my_forwarder_index, my_slot.
+            const uint32_t f = worker_forwarder(i);
+            writer_rt_args = {output_addr, tile_row_start, tile_row_end, trans_mat_addr_rt};
+            stats_dram_addr_writer_arg_idx = writer_rt_args.size();
+            writer_rt_args.push_back(stats_dram_addr);
+            writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].x));
+            writer_rt_args.push_back(static_cast<uint32_t>(forwarder_virtual[f].y));
+            writer_rt_args.push_back(f);
+            writer_rt_args.push_back(worker_slot(i));
         }
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
 
         std::vector<uint32_t> compute_rt_args = {this_core_rows};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_args);
+    }
+
+    // ------------------------------------------------------------------------
+    // Per-forwarder runtime args: stats_dram, out_ready GlobalSemaphore, the
+    // group's worker NoC coords, present_count[r], then fwd+bwd fabric-connection
+    // args on this forwarder's routing plane (link_idx = f).
+    // ------------------------------------------------------------------------
+    const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+    for (uint32_t f = 0; f < num_forwarders; f++) {
+        const auto& core = forwarder_cores[f];
+        const uint32_t group_begin = f * workers_per_forwarder;
+        const uint32_t group_end = std::min(group_begin + workers_per_forwarder, num_workers);
+        std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
+        for (uint32_t w = group_begin; w < group_end; w++) {
+            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].x));
+            fwd_rt.push_back(static_cast<uint32_t>(worker_virtual[w].y));
+        }
+        for (uint32_t r = 0; r < max_rounds; r++) {
+            uint32_t pc = 0;
+            for (uint32_t w = group_begin; w < group_end; w++) {
+                if (worker_num_rows(w) > r) {
+                    pc++;
+                }
+            }
+            fwd_rt.push_back(pc);
+        }
+        fwd_rt.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+        if (forward_fabric_node_id.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                local_node_id, forward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+        }
+        fwd_rt.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
+        if (backward_fabric_node_id.has_value()) {
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                local_node_id, backward_fabric_node_id.value(), /*link_idx=*/f, program, {core}, fwd_rt);
+        }
+        SetRuntimeArgs(program, forwarder_kernel_ids[f], core, fwd_rt);
     }
 
     return {
@@ -1439,6 +1279,8 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             .reader_kernel_ids = {reader_kernel_id},
             .writer_kernel_ids = {writer_kernel_id},
             .compute_kernel_ids = {compute_kernel_id},
+            .forwarder_kernel_ids = forwarder_kernel_ids,
+            .forwarder_cores = forwarder_cores,
             .cores = worker_cores,
             .stats_dram_addr_writer_arg_idx = stats_dram_addr_writer_arg_idx,
         }};
@@ -1504,18 +1346,17 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
 
             auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
             writer_args[0] = output_addr;
+            writer_args[3] = trans_mat_addr;  // worker-writer + drain-only writer: trans_mat at rt[3]
             if (shared.stats_dram_addr_writer_arg_idx.has_value()) {
-                // MUX writer: stats_dram + (worker_chunk_base) + trans_mat.
-                const size_t idx = shared.stats_dram_addr_writer_arg_idx.value();
-                writer_args[idx] = stats_dram_addr;
-                // trans_mat addr for the writer-side population sits at idx + 2
-                // (stats_dram, worker_chunk_base, trans_mat — see create_at).
-                writer_args[idx + 2] = trans_mat_addr;
-            } else {
-                // Legacy writer: trans_mat addr for the writer-side scalar/
-                // trans_mat population sits at rt index 3.
-                writer_args[3] = trans_mat_addr;
+                // worker-writer (AG path): stats_dram scratch at rt[4].
+                writer_args[shared.stats_dram_addr_writer_arg_idx.value()] = stats_dram_addr;
             }
+        }
+        // Forwarders read the stats DRAM scratch base at rt[0].
+        for (size_t f = 0; f < shared.forwarder_kernel_ids.size(); f++) {
+            auto& fwd_args_by_core = GetRuntimeArgs(program, shared.forwarder_kernel_ids[f]);
+            const auto& fc = shared.forwarder_cores[f];
+            fwd_args_by_core.at(fc.x).at(fc.y)[0] = stats_dram_addr;
         }
     }
 }
