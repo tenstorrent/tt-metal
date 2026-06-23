@@ -212,6 +212,15 @@ def run_topk_router_component(
     # We will sort the indices here as the order of the indices is not guaranteed to be the same in the reference and TT implementation.
     sorted_tt_indices, sorted_tt_indices_order = torch.sort(tt_router_indices_torch, dim=-1)
     sorted_ref_indices, sorted_ref_indices_order = torch.sort(router_indices, dim=-1)
+    # ===== ROUTER_DBG2 (temporary) — dump aligned weights to diagnose 120B PCC =====
+    _g_tt = torch.gather(tt_router_weights_torch, -1, sorted_tt_indices_order)
+    _g_ref = torch.gather(router_scores, -1, sorted_ref_indices_order)
+    logger.info(f"ROUTER_DBG2 throughput={decoder_layer.mlp.use_throughput_experts} batch={batch} top_k={top_k} num_experts={tt_router_weights_full.shape[-1]}")
+    logger.info(f"ROUTER_DBG2 sorted_tt_idx_row0={sorted_tt_indices.flatten()[:8].tolist()} sorted_ref_idx_row0={sorted_ref_indices.flatten()[:8].tolist()}")
+    logger.info(f"ROUTER_DBG2 aligned_tt_row0={_g_tt.float().flatten()[:8].tolist()}")
+    logger.info(f"ROUTER_DBG2 aligned_ref_row0={_g_ref.float().flatten()[:8].tolist()}")
+    logger.info(f"ROUTER_DBG2 tt_full_row0={tt_router_weights_full.float().flatten()[:12].tolist()}")
+    # ===== end ROUTER_DBG2 =====
     indices_passing, indices_output = compare_tensors(
         sorted_tt_indices, sorted_ref_indices, mesh_device, pcc_threshold=pcc_threshold
     )
