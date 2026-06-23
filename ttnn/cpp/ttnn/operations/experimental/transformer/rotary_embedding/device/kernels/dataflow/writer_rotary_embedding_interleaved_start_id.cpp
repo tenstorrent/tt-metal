@@ -67,12 +67,13 @@ void kernel_main() {
 #ifdef OUT_SHARDED
     cb_out.wait_front(num_tiles);
 #else
+    constexpr uint32_t out_tile_size = get_tile_size(cb_id_out);
     uint32_t end_id = start_id + num_tiles;
     for (uint32_t i = start_id; i < end_id; ++i) {
         cb_out.wait_front(onetile);
         uint32_t l1_read_addr = cb_out.get_read_ptr();
 
-        noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), s, get_tile_size(cb_id_out), {}, {.page_id = i});
+        noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), s, out_tile_size, {}, {.page_id = i});
 
         noc.async_write_barrier();
 
