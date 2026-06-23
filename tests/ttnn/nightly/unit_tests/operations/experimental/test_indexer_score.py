@@ -268,6 +268,63 @@ def test_indexer_score_determinism(device, case_id, heads):
     logger.info(f"indexer_score {case_id} determinism verified: all {num_iterations} outputs identical")
 
 
+# ---------------------------------------------------------------------------
+# Padded-KV / multiturn: K is allocated once at a fixed capacity T_cap while only chunk_start+Sq tokens
+# are valid. Work units entirely in the -inf tail (k_tile_start >= min(Tt, chunk_start+Sq) in tiles) are
+# skipped in-kernel (matmul/gate dropped, K reads dropped, the causal mask alone produces the -inf
+# strip). The result must still match the unpadded reference (which masks the tail to -inf), and -- the
+# point of the port -- distinct chunk_start turns at a fixed T_cap must reuse ONE cached program.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
+@pytest.mark.parametrize("valid_len", [128, 1024], ids=["early_turn", "mid_turn"])
+def test_indexer_score_padded_kv(device, valid_len, case_id, heads):
+    """K at a fixed capacity T_cap (4096) far larger than the valid window: most k-tiles are a -inf tail
+    whose work units are skipped. chunk_start places the Sq queries so the last query sees exactly
+    valid_len keys; every column past that stays -inf. assert_indexer_match checks both the visible PCC
+    and the exact -inf tail, so this is the correctness guard for the in-kernel skip at a large pad ratio
+    (KC=16/8 fast-untilize + resident path). early_turn skips 7/8 of each group's units."""
+    sq = 128  # 4 q-tiles, resident
+    t_cap = 4096  # 128 k-tiles allocated; the turn only fills a small prefix
+    chunk_start = valid_len - sq  # last query row sees keys [0, valid_len); the rest of T_cap is padded
+    assert chunk_start >= 0 and chunk_start % 32 == 0 and chunk_start + sq <= t_cap
+    q, k, w = make_inputs(heads, GLX_DIM, sq, t_cap)
+    out = run_indexer(q, k, w, chunk_start, device, program_config=glx_config(heads), k_dtype=ttnn.bfloat8_b)
+    ref = indexer_score_ref(q, k, w, chunk_start)
+    assert_indexer_match(out, ref, sq, t_cap, check_neg=True)
+
+
+@pytest.mark.parametrize("case_id, heads", GLX_CASES, ids=GLX_IDS)
+def test_indexer_score_multiturn_cache(device, case_id, heads):
+    """G1 (the PR port's headline): with K at a fixed capacity, turns that differ only in chunk_start must
+    reuse ONE compiled program -- chunk_start is a hash-excluded runtime arg, patched in
+    override_runtime_arguments and re-validated on the cache hit.
+
+    The GLX production shape (grid-aligned multicast). Turn 1 compiles at sp_rank 7 (fullest, almost no
+    pad tail); turn 2 reuses that program at sp_rank 0 (a much larger pad tail). If the skip threshold or
+    chunk_start were baked at compile time, turn 2 would mis-skip or recompile -- so a shared cache entry
+    AND a correct turn-2 result together prove the skip is driven by the runtime chunk_start."""
+    device.enable_program_cache()
+    q, k, w = make_inputs(heads, GLX_DIM, GLX_SQ, GLX_T)
+    cfg = glx_config(heads)
+    n_entries = None
+    for sp_rank in [7, 0]:  # compile at the full rank, then reuse at the padded rank
+        chunk_start = GLX_HISTORY + sp_rank * GLX_SQ
+        out = run_indexer(q, k, w, chunk_start, device, program_config=cfg, k_dtype=ttnn.bfloat8_b)
+        ref = indexer_score_ref(q, k, w, chunk_start)
+        assert_indexer_match(out, ref, GLX_SQ, GLX_T, check_neg=True)
+        if n_entries is None:
+            n_entries = device.num_program_cache_entries()
+            assert n_entries >= 1, "program cache not populated; cannot prove cross-turn reuse"
+        else:
+            assert device.num_program_cache_entries() == n_entries, (
+                f"a second chunk_start compiled a new program ({device.num_program_cache_entries()} != "
+                f"{n_entries}) -- chunk_start is not hash-excluded (G1 cache-stability regressed)"
+            )
+    logger.info(f"indexer_score {case_id} multiturn cache-stability verified: {n_entries} program across 2 turns")
+
+
 # Blackhole post-commit / sanity coverage reuses test_indexer_score_accuracy above: the CI entry in
 # tests/pipeline_reorg/ttnn-tests.yaml selects its sp_rank-7 GLM5.1/DSv32 cases via `-k "accuracy and
 # rank7"`. No separate post-commit test (that would re-run the same cases under nightly); post-commit just
