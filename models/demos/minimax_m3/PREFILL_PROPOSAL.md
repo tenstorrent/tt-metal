@@ -17,7 +17,7 @@
 
 ---
 
-## 0. Status (living) — last updated 2026-06-21
+## 0. Status (living) — last updated 2026-06-23
 
 ### 0.1 What we inherit (validated MiniMax-M2.7 base — the foundation we convert)
 Everything below was validated on a real Blackhole Galaxy (32 chips) for **M2.7** and
@@ -84,6 +84,32 @@ locally (not deferred). All vs self-authored torch refs, random weights, full-GQ
   use_ep_moe → per-row TP-sharded logits gather), all 8 prompts PCC ~0.98.
 - Run commands: see `TESTING.md`.
 
+### 0.2d Real weights + SP building blocks — VALIDATED 2026-06-23
+- ✅ **Step A done** (ModelArgs real-weights plumbing: `text_config` unwrap + bf16 safetensors, strip
+  `language_model.`, drop multimodal; no mtp/nextn in the ckpt). 869 GB bf16 downloaded; weight cache
+  built (bf8 attn/dense + bf4 experts).
+- ✅ **REAL-WEIGHTS GROUND-TRUTH GOLDEN** (`tests/golden_hf_first_token.py`): the real
+  `MiniMaxM3SparseForConditionalGeneration` (HF `minimax_m3_vl`, CPU offload) vs our TTNN bf4 galaxy
+  run — **first-token argmax 8/8 MATCH** (every prompt → `<mm:think>`) + **oracle 3/3 exact**
+  (`<mm:think>The user`), plus coherent 6-token generation (`tests/galaxy_generate_m3.py`). Chain
+  closes: TTNN ==(device PCC)== our refs ==(oracle PCC 1.0)== arch **AND** TTNN bf4 ==(8/8 golden)== real M3.
+- ✅ **SP=8 building blocks DE-RISKED standalone** (NOT yet integrated into the model attention):
+  - `tests/unit/test_ring_joint_sp_vs_ref.py` — SP attention op: `ring_joint` GQA causal, SP=8×TP=4
+    on `(8,4)`, **PCC 0.99998** (grouped V, no inflation). Depends on the kernel fix below.
+  - `tests/unit/test_kv_cache_gqa_sp_vs_ref.py` — GQA chunked-KV cache (TP heads + SP block-cyclic
+    seq + DRAM NdShard) write/readback, **PCC 0.99997**. `update_padded_kv_cache` is reusable for GQA
+    (per-chip 1 head under TP=4) — **no new write op needed**.
+- ⚠️ **`ring_joint` grouped-V kernel fix is LOCAL on this branch** (relaxes the tensor-V `NQH==NVH`
+  assert to `NQH%NVH==0`; the reader already broadcasts V like K). Branch `ring-joint-gqa-v` is prepped
+  for a PR — **pending code-owner review**. The SP op test depends on it.
+
+> **BASELINE vs REARCHITECTURE (read this).** The validated path is **functional M3 on real weights**
+> but with **M2-shaped serving mechanics**: full-GQA-everywhere, **single-shot non-cached** SDPA, TP=4
+> (+ DP across rows). This is **exact for S ≤ ~2048** (one prompt fits a chip) — the regime the golden
+> runs in. The **SP=8 + chunked-KV + MSA** rearchitecture (1M context) is the remaining work; its two
+> hardest pieces (the SP attn op + the GQA chunked cache) are de-risked above but **NOT wired into
+> `tt/attention/prefill.py`** (still the baseline SDPA, see [prefill.py:124]). Integration is next.
+
 ### 0.4 ⓘ HF oracle — it EXISTS upstream (correction)
 Earlier drafts said "no HF modeling code." **Correction:** native `transformers` **main** has
 `minimax_m3_vl` (full modeling; `MiniMaxM3VLRMSNorm`/attention/MLP), and **vLLM** has
@@ -94,25 +120,25 @@ bring a **branch-local** transformers (git main) at full-model assembly to PCC a
 swigluoai against this source.
 
 ### 0.3 ⚠️ GAPS — what is NOT done (read before assuming "it works")
-- **Everything in §0.2b/§0.2c is vs SELF-AUTHORED refs + random weights** (we wrote both sides). The
-  independent check — **real weights → first token** — is NOT done yet (see below). Also reduced
-  configs (2 layers, small experts/vocab), not the full 60L×128E.
-- **`ModelArgs` model-level config plumbing** — the remaining Phase-0/real-weights tail: nested
-  `text_config` unwrap + `load_state_dict` real path (strip `language_model.`, skip `mtp`/`nextn`).
-  Pure code; blocks real weights. (Step "A" — the agreed next move.)
-- **Real weights** — 869 GB bf16 not downloaded; first-token vs reference not run. Needs: A (config
-  plumbing) + the download + a branch-local `transformers minimax_m3_vl` oracle (§0.4).
-- **Full 60-layer depth** — validated assembly at reduced depth (2-layer hybrid); 60L×128E real run
-  comes with real weights. Full-GQA placeholder is exact for prompts ≤~2K tokens.
+- ✅ **DONE since this list was written (see §0.2d):** ModelArgs real-weights plumbing (Step A);
+  869 GB download; **real-weights → first-token vs the HF `minimax_m3_vl` golden (8/8)**. (The oracle
+  ran via CPU offload of the real checkpoint, not a branch-local transformers — simpler and direct.)
+- **Per-module PCC track (§0.2b/§0.2c) is vs SELF-AUTHORED refs + random weights** at reduced configs
+  (2 layers, small experts/vocab). The full 60L×128E runs only on real weights (the golden path).
+- **Full-GQA placeholder** is exact for prompts ≤ ~2K tokens; >2K needs MSA.
 - **MSA sparse attention:** GQA torch golden delivered (`reference/sparse_gqa_prefill.py`, verified);
-  the on-device GQA `sparse_sdpa` kernel + indexer/topk wiring are NOT done (external dep). Parallel
-  track; only matters for >~2K context.
-- **KV cache:** current code runs **full non-cached SDPA on fresh Q/K/V**. Target is **chunked KV**
-  (DeepSeek-style, §5), NOT vLLM paged. Chunked KV not wired yet.
+  the on-device GQA `sparse_sdpa` kernel + indexer/topk wiring are NOT done (external dep — the merged
+  `sparse_sdpa` is the DSA/MLA op, the GQA variant is WIP). Parallel track; only matters for >~2K context.
+- **KV cache / SP — DE-RISKED but NOT INTEGRATED:** the model still runs **full non-cached SDPA on
+  fresh Q/K/V** (baseline). The **GQA chunked-KV cache** and the **SP `ring_joint` op** are each
+  validated standalone (§0.2d) but **not wired into `tt/attention/prefill.py`**. Chunked KV is
+  DeepSeek-style (§5), NOT vLLM paged. Integration (SP + chunked-cache into `prefill_forward`) is the
+  next build. Depends on the local `ring_joint` grouped-V kernel fix (PR pending).
 - **Fused MoE expert kernel** for clamped swigluoai — perf task (copy+modify; activation ≠ M2/DS).
   Functional EP uses the composite per-expert loop (§0.2c #11), correct but slower.
-- **Parallelism:** TP=4 (#10) + EP=32 (#11/#12) VALIDATED. **SP=8** NOT done — only needed once MSA
-  unlocks >2K context (at S<2048 the sequence fits one chip, so SP buys nothing yet).
+- **Parallelism:** TP=4 (#10) + EP=32 (#11/#12) VALIDATED. **SP=8** building blocks de-risked
+  standalone (§0.2d) but NOT integrated into the model; needed once context >2K (at S<2048 the
+  sequence fits one chip, so SP buys nothing yet).
 - **Runner / pipeline / scheduler / KV migration** — still scaffold (inherited from M2.7).
 - **Multimodal** — out of scope for now.
 

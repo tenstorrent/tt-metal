@@ -110,17 +110,17 @@ def prefill_forward(
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
-    # Full non-cached causal prefill: SDPA attends over THIS call's own Q/K/V.
+    # M3 BASELINE: full non-cached causal GQA prefill — SDPA attends over THIS call's own Q/K/V
+    # (plain causal, no sliding window / no attention sinks). The whole sequence lives on one chip,
+    # so this is exact for S <= ~2048 (the regime the real-weights bring-up runs in).
     #
-    # The paged KV-cache fill + chunked SDPA (reading K/V back from the cache) is the
-    # attention rewire — GQA paged KV cache (same serving/KV pattern as DeepSeek, but
-    # standard chunked_scaled_dot_product_attention, NOT MLA flash) so chunked prefill
-    # and per-layer KV migration work. See PREFILL_PROPOSAL.md §6. `kv_cache`/`page_table`
-    # are reserved for that work and intentionally unused in this baseline.
-
-    # Scaled dot-product attention.
-    # MiniMax-M2 uses plain causal attention every layer: no sliding window, no
-    # attention sinks.
+    # PLANNED (SP=8 + chunked-KV rearchitecture, NOT wired in yet): shard the sequence across the
+    # SP/rows axis, write K/V into a chunked-KV cache, and run
+    # ttnn.transformer.ring_joint_scaled_dot_product_attention (GQA grouped-V) over the accumulated
+    # prefix (kv_cache_batch_idx + kv_actual_isl). The ring op and the GQA chunked-KV cache are each
+    # validated standalone (tests/unit/test_ring_joint_sp_vs_ref.py, test_kv_cache_gqa_sp_vs_ref.py)
+    # but not yet integrated here. See PREFILL_PROPOSAL.md §6/§6.6. kv_cache/page_table are unused
+    # in this baseline.
     tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
         tt_q,
         tt_k,

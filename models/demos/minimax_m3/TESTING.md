@@ -78,6 +78,30 @@ python models/demos/minimax_m3/tests/test_ep_moe_vs_ref.py --rows 8 --cols 4 --s
 grep -iE "ep-moe|pcc|PASS|FAIL" /tmp/ep_moe.log
 ```
 
+### 2c. SP=8 building blocks (op + cache) — `(8,4)`, `-k 8x4`
+
+De-risk tests for the SP=8 + chunked-KV rearchitecture (PREFILL_PROPOSAL §0.2d/§6.6). These validate
+the pieces **in isolation** — they are NOT yet wired into the model attention path. **Both require the
+local `ring_joint` grouped-V kernel fix** (branch carries it; `ring-joint-gqa-v` is prepped for a PR).
+
+```bash
+# SP attention op: ring_joint GQA causal, SP=8 x TP=4, vs torch causal golden (PCC ~0.99998)
+pytest models/demos/minimax_m3/tests/unit/test_ring_joint_sp_vs_ref.py -k 8x4 -q -s
+
+# GQA chunked-KV cache: TP-sharded heads + SP block-cyclic seq, write/readback vs torch (PCC ~0.99997)
+pytest models/demos/minimax_m3/tests/unit/test_kv_cache_gqa_sp_vs_ref.py -k 8x4 -q -s
+```
+
+### 2d. Real-weights ground-truth (needs the 869 GB checkpoint + HF_MODEL)
+
+```bash
+# HF minimax_m3_vl golden vs our TTNN bf4 galaxy run (first-token 8/8 + oracle). CPU-offload, slow.
+export HF_MODEL=/path/to/MiniMax-M3
+uv run --no-project --with "transformers>=5.12" --with torch --with accelerate --python 3.10 \
+    python models/demos/minimax_m3/tests/golden_hf_first_token.py
+# Our real-weights generation (galaxy): galaxy_first_token_m3.py / galaxy_generate_m3.py (see file headers).
+```
+
 ---
 
 ## 3. Numerical oracle — correctness vs the real `minimax_m3_vl` (no device, no download)
