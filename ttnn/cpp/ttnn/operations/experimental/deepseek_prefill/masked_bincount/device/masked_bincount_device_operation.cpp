@@ -52,14 +52,6 @@ MaskedBincountDeviceOperation::spec_return_value_t MaskedBincountDeviceOperation
             tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
 }
 
-tt::stl::hash::hash_t MaskedBincountDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& input_shape = tensor_args.input_tensor.padded_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<MaskedBincountDeviceOperation>(
-        args, tensor_args.input_tensor.dtype(), tensor_args.input_tensor.memory_config(), input_shape);
-    return hash;
-}
-
 MaskedBincountDeviceOperation::tensor_return_value_t MaskedBincountDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
