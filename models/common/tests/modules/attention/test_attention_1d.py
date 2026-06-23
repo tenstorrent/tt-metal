@@ -43,7 +43,7 @@ from models.common.modules.rmsnorm.rmsnorm_1d import RMSNorm1DConfig
 from models.common.modules.tt_ccl import TT_CCL
 from models.common.tensor_utils import get_rot_transformation_mat, zeros_like_kv_cache, zeros_like_paged_cache
 from models.common.tests.utils import stable_model_seed
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.common.utility_functions import comp_allclose, comp_pcc, is_wormhole_b0, nearest_32
 
 # =============================================================================
 # RoPE Helper Functions (replaces TTTv1 rope imports)
@@ -675,7 +675,7 @@ def test_attention_1d_happy_path_signature():
         assert param.default is inspect.Parameter.empty, f"{param_name} should be required (no default)"
 
 
-def test_attention_1d_resolve_requires_n_heads():
+def test_attention_1d_resolve_requires_n_heads(expect_error):
     """Test that _resolve_attention1d_config raises ValueError when n_heads is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -692,11 +692,11 @@ def test_attention_1d_resolve_requires_n_heads():
         head_dim=128,
     )
 
-    with pytest.raises(ValueError, match="n_heads must be provided"):
+    with expect_error(ValueError, "n_heads must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_requires_n_kv_heads():
+def test_attention_1d_resolve_requires_n_kv_heads(expect_error):
     """Test that _resolve_attention1d_config raises ValueError when n_kv_heads is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -713,11 +713,11 @@ def test_attention_1d_resolve_requires_n_kv_heads():
         head_dim=128,
     )
 
-    with pytest.raises(ValueError, match="n_kv_heads must be provided"):
+    with expect_error(ValueError, "n_kv_heads must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_requires_head_dim():
+def test_attention_1d_resolve_requires_head_dim(expect_error):
     """Test that _resolve_attention1d_config raises ValueError when head_dim is missing."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -734,11 +734,11 @@ def test_attention_1d_resolve_requires_head_dim():
         head_dim=None,  # Missing!
     )
 
-    with pytest.raises(ValueError, match="head_dim must be provided"):
+    with expect_error(ValueError, "head_dim must be provided"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_validates_token_budget():
+def test_attention_1d_resolve_validates_token_budget(expect_error):
     """Test that _resolve_attention1d_config raises ValueError when token budget is exceeded."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -758,11 +758,11 @@ def test_attention_1d_resolve_validates_token_budget():
         max_seq_len=8192,  # 32 × 8192 = 262K > 128K
     )
 
-    with pytest.raises(ValueError, match="Total token budget exceeded"):
+    with expect_error(ValueError, "Total token budget exceeded"):
         _resolve_attention1d_config(config)
 
 
-def test_attention_1d_resolve_validates_token_budget_edge_case():
+def test_attention_1d_resolve_validates_token_budget_edge_case(expect_error):
     """Test that exactly 128K tokens is allowed but 128K+1 is not."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -800,7 +800,7 @@ def test_attention_1d_resolve_validates_token_budget_edge_case():
         max_seq_len=128 * 1024 + 1,  # 128K + 1 tokens
     )
 
-    with pytest.raises(ValueError, match="Total token budget exceeded"):
+    with expect_error(ValueError, "Total token budget exceeded"):
         _resolve_attention1d_config(config_fail)
 
 
@@ -842,7 +842,7 @@ def test_attention_1d_resolve_kv_cache_tensor_passthrough():
     assert resolved.kv_cache[1] is mock_cache_v
 
 
-def test_attention_1d_resolve_rejects_sliding_window_with_paged():
+def test_attention_1d_resolve_rejects_sliding_window_with_paged(expect_error):
     """Test that _resolve_attention1d_config rejects sliding_window + paged_attention_config."""
     mock_source = MagicMock()
     mock_source.shape = (4096, 1536)
@@ -863,7 +863,7 @@ def test_attention_1d_resolve_rejects_sliding_window_with_paged():
         paged_attention_config=PagedAttentionConfig(block_size=64, max_num_blocks=2048),
     )
 
-    with pytest.raises(ValueError, match="sliding_window"):
+    with expect_error(ValueError, "sliding_window"):
         _resolve_attention1d_config(config)
 
 
@@ -1186,6 +1186,11 @@ def test_attention_1d_vs_reference(
     test_attention_1d_vs_reference_from_model_args which uses existing infrastructure
     that handles HF API differences.
     """
+    # WH B0 multi-device: reduce_scatter output topology generates duplicate shard dims
+    # causing TT_FATAL @ partition.cpp:152. Single-device (1x1) is unaffected. Refs #46878.
+    if is_wormhole_b0() and ttnn_mesh_device.get_num_devices() > 1:
+        pytest.skip("WH B0 multi-device: TT_FATAL duplicate dims in partition.cpp (refs #46878)")
+
     # Skip if mesh_shape doesn't match device
     device_shape = (ttnn_mesh_device.shape[0], ttnn_mesh_device.shape[1])
     if device_shape != mesh_shape:
@@ -2284,13 +2289,13 @@ def test_attention_1d_vs_reference_from_model_args(ttnn_mesh_device: ttnn.MeshDe
         logger.info(f"test_attention_1d_vs_reference_from_model_args: PASSED for mode={mode}, seq_len={seq_len}")
 
 
-def test_attention_1d_rejects_galaxy():
+def test_attention_1d_rejects_galaxy(expect_error):
     """Test that Attention1D.from_model_args rejects Galaxy/TG devices."""
     # Mock args with is_galaxy = True
     mock_args = MagicMock()
     mock_args.is_galaxy = True
 
-    with pytest.raises(ValueError, match="cannot be used for Galaxy"):
+    with expect_error(ValueError, "cannot be used for Galaxy"):
         Attention1D.from_model_args(
             mesh_device=MagicMock(),
             tt_ccl=MagicMock(),
