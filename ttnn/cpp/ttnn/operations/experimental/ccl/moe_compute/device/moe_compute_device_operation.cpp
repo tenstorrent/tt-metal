@@ -471,7 +471,8 @@ std::vector<ttnn::Tensor> moe_compute(
         num_token_parallel_cores,
         num_data_parallel_cores,
         hidden_size,
-        mux_core_range_set.value_or(CoreRangeSet{}));
+        mux_core_range_set.value_or(CoreRangeSet{}),
+        ring_n);
 
     std::optional<ttnn::experimental::prim::SelectiveReduceCombineParams> combine_params;
     if (!compute_only) {

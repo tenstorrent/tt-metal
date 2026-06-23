@@ -68,7 +68,7 @@ MoEComputeCoreSelection select_moe_compute_cores(
     uint32_t combine_token_parallel_cores,
     uint32_t combine_data_parallel_cores,
     uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set = CoreRangeSet(),
-    uint32_t bh_ring_size = 12);
+    const CoreRangeSet& mux_core_range_set,
+    uint32_t bh_ring_size);
 
 }  // namespace ttnn::operations::ccl::common
