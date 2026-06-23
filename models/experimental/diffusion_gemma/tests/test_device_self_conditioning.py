@@ -71,6 +71,50 @@ def test_self_conditioning_pcc(device, seq_len):
     assert_with_pcc(golden, out, 0.99)
 
 
+def _embed_to_dev(embed_w, device):
+    """Tied embedding table [vocab, hidden] -> ttnn [1,1,vocab,hidden] TILE (matmul operand)."""
+    return ttnn.from_torch(
+        embed_w.unsqueeze(0).unsqueeze(0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+
+
+@pytest.mark.parametrize("seq_len", [256])
+@pytest.mark.parametrize("vocab", [256])
+def test_condition_full_path_pcc(device, seq_len, vocab):
+    """Full self-conditioning: soft-embed prev logits (softmax @ embed) THEN the
+    gated MLP — the production decoder path, vs the reference condition()."""
+    ref, state = _build(2)
+    tt = TtSelfConditioning(device, state, hidden_size=HIDDEN, intermediate_size=INTER, eps=EPS)
+
+    emb = torch.randn(1, seq_len, HIDDEN)
+    prev_logits = torch.randn(1, seq_len, vocab)
+    embed_w = torch.randn(vocab, HIDDEN)
+
+    with torch.no_grad():
+        golden = ref.condition(emb, prev_logits, embed_w, enabled=True)  # [1, L, H]
+
+    out = ttnn.to_torch(
+        tt.condition(_to_dev(emb, device), _to_dev(prev_logits, device), _embed_to_dev(embed_w, device))
+    )[0]
+    assert_with_pcc(golden, out, 0.99)
+
+
+@pytest.mark.parametrize("seq_len", [256])
+@pytest.mark.parametrize("vocab", [256])
+def test_condition_none_logits_is_post_norm(device, seq_len, vocab):
+    """prev_logits=None (first step / encoder) -> post_norm(inputs_embeds), device == ref."""
+    ref, state = _build(3)
+    tt = TtSelfConditioning(device, state, hidden_size=HIDDEN, intermediate_size=INTER, eps=EPS)
+
+    emb = torch.randn(1, seq_len, HIDDEN)
+    embed_w = torch.randn(vocab, HIDDEN)
+    with torch.no_grad():
+        golden = ref.condition(emb, None, embed_w, enabled=False)  # == post_norm(emb)
+
+    out = ttnn.to_torch(tt.condition(_to_dev(emb, device), None, _embed_to_dev(embed_w, device)))[0]
+    assert_with_pcc(golden, out, 0.99)
+
+
 @pytest.mark.parametrize("seq_len", [256])
 def test_zero_signal_is_post_norm_of_embeds(device, seq_len):
     """Zero signal -> post_norm(inputs_embeds), NOT inputs_embeds unchanged."""

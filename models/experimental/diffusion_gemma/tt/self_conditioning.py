@@ -93,3 +93,40 @@ class TtSelfConditioning:
         out = ttnn.rms_norm(summed, epsilon=self.eps)  # scaleless post_norm
         summed.deallocate(True)
         return out
+
+    def soft_embedding(self, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
+        """Probability-weighted token embedding from prev-step logits — the decoder's
+        soft-embedding step (modeling: ``softmax(logits, dim=-1) @ embed_tokens.weight``).
+
+        ``prev_logits_tt`` ``[1,1,L,vocab]`` (TILE), ``embedding_weight_tt`` the tied
+        table ``[1,1,vocab,hidden]`` (TILE). Returns the signal ``[1,1,L,hidden]``.
+        For the production vocab (262144) drive ``softmax`` with an fp32
+        ``compute_kernel_config`` (bf16 over a 262k-wide reduction is lossy — see the
+        bfp8 entropy drift); a moderate vocab is fine in bf16.
+        """
+        if compute_kernel_config is not None:
+            probs = ttnn.softmax(
+                prev_logits_tt, dim=-1, numeric_stable=True, compute_kernel_config=compute_kernel_config
+            )
+        else:
+            probs = ttnn.softmax(prev_logits_tt, dim=-1)
+        signal = ttnn.matmul(probs, embedding_weight_tt)  # [1,1,L,vocab] @ [1,1,vocab,hidden] -> [1,1,L,hidden]
+        probs.deallocate(True)
+        return signal
+
+    def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
+        """Full self-conditioning step: soft-embed prev logits, then apply the module
+        (mirrors the reference ``SelfConditioning.condition`` / decoder forward).
+
+        ``prev_logits_tt is None`` (first step / encoder pass) -> zero signal, so the
+        result is ``post_norm(inputs_embeds)``.
+        """
+        if prev_logits_tt is None:
+            signal = ttnn.mul(inputs_embeds_tt, 0.0)  # zeros, same shape/layout/dtype
+        else:
+            signal = self.soft_embedding(
+                prev_logits_tt, embedding_weight_tt, compute_kernel_config=compute_kernel_config
+            )
+        out = self.forward(inputs_embeds_tt, signal)
+        signal.deallocate(True)
+        return out
