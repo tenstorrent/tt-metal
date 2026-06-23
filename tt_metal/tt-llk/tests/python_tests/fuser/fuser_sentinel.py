@@ -15,7 +15,7 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import EltwiseBinaryReuseDestType
 
 if TYPE_CHECKING:
-    from .compute_node import ComputeNode
+    from .fpu_node import FpuNode
     from .fused_operation import FusedOperation
     from .fuser_config import GlobalConfig
     from .pack_node import PackNode
@@ -68,24 +68,26 @@ class FuserSentinel:
     @staticmethod
     def _find_format_node(
         operation: "FusedOperation",
-    ) -> Optional["ComputeNode"]:
-        """Find the first compute node with operand inputs for format inference.
+    ) -> Optional["FpuNode"]:
+        """Find the first FpuNode for format inference.
 
         In a pipeline with mixed FPU and SFPU nodes, only FPU nodes have src_a/src_b
         operands. SFPU nodes operate on data already in the dest register and don't
         drive format configuration.
 
         Returns:
-            The first ComputeNode with src_a or src_b, or None if all nodes are SFPU only.
+            The first FpuNode, or None if all nodes are SFPU only.
         """
+        from .fpu_node import FpuNode
+
         for node in operation.math.operations:
-            if node.src_a is not None or node.src_b is not None:
+            if isinstance(node, FpuNode):
                 return node
         return None
 
     @staticmethod
     def _get_src_formats(
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
     ) -> Tuple[DataFormat, Optional[DataFormat]]:
         """Extract src_a and src_b data formats, handling DEST_TO_SRCA routing."""
         src_a_fmt = compute_node.src_a.data_format
@@ -98,7 +100,7 @@ class FuserSentinel:
     def _infer_node_formats(
         self,
         config: "GlobalConfig",
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
         output_format: DataFormat,
     ) -> Tuple[DataFormat, DataFormat, DataFormat, DataFormat, DataFormat, DataFormat]:
         """Infer all pipeline formats from a compute node's operands.
@@ -292,11 +294,11 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
     ) -> str:
         """Emit unpack reconfig calls when formats or tile shapes change between compute nodes.
 
-        Called per node from ComputeNode.unpack_configure() inside the tile loop. Compares
+        Called per node from FpuNode.unpack_configure() inside the tile loop. Compares
         the node's inferred formats and tile shape against the currently configured state
         and emits _llk_unpack_reconfig_data_format_src{a,b}_impl_ for channels that changed.
         When tile shapes differ, uses FACE_ROW_MAJOR to reprogram dim/stride registers.
@@ -431,11 +433,11 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
-        compute_node: "ComputeNode",
+        compute_node: "FpuNode",
     ) -> str:
         """Emit math reconfig when the math format changes between compute nodes.
 
-        Called per node from ComputeNode.math_configure() inside the tile loop.
+        Called per node from FpuNode.math_configure() inside the tile loop.
         """
         if compute_node.src_a is None:
             return ""
@@ -539,7 +541,7 @@ class FuserSentinel:
         self,
         config: "GlobalConfig",
         operation: "FusedOperation",
-        compute_node: "ComputeNode" = None,
+        compute_node=None,
         output_format: DataFormat = DataFormat.Float16_b,
     ):
         """Compute and store format values for golden generation.
@@ -547,8 +549,10 @@ class FuserSentinel:
         Called per compute node during golden computation. When called without
         a compute_node (at operation start), initializes from the first format
         node or from the output format. When called with a compute_node,
-        recomputes only if the node's formats differ from the current state.
+        recomputes only if the node is an FpuNode.
         """
+        from .fpu_node import FpuNode
+
         if compute_node is None:
             fmt_node = self._find_format_node(operation)
             if fmt_node is not None:
@@ -563,7 +567,7 @@ class FuserSentinel:
             self.golden_pack_src = pack_src
             return
 
-        if compute_node.src_a is None and compute_node.src_b is None:
+        if not isinstance(compute_node, FpuNode):
             return
 
         _, _, _, _, math_fmt, pack_src = self._infer_node_formats(

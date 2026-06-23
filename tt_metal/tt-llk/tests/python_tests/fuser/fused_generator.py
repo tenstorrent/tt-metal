@@ -22,7 +22,10 @@ class UnpackKernelGenerator:
         all_headers = set()
         for op in self.config.pipeline:
             for fused_compute in op.math.operations:
-                if fused_compute.unpacker is not None:
+                if (
+                    hasattr(fused_compute, "unpacker")
+                    and fused_compute.unpacker is not None
+                ):
                     all_headers.update(fused_compute.unpacker.get_headers())
 
         # Generate include statements
