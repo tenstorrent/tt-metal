@@ -22,7 +22,7 @@ void kernel_main() {
     constexpr uint32_t sin_interm_cb_id = get_compile_time_arg_val(6);
     constexpr uint32_t out_cb_id = get_compile_time_arg_val(7);
     constexpr uint32_t Wt = get_compile_time_arg_val(8);
-    constexpr uint32_t Ht = get_compile_time_arg_val(9);
+    constexpr uint32_t Ht = get_compile_time_arg_val(9);  // Total rows (tiles) owned by this core
     constexpr uint32_t heads_per_batch_t = get_compile_time_arg_val(10);
     constexpr uint32_t batch_per_core = get_compile_time_arg_val(11);
     constexpr uint32_t half_Wt = Wt / 2;
@@ -37,11 +37,15 @@ void kernel_main() {
     CircularBuffer sin_interm_cb(sin_interm_cb_id);
     CircularBuffer out_cb(out_cb_id);
 
-    binary_op_init_common(in_cb_id, sin_cb_id, sin_interm_cb_id);
+    binary_op_init_common(in_cb_id, sin_cb_id, sin_interm_cb_id);  // General Init for all binary ops
 
+    // Wait for the reader kernel (reader_rotary_embedding_hf_sharded.cpp) to
+    // write -1.0 into the scalar CB and push it.
     scalar_cb.wait_front(onetile);
 
     for (uint32_t batch_idx = 0; batch_idx < batch_per_core; ++batch_idx) {
+        // For decode mode, cos/sin are [1, batch, 1, head_dim] and this core's shard
+        // may contain multiple batch rows. Push one row at a time and advance the CB.
         sin_cb.reserve_back(Wt);
         cos_cb.reserve_back(Wt);
         sin_cb.push_back(Wt);
@@ -53,10 +57,12 @@ void kernel_main() {
             cos_interm_cb.reserve_back(Wt);
             out_cb.reserve_back(Wt);
 
+            // Get the input
             in_cb.reserve_back(Wt);
             in_cb.push_back(Wt);
             in_cb.wait_front(Wt);
 
+            // Process second half: multiply by -1 and store in rotated buffer
             mul_tiles_bcast_scalar_init_short(in_cb_id, scalar_cb_id);
             tile_regs_acquire();
             for (uint32_t j = 0; j < half_Wt; ++j) {
@@ -69,6 +75,7 @@ void kernel_main() {
             }
             tile_regs_release();
 
+            // Copy first half to second half of rotated buffer
             tile_regs_acquire();
             for (uint32_t j = 0; j < half_Wt; ++j) {
                 copy_tile_init_with_dt(in_cb_id);
@@ -84,6 +91,7 @@ void kernel_main() {
             rotated_in_interm_cb.push_back(Wt);
             rotated_in_interm_cb.wait_front(Wt);
 
+            // sin_interim = rotated * sin (broadcast rows)
             mul_bcast_rows_init_short(rotated_in_interm_cb_id, sin_cb_id);
             tile_regs_acquire();
             for (uint32_t j = 0; j < Wt; ++j) {
@@ -111,6 +119,7 @@ void kernel_main() {
             cos_interm_cb.push_back(Wt);
             in_cb.pop_front(Wt);
 
+            // out = cos_interim + sin_interim
             sin_interm_cb.wait_front(Wt);
             cos_interm_cb.wait_front(Wt);
             add_tiles_init(cos_interm_cb_id, sin_interm_cb_id);
@@ -133,5 +142,6 @@ void kernel_main() {
         cos_cb.pop_front(Wt);
     }
 
+    // Done with the scalar, so remove from CB
     scalar_cb.pop_front(onetile);
 }
