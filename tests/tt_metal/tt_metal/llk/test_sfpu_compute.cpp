@@ -69,6 +69,7 @@ const map<std::string, std::map<std::string, std::string>> sfpu_op_to_op_name = 
     {"sign", {{"SFPU_OP_CHAIN_0", "sign_tile_init(); sign_tile(0);"}}},
     {"rsqrt", {{"SFPU_OP_CHAIN_0", "rsqrt_tile_init(); rsqrt_tile(0);"}}},
     {"mul_unary", {{"SFPU_OP_CHAIN_0", "binop_with_scalar_tile_init(); mul_unary_tile(0, 0x40000000u);"}}},  // 2.0f
+    {"square", {{"SFPU_OP_CHAIN_0", "square_tile_init(); square_tile(0);"}}},
     // Comparison-to-zero family (unary): result = 1.0f if predicate(x, 0) else 0.0f.
     {"eqz", {{"SFPU_OP_CHAIN_0", "eqz_tile_init(); eqz_tile(0);"}}},
     {"nez", {{"SFPU_OP_CHAIN_0", "nez_tile_init(); nez_tile(0);"}}},
@@ -162,6 +163,9 @@ float sfpu_function(const std::string& op_name, float input) {
     }
     if (op_name == "mul_unary") {
         return bfloat16(static_cast<float>(input) * 2.0f);
+    }
+    if (op_name == "square") {
+        return bfloat16(static_cast<float>(input) * static_cast<float>(input));
     }
     if (op_name == "eqz") {
         return bfloat16(static_cast<float>(input) == 0.0f ? 1.0f : 0.0f);
@@ -1231,6 +1235,8 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(4, "gtz"),
         std::make_tuple(4, "gez"),
         std::make_tuple(4, "lez"),
+        std::make_tuple(1, "square"),
+        std::make_tuple(4, "square"),
         std::make_tuple(1, "relu"),
         std::make_tuple(1, "exponential"),
         std::make_tuple(1, "reciprocal"),
