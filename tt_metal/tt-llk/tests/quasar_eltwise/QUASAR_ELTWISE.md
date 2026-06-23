@@ -285,15 +285,32 @@ commit message it **compiles, links, and runs end-to-end on the craq-sim Quasar 
 output reads back as zero** (a functional bug in the single-tile Quasar DFB add path). It was
 later **cleaned up on that branch and never merged to `origin/main`**.
 
-So it is **not** "DFB doesn't run on craq-sim" — the sim *does* have DFB emulation
-(`tt_metal/impl/emulation/emulated_program_runner.cpp` handles `QuasarDataMovementKernel`,
-one thread per DM processor 0..7). The blocker is the **zero-output functional bug** in the
-single-tile DFB path. (Root-cause investigation in progress; this note will be updated.)
+**UPDATE — the zero-output bug is RESOLVED; the DFB path works on craq-sim now.** Re-running the
+Milestone-1 DFB single-tile bf16 eltwise-ADD (gtest `QuasarEltwiseBinaryAdd`, commit `71c9425e14f`)
+against the current sim **`b4358134`** produces **correct output** (`out == golden` on all sampled
+lanes, verified by instrumented readback) and the gtest **PASSES** — no code fix needed. Two root
+causes, both since fixed:
+- **(A, gating) `mtvec` MODE=1 (vectored).** PR #46916 ("vectored interrupt handlers table")
+  programs `mtvec` MODE=1; the *old* sim only accepted MODE=0, so vectored interrupt dispatch on
+  the DM/compute RISC-Vs derailed the kernels and left the output buffer at its initial zeros.
+  Fixed by **craq-sim `61695922` "Fix Quasar vectored mtvec handling"** (Nachiket Kapre, 2026-06-18)
+  — `riscv_impl.h` `QSR_RV64_MTVEC_MODE_VECTORED`, honored in `qsr_rv64_take_exception()`
+  (`pc = mtvec_base + 4*cause` when vectored). Same `mtvec` area as the firmware-boot fix above.
+- **(B) residual add-path bug** — fixed by the intervening DFB-framework evolution
+  (`emulated_program_runner.cpp` + `dataflow_buffer.cpp`: DFB allocation, tile-counter credit
+  model, per-thread DFB interfaces). Data-path traced clean (distinct non-aliasing L1 addrs for
+  in0/in1/out; writer NoC-writes OUT→DRAM; ReadShard returns the true sum).
 
-**Path to a DFB-backed flow:**
-1. Root-cause + fix the single-tile DFB zero-output bug (trace QuasarDataMovementKernel → DFB
-   alloc/bind → compute → readback).
+So it was never "DFB doesn't run on craq-sim" — the sim has DFB emulation and the single-tile DFB
+path is now **functionally correct**. (Caveat: the example/gtest live only at the historical
+`71c9425e` on `origin/dchen/binary_quasar`; later commits there removed them, and #46916's promised
+revert was never committed — so it works because the *sim* was fixed, not the branch.)
+
+**Path to a DFB-backed eltwise-LUT flow (now UNBLOCKED):**
+1. ~~Fix the single-tile DFB zero-output bug~~ — **done** (sim `b4358134` vectored-`mtvec`
+   `61695922` + DFB-framework evolution; binary-ADD proof passes).
 2. Port the eltwise-LUT host driver onto the Metal-2.0 DFB API (`program_spec` +
-   `dataflow_buffer_spec` + `QuasarDataMovementKernel`).
-3. Re-run the same `quasar_sweep.sh --activations all` on the DFB path and confirm parity
-   with the tt-llk slow-dispatch numbers (60/60).
+   `dataflow_buffer_spec` + `QuasarDataMovementKernel`), mirroring the working binary-ADD's
+   ProgramSpec/DFB setup (resurrect the `71c9425e` example as the template).
+3. Re-run `quasar_sweep.sh --activations all` on the DFB path and confirm parity with the tt-llk
+   slow-dispatch numbers (60/60).
