@@ -290,13 +290,13 @@ def test_indexer_score_compute_kernel_config(device, math_fidelity):
     assert_indexer_match(out, ref, sq, t, check_neg=True)
 
 
-def test_indexer_score_rejects_fp32_dest_acc(device):
+def test_indexer_score_rejects_fp32_dest_acc(device, expect_error):
     """fp32_dest_acc_en=True is not supported by the custom LLK -> validate must reject it."""
     heads, dim, sq, t = MINI["heads"], MINI["dim"], MINI["sq"], MINI["t"]
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
     ckc = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=True)
     q, k, w = make_inputs(heads, dim, sq, t)
-    with pytest.raises(RuntimeError, match="fp32_dest_acc_en=false"):
+    with expect_error(RuntimeError, "fp32_dest_acc_en=false"):
         run_indexer(q, k, w, 128, device, program_config=cfg, compute_kernel_config=ckc)
 
 

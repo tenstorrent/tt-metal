@@ -2,45 +2,46 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Metal 2.0 op-local compute kernel for transpose's sharded WH factory. Resource bindings use the
+// Metal 2.0 namespaces (dfb::/args::).
+
 #include <cstdint>
 
 #include "api/compute/transpose.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t NHtWt = get_arg_val<uint32_t>(0);
-    uint32_t HtWt = get_arg_val<uint32_t>(1);
-    uint32_t N = get_arg_val<uint32_t>(2);
-    uint32_t Ht = get_arg_val<uint32_t>(3);
-    uint32_t Wt = get_arg_val<uint32_t>(4);
+    std::uint32_t NHtWt = get_arg(args::NHtWt);
+    std::uint32_t HtWt = get_arg(args::HtWt);
+    std::uint32_t N = get_arg(args::N);
+    std::uint32_t Ht = get_arg(args::Ht);
+    std::uint32_t Wt = get_arg(args::Wt);
 
-    constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
+    compute_kernel_hw_startup(dfb::cb_in0, dfb::cb_out0);
+    transpose_init(dfb::cb_in0);
 
-    compute_kernel_hw_startup(cb_id_in, cb_id_out);
-    transpose_init(cb_id_in);
-
-    CircularBuffer cb_in(cb_id_in);
-    CircularBuffer cb_out(cb_id_out);
+    DataflowBuffer cb_in(dfb::cb_in0);
+    DataflowBuffer cb_out(dfb::cb_out0);
 
     // transpose a row-major block:
     // - uses reader_unary_transpose_wh
     // - transpose_wh each tile
 
-    uint32_t tile_idx = 0;
-    uint32_t tile_idx_N = 0;
+    std::uint32_t tile_idx = 0;
+    std::uint32_t tile_idx_N = 0;
 
     cb_in.wait_front(NHtWt);
     cb_out.reserve_back(NHtWt);
-    for (uint32_t n = 0; n < N; ++n) {
+    for (std::uint32_t n = 0; n < N; ++n) {
         tile_idx = tile_idx_N;
-        for (uint32_t w = 0; w < Wt; ++w) {
-            for (uint32_t h = 0; h < Ht; ++h) {
+        for (std::uint32_t w = 0; w < Wt; ++w) {
+            for (std::uint32_t h = 0; h < Ht; ++h) {
                 tile_regs_acquire();
-                transpose_tile(cb_id_in, tile_idx, 0);
+                transpose_tile(dfb::cb_in0, tile_idx, 0);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile(0, cb_id_out);
+                pack_tile(0, dfb::cb_out0);
                 tile_regs_release();
                 tile_idx += Wt;
             }
