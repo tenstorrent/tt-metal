@@ -129,7 +129,14 @@ def _parse_rr_meta(meta):
         rr["rr_log2_basis_mminus1"] = 1 if meta.get("expalu_log2_basis", "m") == "m_minus_1" else 0
         rr["rr_input_offset"] = mf("expalu_input_offset", 0.0) or 0.0
     elif method == "exponent_alu_pow":
-        rr["rr_pow_n"] = int(float(meta["expalu_root_n"]))
+        # The refactored fitter may emit the method name without its companion params
+        # (e.g. cbrt's CSV carries only range_reduction_method=exponent_alu_pow). Missing
+        # required params => the RR metadata is incomplete for this method; fall back to the
+        # no-RR cascade so the pick is still measured honestly rather than crashing the sweep.
+        root_n = meta.get("expalu_root_n", "")
+        if root_n in (None, ""):
+            return {"rr_method": 0}, False, "none", None
+        rr["rr_pow_n"] = int(float(root_n))
         rr["rr_pow_recip"] = 1 if str(meta.get("expalu_reciprocal", "False")).lower() == "true" else 0
         for i in range(3):
             c = mf(f"expalu_pow_scale_c{i}")
@@ -355,6 +362,65 @@ def true_golden(activation, x_np):
     return y.to(torch.float32).numpy()
 
 
+def csv_is_asymptotic(csv_path):
+    """True iff ANY segment row of the CSV has is_asymptotic=True. is_asymptotic is a
+    per-segment COLUMN (not METADATA). A pick with >=1 asymptotic segment is one whose
+    deployed fit relies on asymptotic factoring f(x)=dominant(x)*correction(x) for its
+    tail — the signal for whether asymptotic factoring needs porting to the DFB kernel."""
+    with open(csv_path, newline="") as f:
+        hdr = None
+        for r in _csv.reader(f):
+            if not r:
+                continue
+            if r[0] == "segment_id":
+                hdr = r
+                continue
+            if r[0] == "METADATA":
+                continue
+            if hdr and "is_asymptotic" in hdr:
+                i = hdr.index("is_asymptotic")
+                if len(r) > i and r[i].strip().lower() == "true":
+                    return True
+    return False
+
+
+def _bf16_bitdist_ulp(out_f32, truth_f32):
+    """Sign-magnitude bf16 ordinal (bit-distance) ULP between device output and truth.
+
+    Both are rounded to bf16, viewed as int16, mapped to a monotone ordinal
+    (sign-magnitude -> two's-complement-like ordering), and the absolute ordinal
+    difference is the ULP distance. Returns (max, mean, p99) over finite pairs."""
+    o = (
+        torch.from_numpy(np.asarray(out_f32, dtype=np.float32).ravel())
+        .to(torch.bfloat16)
+        .contiguous()
+        .view(torch.int16)
+        .to(torch.int64)
+    )
+    t = (
+        torch.from_numpy(np.asarray(truth_f32, dtype=np.float32).ravel())
+        .to(torch.bfloat16)
+        .contiguous()
+        .view(torch.int16)
+        .to(torch.int64)
+    )
+    ordi = lambda b: torch.where(b < 0, (-32768) - b, b)
+    d = (ordi(o) - ordi(t)).abs().to(torch.float64)
+    return float(d.max()), float(d.mean()), float(np.percentile(d.numpy(), 99))
+
+
+def _all_bf16_in_domain(lo, hi):
+    """ALL distinct representable bf16 values in [lo, hi] (finite), sorted ascending.
+
+    Enumerates every 16-bit pattern, views as bf16, filters to the domain, dedups. This
+    is the EXHAUSTIVE input set — not a random/linspace sample — so every bf16 the device
+    can see in the activation's full fit domain is measured."""
+    bits = torch.arange(0, 2**16, dtype=torch.int32).to(torch.int16)
+    v = bits.view(torch.bfloat16).to(torch.float32)
+    msk = (v >= lo) & (v <= hi) & torch.isfinite(v)
+    return np.unique(v[msk].numpy())
+
+
 def height_sharded_config(tiles):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))})
     shard = [tiles * 32, 32]
@@ -369,38 +435,53 @@ def height_sharded_config(tiles):
 
 
 def run_dfb(device, csv_path, activation=None, tiles=4, seed=0, margin=0.02):
-    """Run a CSV's deployed config through the DFB op and return a result dict with
-    PCC vs the true activation AND vs the approximation."""
+    """Run a CSV's deployed config through the DFB op EXHAUSTIVELY and return a result
+    dict with PCC, bf16 bit-distance ULP (max/mean/p99) and ml_pass vs the true activation.
+
+    EXHAUSTIVE sampling: every distinct representable bf16 value in the activation's FULL
+    fit domain [lo, hi] (NOT random / linspace). The full fit domain is used — asymptotic
+    tail segments are NOT dropped — so tail-fidelity errors are measured, not hidden.
+    `tiles`/`seed`/`margin` are retained for API compatibility but no longer drive sampling
+    (the input set is fully determined by [lo, hi])."""
     activation = activation or _activation_name_from_csv(csv_path)
     cfg, (lo, hi) = parse_csv(csv_path)
     rr_enabled = cfg.get("_rr_enabled", False)
     lut = make_lut_config(cfg)
 
-    # Sampling. We sample STRICTLY within the fit's valid domain [lo, hi] — the SAME
-    # domain the fitter's evaluate_csv (ttpoly.stages.s40_eval: x = linspace(lo, hi))
-    # and the tt-llk deployment validator use to compute their deployed metrics. The fit
-    # is only defined on [lo, hi]; for activations with poles or steep tails just OUTSIDE
-    # the domain (digamma/polygamma poles at <=0, cosh's exponential growth past +-10),
-    # the TRUE activation there is a value the fit was never built to reproduce, while the
-    # kernel clamps to the boundary — so an out-of-domain margin measures extrapolation
-    # error, not deployed-fit fidelity, and wrongly tanks PCC_vs_true. Clamp behaviour is
-    # still exercised implicitly (the kernel clamps every in-domain x to its segment span);
-    # `margin` is retained for API compatibility but no longer pushes samples past the ends.
-    mc, shape = height_sharded_config(tiles)
-    n = int(np.prod(shape))
-    torch.manual_seed(seed)
-    span = hi - lo
-    x_np = lo + span * np.random.RandomState(seed).rand(n)
-    x_np = x_np.astype(np.float32).reshape(tuple(shape))
-    x_pt = torch.from_numpy(x_np).to(torch.bfloat16)
+    # EXHAUSTIVE input set: every distinct finite bf16 in the FULL fit domain [lo, hi].
+    xv = _all_bf16_in_domain(lo, hi)  # float32 array, ascending, deduped
+    n0 = int(xv.size)
+    # Pad up to a whole number of 32x32 tiles (height-sharded on one core).
+    n_tiles = max(1, int(np.ceil(n0 / 1024)))
+    npad = n_tiles * 1024
+    pad_val = xv[-1] if n0 > 0 else np.float32(lo)
+    xp = np.concatenate([xv, np.full(npad - n0, pad_val, dtype=np.float32)]).reshape(n_tiles * 32, 32)
+    x_pt = torch.from_numpy(xp).to(torch.bfloat16)
 
+    mc, _shape = height_sharded_config(n_tiles)
     x_tt = ttnn.from_torch(x_pt, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
     out_tt = ttnn.experimental.quasar.unary_lut(x_tt, lut_config=lut)
-    out = ttnn.to_torch(out_tt).to(torch.float32).numpy()
+    out = ttnn.to_torch(out_tt).to(torch.float32).numpy().ravel()[:n0]
 
-    x_eff = x_pt.to(torch.float32).numpy()  # what the device actually saw (bf16-rounded)
+    x_eff = x_pt.to(torch.float32).numpy().ravel()[:n0]  # what the device actually saw (bf16-rounded)
     truth = true_golden(activation, x_eff)
+
+    fin = np.isfinite(out) & np.isfinite(truth)
+    out_f, truth_f = out[fin], truth[fin]
+
     pcc_true = _pcc(out, truth)
+    # bf16 bit-distance ULP on the DFB device output vs the true activation.
+    if out_f.size:
+        ulp_max, ulp_mean, ulp_p99 = _bf16_bitdist_ulp(out_f, truth_f)
+        # ml_pass: fraction within a relative+absolute tolerance (the "good enough for ML"
+        # band) — a broad-error detector that, unlike bit-distance ULP_max, is NOT inflated
+        # by near-zero crossings.
+        tol = 1e-3 + 1e-3 * np.abs(truth_f)
+        ml_pass = float(np.mean(np.abs(out_f - truth_f) <= tol))
+    else:
+        ulp_max = ulp_mean = ulp_p99 = float("nan")
+        ml_pass = float("nan")
+
     # The reduced-poly approximation_golden only matches the kernel on the NO-RR path
     # (the RR kernel reduces+reconstructs the full activation). For RR, report
     # pcc_vs_approx == pcc_vs_true so the headline metric is the true-activation PCC.
@@ -419,8 +500,14 @@ def run_dfb(device, csv_path, activation=None, tiles=4, seed=0, margin=0.02):
         "domain": (lo, hi),
         "rr_method": cfg.get("rr_method", 0),
         "rr_enabled": rr_enabled,
+        "is_asymptotic": csv_is_asymptotic(csv_path),
+        "n_bf16": n0,
         "pcc_vs_approx": pcc_approx,
         "pcc_vs_true": pcc_true,
+        "ulp_max": ulp_max,
+        "ulp_mean": ulp_mean,
+        "ulp_p99": ulp_p99,
+        "ml_pass": ml_pass,
     }
 
 

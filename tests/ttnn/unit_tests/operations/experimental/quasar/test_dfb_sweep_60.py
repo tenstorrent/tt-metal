@@ -55,6 +55,17 @@ _BEST = _FITTER / "best.csv"
 _COEFFS = _FITTER / "data" / "coefficients"
 
 _PCC = 0.99
+# "Clean exhaustively" bars (in addition to PCC>=0.99): the bf16 output must be faithful
+# across the WHOLE domain in bf16's OWN precision. The gating metric is the bf16 bit-distance
+# ULP (the bf16-native accuracy measure), NOT ml_pass: ml_pass uses a 1e-3 rel+abs band that
+# sits BELOW bf16's ~8-bit mantissa (bf16 ULP at value V is ~V/256 ≈ 0.4% rel), so ml_pass<0.99
+# is forced by bf16 quantization for steep/large-magnitude activations (cosh, exp2, digamma)
+# even when every output is within 1 bf16 ULP. ml_pass is therefore MEASURED + REPORTED per the
+# task spec but does NOT gate CLEAN. ULP_P99 is the robust broad-error gate (99% of exhaustive
+# bf16 inputs within 1 ULP); ULP_MEAN backs it up; ULP_MAX alone is the near-root artifact tell.
+_ML_PASS_BAR = 0.99  # reported only (1e-3 rel+abs band); below bf16 precision, does NOT gate
+_ULP_P99_BAR = 1.0  # 99th-percentile bf16 bit-distance <= 1 ULP  (CLEAN gate)
+_ULP_MEAN_BAR = 1.0  # average bf16 bit-distance <= 1 ULP            (CLEAN gate)
 _PRECROW = "bf16"  # the deployed row we validate (task: use the bf16 row per activation)
 _SEL = "ulp"  # the deployed pick selector (best_ulp_*)
 
@@ -187,6 +198,7 @@ def test_dfb_sweep_60(device, activation):
 
     kind, core, segs, csv_path = res
     rr_method_name, rr_enabled = _read_meta_method(csv_path)
+    is_asym = drv.csv_is_asymptotic(str(csv_path))
 
     # Out-of-scope BEFORE running: deployed pick needs an RR method the DFB kernel
     # does not implement (e.g. newton_root). Not a kernel defect — name + skip.
@@ -196,9 +208,15 @@ def test_dfb_sweep_60(device, activation):
             eval_method=kind.upper()[:8],
             rr=rr_method_name,
             num_segments=segs,
+            is_asym=is_asym,
             pcc_true=float("nan"),
             pcc_approx=float("nan"),
+            ulp_max=float("nan"),
+            ulp_mean=float("nan"),
+            ulp_p99=float("nan"),
+            ml_pass=float("nan"),
             status="out-of-scope",
+            classification="-",
             reason=f"RR method '{rr_method_name}' not implemented in DFB kernel",
         )
         _RESULTS.append(rec)
@@ -210,17 +228,72 @@ def test_dfb_sweep_60(device, activation):
     pcc_approx = r["pcc_vs_approx"]
     rr_code = r["rr_method"]
     rr_label = rr_method_name if r["rr_enabled"] else "none"
-    status = "pass" if (pcc_true == pcc_true and pcc_true >= _PCC) else "fail"
+    ulp_max = r["ulp_max"]
+    ulp_mean = r["ulp_mean"]
+    ulp_p99 = r["ulp_p99"]
+    ml_pass = r["ml_pass"]
+
+    # CLEAN bar: bf16-faithful across the ENTIRE exhaustive domain in bf16's OWN precision.
+    # Gated on PCC + bf16 bit-distance ULP (p99 and mean), NOT ml_pass (ml_pass's 1e-3 band
+    # is below bf16 precision; see _ML_PASS_BAR comment). A CLEAN activation has 99% of every
+    # representable bf16 input within 1 ULP and a sub-1-ULP average bit-distance.
+    nn = lambda v: v == v  # not-NaN
+    clean = (
+        nn(pcc_true)
+        and pcc_true >= _PCC
+        and nn(ulp_p99)
+        and ulp_p99 <= _ULP_P99_BAR
+        and nn(ulp_mean)
+        and ulp_mean <= _ULP_MEAN_BAR
+    )
+    status = "clean" if clean else "fail"
+
+    # Classification of every NON-clean activation (the diagnosis the report turns on).
+    # The distinguishing signal (per task spec) is "MEAN/p99 ULP + ml_pass (real error) vs
+    # MAX-only (artifact)". The ROBUST discriminator is ULP_P99: it is immune to a handful of
+    # near-zero-crossing bit-distance spikes that inflate ULP_MAX (and, through them, ULP_MEAN).
+    #   broad_error  := ULP_P99 spread well past 1 ULP (error across the WHOLE domain), OR low PCC.
+    #   artifact     := 99% of inputs within a few ULP (ULP_P99 small) but ULP_MAX large — i.e. a
+    #                   localized near-zero-crossing spike. PCC must still be >= bar (the bulk is fine).
+    #   (A) NEEDS-ASYMPTOTIC   — pick HAS asymptotic segments AND broad real error.
+    #   (B) NEAR-ROOT-ARTIFACT — ULP_MAX large but ULP_P99 small + PCC healthy (harmless in bf16).
+    #   (C) OTHER:broad-error  — broad real error, pick is NOT asymptotic (fit/degree/RR limit).
+    #   (C) OTHER:pcc-low      — PCC below bar without a broad-ULP signature.
+    _ARTIFACT_P99 = 4.0  # 99% of exhaustive bf16 inputs within 4 ULP -> the misses are a thin tail
+    classification = "-"
+    if not clean:
+        broad_error = (nn(ulp_p99) and ulp_p99 > _ARTIFACT_P99) or (nn(pcc_true) and pcc_true < _PCC)
+        artifact = (
+            (nn(ulp_p99) and ulp_p99 <= _ARTIFACT_P99)
+            and (nn(ulp_max) and ulp_max > _ULP_P99_BAR)
+            and (nn(pcc_true) and pcc_true >= _PCC)
+        )
+        if is_asym and broad_error:
+            classification = "NEEDS-ASYMPTOTIC"
+        elif artifact:
+            classification = "NEAR-ROOT-ARTIFACT"
+        elif broad_error:
+            classification = "OTHER:broad-error"
+        elif nn(pcc_true) and pcc_true < _PCC:
+            classification = "OTHER:pcc-low"
+        else:
+            classification = "OTHER"
 
     rec = dict(
         activation=activation,
         eval_method=r["eval_method"],
         rr=rr_label,
         num_segments=r["num_segments"],
+        is_asym=is_asym,
         pcc_true=pcc_true,
         pcc_approx=pcc_approx,
+        ulp_max=ulp_max,
+        ulp_mean=ulp_mean,
+        ulp_p99=ulp_p99,
+        ml_pass=ml_pass,
         status=status,
-        reason="" if status == "pass" else f"PCC_vs_true {pcc_true:.6f} < {_PCC}",
+        classification=classification,
+        reason="" if clean else f"PCC={pcc_true:.4f} ml_pass={ml_pass:.4f} ulp_mean={ulp_mean:.2f}",
         csv=os.path.basename(csv_path),
         rr_code=rr_code,
     )
@@ -228,7 +301,8 @@ def test_dfb_sweep_60(device, activation):
 
     print(
         f"\n[{activation:>16} {r['eval_method']:>8} deg={r['degree']} seg={r['num_segments']} "
-        f"rr={rr_label} dom={r['domain']}]  PCC_true={pcc_true:.6f} PCC_approx={pcc_approx:.6f}  -> {status.upper()}"
+        f"rr={rr_label} asym={is_asym} n={r['n_bf16']}]  PCC={pcc_true:.6f} ml_pass={ml_pass:.4f} "
+        f"ULP max/mean/p99={ulp_max:.0f}/{ulp_mean:.3f}/{ulp_p99:.1f}  -> {status.upper()} {classification}"
     )
     # Soft per-case: do NOT propagate a single failure as a hard error that aborts the
     # collection. We record the status; the session-end summary is the source of truth.
@@ -236,26 +310,29 @@ def test_dfb_sweep_60(device, activation):
 
 # ---- session-end summary -------------------------------------------------------------
 _MD_OUT = Path(__file__).parent / "DFB_SWEEP_60.md"
-_TXT_OUT = Path("/tmp/dfb_sweep_60.txt")
+_TXT_OUT = Path("/tmp/dfb_exhaustive_baseline.txt")
+
+
+def _fnum(v, w, p):
+    return f"{v:>{w}.{p}f}" if v == v else f"{'n/a':>{w}}"
 
 
 def _render_table():
-    hdr = f"| {'activation':<16} | {'eval':<8} | {'rr':<18} | {'segs':>4} | {'PCC_true':>10} | {'status':<12} |"
-    sep = "|" + "-" * (len(hdr) - 2) + "|"
-    lines = [hdr, sep.replace(" ", "-")]
-    # tabular separator aligned to columns
     lines = [
-        "| activation       | eval     | rr                 | segs | PCC_true   | status       |",
-        "|------------------|----------|--------------------|------|------------|--------------|",
+        "| activation       | eval     | rr                 | segs | asym | PCC_true   | ml_pass | ULP_max | ULP_mean | ULP_p99 | status | classification     |",
+        "|------------------|----------|--------------------|------|------|------------|---------|---------|----------|---------|--------|--------------------|",
     ]
-    order = {"pass": 0, "fail": 1, "out-of-scope": 2}
+    order = {"clean": 0, "fail": 1, "out-of-scope": 2}
     for rec in sorted(_RESULTS, key=lambda r: (order.get(r["status"], 3), r["activation"])):
         pcc = rec["pcc_true"]
-        pcc_s = f"{pcc:.6f}" if pcc == pcc else "   n/a   "
+        pcc_s = f"{pcc:>10.6f}" if pcc == pcc else f"{'n/a':>10}"
         seg = str(rec["num_segments"])
+        asym = "yes" if rec.get("is_asym") else "no"
         lines.append(
             f"| {rec['activation']:<16} | {str(rec['eval_method']):<8} | {str(rec['rr']):<18} "
-            f"| {seg:>4} | {pcc_s:>10} | {rec['status']:<12} |"
+            f"| {seg:>4} | {asym:>4} | {pcc_s} | {_fnum(rec.get('ml_pass', float('nan')),7,4)} "
+            f"| {_fnum(rec.get('ulp_max', float('nan')),7,0)} | {_fnum(rec.get('ulp_mean', float('nan')),8,3)} "
+            f"| {_fnum(rec.get('ulp_p99', float('nan')),7,1)} | {rec['status']:<6} | {str(rec.get('classification','-')):<18} |"
         )
     return "\n".join(lines)
 
@@ -265,7 +342,7 @@ def _write_summary():
     yield
     if not _RESULTS:
         return
-    npass = sum(1 for r in _RESULTS if r["status"] == "pass")
+    nclean = sum(1 for r in _RESULTS if r["status"] == "clean")
     nfail = sum(1 for r in _RESULTS if r["status"] == "fail")
     noos = sum(1 for r in _RESULTS if r["status"] == "out-of-scope")
     total = len(_RESULTS)
@@ -274,46 +351,90 @@ def _write_summary():
     fails = [r for r in _RESULTS if r["status"] == "fail"]
     oos = [r for r in _RESULTS if r["status"] == "out-of-scope"]
 
+    # Classification breakdown of every non-clean activation.
+    needs_asym = [r for r in _RESULTS if r.get("classification") == "NEEDS-ASYMPTOTIC"]
+    near_root = [r for r in _RESULTS if r.get("classification") == "NEAR-ROOT-ARTIFACT"]
+    other = [r for r in _RESULTS if str(r.get("classification", "-")).startswith("OTHER")]
+
     tally = (
-        f"TALLY: {npass}/{total} pass  |  {nfail} fail  |  {noos} out-of-scope  "
-        f"(threshold PCC_vs_true >= {_PCC}, measured on craq-sim Quasar)"
+        f"TALLY: {nclean}/{total} CLEAN exhaustively  |  {nfail} fail  |  {noos} out-of-scope  "
+        f"(CLEAN = PCC_vs_true >= {_PCC} AND bf16 ULP_p99 <= {_ULP_P99_BAR} AND bf16 ULP_mean <= {_ULP_MEAN_BAR}; "
+        f"ml_pass MEASURED+REPORTED but does NOT gate. bf16 measured EXHAUSTIVELY on craq-sim Quasar "
+        f"over every representable bf16 in the full fit domain)"
     )
 
-    def _fail_line(r):
-        # PCC_vs_approx isolates DFB-path correctness from deployed-fit fidelity: when
-        # PCC_vs_approx ~ 1.0 the DFB kernel reproduced its own approximation faithfully,
-        # so the PCC_vs_true miss is the deployed fit's accuracy on its own domain (a
-        # fitter/domain characteristic), NOT a DFB-kernel defect.
-        pa = r.get("pcc_approx", float("nan"))
-        pa_s = f"{pa:.6f}" if pa == pa else "n/a"
-        return f"  - {r['activation']}: {r['reason']}  (PCC_vs_approx={pa_s} -> DFB path faithful; fit-on-domain miss)"
+    def _cls_line(r):
+        return (
+            f"  - {r['activation']}: asym={'yes' if r.get('is_asym') else 'no'} "
+            f"PCC={r['pcc_true']:.6f} ml_pass={r.get('ml_pass', float('nan')):.4f} "
+            f"ULP max/mean/p99={r.get('ulp_max', float('nan')):.0f}/"
+            f"{r.get('ulp_mean', float('nan')):.3f}/{r.get('ulp_p99', float('nan')):.1f} "
+            f"-> {r.get('classification', '-')}"
+        )
 
-    fail_lines = "\n".join(_fail_line(r) for r in fails) or "  (none)"
+    na_lines = "\n".join(_cls_line(r) for r in needs_asym) or "  (none)"
+    nr_lines = "\n".join(_cls_line(r) for r in near_root) or "  (none)"
+    ot_lines = "\n".join(_cls_line(r) for r in other) or "  (none)"
     oos_lines = "\n".join(f"  - {r['activation']}: {r['reason']}" for r in oos) or "  (none)"
+
+    cls_summary = (
+        f"CLASSIFICATION of non-clean activations:\n"
+        f"  NEEDS-ASYMPTOTIC ({len(needs_asym)}): {[r['activation'] for r in needs_asym]}\n"
+        f"  NEAR-ROOT-ARTIFACT ({len(near_root)}): {[r['activation'] for r in near_root]}\n"
+        f"  OTHER ({len(other)}): {[(r['activation'], r.get('classification')) for r in other]}\n"
+    )
 
     md = (
         "<!-- SPDX-FileCopyrightText: © 2026 Tenstorrent Inc. -->\n"
         "<!-- SPDX-License-Identifier: Apache-2.0 -->\n\n"
-        "# DFB 60-Activation Deployment Sweep\n\n"
+        "# DFB 60-Activation Deployment Sweep (EXHAUSTIVE bf16 baseline)\n\n"
         "The DFB analog of the tt-llk `quasar_sweep.sh` deployment validator. Each of the\n"
         "60 deployed activations is the fitter's TRUE bf16 shipping pick (`best_ulp_*` in\n"
         "`best.csv`), resolved to a coefficient CSV with the same 3-tier tolerant glob, run\n"
-        "through the generic `ttnn.experimental.quasar.unary_lut` DFB op on craq-sim Quasar,\n"
-        "and PCC-checked vs the fitter `ground_truth` (the TRUE activation). PCC is MEASURED\n"
-        "on craq-sim, never assumed.\n\n"
+        "through the generic `ttnn.experimental.quasar.unary_lut` DFB op on craq-sim Quasar.\n\n"
+        "Inputs are **EXHAUSTIVE**: every distinct representable bf16 value in the activation's\n"
+        "**FULL fit domain** `[lo, hi]` (asymptotic tail segments are NOT dropped). Output is\n"
+        "compared against the fitter `ground_truth` (the TRUE activation) with PCC, the bf16\n"
+        "sign-magnitude bit-distance ULP (max/mean/p99), and `ml_pass` (fraction within a\n"
+        "`1e-3` rel+abs tolerance band). All measured on craq-sim, never assumed.\n\n"
+        "`is_asymptotic` (asym column) is True iff the deployed CSV has >=1 segment with\n"
+        "`is_asymptotic=True` — i.e. the fit relies on asymptotic factoring the DFB kernel\n"
+        "does NOT yet implement. The diagnostic signal that distinguishes a real asymptotic\n"
+        "miss from a harmless near-root bit-distance artifact is **ULP_mean + ml_pass** (broad\n"
+        "error) vs **ULP_max only** (near-zero-crossing artifact).\n\n"
         f"**{tally}**\n\n"
         "## Results\n\n" + table + "\n\n"
-        "## Failures (DFB op ran, PCC_vs_true < 0.99)\n" + fail_lines + "\n\n"
+        "## NEEDS-ASYMPTOTIC FACTORING (asym pick + broad real error: high ULP_mean / low ml_pass)\n"
+        + na_lines
+        + "\n\n"
+        "## NEAR-ROOT ARTIFACT (high ULP_max but low ULP_mean + high ml_pass: harmless)\n" + nr_lines + "\n\n"
+        "## OTHER non-clean\n" + ot_lines + "\n\n"
         "## Out-of-scope (deployed pick uses a feature the DFB kernel does not yet implement)\n" + oos_lines + "\n"
     )
     _MD_OUT.write_text(md)
 
-    txt = tally + "\n\n" + table + "\n\nFAILURES:\n" + fail_lines + "\n\nOUT-OF-SCOPE:\n" + oos_lines + "\n"
+    txt = (
+        tally
+        + "\n\n"
+        + table
+        + "\n\n"
+        + cls_summary
+        + "\nNEEDS-ASYMPTOTIC:\n"
+        + na_lines
+        + "\n\nNEAR-ROOT-ARTIFACT:\n"
+        + nr_lines
+        + "\n\nOTHER:\n"
+        + ot_lines
+        + "\n\nOUT-OF-SCOPE:\n"
+        + oos_lines
+        + "\n"
+    )
     _TXT_OUT.write_text(txt)
 
-    print("\n\n" + "=" * 90)
+    print("\n\n" + "=" * 110)
     print(tally)
-    print("=" * 90)
+    print("=" * 110)
     print(table)
+    print("\n" + cls_summary)
     print(f"\nwrote {_MD_OUT}")
     print(f"wrote {_TXT_OUT}")
