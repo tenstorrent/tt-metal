@@ -50,7 +50,10 @@ def token_entropy(logits, temperature: float = 1.0):
     """
     z = temperature_scale(logits, temperature)
     p = ttnn.softmax(z, dim=-1)
-    logp = ttnn.log(p)
+    # +eps before log: at the production vocab (262144) a near-one-hot row underflows
+    # the non-peak probs to exact 0 in bf16, and log(0)=-inf -> 0*-inf = NaN. The eps
+    # floors log at ~-20.7 so the 0*log term is 0; bias is negligible (eps << any real p).
+    logp = ttnn.log(ttnn.add(p, 1.0e-9))
     plogp = ttnn.multiply(p, logp)
     neg_h = ttnn.sum(plogp, dim=-1, keepdim=True)  # Σ p·log p  (negative)
     p.deallocate(True)

@@ -108,15 +108,21 @@ class SelfConditioning(nn.Module):
     ) -> torch.Tensor:
         """Probability-weighted average of token embeddings from prev-step logits.
 
-        ``prev_logits`` ``[B, L, vocab]`` -> ``[B, L, hidden]``. Matches the
-        decoder's ``softmax(dim=-1, dtype=fp32) @ embed_tokens.weight`` (NO
-        temperature here — HF feeds the already temperature-scaled logits). One-hot
-        logits reproduce exactly that token's embedding row. ``mask`` ``[B]`` is the
-        per-example ``self_conditioning_mask`` (zeroes the signal for unconditioned
-        examples).
+        ``prev_logits`` ``[B, L, vocab]`` -> ``[B, L, hidden]``. Matches the decoder
+        (``modeling_diffusion_gemma.py:1278-1281``):
+        ``(softmax(dim=-1, fp32) @ embed_tokens.weight) * embed_scale``, where
+        ``embed_scale = hidden_size ** 0.5`` (the same scale the tied
+        ``DiffusionGemmaTextScaledWordEmbedding`` applies to token embeddings). NO
+        temperature here — HF feeds the already temperature-scaled logits. The scale
+        matters: the soft signal then feeds the self-conditioning ``pre_norm`` whose
+        ``eps`` floor does NOT normalize the factor away at the tiny soft-RMS of a
+        262k-vocab softmax. A one-hot row therefore yields ``embed_scale * emb[row]``.
+        ``mask`` ``[B]`` is the per-example ``self_conditioning_mask`` (applied AFTER
+        the scale, matching canonical order).
         """
+        embed_scale = embedding_weight.shape[-1] ** 0.5  # = hidden_size**0.5
         probs = prev_logits.softmax(dim=-1, dtype=torch.float32).to(embedding_weight.dtype)
-        soft = probs @ embedding_weight
+        soft = (probs @ embedding_weight) * embed_scale
         if mask is not None:
             soft = soft * mask.to(soft.dtype)[:, None, None]
         return soft

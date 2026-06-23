@@ -84,7 +84,7 @@ def test_acceptance_chain_stagewise_diagnostic(device):
 
     t_vals, _ = torch.sort(entropy, dim=-1)
     t_cum = torch.cumsum(t_vals, dim=-1)
-    ref_accept_sorted = t_cum <= budget
+    ref_accept_sorted = (t_cum - t_vals) <= budget  # EXCLUSIVE prefix (matches device/HF), not inclusive
     ref = S.entropy_budget_accept(entropy, budget, min_accept=0)
 
     diag = (

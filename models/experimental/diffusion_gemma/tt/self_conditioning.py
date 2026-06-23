@@ -112,7 +112,11 @@ class TtSelfConditioning:
             probs = ttnn.softmax(prev_logits_tt, dim=-1)
         signal = ttnn.matmul(probs, embedding_weight_tt)  # [1,1,L,vocab] @ [1,1,vocab,hidden] -> [1,1,L,hidden]
         probs.deallocate(True)
-        return signal
+        # canonical: * embed_scale = hidden_size**0.5 (the tied embedding's scale). The pre_norm eps
+        # floor does NOT absorb this at the tiny soft-RMS of a 262k-vocab softmax, so it is load-bearing.
+        scaled = ttnn.multiply(signal, float(self.hidden_size) ** 0.5)
+        signal.deallocate(True)
+        return scaled
 
     def condition(self, inputs_embeds_tt, prev_logits_tt, embedding_weight_tt, *, compute_kernel_config=None):
         """Full self-conditioning step: soft-embed prev logits, then apply the module

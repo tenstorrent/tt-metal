@@ -76,19 +76,23 @@ def test_conditioning_signal_changes_output():
     assert not torch.allclose(conditioned, disabled)
 
 
-def test_soft_embedding_onehot_recovers_token_row():
+def test_soft_embedding_onehot_recovers_scaled_token_row():
+    # Canonical applies embed_scale = hidden**0.5 -> a one-hot recovers scale * emb[row].
     vocab, hidden = 20, 12
     emb = _embedding(vocab, hidden, seed=3)
     logits = torch.full((1, 1, vocab), -1e4)
     logits[..., 7] = 1e4
     soft = SelfConditioning.soft_embedding(logits, emb)
-    assert torch.allclose(soft[0, 0], emb[7], atol=1e-4)
+    assert torch.allclose(soft[0, 0], emb[7] * (hidden**0.5), atol=1e-3)
+    # explicit, independent check that the scale is present (guards against re-dropping it)
+    assert not torch.allclose(soft[0, 0], emb[7], atol=1e-2)
 
 
-def test_soft_embedding_is_convex_combination():
+def test_soft_embedding_is_scaled_convex_combination():
+    # soft / embed_scale is the convex combination (lies in the embedding bounding box).
     vocab, hidden = 6, 4
     emb = _embedding(vocab, hidden, seed=4)
-    soft = SelfConditioning.soft_embedding(torch.randn(1, 5, vocab, generator=_gen(5)), emb)
+    soft = SelfConditioning.soft_embedding(torch.randn(1, 5, vocab, generator=_gen(5)), emb) / (hidden**0.5)
     assert torch.all(soft <= emb.max(dim=0).values + 1e-5)
     assert torch.all(soft >= emb.min(dim=0).values - 1e-5)
 

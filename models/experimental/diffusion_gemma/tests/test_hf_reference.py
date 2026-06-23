@@ -117,10 +117,33 @@ def test_hf_reference_generate_delegates_to_model_generate():
 
 
 def test_harness_rejects_drifted_candidate():
+    """Drift must be caught on the DETERMINISTIC decision classes, not via RNG noise.
+    Inject fixed Gumbel+renoise into all three runs so the only difference is the
+    logit drift; a no-drift control must PASS (proving the test isn't vacuous), and
+    the drifted run must fail with degraded argmax agreement."""
     batch, length, vocab = 1, 8, 32
     init = S.random_canvas((batch, length), vocab, generator=_gen(3))
-    ref = run_reference_trajectory(_MockCanvasModel(batch, length, vocab, seed=5), init.clone(), _cfg(), vocab)
-    drifted = run_reference_trajectory(
-        _MockCanvasModel(batch, length, vocab, seed=5, drift=5.0), init.clone(), _cfg(), vocab
-    )
-    assert not compare_trajectories(ref, drifted).passed  # decision drift is caught
+
+    def gumbel_fn(step):
+        return S.sample_gumbel_noise((batch, length, vocab), generator=_gen(500 + step))
+
+    def noise_fn(step):
+        return torch.randint(0, vocab, (batch, length), generator=_gen(600 + step))
+
+    def run(drift):
+        return run_reference_trajectory(
+            _MockCanvasModel(batch, length, vocab, seed=5, drift=drift),
+            init.clone(),
+            _cfg(),
+            vocab,
+            gumbel_noise_fn=gumbel_fn,
+            noise_tokens_fn=noise_fn,
+        )
+
+    ref = run(0.0)
+    # no-drift control: same injected noise -> identical trajectory -> the harness PASSES
+    assert compare_trajectories(ref, run(0.0)).passed
+    # a strong logit drift flips argmax/accept deterministically -> the harness FAILS
+    cmp = compare_trajectories(ref, run(5.0))
+    assert not cmp.passed
+    assert cmp.min_argmax_agreement < 1.0  # caught on the deterministic decision class, not RNG

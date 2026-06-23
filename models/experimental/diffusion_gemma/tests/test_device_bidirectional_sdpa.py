@@ -50,7 +50,7 @@ NEG = -1.0e9
 def _run_canvas_sdpa(
     device,
     *,
-    is_sliding,
+    local_window=False,
     window_half=None,
     prompt_fully_visible=False,
     batch=1,
@@ -71,7 +71,7 @@ def _run_canvas_sdpa(
     mask2d = build_canvas_denoise_mask(
         prompt_len,
         canvas_len,
-        is_sliding=is_sliding,
+        local_window=local_window,
         window_half=window_half,
         prompt_fully_visible=prompt_fully_visible,
         neg_inf=NEG,
@@ -119,21 +119,23 @@ def _run_canvas_sdpa(
     assert_with_pcc(golden, out, pcc)
 
 
-def test_full_attention_bidirectional(device):
-    # full-attn layer: canvas fully sees prompt + canvas (bidirectional)
-    _run_canvas_sdpa(device, is_sliding=False)
+def test_canvas_bidirectional(device):
+    # CANONICAL denoise geometry: canvas fully sees prompt + canvas (bidirectional)
+    # for every layer type — the decoder is fully bidirectional (modeling:1399-1438).
+    _run_canvas_sdpa(device)
 
 
-def test_sliding_symmetric_window(device):
-    # sliding/local layer: symmetric 2W+1 window over absolute positions, baked into the mask
-    _run_canvas_sdpa(device, is_sliding=True, window_half=64)
+def test_gqa_bidirectional(device):
+    # GQA shape matching the model (16 query / 8 KV heads), canonical full visibility.
+    _run_canvas_sdpa(device, num_heads=16, num_kv_heads=8)
 
 
-def test_sliding_prompt_fully_visible(device):
-    # variant: prompt fully visible + canvas<->canvas windowed (plan.md §10 open question)
-    _run_canvas_sdpa(device, is_sliding=True, window_half=64, prompt_fully_visible=True)
+# --- NON-canonical: exercise the ttnn SDPA windowed-mask path (NOT the denoise geometry) ---
+def test_sdpa_local_window_op(device):
+    # op-capability only: symmetric 2W+1 window baked into the mask. The real decoder
+    # does NOT window visibility — see build_canvas_denoise_mask docstring.
+    _run_canvas_sdpa(device, local_window=True, window_half=64)
 
 
-def test_gqa_full_attention(device):
-    # GQA shape matching the model (16 query / 8 KV heads)
-    _run_canvas_sdpa(device, is_sliding=False, num_heads=16, num_kv_heads=8)
+def test_sdpa_local_window_prompt_fully_visible_op(device):
+    _run_canvas_sdpa(device, local_window=True, window_half=64, prompt_fully_visible=True)

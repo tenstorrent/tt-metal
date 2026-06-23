@@ -78,6 +78,7 @@ def test_token_entropy_bf16_accurate_and_bfp8_degrades(device, temperature):
 
     def err(dtype):
         out = ttnn.to_torch(TS.token_entropy(_to(logits, device, dtype), temperature=temperature)).squeeze(-1)
+        assert torch.isfinite(out).all(), f"{dtype} entropy produced non-finite values (log(0) guard regressed?)"
         return (ref - out).abs(), comp_pcc(ref, out, 0.0)[1]
 
     bf16_d, bf16_pcc = err(ttnn.bfloat16)

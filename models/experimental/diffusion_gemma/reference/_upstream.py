@@ -107,7 +107,10 @@ def self_conditioning_upstream(
 ) -> torch.Tensor:
     """Decoder soft-embedding step + the self-conditioning gated MLP (gelu-tanh)."""
     if prev_logits is not None:
-        soft = torch.matmul(prev_logits.softmax(dim=-1, dtype=torch.float32).to(embed_weight.dtype), embed_weight)
+        # canonical: ( softmax @ embed_tokens.weight ) * embed_tokens.embed_scale, embed_scale = hidden**0.5
+        soft = torch.matmul(prev_logits.softmax(dim=-1, dtype=torch.float32).to(embed_weight.dtype), embed_weight) * (
+            embed_weight.shape[-1] ** 0.5
+        )
     else:
         soft = torch.zeros_like(inputs_embeds)
     normed = rmsnorm_upstream(soft, pre_norm_w, eps)

@@ -57,9 +57,14 @@ class TextConfig:
     # for the 30-layer 26B-A4B (configs/gemma-4-26B-A4B-it/config.json).
     sliding_window_pattern: int = 6  # verified (derived from layer_types)
     # K=V tying applies to full-attn (global) layers ONLY; sliding/local layers
-    # keep a real separate V (matters for the bidirectional local-window path,
-    # #47462). See gemma4 tt/attention/__init__.py:34.
-    attention_k_eq_v: bool = True  # verified (26B-A4B config.json: attention_k_eq_v=True)
+    # keep a real separate V. See gemma4 tt/attention/__init__.py:34.
+    # PROVENANCE: this is the **gemma-4-26B-A4B base** config value (the backbone we
+    # reuse — its config.json has attention_k_eq_v=True). The *DiffusionGemma* config
+    # OMITS the key (modular_diffusion_gemma.py:101 sets attention_k_eq_v=AttributeError(),
+    # i.e. DG deletes it and derives K=V tying from layer geometry). We keep True
+    # because the backbone loads through the gemma4 path; the weight diff confirms it
+    # (v_proj present on 25 sliding layers, absent on the 5 K=V-tied full layers).
+    attention_k_eq_v: bool = True  # verified (gemma-4-26B-A4B base config.json + weight-key diff)
 
     # --- RoPE (dual theta, per layer type) -------------------------------
     rope_theta_full: float = 1.0e6  # verified (full-attention layers)

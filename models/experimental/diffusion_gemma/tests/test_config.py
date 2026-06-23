@@ -48,6 +48,9 @@ def test_from_hf_config_matches_target_26b():
     assert tc.num_experts == 128
     assert tc.moe_intermediate_size == 704
     assert (tc.num_global_key_value_heads, tc.global_head_dim) == (2, 512)
+    # NB: this reads the gemma-4-26B-A4B *base* config (the backbone we reuse), which
+    # carries attention_k_eq_v=True. The DiffusionGemma config itself omits the key
+    # (DG derives K=V tying from layer geometry); we validate the backbone value here.
     assert tc.attention_k_eq_v is True
     assert tc.hidden_activation == "gelu_pytorch_tanh"
 
