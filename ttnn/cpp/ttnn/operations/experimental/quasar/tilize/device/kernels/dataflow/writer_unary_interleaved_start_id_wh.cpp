@@ -4,29 +4,27 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t start_id = get_arg_val<uint32_t>(1);
-    uint32_t single_block_size_row_arg = get_arg_val<uint32_t>(2);
-    uint32_t single_block_size_col_arg = get_arg_val<uint32_t>(3);
+    auto start_id = get_arg(args::start_id);
+    auto single_block_size_row_arg = get_arg(args::single_block_size_row_arg);
+    auto single_block_size_col_arg = get_arg(args::single_block_size_col_arg);
 
-    constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
-    constexpr uint32_t num_tiles_per_2d = get_compile_time_arg_val(1);
-    constexpr uint32_t third_dim = get_compile_time_arg_val(2);
-    constexpr uint32_t total_tiles_per_row = get_compile_time_arg_val(3);
-    constexpr auto dst_args = TensorAccessorArgs<4>();
+    constexpr auto num_tiles_per_2d = get_arg(args::num_tiles_per_2d);
+    constexpr auto third_dim = get_arg(args::third_dim);
+    constexpr auto total_tiles_per_row = get_arg(args::total_tiles_per_row);
 
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
-    const uint32_t tile_bytes = get_tile_size(cb_id_out);
+    const uint32_t tile_bytes = DataflowBuffer(dfb::out).get_entry_size();
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::dst);
 
     Noc noc;
-    CircularBuffer cb(cb_id_out);
+    DataflowBuffer cb(dfb::out);
 
 #ifdef BACKWARDS
     for (uint32_t dim = 0; dim > -third_dim; dim--) {
