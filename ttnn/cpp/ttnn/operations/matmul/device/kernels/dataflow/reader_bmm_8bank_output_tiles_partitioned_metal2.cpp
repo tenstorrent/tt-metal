@@ -51,8 +51,8 @@ void kernel_main() {
         itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
     }
 
-    const auto s0 = TensorAccessor(ta::src0);
-    const auto s1 = TensorAccessor(ta::src1);
+    const auto s0 = TensorAccessor(tensor::src0);
+    const auto s1 = TensorAccessor(tensor::src1);
 
     Noc noc;
     DataflowBuffer cb_in0(cb_id_in0);

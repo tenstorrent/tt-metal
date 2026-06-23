@@ -30,7 +30,7 @@ void kernel_main() {
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(ta::dst);
+    const auto s = TensorAccessor(tensor::dst);
 
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
