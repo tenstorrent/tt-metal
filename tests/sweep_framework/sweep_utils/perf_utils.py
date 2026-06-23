@@ -11,8 +11,6 @@ from pathlib import Path
 from typing import Any, Optional, Tuple, Dict
 
 from framework.sweeps_logger import sweeps_logger as logger
-from tracy.common import PROFILER_LOGS_DIR
-from tracy.process_ops_logs import get_device_data_generate_report
 from sweep_utils.roofline_utils import get_updated_message
 
 
@@ -204,14 +202,10 @@ def run_with_cache_comparison(
 
     device_perf_uncached = None
     if getattr(config, "measure_device_perf", False):
+        # Each gather's ttnn.ReadDeviceProfiler refreshes the in-memory "latest"
+        # program perf data, so the cached run below reads its own data with no
+        # legacy CSV-log clearing needed.
         device_perf_uncached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_uncached)
-        # Clear the profiler log file for the next run to isolate device perf measurements
-        from tracy.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
-        import os as _os
-
-        device_log_path = _os.path.join(PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG)
-        if _os.path.exists(device_log_path):
-            _os.remove(device_log_path)
 
     # Second run (with cache)
     status_cached, message_cached, e2e_cached_ms = execute_test(test_module, test_vector, device)
