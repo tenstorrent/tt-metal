@@ -238,18 +238,28 @@ def load_weights_from_hf(
     # "Shard shape mismatch"). The matching per-param mapper is cached for reuse
     # in the upload loop below.
     ttml_shapes = {name: list(ttml_params[name].shape()) for name in ttml_params}
-    sharded_placements: dict = {}
+    sharded_mappers: dict = {}
     if sharded:
+        device = ttml.autograd.AutoContext.get_instance().get_device()
         mesh_shape = list(ttml.mesh().shape)
+        n_mesh_dims = len(mesh_shape)
+        replicate_mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
         for name in ttml_params:
             placements = _placements_of(ttml_params[name])
-            sharded_placements[name] = placements
-            if not placements:
-                continue
-            global_shape = ttml_shapes[name]
-            for axis_idx, placement in enumerate(placements):
-                if isinstance(placement, ttnn.PlacementShard) and axis_idx < len(mesh_shape):
-                    global_shape[placement.dim] *= mesh_shape[axis_idx]
+            # Only treat as sharded when there is a real Shard placement AND the
+            # placement list covers every mesh axis. A replicated param (e.g. the
+            # root params when GRPO_QWEN_FSDP_WRAP_ROOT=0, or any param fully_shard
+            # skipped) reports a single [Replicate], which does not match the mesh
+            # dims and must use the replicate mapper (global == local shape).
+            has_shard = bool(placements) and any(isinstance(p, ttnn.PlacementShard) for p in placements)
+            if has_shard and len(placements) == n_mesh_dims:
+                global_shape = ttml_shapes[name]
+                for axis_idx, placement in enumerate(placements):
+                    if isinstance(placement, ttnn.PlacementShard):
+                        global_shape[placement.dim] *= mesh_shape[axis_idx]
+                sharded_mappers[name] = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
+            else:
+                sharded_mappers[name] = replicate_mapper
 
     def _prepare(hf_name, ttml_name):
         # CPU-only prep (float cast, permutation, padding). The device transfer
@@ -295,8 +305,6 @@ def load_weights_from_hf(
     loaded = 0
     skipped: List[str] = []
 
-    device = ttml.autograd.AutoContext.get_instance().get_device() if sharded else None
-
     with ThreadPoolExecutor(max_workers=4) as pool:
         futures = [(hf_name, ttml_name, pool.submit(_prepare, hf_name, ttml_name)) for hf_name, ttml_name in items]
         for hf_name, ttml_name, future in futures:
@@ -308,15 +316,9 @@ def load_weights_from_hf(
             param = ttml_params[ttml_name]
             if sharded:
                 # ``weight`` is already padded to the GLOBAL shape (see above).
-                # Distribute it to match the destination parameter's existing
-                # (FSDP-sharded or replicated) placements, then swap the value in
-                # place to preserve FSDP markers.
-                placements = sharded_placements.get(ttml_name)
-                if placements:
-                    mapper = ttnn.create_mesh_mapper(device, ttnn.MeshMapperConfig(placements))
-                else:
-                    mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(device)
-                param.set_value(torch_to_ttml(weight, mapper=mapper).get_value())
+                # Distribute it with the param's precomputed mapper (FSDP-shard or
+                # replicate), then swap the value in place to preserve FSDP markers.
+                param.set_value(torch_to_ttml(weight, mapper=sharded_mappers[ttml_name]).get_value())
             else:
                 param.assign(torch_to_ttml(weight))
             loaded += 1

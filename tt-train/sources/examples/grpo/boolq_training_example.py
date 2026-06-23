@@ -107,11 +107,19 @@ def boolq_reward(completions, answer, **kwargs):
         f"mean_reward={sum(rewards) / n:.2f}",
         flush=True,
     )
-    # One decoded sample so completion quality/coherence is visible. Gated to
-    # avoid log spam when not debugging.
+    # Print every generation for the FIRST prompt. Completions are grouped by
+    # prompt with ``num_generations`` contiguous entries, so ``completions[:G]``
+    # are prompt 0's G samples. This is a pre-training sanity check on the loaded
+    # pretrained weights: a healthy model should produce coherent completions
+    # here (compare 0.6B vs 32B at step 1, before any training). ``G`` defaults
+    # to 8 (= grpo_config.num_generations); override via GRPO_QWEN_NUM_GEN_PRINT.
+    # Gated on GRPO_QWEN_DEBUG to avoid log spam.
     if os.environ.get("GRPO_QWEN_DEBUG") and completions:
-        preview = completions[0].strip().replace("\n", " ")[:200]
-        print(f"[reward] sample gt={answer[0]!r} completion={preview!r}", flush=True)
+        n_gen = min(int(os.environ.get("GRPO_QWEN_NUM_GEN_PRINT", "8")), len(completions))
+        print(f"[reward] first-prompt gt={answer[0]!r}: {n_gen} generations:", flush=True)
+        for i in range(n_gen):
+            preview = completions[i].strip().replace("\n", " ")[:300]
+            print(f"[reward]   gen[{i}] = {preview!r}", flush=True)
 
     return rewards
 
