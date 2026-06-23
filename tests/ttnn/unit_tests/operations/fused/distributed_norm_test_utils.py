@@ -163,6 +163,7 @@ def compute_ttnn_distributed_norm(
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
     use_2d_core_grid=None,
+    input_dtype=ttnn.bfloat16,
 ):
     """
     Compute TTNN distributed normalization output.
@@ -192,7 +193,7 @@ def compute_ttnn_distributed_norm(
         torch_input,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=input_dtype,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
     )
 
@@ -208,7 +209,7 @@ def compute_ttnn_distributed_norm(
 
     ttnn_weight = ttnn.from_torch(
         torch_weight.reshape(weight_shape),
-        dtype=ttnn.bfloat16,
+        dtype=input_dtype,
         device=mesh_device,
         layout=weight_layout,
         mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=weight_shard_dim),
@@ -228,7 +229,7 @@ def compute_ttnn_distributed_norm(
 
         ttnn_bias = ttnn.from_torch(
             torch_bias.reshape(bias_shape),
-            dtype=ttnn.bfloat16,
+            dtype=input_dtype,
             device=mesh_device,
             layout=bias_layout,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=bias_shard_dim),
@@ -282,7 +283,7 @@ def compute_ttnn_distributed_norm(
         ttnn_stats = ttnn.layer_norm_pre_all_gather(
             ttnn_input,
             compute_kernel_config=compute_kernel_config,
-            dtype=ttnn.bfloat16,
+            dtype=input_dtype,
             program_config=program_config,
             recip_tensor=recip_tensor,
         )
@@ -387,6 +388,7 @@ def run_distributed_norm_test(
     bias_layout=ttnn.TILE_LAYOUT,
     use_welford=True,
     use_2d_core_grid=None,
+    input_dtype=ttnn.bfloat16,
 ):
     """
     Main test function for distributed normalization.
@@ -443,6 +445,7 @@ def run_distributed_norm_test(
         bias_layout,
         use_welford,
         use_2d_core_grid,
+        input_dtype,
     )
 
     # Check average relative difference
