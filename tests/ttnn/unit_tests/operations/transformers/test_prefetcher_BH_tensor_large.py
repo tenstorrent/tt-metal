@@ -417,7 +417,7 @@ def test_create_global_circular_buffer_for_matmul_1d(device, layers_buffered):
     assert passing, f"[factory layers_buffered={layers_buffered}] PCC check failed: {output_str}"
 
 
-def test_create_global_circular_buffer_for_matmul_1d_rejects_undersized(device):
+def test_create_global_circular_buffer_for_matmul_1d_rejects_undersized(device, expect_error):
     """Factory must TT_FATAL when size < num_blocks * in1_block_size (matmul would deadlock)."""
     num_dram_banks = device.dram_grid_size().x
     recv_per_bank = 1
@@ -464,7 +464,7 @@ def test_create_global_circular_buffer_for_matmul_1d_rejects_undersized(device):
     bank_to_receivers = [
         (b, _bank_receivers_row_major(b, recv_per_bank, num_dram_banks)) for b in range(num_dram_banks)
     ]
-    with pytest.raises(RuntimeError, match="must be at least num_blocks"):
+    with expect_error(RuntimeError, "must be at least num_blocks"):
         ttnn.experimental.create_global_circular_buffer_for_matmul_1d(
             device,
             [program_config],
