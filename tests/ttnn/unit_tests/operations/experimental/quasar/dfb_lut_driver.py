@@ -61,12 +61,88 @@ def _activation_name_from_csv(csv_path):
     return "_".join(out)
 
 
-def parse_csv(csv_path):
-    """Parse a fitter coefficient CSV into a LutConfig + (lo, hi) global domain.
+# Range-reduction method codes — MUST match the kernel's LUT_RR_METHOD contract
+# (unary_lut_sfpu.h) and the tt-llk reference.
+_RR_CODE = {
+    "none": 0,
+    "log": 1,
+    "exp": 2,
+    "cbrt": 3,
+    "exponent_alu_exp2": 4,
+    "exponent_alu_log2": 5,
+    "exponent_alu_pow": 6,
+    "trig": 7,
+    "tan": 8,
+}
+_RR_COMPOSE = {"": 0, "sigmoid": 1, "minus_one": 2}
+# Methods whose reduce/reconstruct is implemented in the DFB kernel.
+_RR_SUPPORTED = {"exp", "trig", "tan", "log", "cbrt", "exponent_alu_exp2", "exponent_alu_log2", "exponent_alu_pow"}
 
-    Returns (lut_config_kwargs: dict, domain: (float, float))."""
+
+def _parse_rr_meta(meta):
+    """Parse the range-reduction METADATA into LutConfig RR kwargs.
+
+    Mirrors the tt-llk generic_lut codegen: method code + method-specific constants.
+    Returns (rr_kwargs: dict, rr_enabled: bool, rr_method: str, original_domain or None).
+    rr_kwargs are merged into the LutConfig; when the method is unsupported / disabled
+    rr_method=0 (none) so the kernel/golden stay on the no-RR path.
+    """
+
+    def mf(k, default=None):
+        v = meta.get(k, "")
+        return float(v) if v not in (None, "") else default
+
+    method = meta.get("range_reduction_method", "none")
+    enabled = str(meta.get("range_reduction_enabled", "False")).lower() == "true"
+    if method not in _RR_SUPPORTED:
+        enabled = False
+    if not enabled:
+        return {"rr_method": 0}, False, "none", None
+
+    rr = {"rr_method": _RR_CODE[method]}
+    if method == "log":
+        rr["rr_log_ln2"] = mf("log_ln2_constant", 1.0)
+    elif method == "exp":
+        rr["rr_exp_mult"] = mf("exp_log2_multiplier", 1.4426950408889634)
+        rr["rr_exp_const"] = mf("exp_log2_constant", 0.6931471805599453)
+    elif method == "cbrt":
+        for i in range(3):
+            c = mf(f"cbrt_scale_c{i}")
+            if c is not None:
+                rr[f"rr_scale{i}"] = c
+    elif method == "exponent_alu_exp2":
+        rr["rr_exp2_mult"] = mf("expalu_log2_multiplier", 1.0)
+        rr["rr_compose"] = _RR_COMPOSE.get(meta.get("expalu_compose", "") or "", 0)
+    elif method == "exponent_alu_log2":
+        rr["rr_log2_scale"] = mf("expalu_log_scale", 1.0)
+        rr["rr_log2_basis_mminus1"] = 1 if meta.get("expalu_log2_basis", "m") == "m_minus_1" else 0
+        rr["rr_input_offset"] = mf("expalu_input_offset", 0.0) or 0.0
+    elif method == "exponent_alu_pow":
+        rr["rr_pow_n"] = int(float(meta["expalu_root_n"]))
+        rr["rr_pow_recip"] = 1 if str(meta.get("expalu_reciprocal", "False")).lower() == "true" else 0
+        for i in range(3):
+            c = mf(f"expalu_pow_scale_c{i}")
+            if c is not None:
+                rr[f"rr_scale{i}"] = c
+    # trig / tan carry no kernel-tunable params (pi / Cody-Waite constants are hardcoded).
+
+    orig = None
+    omin, omax = mf("range_reduction_original_min"), mf("range_reduction_original_max")
+    if omin is not None and omax is not None:
+        orig = (omin, omax)
+    return rr, True, method, orig
+
+
+def parse_csv(csv_path):
+    """Parse a fitter coefficient CSV into a LutConfig + sampling domain.
+
+    Returns (lut_config_kwargs: dict, domain: (float, float)).
+    The domain is the ORIGINAL activation domain when range reduction is enabled (the
+    kernel reconstructs the full activation), else the reduced [b0, bN] LUT span.
+    LutConfig kwargs carry the RR method + constants (rr_method == 0 => no RR)."""
     rows = []
     header = None
+    meta = {}
     with open(csv_path, newline="") as f:
         for r in _csv.reader(f):
             if not r:
@@ -75,11 +151,18 @@ def parse_csv(csv_path):
                 header = r
                 continue
             if r[0] == "METADATA":
+                if len(r) >= 3:
+                    meta[r[1].strip()] = r[2].strip()
                 continue
             rows.append(r)
     assert header is not None, f"no header in {csv_path}"
 
     rational = "approximation_type" in header and any((len(r) > 3 and r[3] == "rational") for r in rows)
+
+    rr_kwargs, rr_enabled, rr_method, rr_orig = _parse_rr_meta(meta)
+
+    # Ascending boundaries (the kernel selects segments by ascending b0..bN).
+    rows.sort(key=lambda r: float(r[1]))
 
     boundaries = []
     seg_coeffs = []
@@ -129,7 +212,25 @@ def parse_csv(csv_path):
             data=data,
         )
 
-    domain = (boundaries[0], boundaries[-1])
+    # exponent_alu_log2 m_minus_1 basis: the kernel's poly argument is u = mantissa - 1,
+    # so the boundaries (used by the kernel ONLY for clamp + segment selection) must live
+    # in the SAME u-space. The CSV stores them in m-space [1,2]; shift by -1. Mirrors the
+    # tt-llk codegen. The coefficients are already in the u-basis.
+    if rr_enabled and rr_method == "exponent_alu_log2" and rr_kwargs.get("rr_log2_basis_mminus1") == 1:
+        nseg = cfg["num_segments"]
+        for i in range(nseg + 1):
+            cfg["data"][i] = cfg["data"][i] - 1.0
+        boundaries = [b - 1.0 for b in boundaries]
+
+    cfg.update(rr_kwargs)
+    cfg["_rr_enabled"] = rr_enabled
+
+    # Sampling domain: the ORIGINAL activation domain when RR is enabled (the kernel
+    # reconstructs the full activation), else the reduced [b0, bN] LUT span.
+    if rr_enabled and rr_orig is not None:
+        domain = rr_orig
+    else:
+        domain = (boundaries[0], boundaries[-1])
     return cfg, domain
 
 
@@ -143,8 +244,26 @@ def _lut_config_cls():
     return _raw.operations.experimental.quasar.LutConfig
 
 
+_RR_KW = (
+    "rr_method",
+    "rr_log_ln2",
+    "rr_exp_mult",
+    "rr_exp_const",
+    "rr_scale0",
+    "rr_scale1",
+    "rr_scale2",
+    "rr_exp2_mult",
+    "rr_compose",
+    "rr_log2_scale",
+    "rr_log2_basis_mminus1",
+    "rr_input_offset",
+    "rr_pow_n",
+    "rr_pow_recip",
+)
+
+
 def make_lut_config(cfg):
-    return _lut_config_cls()(
+    kw = dict(
         eval_method=cfg["eval_method"],
         poly_degree=cfg["poly_degree"],
         num_segments=cfg["num_segments"],
@@ -152,6 +271,10 @@ def make_lut_config(cfg):
         den_degree=cfg["den_degree"],
         data=cfg["data"],
     )
+    for k in _RR_KW:
+        if k in cfg:
+            kw[k] = cfg[k]
+    return _lut_config_cls()(**kw)
 
 
 def approximation_golden(cfg, x_np):
@@ -223,14 +346,21 @@ def run_dfb(device, csv_path, activation=None, tiles=4, seed=0, margin=0.02):
     PCC vs the true activation AND vs the approximation."""
     activation = activation or _activation_name_from_csv(csv_path)
     cfg, (lo, hi) = parse_csv(csv_path)
+    rr_enabled = cfg.get("_rr_enabled", False)
     lut = make_lut_config(cfg)
 
-    # Sample the deployed domain with a margin past both ends (exercises the clamp).
+    # Sampling. RR: the (lo, hi) returned IS the original domain and the kernel
+    # reconstructs the full activation there, so sample it exactly (no margin past the
+    # ends — that would leave the activation's valid range for log/sqrt). No-RR: sample
+    # [b0, bN] with a margin to exercise the clamp.
     mc, shape = height_sharded_config(tiles)
     n = int(np.prod(shape))
     torch.manual_seed(seed)
     span = hi - lo
-    x_np = (lo - margin * span) + (span * (1 + 2 * margin)) * np.random.RandomState(seed).rand(n)
+    if rr_enabled:
+        x_np = lo + span * np.random.RandomState(seed).rand(n)
+    else:
+        x_np = (lo - margin * span) + (span * (1 + 2 * margin)) * np.random.RandomState(seed).rand(n)
     x_np = x_np.astype(np.float32).reshape(tuple(shape))
     x_pt = torch.from_numpy(x_np).to(torch.bfloat16)
 
@@ -239,11 +369,16 @@ def run_dfb(device, csv_path, activation=None, tiles=4, seed=0, margin=0.02):
     out = ttnn.to_torch(out_tt).to(torch.float32).numpy()
 
     x_eff = x_pt.to(torch.float32).numpy()  # what the device actually saw (bf16-rounded)
-    approx = approximation_golden(cfg, x_eff)
     truth = true_golden(activation, x_eff)
-
-    pcc_approx = _pcc(out, approx)
     pcc_true = _pcc(out, truth)
+    # The reduced-poly approximation_golden only matches the kernel on the NO-RR path
+    # (the RR kernel reduces+reconstructs the full activation). For RR, report
+    # pcc_vs_approx == pcc_vs_true so the headline metric is the true-activation PCC.
+    if rr_enabled:
+        pcc_approx = pcc_true
+    else:
+        approx = approximation_golden(cfg, x_eff)
+        pcc_approx = _pcc(out, approx)
     return {
         "activation": activation,
         "eval_method": "RATIONAL" if cfg["eval_method"] == EVAL_RATIONAL else "POLY",
@@ -252,6 +387,8 @@ def run_dfb(device, csv_path, activation=None, tiles=4, seed=0, margin=0.02):
         if cfg["eval_method"] == EVAL_POLY
         else f"n{cfg['num_degree']}d{cfg['den_degree']}",
         "domain": (lo, hi),
+        "rr_method": cfg.get("rr_method", 0),
+        "rr_enabled": rr_enabled,
         "pcc_vs_approx": pcc_approx,
         "pcc_vs_true": pcc_true,
     }

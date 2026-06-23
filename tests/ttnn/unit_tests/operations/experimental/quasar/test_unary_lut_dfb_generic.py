@@ -63,6 +63,27 @@ _CASES = [
 ]
 
 
+# Range-reduction (RR) cases — the activations that need reduce-then-poly-then-reconstruct
+# to be correct over their FULL original domain (out of scope for the no-RR _CASES above).
+# The kernel now performs RR uniformly, driven by the CSV's range_reduction_method METADATA
+# (NO per-activation special-casing). (csv filename, expected rr_method code).
+#   2 = exp (Cody-Waite), 7 = trig (sin/cos), 4 = exponent_alu_exp2 (exp/sigmoid),
+#   5 = exponent_alu_log2 (log/log2/log10), 6 = exponent_alu_pow (sqrt/rsqrt/cbrt).
+_RR_CASES = [
+    ("exp_p5_s1_uniform_any_ulp.csv", 2),  # REDUCED_POLY: Cody-Waite exp(x)=2^k*exp(s)
+    ("sin_p5_s1_uniform_any_ulp.csv", 7),  # REDUCED_POLY: trig reduce to [-pi/2,pi/2]
+    ("cos_p6_s1_uniform_any_ulp.csv", 7),  # REDUCED_POLY: trig (even)
+    ("exp_p5_s1_uniform_fpminimax_ulp.csv", 4),  # EXPONENT_ALU: exp2 exman/floor
+    ("sigmoid_p6_s1_uniform_fpminimax_ulp.csv", 4),  # EXPONENT_ALU: exp2 + sigmoid compose
+    ("log2_p4_s1_uniform_fpminimax_ulp.csv", 5),  # EXPONENT_ALU: log2 exexp + (m-1) basis
+    ("log_p4_s1_uniform_fpminimax_ulp.csv", 5),  # EXPONENT_ALU: log2-basis * scale
+    ("log10_p4_s1_uniform_fpminimax_ulp.csv", 5),  # EXPONENT_ALU: log2-basis * scale
+    ("sqrt_p4_s1_uniform_fpminimax_ulp.csv", 6),  # NEWTON_ROOT analog: pow exexp/divmod (n=2)
+    ("rsqrt_p4_s1_uniform_fpminimax_ulp.csv", 6),  # pow + reciprocal (n=2)
+    ("cbrt_p3_s1_uniform_fpminimax_ulp.csv", 6),  # pow odd root (n=3, sign restore)
+]
+
+
 @pytest.mark.parametrize("csv_name,method_tag", _CASES, ids=[c[0] for c in _CASES])
 def test_generic_dfb_activation(device, csv_name, method_tag):
     csv_path = _COEFFS / csv_name
@@ -81,3 +102,25 @@ def test_generic_dfb_activation(device, csv_name, method_tag):
     assert res["pcc_vs_approx"] >= _PCC, f"DFB path PCC vs approximation {res['pcc_vs_approx']} < {_PCC}"
     # End-to-end accuracy vs the true activation on the deployed domain.
     assert res["pcc_vs_true"] >= _PCC, f"PCC vs ground_truth {res['pcc_vs_true']} < {_PCC}"
+
+
+@pytest.mark.parametrize("csv_name,rr_code", _RR_CASES, ids=[c[0] for c in _RR_CASES])
+def test_generic_dfb_range_reduction(device, csv_name, rr_code):
+    """Range-reduction activations: reduce-then-poly-then-reconstruct over the FULL
+    original domain. PCC is checked vs the TRUE activation (the kernel reconstructs it,
+    so the reduced-poly approximation golden does not apply — run_dfb reports
+    pcc_vs_approx == pcc_vs_true for RR)."""
+    csv_path = _COEFFS / csv_name
+    if not csv_path.exists():
+        pytest.skip(f"CSV not found: {csv_path}")
+
+    res = drv.run_dfb(device, str(csv_path), tiles=4)
+
+    assert res["rr_enabled"], f"{csv_name}: expected range reduction enabled, got rr_method={res['rr_method']}"
+    assert res["rr_method"] == rr_code, f"{csv_name}: expected rr_method {rr_code}, parsed {res['rr_method']}"
+    print(
+        f"\n[{res['activation']:>8} rr={res['rr_method']} {res['eval_method']:>8} "
+        f"seg={res['num_segments']} dom={res['domain']}]  PCC_true={res['pcc_vs_true']:.6f}"
+    )
+    # End-to-end accuracy vs the true activation over the full original domain.
+    assert res["pcc_vs_true"] >= _PCC, f"RR PCC vs ground_truth {res['pcc_vs_true']} < {_PCC}"

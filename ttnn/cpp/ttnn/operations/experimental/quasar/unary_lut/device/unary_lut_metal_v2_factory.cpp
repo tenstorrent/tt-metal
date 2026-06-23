@@ -92,6 +92,29 @@ m2::KernelSpec::CompilerOptions::Defines make_lut_defines(const std::optional<Lu
     }
     os << "}";
     defines.emplace("LUT_DATA_INIT", os.str());
+
+    // ---- Range-reduction defines. Mirror the tt-llk generic-LUT build header: the
+    // kernel does reduce-then-poly-then-reconstruct guarded by LUT_RR_METHOD. When
+    // rr_method == 0 (none) emit nothing so the kernel keeps its no-RR default and the
+    // build is byte-identical to the no-RR path. Method-specific params are emitted for
+    // ALL methods (the kernel's #ifndef fallbacks make extras harmless), driven solely
+    // by the LutConfig the driver parsed from the CSV — no per-activation special-casing.
+    if (l.rr_method != 0) {
+        defines.emplace("LUT_RR_METHOD", std::to_string(l.rr_method));
+        defines.emplace("LUT_RR_LOG_LN2", float_literal(l.rr_log_ln2));
+        defines.emplace("LUT_RR_EXP_MULT", float_literal(l.rr_exp_mult));
+        defines.emplace("LUT_RR_EXP_CONST", float_literal(l.rr_exp_const));
+        defines.emplace("LUT_RR_SCALE0", float_literal(l.rr_scale0));
+        defines.emplace("LUT_RR_SCALE1", float_literal(l.rr_scale1));
+        defines.emplace("LUT_RR_SCALE2", float_literal(l.rr_scale2));
+        defines.emplace("LUT_RR_EXP2_MULT", float_literal(l.rr_exp2_mult));
+        defines.emplace("LUT_RR_COMPOSE", std::to_string(l.rr_compose));
+        defines.emplace("LUT_RR_LOG2_SCALE", float_literal(l.rr_log2_scale));
+        defines.emplace("LUT_RR_LOG2_BASIS_MMINUS1", std::to_string(l.rr_log2_basis_mminus1));
+        defines.emplace("LUT_RR_INPUT_OFFSET", float_literal(l.rr_input_offset));
+        defines.emplace("LUT_RR_POW_N", std::to_string(l.rr_pow_n));
+        defines.emplace("LUT_RR_POW_RECIP", std::to_string(l.rr_pow_recip));
+    }
     return defines;
 }
 

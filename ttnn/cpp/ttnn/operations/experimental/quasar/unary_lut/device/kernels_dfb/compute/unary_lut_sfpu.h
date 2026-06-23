@@ -41,6 +41,7 @@
 
 #include <array>
 #include <cstdint>
+#include <limits>
 
 #include "ckernel.h"
 #include "sfpi.h"
@@ -81,6 +82,76 @@
     /* seg3 */                                \
     0.61703646f, 0.17515847f, -0.02109685f }
 // clang-format on
+#endif
+
+// ---- Range-reduction configuration (emitted by the program factory) ---------
+// The factory parses range_reduction_method (+ params) from the fitter CSV METADATA
+// into the LutConfig and emits these as -D defines (see make_lut_defines). The kernel
+// then does the exact reduce-then-poly-then-reconstruct from range_reduction.py, so
+// the golden is the TRUE activation over the FULL original domain. With no RR
+// (LUT_RR_METHOD == 0, the default) the reduce/reconstruct blocks compile away and the
+// kernel is byte-identical to the no-RR poly/rational path. Method codes + constants
+// mirror the tt-llk Quasar generic-LUT reference exactly.
+#ifndef LUT_RR_METHOD
+#define LUT_RR_METHOD \
+    0  // 0 none, 1 log, 2 exp, 3 cbrt, 4 expalu_exp2,
+       // 5 expalu_log2, 6 expalu_pow, 7 trig (sin/cos), 8 tan
+#endif
+#ifndef LUT_RR_LOG_LN2
+#define LUT_RR_LOG_LN2 1.0f
+#endif
+#ifndef LUT_RR_EXP_MULT
+#define LUT_RR_EXP_MULT 1.4426950408889634f
+#endif
+#ifndef LUT_RR_EXP_CONST
+#define LUT_RR_EXP_CONST 0.6931471805599453f
+#endif
+#ifndef LUT_RR_SCALE0
+#define LUT_RR_SCALE0 1.0f
+#endif
+#ifndef LUT_RR_SCALE1
+#define LUT_RR_SCALE1 1.0f
+#endif
+#ifndef LUT_RR_SCALE2
+#define LUT_RR_SCALE2 1.0f
+#endif
+#ifndef LUT_RR_EXP2_MULT
+#define LUT_RR_EXP2_MULT 1.0f
+#endif
+#ifndef LUT_RR_COMPOSE
+#define LUT_RR_COMPOSE 0  // 0 none, 1 sigmoid, 2 minus_one
+#endif
+#ifndef LUT_RR_LOG2_SCALE
+#define LUT_RR_LOG2_SCALE 1.0f
+#endif
+#ifndef LUT_RR_LOG2_BASIS_MMINUS1
+#define LUT_RR_LOG2_BASIS_MMINUS1 0
+#endif
+#ifndef LUT_RR_INPUT_OFFSET
+#define LUT_RR_INPUT_OFFSET 0.0f
+#endif
+#ifndef LUT_RR_POW_N
+#define LUT_RR_POW_N 2
+#endif
+#ifndef LUT_RR_POW_RECIP
+#define LUT_RR_POW_RECIP 0
+#endif
+// trig (method 7) / tan (method 8): the kernel hardcodes pi / Cody-Waite constants
+// (matching range_reduction.py); they are fp32-exact and carry no per-CSV params.
+#ifndef LUT_RR_TRIG_INV_PI
+#define LUT_RR_TRIG_INV_PI 0.3183098861837907f  // 1/pi
+#endif
+#ifndef LUT_RR_TRIG_PI
+#define LUT_RR_TRIG_PI 3.141592653589793f
+#endif
+#ifndef LUT_RR_TAN_INV_HALFPI
+#define LUT_RR_TAN_INV_HALFPI 0.6366197723675814f  // 1/(pi/2)
+#endif
+#ifndef LUT_RR_TAN_PI2_HI
+#define LUT_RR_TAN_PI2_HI 1.5703125f  // pi/2 high bits
+#endif
+#ifndef LUT_RR_TAN_PI2_LO
+#define LUT_RR_TAN_PI2_LO 0.0004837512969970703f  // pi/2 remainder
 #endif
 
 namespace ckernel {
@@ -178,6 +249,95 @@ sfpi_inline sfpi::vFloat recip(sfpi::vFloat x) {
     return y;
 }
 
+// =====================================================================
+// Range-reduction primitives (exponent / trig family). Ported verbatim from the
+// proven tt-llk Quasar generic-LUT reference (generic_lut_activation_quasar_test.cpp):
+// reduce/reconstruct math via the Quasar SFPU exexp/setexp/convert ops. All adds that
+// the SFPADDI-fold rule could trip are expressed as fused SFPMAD (fma_const / explicit
+// __builtin_rvtt_sfpmad). int<->float goes through vSMag (the only int<->float path on
+// Quasar sfpi). Compiled away when LUT_RR_METHOD == 0.
+// =====================================================================
+#if LUT_RR_METHOD != 0
+
+// Reduced-domain mantissa m in [1,2): replace x's biased exponent with 127 (np.frexp
+// adjustment m=2*m, e=e-1 -> m in [1,2)). setexp idiom from the BH log kernel.
+sfpi_inline sfpi::vFloat rr_mantissa(sfpi::vFloat in) { return sfpi::setexp(in, 127); }
+
+// int -> float (vInt -> vSMag -> vFloat); the only int->float path on Quasar.
+sfpi_inline sfpi::vFloat rr_int_to_float(sfpi::vInt v) {
+    const auto s = sfpi::convert<sfpi::vSMag>(v);
+    return sfpi::convert<sfpi::vFloat>(s, sfpi::RoundMode::Nearest);
+}
+
+// True signed exponent e as float (e==0 for x in [1,2)). exexp(Debias) returns the
+// frexp-adjusted signed exponent directly (matches the BH log kernel pairing).
+sfpi_inline sfpi::vFloat rr_exp_float(sfpi::vFloat in) {
+    return rr_int_to_float(sfpi::exexp(in, sfpi::ExponentMode::Debias));
+}
+
+// Variable ldexp: result = mant * 2^(e_int). Synthesize 2^e by writing the biased
+// exponent field (e+127) onto 1.0 and multiplying. Valid for |e_int| <= 127.
+sfpi_inline sfpi::vFloat rr_ldexp(sfpi::vFloat mant, sfpi::vInt e_int) {
+    const sfpi::vInt e_biased = e_int + sfpi::vInt(127);
+    const sfpi::vFloat two_pow_e = sfpi::setexp(sfpi::vFloat(1.0f), e_biased);
+    return mant * two_pow_e;
+}
+
+// round-to-nearest float -> vInt via SFPSTOCHRND fp32->sm16 (RNE) then SFPCAST sm32->int.
+// Reduced exponent integers (|q|,|i|,|e| <= ~127) fit in 16 bits, so this is exact.
+sfpi_inline sfpi::vInt rr_round_to_int(sfpi::vFloat t) {
+    const sfpi::vSMag s = sfpi::vSMag(
+        __builtin_rvtt_sfpstochrnd_i(t.get(), 0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_SMAG16, sfpi::SFPSTOCHRND_RND_EVEN));
+    return sfpi::convert<sfpi::vInt>(s);
+}
+
+// floor(t) -> vInt. convert<vSMag> only rounds to nearest, so round then correct down
+// when the rounded value overshot the input (toward -inf). The fi > t compare is a
+// vFloat-vFloat compare; form (fi - t) and compare against literal 0.0f (the same
+// nonzero-constant-compare workaround used by sub() elsewhere in this kernel).
+sfpi_inline sfpi::vInt rr_floor_to_int(sfpi::vFloat t) {
+    sfpi::vInt i = rr_round_to_int(t);
+    const sfpi::vFloat fi = rr_int_to_float(i);
+    v_if(sub(fi, t) > 0.0f) { i = i - sfpi::vInt(1); }
+    v_endif;
+    return i;
+}
+
+// Floored divmod by compile-time divisor d (>0): e = d*q + r, r in [0,d). |e| <= 127
+// is exactly fp32-representable. r is formed in the float domain via fused FMA (no
+// SFPADDI: vInt has no multiply on Quasar) then converted back to int.
+sfpi_inline void rr_divmod_floor(sfpi::vInt e, int d, sfpi::vInt& q, sfpi::vInt& r) {
+    const sfpi::vFloat ef = rr_int_to_float(e);
+    q = rr_floor_to_int(ef * sfpi::vFloat(1.0f / (float)d));
+    const sfpi::vFloat qf = rr_int_to_float(q);
+    const sfpi::vFloat rf =
+        __builtin_rvtt_sfpmad(qf.get(), sfpi::vFloat(-(float)d).get(), ef.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    r = rr_round_to_int(rf);
+}
+
+// Multiply v by scale-table entry C[r], r in {0,1,2}. vInt == vInt(k) compares; these
+// are integer compares (not the float nonzero-constant-compare bug), used as in the
+// reference. Top-level v_if (no nesting) per the predicate-stack rule.
+sfpi_inline sfpi::vFloat rr_scale_by_r(sfpi::vFloat v, sfpi::vInt r) {
+    sfpi::vFloat out = v * sfpi::vFloat(LUT_RR_SCALE0);  // r==0 default
+    v_if(r == sfpi::vInt(1)) { out = v * sfpi::vFloat(LUT_RR_SCALE1); }
+    v_endif;
+    v_if(r == sfpi::vInt(2)) { out = v * sfpi::vFloat(LUT_RR_SCALE2); }
+    v_endif;
+    return out;
+}
+
+// Parity p in {0,1} of a signed integer kv: p = kv - 2*floor(kv/2), in the float
+// domain. Returns a vFloat exactly 0.0f (even) or 1.0f (odd).
+sfpi_inline sfpi::vFloat rr_parity_f(sfpi::vInt kv) {
+    const sfpi::vFloat kf = rr_int_to_float(kv);
+    const sfpi::vInt h = rr_floor_to_int(kf * sfpi::vFloat(0.5f));  // floor(k/2)
+    const sfpi::vFloat hf = rr_int_to_float(h);
+    return __builtin_rvtt_sfpmad(hf.get(), sfpi::vFloat(-2.0f).get(), kf.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+}
+
+#endif  // LUT_RR_METHOD != 0
+
 // Horner step recursion with COMPILE-TIME coefficient indices (folds LUT_DATA away).
 // __attribute__((always_inline)) on the recursive templates prevents LTO
 // constprop.isra register spills that otherwise drop the cumulative v_if overrides
@@ -249,13 +409,75 @@ __attribute__((always_inline)) sfpi_inline void select_segment(sfpi::vFloat& res
 }
 
 // Evaluate the embedded piecewise LUT on the current Dest row(s).
+//
+// With range reduction (LUT_RR_METHOD != 0): REDUCE x_in to the polynomial argument
+// r_arg (+ per-method reconstruct state) BEFORE the poly cascade, then RECONSTRUCT the
+// full activation over the original domain AFTER. Ported verbatim from the proven
+// tt-llk Quasar generic-LUT reference. With LUT_RR_METHOD == 0 (no RR) r_arg is x_in
+// and both blocks compile away -> byte-identical to the no-RR path.
 sfpi_inline void piecewise_generic_lut_row() {
     const sfpi::vFloat x_in = sfpi::dst_reg[0];
 
-    // Clamp x to [b0, bN] (NO range reduction in this slice), compare-against-zero form.
+    // ---- REDUCE: r_arg = reduced polynomial argument; capture reconstruct state.
+    sfpi::vFloat r_arg = x_in;
+#if LUT_RR_METHOD == 1  // log: x = 2^e * m
+    const sfpi::vFloat rr_ef = rr_exp_float(x_in);
+    r_arg = rr_mantissa(x_in);
+#elif LUT_RR_METHOD == 2  // exp (Cody-Waite): q=round(x*mult); s = x - q*const
+    const sfpi::vFloat t_q = x_in * const_vf(LUT_RR_EXP_MULT);
+    const sfpi::vInt q_i = rr_round_to_int(t_q);
+    const sfpi::vFloat q_f = rr_int_to_float(q_i);
+    r_arg = __builtin_rvtt_sfpmad(
+        q_f.get(), const_vf(-(float)(LUT_RR_EXP_CONST)).get(), x_in.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+#elif LUT_RR_METHOD == 3  // cbrt: |x| = 2^e * m, e = 3q + r
+    const sfpi::vFloat ax = sfpi::abs(x_in);
+    const sfpi::vInt e_i = sfpi::exexp(ax, sfpi::ExponentMode::Debias);
+    sfpi::vInt q_i, r_i;
+    rr_divmod_floor(e_i, 3, q_i, r_i);
+    r_arg = rr_mantissa(ax);
+#elif LUT_RR_METHOD == 4  // expalu_exp2: t = x*mult; i = floor(t); f = t - i
+    const sfpi::vFloat t_e = x_in * const_vf(LUT_RR_EXP2_MULT);
+    const sfpi::vInt i_i = rr_floor_to_int(t_e);
+    const sfpi::vFloat i_f = rr_int_to_float(i_i);
+    r_arg =
+        __builtin_rvtt_sfpmad(const_vf(-1.0f).get(), i_f.get(), t_e.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);  // f = t - i
+#elif LUT_RR_METHOD == 5  // expalu_log2: (x+off) = 2^e * m
+    const sfpi::vFloat xo = x_in + const_vf(LUT_RR_INPUT_OFFSET);
+    const sfpi::vFloat rr_ef = rr_exp_float(xo);
+    const sfpi::vFloat m_v = rr_mantissa(xo);
+#if LUT_RR_LOG2_BASIS_MMINUS1
+    r_arg = m_v - const_vf(1.0f);  // Horner on u = m-1 (c0 == 0)
+#else
+    r_arg = m_v;
+#endif
+#elif LUT_RR_METHOD == 6  // expalu_pow: |x| = 2^e * m, e = n*q + r
+    const sfpi::vFloat ax = sfpi::abs(x_in);
+    const sfpi::vInt e_i = sfpi::exexp(ax, sfpi::ExponentMode::Debias);
+    sfpi::vInt q_i, r_i;
+    rr_divmod_floor(e_i, LUT_RR_POW_N, q_i, r_i);
+    r_arg = rr_mantissa(ax);
+#elif LUT_RR_METHOD == 7  // trig (sin/cos): k=round(x/pi); s = x - k*pi
+    const sfpi::vFloat t_k = x_in * const_vf(LUT_RR_TRIG_INV_PI);
+    const sfpi::vInt k_i = rr_round_to_int(t_k);
+    const sfpi::vFloat k_f = rr_int_to_float(k_i);
+    r_arg = __builtin_rvtt_sfpmad(
+        k_f.get(), const_vf(-(float)(LUT_RR_TRIG_PI)).get(), x_in.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    const sfpi::vFloat trig_sign = rr_parity_f(k_i);  // 0.0 (even k) or 1.0 (odd k)
+#elif LUT_RR_METHOD == 8  // tan: j=round(x/(pi/2)); Cody-Waite a = x - j*(pi/2)
+    const sfpi::vFloat t_j = x_in * const_vf(LUT_RR_TAN_INV_HALFPI);
+    const sfpi::vInt j_i = rr_round_to_int(t_j);
+    const sfpi::vFloat j_f = rr_int_to_float(j_i);
+    const sfpi::vFloat a_hi = __builtin_rvtt_sfpmad(
+        j_f.get(), const_vf(-(float)(LUT_RR_TAN_PI2_HI)).get(), x_in.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    r_arg = __builtin_rvtt_sfpmad(
+        j_f.get(), const_vf(-(float)(LUT_RR_TAN_PI2_LO)).get(), a_hi.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    const sfpi::vFloat tan_odd = rr_parity_f(j_i);  // 0.0 (even j) or 1.0 (odd j)
+#endif
+
+    // Clamp r_arg to [b0, bN] (the REDUCED domain), compare-against-zero form.
     const sfpi::vFloat b_lo = const_vf(LUT_DATA[0]);
     const sfpi::vFloat b_hi = const_vf(LUT_DATA[NUM_SEGMENTS]);
-    sfpi::vFloat x_clamped = x_in;
+    sfpi::vFloat x_clamped = r_arg;
     v_if(sub(x_clamped, b_lo) < 0.0f) { x_clamped = b_lo; }
     v_endif;
     v_if(sub(x_clamped, b_hi) > 0.0f) { x_clamped = b_hi; }
@@ -263,6 +485,56 @@ sfpi_inline void piecewise_generic_lut_row() {
 
     sfpi::vFloat result = eval_seg<0>(x_clamped);
     select_segment<1>(result, x_clamped);
+
+    // ---- RECONSTRUCT the full activation over the original domain.
+#if LUT_RR_METHOD == 1  // log: e*ln2 + P(m)
+    result =
+        __builtin_rvtt_sfpmad(rr_ef.get(), const_vf(LUT_RR_LOG_LN2).get(), result.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    v_if(x_in == sfpi::vFloat(0.0f)) { result = -std::numeric_limits<float>::infinity(); }
+    v_endif;
+#elif LUT_RR_METHOD == 2   // exp: 2^q * P(s)
+    result = rr_ldexp(result, q_i);
+#elif LUT_RR_METHOD == 3   // cbrt: sign * C[r] * 2^q * P(m)
+    result = rr_scale_by_r(result, r_i);
+    result = rr_ldexp(result, q_i);
+    result = sfpi::copysgn(result, x_in);
+    v_if(sfpi::abs(x_in) == sfpi::vFloat(0.0f)) { result = sfpi::vFloat(0.0f); }
+    v_endif;
+#elif LUT_RR_METHOD == 4   // expalu_exp2: 2^i * P(f) [+ compose]
+    result = rr_ldexp(result, i_i);
+#if LUT_RR_COMPOSE == 1    // sigmoid: 1/(1+y)
+    result = recip(result + const_vf(1.0f));
+#elif LUT_RR_COMPOSE == 2  // minus_one: y - 1
+    result = result - const_vf(1.0f);
+#endif
+#elif LUT_RR_METHOD == 5  // expalu_log2: scale*(e + P(u))
+    result = (rr_ef + result) * const_vf(LUT_RR_LOG2_SCALE);
+#elif LUT_RR_METHOD == 6  // expalu_pow: [1/](sign) * C[r] * 2^q * P(m)
+    result = rr_scale_by_r(result, r_i);
+    result = rr_ldexp(result, q_i);
+#if (LUT_RR_POW_N % 2) == 1
+    result = sfpi::copysgn(result, x_in);  // odd root: restore sign
+#endif
+#if LUT_RR_POW_RECIP
+    result = recip(result);  // rsqrt
+#endif
+    v_if(sfpi::abs(x_in) == sfpi::vFloat(0.0f)) {
+#if LUT_RR_POW_RECIP
+        result = std::numeric_limits<float>::infinity();
+#else
+        result = sfpi::vFloat(0.0f);
+#endif
+    }
+    v_endif;
+#elif LUT_RR_METHOD == 7  // trig: result = (-1)^k * P(s); odd-k parity flips sign.
+    // trig_sign is exactly 0.0f or 1.0f; compare against 1.0f via the sub() workaround.
+    v_if(sub(trig_sign, const_vf(1.0f)) == 0.0f) { result = -result; }
+    v_endif;
+#elif LUT_RR_METHOD == 8  // tan: j even -> P(a); j odd -> -1/P(a)
+    const sfpi::vFloat tan_recip = -recip(result);  // -1/P(a), computed on all lanes
+    v_if(sub(tan_odd, const_vf(1.0f)) == 0.0f) { result = tan_recip; }
+    v_endif;
+#endif
 
     sfpi::dst_reg[0] = result;
 }

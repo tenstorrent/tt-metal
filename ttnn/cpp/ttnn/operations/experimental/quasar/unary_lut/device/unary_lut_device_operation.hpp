@@ -34,6 +34,29 @@ struct LutConfig {
     uint32_t den_degree = 0;  // RATIONAL denominator degree
     std::vector<float> data;  // boundaries + per-segment coefficients (see layout above)
 
+    // ---- Range reduction (RR). Mirrors the tt-llk generic-LUT build header contract
+    // (LUT_RR_* defines). The Python driver parses range_reduction_method (+ params)
+    // from the fitter CSV METADATA into these fields; the factory bakes them into the
+    // compute kernel as -D defines so reduce-then-poly-then-reconstruct runs uniformly,
+    // with NO per-activation special-casing. rr_method == 0 (none) => byte-identical to
+    // the no-RR path. Method codes (match the kernel's LUT_RR_METHOD contract):
+    //   0 none, 1 log, 2 exp (Cody-Waite), 3 cbrt, 4 expalu_exp2, 5 expalu_log2,
+    //   6 expalu_pow, 7 trig (sin/cos), 8 tan.
+    uint32_t rr_method = 0;
+    float rr_log_ln2 = 1.0f;                   // method 1
+    float rr_exp_mult = 1.4426950408889634f;   // method 2
+    float rr_exp_const = 0.6931471805599453f;  // method 2
+    float rr_scale0 = 1.0f;                    // methods 3/6 scale table
+    float rr_scale1 = 1.0f;
+    float rr_scale2 = 1.0f;
+    float rr_exp2_mult = 1.0f;           // method 4
+    uint32_t rr_compose = 0;             // method 4: 0 none, 1 sigmoid, 2 minus_one
+    float rr_log2_scale = 1.0f;          // method 5
+    uint32_t rr_log2_basis_mminus1 = 0;  // method 5
+    float rr_input_offset = 0.0f;        // method 5 (log1p)
+    uint32_t rr_pow_n = 2;               // method 6
+    uint32_t rr_pow_recip = 0;           // method 6 (rsqrt)
+
     bool operator==(const LutConfig&) const = default;
 };
 

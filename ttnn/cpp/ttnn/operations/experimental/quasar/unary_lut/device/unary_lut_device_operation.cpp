@@ -20,7 +20,26 @@ ttsl::hash::hash_t UnaryLutDeviceOperation::operation_attributes_t::to_hash() co
     if (lut_config.has_value()) {
         const auto& l = *lut_config;
         lut_sig = ttsl::hash::hash_objects_with_default_seed(
-            l.eval_method, l.poly_degree, l.num_segments, l.num_degree, l.den_degree, l.data);
+            l.eval_method,
+            l.poly_degree,
+            l.num_segments,
+            l.num_degree,
+            l.den_degree,
+            l.data,
+            l.rr_method,
+            l.rr_log_ln2,
+            l.rr_exp_mult,
+            l.rr_exp_const,
+            l.rr_scale0,
+            l.rr_scale1,
+            l.rr_scale2,
+            l.rr_exp2_mult,
+            l.rr_compose,
+            l.rr_log2_scale,
+            l.rr_log2_basis_mminus1,
+            l.rr_input_offset,
+            l.rr_pow_n,
+            l.rr_pow_recip);
     }
     return ttsl::hash::hash_objects_with_default_seed(memory_config, input_dtype, lut_sig);
 }
