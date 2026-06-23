@@ -135,6 +135,8 @@ TRANSPOSE_DEST_FORMATS = input_output_formats(
         DataFormat.Int32,
         DataFormat.Int8,
         DataFormat.UInt8,
+        DataFormat.MxFp6R,
+        DataFormat.MxFp6P,
         DataFormat.MxInt8,
         DataFormat.MxInt4,
         DataFormat.MxInt2,

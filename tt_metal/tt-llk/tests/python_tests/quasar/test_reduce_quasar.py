@@ -80,6 +80,10 @@ def generate_pool_type_and_math_fidelity_combinations():
         [
             DataFormat.Float16_b,
             DataFormat.Float16,
+            DataFormat.MxFp8R,
+            DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,

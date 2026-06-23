@@ -130,6 +130,14 @@ def generate_unpack_reduce_col_tilizeA_strided_combinations(
 
 UNPACK_REDUCE_COL_TILIZEA_STRIDED_FORMATS = input_output_formats(
     [
+        DataFormat.MxInt8,
+        DataFormat.MxInt4,
+        DataFormat.MxInt2,
+        DataFormat.MxFp8P,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp6P,
+        DataFormat.MxFp6R,
+        DataFormat.MxFp4,
         DataFormat.Float32,
         DataFormat.Float16_b,
         DataFormat.Float16,

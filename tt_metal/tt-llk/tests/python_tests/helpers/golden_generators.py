@@ -1739,6 +1739,8 @@ class DataCopyGolden:
                 result = _bfp2b_to_float16b(data, dims)
             else:
                 result = _bfp8b_to_float16b(data, dims)
+        elif data_format.is_mx_format():
+            result = quantize_mx_tensor_chunked(result.to(torch.bfloat16), data_format)
 
         # Final FTZ pass: hardware always flushes subnormals to zero. The BFP
         # helpers no longer FTZ internally, so funnel every output (BFP, MX,
@@ -3752,7 +3754,13 @@ class UntilizeGolden:
     ):
         from helpers.tilize_untilize import untilize_block
 
-        operand = quantize_input_to_unpack_format(operand, input_format)
+        # all_mx_formats=True: quantize every MX input (MxFp6/MxFp8/MxInt), not just
+        # MxFp4, to the lattice the unpacker produces. Without it MxFp6R/etc. inputs
+        # keep finer-than-format bf16 values and diverge from HW (which quantizes on
+        # unpack). Mirrors DataCopyGolden.
+        operand = quantize_input_to_unpack_format(
+            operand, input_format, all_mx_formats=True
+        )
 
         result = untilize_block(
             operand, stimuli_format=data_format, dimensions=dimensions

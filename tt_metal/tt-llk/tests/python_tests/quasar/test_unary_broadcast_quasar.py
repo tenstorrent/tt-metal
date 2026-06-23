@@ -63,6 +63,8 @@ def get_valid_dest_acc_unary_broadcast(formats):
             # DataFormat.Float32, Buggy functionality for Float32 (unpack_to_dest=True) tbd
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
+            DataFormat.MxFp6R,
+            DataFormat.MxFp6P,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,

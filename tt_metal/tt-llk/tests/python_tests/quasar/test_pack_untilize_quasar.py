@@ -97,6 +97,8 @@ PACK_UNTILIZE_FORMATS = input_output_formats(
         DataFormat.Float16_b,
         DataFormat.Int16,
         DataFormat.Int32,
+        DataFormat.MxFp8R,
+        DataFormat.MxFp8P,
         DataFormat.MxFp6R,
         DataFormat.MxFp6P,
         DataFormat.MxFp4,
@@ -182,4 +184,5 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
         golden_tensor,
         res_tensor,
         formats.output_format,
+        print_errors=False,
     ), "Assert against golden failed"
