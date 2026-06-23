@@ -103,6 +103,9 @@ class VariableMatmulTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ttml::autograd::ctx().open_device();
+        if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "variable_matmul is only supported on Blackhole.";
+        }
         ttml::autograd::ctx().set_seed(42);
     }
 

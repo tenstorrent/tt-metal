@@ -26,6 +26,11 @@ protected:
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
     }
+    void SetUp() override {
+        if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "moe_ffn_swiglu is only supported on Blackhole.";
+        }
+    }
 };
 
 // CPU reference: for each expert slice X_e, compute
@@ -230,6 +235,11 @@ protected:
     }
     static void TearDownTestSuite() {
         ttml::autograd::ctx().close_device();
+    }
+    void SetUp() override {
+        if (ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
+            GTEST_SKIP() << "moe_ffn_swiglu is only supported on Blackhole.";
+        }
     }
 };
 
