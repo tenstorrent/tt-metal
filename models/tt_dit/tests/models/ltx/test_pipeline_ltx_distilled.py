@@ -2,9 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import functools
 import itertools
 import math
 import os
+import shutil
+import subprocess
+import sys
 import time
 
 import numpy as np
@@ -260,10 +264,30 @@ def test_pipeline_distilled(
         pipeline.release_traces()
 
 
+@functools.lru_cache(maxsize=1)
+def _ffmpeg():
+    """An ffmpeg executable. Prefer the system binary; fall back to imageio-ffmpeg's
+    bundled static build (pip-installed on demand) so a host without ffmpeg still runs
+    the frame-decode checks. The static build is real ffmpeg, so decoded pixels — and
+    thus the calibrated seam thresholds — are unchanged."""
+    exe = shutil.which("ffmpeg")
+    if exe:
+        return exe
+    try:
+        import imageio_ffmpeg
+    except ImportError:
+        pip_install = [sys.executable, "-m", "pip", "install", "-q", "imageio-ffmpeg"]
+        if subprocess.run(pip_install).returncode != 0:
+            # uv-managed venvs ship without pip; bootstrap it from the stdlib, then retry.
+            subprocess.run([sys.executable, "-m", "ensurepip", "--upgrade"], check=True)
+            subprocess.run(pip_install, check=True)
+        import imageio_ffmpeg
+    return imageio_ffmpeg.get_ffmpeg_exe()
+
+
 def _ffmpeg_frames(path, n):
     """Sample ``n`` luma frames evenly across ``path`` (via ffmpeg) as float ndarrays."""
     import io
-    import subprocess
 
     from PIL import Image
 
@@ -271,7 +295,7 @@ def _ffmpeg_frames(path, n):
     for t in np.linspace(0.1, 5.5, n):
         raw = subprocess.run(
             [
-                "ffmpeg",
+                _ffmpeg(),
                 "-v",
                 "error",
                 "-ss",
@@ -371,7 +395,7 @@ def test_pipeline_distilled_i2v(
     t2v = tmp_path / "t2v.mp4"
     _gen(t2v, None)
     cond = tmp_path / "cond_frame0.png"
-    subprocess.run(["ffmpeg", "-v", "error", "-i", str(t2v), "-vframes", "1", "-y", str(cond)], check=True)
+    subprocess.run([_ffmpeg(), "-v", "error", "-i", str(t2v), "-vframes", "1", "-y", str(cond)], check=True)
 
     # 2) i2v conditioned on that frame
     i2v = tmp_path / "i2v.mp4"
@@ -381,7 +405,7 @@ def test_pipeline_distilled_i2v(
     # so not identity — but a far tighter correlation than an unconditioned gen of the same prompt).
     def _luma0(path):
         raw = subprocess.run(
-            ["ffmpeg", "-v", "error", "-i", path, "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
+            [_ffmpeg(), "-v", "error", "-i", path, "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
             capture_output=True,
         ).stdout
         return torch.from_numpy(
