@@ -44,9 +44,15 @@ inline __attribute__((always_inline)) void _sfpu_check_(
 
 // Init macros take OP first, then the optional init callback and template args.
 
-// Bare init: no callback.
-//   SFPU_UNARY_INIT(abs);
-#define SFPU_UNARY_INIT(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>()
+// Init with an optional non-templated init function.
+//   SFPU_UNARY_INIT(abs);                                       // no init function
+//   SFPU_UNARY_INIT(greater_than_zero, sfpu::init_zero_comp);  // non-templated init function
+#define SFPU_UNARY_INIT_1(OP) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>()
+#define SFPU_UNARY_INIT_2(OP, INIT_FN) ::ckernel::llk_math_eltwise_unary_sfpu_init<::ckernel::SfpuType::OP>(INIT_FN)
+#define SFPU_UNARY_INIT_PICK(_1, _2, NAME, ...) NAME
+#define SFPU_UNARY_INIT(...) \
+    SFPU_UNARY_INIT_PICK(    \
+        __VA_ARGS__, SFPU_UNARY_INIT_2, SFPU_UNARY_INIT_1, _ignore /* at least one argument */)(__VA_ARGS__)
 
 // Init with a templated callback.
 //   SFPU_UNARY_INIT_FN(erf, sfpu::erf_init, (APPROXIMATE));
