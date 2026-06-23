@@ -45,12 +45,14 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.AI_GH_TOKEN }}
 
-      # 2. Switch to the PR's head branch.
+      # 2. Switch to the PR's head branch, and ensure a local `main` exists so
+      #    /code-review can diff the PR against it (main...HEAD).
       - name: Check out the PR branch
         env:
           GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
         run: |
           gh pr checkout "${PR_NUMBER}"
+          git fetch origin +refs/heads/main:refs/heads/main
 
       # 3. Fetch the private LLK review knowledge, kept out of the public tree and
       #    pulled at runtime into a scratch dir via a sparse checkout.
@@ -97,6 +99,8 @@ jobs:
           # The proxy requires the "anthropic/" model prefix.
           ANTHROPIC_MODEL: anthropic/claude-opus-4-5-20251101
           ANTHROPIC_SMALL_FAST_MODEL: anthropic/claude-haiku-4-5-20251001
+          # So /code-review --comment can detect the PR and post via gh.
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
         with:
           # Present only to satisfy the action's auth precheck; actual auth +
           # routing is via the ANTHROPIC_* env vars above (AUTH_TOKEN takes
@@ -108,6 +112,7 @@ jobs:
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
           # anthropic/ prefix for the proxy).
           claude_args: |
+            --allowedTools "Bash(gh:*),Bash(git:*)"
             --max-turns 60
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
