@@ -56,6 +56,10 @@ from models.experimental.pi0_5.tt.ttnn_gemma import (
     ada_rms_norm_no_gate_ttnn,
     ada_rms_norm_no_gate_precomputed_ttnn,
 )
+from models.experimental.pi0_5.tt.ttnn_pi0_5_model import (
+    _MASK_VAL,
+    _precompute_rope_table_torch,
+)
 
 from .expert_slice import ExpertChunkSlice
 from .pipeline import _DenoiseHead, _PrefillHead
@@ -163,6 +167,15 @@ class Pi0_5GLX1x8Pipeline:
         self._num_real_cams = int(os.environ.get("PI0_NUM_CAMERAS", _DEFAULT_NUM_REAL_CAMS))
         if not 1 <= self._num_real_cams <= _NUM_CHIPS_REQUIRED:
             raise RuntimeError(f"PI0_NUM_CAMERAS={self._num_real_cams} out of range [1, {_NUM_CHIPS_REQUIRED}]")
+
+        # Upstream-openpi-compat artifacts: position-aware suffix RoPE +
+        # cross-attention mask. Without these, denoise suffix Q uses RoPE at
+        # sequential positions 0..suffix_padded-1 instead of the correct
+        # prefix_len..prefix_len+suffix_padded-1 — corrupts cross-attention
+        # against the prefill KV cache. Effect scales with prefix_len so 2-cam
+        # (768) and 3-cam (1024) drift differently. Torch ref builds the same
+        # in _denoise_forward (torch_pi0_5_model.py:148).
+        self._suffix_cos, self._suffix_sin, self._expert_attn_mask = self._build_suffix_rope_and_expert_mask()
 
         # ---- Persistent buffers (pre-allocated for trace replay) ----
         # Allocated lazily on the first sample_actions call so the per-call
@@ -291,6 +304,57 @@ class Pi0_5GLX1x8Pipeline:
                 self.denoise_head.core_grid,
             )
         return self.suffix.project_output(normed)
+
+    # ──────────── Upstream-compat suffix RoPE + expert mask ──────────
+
+    def _build_suffix_rope_and_expert_mask(self):
+        """Build (suffix_cos, suffix_sin, expert_attn_mask) on the mesh.
+
+        Ports the relevant slice of tt_bh_glx/pipeline.py:_build_upstream_attn_artifacts
+        for the 1×8 single-mesh case. In our pipeline, img_masks and lang_masks
+        are always all-True (no padding) and the prefix length equals the
+        tile-aligned padded length, so:
+          - prefix attn mask is None (no padding to mask)
+          - prefix RoPE positions are sequential 0..prefix_len-1 (default)
+          - suffix RoPE positions are prefix_len + [0..suffix_padded-1]   ← THE FIX
+          - expert mask blocks only the suffix-padding tail rows/cols
+
+        All tensors are replicated across the 1×8 mesh (no mesh_mapper).
+        """
+        action_horizon = self.action_horizon
+        suffix_padded = self._action_horizon_padded
+        prefix_len = self._num_real_cams * _NUM_PATCHES + 256  # 256 = LANG_LEN production
+        prefix_padded = ((prefix_len + 31) // 32) * 32  # equal to prefix_len for our case
+        expert_head_dim = self.config.expert_config.head_dim
+        max_seq_len = self.config.max_seq_len
+
+        # Suffix RoPE at prefix_len + [0..suffix_padded-1].
+        cos_exp, sin_exp = _precompute_rope_table_torch(expert_head_dim, max_seq_len)
+        suffix_positions = (torch.arange(suffix_padded, dtype=torch.int64) + prefix_len).clamp(max=max_seq_len - 1)
+        suffix_cos_4d = cos_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
+        suffix_sin_4d = sin_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
+
+        # Expert cross-attention mask: (1, 1, suffix_padded, prefix_padded + suffix_padded).
+        # In our all-real case, only suffix-tail padding needs masking.
+        kv_total = prefix_padded + suffix_padded
+        em = torch.zeros(suffix_padded, kv_total, dtype=torch.bfloat16)
+        if suffix_padded > action_horizon:
+            # Block columns in the suffix-segment past action_horizon.
+            em[:, prefix_padded + action_horizon : kv_total] = _MASK_VAL
+            # Block rows past action_horizon (those queries don't matter).
+            em[action_horizon:suffix_padded, :] = _MASK_VAL
+        expert_mask_4d = em.unsqueeze(0).unsqueeze(0)
+
+        def _up(host_t, mc=ttnn.DRAM_MEMORY_CONFIG):
+            return ttnn.from_torch(
+                host_t.to(torch.bfloat16) if host_t.dtype != torch.bfloat16 else host_t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=self.mesh,
+                memory_config=mc,
+            )
+
+        return _up(suffix_cos_4d), _up(suffix_sin_4d), _up(expert_mask_4d)
 
     # ──────────── TIER A: host-side modulation precompute ──────────────
 
@@ -491,6 +555,9 @@ class Pi0_5GLX1x8Pipeline:
                 suffix_hidden,
                 adarms_cond,
                 per_layer_kv,
+                attention_mask=self._expert_attn_mask,
+                cos_override=self._suffix_cos,
+                sin_override=self._suffix_sin,
                 precomputed_mods=block_mods,
             )
             ttnn.deallocate(suffix_hidden)
@@ -563,7 +630,15 @@ class Pi0_5GLX1x8Pipeline:
             x_t_bf16 = ttnn.typecast(self.x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             suffix_hidden = self.suffix.embed_actions(x_t_bf16)
             ttnn.deallocate(x_t_bf16)
-            expert_out = self.denoise.forward(suffix_hidden, adarms_cond, per_layer_kv, precomputed_mods=block_mods)
+            expert_out = self.denoise.forward(
+                suffix_hidden,
+                adarms_cond,
+                per_layer_kv,
+                attention_mask=self._expert_attn_mask,
+                cos_override=self._suffix_cos,
+                sin_override=self._suffix_sin,
+                precomputed_mods=block_mods,
+            )
             ttnn.deallocate(suffix_hidden)
             velocity_bf16 = self._apply_final_norm_and_project(expert_out, adarms_cond, precomputed_final_mod=final_mod)
             ttnn.deallocate(expert_out)
@@ -694,7 +769,15 @@ class Pi0_5GLX1x8Pipeline:
             x_t_bf16 = ttnn.typecast(self.x_t_fp32, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
             suffix_hidden = self.suffix.embed_actions(x_t_bf16)
             ttnn.deallocate(x_t_bf16)
-            expert_out = self.denoise.forward(suffix_hidden, adarms_cond, per_layer_kv, precomputed_mods=block_mods)
+            expert_out = self.denoise.forward(
+                suffix_hidden,
+                adarms_cond,
+                per_layer_kv,
+                attention_mask=self._expert_attn_mask,
+                cos_override=self._suffix_cos,
+                sin_override=self._suffix_sin,
+                precomputed_mods=block_mods,
+            )
             ttnn.deallocate(suffix_hidden)
             velocity_bf16 = self._apply_final_norm_and_project(expert_out, adarms_cond, precomputed_final_mod=final_mod)
             ttnn.deallocate(expert_out)
