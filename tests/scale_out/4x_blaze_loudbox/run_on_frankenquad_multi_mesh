@@ -35,9 +35,11 @@ shift
 
 # Configuration for 4x2 multi-mesh (4 separate 4x2 meshes)
 TCP_INTERFACE="enp194s0f1np1"
-HOSTS="bh-lb-39,bh-lb-37,bh-lb-40,bh-lb-38"
-RANKFILE="tests/scale_out/4x_blaze_loudbox/rankfile/4x2_multi_mesh.txt"
-RANK_BINDING="tests/scale_out/4x_blaze_loudbox/rank_bindings/4x2_multi_mesh.yaml"
+HOSTS="bh-lb-37,bh-lb-39,bh-lb-38,bh-lb-40"
+#RANKFILE="tt-metal/tests/scale_out/4x_blaze_loudbox/rankfile/4x2_multi_mesh.txt"
+# One rank per host; avoids OpenMPI rankfile/map-by parser incompatibilities.
+HOSTS_WITH_SLOTS="bh-lb-37:1,bh-lb-39:1,bh-lb-38:1,bh-lb-40:1"
+RANK_BINDING="tt-metal/tests/scale_out/4x_blaze_loudbox/rank_bindings/4x2_multi_mesh.yaml"
 LOG_FILE="/tmp/lbx4_4x2_multi_mesh_debug.log"
 
 echo "========================================"
@@ -50,6 +52,7 @@ fi
 echo "Command: $TEST_PATH"
 echo "Hosts: $HOSTS"
 echo "Config: 4 separate 4x2 meshes (one per host)"
+echo "Environment: FORCE_GALAXY_FABRIC_MODE=1"
 echo "Output log: $LOG_FILE"
 if [ $# -gt 0 ]; then
     echo "Additional args: $*"
@@ -58,16 +61,19 @@ echo "========================================"
 echo ""
 
 # Build command with proper quoting
-CMD="source ~/tt-metal/python_env/bin/activate && $TEST_PATH"
+CMD="source tt-metal/python_env/bin/activate && FORCE_GALAXY_FABRIC_MODE=1 $TEST_PATH"
 for arg in "$@"; do
   CMD="$CMD $(printf '%q' "$arg")"
 done
 
+# Activate the virtual environment to ensure tt-run is available
+source tt-metal/python_env/bin/activate
+
 tt-run \
   --tcp-interface $TCP_INTERFACE \
-  --mpi-args "--host $HOSTS --map-by rankfile:file=$RANKFILE" \
+    --mpi-args "--host $HOSTS_WITH_SLOTS" \
   --rank-binding $RANK_BINDING \
-  bash -c "$CMD" 2>&1 | tee $LOG_FILE
+    env FORCE_GALAXY_FABRIC_MODE=1 bash -c "$CMD" 2>&1 | tee $LOG_FILE
 
 EXIT_CODE=${PIPESTATUS[0]}
 
