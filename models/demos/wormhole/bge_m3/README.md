@@ -65,13 +65,21 @@ model_args, tt_model, _ = create_tt_model(
 > ColBERT) driven through `create_tt_model(pooling=...)`, see
 > `tests/pcc/test_model_pooling.py`.
 
-## Trace capture for repeated inference
+## Running the model: eager vs trace
 
-Trace capture records the model's program once on device and replays it without recompilation, giving the best latency for repeated inference. When using trace capture, follow the warmup → capture → replay pattern:
+`model.forward(...)` runs the encoder. It takes one required argument,
+`input_ids`, plus optional `attention_mask`, `token_type_ids`, and
+`position_ids` (each defaults to `None`, and the model derives sensible values
+internally). The `mode` keyword selects how the forward runs:
+
+- `mode="eager"` (default) — run the program directly. Best for one-off calls,
+  debugging, or correctness checks.
+- `mode="trace"` — capture the program once, then replay it on every subsequent
+  call. Best latency for repeated inference. All the capture/replay bookkeeping
+  is handled for you, so the call site is identical to eager.
 
 ```python
 import ttnn
-from models.common.auto_compose import to_torch_auto_compose
 from models.demos.wormhole.bge_m3.tt.common import create_tt_model
 
 device = ttnn.open_device(device_id=0, trace_region_size=50_000_000, num_command_queues=1)
@@ -81,55 +89,53 @@ model_args, model, _ = create_tt_model(
     dtype=ttnn.bfloat8_b, hf_model_name="BAAI/bge-m3",
 )
 
-# 1. Warmup (JIT compile)
-encoded = model_args.encode_prompts(["warmup"], prompt_length=512)
-staged = encoded["model_inputs"]
-warmup_out = model(**staged)
-ttnn.synchronize_device(device)
-ttnn.deallocate(warmup_out)
+# Eager: run the program directly.
+inputs = model_args.encode_prompts(["What is BGE-M3?"], prompt_length=512)["model_inputs"]
+output_dev = model.forward(**inputs)                  # mode="eager" is the default
 
-# 2. Capture trace (records the program at fixed device memory addresses)
-output_dev = model.capture_trace(
-    input_ids=staged["input_ids"],
-    attention_mask=staged["attention_mask"],
-    token_type_ids=staged["token_type_ids"],
-    position_ids=staged["position_ids"],
-    mesh_device=device, cq_id=0,
-)
-
-# 3. For each new prompt: overwrite device tensors in-place, then replay
+# Trace: the FIRST call warms up + captures; every later call replays.
 for prompt in ["First query.", "Second query.", "Third query."]:
-    enc = model_args.encode_prompts([prompt], prompt_length=512)
+    inputs = model_args.encode_prompts([prompt], prompt_length=512)["model_inputs"]
+    output_dev = model.forward(**inputs, mode="trace")
+    # ... read output_dev back to torch and extract embeddings
 
-    # copy_host_to_device_tensor writes new data to the SAME device address
-    # the trace reads from — this is how new inputs reach the captured program.
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(enc["input_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-        staged["input_ids"],
-    )
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(enc["attention_mask"].bfloat16(),
-                        dtype=model_args.attention_mask_dtype, layout=ttnn.TILE_LAYOUT),
-        staged["attention_mask"],
-    )
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(enc["token_type_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-        staged["token_type_ids"],
-    )
-    ttnn.copy_host_to_device_tensor(
-        ttnn.from_torch(enc["position_ids"].int(), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
-        staged["position_ids"],
-    )
-
-    model.execute_trace(blocking=True)
-    hidden_states = to_torch_auto_compose(output_dev, device=device)
-    # ... extract embeddings from hidden_states
-
-model.release_trace()
 ttnn.close_device(device)
 ```
 
-See `demo/demo_v2.py` for a complete runnable example.
+`encode_prompts(...)["model_inputs"]` returns the four device tensors
+(`input_ids`, `attention_mask`, `token_type_ids`, `position_ids`) already
+converted to the dtypes/layouts the model expects, so `model.forward(**inputs)`
+just works.
+
+See `demo/demo_single_chip.py` for a complete runnable example (batch sizes
+1/8/16/32, including the optimized device→host readback).
+
+## How trace works
+
+A *trace* is a recording of the exact sequence of device operations a forward
+pass performs. Capturing it once and replaying it skips the host-side overhead
+(Python dispatch, op-by-op command building) on every later call, which is what
+gives trace mode its latency advantage.
+
+The first time you call `model.forward(**inputs, mode="trace")`, three things
+happen automatically:
+
+1. **Warmup** — an eager forward runs first to JIT-compile all kernels. (Kernel
+   compilation synchronizes the device, which is not allowed *during* capture,
+   so it must happen before.)
+2. **Capture** — `ttnn.begin_trace_capture` records the program. The captured
+   trace is bound to the **fixed device memory addresses** of the input tensors
+   it read during capture.
+3. **Replay** — `ttnn.execute_trace` runs the recorded program.
+
+On every subsequent call, the model copies your new inputs into those same fixed
+input addresses (a fast device→device copy) and replays the trace — no
+recompilation, no recapture. Because the trace is fixed-shape, the model must be
+built (`max_batch_size` / `max_seq_len`) for the shape you intend to run.
+
+If you prefer the low-level API, the same three steps are also exposed directly
+as `model.capture_trace(...)`, `model.execute_trace(...)`, and
+`model.release_trace()` — see `demo/demo_v2.py`.
 
 ## Performance benchmarks
 
