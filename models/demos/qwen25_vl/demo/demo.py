@@ -660,7 +660,25 @@ def test_demo(
 
     if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
+        import bert_score.score as _bs_score
         from bert_score import score as bert_score
+
+        # transformers 5.x hands tokenizer.model_max_length straight to the Rust tokenizer's
+        # enable_truncation. deberta-xlarge-mnli has no configured max length, so it is the
+        # VERY_LARGE_INTEGER sentinel (1e30), which does not fit a usize -> "OverflowError: int
+        # too big to convert". Cap it to the model's real 512 on the tokenizer bert-score builds
+        # internally (patch target is bert_score.score.get_tokenizer, where score() resolves it).
+        # TODO(#42151): Qwen2.5-VL-32B produces gibberish output on wh_llmbox_perf; once that
+        # accuracy bug is fixed the BERTScore F1 assertion below should pass. Investigate separately.
+        _orig_get_tokenizer = _bs_score.get_tokenizer
+
+        def _get_tokenizer_capped(model_type, use_fast=False):
+            tok = _orig_get_tokenizer(model_type, use_fast)
+            if tok.model_max_length is None or tok.model_max_length > 100_000:
+                tok.model_max_length = 512
+            return tok
+
+        _bs_score.get_tokenizer = _get_tokenizer_capped
 
         candidates = text_outputs_all_users_all_batches
         references = [expected_output] * len(candidates)
