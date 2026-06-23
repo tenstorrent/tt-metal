@@ -1101,7 +1101,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
                              input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
-                            // Receiver-contiguous DRAM-core prefetcher: in1 is an NdShardSpec DRAM
+                            // Receiver-contiguous Tensor prefetcher: in1 is an NdShardSpec DRAM
                             // weight (reported as ND_SHARDED) whose data is delivered via the
                             // global CB receivers, not read directly per its DRAM layout. The
                             // weight's own layout is irrelevant to the matmul in this case.
@@ -1901,7 +1901,8 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                                 all_cores,
                                 {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                                 ShardOrientation::ROW_MAJOR};
-                            mem_config = mem_config.with_shard_spec(shard_spec);
+                            mem_config = tt::tt_metal::MemoryConfig(
+                                mem_config.memory_layout(), mem_config.buffer_type(), shard_spec);
                         }
                     }
                     // support for multi-tensor output
@@ -1947,7 +1948,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         ShardOrientation::ROW_MAJOR};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -1988,21 +1992,34 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
 
                     uint32_t num_blocks_y = ((M - 1) / per_core_M) + 1;
                     uint32_t num_blocks_x = ((N - 1) / per_core_N) + 1;
-                    ShardOrientation shard_orientation =
-                        program_config.transpose_mcast ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
+                    // The output CB is globally allocated against the output tensor on the factory's
+                    // work grid {start_core, start_core + num_blocks - 1}, so the output shard grid
+                    // computed here must match it exactly. Mirror the factory's start_core derivation
+                    // (allowed_worker_cores is the single source of truth for core placement) rather
+                    // than trusting a user-supplied output shard grid, which need not agree.
+                    const CoreCoord start_core =
+                        program_config.allowed_worker_cores.has_value()
+                            ? program_config.allowed_worker_cores.value().bounding_box().start_coord
+                            : CoreCoord{0, 0};
                     CoreRangeSet all_cores;
-                    if (attributes.output_mem_config.shard_spec().has_value()) {
-                        all_cores = attributes.output_mem_config.shard_spec()->grid;
-                    } else if (program_config.transpose_mcast) {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_y - 1, num_blocks_x - 1})});
+                    ShardOrientation shard_orientation;
+                    if (program_config.transpose_mcast) {
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_y - 1, start_core.y + num_blocks_x - 1})});
+                        shard_orientation = ShardOrientation::COL_MAJOR;
                     } else {
-                        all_cores = CoreRangeSet({CoreRange({0, 0}, {num_blocks_x - 1, num_blocks_y - 1})});
+                        all_cores = CoreRangeSet({CoreRange(
+                            start_core, {start_core.x + num_blocks_x - 1, start_core.y + num_blocks_y - 1})});
+                        shard_orientation = ShardOrientation::ROW_MAJOR;
                     }
                     tt::tt_metal::ShardSpec shard_spec = tt::tt_metal::ShardSpec{
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -2042,7 +2059,10 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                         all_cores,
                         {per_core_M * in0_tile.get_height(), per_core_N * in1_tile.get_width()},
                         shard_orientation};
-                    auto mem_config = attributes.output_mem_config.with_shard_spec(shard_spec);
+                    auto mem_config = tt::tt_metal::MemoryConfig(
+                        attributes.output_mem_config.memory_layout(),
+                        attributes.output_mem_config.buffer_type(),
+                        shard_spec);
                     return {TensorSpec(
                         output_shape,
                         TensorLayout(

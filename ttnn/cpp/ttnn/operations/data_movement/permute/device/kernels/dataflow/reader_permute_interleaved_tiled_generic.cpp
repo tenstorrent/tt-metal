@@ -216,7 +216,7 @@ void kernel_main() {
                                 {.offset_bytes = 0});
                             noc.async_read_barrier();
                             tt::data_movement::common::tt_memmove<true, false, false, SUBTILE_LINE_BYTES>(
-                                l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
+                                noc, l1_base, misaligned_addr, SUBTILE_LINE_BYTES);
                         } else {
                             CoreLocalMem<uint32_t> dst(l1_col_base + cb_w_offset);
                             noc.async_read(

@@ -186,7 +186,7 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_tokens = num_tokens_per_expert_ptr[expert_id];
         NUM_TOKENS_PER_EXPERT[expert_id] = num_tokens;
-        NUM_CHUNKS_PER_EXPERT[expert_id] = detail::div_up(num_tokens, tokens_per_chunk);
+        NUM_CHUNKS_PER_EXPERT[expert_id] = moe_ring::detail::div_up(num_tokens, tokens_per_chunk);
     }
 
     // Tilize core we signal to that tilize cores can send another chunk of tiles
@@ -270,9 +270,13 @@ void kernel_main() {
                     }
 
                     // Wait for current data to be ready in cb_s2c_in2
+#if !defined(ARCH_BLACKHOLE)
                     while ((*my_semaphore_ptr) < semaphore_value) {
                     };
-
+#else
+                    // on BH we use standard semaphore APIs AND require the cache invalidation they provide
+                    noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
+#endif
                     // Signal to compute core that data is ready
                     cb_reserve_back(cb_w2c_rdy, 1);
                     cb_push_back(cb_w2c_rdy, 1);

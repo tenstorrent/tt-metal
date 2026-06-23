@@ -81,7 +81,7 @@ void kernel_main() {
                 const uint32_t topk_l1_addr = data_cb.get_read_ptr() + expert_idx * datum_size_bytes;
                 const uint32_t output_l1_element_addr = output_l1_addr + e * datum_size_bytes;
                 tt::data_movement::common::tt_memmove<false, false, false, datum_size_bytes>(
-                    output_l1_element_addr, topk_l1_addr, datum_size_bytes);
+                    noc, output_l1_element_addr, topk_l1_addr, datum_size_bytes);
 
                 reduced_l1_ptr[e] = 1;
             }

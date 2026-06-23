@@ -90,15 +90,18 @@ def apply_per_head_norm(tensor, weight, eps, with_scale=True):
     """
     Apply RMSNorm per-head on the head_dim dimension.
 
-    Input: [1, num_heads, S, head_dim]
-    Process: reshape to [1, 1, num_heads*S, head_dim] -> rms_norm -> reshape back
+    Input: [1, num_heads, S, head_dim] or batched prefill [B, num_heads, S, head_dim]
+    Process: reshape to [1, 1, num_heads*S, head_dim] (or B*num_heads*S for batch) -> rms_norm -> reshape back
     """
     orig_shape = tensor.shape
-    num_heads = orig_shape[1]
-    seq_or_batch = orig_shape[2]
-    head_dim = orig_shape[3]
-
-    flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
+    head_dim = orig_shape[-1]
+    if len(orig_shape) == 4 and orig_shape[0] > 1:
+        batch, num_heads, seq_len, _ = orig_shape
+        flat = ttnn.reshape(tensor, (1, 1, batch * num_heads * seq_len, head_dim))
+    else:
+        num_heads = orig_shape[1]
+        seq_or_batch = orig_shape[2]
+        flat = ttnn.reshape(tensor, (1, 1, num_heads * seq_or_batch, head_dim))
     if with_scale and weight is not None:
         normed = ttnn.rms_norm(flat, weight=weight, epsilon=eps)
     else:

@@ -26,6 +26,7 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
@@ -56,7 +57,7 @@ void matmul_blocks(
 
             // Only reconfigure when subblock size changes (edge tiles)
             if (current_sh != last_sh || current_sw != last_sw) {
-                mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, current_sw, current_sh, kInnerKTiles);
+                matmul_block_init(in0_cb, in1_cb, kTransposeIn1, current_sw, current_sh, kInnerKTiles);
                 last_sh = current_sh;
                 last_sw = current_sw;
             }
@@ -95,7 +96,7 @@ void matmul_blocks(
     }
     // Restore full subblock size for next call
     if (last_sh != subblock_h || last_sw != subblock_w) {
-        mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+        matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
     }
 }
 
@@ -240,8 +241,8 @@ void kernel_main() {
     constexpr uint32_t combined_cb = tt::CBIndex::c_6;
 #endif
 
-    mm_init(in0_cb, in1_cb, intermed_cb);
-    mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, intermed_cb);
+    matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
     reconfig_data_format(in1_cb, in0_cb);
     pack_reconfig_data_format(intermed_cb);
 
@@ -304,8 +305,7 @@ void kernel_main() {
 
             // Re-init matmul pipeline after copy/pack changed data formats
             if (n_sub + 1 < num_n_blocks) {
-                mm_init(in0_cb, in1_cb, intermed_cb);
-                mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+                matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
                 reconfig_data_format(in1_cb, in0_cb);
                 pack_reconfig_data_format(intermed_cb);
             }
@@ -313,8 +313,7 @@ void kernel_main() {
 
         // Re-init matmul pipeline for next m_sub
         if (m_sub + 1 < num_m_blocks) {
-            mm_init(in0_cb, in1_cb, intermed_cb);
-            mm_block_init_short(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
+            matmul_block_init(in0_cb, in1_cb, kTransposeIn1, subblock_w, subblock_h, kInnerKTiles);
             reconfig_data_format(in1_cb, in0_cb);
             pack_reconfig_data_format(intermed_cb);
         }

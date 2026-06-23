@@ -269,7 +269,7 @@ void validate_recv_contig_weight_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const tt::tt_metal::Tensor& weight,
     uint32_t ring_size) {
-    TT_FATAL(program_config.gather_in0, "receiver-contiguous DRAM-core prefetcher requires gather_in0=true");
+    TT_FATAL(program_config.gather_in0, "receiver-contiguous Tensor prefetcher requires gather_in0=true");
     TT_FATAL(ring_size > 0, "ring_size must be > 0");
 
     // The receiver-contiguous weight is an NdShardSpec DRAM tensor: num_shards == ring_size, each shard
@@ -279,7 +279,7 @@ void validate_recv_contig_weight_for_matmul_1d(
     TT_FATAL(
         nd_opt.has_value(),
         "weight must be allocated with an NdShardSpec (ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(...))) "
-        "for the receiver-contiguous DRAM-core prefetcher path");
+        "for the receiver-contiguous Tensor prefetcher path");
     const auto& shard_shape = nd_opt->shard_shape;
     TT_FATAL(
         shard_shape.rank() == 2,
@@ -342,7 +342,7 @@ void validate_recv_contig_weight_for_matmul_1d(
 
 }  // namespace
 
-uint32_t dram_core_prefetcher_block_count_for_matmul_1d(
+uint32_t tensor_prefetcher_block_count_for_matmul_1d(
     const ttnn::operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& program_config,
     const tt::tt_metal::Tensor& weight,
     const GlobalCircularBuffer& gcb) {
@@ -398,7 +398,7 @@ GlobalCircularBuffer create_global_circular_buffer_for_matmul_1d_recv_contig(
             ring_size);
 
         // Per-(config, weight) recv-contig cross-checks (num_shards == ring_size, K % ring_size == 0,
-        // per_core_N == per-receiver N). Shared with dram_core_prefetcher_block_count_for_matmul_1d.
+        // per_core_N == per-receiver N). Shared with tensor_prefetcher_block_count_for_matmul_1d.
         validate_recv_contig_weight_for_matmul_1d(cfg, weights[i], ring_size);
 
         // page_bytes_per_recv = (K_tiles / ring_size) * per_core_N * tile_bytes — one K-block per receiver.

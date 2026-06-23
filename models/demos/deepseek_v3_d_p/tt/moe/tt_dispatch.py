@@ -276,14 +276,6 @@ class TtDispatchModule(LightweightModule):
             num_untilizers_per_sender=self.num_untilizers_per_sender,
         )
 
-        if tt_dispatched_buffer.dtype == ttnn.uint8:
-            logger.warning(
-                """tt_dispatched_buffer dtype is uint8 but the actual content is fp8_e4m3fn. \
-                Workaround until fp8_e4m3fn is supported as a data type. \
-                Use custom kernels to typecast. See test_fp8_typecast.py
-                """
-            )
-
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape
         logger.debug(f"[TtDispatchModule.forward] OUTPUT SHAPES:")

@@ -184,20 +184,6 @@ SDPABackwardKVDeviceOperation::tensor_return_value_t SDPABackwardKVDeviceOperati
     return {grad_key, grad_value};
 }
 
-ttsl::hash::hash_t SDPABackwardKVDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto hash = tt::tt_metal::operation::hash_operation<SDPABackwardKVDeviceOperation>(
-        operation_attributes,
-        operation_attributes.mask_type,
-        tensor_args.query.logical_shape(),
-        tensor_args.key.logical_shape(),
-        tensor_args.value.logical_shape(),
-        tensor_args.intermediates.logical_shape(),
-        tensor_args.query.dtype());
-
-    return hash;
-}
-
 }  // namespace ttml::metal::ops::sdpa_bw::device
 
 namespace ttnn::prim {

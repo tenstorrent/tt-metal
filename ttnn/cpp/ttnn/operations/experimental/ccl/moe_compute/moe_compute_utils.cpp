@@ -5,6 +5,7 @@
 #include "moe_compute_utils.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <numeric>
@@ -17,15 +18,16 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
-#include <umd/device/types/arch.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/span.hpp>
 
+#include "ttnn/operations/ccl/mesh_partition/mesh_partition.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/core/to_dtype/to_dtype_op.hpp"
 #include "ttnn/operations/core/to_layout/to_layout_op.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
@@ -74,6 +76,63 @@ ttnn::Tensor stack_along(const std::vector<ttnn::Tensor>& tensors, int dim) {
         unsqueezed.push_back(ttnn::unsqueeze(t, dim));
     }
     return ttnn::concat(unsqueezed, dim);
+}
+
+// Lay a TP-split shared-expert weight out so each ring core's real TpNt slice
+// sits at the FRONT of that core's full-Nt shard, zero-filling the rest. `axis`
+// is the intermediate (Nt) dim: last dim for W0/W1, dim -2 for W2. `full_map[c]`
+// is core c's tile count under the full-Nt shard (sum = Nt); `tp_map[c]` is core
+// c's count under the TpNt shard (sum = TpNt). The real tiles are consumed in
+// order, so applying the SAME (full_map, tp_map) pair to W0/W1 (axis=-1) and W2
+// (axis=-2) keeps each real intermediate column paired with its W2 row — i.e. a
+// correct partial contraction once the kernel walks only the per-core prefixes.
+ttnn::Tensor front_pack_per_core(
+    const ttnn::Tensor& real, int axis, const std::vector<uint32_t>& full_map, const std::vector<uint32_t>& tp_map) {
+    const auto& shape = real.logical_shape();
+    const int rank = static_cast<int>(shape.rank());
+    const int ax = axis < 0 ? rank + axis : axis;
+    const uint32_t num_cores = static_cast<uint32_t>(full_map.size());
+
+    ttsl::SmallVector<int32_t> begins(rank, 0);
+    ttsl::SmallVector<int32_t> ends(rank, 0);
+    ttsl::SmallVector<uint32_t> zshape(rank, 0);
+
+    std::vector<ttnn::Tensor> pieces;
+    uint32_t cursor = 0;  // real tiles consumed so far (along `ax`)
+    for (uint32_t c = 0; c < num_cores; ++c) {
+        const uint32_t r = tp_map[c];
+        const uint32_t s = full_map[c];
+        TT_FATAL(r <= s, "TpNt shard ({}) exceeds full-Nt shard ({}) at core {}", r, s, c);
+        if (r > 0) {
+            for (int d = 0; d < rank; ++d) {
+                if (d == ax) {
+                    begins[d] = cursor * TILE_SIZE;
+                    ends[d] = (cursor + r) * TILE_SIZE;
+                } else {
+                    ends[d] = shape[d];
+                    begins[d] = 0;
+                }
+            }
+            pieces.push_back(slice_basic(real, begins, ends));
+            cursor += r;
+        }
+        if (s > r) {
+            for (int d = 0; d < rank; ++d) {
+                if (d == ax) {
+                    zshape[d] = (s - r) * TILE_SIZE;
+                } else {
+                    zshape[d] = shape[d];
+                }
+            }
+            pieces.push_back(
+                ttnn::zeros(ttnn::Shape(zshape), real.dtype(), real.layout(), *real.device(), real.memory_config()));
+        }
+    }
+    auto out = ttnn::concat(pieces, ax);
+    for (auto& p : pieces) {
+        p.deallocate(/*force=*/true);
+    }
+    return out;
 }
 
 // W2 packer without the trailing N-pad — used by the bias-aware path so the
@@ -220,19 +279,13 @@ ttnn::Tensor prepare_w2_no_n_pad(
 }  // namespace
 
 WeightCoreShardMaps get_weight_core_shard_maps(
-    ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size, uint32_t bh_ring_size) {
+    ttnn::MeshDevice* mesh_device, uint32_t hidden_size, uint32_t intermediate_size) {
     const auto in0_core_coords =
         mesh_device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
+    // Matmul ring size = the DRAM-bank count, which auto-detects the ring per arch (8 on
+    // Blackhole, 12 on Wormhole) to match ttnn.experimental.moe_compute.
     const uint32_t n_dram_banks = static_cast<uint32_t>(in0_core_coords.size());
-
-    const bool is_blackhole = mesh_device->arch() == tt::ARCH::BLACKHOLE;
-    if (is_blackhole) {
-        TT_FATAL(
-            bh_ring_size == 8 || bh_ring_size == 12 || bh_ring_size == 16,
-            "bh_ring_size ({}) must be 8, 12, or 16 on BLACKHOLE",
-            bh_ring_size);
-    }
-    const uint32_t target_ring_size = is_blackhole ? bh_ring_size : n_dram_banks;
+    const uint32_t target_ring_size = n_dram_banks;
 
     // Ring ordering: sort the DRAM-bank logical core coords by (y, x) descending.
     std::vector<uint32_t> ring_to_dram_bank(n_dram_banks);
@@ -286,8 +339,7 @@ WeightMemoryConfigs get_weight_mem_configs(
     uint32_t experts_per_device,
     uint32_t hidden_size,
     uint32_t intermediate_size,
-    bool has_bias,
-    uint32_t bh_ring_size) {
+    bool has_bias) {
     TT_FATAL(
         hidden_size % TILE_SIZE == 0, "hidden_size ({}) must be divisible by TILE_SIZE ({})", hidden_size, TILE_SIZE);
     TT_FATAL(
@@ -296,7 +348,7 @@ WeightMemoryConfigs get_weight_mem_configs(
         intermediate_size,
         TILE_SIZE);
 
-    const auto shard_maps = get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size, bh_ring_size);
+    const auto shard_maps = get_weight_core_shard_maps(mesh_device, hidden_size, intermediate_size);
     const auto& w0_w1_shard_map = shard_maps.w0_w1_shard_map;
     const auto& w2_shard_map = shard_maps.w2_shard_map;
 
@@ -366,27 +418,61 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> add_shared_expert_weights(
     const ttnn::Tensor& routed_w2,
     const ttnn::Tensor& shared_w0,
     const ttnn::Tensor& shared_w1,
-    const ttnn::Tensor& shared_w2) {
-    auto output_w0 = ttnn::concat({routed_w0, shared_w0}, 1);
-    auto output_w1 = ttnn::concat({routed_w1, shared_w1}, 1);
-    auto output_w2 = ttnn::concat({routed_w2, shared_w2}, 1);
+    const ttnn::Tensor& shared_w2,
+    const uint32_t cluster_axis) {
+    const auto intermediate_dim = static_cast<uint32_t>(routed_w0.logical_shape()[-1]);
+    const auto hidden_dim = static_cast<uint32_t>(routed_w0.logical_shape()[-2]);
+    const auto tp_axis = 1 - cluster_axis;
+    auto* device = routed_w0.device();
+
+    // Per-core shard maps, generated with the SAME moe_ring::shard_tiles the kernel's
+    // shard LUT uses (so host layout and kernel geometry agree by construction):
+    //  - full_map: how the uniform prep slices EVERY expert's full-Nt intermediate.
+    //  - tp_map:   the TpNt sub-shard the shared expert actually contracts.
+    // We front-pack each core's real TpNt tiles into the front of its full-Nt shard
+    // (zeros after), applying the same mapping to W0/W1 and W2. This keeps the whole
+    // downstream prep + DRAM layout uniform (full-Nt per-expert stride) while letting
+    // the kernel walk only the real per-core prefixes as a balanced TpNt ring.
+    const auto full_map = get_weight_core_shard_maps(device, hidden_dim, intermediate_dim).w0_w1_shard_map;
+
+    auto mp_w0 = ttnn::mesh_partition(shared_w0, -1, tp_axis);
+    const auto tp_intermediate = static_cast<uint32_t>(mp_w0.logical_shape()[-1]);
+    TT_FATAL(
+        tp_intermediate % TILE_SIZE == 0,
+        "TP-split intermediate ({}) must be tile-aligned (TILE_SIZE={})",
+        tp_intermediate,
+        TILE_SIZE);
+    const auto tp_map = get_weight_core_shard_maps(device, hidden_dim, tp_intermediate).w0_w1_shard_map;
+
+    auto working_shared_w0 = front_pack_per_core(mp_w0, /*axis=*/-1, full_map, tp_map);
+    mp_w0.deallocate(/*force=*/false);
+    auto output_w0 = ttnn::concat({routed_w0, working_shared_w0}, 1);
+    working_shared_w0.deallocate(/*force=*/false);
+
+    auto mp_w1 = ttnn::mesh_partition(shared_w1, -1, tp_axis);
+    auto working_shared_w1 = front_pack_per_core(mp_w1, /*axis=*/-1, full_map, tp_map);
+    mp_w1.deallocate(/*force=*/false);
+    auto output_w1 = ttnn::concat({routed_w1, working_shared_w1}, 1);
+    working_shared_w1.deallocate(/*force=*/false);
+
+    // W2's intermediate (contraction K) is dim -2. Same maps -> each real W2 row pairs
+    // with its real W0/W1 column.
+    auto mp_w2 = ttnn::mesh_partition(shared_w2, -2, tp_axis);
+    auto working_shared_w2 = front_pack_per_core(mp_w2, /*axis=*/-2, full_map, tp_map);
+    mp_w2.deallocate(/*force=*/false);
+    auto output_w2 = ttnn::concat({routed_w2, working_shared_w2}, 1);
+    working_shared_w2.deallocate(/*force=*/false);
+
     return {output_w0, output_w1, output_w2};
 }
 
 ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
-    const ttnn::Tensor& tt_w0,
-    const ttnn::Tensor& tt_w1,
-    uint32_t L,
-    uint32_t E,
-    uint32_t K,
-    uint32_t N,
-    uint32_t bh_ring_size) {
+    const ttnn::Tensor& tt_w0, const ttnn::Tensor& tt_w1, uint32_t L, uint32_t E, uint32_t K, uint32_t N) {
     TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
     TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
 
     const auto shard_map =
-        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N, bh_ring_size)
-            .w0_w1_shard_map;
+        get_weight_core_shard_maps(tt_w0.device(), /*hidden_size=*/K, /*intermediate_size=*/N).w0_w1_shard_map;
     const uint32_t Nt = N / TILE_SIZE;
     // Pad K up to a multiple of (TILE_SIZE * BLOCK_TILES_H) — matches the DRAM read transaction.
     const uint32_t Kp = ceil_div(K / TILE_SIZE, BLOCK_TILES_H) * TILE_SIZE * BLOCK_TILES_H;
@@ -521,12 +607,11 @@ ttnn::Tensor prepare_w0_w1_tensor_for_moe_compute(
 }
 
 ttnn::Tensor prepare_w2_tensor_for_moe_compute(
-    const ttnn::Tensor& tt_w2, uint32_t L, uint32_t E, uint32_t N, uint32_t K, uint32_t bh_ring_size) {
+    const ttnn::Tensor& tt_w2, uint32_t L, uint32_t E, uint32_t N, uint32_t K) {
     TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
     TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
 
-    const auto shard_maps =
-        get_weight_core_shard_maps(tt_w2.device(), /*hidden_size=*/K, /*intermediate_size=*/N, bh_ring_size);
+    const auto shard_maps = get_weight_core_shard_maps(tt_w2.device(), /*hidden_size=*/K, /*intermediate_size=*/N);
     const auto& w0_w1_shard_map = shard_maps.w0_w1_shard_map;
     const auto& w2_shard_map = shard_maps.w2_shard_map;
 
@@ -563,8 +648,7 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     uint32_t L,
     uint32_t E,
     uint32_t K,
-    uint32_t N,
-    uint32_t bh_ring_size) {
+    uint32_t N) {
     TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
     TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
 
@@ -585,25 +669,18 @@ ttnn::Tensor prepare_w0_w1_tensor_with_bias(
     b0_tiled.deallocate(/*force=*/true);
     b1_tiled.deallocate(/*force=*/true);
 
-    auto result = prepare_w0_w1_tensor_for_moe_compute(w0_b0, w1_b1, L, E, K_with_bias, N, bh_ring_size);
+    auto result = prepare_w0_w1_tensor_for_moe_compute(w0_b0, w1_b1, L, E, K_with_bias, N);
     w0_b0.deallocate(/*force=*/true);
     w1_b1.deallocate(/*force=*/true);
     return result;
 }
 
 ttnn::Tensor prepare_w2_tensor_with_bias(
-    const ttnn::Tensor& tt_w2,
-    const ttnn::Tensor& tt_b2,
-    uint32_t L,
-    uint32_t E,
-    uint32_t N,
-    uint32_t K,
-    uint32_t bh_ring_size) {
+    const ttnn::Tensor& tt_w2, const ttnn::Tensor& tt_b2, uint32_t L, uint32_t E, uint32_t N, uint32_t K) {
     TT_FATAL(N % TILE_SIZE == 0, "N dimension ({}) must be divisible by TILE_SIZE ({})", N, TILE_SIZE);
     TT_FATAL(K % TILE_SIZE == 0, "K dimension ({}) must be divisible by TILE_SIZE ({})", K, TILE_SIZE);
 
-    const auto shard_maps =
-        get_weight_core_shard_maps(tt_w2.device(), /*hidden_size=*/K, /*intermediate_size=*/N, bh_ring_size);
+    const auto shard_maps = get_weight_core_shard_maps(tt_w2.device(), /*hidden_size=*/K, /*intermediate_size=*/N);
     const auto& w0_w1_shard_map = shard_maps.w0_w1_shard_map;
     const auto& w2_shard_map = shard_maps.w2_shard_map;
 

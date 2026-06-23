@@ -49,33 +49,33 @@ namespace detail {
 // in the (now-deleted) BH wrapper.
 //
 // Guarded by TRISC_MATH because the template signature references SfpuType, which is only
-// brought into scope on the math thread (via llk_math_binary_sfpu_api.h). All callers wrap the
-// invocation in MATH((...)) so the function is never reached on unpack/pack threads.
+// brought into scope on the math thread. All callers wrap the invocation in MATH((...)) so the
+// function is never reached on unpack/pack threads.
 template <SfpuType OP, DataFormat data_format>
 ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     static_assert(
         data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
         "Unsupported data format. Supported: Int32, UInt32, UInt16");
     if constexpr (data_format == DataFormat::Int32) {
-        SFPU_BINARY_CALL_MODE(
+        SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_comp_int32,
             (APPROX, 8 /* ITERATIONS */, OP),
-            RC,
             idst0,
             idst1,
-            odst);
+            odst,
+            VectorMode::RC);
     } else {
-        SFPU_BINARY_CALL_MODE(
+        SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_binary_comp_uint,
             (APPROX, 8 /* ITERATIONS */, OP, data_format),
-            RC,
             idst0,
             idst1,
-            odst);
+            odst,
+            VectorMode::RC);
     }
 }
 

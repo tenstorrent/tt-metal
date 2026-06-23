@@ -512,7 +512,7 @@ void FDMeshCommandQueue::enqueue_write_dram_core_counter(
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScoped;
 
-    // No lock_api_function_() here: the caller (DramCorePrefetcherManager) already holds
+    // No lock_api_function_() here: the caller (TensorPrefetcherManager) already holds
     // the MeshDevice api lock across the counter bump + WAIT_CQ enqueue, and that lock is
     // non-recursive, so re-locking would self-deadlock. See the declaration's contract.
 

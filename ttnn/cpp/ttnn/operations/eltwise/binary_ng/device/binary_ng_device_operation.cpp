@@ -670,7 +670,7 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
 
 ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t binary_ng(
     const Tensor& input_tensor_a,
-    float scalar,
+    ttnn::operations::unary::ScalarVariant scalar,
     ttnn::operations::binary_ng::BinaryOpType binary_op_type,
     const std::optional<const DataType>& output_dtype,
     const std::optional<MemoryConfig>& memory_config,

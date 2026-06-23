@@ -7,6 +7,13 @@ import torch
 
 import ttnn
 from models.demos.gemma4.tt.common import create_tt_model
+from models.demos.gemma4.tt.generator_trace import (
+    maybe_disable_pli_prefill_trace,
+    patch_gemma4_trace_model_args,
+    resolve_gemma4_prefill_trace_enable,
+    warmup_gemma4_model_prefill,
+)
+from models.tt_transformers.tt.common import get_padded_prefill_len
 from models.tt_transformers.tt.generator import create_submeshes
 from models.tt_transformers.tt.generator_vllm import HybridAttentionForCausalLM, allocate_vllm_kv_cache
 
@@ -22,11 +29,10 @@ def _patch_model_args(model_args, mesh_device, max_batch_size, max_seq_len, mode
     model_args.max_batch_size = max_batch_size
     model_args.max_seq_len = max_seq_len
     model_args.max_prefill_chunk_size = max_seq_len
-    model_args.trace_prefill_supported_seq_lens = []
+    patch_gemma4_trace_model_args(model_args, prefill_trace_enabled=True)
     model_args.optimizations = _Gemma4VllmOptimizations()
     model_args.mesh_device = mesh_device
     model_args._gemma4_model_path = model_path
-    model_args.can_enable_trace = lambda prefill_seq_len, num_cached_tokens=0: False
     model_args.is_llama_vision = lambda: False
 
 
@@ -56,6 +62,59 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         # to fall back to the legacy unbounded path through the paged ops.
         self._bounded_sliding_kv_cache = os.environ.get("GEMMA4_BOUNDED_SLIDING_KV_CACHE", "1") != "0"
 
+    def _maybe_disable_pli_prefill_trace(self, enable_trace: bool, batch_size: int = 1) -> bool:
+        return maybe_disable_pli_prefill_trace(enable_trace, self.model[0], batch_size=batch_size)
+
+    def warmup_model_prefill(
+        self,
+        kv_cache,
+        enable_trace,
+        can_sample_on_device,
+        greedy_only: bool = False,
+    ):
+        warmup_gemma4_model_prefill(
+            self,
+            kv_cache,
+            enable_trace=enable_trace,
+            can_sample_on_device=can_sample_on_device,
+            greedy_only=greedy_only,
+        )
+
+    def prefill_forward_text(self, *args, enable_trace=True, **kwargs):
+        tokens = args[0] if args else kwargs.get("tokens")
+        batch_size = tokens.shape[0] if tokens is not None else 1
+        enable_trace = self._maybe_disable_pli_prefill_trace(enable_trace, batch_size=batch_size)
+        if tokens is not None:
+            batch_seq_len = tokens.shape[1]
+            prompt_lens = kwargs.get("prompt_lens")
+            start_pos = kwargs.get("start_pos")
+            prompt_lens_list = prompt_lens if prompt_lens is not None else [batch_seq_len] * batch_size
+            if not isinstance(prompt_lens_list, list):
+                prompt_lens_list = prompt_lens_list.tolist()
+            num_cached_per_user = [int(n) for n in start_pos] if start_pos is not None else [0] * len(prompt_lens_list)
+            prefill_seq_lens = [
+                get_padded_prefill_len(seq_len - num_cached)
+                for seq_len, num_cached in zip(prompt_lens_list, num_cached_per_user)
+            ]
+            page_table = kwargs.get("page_table")
+            can_batch_prefill = (
+                page_table is not None
+                and batch_size > 1
+                and len(set(prefill_seq_lens)) == 1
+                and self.data_parallel == 1
+                and not getattr(self.model_args[0], "disable_batched_prefill", False)
+                and all(n == 0 for n in num_cached_per_user)
+            )
+            enable_trace = resolve_gemma4_prefill_trace_enable(
+                enable_trace,
+                self.model[0],
+                self.model_args[0],
+                batch_size=batch_size,
+                prefill_seq_lens=prefill_seq_lens,
+                can_batch_prefill=can_batch_prefill,
+            )
+        return super().prefill_forward_text(*args, enable_trace=enable_trace, **kwargs)
+
     def _get_prefill_user_page_table(
         self,
         page_table,
@@ -66,6 +125,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         use_batched_prefill=False,
         user_id=None,
         padded_batch_size=None,
+        use_full_prompt_len=False,
     ):
         """Override the shared Generator helper to size/slice the
         per-user page table to the *smallest* effective block_size in
@@ -101,6 +161,7 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
                 use_batched_prefill=use_batched_prefill,
                 user_id=user_id,
                 padded_batch_size=padded_batch_size,
+                use_full_prompt_len=use_full_prompt_len,
             )
 
         # Per-user (non-batched) path: replicate the base behavior but
@@ -118,7 +179,14 @@ class Gemma4ForCausalLM(HybridAttentionForCausalLM):
         max_head_dim = max(head_dims)
         effective_block_size = cache_block_size * cache_head_dim // max_head_dim
 
-        target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
+        # Mirror the base Generator semantics: when ``use_full_prompt_len`` is
+        # set (vLLM warmup runs prefill kernels on the padded prompt length, e.g.
+        # a 32-token prompt becomes a 128-token kernel), size the page table to
+        # the full ``prefill_len`` so it exposes blocks for the padded length.
+        if use_full_prompt_len:
+            target_prefill_len = prefill_len
+        else:
+            target_prefill_len = prefill_seq_len if prefill_seq_len is not None else prefill_len
         num_blocks = num_blocks_in_seq(target_prefill_len, effective_block_size)
         # Bounded sliding-window cache: ``paged_fill_cache`` /
         # ``paged_update_cache`` with ``cache_position_modulo`` set require
