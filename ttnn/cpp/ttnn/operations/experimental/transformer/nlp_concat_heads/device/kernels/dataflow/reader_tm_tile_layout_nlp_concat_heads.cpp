@@ -25,7 +25,7 @@ void kernel_main() {
     constexpr uint32_t in0_c = get_arg(args::in0_c);
     constexpr uint32_t in0_HtWt = get_arg(args::in0_HtWt);
 
-    const auto s0 = TensorAccessor(ta::input);
+    const auto s0 = TensorAccessor(tensor::input);
 
     DataflowBuffer cb_in0(dfb::in);
     const uint32_t single_tile_size_bytes = cb_in0.get_entry_size();

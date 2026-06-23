@@ -5,7 +5,7 @@
 // Metal 2.0 fork of eltwise/unary/.../writer_unary_interleaved_start_id.cpp, specialized for
 // nlp_concat_heads' interleaved path (forward, non-sharded output). The legacy shared writer
 // reads a positional CTA + TensorAccessorArgs + a buffer-address RTA, which a Metal 2.0 factory
-// cannot emit; this fork uses named bindings (dfb::in / ta::output) instead. The legacy copy
+// cannot emit; this fork uses named bindings (dfb::in / tensor::output) instead. The legacy copy
 // stays in place for its ~31 co-borrowers. See METAL2_PORT_REPORT.md (cross-op kernel fork).
 
 #include "api/dataflow/dataflow_api.h"
@@ -27,7 +27,7 @@ void kernel_main() {
     const uint32_t page_bytes = cb.get_entry_size();
 
     constexpr uint32_t onepage = 1;
-    const auto s = TensorAccessor(ta::output);
+    const auto s = TensorAccessor(tensor::output);
 
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
