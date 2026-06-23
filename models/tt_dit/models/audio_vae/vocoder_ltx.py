@@ -13,7 +13,7 @@ to ``(B, T, C)`` ROW_MAJOR at the device boundary for ``Conv1dViaConv3d``.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import List, Sequence
+from typing import List, NamedTuple, Sequence
 
 import torch
 
