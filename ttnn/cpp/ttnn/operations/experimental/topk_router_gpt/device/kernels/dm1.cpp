@@ -146,14 +146,12 @@ void kernel_main() {
         // NOC write partial tile to worker's CB2 at our sender_slot.
         // cb2_base_addr is the same L1 address on all cores due to uniform CB layout.
         uint32_t worker_recv_l1 = cb2_base_addr + sender_slot * tile_size;
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         uint64_t worker_recv_noc = get_noc_addr(worker_phys_x, worker_phys_y, worker_recv_l1);
 
         noc_async_write(local_out_l1, worker_recv_noc, tile_size);
         noc_async_write_barrier();
 
         // Signal worker that this sender's partial is ready
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         uint64_t worker_sem_noc = get_noc_addr(worker_phys_x, worker_phys_y, get_semaphore(sem_partial_ready));
         noc_semaphore_inc(worker_sem_noc, 1);
         noc_async_atomic_barrier();
@@ -232,20 +230,17 @@ void kernel_main() {
         // Use our own CB8/CB9 base addresses — identical L1 layout on all worker cores
         uint32_t coll_val_base = cb_gathered_val.get_write_ptr();
         uint32_t coll_val_dst_l1 = coll_val_base + worker_gather_slot * tile_size;
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         uint64_t coll_val_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_val_dst_l1);
         noc_async_write(val_l1, coll_val_noc, tile_size);
 
         uint32_t coll_ind_base = cb_gathered_ind.get_write_ptr();
         uint32_t coll_ind_dst_l1 = coll_ind_base + worker_gather_slot * tile_size;
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         uint64_t coll_ind_noc = get_noc_addr(collector_phys_x, collector_phys_y, coll_ind_dst_l1);
         noc_async_write(ind_l1, coll_ind_noc, tile_size);
 
         noc_async_write_barrier();
 
         // Signal collector
-        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
         uint64_t coll_sem_noc = get_noc_addr(collector_phys_x, collector_phys_y, get_semaphore(sem_topk_ready));
         noc_semaphore_inc(coll_sem_noc, 1);
         noc_async_atomic_barrier();
