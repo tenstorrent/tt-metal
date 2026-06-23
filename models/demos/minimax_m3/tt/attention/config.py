@@ -26,6 +26,10 @@ class AttentionConfig:
     rms_norm_eps: float = 1e-6  # used by QK-norm
     use_qk_norm: bool = True  # M2 = full-width RMSNorm on Q/K; M3 = per-head (over head_dim)
     use_gemma_norm: bool = False  # M3: QK-norm uses gemma (1+w) RMSNorm (folded into the gain)
+    # SP=8 dense-attention path: when True (and prefill SP>1), prefill SDPA uses
+    # ring_joint_scaled_dot_product_attention (seq sharded across the SP/rows axis) instead of the
+    # local scaled_dot_product_attention. Default off so the DP/EP prefill path is unchanged.
+    sequence_parallel: bool = False
 
     def __post_init__(self):
         """Compute scaling factor if not provided"""

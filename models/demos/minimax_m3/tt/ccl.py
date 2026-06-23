@@ -24,7 +24,11 @@ class CCLManager:
         self.barrier_idx = 0
 
     def _init_subdevice(self):
-        compute_grid_size = ttnn.CoreCoord(8, 8)
+        # Use the REAL device compute grid (Blackhole is wider than 8x8). The ring-attention CCL offset
+        # and the ring_joint SDPA program grid must both derive from this same grid, else the op's
+        # ccl_core_grid_offset.x >= sdpa_grid.x assert fails. Matches deepseek_v3_d_p tt_ccl.
+        compute_grid_size = self.mesh_device.compute_with_storage_grid_size()
+        self.compute_grid_size = compute_grid_size
         self.ccl_cores = ttnn.CoreRangeSet(
             {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
         )
@@ -35,6 +39,12 @@ class CCLManager:
             ]
         )
         self.ccl_sub_device_id = ttnn.SubDeviceId(0)
+
+        # Ring-attention CCL workers live in the LAST compute column; ring_joint SDPA compute uses
+        # the remaining columns (the op requires CCL and SDPA cores to be non-overlapping). Mirrors
+        # deepseek_v3_d_p tt_ccl.ring_attention_ccl_core_grid_offset = (grid.x - 1, 0). Used by the
+        # SP=8 dense-attention path (ring_joint_scaled_dot_product_attention); see PREFILL_PROPOSAL §6.6.
+        self.ring_attention_ccl_core_grid_offset = (compute_grid_size.x - 1, 0)
 
     def _init_semaphores(self):
         # Initialize semaphores for reduce scatter ping pong
@@ -53,6 +63,12 @@ class CCLManager:
         barrier_ns_sems = 2 * 1
         self.barrier_semaphore = [
             ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(barrier_ns_sems)
+        ]
+
+        # Ring-attention semaphores: a forward/backward PAIR for ring_joint_scaled_dot_product_attention
+        # (the SP=8 dense-attention path). Matches deepseek_v3_d_p create_global_semaphores (2 handles).
+        self.ring_attention_ccl_semaphore_handles = [
+            ttnn.create_global_semaphore(self.mesh_device, self.ccl_cores, 0) for _ in range(2)
         ]
 
     def get_rs_ping_pong_semaphore(self):

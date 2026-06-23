@@ -112,6 +112,7 @@ class Model:
         use_throughput_experts=False,
         use_ep_moe=False,
         ep_seq_len_per_chip=1024,
+        expert_weight_dtype=ttnn.bfloat4_b,
     ):
         """
         Initialize MiniMax-M2 model
@@ -192,6 +193,7 @@ class Model:
                 tokens_per_device=max_local_batch_size,
                 use_ep_moe=use_ep_moe,
                 ep_seq_len_per_chip=ep_seq_len_per_chip,
+                expert_weight_dtype=expert_weight_dtype,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]

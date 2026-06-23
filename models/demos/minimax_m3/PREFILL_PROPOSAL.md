@@ -322,6 +322,70 @@ probably goes away* (full SP). So we don't design the cross-SP selection ourselv
 The attention-internal layout is settled (TP→SP CCL bracket, §6.4). Still open: the body's precise
 TP=4 × SP × EP physical mapping on 4×8 (which axis is SP vs EP). Reference DeepSeek `(8,4)` SP8/TP4.
 
+### 6.6 SP bring-up — implementation plan (grounded in `deepseek_v3_d_p` reuse)
+> Investigated 2026-06-23. The strategy above (§6.1–6.5) is the *direction*; this is the concrete
+> code path, staged so dense-layer SP lands first (the perf target) with no MSA/EP dependency.
+
+**Current state.** SP is *plumbed but not consumed*: `config.py` has `ModeConfig.sp`, `MeshConfig`
+auto-defaults prefill to `sp=rows, ep=1` and sets `sp_axis = ep_axis` (rows) — but no layer in `tt/`
+actually shards the sequence (grep: `sp` appears only in comments). Attention prefill
+(`tt/attention/prefill.py`) runs full non-cached SDPA on the call's own Q/K/V; the sequence is whole
+per chip (replicated under TP, one-prompt-per-row under the DP=8 stopgap).
+
+**Key insight — SP and EP alternate (they share the rows axis).** `sp_axis == ep_axis`, so they
+cannot both shard the rows of the *same* tensor. Resolution (DeepSeek's): **attention + norms +
+dense-MLP run in SP** (tokens sharded on rows); **inside MoE, dispatch/combine all-to-all re-lays
+SP-sharded tokens onto EP-sharded experts**, then combine returns to SP layout. Consequence: **dense
+layers (0–2) get SP with zero MoE/EP entanglement** — the clean first step.
+
+#### Stage SP-1 — dense layers (self-contained; the perf target)
+1. **Input + embedding → seq-shard on rows.** `ShardTensor2dMesh(dims=(sp_axis=0, None))`; embedding
+   replicated on rows, TP-sharded on cols. **Drop-in reuse:** `deepseek_v3_d_p/tt/tt_parallel_embedding.py`
+   + `tt/runners/runner_utils.py:~246` (`prepare_prefill_input_tensor`).
+2. **Dense MLP + RMSNorm → no change.** Token-wise ops; each chip processes its `S/8` tokens. The TP
+   collectives (gate/up col-parallel, down all-reduce) are on **cols**, orthogonal to SP on rows. Works
+   as-is once the input is seq-sharded.
+3. **Attention → the only real work.** Q/K/V become seq-sharded; each query needs all keys.
+   **Mechanism: `ttnn.transformer.ring_joint_scaled_dot_product_attention`** (investigated 2026-06-23) —
+   a fused CCL+SDPA op that **overlaps the ring all-gather of K/V with the SDPA matmul** (semaphore
+   handshake, CCL workers on a non-overlapping sub-device column; `ring_fusion.cpp`). It is **GQA-native**
+   (`nkh<nqh`), **causal** (`is_causal=True` — the op handles the per-shard causal offset internally, so
+   NO hand-built offset mask), and uses **online-softmax** across the ring. It takes M3's shapes directly:
+   per chip (after TP) `Q[1,16,S/8,128]`, `K/V[1,1,S/8,128]`, `joint_*=None`, `cluster_axis=sp_axis(rows)`,
+   persistent K/V buffers `[1,1,S,128]`, ring semaphores. **The op is already proven for GQA+causal+SP**
+   by `tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py` (separate `nhq/nhk/nhv`, `is_causal`,
+   `is_balanced`) and used in production at `deepseek_v3_d_p/tt/mla/mla.py:857` — so our work is M3
+   integration + CCL plumbing, NOT re-proving the kernel. (Supersédes the earlier all-gather-KV idea: same
+   KV memory, but comm overlapped with compute and causality handled by the op.) `ring_distributed_sdpa`
+   is a simpler-API fallback (no explicit semaphores) if the ring_joint plumbing misbehaves.
+
+#### Stage SP-2 — MSA layers (later; kernel-gated)
+SP-shard the **chunked-KV buffer across rows** (§5 already states this); `sparse_sdpa` (pavle's GQA
+variant) gathers selected blocks **cross-row** by index. Plus the **MoE SP↔EP dispatch bridge**.
+Gated on: the `sparse_sdpa` GQA kernel (§4) + SP-aware dispatch/combine. This is also where §6.4's
+**TP→SP CCL bracket** lives (the head-sum indexer needs all heads local).
+
+#### Memory note — full-S buffer vs chunked
+`ring_joint`'s persistent K/V buffer is full-S (`[1,1,S,128]` per chip), so it overlaps comm but does
+NOT shrink KV memory by itself — fine for the dense-layer perf measurement at moderate-to-large S. For
+**true 1M**, layer **chunked prefill** on top (chunk Q/S, drive `logical_n`/`kv_actual_isl` — deepseek's
+machinery) so each chip holds only a chunk at a time. (`ring_mla` is the MLA/latent-KV cousin — NOT a fit
+for M3's plain GQA; `exp_ring_joint` rejects GQA. `ring_joint` is the one.)
+
+#### Reuse scorecard
+| Need | Reuse | Effort |
+|---|---|---|
+| Seq-shard input | `ShardTensor2dMesh(dims=(0,None))` + parallel embedding (`deepseek_v3_d_p`) | drop-in |
+| Dense MLP/norm in SP | nothing — already token-wise | none |
+| Ring attn (GQA+causal+SP) | `ttnn.transformer.ring_joint_scaled_dot_product_attention` (proven: `test_ring_joint_sdpa.py`; called at `mla.py:857`) | small — call + CCL plumbing |
+| Ring CCL semaphores | `CCLManager.ring_attention_ccl_semaphore_handles` (added 2026-06-23, mirrors `tt_ccl`) | done |
+| 1M memory | chunked prefill on top of ring_joint (`logical_n`/`kv_actual_isl`) | medium, later |
+| MSA in SP | chunked-KV SP-shard + `sparse_sdpa` cross-row gather | kernel-gated |
+
+**Next concrete step:** (a) M3 `ring_joint` SP helper + standalone PCC test (M3 dims, our CCLManager,
+`(8,4)`) vs torch GQA-causal golden; (b) seq-shard inputs + wire the helper into `attention/prefill.py`
+behind `mesh_config.sp>1`; (c) `test_dense_sp_*` perf harness on layers 0–2 at growing S, measure vs TP-only.
+
 ---
 
 ## 6b. Serving & batching (what prefill owns vs not)
