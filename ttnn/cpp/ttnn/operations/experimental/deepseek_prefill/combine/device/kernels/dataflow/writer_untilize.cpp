@@ -50,6 +50,8 @@ void kernel_main() {
     uint32_t rt_args_idx = 0;
     uint32_t output_addr = get_arg_val<uint32_t>(rt_args_idx++);
 
+    Noc noc;
+
 #if INIT_ZEROS
     uint32_t page_start = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t page_end = get_arg_val<uint32_t>(rt_args_idx++);
@@ -165,7 +167,6 @@ void kernel_main() {
     uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
 
-    Noc noc;
     Semaphore<> credits_sem(credits_semaphore_id);
     Semaphore<> counter_ready_sem(counter_ready_semaphore_id);
 
