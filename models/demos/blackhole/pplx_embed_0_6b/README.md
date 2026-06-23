@@ -160,6 +160,105 @@ python models/demos/blackhole/pplx_embed_0_6b/demo/eval_accuracy_tt.py --pool ma
 
 ---
 
+## Embedding API
+
+To call the model from your own code, build it once with
+`build_single_device_model()` and wrap it in a resident encoder. The encoder
+captures the bidirectional prefill as a hardware trace and replays it per
+request, folding the final RMSNorm + mean-token pooling onto the device, so each
+`encode()` returns a post-processed `[1024]` embedding at the benchmarked latency.
+
+```python
+import ttnn
+from models.demos.blackhole.pplx_embed_0_6b.demo._common import (
+    apply_workload_env,
+    build_single_device_model,
+)
+from models.demos.blackhole.pplx_embed_0_6b.demo.live_demo import (
+    BucketedEncoder,
+    TracedEncoder,
+    bucket_lengths,
+    encode_one,
+    _extract_final_norm,
+)
+
+apply_workload_env(1, 512)  # enable the perf flags for bs=1, ISL=512
+
+device = ttnn.open_device(
+    device_id=0,
+    l1_small_size=32768,
+    trace_region_size=200_000_000,
+    num_command_queues=1,
+)
+
+# Build the resident model once (weights + KV cache + page table).
+generator, model_args, kv_caches, page_table = build_single_device_model(
+    device, batch_size=1, seq_len=512,
+)
+model = generator.model[0]
+norm_weight, eps = _extract_final_norm(model)
+
+# Low-latency encoder. Two encoder classes are available:
+#   TracedEncoder   - one fixed-ISL trace (every input padded to seq_len).
+#   BucketedEncoder - one trace per length tier (128/256/512...); each request
+#                     routes to the smallest bucket that fits (faster for short text).
+encoder = BucketedEncoder(
+    generator, model, kv_caches[0], page_table, model_args.tokenizer,
+    norm_weight, eps, bucket_lengths(512), device,
+    pool="masked", use_mask=True,   # accurate "masked-attn" path (any length)
+)
+```
+
+### Pooling / accuracy options
+
+The `pool` and `use_mask` arguments select the embedding path (same trade-offs as
+the `eval_accuracy_tt.py --pool` modes):
+
+| `pool`     | `use_mask` | Behavior | Use when |
+|------------|------------|----------|----------|
+| `"fast"`   | `False`    | Device mean over the full padded ISL. Lowest latency. | Full-length (~512-token) inputs. |
+| `"masked"` | `True`     | Real-token mean pooling + SDPA padding mask (the `masked-attn` path). Near-reference accuracy for any length. | Short / variable-length inputs (recommended default). |
+
+`encode_one(generator, model, kv_caches[0], page_table, tokenizer, norm_weight, eps, text, max_length)`
+runs the same forward **eagerly** (no trace, minimal padding to the nearest 128) —
+handy for one-off calls or debugging.
+
+## Run inference (Example)
+
+`encoder.encode(text, normalize=True)` returns an L2-normalized `[1024]` torch
+tensor. Stack a batch of texts and take a dot product for cosine-similarity
+(dense retrieval) scoring:
+
+```python
+import torch
+
+sentences_1 = ["What is pplx-embed?", "Definition of BM25"]
+sentences_2 = [
+    "pplx-embed-v1-0.6B is a bidirectional text-embedding model from Perplexity AI.",
+    "BM25 is a bag-of-words retrieval function that ranks documents by query-term matches.",
+]
+
+def encode(sentences):
+    # Each call returns an L2-normalized [1024] tensor (normalize=False to skip).
+    return torch.stack([encoder.encode(s, normalize=True) for s in sentences])
+
+embeddings_1 = encode(sentences_1)
+embeddings_2 = encode(sentences_2)
+
+# Vectors are already L2-normalized, so the dot product is the cosine similarity.
+similarity = embeddings_1 @ embeddings_2.T
+print(similarity)            # [2, 2]: diagonal pairs score highest
+
+ttnn.close_device(device)
+```
+
+To serve embeddings across all 32 chips of a Galaxy from your own code, use the
+`_DPServer` class in [live_demo.py](live_demo.py) (one resident encoder per chip;
+`broadcast(text)` runs on every chip, `map(texts)` distributes a batch
+round-robin), or run `live_demo.py --dp 32` directly.
+
+---
+
 ## 3. Performance
 
 All numbers measured on Blackhole P150. Optimizations (Section 5) are on by
