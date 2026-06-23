@@ -303,6 +303,7 @@ void kernel_main() {
             uint32_t relay_N_block_tiles = (n_tile < N_tiles) ? std::min(current_N_block_tiles, N_tiles - n_tile) : 0;
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                DeviceZoneScopedN("AVAILABLE");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
                         cb_out.wait_front(out_block_num_tiles);

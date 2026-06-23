@@ -606,6 +606,10 @@ def run_test_linear(
         (3072, 5120, 3456, True, True, "gelu", 1, False, 8, 8, 8, 2, 2),
         (3072, 3456, 5120, True, True, None, 1, False, 8, 9, 8, 2, 2),
         (4864, 4096, 1024, True, True, None, 1, False, 16, 8, 4, 2, 2),
+        (4864, 4096, 4096, True, True, None, 1, False, 16, 8, 4, 2, 2),
+        (4864, 4096, 1024, True, True, None, 1, False, 8, 8, 4, 2, 2),  # this is straight up faster than the OG
+        (32768, 4096, 1024, True, False, None, 1, False, 8, 8, 8, 2, 2),
+        (4864, 4096, 1024, True, True, None, 1, False, 4, 8, 4, 2, 2),  # this is straight up faster than the OG
     ],
     ids=[
         "4k4k4k",
@@ -631,6 +635,10 @@ def run_test_linear(
         "3072x5120x6912",
         "3072x3456x5120",
         "4864x4096x1024",
+        "4864x4096x4096",
+        "running-ex-8x8",
+        "4k4k1k",
+        "running-ex-4x8x4",
     ],
 )
 @pytest.mark.parametrize(
