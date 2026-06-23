@@ -134,6 +134,7 @@ def test_qwen_transformer_inference(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         mode="decode",
+        decode_mode_only=True,
     )
 
     seqlen = 1
