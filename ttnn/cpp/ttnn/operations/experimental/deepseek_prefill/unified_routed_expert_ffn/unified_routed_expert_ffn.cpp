@@ -133,7 +133,8 @@ ttnn::Tensor unified_routed_expert_moe(
             expert_token_counts,
             global_expert_idx_table,
             local_expert,
-            max_dispatched_tokens_per_expert);
+            max_dispatched_tokens_per_expert,
+            subdevice_id);
         // In-place direct-write: output == dispatched_buffer, with
         // expert_region_offsets so the writer offsets into this expert's region
         // of that same buffer. The op mutates dispatched_buffer in place; its

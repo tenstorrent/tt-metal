@@ -626,6 +626,11 @@ class TtMoe(LightweightModule):
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
 
+        # Overlap the routed expert with the combine
+        signpost("routed_expert_and_combine_start")
+        if self.overlap_routed_expert_with_combine:
+            self.mesh_device.load_sub_device_manager(self.sd_manager_id)
+
         # NOTE: expert_outputs aliases dispatched_buffer_tiled — TtRoutedExpert.forward sets
         # expert_outputs = dispatched_buffer and then writes per-expert FFN results back
         # in-place via deepseek_prefill.insert. The two names point at the same device buffer.
@@ -654,21 +659,26 @@ class TtMoe(LightweightModule):
         )
         logger.debug(f"[TtMoe.forward] combined_output shape: {combined_output.shape} {combined_output.dtype=}")
 
-        # The routed_expert op bumps this semaphore once per local expert, so after the
-        # call it should read `experts_per_chip` on every core. Log the distinct values,
-        # then reset it to zero for the next forward. The semaphore only exists when an
-        # overlap is enabled (see __init__); skip when it was not created.
-        #
-        # TODO(fbajraktari): To remove; Reset of the global semaphore should eventually
-        # be responsibility of combine op.
-        if self.routed_expert_global_semaphore is not None:
-            _sem_values = ttnn.read_global_semaphore_value(self.routed_expert_global_semaphore)
-            logger.debug(f"[TtMoe.forward] routed_expert semaphore values: {_sem_values}")
-            logger.debug(
-                f"[TtMoe.forward] routed_expert semaphore (expect {self.experts_per_chip}): "
-                f"distinct={sorted(set(_sem_values))}, count={len(_sem_values)}"
-            )
-            ttnn.reset_global_semaphore_value(self.routed_expert_global_semaphore, 0)
+        # # The routed_expert op bumps this semaphore once per local expert, so after the
+        # # call it should read `experts_per_chip` on every core. Log the distinct values,
+        # # then reset it to zero for the next forward. The semaphore only exists when an
+        # # overlap is enabled (see __init__); skip when it was not created.
+        # #
+        # # TODO(fbajraktari): To remove; Reset of the global semaphore should eventually
+        # # be responsibility of combine op.
+        # if self.routed_expert_global_semaphore is not None:
+        #     _sem_values = ttnn.read_global_semaphore_value(self.routed_expert_global_semaphore)
+        #     logger.debug(f"[TtMoe.forward] routed_expert semaphore values: {_sem_values}")
+        #     logger.debug(
+        #         f"[TtMoe.forward] routed_expert semaphore (expect {self.experts_per_chip}): "
+        #         f"distinct={sorted(set(_sem_values))}, count={len(_sem_values)}"
+        #     )
+        #     ttnn.reset_global_semaphore_value(self.routed_expert_global_semaphore, 0)
+
+        # Restore the default full-grid
+        if self.overlap_routed_expert_with_combine:
+            self.mesh_device.clear_loaded_sub_device_manager()
+        signpost("routed_expert_and_combine_end")
 
         # ========================================
         # Step 5: Reduce (fused weighted sum over topk + reduce-scatter for TP sharding)
