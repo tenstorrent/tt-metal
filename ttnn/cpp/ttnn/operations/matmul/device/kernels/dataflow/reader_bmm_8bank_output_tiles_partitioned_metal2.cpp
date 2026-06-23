@@ -58,8 +58,8 @@ void kernel_main() {
     DataflowBuffer cb_in0(cb_id_in0);
     DataflowBuffer cb_in1(cb_id_in1);
 
-    const uint32_t in0_tile_bytes = cb_in0.get_tile_size();
-    const uint32_t in1_tile_bytes = cb_in1.get_tile_size();
+    const uint32_t in0_tile_bytes = cb_in0.get_entry_size();
+    const uint32_t in1_tile_bytes = cb_in1.get_entry_size();
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {
