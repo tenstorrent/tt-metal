@@ -108,12 +108,25 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
     TT_THROW("Unreachable");
 }
 
-// Reader/writer split: the scratch CB holds `slot_count` full socket pages so the reader
-// can stage pages ahead while the writer drains earlier ones. We target kMinDataSlots
-// slots (double-buffering) and pick the largest socket page that still leaves room for
-// them; if the budget cannot hold that many we fall back to a single slot (no device-side
-// overlap, but still correct).
-constexpr uint32_t kMinDataSlots = 2;
+// Reader/writer split: the data CB holds `slot_count` full socket pages so the reader can stage
+// pages ahead while the writer drains earlier ones. The socket page is sized to a few NOC bursts
+// (read coalescing); slot depth then fills the remaining service-core L1 as producer/consumer
+// buffering that hides the writer's per-transfer worker-sync stall from the reader. See
+// derive_chunk_plan.
+constexpr uint32_t kMinDataSlots = 2;  // double-buffering floor (reader/writer overlap)
+
+// Host-side sizing heuristics. The reader chunks each socket page by the real device NOC burst
+// (BH 16K / WH 8K) internally; kNocBurstBytes is only a host granularity target, NOT device truth
+// (we deliberately don't pull NOC headers into host code).
+constexpr uint32_t kNocBurstBytes = 16u * 1024;
+constexpr uint32_t kTargetReadBursts = 4;  // default socket-page target ~= 4 bursts (64 KB) of coalescing
+constexpr uint32_t kSlotCap = 64;          // upper bound on data-CB slots ("fill L1" knob; sweep validates)
+// The data CB (program allocator, bottom-up) and the service-core scratch (ServiceCoreManager,
+// top-down) share the unreserved L1 with no cross-allocator overflow check. The CB budget starts
+// from svc.bytes_available(), which already excludes the socket config buffer, so this only holds
+// back headroom for the scratch words allocated AFTER the chunk plan -- termination, worker-sync
+// consumed, and per-coord completion-src -- plus a safety pad. Generous on purpose.
+constexpr uint64_t kServiceScratchReserveBytes = 16u * 1024;
 
 struct ChunkPlan {
     uint32_t socket_page_size;  // bytes per socket page (== pages_per_chunk * tensor_page_size)
@@ -122,32 +135,72 @@ struct ChunkPlan {
     uint32_t slot_count;        // full-page data-CB slots backing the reader/writer pipeline
 };
 
-ChunkPlan derive_chunk_plan(uint32_t tensor_page_size, uint32_t tensor_num_pages, uint32_t scratch_cb_size_bytes) {
+// Usable service-core L1 for the data CB, given the service core's measured free L1
+// (`free_l1_bytes` == svc.bytes_available()), after reserving the metadata CB (a bottom-up program
+// allocation) and kServiceScratchReserveBytes for the post-plan service scratch words. The socket
+// config buffer is already excluded by free_l1_bytes. Keeps the CB from colliding with the top-down
+// scratch; the caller also asserts the final footprint fits. NB: use bytes_available (spans
+// [DEFAULT_UNRESERVED, L1_end], where CBs actually start) rather than
+// hal::get_max_worker_l1_unreserved_size(), which is keyed off KERNEL_CONFIG and overshoots by the
+// kernel-config ringbuffer (CBs are placed after it, so that figure overflows L1).
+uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes, uint64_t metadata_cb_bytes) {
+    const uint64_t reserved = metadata_cb_bytes + kServiceScratchReserveBytes;
+    TT_FATAL(
+        free_l1_bytes > reserved,
+        "H2DStreamService: service-core free L1 ({} B) too small for reservations ({} B)",
+        free_l1_bytes,
+        reserved);
+    return free_l1_bytes - reserved;
+}
+
+// Size the socket page to a few NOC bursts for read coalescing (capped by `page_budget_hint`, which
+// is Config::scratch_cb_size_bytes -- 0 means use the burst-derived default), then fill the
+// remaining L1 with full-page slots above the kMinDataSlots overlap floor. No double-buffer
+// fallback: capping the page at usable/kMinDataSlots guarantees >= kMinDataSlots slots whenever a
+// single tensor page fits. Slots are pure producer/consumer depth (they decouple the reader from
+// the writer's worker-sync stall) -- help-or-neutral for throughput, at a per-transfer latency cost.
+ChunkPlan derive_chunk_plan(
+    uint32_t tensor_page_size, uint32_t tensor_num_pages, uint64_t usable_cb_l1_bytes, uint64_t page_budget_hint) {
     TT_FATAL(tensor_page_size > 0, "device_tensor page size must be > 0");
     TT_FATAL(tensor_num_pages > 0, "device_tensor must have at least one page");
+    // The only un-recoverable case: a single tensor page must physically fit in the CB L1 budget.
     TT_FATAL(
-        scratch_cb_size_bytes >= tensor_page_size,
-        "scratch_cb_size_bytes ({} B) must be >= tensor page size ({} B); "
-        "consider a layout with smaller pages or a larger CB budget",
-        scratch_cb_size_bytes,
-        tensor_page_size);
+        tensor_page_size <= usable_cb_l1_bytes,
+        "H2DStreamService: tensor page {} B exceeds service-core CB L1 budget {} B; "
+        "use a layout with smaller pages",
+        tensor_page_size,
+        usable_cb_l1_bytes);
 
-    // Largest pages_per_chunk that leaves room for kMinDataSlots full slots; fall back to
-    // the largest chunk that fits a single slot when the budget is too small for two.
-    uint32_t max_pages_per_chunk = scratch_cb_size_bytes / (kMinDataSlots * tensor_page_size);
-    if (max_pages_per_chunk == 0) {
-        max_pages_per_chunk = scratch_cb_size_bytes / tensor_page_size;
-    }
-    uint32_t pages_per_chunk = std::min(tensor_num_pages, max_pages_per_chunk);
+    const uint64_t burst_target = static_cast<uint64_t>(kTargetReadBursts) * kNocBurstBytes;
+    const uint64_t requested = page_budget_hint > 0 ? page_budget_hint : burst_target;
+    // Never let one socket page exceed usable/kMinDataSlots, so kMinDataSlots full pages always fit.
+    const uint64_t page_budget = std::min<uint64_t>(requested, usable_cb_l1_bytes / kMinDataSlots);
+
+    uint32_t pages_per_chunk = std::max<uint32_t>(1, static_cast<uint32_t>(page_budget / tensor_page_size));
+    pages_per_chunk = std::min(pages_per_chunk, tensor_num_pages);
     while (pages_per_chunk > 1 && (tensor_num_pages % pages_per_chunk) != 0) {
         --pages_per_chunk;
     }
     const uint32_t socket_page_size = pages_per_chunk * tensor_page_size;
+
+    const uint32_t slots_l1_max = static_cast<uint32_t>(usable_cb_l1_bytes / socket_page_size);  // >= 1
+    const uint32_t slot_count = std::min(slots_l1_max, kSlotCap);
+    if (slot_count < kMinDataSlots) {
+        // Reachable only when one tensor page > usable/kMinDataSlots: correct, but no reader/writer
+        // overlap (the reader's early host-FIFO-recycling ack still applies).
+        log_warning(
+            tt::LogOp,
+            "H2DStreamService: tensor page {} B leaves only {} CB slot(s) in {} B of L1; "
+            "reader/writer overlap disabled (use a smaller per-shard page to double-buffer)",
+            tensor_page_size,
+            slot_count,
+            usable_cb_l1_bytes);
+    }
     return ChunkPlan{
         .socket_page_size = socket_page_size,
         .num_socket_pages = tensor_num_pages / pages_per_chunk,
         .pages_per_chunk = pages_per_chunk,
-        .slot_count = scratch_cb_size_bytes / socket_page_size,
+        .slot_count = slot_count,
     };
 }
 
@@ -189,8 +242,11 @@ void set_worker_mcast_corners(WorkerSyncArgs& args, NOC noc, CoreCoord start_phy
 // Metadata multicast CT-arg block. Populated when Config::metadata_size_bytes > 0.
 struct MetadataArgs {
     bool enabled = false;
-    uint32_t metadata_size_bytes = 0;     // user-specified size; <= socket_page_size
+    uint32_t metadata_size_bytes = 0;     // user-specified size; multicast verbatim by the writer
     uint32_t metadata_l1_addr = 0;        // worker-grid L1 (mesh-wide L1-sharded Buffer)
+    uint32_t metadata_cb_page_size = 0;   // staged bytes / metadata-CB page (== align(metadata_size),
+                                          // << socket_page_size: reader reads only this much L1 of the
+                                          // full metadata socket page, then pops the whole page)
 };
 
 // Writer DRAM-completion push CT-arg block. The writer pushes a per-transfer count to its
@@ -240,6 +296,7 @@ volatile uint32_t* completion_word(void* base, uint32_t offset) {
 //   [2] data_cb_index
 //   [3] metadata_enabled                  (uint32 0/1)
 //   [4] metadata_cb_index
+//   [5] metadata_read_size                (uint32, L1 bytes staged per metadata page; 0 if disabled)
 // Reader RT-arg layout:
 //   [0] socket_config_addr
 //   [1] termination_semaphore_addr
@@ -291,10 +348,11 @@ Program build_persistent_h2d_program(
                            .set_page_size(data_cb_index, plan.socket_page_size);
     CreateCircularBuffer(program, recv_core, data_cb_cfg);
 
-    // Metadata CB: a single socket page; only created when metadata multicast is enabled.
+    // Metadata CB: one slot sized to the (aligned) metadata payload -- not a full socket page -- so a
+    // tiny metadata multicast doesn't reserve a large socket-page slot of L1. Only created when enabled.
     if (metadata.enabled) {
-        auto metadata_cb_cfg = CircularBufferConfig(plan.socket_page_size, {{metadata_cb_index, data_format}})
-                                   .set_page_size(metadata_cb_index, plan.socket_page_size);
+        auto metadata_cb_cfg = CircularBufferConfig(metadata.metadata_cb_page_size, {{metadata_cb_index, data_format}})
+                                   .set_page_size(metadata_cb_index, metadata.metadata_cb_page_size);
         CreateCircularBuffer(program, recv_core, metadata_cb_cfg);
     }
 
@@ -304,6 +362,7 @@ Program build_persistent_h2d_program(
         static_cast<uint32_t>(data_cb_index),
         static_cast<uint32_t>(metadata.enabled ? 1u : 0u),
         static_cast<uint32_t>(metadata_cb_index),
+        metadata.metadata_cb_page_size,  // [5] metadata_read_size: L1 bytes staged per metadata page
     };
     auto reader_kernel = CreateKernel(
         program,
@@ -371,7 +430,8 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     mesh_device_(mesh_device), cfg_(std::move(cfg)) {
     TT_FATAL(mesh_device_ != nullptr, "H2DStreamService: mesh_device must not be null");
     TT_FATAL(cfg_.fifo_size_bytes > 0, "H2DStreamService: fifo_size_bytes must be > 0");
-    TT_FATAL(cfg_.scratch_cb_size_bytes > 0, "H2DStreamService: scratch_cb_size_bytes must be > 0");
+    // scratch_cb_size_bytes is now an OPTIONAL socket-page (coalescing) budget hint: 0 means use the
+    // burst-derived default, and slot depth is auto-sized to fill service-core L1 either way.
     TT_FATAL(
         cfg_.metadata_size_bytes == 0 || cfg_.worker_cores.has_value(),
         "H2DStreamService: metadata_size_bytes={} requires Config::worker_cores to be set "
@@ -424,18 +484,60 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     // Every per-device buffer shares the same spec, so this buffer is representative.
     const uint32_t tensor_page_size = device_tensor_.buffer()->page_size();
     const uint32_t tensor_num_pages = device_tensor_.buffer()->num_pages();
-    const ChunkPlan plan = derive_chunk_plan(tensor_page_size, tensor_num_pages, cfg_.scratch_cb_size_bytes);
+
+    // Metadata CB is sized to the (aligned) metadata payload, not a full socket page: keeps L1 for
+    // data slots AND makes the CB budget computable before the chunk plan (no circular dependency).
+    // Aligned to max(L1, PCIe) so it satisfies both the CB and the reader's PCIe read.
+    const uint32_t metadata_cb_page_size =
+        cfg_.metadata_size_bytes > 0
+            ? tt::align(cfg_.metadata_size_bytes, std::max(hal::get_l1_alignment(), hal::get_pcie_alignment()))
+            : 0u;
+
+    // Usable L1 for the data CB = the service core's measured free L1 (ServiceCoreManager allocator,
+    // which spans [DEFAULT_UNRESERVED, L1_end] -- where CBs actually start). L1 layout is uniform
+    // across coords, so a representative service core suffices.
+    auto* rep_device = mesh_device_->get_device(coords.front());
+    const uint64_t service_core_free_l1 = svc.bytes_available(rep_device, service_cores_.at(coords.front()));
+    const uint64_t usable_cb_l1 = service_core_cb_l1_budget(service_core_free_l1, metadata_cb_page_size);
+    const ChunkPlan plan =
+        derive_chunk_plan(tensor_page_size, tensor_num_pages, usable_cb_l1, cfg_.scratch_cb_size_bytes);
     socket_page_size_ = plan.socket_page_size;
     num_socket_pages_ = plan.num_socket_pages;
+    slot_count_ = plan.slot_count;
 
-    // Metadata travels as exactly one trailing socket page, so it must fit.
+    // Metadata travels as exactly one trailing socket page on the wire, and its (shrunk) CB slot
+    // must also fit within one socket page.
     TT_FATAL(
-        cfg_.metadata_size_bytes <= socket_page_size_,
-        "H2DStreamService: metadata_size_bytes={} exceeds derived socket_page_size={} "
-        "(single-metadata-page constraint). Either reduce metadata or increase "
-        "scratch_cb_size_bytes / per-shard page size.",
+        cfg_.metadata_size_bytes <= socket_page_size_ && metadata_cb_page_size <= socket_page_size_,
+        "H2DStreamService: metadata_size_bytes={} (aligned CB page {}) exceeds derived socket_page_size={} "
+        "(single-metadata-page constraint). Either reduce metadata or increase the per-shard page size.",
         cfg_.metadata_size_bytes,
+        metadata_cb_page_size,
         socket_page_size_);
+
+    // Belt-and-suspenders L1 guard: the data CB (program allocator, bottom-up) and the service-core
+    // scratch (ServiceCoreManager, top-down) share the unreserved region with no cross-allocator check.
+    const uint64_t data_cb_bytes = static_cast<uint64_t>(plan.slot_count) * plan.socket_page_size;
+    TT_FATAL(
+        data_cb_bytes + metadata_cb_page_size + kServiceScratchReserveBytes <= service_core_free_l1,
+        "H2DStreamService: data CB {} B + metadata CB {} B + scratch reserve {} B exceeds service-core "
+        "free L1 {} B",
+        data_cb_bytes,
+        metadata_cb_page_size,
+        kServiceScratchReserveBytes,
+        service_core_free_l1);
+
+    log_info(
+        tt::LogOp,
+        "H2DStreamService L1: socket_page={} B, pages_per_chunk={}, num_socket_pages={}, slots={}, "
+        "data_cb={} B, metadata_cb={} B, usable_for_cb={} B",
+        plan.socket_page_size,
+        plan.pages_per_chunk,
+        plan.num_socket_pages,
+        plan.slot_count,
+        data_cb_bytes,
+        metadata_cb_page_size,
+        usable_cb_l1);
 
     for (auto& s : sockets_) {
         s->set_page_size(plan.socket_page_size);
@@ -566,6 +668,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             metadata.enabled = true;
             metadata.metadata_size_bytes = cfg_.metadata_size_bytes;
             metadata.metadata_l1_addr = static_cast<uint32_t>(metadata_l1_addr_);
+            metadata.metadata_cb_page_size = metadata_cb_page_size;
         }
 
         // Per-coord writer DRAM-completion counter: a slot in the shared host-pinned
@@ -1027,6 +1130,11 @@ std::size_t H2DStreamService::payload_size_bytes() const {
 
 std::size_t H2DStreamService::metadata_size_bytes() const {
     return cfg_.metadata_size_bytes;
+}
+
+uint32_t H2DStreamService::get_slot_count() const {
+    require_owner(is_owner_, "H2DStreamService::get_slot_count");
+    return slot_count_;
 }
 
 std::string H2DStreamService::export_descriptor(const std::string& service_id) {

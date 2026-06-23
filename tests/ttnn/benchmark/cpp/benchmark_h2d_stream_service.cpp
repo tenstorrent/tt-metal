@@ -338,7 +338,9 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     TT_FATAL(per_shard_payload_bytes % socket_page_size == 0, "per-shard payload bytes must divide socket page size");
     const uint32_t num_socket_pages = static_cast<uint32_t>(per_shard_payload_bytes / socket_page_size);
     const uint32_t pages_per_chunk = socket_page_size / backing_buf->page_size();
-    const uint32_t slot_count = scratch_cb_size_bytes / socket_page_size;
+    // The service auto-sizes slot depth from service-core L1 (no longer scratch_cb_size_bytes /
+    // socket_page_size), so read the actual derived value rather than recomputing it.
+    const uint32_t slot_count = service.get_slot_count();
     const WarmupPlan warmup_plan =
         compute_warmup_plan(fifo_size_bytes, per_shard_payload_bytes, slot_count, num_socket_pages);
     const uint32_t warmup_iters = warmup_plan.warmup_iters;

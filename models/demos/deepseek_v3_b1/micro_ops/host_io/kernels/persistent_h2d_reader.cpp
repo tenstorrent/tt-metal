@@ -20,6 +20,10 @@ constexpr uint32_t num_socket_pages = get_compile_time_arg_val(1);
 constexpr uint32_t data_cb_index = get_compile_time_arg_val(2);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(3);
 constexpr uint32_t metadata_cb_index = get_compile_time_arg_val(4);
+// L1 bytes to stage per metadata page. The metadata travels as a full socket page on the wire, but
+// only the leading metadata_read_size bytes are meaningful, so the reader stages just those into the
+// (smaller) metadata CB slot and still pops the whole socket page from the FIFO.
+constexpr uint32_t metadata_read_size = get_compile_time_arg_val(5);
 
 // Reads one socket page from PCIe host RAM into L1; caller must barrier afterward.
 inline void noc_read_page_chunked(uint32_t pcie_xy_enc, uint64_t src_pcie, uint32_t dst_l1, uint32_t size) {
@@ -47,11 +51,12 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* termination_semaphore =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr);
 
-    // Stage one socket page into `cb`: wait for the page and a free slot (both terminable),
-    // read it into the slot, push it to the writer, then ack the socket page. The ack is still
-    // before the DRAM write, but never before the writer can observe the staged page.
-    // Returns false when termination is observed while waiting.
-    auto stage_one_page = [&](uint32_t cb) -> bool {
+    // Stage one socket page into `cb`: wait for the page and a free slot (both terminable), read
+    // `read_size` bytes into the slot, push it to the writer, then ack the socket page. `read_size`
+    // is the full socket page for data; for metadata it is the smaller meaningful prefix while the
+    // whole socket page is still popped from the FIFO. The ack is still before the DRAM write, but
+    // never before the writer can observe the staged page. Returns false on termination while waiting.
+    auto stage_one_page = [&](uint32_t cb, uint32_t read_size) -> bool {
         if (!deepseek_b1_ops::socket_wait_for_pages_with_termination(receiver_socket, 1, termination_semaphore)) {
             return false;
         }
@@ -60,7 +65,7 @@ void kernel_main() {
         }
         const uint32_t dst = get_write_ptr(cb);
         noc_read_page_chunked(
-            pcie_xy_enc, base_pinned + receiver_socket.read_ptr - receiver_socket.fifo_addr, dst, socket_page_size);
+            pcie_xy_enc, base_pinned + receiver_socket.read_ptr - receiver_socket.fifo_addr, dst, read_size);
         noc_async_read_barrier();
         cb_push_back(cb, 1);
         socket_pop_pages(receiver_socket, 1);
@@ -71,7 +76,7 @@ void kernel_main() {
     bool terminated = false;
     while (!terminated) {
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
-            if (!stage_one_page(data_cb_index)) {
+            if (!stage_one_page(data_cb_index, socket_page_size)) {
                 terminated = true;
                 break;
             }
@@ -80,7 +85,7 @@ void kernel_main() {
             break;
         }
         if constexpr (metadata_enabled) {
-            if (!stage_one_page(metadata_cb_index)) {
+            if (!stage_one_page(metadata_cb_index, metadata_read_size)) {
                 break;
             }
         }

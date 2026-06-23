@@ -139,6 +139,10 @@ public:
     // overload must be used.
     std::size_t metadata_size_bytes() const;
 
+    // Data-CB depth (full socket-page slots) the service derived from service-core L1. Lets a
+    // benchmark report/size against the real device pipeline depth. Owner-only.
+    uint32_t get_slot_count() const;
+
     std::vector<distributed::H2DSocket*> get_sockets() const;
 
     // Worker-sync handshake accessors. Only meaningful when Config::worker_cores
@@ -279,6 +283,7 @@ private:
     // the service's lifetime.
     uint32_t socket_page_size_ = 0;
     uint32_t num_socket_pages_ = 0;
+    uint32_t slot_count_ = 0;  // data-CB depth derived from service-core L1 (owner only)
 
     // Writer DRAM-completion tracking. The owner creates one shared completion
     // region and maps it to every participating coord; connectors map the same
