@@ -38,13 +38,37 @@ on craq-sim Quasar. They are now **feature-equivalent**.
 | Repo / branch | `/localdev/nkapre/tt-metal-dfbport`, `dfb-lut-port` @ `c9aae9b8dcd` | `/localdev/nkapre/tt-metal`, `nkapre/tt-polynomial-fitter` @ `2a123142a05` |
 | Kernel | `ttnn/cpp/ttnn/operations/experimental/quasar/unary_lut/device/kernels_dfb/` (`unary_lut_sfpu.h`) | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_*_quasar_test.cpp` |
 | Driver + sweep | `tests/ttnn/.../quasar/{dfb_lut_driver.py, test_dfb_sweep_60.py}` | `tt_metal/tt-llk/tests/quasar_eltwise/run_quasar.sh` |
-| Status | the path the Quasar team will use (DFB add op landed via PR #47739) | being phased out in favor of DFB |
+| Status | the path the Quasar team will use (DFB add-op PR #47739 still **OPEN**; the DFB framework + `binary_ng` op skeleton are already on `main` via #47486) | being phased out in favor of DFB |
 
 **Separate source files, no shared eval header.** The DFB SFPU evaluator
 (`unary_lut_sfpu.h`) and the tt-llk per-method sources are independent. The full
 feature set was ported (duplicated) into tt-llk "for now" — tt-llk is being phased
 out in favor of DFB, so a shared-eval-header refactor is the eventual clean
 architecture but **deliberately deferred**.
+
+### How each sweep runs (the pieces)
+
+Both sweeps do the same three things — resolve the deployed pick per activation from
+`best.csv`, evaluate it over **exhaustive bf16**, compare to fitter `ground_truth` —
+through analogous but separate pieces:
+
+| piece | DFB flow | tt-llk flow |
+|---|---|---|
+| sweep driver | `tests/ttnn/.../quasar/test_dfb_sweep_60.py` (pytest) | `tt-llk/tests/python_tests/quasar/quasar_sweep.sh` |
+| per-CSV runner | `dfb_lut_driver.py` → `run_dfb(csv)` | `tt-llk/tests/quasar_eltwise/run_quasar.sh` |
+| pick resolution | `_resolve_deployed()` (best_ulp 3-tier glob) | same resolution inside `quasar_sweep.sh` |
+| eval kernel | `unary_lut_sfpu.h` — **JIT-compiled, cached** | `generic_lut_*_quasar_test.cpp` — **SFPI-compiled per activation** |
+| inputs | exhaustive distinct bf16 (full domain) | exhaustive distinct bf16 (full domain) |
+| golden | fitter `ground_truth` (read-only) | fitter `ground_truth` (read-only) |
+| results | `DFB_SWEEP_60.md` | sweep stdout table |
+
+**Why DFB runs all 60 in ~1.5 min and tt-llk is much slower:** the DFB kernel
+**JIT-compiles once and caches** — each activation only re-bakes the LUT `-D` defines,
+so an exhaustive sweep is ~1.5 s/activation. The tt-llk flow **SFPI-compiles each
+per-method kernel fresh** (no JIT cache) and runs the two-phase
+compile-producer/compile-consumer pytest harness, so the per-activation compile
+dominates. Same exhaustive regime, identical inputs — purely a compile-cost
+difference, not a correctness one.
 
 ### Shared feature set (both flows complete, ZERO per-activation hardcoding)
 
@@ -96,10 +120,79 @@ The craq-sim Quasar enablers that made the DFB path + `exponent_alu` work (this
 session): the vectored-`mtvec` fix (craq-sim `61695922`) + native `SFPEXMAN` /
 `SFPDIVP2` (`b4358134`).
 
-### DFB-vs-tt-llk exhaustive comparison table (TBD)
+### DFB-vs-tt-llk exhaustive comparison
 
-_Side-by-side per-activation bf16-ULP / `ml_pass` for the DFB flow and the tt-llk
-flow — to be pasted here once the tt-llk exhaustive sweep finishes._
+Both flows measured EXHAUSTIVELY (every distinct bf16 in each activation's full domain)
+on craq-sim Quasar, identical metric definitions. **ULP_max is bit-identical on 59/60**;
+the only difference is `erfc` (DFB 26128 vs tt-llk 25365 — both near-root bit-distance
+artifacts) with **identical `ml_pass`**. The two flows are functionally identical — the
+port achieved full parity. `ULP` = bf16 bit-distance (max; near-root max spikes are
+artifacts, `ml_pass` is the headline). `ml` = Torch tolerance pass-rate (atol=rtol=1e-3).
+The 2 non-clean activations (`hardshrink`, `polygamma`) are fitter-side fundamentals,
+identical on both flows.
+
+| activation | DFB ULPmax | DFB ml | LLK ULPmax | LLK ml | = |
+|---|--:|--:|--:|--:|:-:|
+| abs              |    127 |  1.000 |    127 |  1.000 | = |
+| acos             |      1 |  0.943 |      1 |  0.943 | = |
+| acosh            |      1 |  0.272 |      1 |  0.272 | = |
+| asin             |    225 |  0.993 |    225 |  0.993 | = |
+| asinh            |    179 |  0.976 |    179 |  0.976 | = |
+| atan             |    128 |  0.991 |    128 |  0.991 | = |
+| atanh            |    324 |  0.993 |    324 |  0.993 | = |
+| cbrt             |  10879 |  0.944 |  10879 |  0.944 | = |
+| celu             |    128 |  0.990 |    128 |  0.990 | = |
+| cos              |      1 |  0.921 |      1 |  0.921 | = |
+| cosh             |      1 |  0.957 |      1 |  0.957 | = |
+| digamma          |      1 |  0.293 |      1 |  0.293 | = |
+| elu              |    128 |  0.990 |    128 |  0.990 | = |
+| erf              |    143 |  0.978 |    143 |  0.978 | = |
+| erfc             |  26128 |  0.891 |  25365 |  0.891 | ≠ |
+| erfinv           |    333 |  0.993 |    333 |  0.993 | = |
+| exp              |      1 |  0.895 |      1 |  0.895 | = |
+| exp2             |      1 |  0.497 |      1 |  0.497 | = |
+| expm1            |    127 |  0.993 |    127 |  0.993 | = |
+| gelu             |    128 |  0.990 |    128 |  0.990 | = |
+| hardmish         |    127 |  0.997 |    127 |  0.997 | = |
+| hardshrink       |     22 |  0.004 |     22 |  0.004 | = |
+| hardsigmoid      |      1 |  0.919 |      1 |  0.919 | = |
+| hardswish        |    128 |  0.992 |    128 |  0.992 | = |
+| hardtanh         |    127 |  1.000 |    127 |  1.000 | = |
+| i0               |      1 |  0.959 |      1 |  0.959 | = |
+| i1               |    128 |  0.979 |    128 |  0.979 | = |
+| identity         |    127 |  1.000 |    127 |  1.000 | = |
+| leaky_relu       |    127 |  1.000 |    127 |  1.000 | = |
+| lgamma           |      1 |  0.349 |      1 |  0.349 | = |
+| log              |      1 |  0.448 |      1 |  0.448 | = |
+| log10            |      1 |  0.640 |      1 |  0.640 | = |
+| log1p            |  22975 |  0.984 |  22975 |  0.984 | = |
+| log2             |      1 |  0.386 |      1 |  0.386 | = |
+| logit            |      1 |  0.324 |      1 |  0.324 | = |
+| logsigmoid       |      1 |  0.066 |      1 |  0.066 | = |
+| mish             |  22744 |  0.986 |  22744 |  0.986 | = |
+| multigammaln     |      1 |  0.294 |      1 |  0.294 | = |
+| polygamma        |  33843 |  0.282 |  33843 |  0.282 | = |
+| prelu            |    128 |  1.000 |    128 |  1.000 | = |
+| relu             |    127 |  1.000 |    127 |  1.000 | = |
+| relu6            |    127 |  1.000 |    127 |  1.000 | = |
+| relu_max         |    127 |  1.000 |    127 |  1.000 | = |
+| relu_min         |    127 |  1.000 |    127 |  1.000 | = |
+| rsqrt            |      1 |  0.427 |      1 |  0.427 | = |
+| selu             |    223 |  0.974 |    223 |  0.974 | = |
+| sigmoid          |      1 |  0.909 |      1 |  0.909 | = |
+| sigmoid_accurate |      1 |  0.094 |      1 |  0.094 | = |
+| silu             |    128 |  0.986 |    128 |  0.986 | = |
+| sin              |    127 |  0.987 |    127 |  0.987 | = |
+| sinh             |    127 |  0.973 |    127 |  0.973 | = |
+| softplus         |      1 |  0.066 |      1 |  0.066 | = |
+| softshrink       |      0 |  1.000 |      0 |  1.000 | = |
+| softsign         |    127 |  0.982 |    127 |  0.982 | = |
+| sqrt             |      1 |  0.589 |      1 |  0.589 | = |
+| swish            |  22683 |  0.986 |  22683 |  0.986 | = |
+| tan              |    127 |  0.990 |    127 |  0.990 | = |
+| tanh             |    127 |  0.984 |    127 |  0.984 | = |
+| tanhshrink       |    128 |  0.993 |    128 |  0.993 | = |
+| threshold        |    127 |  1.000 |    127 |  1.000 | = |
 
 ## Pinned, validated simulator (load-bearing)
 
