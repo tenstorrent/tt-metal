@@ -29,8 +29,8 @@ void kernel_main() {
     Noc noc;
     DataflowBuffer values_cb(dfb::output_val);
     DataflowBuffer indices_cb(dfb::output_ind);
-    const uint32_t tile_bytes_val = values_cb.get_tile_size();
-    const uint32_t tile_bytes_idx = indices_cb.get_tile_size();
+    const uint32_t tile_bytes_val = values_cb.get_entry_size();
+    const uint32_t tile_bytes_idx = indices_cb.get_entry_size();
 
     // Get Kt rows of values and then Kt rows of indices from compute kernel
     for (uint32_t core_loop = 0; core_loop < work_per_core; core_loop++) {
