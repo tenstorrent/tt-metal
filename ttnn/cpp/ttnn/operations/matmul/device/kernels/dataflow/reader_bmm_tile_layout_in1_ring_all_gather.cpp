@@ -138,15 +138,23 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch; ++b) {
 #if defined(ENABLE_GLOBAL_CB) && defined(STREAMING_IN1)
-        // Streaming: the prefetcher delivers blocks in ring-rotated FIFO order. Hand each
-        // block to compute as it lands, then free its GCB slot once compute consumes it, so
-        // the GCB only needs to hold a small live window instead of the whole tensor.
-        // (in1 is never DRAM-resident on the GCB path, so this fully replaces the batched
+        // Streaming: the prefetcher delivers blocks in ring-rotated FIFO order, so the in1 CB
+        // (aligned to the GCB ring) is consumed strictly front-to-back. Drive it as a normal local
+        // CB — once the prefetcher lands a block, hand it to compute via the standard
+        // reserve_back/push_back credit on cb_in1 itself, and compute reads it with
+        // wait_front/pop_front instead of manual rd_ptr math. cb_sync still carries the
+        // compute->reader "done" signal, which gates freeing the GCB slot back to the prefetcher,
+        // so the GCB only needs to hold a small live window instead of the whole tensor. (in1 is
+        // never DRAM-resident on the GCB path, so this fully replaces the batched
         // wait_front(num_blocks) gate below.)
         for (uint32_t block = 0; block < num_blocks; ++block) {
-            cb_sync2.reserve_back(1);
+            // Standard producer order (mirrors the DRAM path's reserve -> fill -> push): reserve
+            // the in1 CB slot, wait for the prefetcher to fill it in the GCB, then push the credit
+            // to compute. reserve_back before push keeps cb_in1's credit accounting correct even
+            // if the reader ever runs more than one block ahead of compute.
+            cb_in1.reserve_back(in1_block_num_tiles);
             experimental::remote_cb_wait_front(remote_cb_id, 1);
-            cb_sync2.push_back(1);
+            cb_in1.push_back(in1_block_num_tiles);
 
             cb_sync.wait_front(1);
             experimental::remote_cb_pop_front(remote_cb_id, 1);
