@@ -20,7 +20,7 @@ show_help() {
     echo "  -h, --help                       Show this help message."
     echo "  -e, --export-compile-commands    Enable CMAKE_EXPORT_COMPILE_COMMANDS."
     echo "  -c, --enable-ccache              Enable ccache for the build."
-    echo "  -b, --build-type build_type      Set the build type. Default is Release."
+    echo "  -b, --build-type build_type      Set the build type. Default is Release. Other options are Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     echo "  -t, --enable-time-trace          Enable build time trace (clang only)."
     echo "  --disable-profiler               Disable Tracy profiler (enabled by default)."
     echo "  --install-prefix                 Where to install build artifacts."
@@ -32,13 +32,13 @@ show_help() {
     echo "  --build-programming-examples     Build programming examples."
     echo "  --build-tt-train                 Build tt-train."
     echo "  --build-packages                 Build installation packages (.deb)"
+    echo "  --build-telemetry                Build tt-telemetry server."
     echo "  --build-all                      Build all optional components."
     echo "  --release                        Set the build type as Release."
     echo "  --development                    Set the build type as RelWithDebInfo."
     echo "  --debug                          Set the build type as Debug."
     echo "  --clean                          Remove build workspaces."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
-    echo "  --disable-pch                    Disable precompiled headers"
     echo "  --disable-unity-builds           Disable Unity builds"
     echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
@@ -51,13 +51,12 @@ show_help() {
     echo "  --without-distributed            Disable distributed compute support (OpenMPI dependency). Enabled by default."
     echo "  --without-python-bindings        Disable Python bindings (ttnncpp will be available as standalone library, otherwise ttnn will include the cpp backend and the python bindings), Enabled by default"
     echo "  --enable-fake-kernels-target     Enable fake kernels target, to enable generation of compile_commands.json for the kernels to enable IDE support."
-    echo "  --enable-lto                     Enable Link Time Optimization (LTO) for Release/RelWithDebInfo builds."
-    echo "  --disable-warnings-as-errors     Disable treating warnings as errors (CMAKE_COMPILE_WARNING_AS_ERROR=OFF)."
+    echo "  -j, --jobs N                     Number of parallel build jobs. Defaults to available_ram_gb/4 to avoid OOM kills."
 }
 
 clean() {
     echo "INFO: Removing build artifacts!"
-    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_CodeCoverage* build_ASanCoverage build built .cpmcache
+    rm -rf build_Release* build_Debug* build_RelWithDebInfo* build_ASan* build_TSan* build_ASanCoverage build built .cpmcache
     rm -rf ~/.cache/tt-metal-cache /tmp/tt-metal-cache
     if [[ ! -z $TT_METAL_CACHE ]]; then
         echo "User has TT_METAL_CACHE set, please make sure you delete it in order to delete all artifacts!"
@@ -77,8 +76,8 @@ build_metal_tests="OFF"
 build_umd_tests="OFF"
 build_programming_examples="OFF"
 build_tt_train="OFF"
+build_telemetry="OFF"
 build_static_libs="OFF"
-pch="ON"
 unity_builds="ON"
 light_metal_trace="ON"
 build_packages="OFF"
@@ -89,23 +88,28 @@ c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake"
 
+# Requested handling for 20.04 -> 22.04 migration
+if [[ "$FLAVOR" == "ubuntu" && "$VERSION" == "20.04" ]]; then
+    echo "WARNING: You are using Ubuntu 20.04 which is end of life. Default toolchain is set to libcpp, which is an unsupported configuration. This default behavior will be removed by June 2025."
+    toolchain_path="cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake"
+fi
 
 configure_only="OFF"
 enable_distributed="ON"
 with_python_bindings="ON"
 enable_fake_kernels_target="OFF"
-enable_lto="OFF"
-warnings_as_errors="ON"
+num_jobs=""
 
 declare -a cmake_args
 
-OPTIONS=h,e,c,t,a,m,s,u,b:
+OPTIONS=h,e,c,t,a,m,s,u,b:,j:
 LONGOPTIONS="
 help
 build-all
 export-compile-commands
 enable-ccache
 enable-time-trace
+jobs:
 build-type:
 disable-profiler
 install-prefix:
@@ -117,8 +121,8 @@ build-umd-tests
 build-programming-examples
 build-tt-train
 build-packages
+build-telemetry
 build-static-libs
-disable-pch
 disable-unity-builds
 disable-light-metal-trace
 release
@@ -135,8 +139,6 @@ configure-only
 without-distributed
 without-python-bindings
 enable-fake-kernels-target
-enable-lto
-disable-warnings-as-errors
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -186,6 +188,8 @@ while true; do
             build_tt_train="ON";;
         --build-packages)
             build_packages="ON";;
+        --build-telemetry)
+            build_telemetry="ON";;
         --build-static-libs)
             build_static_libs="ON";;
         --build-all)
@@ -198,12 +202,8 @@ while true; do
             with_python_bindings="OFF";;
         --enable-fake-kernels-target)
             enable_fake_kernels_target="ON";;
-        --enable-lto)
-            enable_lto="ON";;
-        --disable-warnings-as-errors)
-            warnings_as_errors="OFF";;
-        --disable-pch)
-	    pch="OFF";;
+        -j|--jobs)
+            num_jobs="$2";shift;;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -244,27 +244,21 @@ if [ "$disable_profiler" = "ON" ]; then
 fi
 
 # Validate the build_type
-VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "CodeCoverage" "ASanCoverage")
+VALID_BUILD_TYPES=("Release" "Debug" "RelWithDebInfo" "ASan" "TSan" "ASanCoverage")
 if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
-    echo "ERROR: Invalid build type '$build_type'. Allowed values are ${VALID_BUILD_TYPES[*]}."
+    echo "ERROR: Invalid build type '$build_type'. Allowed values are Release, Debug, RelWithDebInfo, ASan, TSan, ASanCoverage."
     show_help
     exit 1
-fi
-
-# Disable unity builds for CodeCoverage builds to get accurate per-file coverage
-if [[ "$build_type" == "CodeCoverage" || "$build_type" == "ASanCoverage" ]]; then
-    unity_builds="OFF"
 fi
 
 # If build-dir is not specified
 # Use build_type to choose a default path
 if [ "$build_dir" = "" ]; then
     build_dir="build_$build_type"
+    # Create and link the build directory
+    mkdir -p $build_dir
+    ln -nsf $build_dir build
 fi
-
-# Create and link the build directory
-mkdir -p $build_dir
-ln -nsf $build_dir build
 
 install_prefix_default=$build_dir
 cmake_install_prefix=${install_prefix:="${install_prefix_default}"}
@@ -282,15 +276,12 @@ echo "INFO: Enable time trace: $enable_time_trace"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
-echo "INFO: Enable PCH: $pch"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 echo "INFO: Enable Distributed: $enable_distributed"
 echo "INFO: With python bindings: $with_python_bindings"
 echo "INFO: Enable Tracy: $tracy_enabled"
-echo "INFO: Enable LTO: $enable_lto"
-echo "INFO: Warnings as errors: $warnings_as_errors"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -359,13 +350,13 @@ if [ "$build_tt_train" = "ON" ]; then
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
 fi
 
+if [ "$build_telemetry" = "ON" ]; then
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
+fi
+
 if [ "$build_static_libs" = "ON" ]; then
     cmake_args+=("-DBUILD_SHARED_LIBS=OFF")
     cmake_args+=("-DTT_INSTALL=OFF")
-fi
-
-if [ "$pch" = "OFF" ]; then
-    cmake_args+=("-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON")
 fi
 
 if [ "$unity_builds" = "ON" ]; then
@@ -385,6 +376,7 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+    cmake_args+=("-DBUILD_TELEMETRY=ON")
 fi
 
 if [ "$light_metal_trace" = "ON" ]; then
@@ -395,7 +387,7 @@ fi
 
 if [ "$with_python_bindings" = "ON" ]; then
     cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
-    cmake_args+=("-DPython3_EXECUTABLE=$(command -v python3)")
+    cmake_args+=("-DPython3_EXECUTABLE=$(which python3)")
     cmake_args+=("-DPython3_INCLUDE_DIR=$(python3 -c "from sysconfig import get_paths as gp; print(gp()['include'])")")
     cmake_args+=("-DPython3_LIBRARY=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR') + '/libpython' + sysconfig.get_config_var('LDVERSION') + '.so')")")
 else
@@ -414,15 +406,7 @@ else
     cmake_args+=("-DENABLE_FAKE_KERNELS_TARGET=OFF")
 fi
 
-if [ "$enable_lto" = "ON" ]; then
-    cmake_args+=("-DTT_ENABLE_LTO=ON")
-fi
-
-if [ "$warnings_as_errors" = "OFF" ]; then
-    cmake_args+=("-DCMAKE_COMPILE_WARNING_AS_ERROR=OFF")
-fi
-
-# toolchain and cxx_compiler settings would conflict with each other
+# toolchain and cxx_compiler settings would conflict with eachother
 # only use toolchain if not setting cxx compiler directly
 if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
@@ -441,6 +425,18 @@ fi
 
 # Build libraries and cpp tests
 if [ "$configure_only" = "OFF" ]; then
+    # Compute a memory-safe default for parallel jobs if not specified.
+    # clang++ with -O3 on large unity builds can use ~4GB each.
+    if [ -z "$num_jobs" ]; then
+        available_gb=$(free -g | awk '/^Mem:/{print $7}')
+        num_jobs=$(( available_gb / 4 ))
+        if [ "$num_jobs" -lt 1 ]; then
+            num_jobs=1
+        fi
+        echo "INFO: Parallel build jobs (auto): $num_jobs (based on ${available_gb}GB available RAM / 4GB per job)"
+    else
+        echo "INFO: Parallel build jobs: $num_jobs"
+    fi
     echo "INFO: Building Project"
-    cmake --build $build_dir --target $target
+    cmake --build $build_dir --target $target --parallel $num_jobs
 fi
