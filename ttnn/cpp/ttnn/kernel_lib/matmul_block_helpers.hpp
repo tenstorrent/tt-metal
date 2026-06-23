@@ -11,6 +11,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/buffer_compat.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/sfpu_activation_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_constraints.hpp"
 
 namespace compute_kernel_lib {
 
