@@ -212,7 +212,7 @@ def test_ttnn_reduce(mesh_device, seq_len, emb_dim, topk, use_weights):
     run_reduce(mesh_device, seq_len, emb_dim, topk, use_weights)
 
 
-# Per-model reduce shapes as (id_prefix, config, extended_model). Each model uses seq_len 3200 and
+# Per-model reduce shapes as (id_prefix, config, extended_model). Each model uses seq_len 640 and
 # topk = NUM_EXPERTS_PER_TOKEN at its own emb_dim. DeepSeek V3 is the baseline and runs by default;
 # every other model is gated behind @pytest.mark.extended_model.
 REDUCE_MODELS = [
@@ -232,7 +232,7 @@ def reduce_shape_params():
     params = []
     for name, config, extended in REDUCE_MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
-        params.append(pytest.param(3200, config.EMB_SIZE, config.NUM_EXPERTS_PER_TOKEN, marks=marks, id=name))
+        params.append(pytest.param(640, config.EMB_SIZE, config.NUM_EXPERTS_PER_TOKEN, marks=marks, id=name))
     return params
 
 

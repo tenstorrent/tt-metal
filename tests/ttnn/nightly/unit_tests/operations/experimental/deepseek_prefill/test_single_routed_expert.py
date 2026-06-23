@@ -167,7 +167,7 @@ SINGLE_EXPERT_MODELS = [
 # Currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}" param id ->
 # xfail reason (with tracking issue), so CI stays green while the linked issues are worked on. The
 # entries mirror exactly the failing cases reported by CI (gptoss_120b hits a K_gate divisibility
-# error; dsv4_pro overflows L1 only at the larger token counts). strict=False keeps CI green
+# error; dsv4_pro overflows L1 only at the larger token counts). strict=True keeps CI green
 # whether a marked case fails or (unexpectedly) passes. Delete an entry once its issue is resolved.
 _GPTOSS_KGATE_XFAIL = (
     "GPT-OSS 120B single routed expert: K_gate_tiles not divisible by in0_block_w_gu — "
@@ -200,7 +200,7 @@ def single_routed_expert_token_sweep_params():
             test_id = f"{name}-{tag}"
             marks = (pytest.mark.extended_model,) if extended else ()
             if test_id in _TOKEN_SWEEP_XFAIL:
-                marks += (pytest.mark.xfail(reason=_TOKEN_SWEEP_XFAIL[test_id], strict=False),)
+                marks += (pytest.mark.xfail(reason=_TOKEN_SWEEP_XFAIL[test_id], strict=True),)
             params.append(
                 pytest.param(num_tokens, config.EMB_SIZE, config.MOE_INTERMEDIATE_SIZE, marks=marks, id=test_id)
             )

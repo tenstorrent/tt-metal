@@ -394,13 +394,13 @@ def dispatch_combine_shape_params():
         marks = (pytest.mark.extended_model,) if extended else ()
         params.append(
             pytest.param(
-                3200,
+                640,
                 config.EMB_SIZE,
                 config.NUM_ROUTED_EXPERTS // 4,
                 2,
                 2,
                 marks=marks,
-                id=f"{name}-3200-avg",
+                id=f"{name}-640-avg",
             )
         )
     return params

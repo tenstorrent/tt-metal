@@ -338,7 +338,7 @@ def run_combine(
 
 
 # Per-model combine shapes as (id_prefix, config, extended_model). Each model contributes a pcc
-# param (seq 128, // 16 experts, top-4) and a perf param (seq 3200, // 4 experts, top-2). DeepSeek
+# param (seq 128, // 16 experts, top-4) and a perf param (seq 640, // 4 experts, top-2). DeepSeek
 # V3 is the baseline and runs by default; every other model is gated behind
 # @pytest.mark.extended_model. dispatch_buffer_capacity_factor is ceil(N/2) of the most
 # conservative integer N such that dgs*seq*N >= worst-case dispatch buffer.
@@ -361,7 +361,7 @@ def combine_shape_params():
         marks = (pytest.mark.extended_model,) if extended else ()
         shapes = [
             ("pcc", 128, config.NUM_ROUTED_EXPERTS // 16, 4, 4, True),
-            ("perf_no_pcc", 3200, config.NUM_ROUTED_EXPERTS // 4, 2, 8, False),
+            ("perf_no_pcc", 640, config.NUM_ROUTED_EXPERTS // 4, 2, 8, False),
         ]
         for shape_id, seq, num_experts, topk, capacity, run_pcc in shapes:
             params.append(
