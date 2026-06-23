@@ -500,7 +500,6 @@ ROUTED_EXPERT_MODELS = [
 # tracking issue link). xfail'd so CI stays green while the issues are worked on; delete an entry
 # once its issue is resolved.
 XFAIL_ROUTED_EXPERT = {
-    "dsv4_pro": "DeepSeek V4 Pro routed expert: CB grows beyond L1 — https://github.com/tenstorrent/tt-metal/issues/46608",
     "gptoss_120b": "GPT-OSS 120B routed expert — https://github.com/tenstorrent/tt-metal/issues/47604",
 }
 
