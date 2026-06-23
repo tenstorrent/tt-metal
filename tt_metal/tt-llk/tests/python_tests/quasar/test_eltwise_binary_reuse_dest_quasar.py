@@ -105,8 +105,6 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
             DataFormat.Float16,
             DataFormat.MxFp8R,
             DataFormat.MxFp8P,
-            DataFormat.MxFp6R,
-            DataFormat.MxFp6P,
             DataFormat.MxFp4,
             DataFormat.MxInt8,
             DataFormat.MxInt4,
@@ -120,13 +118,8 @@ def valid_output_dimensions(formats, dest_sync_mode, input_dimensions) -> list:
             MathOperation.Elwsub,
         ]
         if (
-            formats.input_format
-            in [
-                DataFormat.MxFp8R,
-                DataFormat.MxFp8P,
-                DataFormat.MxFp6R,
-                DataFormat.MxFp6P,
-            ]
+            formats.input_format == DataFormat.MxFp8R
+            or formats.input_format == DataFormat.MxFp8P
         )
         else [
             MathOperation.Elwadd,

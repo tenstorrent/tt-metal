@@ -224,6 +224,66 @@ def _align16(n: int) -> int:
     return (n + 15) & ~15
 
 
+def _split_mx_sections(packed_bytes, *, num_blocks, elements_byte_len, fmt_name):
+    """Split a packed MX buffer into its [scales][elements] sections.
+
+    Both sections start on a 16B boundary: the scale section holds one E8M0 byte
+    per 32-element block, padded up to _align16(num_blocks). Returns
+    (scales_u8, elem_u8) as uint8 arrays.
+    """
+    scale_section_len = _align16(num_blocks)
+    needed = scale_section_len + elements_byte_len
+    if len(packed_bytes) < needed:
+        raise ValueError(
+            f"Invalid packed_bytes length for {fmt_name}: got {len(packed_bytes)} "
+            f"bytes, expected at least {needed}."
+        )
+    scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
+    elem_u8 = np.frombuffer(
+        bytes(packed_bytes[scale_section_len : scale_section_len + elements_byte_len]),
+        dtype=np.uint8,
+    )
+    return scales_u8, elem_u8
+
+
+def _apply_mx_block_scale(scales_u8, elem_val, unit_exp_unbiased=None):
+    """Apply the E8M0 block scale and the universal MX unpack special-number rules,
+    returning a flat bfloat16 tensor.
+
+    Args:
+      scales_u8: (num_blocks,) uint8 E8M0 block scales.
+      elem_val: (num_blocks, MX_FORMAT_BLOCK_SIZE) signed float32 element values,
+                decoded before the block scale is applied.
+      unit_exp_unbiased: matching array of element unbiased exponents, or None.
+        When provided (MXFP4/MXFP6, whose elements are always finite), the spec's
+        combined-exponent rules are applied explicitly:
+          (block_exp + unit_exp) >= 128 -> +/-Inf;  < -127 -> 0.
+        When None (MXFP8/MXInt, which rely on IEEE float32 over/underflow and whose
+        decoded elements may already be Inf/NaN), only the block-level rule applies.
+
+    A block scale of 0xFF decodes the whole block to NaN, for every MX format
+    (Tensix Formats spec, Unpacker Special Number Behavior; reference
+    convert_from_mx_elem_to_float).
+    """
+    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias = 127
+    with np.errstate(over="ignore", invalid="ignore"):
+        scaled = (
+            elem_val * np.exp2(block_exp_unbiased.astype(np.float32))[:, np.newaxis]
+        )
+
+    nan_blocks = scales_u8 == 0xFF
+    if unit_exp_unbiased is not None:
+        combined = block_exp_unbiased[:, np.newaxis] + unit_exp_unbiased
+        overflow = (combined >= 128) & ~nan_blocks[:, np.newaxis]
+        underflow = (combined < -127) & ~nan_blocks[:, np.newaxis]
+        scaled[overflow] = np.where(scaled[overflow] >= 0.0, np.inf, -np.inf)
+        scaled[underflow] = 0.0
+    if np.any(nan_blocks):
+        scaled[nan_blocks] = np.nan
+
+    return torch.tensor(scaled.ravel(), dtype=torch.bfloat16)
+
+
 def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DIM):
     """
     Unpack MXFP8 format with layout: [scales padded to 16B][elements padded to 16B].
@@ -240,30 +300,22 @@ def _unpack_mxfp8(packed_bytes, fp8_dtype, num_faces=4, face_r_dim=MAX_FACE_R_DI
         torch.Tensor of bfloat16 values
     """
     num_elements = face_r_dim * FACE_C_DIM * num_faces
-    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
+    num_blocks = num_elements // MX_FORMAT_BLOCK_SIZE
 
-    scale_section_len = _align16(num_scales)
-
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
-
-    # Convert elements bytes to FP8 blocks and reshape to (num_scales, 32)
-    fp8_blocks = np.frombuffer(bytes(elements_bytes), dtype=fp8_dtype).reshape(
-        num_scales, MX_FORMAT_BLOCK_SIZE
+    scales_u8, elem_u8 = _split_mx_sections(
+        packed_bytes,
+        num_blocks=num_blocks,
+        elements_byte_len=num_elements,
+        fmt_name="MXFP8",
     )
 
-    # Vectorized scale decoding - decode all E8M0 scales at once
-    scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
-    # Handle NaN case (255) and compute 2^(exponent) where exponent = value - 127
-    scale_factors = np.where(
-        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
-    )
+    # One byte per element; decode via ml_dtypes (carries E5M2 Inf/NaN, E4M3 NaN).
+    fp8_blocks = elem_u8.view(fp8_dtype).reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    elem_val = fp8_blocks.astype(np.float32)
 
-    # Scale blocks back to float32
-    scaled_blocks = fp8_blocks.astype(np.float32) * scale_factors[:, np.newaxis]
-
-    # Flatten and convert to bfloat16 tensor
-    return torch.tensor(scaled_blocks.flatten(), dtype=torch.bfloat16)
+    # unit_exp_unbiased=None: rely on IEEE float32 over/underflow; the block-level
+    # 0xFF -> NaN rule (and the float8 Inf/NaN bits) carry the special cases.
+    return _apply_mx_block_scale(scales_u8, elem_val)
 
 
 def _unpack_mxfp8_srcs(packed_bytes, fp8_dtype, dest_acc: bool = False):
@@ -392,31 +444,21 @@ def unpack_mxfp4(
 
     block_size = MX_FORMAT_BLOCK_SIZE
     num_elements = face_r_dim * FACE_C_DIM * num_faces
-    num_blocks = num_elements // block_size
-
     if num_elements % block_size != 0:
         raise ValueError(
             "Invalid MXFP4 tile geometry: num_elements must be a multiple of "
             f"{block_size}, got {num_elements}."
         )
+    num_blocks = num_elements // block_size
 
-    # Expected bytes = 1 scale byte per block (16B-aligned) + packed FP4 elements.
-    scale_section_len = _align16(num_blocks)
-    element_bytes_len = num_blocks * (block_size // 2)
-    expected_len = scale_section_len + element_bytes_len
-    if len(packed_bytes) != expected_len:
-        raise ValueError(
-            "Invalid packed_bytes length for MXFP4: got "
-            f"{len(packed_bytes)} bytes, expected {expected_len} bytes."
-        )
-
-    scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
-    packed_u8 = np.frombuffer(
-        bytes(packed_bytes[scale_section_len : scale_section_len + element_bytes_len]),
-        dtype=np.uint8,
+    scales_u8, packed_u8 = _split_mx_sections(
+        packed_bytes,
+        num_blocks=num_blocks,
+        elements_byte_len=num_blocks * (block_size // 2),
+        fmt_name="MXFP4",
     )
 
-    # Each byte packs 2 FP4 values: low nibble then high nibble.
+    # Each byte packs 2 FP4 values: low nibble (even index) then high nibble.
     nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
     nibbles_u8[0::2] = packed_u8 & 0x0F
     nibbles_u8[1::2] = packed_u8 >> 4
@@ -427,41 +469,22 @@ def unpack_mxfp4(
         .astype(np.float32)
     )
 
-    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias=127
-    scaled_blocks = fp4_f32 * np.exp2(block_exp_unbiased.astype(np.float32))[:, None]
-
-    # Extract 2-bit exponent field from E2M1 format
+    # E2M1 unbiased exponent (bias=1): normal -> field-1; subnormal (field==0) -> 0.
     unit_exp_field = (
         ((nibbles_u8 >> 1) & 0x3)
         .astype(np.int32)[: num_blocks * block_size]
         .reshape(num_blocks, block_size)
     )
-
-    # E2M1 unbiased exponent calculation (bias=1):
-    # - Normal values (exp_field != 0): unbiased = exp_field - 1
-    # - Subnormal values (exp_field == 0): unbiased = 0 (fixed at 1-bias)
     unit_exp_unbiased = np.where(unit_exp_field == 0, 0, unit_exp_field - 1)
-    combined_unbiased = block_exp_unbiased[:, None] + unit_exp_unbiased
 
-    nan_blocks = scales_u8 == 0xFF
-    overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
-    underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
-
-    if np.any(nan_blocks):
-        scaled_blocks[nan_blocks] = np.nan
-
-    scaled_blocks[overflow_mask] = np.where(
-        scaled_blocks[overflow_mask] >= 0.0, np.inf, -np.inf
-    )
-    scaled_blocks[underflow_mask] = 0.0
-
-    return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
+    return _apply_mx_block_scale(scales_u8, fp4_f32, unit_exp_unbiased)
 
 
-# MX-FP6 element parameters (must match pack._MXFP6_PARAMS).
+# MX-FP6 element parameters (must match pack._MXFP6_PARAMS). ml_dtype decodes the
+# 6-bit element code directly (bit-identical to a manual E3M2/E2M3 decode).
 _MXFP6_PARAMS = {
-    "r": dict(exp_bits=3, man_bits=2, exp_bias=3),  # E3M2
-    "p": dict(exp_bits=2, man_bits=3, exp_bias=1),  # E2M3
+    "r": dict(exp_bits=3, man_bits=2, exp_bias=3, ml_dtype=ml_dtypes.float6_e3m2fn),
+    "p": dict(exp_bits=2, man_bits=3, exp_bias=1, ml_dtype=ml_dtypes.float6_e2m3fn),
 }
 
 
@@ -473,73 +496,44 @@ def _unpack_mxfp6(packed_bytes, *, variant, num_faces=4, face_r_dim=MAX_FACE_R_D
     per 32-element block and one 8-bit container per element. The 6-bit element
     code lives in the upper bits of each byte (byte >> 2 == code).
 
-    Mirrors unpack_mxfp4's special-case handling: block scale 0xFF -> NaN block;
-    combined (block + element) exponent >= 128 -> ±Inf; < -127 -> 0.
+    Block scale 0xFF -> NaN block; combined (block + element) exponent >= 128 ->
+    ±Inf; < -127 -> 0 (handled by _apply_mx_block_scale).
     """
     params = _MXFP6_PARAMS[variant]
     exp_bits = params["exp_bits"]
     man_bits = params["man_bits"]
     exp_bias = params["exp_bias"]
-    sign_shift = exp_bits + man_bits
 
     block_size = MX_FORMAT_BLOCK_SIZE
     num_elements = face_r_dim * FACE_C_DIM * num_faces
-    num_blocks = num_elements // block_size
     if num_elements % block_size != 0:
         raise ValueError(
             "Invalid MXFP6 tile geometry: num_elements must be a multiple of "
             f"{block_size}, got {num_elements}."
         )
+    num_blocks = num_elements // block_size
 
-    # 1 scale byte per block (16B-aligned) + 1 byte per element.
-    scale_section_len = _align16(num_blocks)
-    expected_len = scale_section_len + num_elements
-    if len(packed_bytes) != expected_len:
-        raise ValueError(
-            "Invalid packed_bytes length for MXFP6: got "
-            f"{len(packed_bytes)} bytes, expected {expected_len} bytes."
-        )
-
-    scales_u8 = np.frombuffer(bytes(packed_bytes[:num_blocks]), dtype=np.uint8)
-    elem_u8 = np.frombuffer(
-        bytes(packed_bytes[scale_section_len : scale_section_len + num_elements]),
-        dtype=np.uint8,
+    scales_u8, elem_u8 = _split_mx_sections(
+        packed_bytes,
+        num_blocks=num_blocks,
+        elements_byte_len=num_elements,
+        fmt_name="MXFP6",
     )
 
-    # Recover the 6-bit code and split into sign / exponent / mantissa fields.
-    code = (elem_u8 >> 2).astype(np.int32)
-    sign = (code >> sign_shift) & 0x1
-    exp_field = (code >> man_bits) & ((1 << exp_bits) - 1)
-    man = code & ((1 << man_bits) - 1)
-
-    is_sub = exp_field == 0
-    # Normal: exp = exp_field - bias, hidden 1. Subnormal: exp = 1 - bias, hidden 0.
-    elem_exp_unbiased = np.where(is_sub, 1 - exp_bias, exp_field - exp_bias).astype(
-        np.int32
+    # Recover the 6-bit code (upper bits of each byte) and decode the element value
+    # via ml_dtypes; the unbiased element exponent feeds the combined-exp rules.
+    code = (elem_u8 >> 2).astype(np.uint8)
+    elem_val = (
+        code.view(params["ml_dtype"]).astype(np.float32).reshape(num_blocks, block_size)
     )
-    hidden = np.where(is_sub, 0.0, 1.0).astype(np.float32)
-    mant_frac = man.astype(np.float32) / float(1 << man_bits)
-    elem_val = (hidden + mant_frac) * np.exp2(elem_exp_unbiased.astype(np.float32))
-    elem_val = np.where(sign == 1, -elem_val, elem_val).reshape(num_blocks, block_size)
 
-    block_exp_unbiased = scales_u8.astype(np.int32) - 127  # E8M0 bias=127
-    scaled_blocks = elem_val * np.exp2(block_exp_unbiased.astype(np.float32))[:, None]
+    exp_field = (code.astype(np.int32) >> man_bits) & ((1 << exp_bits) - 1)
+    # Normal: exp = field - bias. Subnormal (field == 0): exp = 1 - bias.
+    unit_exp_unbiased = np.where(
+        exp_field == 0, 1 - exp_bias, exp_field - exp_bias
+    ).reshape(num_blocks, block_size)
 
-    combined_unbiased = block_exp_unbiased[:, None] + elem_exp_unbiased.reshape(
-        num_blocks, block_size
-    )
-    nan_blocks = scales_u8 == 0xFF
-    overflow_mask = (combined_unbiased >= 128) & ~nan_blocks[:, None]
-    underflow_mask = (combined_unbiased < -127) & ~nan_blocks[:, None]
-
-    if np.any(nan_blocks):
-        scaled_blocks[nan_blocks] = np.nan
-    scaled_blocks[overflow_mask] = np.where(
-        scaled_blocks[overflow_mask] >= 0.0, np.inf, -np.inf
-    )
-    scaled_blocks[underflow_mask] = 0.0
-
-    return torch.tensor(scaled_blocks.ravel(), dtype=torch.bfloat16)
+    return _apply_mx_block_scale(scales_u8, elem_val, unit_exp_unbiased)
 
 
 def _unpack_mxfp6_srcs(packed_bytes, *, variant, dest_acc: bool = False):
@@ -601,22 +595,17 @@ def unpack_mxfp6p(
     )
 
 
-def _mxint_decode_blocks(scales_e8m0, int_blocks, elem_scale_divisor: float):
+def _mxint_decode_blocks(scales_u8, int_blocks, elem_scale_divisor: float):
     """
-    Shared unpack core for MxInt formats. Given E8M0 scale bytes and a
-    (num_blocks, 32) int8 array of per-element values, return the decoded
+    Shared unpack core for MxInt formats. Given E8M0 block scales and a
+    (num_blocks, 32) signed-int array of per-element values, return the decoded
     bfloat16 tensor. `elem_scale_divisor` is the format's implicit scale
     denominator (64 for MxInt8's 2^-6, 4 for MxInt4's 2^-2, 1 for MxInt2's
-    2^0). NaN scale (0xFF) zeros the block, matching MxFp unpack behavior.
+    2^0). A 0xFF block scale decodes to NaN, matching the spec and every other
+    MX format (handled by _apply_mx_block_scale).
     """
-    scales_array = np.frombuffer(bytes(scales_e8m0), dtype=np.uint8)
-    scale_factors = np.where(
-        scales_array == 255, 0.0, np.exp2(scales_array.astype(np.float32) - 127.0)
-    )
-    decoded = int_blocks.astype(np.float32) * (
-        scale_factors[:, np.newaxis] / elem_scale_divisor
-    )
-    return torch.tensor(decoded.flatten(), dtype=torch.bfloat16)
+    elem_val = int_blocks.astype(np.float32) / elem_scale_divisor
+    return _apply_mx_block_scale(scales_u8, elem_val)
 
 
 def unpack_mxint8(
@@ -636,22 +625,16 @@ def unpack_mxint8(
         raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint8")
 
     num_elements = face_r_dim * FACE_C_DIM * num_faces
-    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
-    scale_section_len = _align16(num_scales)
+    num_blocks = num_elements // MX_FORMAT_BLOCK_SIZE
 
-    if len(packed_bytes) < scale_section_len + num_elements:
-        raise ValueError(
-            "Invalid packed_bytes length for MxInt8: got "
-            f"{len(packed_bytes)} bytes, expected at least "
-            f"{scale_section_len + num_elements} bytes."
-        )
-
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[scale_section_len : scale_section_len + num_elements]
-    int8_blocks = np.frombuffer(bytes(elements_bytes), dtype=np.int8).reshape(
-        num_scales, MX_FORMAT_BLOCK_SIZE
+    scales_u8, elem_u8 = _split_mx_sections(
+        packed_bytes,
+        num_blocks=num_blocks,
+        elements_byte_len=num_elements,
+        fmt_name="MxInt8",
     )
-    return _mxint_decode_blocks(scales_e8m0, int8_blocks, elem_scale_divisor=64.0)
+    int8_blocks = elem_u8.view(np.int8).reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    return _mxint_decode_blocks(scales_u8, int8_blocks, elem_scale_divisor=64.0)
 
 
 def unpack_mxint4(
@@ -672,24 +655,16 @@ def unpack_mxint4(
         raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint4")
 
     num_elements = face_r_dim * FACE_C_DIM * num_faces
-    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
-    scale_section_len = _align16(num_scales)
-    element_bytes_len = num_elements // 2  # 2 elements per byte
+    num_blocks = num_elements // MX_FORMAT_BLOCK_SIZE
 
-    if len(packed_bytes) < scale_section_len + element_bytes_len:
-        raise ValueError(
-            "Invalid packed_bytes length for MxInt4: got "
-            f"{len(packed_bytes)} bytes, expected at least "
-            f"{scale_section_len + element_bytes_len} bytes."
-        )
-
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[
-        scale_section_len : scale_section_len + element_bytes_len
-    ]
+    scales_u8, packed_u8 = _split_mx_sections(
+        packed_bytes,
+        num_blocks=num_blocks,
+        elements_byte_len=num_elements // 2,  # 2 elements per byte
+        fmt_name="MxInt4",
+    )
 
     # Unpack 2 nibbles per byte: low = even index, high = odd index.
-    packed_u8 = np.frombuffer(bytes(elements_bytes), dtype=np.uint8)
     nibbles_u8 = np.empty(packed_u8.size * 2, dtype=np.uint8)
     nibbles_u8[0::2] = packed_u8 & 0x0F
     nibbles_u8[1::2] = packed_u8 >> 4
@@ -699,8 +674,8 @@ def unpack_mxint4(
         nibbles_u8.astype(np.int16) - 16,
         nibbles_u8.astype(np.int16),
     ).astype(np.int8)
-    int4_blocks = int4_as_int8.reshape(num_scales, MX_FORMAT_BLOCK_SIZE)
-    return _mxint_decode_blocks(scales_e8m0, int4_blocks, elem_scale_divisor=4.0)
+    int4_blocks = int4_as_int8.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    return _mxint_decode_blocks(scales_u8, int4_blocks, elem_scale_divisor=4.0)
 
 
 def unpack_mxint2(
@@ -721,24 +696,16 @@ def unpack_mxint2(
         raise NotImplementedError("use_srcs=True not yet implemented for unpack_mxint2")
 
     num_elements = face_r_dim * FACE_C_DIM * num_faces
-    num_scales = num_elements // MX_FORMAT_BLOCK_SIZE
-    scale_section_len = _align16(num_scales)
-    element_bytes_len = num_elements // 4  # 4 elements per byte
+    num_blocks = num_elements // MX_FORMAT_BLOCK_SIZE
 
-    if len(packed_bytes) < scale_section_len + element_bytes_len:
-        raise ValueError(
-            "Invalid packed_bytes length for MxInt2: got "
-            f"{len(packed_bytes)} bytes, expected at least "
-            f"{scale_section_len + element_bytes_len} bytes."
-        )
-
-    scales_e8m0 = packed_bytes[:num_scales]
-    elements_bytes = packed_bytes[
-        scale_section_len : scale_section_len + element_bytes_len
-    ]
+    scales_u8, packed_u8 = _split_mx_sections(
+        packed_bytes,
+        num_blocks=num_blocks,
+        elements_byte_len=num_elements // 4,  # 4 elements per byte
+        fmt_name="MxInt2",
+    )
 
     # Unpack 4 crumbs per byte: bits[1:0], [3:2], [5:4], [7:6].
-    packed_u8 = np.frombuffer(bytes(elements_bytes), dtype=np.uint8)
     crumbs_u8 = np.empty(packed_u8.size * 4, dtype=np.uint8)
     crumbs_u8[0::4] = packed_u8 & 0x03
     crumbs_u8[1::4] = (packed_u8 >> 2) & 0x03
@@ -750,8 +717,8 @@ def unpack_mxint2(
         crumbs_u8.astype(np.int16) - 4,
         crumbs_u8.astype(np.int16),
     ).astype(np.int8)
-    int2_blocks = int2_as_int8.reshape(num_scales, MX_FORMAT_BLOCK_SIZE)
-    return _mxint_decode_blocks(scales_e8m0, int2_blocks, elem_scale_divisor=1.0)
+    int2_blocks = int2_as_int8.reshape(num_blocks, MX_FORMAT_BLOCK_SIZE)
+    return _mxint_decode_blocks(scales_u8, int2_blocks, elem_scale_divisor=1.0)
 
 
 _UNPACKERS = {

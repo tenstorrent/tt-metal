@@ -184,5 +184,4 @@ def test_pack_untilize_quasar(formats_dest_acc_sync_dimensions):
         golden_tensor,
         res_tensor,
         formats.output_format,
-        print_errors=False,
     ), "Assert against golden failed"

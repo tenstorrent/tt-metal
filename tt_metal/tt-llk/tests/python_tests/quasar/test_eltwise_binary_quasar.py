@@ -75,6 +75,8 @@ def valid_acc_to_dest(input_dimensions) -> list:
 
 ELTWISE_FORMATS = input_output_formats(
     [
+        DataFormat.Float16_b,
+        DataFormat.Float16,
         DataFormat.MxFp8R,
         DataFormat.MxFp8P,
         DataFormat.MxFp6R,
@@ -83,8 +85,6 @@ ELTWISE_FORMATS = input_output_formats(
         DataFormat.MxInt8,
         DataFormat.MxInt4,
         DataFormat.MxInt2,
-        DataFormat.Float16_b,
-        DataFormat.Float16,
     ],
 ) + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
 

@@ -43,7 +43,6 @@ from helpers.utils import passed_test
 
 INPUT_DIMENSIONS = [[512, 64], [192, 512]]
 TILE_DIMENSIONS = [32, 32]
-
 PACK_L1_ACC_FORMATS = input_output_formats(
     [
         DataFormat.Float16_b,

@@ -442,11 +442,12 @@ def _clamp_mx_tensors(
     Returns:
         tuple: (clamped_srcA_tensor, clamped_srcB_tensor)
     """
-    # Clamp inputs when both are different MX formats to the more restrictive of
-    # the two operand ranges, so neither operand overflows what it can represent.
+    # Clamp inputs when both are different MX *float* formats to the more
+    # restrictive of the two operand ranges, so neither operand overflows what
+    # it can represent. Only MX-FP formats have a MX_FORMAT_MAX_NORMAL entry.
     if (
-        stimuli_format_A.is_mx_format()
-        and stimuli_format_B.is_mx_format()
+        stimuli_format_A.is_mx_fp_format()
+        and stimuli_format_B.is_mx_fp_format()
         and stimuli_format_A != stimuli_format_B
     ):
         elem_max = min(
@@ -457,7 +458,7 @@ def _clamp_mx_tensors(
         srcB_tensor = torch.clamp(srcB_tensor, -elem_max, elem_max)
 
     # Clamp inputs to the output format's range to prevent excessive rounding errors.
-    if output_format is not None and output_format.is_mx_format():
+    if output_format is not None and output_format.is_mx_fp_format():
         elem_max = MX_FORMAT_MAX_NORMAL[output_format]
         srcA_tensor = torch.clamp(srcA_tensor, -elem_max, elem_max)
         srcB_tensor = torch.clamp(srcB_tensor, -elem_max, elem_max)
