@@ -446,3 +446,92 @@ def test_causal_conv1d_reference(mesh_device):
     print(f"\nCausal conv1d (S={S}) TTNN vs torch:")
     print(f"  PCC = {score:.6f}  max_abs_err = {max_err:.4f}")
     assert score >= PCC_THRESHOLD_CONV, f"PCC {score:.6f} < {PCC_THRESHOLD_CONV}"
+
+
+def test_ttlang_ssd_integration(mesh_device):
+    """tt-lang SSD kernel path (NEMOTRON_USE_TTLANG_SSD=1) matches vanilla path for S=128.
+
+    Runs mamba2_prefill_layer_forward twice with identical inputs:
+      - vanilla: TTNN chunk loop
+      - ttlang:  tt-lang fused kernel (NEMOTRON_USE_TTLANG_SSD=1)
+    Asserts PCC >= 0.95 between outputs.
+
+    Requires: TT_LANG_PYTHON_PATH set (so ttl can be imported by the kernel module).
+    """
+    import os
+
+    if not os.environ.get("TT_LANG_PYTHON_PATH"):
+        pytest.skip("TT_LANG_PYTHON_PATH not set — tt-lang kernel unavailable")
+
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt import mamba2_prefill as _pf
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import clear_device_weight_cache
+
+    clear_device_weight_cache()
+
+    W = _random_weights(seed=55)
+    B, S = 1, 128  # n_chunks = 2 (S / CHUNK_SIZE = 128 / 64)
+
+    x_cpu = torch.randn(B, S, 2688, dtype=torch.bfloat16) * 0.1
+
+    x_tt = ttnn.from_torch(
+        x_cpu,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_prefill import mamba2_prefill_layer_forward
+
+    # ── Vanilla TTNN chunk-loop run ───────────────────────────────────────
+    _pf._USE_TTLANG_SSD = False
+    out_vanilla, state_vanilla, _ = mamba2_prefill_layer_forward(
+        mesh_device,
+        x_tt,
+        W["norm_w"],
+        W["in_proj_w"],
+        W["conv_w"],
+        W["conv_b"],
+        W["dt_bias"],
+        W["A_log"],
+        W["norm_mixer_w"],
+        W["D"],
+        W["out_proj_w"],
+    )
+    out_vanilla_cpu = _to_cpu(out_vanilla, mesh_device, B)
+    state_vanilla_cpu = ttnn.to_torch(ttnn.get_device_tensors(state_vanilla)[0]).float()
+
+    # ── tt-lang fused kernel run ──────────────────────────────────────────
+    clear_device_weight_cache()
+    _pf._USE_TTLANG_SSD = True
+    try:
+        out_ttlang, state_ttlang, _ = mamba2_prefill_layer_forward(
+            mesh_device,
+            x_tt,
+            W["norm_w"],
+            W["in_proj_w"],
+            W["conv_w"],
+            W["conv_b"],
+            W["dt_bias"],
+            W["A_log"],
+            W["norm_mixer_w"],
+            W["D"],
+            W["out_proj_w"],
+        )
+    finally:
+        _pf._USE_TTLANG_SSD = False  # restore default
+
+    out_ttlang_cpu = _to_cpu(out_ttlang, mesh_device, B)
+    state_ttlang_cpu = ttnn.to_torch(ttnn.get_device_tensors(state_ttlang)[0]).float()
+
+    y_score = pcc(out_ttlang_cpu, out_vanilla_cpu)
+    h_score = pcc(state_ttlang_cpu, state_vanilla_cpu)
+    y_err = (out_ttlang_cpu.float() - out_vanilla_cpu.float()).abs().max().item()
+    h_err = (state_ttlang_cpu - state_vanilla_cpu).abs().max().item()
+
+    print(f"\ntt-lang SSD integration (S={S}, n_chunks=2) vs vanilla TTNN:")
+    print(f"  y  PCC = {y_score:.6f}  max_abs_err = {y_err:.4f}")
+    print(f"  h  PCC = {h_score:.6f}  max_abs_err = {h_err:.4f}")
+
+    assert y_score >= 0.95, f"y PCC {y_score:.6f} < 0.95"
+    assert h_score >= 0.90, f"h PCC {h_score:.6f} < 0.90"
