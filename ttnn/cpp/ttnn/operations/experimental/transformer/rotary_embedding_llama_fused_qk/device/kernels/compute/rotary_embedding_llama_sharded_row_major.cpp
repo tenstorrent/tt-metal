@@ -108,7 +108,7 @@ void kernel_main() {
             compute_kernel_lib::InputLifecycle::CallerManaged,
             compute_kernel_lib::OutputLifecycle::CallerManaged,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None>(1);
+            compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::single());
         sin_interm_cb_obj.push_back(Wt);
         rotated_in_interm_cb_obj.pop_front(Wt);
 

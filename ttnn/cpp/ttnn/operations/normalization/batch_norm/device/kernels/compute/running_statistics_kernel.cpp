@@ -40,7 +40,7 @@ ALWI void update_running_stat() {
     // reserved/pushed once per loop iteration by kernel_main.
     cb_reserve_back(cb_updated, 1);
     ckl::eltwise_chain(
-        1,
+        ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
             cb_one,
             cb_momentum,

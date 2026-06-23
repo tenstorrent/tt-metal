@@ -56,7 +56,7 @@ void kernel_main() {
     // between (CopyTile<D1, InputLifecycle::NoWaitPop> + MulBinary) and DestReuseBinary based
     // on kIsFloat32 / kIsFloat.
     compute_kernel_lib::eltwise_chain(
-        num_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,

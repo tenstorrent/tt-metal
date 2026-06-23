@@ -13,16 +13,17 @@
  * broadcast and operand-kind are defaulted template parameters, so the streaming case is a
  * three-argument call and the broadcast / held-operand cases stay a single call:
  *
- *     mul<dfb_a, dfb_b, dfb_out>(n);                              // streaming a * b
+ *     mul<dfb_a, dfb_b, dfb_out>(EltwiseShape::tiles(n));         // streaming a * b
  *     sub<dfb_x, dfb_max, dfb_out, BroadcastDim::Col,             // softmax x - max
  *         BinaryDataFormatReconfig::Input, OperandKind::Scalar,
  *         InputLifecycle::Streaming, InputLifecycle::HeldStream>(shape);
- *     unary<Exp<>, dfb_in, dfb_out>(n);                           // exp(x)
- *     binary_sfpu<DivBinary<>, dfb_a, dfb_b, dfb_out>(n);         // a / b (SFPU)
- *     copy<dfb_in, dfb_out>(n);
+ *     unary<Exp<>, dfb_in, dfb_out>(EltwiseShape::tiles(n));      // exp(x)
+ *     binary_sfpu<DivBinary<>, dfb_a, dfb_b, dfb_out>(EltwiseShape::tiles(n)); // a / b (SFPU)
+ *     copy<dfb_in, dfb_out>(EltwiseShape::single());             // one tile
  *
- * The shape argument is an `EltwiseShape` (implicitly built from a plain `uint32_t` tile
- * count), so both `op<...>(n_tiles)` and `op<...>(EltwiseShape::grid(Ht, Wt))` work.
+ * The shape argument is an `EltwiseShape`. A bare number is not accepted (the `uint32_t`
+ * ctor is `explicit`): write `op<...>(EltwiseShape::tiles(n))`, `EltwiseShape::single()`,
+ * or `op<...>(EltwiseShape::grid(Ht, Wt))` so the iteration shape is always explicit.
  *
  * Like `eltwise_chain`, these emit no engine-wide init — the caller owns
  * `compute_kernel_hw_startup(...)` as the first statement of `MAIN()`. Drop to

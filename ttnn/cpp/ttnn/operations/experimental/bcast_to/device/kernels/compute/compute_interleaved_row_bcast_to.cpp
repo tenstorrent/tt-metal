@@ -38,7 +38,7 @@ void kernel_main() {
                 for (uint32_t tw = start_tw; tw < Wt && num_tiles_read < num_tiles; ++tw) {
                     // Per-tile row broadcast; setup already emitted above (SetupOwner::Caller).
                     compute_kernel_lib::eltwise_chain<compute_kernel_lib::SetupOwner::Caller>(
-                        1u,
+                        compute_kernel_lib::EltwiseShape::single(),
                         compute_kernel_lib::UnaryBcast<
                             compute_kernel_lib::BroadcastDim::Row,
                             cb_id_src,

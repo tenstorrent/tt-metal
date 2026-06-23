@@ -60,7 +60,8 @@ void kernel_main() {
 
     if constexpr (has_divisor) {
         // recip(divisor) -> cb_divisor_recip (one tile, consumed Bulk by the loop chain).
-        ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_divisor_recip, ckl::InputLifecycle::Bulk>(1);
+        ckl::unary<ckl::Recip<D::D0>, cb_divisor, cb_divisor_recip, ckl::InputLifecycle::Bulk>(
+            ckl::EltwiseShape::single());
     }
 
     // Full-tile weight multiply (DEST-reuse), gated on has_weight — collapses to a no-op tag when
@@ -75,7 +76,7 @@ void kernel_main() {
     if constexpr (has_divisor) {
         // D0 = input * recip (scalar-bcast); input streamed, recip held (Bulk scalar).
         ckl::eltwise_chain(
-            per_core_tile_cnt,
+            ckl::EltwiseShape::tiles(per_core_tile_cnt),
             ckl::BinaryFpu<
                 cb_tmp_input,
                 cb_divisor_recip,
@@ -87,6 +88,7 @@ void kernel_main() {
             weight_mul,
             pack_out);
     } else {
-        ckl::eltwise_chain(per_core_tile_cnt, ckl::CopyTile<cb_tmp_input>{}, negate, weight_mul, pack_out);
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(per_core_tile_cnt), ckl::CopyTile<cb_tmp_input>{}, negate, weight_mul, pack_out);
     }
 }

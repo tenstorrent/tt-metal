@@ -26,7 +26,7 @@ void kernel_main() {
             compute_kernel_lib::InputLifecycle::Streaming,
             compute_kernel_lib::OutputLifecycle::Streaming,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None>(onetile);
+            compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // reduce-w
         if (last_out) {

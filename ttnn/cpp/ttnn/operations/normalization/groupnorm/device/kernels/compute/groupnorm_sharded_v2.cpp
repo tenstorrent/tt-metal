@@ -321,7 +321,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(block_hw);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(block_hw));
             cb_ex_global.pop_front(1);
 
             // (x - E[x]) * input_mask — re-zero out-of-group columns, same-CB cb_x rotation.
@@ -409,7 +409,7 @@ void kernel_main() {
             // unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
             compute_kernel_lib::eltwise_chain(
-                1,
+                compute_kernel_lib::EltwiseShape::single(),
                 compute_kernel_lib::BinaryFpu<
                     cb_ex_global_id,
                     cb_eps_id,
@@ -445,7 +445,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(block_hw);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(block_hw));
             cb_ex2pe.pop_front(1);
             cb_x.wait_front(block_hw);
             //  add or copy with previous output results

@@ -35,11 +35,12 @@ void kernel_main() {
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
                 // Seed cb_max with first cb_in0 tile.
-                compute_kernel_lib::copy<cb_in0, cb_max>(onetile);
+                compute_kernel_lib::copy<cb_in0, cb_max>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
                 // cb_max = max(cb_in0, cb_max) — same accumulator pattern as
                 // moreh_norm_h/w ord_other (7e61967482a).
-                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_in0, cb_max, cb_max>(onetile);
+                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_in0, cb_max, cb_max>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -48,7 +49,7 @@ void kernel_main() {
         for (uint32_t i = 0; i < dim_size; ++i) {
 #ifdef SOFTMAX
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_max,
@@ -63,7 +64,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<cb_exps>{});
 #else
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_max,
@@ -81,9 +82,9 @@ void kernel_main() {
 
             // Accumulator over C-dim.
             if (i == 0) {
-                compute_kernel_lib::copy<cb_exps, cb_add>(onetile);
+                compute_kernel_lib::copy<cb_exps, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_add, cb_exps, cb_add>(onetile);
+                compute_kernel_lib::add<cb_add, cb_exps, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -92,10 +93,10 @@ void kernel_main() {
         compute_kernel_lib::unary<
             compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
             cb_add,
-            cb_recipsumexps>(onetile);
+            cb_recipsumexps>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
         compute_kernel_lib::unary<compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>, cb_add, cb_recipsumexps>(
-            onetile);
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
 #endif
 
         // step 3, compute final result per C tile.
@@ -110,14 +111,14 @@ void kernel_main() {
                 cb_tmp,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             compute_kernel_lib::sub<
                 cb_tmp,
                 cb_recipsumexps,
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
             // -x + max - log(sum). Same as Sub(cb_max, cb_in0) followed by Sub.
             // cb_max held (pop0=0); cb_in0 popped (pop1=1).
@@ -126,20 +127,20 @@ void kernel_main() {
                 cb_in0,
                 cb_tmp,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             compute_kernel_lib::sub<
                 cb_tmp,
                 cb_recipsumexps,
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #endif
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum. Sub+Exp folded; then Mul.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_max,
@@ -158,11 +159,11 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
             // rexp(x - max) / sum (softmin path).
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_max,
@@ -182,7 +183,7 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #endif
 #endif
         }

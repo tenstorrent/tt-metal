@@ -4,7 +4,7 @@
 
 // Init-hoisting equality — PER-TILE side (G5 / init-hoisting).
 //
-// N separate eltwise_chain(1, ...) calls, each emitting its own init for its single tile. This is
+// N separate eltwise_chain(EltwiseShape::single(), ...) calls, each emitting its own init for its single tile. This is
 // the NON-hoisted-across-tiles shape: the same op (Exp) is re-initialized N times instead of once.
 //
 // Paired with hoist_single_call.cpp (one call over N tiles, init hoisted once). For identical input
@@ -24,6 +24,6 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     for (uint32_t i = 0; i < n; ++i) {
-        eltwise_chain(1, CopyTile<cb_in, Dst::D0>{}, Exp<>{}, PackTile<cb_out>{});
+        eltwise_chain(EltwiseShape::single(), CopyTile<cb_in, Dst::D0>{}, Exp<>{}, PackTile<cb_out>{});
     }
 }

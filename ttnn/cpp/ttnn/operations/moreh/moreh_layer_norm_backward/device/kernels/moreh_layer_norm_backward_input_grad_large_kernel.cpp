@@ -103,7 +103,7 @@ void kernel_main() {
                 cb_xmm,
                 is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_y
             // (x - mean) * rstd and mask(optional)
@@ -268,7 +268,7 @@ void kernel_main() {
                 cb_ydy,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::NoWaitPop>(onetile);
+                compute_kernel_lib::InputLifecycle::NoWaitPop>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_ydyadd
             if (wt == 0) {
@@ -324,7 +324,7 @@ void kernel_main() {
         // cb_rstd CallerManaged + Scalar (held); cb_recip_nrstd Streaming. is_lastdim -> Col else Scalar bcast.
         // *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_n_recip_n,
                 cb_rstd,
@@ -441,7 +441,7 @@ void kernel_main() {
                 cb_ndy,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::InputLifecycle::Streaming>(onetile);
+                compute_kernel_lib::InputLifecycle::Streaming>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_ndymdysum
             // n * dy - Sum[dy]
@@ -455,7 +455,7 @@ void kernel_main() {
                 cb_ndymdysum,
                 is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_xmm
             // x - mean and mask(optional)
@@ -506,7 +506,7 @@ void kernel_main() {
                 cb_y,
                 is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
@@ -520,7 +520,7 @@ void kernel_main() {
                 cb_yydysum,
                 is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_tmp4
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
@@ -528,7 +528,8 @@ void kernel_main() {
             CircularBuffer cb_tmp4_obj(cb_tmp4);
             // (n*dy - Sum[dy]) - (y * Sum[y*dy]). both Streaming. sub_tiles_init_with_dt -> Reconfig::Input,
             // pack_tile_with_dt -> PackTileReconfig::Output.
-            compute_kernel_lib::sub<cb_ndymdysum, cb_yydysum, cb_tmp4>(onetile);
+            compute_kernel_lib::sub<cb_ndymdysum, cb_yydysum, cb_tmp4>(
+                compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_dx
             // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n). cb_tmp4 Streaming; cb_recip_nrstd held ->
@@ -539,7 +540,7 @@ void kernel_main() {
                 cb_dx,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }  // Wt loop
         cb_recip_nrstd_obj.pop_front(onetile);
         cb_dysum_obj.pop_front(onetile);

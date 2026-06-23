@@ -25,7 +25,6 @@ template <
     uint32_t cb_max,
     uint32_t cb_out>
 ALWI void calc_numeric_stable() {
-    auto cb_max_obj = CircularBuffer(cb_max);
     auto cb_out_obj = CircularBuffer(cb_out);
 
     // Use reduce_helpers for MAX reduce (REDUCE_ROW, PRELOADED mode)
@@ -41,13 +40,13 @@ ALWI void calc_numeric_stable() {
     // x - max(x) then exp, fused — DEST-batched subblock_w tiles per acquire, matching the
     // original's `for (j < num_subblocks_w) { for (w < subblock_w) }` window with absolute
     // index `w + index_subblock_w_offset`. cb_in resident (popped at chain end) -> DeferredPop
-    // + Block, read by absolute index `wt_base + j`; cb_max held (wait/pop kept outside) ->
-    // CallerManaged + Scalar; cb_out reserve+push block_w upfront/walk -> Bulk (block-correct).
+    // + Block, read by absolute index `wt_base + j`; cb_max consumed once -> Bulk + Scalar
+    // (the chain owns the single wait/pop — M=1 via window_1d<Scalar>); cb_out reserve+push
+    // block_w upfront/walk -> Bulk (block-correct).
     // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size; the chain clamps
     // it to DEST capacity automatically. sub_bcast_cols_init_short ->
     // BinaryDataFormatReconfig::Input; plain pack_tile (format already cb_out) ->
     // PackTileReconfig::None.
-    cb_max_obj.wait_front(1);
     compute_kernel_lib::eltwise_chain(
         compute_kernel_lib::EltwiseShape::tiles(block_w, subblock_w),
         compute_kernel_lib::BinaryFpu<
@@ -56,7 +55,7 @@ ALWI void calc_numeric_stable() {
             compute_kernel_lib::BinaryFpuOp::Sub,
             compute_kernel_lib::BroadcastDim::Col,
             compute_kernel_lib::InputLifecycle::DeferredPop,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
+            compute_kernel_lib::InputLifecycle::Bulk,
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::Dst::D0,
             compute_kernel_lib::OperandKind::Block,
@@ -67,7 +66,6 @@ ALWI void calc_numeric_stable() {
             compute_kernel_lib::Dst::D0>{},
         compute_kernel_lib::
             PackTile<cb_out, compute_kernel_lib::OutputLifecycle::Bulk, compute_kernel_lib::PackTileReconfig::None>{});
-    cb_max_obj.pop_front(1);
     cb_out_obj.wait_front(block_w);
 }
 
@@ -110,6 +108,33 @@ void kernel_main() {
 
     constexpr int dst0 = 0;
 
+    // Compile-time mask configuration for the fused mask-add chain below — replaces the inline
+    // #ifdef CAUSAL_MASK that used to live inside the BinaryFpu<...> template args. Macro
+    // presence is normalized to constexpr bools, then the broadcast dim and the cb_fused_attn
+    // lifecycle are each selected once.
+#if FUSED_SCALE_MASK
+#ifdef CAUSAL_MASK
+    constexpr bool causal_mask = true;
+#else
+    constexpr bool causal_mask = false;
+#endif
+#ifdef SHARDED_CAUSAL_MASK
+    constexpr bool sharded_causal_mask = true;
+#else
+    constexpr bool sharded_causal_mask = false;
+#endif
+    // CAUSAL -> no broadcast (full mask tile); else broadcast the mask row across rows.
+    constexpr auto mask_bcast =
+        causal_mask ? compute_kernel_lib::BroadcastDim::None : compute_kernel_lib::BroadcastDim::Row;
+    // cb_fused_attn lifecycle matrix — reproduces the original "#ifndef SHARDED_CAUSAL_MASK wait"
+    // + "#ifdef CAUSAL_MASK pop": wait <- !SHARDED, pop <- CAUSAL.
+    constexpr auto mask_lifecycle =
+        (causal_mask && sharded_causal_mask) ? compute_kernel_lib::InputLifecycle::DeferredPop  // no wait, pop
+        : causal_mask                        ? compute_kernel_lib::InputLifecycle::Bulk         // wait + pop
+        : !sharded_causal_mask               ? compute_kernel_lib::InputLifecycle::HeldBulk     // wait, no pop
+                                             : compute_kernel_lib::InputLifecycle::CallerManaged;             // no wait, no pop
+#endif
+
     for (uint32_t i = 0; i < block_h; i++) {
 #if FUSED_SCALE_MASK
         // fused scale — DEST-batched subblock_w tiles per acquire, matching the original's
@@ -148,21 +173,9 @@ void kernel_main() {
                 cb_scale_mask,
                 cb_fused_attn,
                 compute_kernel_lib::BinaryFpuOp::Add,
-#ifdef CAUSAL_MASK
-                compute_kernel_lib::BroadcastDim::None,
-#else
-                compute_kernel_lib::BroadcastDim::Row,
-#endif
+                mask_bcast,
                 compute_kernel_lib::InputLifecycle::Bulk,
-#if defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
-                compute_kernel_lib::InputLifecycle::DeferredPop,  // no wait (SHARDED), pop (CAUSAL)
-#elif defined(CAUSAL_MASK)
-                compute_kernel_lib::InputLifecycle::Bulk,  // wait + pop
-#elif !defined(SHARDED_CAUSAL_MASK)
-                compute_kernel_lib::InputLifecycle::HeldBulk,  // wait, no pop (held across block_h)
-#else
-                compute_kernel_lib::InputLifecycle::CallerManaged,  // no wait, no pop
-#endif
+                mask_lifecycle,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
                 compute_kernel_lib::Dst::D0,
                 compute_kernel_lib::OperandKind::Block,

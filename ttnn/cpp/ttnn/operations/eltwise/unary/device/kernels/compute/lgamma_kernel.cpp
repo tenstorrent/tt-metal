@@ -33,7 +33,7 @@ void kernel_main() {
     init_sfpu(cb_input, cb_output);
 
     ckl::eltwise_chain(
-        num_tiles,
+        ckl::EltwiseShape::tiles(num_tiles),
         // x -> D0 (owns the wait), x -> D1.
         ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
         ckl::CopyTile<cb_input, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged, ckl::CopyTileReconfig::None>{},

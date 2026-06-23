@@ -50,7 +50,7 @@ void kernel_main() {
     init_sfpu(cb_input, cb_output);  // caller-owned BIG init
 
     compute_kernel_lib::eltwise_chain(
-        num_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
         // cond -> D0. Single CB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
         compute_kernel_lib::CopyTile<
             cb_input,

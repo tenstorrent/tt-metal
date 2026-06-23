@@ -77,7 +77,7 @@ void kernel_main() {
         //   cb_eps InputLifecycle::CallerManaged + Scalar; cb_recip_sqrt_var OutputLifecycle::Streaming.
         // rsqrt_tile_init<true> -> Legacy::On.
         compute_kernel_lib::eltwise_chain(
-            1,
+            compute_kernel_lib::EltwiseShape::single(),
             compute_kernel_lib::BinaryFpu<
                 cb_stats_reduced,
                 cb_eps,

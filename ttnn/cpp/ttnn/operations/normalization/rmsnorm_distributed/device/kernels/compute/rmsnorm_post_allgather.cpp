@@ -75,7 +75,7 @@ void kernel_main() {
          * before NCHt loop, popped once after). cb_recip_sqrt_var: OutputLifecycle::Streaming.
          */
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_var,
                 cb_eps,

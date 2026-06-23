@@ -40,7 +40,7 @@ void kernel_main() {
                 if (h == 0) {
                     // Single tile: mask cb_dy and write to cb_add directly.
                     compute_kernel_lib::eltwise_chain(
-                        onetile,
+                        compute_kernel_lib::EltwiseShape::tiles(onetile),
                         compute_kernel_lib::CopyTile<cb_dy>{},
                         compute_kernel_lib::CopyTile<
                             cb_mask,
@@ -52,7 +52,7 @@ void kernel_main() {
                     // mask cb_dy -> cb_inter0; then add to cb_add.
                     constexpr auto cb_inter0 = tt::CBIndex::c_24;
                     compute_kernel_lib::eltwise_chain(
-                        onetile,
+                        compute_kernel_lib::EltwiseShape::tiles(onetile),
                         compute_kernel_lib::CopyTile<cb_dy>{},
                         compute_kernel_lib::CopyTile<
                             cb_mask,
@@ -60,13 +60,14 @@ void kernel_main() {
                             compute_kernel_lib::InputLifecycle::HeldStream>{},
                         compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                         compute_kernel_lib::PackTile<cb_inter0>{});
-                    compute_kernel_lib::add<cb_add, cb_inter0, cb_add>(onetile);
+                    compute_kernel_lib::add<cb_add, cb_inter0, cb_add>(
+                        compute_kernel_lib::EltwiseShape::tiles(onetile));
                 }
             } else {
                 if (h == 0) {
-                    compute_kernel_lib::copy<cb_dy, cb_add>(onetile);
+                    compute_kernel_lib::copy<cb_dy, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
                 } else {
-                    compute_kernel_lib::add<cb_add, cb_dy, cb_add>(onetile);
+                    compute_kernel_lib::add<cb_add, cb_dy, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
                 }
             }
         }
@@ -84,15 +85,15 @@ void kernel_main() {
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Dst::D0>,
                 cb_y,
-                cb_exp>(onetile);
+                cb_exp>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             compute_kernel_lib::mul<
                 cb_exp,
                 cb_sum,
                 cb_inter2,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
-            compute_kernel_lib::sub<cb_dy, cb_inter2, cb_dx>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            compute_kernel_lib::sub<cb_dy, cb_inter2, cb_dx>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
 
         cb_sum_obj.pop_front(onetile);
@@ -103,7 +104,7 @@ void kernel_main() {
             if (h == Ht - 1) {
                 // mul_tiles_and_mask_tile_to_cb: y*dy + mask -> cb_ydy.
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::BinaryFpu<cb_y, cb_dy, compute_kernel_lib::BinaryFpuOp::Mul>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask,
@@ -112,14 +113,14 @@ void kernel_main() {
                     compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<cb_ydy>{});
             } else {
-                compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(onetile);
+                compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
 
             // Accumulator.
             if (h == 0) {
-                compute_kernel_lib::copy<cb_ydy, cb_add>(onetile);
+                compute_kernel_lib::copy<cb_ydy, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_add, cb_ydy, cb_add>(onetile);
+                compute_kernel_lib::add<cb_add, cb_ydy, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -134,13 +135,13 @@ void kernel_main() {
                 cb_inter2,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #ifdef SOFTMAX
-            compute_kernel_lib::mul<cb_y, cb_inter2, cb_dx>(onetile);
+            compute_kernel_lib::mul<cb_y, cb_inter2, cb_dx>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
             // mul_tiles_and_negative_to_cb: mul then negate.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<cb_y, cb_inter2, compute_kernel_lib::BinaryFpuOp::Mul>{},
                 compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<cb_dx>{});

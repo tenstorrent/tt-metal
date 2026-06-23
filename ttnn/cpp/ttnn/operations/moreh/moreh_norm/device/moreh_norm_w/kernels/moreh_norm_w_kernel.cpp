@@ -68,7 +68,7 @@ void kernel_main() {
             // Same pattern as moreh_norm_h 7743f35794f.
             if (do_mask_w && (col_idx == Wt - 1)) {
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<cb_x>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,
@@ -78,13 +78,14 @@ void kernel_main() {
                     compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::PackTile<cb_xabs>{});
             } else {
-                compute_kernel_lib::unary<compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>, cb_x, cb_xabs>(onetile);
+                compute_kernel_lib::unary<compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>, cb_x, cb_xabs>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
 
             // power_tile_to_cb body inlined as 4 chain stages -> cb_correct_xpow.
             if (p_is_negative) {
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<
                         cb_xabs,
                         compute_kernel_lib::Dst::D0,
@@ -94,7 +95,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<cb_xpow>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<
                         cb_xabs,
                         compute_kernel_lib::Dst::D0,
@@ -106,9 +107,9 @@ void kernel_main() {
                 compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
                 cb_xabs,
                 cb_logx,
-                compute_kernel_lib::InputLifecycle::NoWaitPop>(onetile);
+                compute_kernel_lib::InputLifecycle::NoWaitPop>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_logx,
                     cb_decimal,
@@ -121,13 +122,15 @@ void kernel_main() {
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<cb_exp_lxmd>{});
-            compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(onetile);
+            compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(
+                compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Accumulator: col_idx==0 -> seed copy; else -> in-place add.
             if (col_idx == 0) {
-                compute_kernel_lib::copy<cb_correct_xpow, cb_xpowadd>(onetile);
+                compute_kernel_lib::copy<cb_correct_xpow, cb_xpowadd>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_correct_xpow, cb_xpowadd, cb_xpowadd>(onetile);
+                compute_kernel_lib::add<cb_correct_xpow, cb_xpowadd, cb_xpowadd>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -139,7 +142,7 @@ void kernel_main() {
         // cb_logx=cb_tmp1, cb_exp_lxmd=cb_tmp2, cb_correct_xpow=cb_y.
         if (recip_p_is_negative) {
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::
                     CopyTile<cb_xpowsum, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
                 compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{recip_p},
@@ -147,7 +150,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<cb_tmp0>{});
         } else {
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::
                     CopyTile<cb_xpowsum, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
                 compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{recip_p},
@@ -157,9 +160,9 @@ void kernel_main() {
             compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
             cb_xpowsum,
             cb_tmp1,
-            compute_kernel_lib::InputLifecycle::NoWaitPop>(onetile);
+            compute_kernel_lib::InputLifecycle::NoWaitPop>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_tmp1,
                 cb_recip_p_decimal,
@@ -172,7 +175,7 @@ void kernel_main() {
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<cb_tmp2>{});
-        compute_kernel_lib::mul<cb_tmp0, cb_tmp2, cb_y>(onetile);
+        compute_kernel_lib::mul<cb_tmp0, cb_tmp2, cb_y>(compute_kernel_lib::EltwiseShape::tiles(onetile));
     }
 
     cb_pop_front(cb_one, onetile);

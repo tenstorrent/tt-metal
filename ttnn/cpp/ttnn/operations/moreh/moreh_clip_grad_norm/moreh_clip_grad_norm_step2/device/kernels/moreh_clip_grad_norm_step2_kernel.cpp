@@ -47,7 +47,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(onetile);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         } else {
             // cb_x = cb_input + cb_x (in-place accumulator).
             // Original: add_tiles_init reconfigs srca/srcb; pack_tile no reconfig.
@@ -60,7 +60,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(onetile);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
     }
     // Inline power_tile_to_cb body as 4 eltwise_chain stages:
@@ -77,7 +77,7 @@ void kernel_main() {
     // cb_decimal InputLifecycle::CallerManaged + Scalar (held by external wait_front at top of kernel).
     if (p_is_negative) {
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::
                 CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
             compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
@@ -85,7 +85,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<cb_xpow>{});
     } else {
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::
                 CopyTile<cb_x, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
             compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
@@ -98,11 +98,11 @@ void kernel_main() {
         compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
         cb_x,
         cb_logx,
-        compute_kernel_lib::InputLifecycle::NoWaitPop>(onetile);
+        compute_kernel_lib::InputLifecycle::NoWaitPop>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
     // Stage C: exp(log(x) * decimal). cb_decimal pre-waited at top of kernel.
     compute_kernel_lib::eltwise_chain(
-        onetile,
+        compute_kernel_lib::EltwiseShape::tiles(onetile),
         compute_kernel_lib::BinaryFpu<
             cb_logx,
             cb_decimal,
@@ -115,5 +115,5 @@ void kernel_main() {
         compute_kernel_lib::PackTile<cb_exp_lxmd>{});
 
     // Stage D: x^p * exp(log(x) * decimal) = (x + decimal)^p -> cb_y.
-    compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_y>(onetile);
+    compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_y>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 }

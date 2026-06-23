@@ -32,7 +32,7 @@ void kernel_main() {
     if constexpr (dim == 2) {
         init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(cb_a, cb_b, cb_out);
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,
@@ -45,7 +45,7 @@ void kernel_main() {
     } else if constexpr (dim == 1) {
         init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::COL>(cb_a, cb_b, cb_out);
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,
@@ -58,7 +58,7 @@ void kernel_main() {
     } else {  // dim == 3 -> Scalar
         init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::SCALAR>(cb_a, cb_b, cb_out);
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,

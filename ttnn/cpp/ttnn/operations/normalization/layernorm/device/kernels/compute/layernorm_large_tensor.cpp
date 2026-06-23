@@ -240,7 +240,7 @@ void kernel_main() {
         // pack_reconfig_data_format(cb_ex2pe) -> Output. Original lacks cb_ex2pe.reserve_back
         // (relies on CB capacity) -> OutputLifecycle::DeferredReserve (no reserve, push at end).
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_ex2,
                 cb_eps,
@@ -257,7 +257,8 @@ void kernel_main() {
         // Broadcast the column vector across cols. UnaryBcast<COL> reconfigs both srca/srcb to
         // cb_ex2pe (Input); downstream PackTile owns pack reconfig (Output). Per-tile
         // Streaming in/out, then re-wait the pushed tile for downstream use.
-        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(onetile);
+        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
         cb_ex2pe_obj.wait_front(onetile);
 
         // End of

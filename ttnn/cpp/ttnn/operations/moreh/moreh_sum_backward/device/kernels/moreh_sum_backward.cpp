@@ -42,7 +42,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::OptionalChainElement<
                 has_bcast,
                 compute_kernel_lib::BinaryFpu<

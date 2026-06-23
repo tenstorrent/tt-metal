@@ -50,7 +50,7 @@ void kernel_main() {
             const bool mask_this = do_mask_h && (row_idx == Ht - 1);
             if (mask_this) {
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<cb_x>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_h,
@@ -72,7 +72,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTile<cb_val>{});
             } else {
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<cb_x>{},
 #ifdef IS_ZERO
                     compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
@@ -89,14 +89,15 @@ void kernel_main() {
             //   IS_ZERO  -> add_tiles (sum of != zero count)
             //   default  -> binary_max (running max via two-DEST SFPU)
             if (row_idx == 0) {
-                compute_kernel_lib::copy<cb_val, cb_cal>(onetile);
+                compute_kernel_lib::copy<cb_val, cb_cal>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
 #ifdef IS_ZERO
                 // cb_cal = cb_val + cb_cal (in-place accumulator).
-                compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(onetile);
+                compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
                 // cb_cal = max(cb_val, cb_cal) via two-DEST SFPU.
-                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_val, cb_cal, cb_cal>(onetile);
+                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_val, cb_cal, cb_cal>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
 #endif
             }
         }
@@ -107,7 +108,7 @@ void kernel_main() {
 
         // Final: copy reduce result -> [negate if MINUS_INF] -> cb_y.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::CopyTile<cb_reduce>{},
 #ifdef MINUS_INF
             compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},

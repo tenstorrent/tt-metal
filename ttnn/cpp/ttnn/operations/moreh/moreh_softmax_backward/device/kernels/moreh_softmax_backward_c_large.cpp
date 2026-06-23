@@ -34,9 +34,9 @@ void kernel_main() {
         // both full tiles (no axis-mask either).
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                compute_kernel_lib::copy<cb_dy, cb_sum>(onetile);
+                compute_kernel_lib::copy<cb_dy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_sum, cb_dy, cb_sum>(onetile);
+                compute_kernel_lib::add<cb_sum, cb_dy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -49,7 +49,7 @@ void kernel_main() {
                     compute_kernel_lib::Approx::Exact,
                     compute_kernel_lib::Dst::D0>,
                 cb_y,
-                cb_exp>(onetile);
+                cb_exp>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // sum * exp(y) — cb_sum held outside, cb_exp streaming.
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
@@ -58,21 +58,21 @@ void kernel_main() {
                 cb_exp,
                 cb_inter2,
                 compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // dy - sum * exp(y).
-            compute_kernel_lib::sub<cb_dy, cb_inter2, cb_dx>(onetile);
+            compute_kernel_lib::sub<cb_dy, cb_inter2, cb_dx>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
         cb_sum_obj.pop_front(onetile);
 #else
         // compute sum(y * dy) over C-dim. No bcast.
         for (uint32_t i = 0; i < dim_size; ++i) {
-            compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(onetile);
+            compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             if (i == 0) {
-                compute_kernel_lib::copy<cb_ydy, cb_sum>(onetile);
+                compute_kernel_lib::copy<cb_ydy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_sum, cb_ydy, cb_sum>(onetile);
+                compute_kernel_lib::add<cb_sum, cb_ydy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -85,14 +85,14 @@ void kernel_main() {
                 cb_dy_m_sum,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #ifdef SOFTMAX
             // (dy - sum) * y. cb_y held outside (InputLifecycle::CallerManaged).
-            compute_kernel_lib::mul<cb_dy_m_sum, cb_y, cb_dx>(onetile);
+            compute_kernel_lib::mul<cb_dy_m_sum, cb_y, cb_dx>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
             // -(dy - sum) * y.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<cb_dy_m_sum, cb_y, compute_kernel_lib::BinaryFpuOp::Mul>{},
                 compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
                 compute_kernel_lib::PackTile<cb_dx>{});

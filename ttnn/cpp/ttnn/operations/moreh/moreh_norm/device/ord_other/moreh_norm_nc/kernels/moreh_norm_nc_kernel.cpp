@@ -36,7 +36,7 @@ void kernel_main() {
             // MINUS_INF additionally negates.
             // Per-stage reconfig matches original *_with_dt calls.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::CopyTile<cb_x>{},
 #ifdef IS_ZERO
                 compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
@@ -50,19 +50,20 @@ void kernel_main() {
 
             // Accumulator over N/C dimension.
             if (inner_idx == 0) {
-                compute_kernel_lib::copy<cb_val, cb_cal>(onetile);
+                compute_kernel_lib::copy<cb_val, cb_cal>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
 #ifdef IS_ZERO
-                compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(onetile);
+                compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
-                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_val, cb_cal, cb_cal>(onetile);
+                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_val, cb_cal, cb_cal>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
 #endif
             }
         }
 
         // Final: copy cb_cal -> [negate if MINUS_INF] -> cb_y.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::CopyTile<cb_cal>{},
 #ifdef MINUS_INF
             compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},

@@ -122,7 +122,7 @@ void kernel_main() {
             sin_interm_cb,
             trig_bcast,
             compute_kernel_lib::InputLifecycle::Streaming,
-            trig_lifecycle>(onetile);
+            trig_lifecycle>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cos_interim = in * cos
         compute_kernel_lib::mul<
@@ -131,9 +131,9 @@ void kernel_main() {
             cos_interm_cb,
             trig_bcast,
             compute_kernel_lib::InputLifecycle::Streaming,
-            trig_lifecycle>(onetile);
+            trig_lifecycle>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // out = cos_interim + sin_interim
-        compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(onetile);
+        compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(compute_kernel_lib::EltwiseShape::tiles(onetile));
     }
 }

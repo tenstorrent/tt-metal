@@ -26,7 +26,7 @@ ALWI void mul_tiles_chain() {
         compute_kernel_lib::InputLifecycle::Streaming,
         compute_kernel_lib::OutputLifecycle::Streaming,
         compute_kernel_lib::BinaryDataFormatReconfig::None,
-        compute_kernel_lib::PackTileReconfig::None>(1u);
+        compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::single());
 }
 
 void kernel_main() {
@@ -64,7 +64,8 @@ void kernel_main() {
                     rotated_in_interm_cb,
                     compute_kernel_lib::BroadcastDim::Scalar,
                     compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                    compute_kernel_lib::InputLifecycle::CallerManaged>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb, sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin (chain-based)
@@ -84,7 +85,8 @@ void kernel_main() {
             //   pack_reconfig_data_format(cos_interm_cb, out_cb) -> replaced by the convenience
             //   default Input/Output reconfig. cos_interm_cb/sin_interm_cb InputLifecycle::Streaming;
             //   out_cb OutputLifecycle::Streaming.
-            compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(onetile);
+            compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(
+                compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
     }
 }

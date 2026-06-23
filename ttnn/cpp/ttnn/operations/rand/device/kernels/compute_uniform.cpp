@@ -30,7 +30,7 @@ void kernel_main() {
     // Reconfig: original had no per-iter reconfig (init_sfpu at boot, plain pack_tile)
     // -> PackTileReconfig::None.
     eltwise_chain(
-        num_tiles,
+        EltwiseShape::tiles(num_tiles),
         RandTile<Dst::D0>{f2u_from.u, f2u_scale.u, seed},
         PackTile<intermed_cb_id, OutputLifecycle::Streaming, PackTileReconfig::None>{});
 }

@@ -23,7 +23,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain<SetupOwner::Caller>(
-        n,
+        EltwiseShape::tiles(n),
         CopyTile<cb_in, Dst::D0>{},  // default CopyTileReconfig::Input -> requests reconfig
         Exp<>{},
         PackTile<cb_out>{});  // default PackTileReconfig::Output

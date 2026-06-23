@@ -326,7 +326,7 @@ void kernel_main() {
         // cb_ex2: InputLifecycle::Streaming. cb_eps: InputLifecycle::CallerManaged. cb_ex2pe:
         // OutputLifecycle::Streaming.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_ex2,
                 cb_eps,

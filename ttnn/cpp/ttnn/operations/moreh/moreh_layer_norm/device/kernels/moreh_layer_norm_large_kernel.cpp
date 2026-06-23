@@ -337,7 +337,7 @@ void kernel_main() {
         // add_tiles_init_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
         // Rsqrt<Exact,Off> matches rsqrt_tile() defaults (legacy_compat=false, FAST_APPROX=false).
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_var,
                 cb_eps,

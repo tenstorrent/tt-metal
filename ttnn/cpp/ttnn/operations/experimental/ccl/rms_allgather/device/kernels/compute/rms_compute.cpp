@@ -211,7 +211,7 @@ void kernel_main() {
             //   (also wait+pop per call here, unlike other rsqrt kernels where
             //   cb_eps is held); cb_stats_reduced OutputLifecycle::Streaming. rsqrt Legacy::On.
             compute_kernel_lib::eltwise_chain(
-                1,
+                compute_kernel_lib::EltwiseShape::single(),
                 compute_kernel_lib::BinaryFpu<cb_var, cb_eps>{},
                 compute_kernel_lib::Rsqrt<
                     compute_kernel_lib::Approx::Exact,

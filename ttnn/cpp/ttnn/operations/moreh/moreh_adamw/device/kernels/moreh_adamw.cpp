@@ -92,7 +92,7 @@ void kernel_main() {
         // cb_tmp1 = weight_decay * param  (scalar_args held @ weight_decay_tile -> CallerManaged + Set on A;
         //   param_in CallerManaged). _with_dt -> Input/Output.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_scalar_args,
                 cb_param_in,
@@ -115,7 +115,7 @@ void kernel_main() {
             cb_tmp1,
             compute_kernel_lib::BroadcastDim::None,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
+            compute_kernel_lib::InputLifecycle::Streaming>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // tmp_cb_param = param - cb_tmp1  (param_in CallerManaged; cb_tmp1 Streaming)
         compute_kernel_lib::sub<
@@ -124,13 +124,13 @@ void kernel_main() {
             tmp_cb_param,
             compute_kernel_lib::BroadcastDim::None,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
+            compute_kernel_lib::InputLifecycle::Streaming>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         ////////////////////////////////////////////////////////////////////////
         // exp_avg = exp_avg * beta1 + grad * (1 - beta1);
         // cb_tmp1 = (1 - beta1)
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_one,
                 cb_scalar_args,
@@ -153,11 +153,11 @@ void kernel_main() {
             cb_tmp1,
             compute_kernel_lib::BroadcastDim::None,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
+            compute_kernel_lib::InputLifecycle::Streaming>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // tmp_cb_exp_avg = cb_exp_avg_in * beta1
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_exp_avg_in,
                 cb_scalar_args,
@@ -174,11 +174,12 @@ void kernel_main() {
             compute_kernel_lib::PackTile<tmp_cb_exp_avg>{});
 
         // tmp_cb_exp_avg = tmp_cb_exp_avg + cb_tmp1  (both Streaming, same-CB out)
-        compute_kernel_lib::add<tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg>(onetile);
+        compute_kernel_lib::add<tmp_cb_exp_avg, cb_tmp1, tmp_cb_exp_avg>(
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cb_exp_avg_out = tmp_cb_exp_avg  (held -> HeldStream; reused below)
         compute_kernel_lib::copy<tmp_cb_exp_avg, cb_exp_avg_out, compute_kernel_lib::InputLifecycle::HeldStream>(
-            onetile);
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -188,7 +189,7 @@ void kernel_main() {
         // Both operands held externally -> InputLifecycle::CallerManaged + Scalar; cb_scalar_args at
         // beta2_tile -> compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_one,
                 cb_scalar_args,
@@ -205,14 +206,15 @@ void kernel_main() {
             compute_kernel_lib::PackTile<cb_tmp1>{});
 
         // cb_tmp2 = grad * grad  (same-buffer -> square; grad_in held -> CallerManaged)
-        compute_kernel_lib::square<cb_grad_in, cb_tmp2, compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+        compute_kernel_lib::square<cb_grad_in, cb_tmp2, compute_kernel_lib::InputLifecycle::CallerManaged>(
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cb_tmp1 = cb_tmp1 * cb_tmp2  (both Streaming, same-CB out)
-        compute_kernel_lib::mul<cb_tmp1, cb_tmp2, cb_tmp1>(onetile);
+        compute_kernel_lib::mul<cb_tmp1, cb_tmp2, cb_tmp1>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // tmp_cb_exp_avg_sq = cb_exp_avg_sq_in * beta2
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_exp_avg_sq_in,
                 cb_scalar_args,
@@ -229,11 +231,12 @@ void kernel_main() {
             compute_kernel_lib::PackTile<tmp_cb_exp_avg_sq>{});
 
         // tmp_cb_exp_avg_sq = tmp_cb_exp_avg_sq + cb_tmp1  (both Streaming, same-CB out)
-        compute_kernel_lib::add<tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq>(onetile);
+        compute_kernel_lib::add<tmp_cb_exp_avg_sq, cb_tmp1, tmp_cb_exp_avg_sq>(
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cb_exp_avg_sq_out = tmp_cb_exp_avg_sq  (held -> HeldStream; reused below)
         compute_kernel_lib::copy<tmp_cb_exp_avg_sq, cb_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::HeldStream>(
-            onetile);
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
         //////////////////////////////////////////////////////////////////////
 
         ////////////////////////////////////////////////////////////////////////
@@ -247,7 +250,7 @@ void kernel_main() {
         // Both operands held externally -> InputLifecycle::CallerManaged + Scalar (first_tile == 0
         // -> default TileBase).
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_one,
                 cb_beta2_exponent,
@@ -269,18 +272,19 @@ void kernel_main() {
             tmp_cb_exp_avg_sq,
             tmp_cb_max_exp_avg_sq,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+            compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cb_max_exp_avg_sq_out = tmp_cb_max_exp_avg_sq  (held -> HeldStream; reused below)
         compute_kernel_lib::
-            copy<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+            copy<tmp_cb_max_exp_avg_sq, cb_max_exp_avg_sq_out, compute_kernel_lib::InputLifecycle::HeldStream>(
+                compute_kernel_lib::EltwiseShape::tiles(onetile));
 #endif
 
         // cb_tmp1 = sqrt(exp_avg_sq * cb_tmp1)  — same-CB in/out on cb_tmp1.
         // Same pattern as moreh_adam d7edb1924ec.
 #ifdef AMSGRAD
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 tmp_cb_max_exp_avg_sq,
                 cb_tmp1,
@@ -292,7 +296,7 @@ void kernel_main() {
         tmp_cb_max_exp_avg_sq_obj.pop_front(onetile);
 #else
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 tmp_cb_exp_avg_sq,
                 cb_tmp1,
@@ -310,7 +314,7 @@ void kernel_main() {
         // Lifecycles: cb_tmp1 InputLifecycle::Streaming + OutputLifecycle::Streaming (same-CB).
         //   cb_scalar_args InputLifecycle::CallerManaged + Scalar + compute_kernel_lib::TileOffset::Set.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_tmp1,
                 cb_scalar_args,
@@ -335,7 +339,7 @@ void kernel_main() {
         // Lifecycles: cb_one InputLifecycle::CallerManaged + Scalar; cb_beta1_exponent
         //   InputLifecycle::CallerManaged + Scalar (held externally); cb_tmp2 OutputLifecycle::Streaming.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_one,
                 cb_beta1_exponent,
@@ -353,16 +357,16 @@ void kernel_main() {
             cb_tmp2,
             compute_kernel_lib::BroadcastDim::None,
             compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::Streaming>(onetile);
+            compute_kernel_lib::InputLifecycle::Streaming>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cb_tmp2 = cb_tmp2 * tmp_cb_exp_avg  (both Streaming; tmp_cb_exp_avg popped here)
-        compute_kernel_lib::mul<cb_tmp2, tmp_cb_exp_avg, cb_tmp2>(onetile);
+        compute_kernel_lib::mul<cb_tmp2, tmp_cb_exp_avg, cb_tmp2>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cb_tmp1 = cb_tmp1 * cb_tmp2  (both Streaming, same-CB out)
-        compute_kernel_lib::mul<cb_tmp1, cb_tmp2, cb_tmp1>(onetile);
+        compute_kernel_lib::mul<cb_tmp1, cb_tmp2, cb_tmp1>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // cb_param_out = tmp_cb_param - cb_tmp1  (both Streaming)
-        compute_kernel_lib::sub<tmp_cb_param, cb_tmp1, cb_param_out>(onetile);
+        compute_kernel_lib::sub<tmp_cb_param, cb_tmp1, cb_param_out>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         cb_param_in_obj.pop_front(onetile);
         cb_grad_in_obj.pop_front(onetile);

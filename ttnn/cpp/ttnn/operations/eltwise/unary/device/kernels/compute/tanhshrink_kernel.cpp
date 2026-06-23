@@ -38,7 +38,7 @@ void kernel_main() {
     // no-op tag (no wait, no pop, no compute emitted). Single chain replaces the two
     // top-level #ifdef'd chain calls.
     compute_kernel_lib::eltwise_chain(
-        num_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,

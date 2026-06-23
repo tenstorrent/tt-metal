@@ -95,7 +95,7 @@ void kernel_main() {
         // mul_bcast_cols (BroadcastDim::Col) else mul_tiles_bcast_scalar (Scalar). *_init_short_with_dt ->
         // Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_n_recip_n,
                 cb_rstd,
@@ -314,7 +314,7 @@ void kernel_main() {
             // wt -> TileOffset::Set{wt}; cb_ydy Streaming. mul_tiles_init_with_dt -> Reconfig::Input,
             // pack_tile_with_dt -> PackTileReconfig::Output.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_y,
                     cb_dycopy,
@@ -389,7 +389,7 @@ void kernel_main() {
             // CallerManaged + Scalar + TileOffset::Set{wt}; cb_ndy Streaming. mul_tiles_init_with_dt ->
             // Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_n_recip_n,
                     cb_dycopy,
@@ -420,7 +420,7 @@ void kernel_main() {
                 cb_ndymdysum,
                 is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
@@ -430,7 +430,7 @@ void kernel_main() {
             // cb_ydysum held -> CallerManaged + Scalar (idx 0). is_lastdim -> Col bcast else Scalar.
             // *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_y,
                     cb_ydysum,
@@ -454,7 +454,8 @@ void kernel_main() {
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             // (n*dy - Sum[dy]) - (y * Sum[y*dy]). both Streaming. sub_tiles_init_with_dt -> Reconfig::Input,
             // pack_tile_with_dt -> PackTileReconfig::Output.
-            compute_kernel_lib::sub<cb_ndymdysum, cb_yydysum, cb_tmp1>(onetile);
+            compute_kernel_lib::sub<cb_ndymdysum, cb_yydysum, cb_tmp1>(
+                compute_kernel_lib::EltwiseShape::tiles(onetile));
 
             // Compute cb_dx
             // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
@@ -466,7 +467,7 @@ void kernel_main() {
                 cb_dx,
                 compute_kernel_lib::BroadcastDim::None,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }  // Wt loop
         cb_dycopy_obj.pop_front(Wt);
         cb_y_obj.pop_front(Wt);

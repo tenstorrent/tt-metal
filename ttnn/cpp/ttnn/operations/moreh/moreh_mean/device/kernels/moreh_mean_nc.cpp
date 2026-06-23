@@ -45,7 +45,8 @@ void kernel_main() {
             // cb_in0 InputLifecycle::Streaming on A. cb_intermed0 OutputLifecycle::Streaming.
             // Reconfig: add_tiles_init_with_dt + pack_tile_with_dt -> Input + Output.
             if (enable_reload) {
-                compute_kernel_lib::add<cb_in0, cb_intermed0, cb_intermed0>(onetile);
+                compute_kernel_lib::add<cb_in0, cb_intermed0, cb_intermed0>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
                 compute_kernel_lib::add<
                     cb_in0,
@@ -53,7 +54,8 @@ void kernel_main() {
                     cb_intermed0,
                     compute_kernel_lib::BroadcastDim::None,
                     compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+                    compute_kernel_lib::InputLifecycle::CallerManaged>(
+                    compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
 
             enable_reload = true;
@@ -69,6 +71,6 @@ void kernel_main() {
             cb_out0,
             compute_kernel_lib::BroadcastDim::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
+            compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
     }
 }

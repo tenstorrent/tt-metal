@@ -66,7 +66,7 @@ void kernel_main() {
             if (h == Ht - 1) {
 #ifdef SOFTMAX
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::BinaryFpu<
                         cb_in0,
                         cb_max,
@@ -87,7 +87,7 @@ void kernel_main() {
 #else
                 // rexp + mask, no sub (matches rexp_tile_and_mask_tile_to_cb).
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<cb_in0>{},
                     compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
                     compute_kernel_lib::Exp<
@@ -104,7 +104,7 @@ void kernel_main() {
             } else {
 #ifdef SOFTMAX
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::BinaryFpu<
                         cb_in0,
                         cb_max,
@@ -121,7 +121,7 @@ void kernel_main() {
                 // sub_bcast_rows then rexp via cb_tmp intermediary. Original used
                 // two helper calls; chain folds both into a single chain.
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::BinaryFpu<
                         cb_in0,
                         cb_max,
@@ -140,9 +140,9 @@ void kernel_main() {
 
             // Accumulate sum of exps into cb_add. Seed copy on first iteration.
             if (h == 0) {
-                compute_kernel_lib::copy<cb_exps, cb_add>(onetile);
+                compute_kernel_lib::copy<cb_exps, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_add, cb_exps, cb_add>(onetile);
+                compute_kernel_lib::add<cb_add, cb_exps, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -193,14 +193,14 @@ void kernel_main() {
                 cb_tmp,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
             compute_kernel_lib::sub<
                 cb_tmp,
                 cb_recipsumexps,
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
             // -x + max - log(sum) — logsoftmin not implemented in original.
 #endif
@@ -208,7 +208,7 @@ void kernel_main() {
 #ifdef SOFTMAX
             // exp(x - max) / sum. Sub+Exp folded; then Mul by recip.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_max,
@@ -227,11 +227,11 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #else
             // rexp(x - max) / sum (softmin path).
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_max,
@@ -251,7 +251,7 @@ void kernel_main() {
                 cb_out0,
                 compute_kernel_lib::BroadcastDim::Row,
                 compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
 #endif
 #endif
         }

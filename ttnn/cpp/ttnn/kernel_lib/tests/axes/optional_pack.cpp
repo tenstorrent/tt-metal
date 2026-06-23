@@ -25,7 +25,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        n,
+        EltwiseShape::tiles(n),
         CopyTile<cb_in, Dst::D0>{},
         PackTile<cb_out0, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>{},
         OptionalChainElement<ON, PackTile<cb_out1, OutputLifecycle::Streaming, PackTileReconfig::Output, Dst::D0>>{});

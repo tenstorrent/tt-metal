@@ -36,7 +36,7 @@ void kernel_main() {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
             // Per-(n,c) 1-tile scalar broadcast; setup already emitted above (SetupOwner::Caller).
             compute_kernel_lib::eltwise_chain<compute_kernel_lib::SetupOwner::Caller>(
-                1u,
+                compute_kernel_lib::EltwiseShape::single(),
                 compute_kernel_lib::UnaryBcast<
                     compute_kernel_lib::BroadcastDim::Scalar,
                     cb_id_src,

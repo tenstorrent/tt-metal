@@ -23,5 +23,5 @@ void kernel_main() {
         compute_kernel_lib::InputLifecycle::Streaming,
         compute_kernel_lib::OutputLifecycle::Streaming,
         compute_kernel_lib::CopyTileReconfig::None,
-        compute_kernel_lib::PackTileReconfig::None>(num_tiles);
+        compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(num_tiles));
 }

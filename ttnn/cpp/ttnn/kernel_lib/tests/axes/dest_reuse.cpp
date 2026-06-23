@@ -25,7 +25,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain(
-        n,
+        EltwiseShape::tiles(n),
         BinaryFpu<
             cb_a,
             cb_b,

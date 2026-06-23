@@ -25,7 +25,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::BinaryDataFormatReconfig::None,
-                compute_kernel_lib::PackTileReconfig::None>(onetile);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
 
         if (has_other_grad) {
@@ -39,7 +39,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::CallerManaged,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::BinaryDataFormatReconfig::None,
-                compute_kernel_lib::PackTileReconfig::None>(onetile);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
     }
 }

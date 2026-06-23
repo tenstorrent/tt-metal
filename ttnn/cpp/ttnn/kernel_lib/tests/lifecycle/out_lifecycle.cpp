@@ -32,14 +32,19 @@ void kernel_main() {
     auto in = CopyTile<cb_in, Dst::D0, InputLifecycle::Streaming, CopyTileReconfig::None>{};
 
     if constexpr (life == 0) {
-        eltwise_chain(n, in, PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+        eltwise_chain(
+            EltwiseShape::tiles(n), in, PackTile<cb_out, OutputLifecycle::Streaming, PackTileReconfig::None>{});
     } else if constexpr (life == 1) {
-        eltwise_chain(n, in, PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::None>{});
+        eltwise_chain(EltwiseShape::tiles(n), in, PackTile<cb_out, OutputLifecycle::Bulk, PackTileReconfig::None>{});
     } else if constexpr (life == 2) {
-        eltwise_chain(n, in, PackTile<cb_out, OutputLifecycle::BulkReservePerTile, PackTileReconfig::None>{});
+        eltwise_chain(
+            EltwiseShape::tiles(n),
+            in,
+            PackTile<cb_out, OutputLifecycle::BulkReservePerTile, PackTileReconfig::None>{});
     } else {  // life == 3: CallerManaged — chain packs only, caller brackets reserve+push
         cb_out_obj.reserve_back(n);
-        eltwise_chain(n, in, PackTile<cb_out, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
+        eltwise_chain(
+            EltwiseShape::tiles(n), in, PackTile<cb_out, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
         cb_out_obj.push_back(n);
     }
 }

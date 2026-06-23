@@ -49,7 +49,7 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // cb_batch_var: InputLifecycle::Bulk + Scalar — chain emits 1-tile wait+pop per call (window_1d<Scalar>).
     // cb_eps:        InputLifecycle::CallerManaged + Scalar — held by kernel_main for the whole kernel.
     eltwise_chain(
-        1,
+        EltwiseShape::single(),
         CopyTile<cb_batch_var, Dst::D0, InputLifecycle::Bulk>{},
         CopyTile<cb_eps, Dst::D1, InputLifecycle::CallerManaged>{},
         AddBinary<Dst::D0, Dst::D1, Dst::D0>{},
@@ -75,8 +75,9 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // is off the wrapped element collapses to a tag with a_policy() == InputLifecycle::CallerManaged,
     // so the chain emits NOTHING for the inactive branch (CB ids, wait, pop all
     // suppressed).
+    // TODO review _all_ comments
     eltwise_chain(
-        inner_count,
+        EltwiseShape::tiles(inner_count),
         CopyTile<cb_other>{},
         CopyTile<cb_bcast, Dst::D1, InputLifecycle::Bulk>{},
         SubBinary<Dst::D0, Dst::D1, Dst::D0>{},

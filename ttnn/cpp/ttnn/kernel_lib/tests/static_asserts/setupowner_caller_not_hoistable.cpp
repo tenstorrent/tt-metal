@@ -23,7 +23,7 @@ void kernel_main() {
 
     using namespace compute_kernel_lib;
     eltwise_chain<SetupOwner::Caller>(
-        n,
+        EltwiseShape::tiles(n),
         CopyTile<cb_in, Dst::D0, InputLifecycle::Streaming, CopyTileReconfig::None>{},
         Exp<>{},
         Sqrt<>{},  // different SFPU op than Exp -> non-uniform -> not boot-hoistable

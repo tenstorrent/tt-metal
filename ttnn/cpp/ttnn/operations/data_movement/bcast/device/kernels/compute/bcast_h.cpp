@@ -30,7 +30,7 @@ void kernel_main() {
     // pack_tile — no per-iter reconfig. BinaryDataFormatReconfig::None +
     // PackTileReconfig::None preserve that.
     compute_kernel_lib::eltwise_chain(
-        B * Ht * Wt,
+        compute_kernel_lib::EltwiseShape::tiles(B * Ht * Wt),
         compute_kernel_lib::BinaryFpu<
             cb_lhs,
             cb_rhs,

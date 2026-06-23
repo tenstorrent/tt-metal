@@ -29,7 +29,7 @@ void kernel_main() {
     compute_kernel_hw_startup(cb_in, cb_out);
 
     compute_kernel_lib::eltwise_chain(
-        total_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(total_tiles),
         compute_kernel_lib::CopyTile<cb_in, Slot>{},
         compute_kernel_lib::PackTile<
             cb_out,

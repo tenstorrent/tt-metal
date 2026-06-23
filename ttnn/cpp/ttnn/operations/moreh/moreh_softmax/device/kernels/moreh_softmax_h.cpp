@@ -87,7 +87,7 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(Ht);
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Ht));
 
         // compute exp(x - max(x)). Original per-tile copy + (Negative if !SOFTMAX)
         // + Exp + (Mask on last tile) + pack with cb_exps reserve(Ht) upfront and
@@ -106,7 +106,7 @@ void kernel_main() {
         // pack_tile_with_dt -> PackTileReconfig::Output.
         cb_x_m_max_obj.wait_front(Ht);
         compute_kernel_lib::eltwise_chain(
-            Ht - 1,
+            compute_kernel_lib::EltwiseShape::tiles(Ht - 1),
             compute_kernel_lib::CopyTile<
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
@@ -123,7 +123,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<cb_exps>{});
 
         compute_kernel_lib::eltwise_chain(
-            1u,
+            compute_kernel_lib::EltwiseShape::single(),
             compute_kernel_lib::CopyTile<
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
@@ -200,7 +200,7 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(Ht);
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Ht));
 #else
         compute_kernel_lib::mul<
             cb_exps,
@@ -213,7 +213,7 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(Ht);
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Ht));
 #endif
         cb_x_m_max_obj.pop_front(Ht);
     }

@@ -53,7 +53,7 @@ void kernel_main() {
             // mask cb_in0[0] (held -> HeldStream) with cb_mask (held externally -> CallerManaged).
             // copy_tile_init_with_dt -> Input; pack_tile_with_dt -> Output.
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::
                     CopyTile<cb_in0, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
                 compute_kernel_lib::
@@ -81,7 +81,7 @@ void kernel_main() {
             // the helper waits+pops the previous tile, then packs+pushes the new one.
             // mask cb_in0[Wt-1] (held -> HeldBulk + TileOffset::Set) with cb_mask (held -> CallerManaged).
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::CopyTile<
                     cb_in0,
                     compute_kernel_lib::Dst::D0,
@@ -115,7 +115,7 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(Wt);
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Wt));
 
         // compute exp(x - max(x)) — split into 2 chains, same pattern as
         // moreh_softmax_h.cpp. cb_x_m_max held outside; cb_mask held outside;
@@ -124,7 +124,7 @@ void kernel_main() {
         // Reconfig: copy_tile_init_with_dt -> Input. pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Wt);
         compute_kernel_lib::eltwise_chain(
-            Wt - 1,
+            compute_kernel_lib::EltwiseShape::tiles(Wt - 1),
             compute_kernel_lib::CopyTile<
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
@@ -141,7 +141,7 @@ void kernel_main() {
             compute_kernel_lib::PackTile<cb_exps>{});
 
         compute_kernel_lib::eltwise_chain(
-            1u,
+            compute_kernel_lib::EltwiseShape::single(),
             compute_kernel_lib::CopyTile<
                 cb_x_m_max,
                 compute_kernel_lib::Dst::D0,
@@ -217,7 +217,7 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(Wt);
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Wt));
 #else
         compute_kernel_lib::mul<
             cb_exps,
@@ -230,7 +230,7 @@ void kernel_main() {
             compute_kernel_lib::BinaryDataFormatReconfig::Input,
             compute_kernel_lib::PackTileReconfig::Output,
             compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(Wt);
+            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Wt));
 #endif
         cb_x_m_max_obj.pop_front(Wt);
     }

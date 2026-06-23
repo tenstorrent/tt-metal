@@ -27,7 +27,7 @@ void kernel_main() {
     // init_runtime() once at boot (see Dropout in eltwise_scalar.inl).
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
     compute_kernel_lib::eltwise_chain(
-        total_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(total_tiles),
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,

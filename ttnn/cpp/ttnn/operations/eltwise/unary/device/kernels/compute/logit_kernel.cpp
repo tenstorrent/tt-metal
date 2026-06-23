@@ -39,7 +39,7 @@ void kernel_main() {
     // Reconfig matches original init_sfpu + copy_tile_init at boot —
     // CopyTileReconfig::None + PackTileReconfig::None.
     compute_kernel_lib::eltwise_chain(
-        num_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,
@@ -54,7 +54,7 @@ void kernel_main() {
             compute_kernel_lib::PackTileReconfig::None>{});
 
     compute_kernel_lib::eltwise_chain(
-        num_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
         compute_kernel_lib::CopyTile<
             cb_tmp0,
             compute_kernel_lib::Dst::D0,

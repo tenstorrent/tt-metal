@@ -36,7 +36,7 @@ void kernel_main() {
     // Flat 1D chain over total tiles (B*Ht*Wt) — bcast_hw is tile-by-tile,
     // no need for 2D shape.
     compute_kernel_lib::eltwise_chain(
-        B * Ht * Wt,
+        compute_kernel_lib::EltwiseShape::tiles(B * Ht * Wt),
         compute_kernel_lib::BinaryFpu<
             cb_lhs,
             cb_rhs,

@@ -81,7 +81,7 @@ void kernel_main() {
                 // OutputLifecycle::Streaming. Reconfig: copy_tile_init_with_dt -> Input on each; pack_tile_with_dt ->
                 // Output.
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<tt::CBIndex::c_0>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_w,

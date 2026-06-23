@@ -474,7 +474,7 @@ void kernel_main() {
         // in original (cb_ex2/cb_ex2pe compatible) -> PackTileReconfig::None.
         // cb_ex2pe.reserve_back IS called -> OutputLifecycle::Streaming. Non-LEGACY rsqrt -> Legacy::Off.
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_ex2,
                 cb_eps,
@@ -493,7 +493,8 @@ void kernel_main() {
 
         // Broadcast the column vector across cols (UnaryBcast<COL>): reconfigs both srca/srcb to
         // cb_ex2pe (Input), downstream PackTile owns pack reconfig. Streaming in/out.
-        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(onetile);
+        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         // =====================================
         // Second pass over the input.

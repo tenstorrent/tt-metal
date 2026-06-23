@@ -95,7 +95,7 @@ void kernel_main() {
          * sequence.
          */
         compute_kernel_lib::eltwise_chain(
-            1,
+            compute_kernel_lib::EltwiseShape::single(),
             compute_kernel_lib::BinaryFpu<
                 reduce_result_cb,
                 epsilon_cb,

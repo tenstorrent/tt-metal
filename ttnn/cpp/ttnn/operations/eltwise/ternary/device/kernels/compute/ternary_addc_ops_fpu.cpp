@@ -32,7 +32,7 @@ inline void run_addcmul(uint32_t num_tiles, uint32_t scalar_arg) {
     constexpr auto cb_out = tt::CBIndex::c_3;
 
     ckl::eltwise_chain(
-        num_tiles,
+        ckl::EltwiseShape::tiles(num_tiles),
         ckl::BinaryFpu<
             cb_in1,
             cb_in2,

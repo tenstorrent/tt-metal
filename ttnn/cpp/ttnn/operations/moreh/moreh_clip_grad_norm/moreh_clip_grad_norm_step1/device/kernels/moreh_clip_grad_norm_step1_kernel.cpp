@@ -73,7 +73,7 @@ void kernel_main() {
         const bool mw = do_mask_w && ((tile_idx + 1) % wt) == 0;
         if (mh && mw) {
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::CopyTile<cb_x>{},
                 compute_kernel_lib::CopyTile<
                     cb_mask_h_w,
@@ -95,7 +95,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTileReconfig::None>{});
         } else if (mh) {
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::CopyTile<cb_x>{},
                 compute_kernel_lib::CopyTile<
                     cb_mask_h_w,
@@ -109,7 +109,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTileReconfig::None>{});
         } else if (mw) {
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::CopyTile<cb_x>{},
                 compute_kernel_lib::CopyTile<
                     cb_mask_h_w,
@@ -132,7 +132,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(onetile);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
 
         // |x + decimal|^p
@@ -145,7 +145,7 @@ void kernel_main() {
         // cb_decimal InputLifecycle::CallerManaged (pre-waited at top of kernel).
         if (p_is_negative) {
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::
                     CopyTile<cb_xabs, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
                 compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
@@ -153,7 +153,7 @@ void kernel_main() {
                 compute_kernel_lib::PackTile<cb_xpow>{});
         } else {
             compute_kernel_lib::eltwise_chain(
-                onetile,
+                compute_kernel_lib::EltwiseShape::tiles(onetile),
                 compute_kernel_lib::
                     CopyTile<cb_xabs, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
                 compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
@@ -163,9 +163,9 @@ void kernel_main() {
             compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
             cb_xabs,
             cb_logx,
-            compute_kernel_lib::InputLifecycle::NoWaitPop>(onetile);
+            compute_kernel_lib::InputLifecycle::NoWaitPop>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         compute_kernel_lib::eltwise_chain(
-            onetile,
+            compute_kernel_lib::EltwiseShape::tiles(onetile),
             compute_kernel_lib::BinaryFpu<
                 cb_logx,
                 cb_decimal,
@@ -178,7 +178,8 @@ void kernel_main() {
                 compute_kernel_lib::Approx::Exact,
                 compute_kernel_lib::Dst::D0>{},
             compute_kernel_lib::PackTile<cb_exp_lxmd>{});
-        compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(onetile);
+        compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(
+            compute_kernel_lib::EltwiseShape::tiles(onetile));
 
         if (tile_idx == 0) {
             // Seed cb_xpowadd with first cb_correct_xpow tile.
@@ -190,7 +191,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(onetile);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         } else {
             // cb_xpowadd = cb_correct_xpow + cb_xpowadd (in-place accumulator).
             // Original: add_tiles_init reconfigs srca/srcb; pack_tile no reconfig.
@@ -203,7 +204,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(onetile);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
         }
     }
 

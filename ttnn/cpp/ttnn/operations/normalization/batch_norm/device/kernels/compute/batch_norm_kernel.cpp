@@ -47,7 +47,7 @@ template <
 ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // Stage 1: cb_den = 1 / sqrt(cb_batch_var + cb_eps), one tile.
     compute_kernel_lib::eltwise_chain(
-        1,
+        compute_kernel_lib::EltwiseShape::single(),
         compute_kernel_lib::BinaryFpu<
             cb_batch_var,
             cb_eps,
@@ -107,7 +107,8 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // Stage 2..4 fused. Single chain — DEST[0] threaded through Sub → Mul(den) →
     // [Mul(weight)] → [Add(bias)] → Pack. Optional weight / bias gates handle the four
     // (WeightHas, BiasHas) cases without a four-way constexpr-if.
-    compute_kernel_lib::eltwise_chain(inner_count, sub_op, mul_den, mul_weight, add_bias, pack_out);
+    compute_kernel_lib::eltwise_chain(
+        compute_kernel_lib::EltwiseShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
 
     cb_pop_front(cb_bcast, 1);
     cb_pop_front(cb_den, 1);

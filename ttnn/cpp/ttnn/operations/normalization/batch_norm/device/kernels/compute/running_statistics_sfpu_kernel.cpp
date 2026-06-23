@@ -50,7 +50,7 @@ ALWI void update_running_stat() {
     // original popped them). cb_updated is caller-reserved/pushed; cb_out0 is handled by kernel_main.
     cb_reserve_back(cb_updated, 1);
     ckl::eltwise_chain(
-        1,
+        ckl::EltwiseShape::single(),
         ckl::CopyTile<cb_one, D::D0, CM, CP_IN, SCALAR>{},
         ckl::CopyTile<cb_momentum, D::D1, CM, CP_IN, SCALAR>{},
         SubBinary<D::D0, D::D1, D::D0>{},  // D0 = 1 - momentum
@@ -69,7 +69,7 @@ template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcC
 ALWI void maybe_typecast_stat() {
     if constexpr (NeedsTypecast) {
         // src (the updated stat just written) -> typecast -> writer-facing CB.
-        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, SrcCb, DstCb>(1);
+        ckl::unary<ckl::Typecast<TcInFmt, TcOutFmt, D::D0>, SrcCb, DstCb>(ckl::EltwiseShape::single());
     }
 }
 

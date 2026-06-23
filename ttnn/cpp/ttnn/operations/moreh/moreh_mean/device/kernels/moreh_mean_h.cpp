@@ -65,7 +65,7 @@ void kernel_main() {
                 // cb_input InputLifecycle::Streaming (chain owns wait+pop); cb_mask_h InputLifecycle::CallerManaged
                 //   (held outside the loop); cb_masked_input OutputLifecycle::Streaming.
                 compute_kernel_lib::eltwise_chain(
-                    onetile,
+                    compute_kernel_lib::EltwiseShape::tiles(onetile),
                     compute_kernel_lib::CopyTile<cb_input>{},
                     compute_kernel_lib::CopyTile<
                         cb_mask_h,

@@ -24,7 +24,7 @@ void kernel_main() {
     //   Logsigmoid<D0, D1, D0> reads D0=x and D1=exp(-x), writes D0.
     //   pack_tile(D0) -> cb_output.
     compute_kernel_lib::eltwise_chain(
-        num_tiles,
+        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
         compute_kernel_lib::CopyTile<
             cb_input,
             compute_kernel_lib::Dst::D0,

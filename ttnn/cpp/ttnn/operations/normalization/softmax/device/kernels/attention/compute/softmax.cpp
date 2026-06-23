@@ -147,7 +147,7 @@ void kernel_main() {
             cb_scale_mask,
             compute_kernel_lib::BroadcastDim::Scalar,
             compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(Wt);
+            compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(Wt));
         // fused mask add (+exp) — DEST-batched ndst tiles per acquire, matching the original's
         // `for (wt += ndst)` window. Both inputs are fully resident before this chain runs, so
         // both walk by absolute index `wt_base + j`:
@@ -240,7 +240,7 @@ void kernel_main() {
             // reconfig srca/srcb -> Input.
             cb_mask_padded_obj.wait_front(1);
             compute_kernel_lib::eltwise_chain(
-                Wt - 1,
+                compute_kernel_lib::EltwiseShape::tiles(Wt - 1),
                 compute_kernel_lib::CopyTile<cb_in0>{},
 #ifndef NUMERIC_STABLE
                 compute_kernel_lib::Exp<
@@ -254,7 +254,7 @@ void kernel_main() {
                     compute_kernel_lib::PackTileReconfig::None>{});
 
             compute_kernel_lib::eltwise_chain(
-                1u,
+                compute_kernel_lib::EltwiseShape::single(),
                 compute_kernel_lib::BinaryFpu<
                     cb_in0,
                     cb_mask_padded,
@@ -307,7 +307,7 @@ void kernel_main() {
                 compute_kernel_lib::InputLifecycle::Streaming,
                 compute_kernel_lib::OutputLifecycle::Streaming,
                 compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(Wt);
+                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(Wt));
 #endif
         }
 #endif

@@ -44,7 +44,7 @@ void kernel_main() {
 
     if constexpr (life == 0) {  // Bulk — chain owns both edges
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,
@@ -59,7 +59,7 @@ void kernel_main() {
             pack);
     } else if constexpr (life == 1) {  // HeldBulk — chain waits upfront, caller pops after
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,
@@ -75,7 +75,7 @@ void kernel_main() {
         cb_b_obj.pop_front(1);
     } else if constexpr (life == 2) {  // HeldStream — chain waits per-iter, caller pops after
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,
@@ -92,7 +92,7 @@ void kernel_main() {
     } else if constexpr (life == 3) {  // CallerManaged — chain emits nothing for B
         cb_b_obj.wait_front(1);
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,
@@ -109,7 +109,7 @@ void kernel_main() {
     } else {  // life == 4: DeferredPop — caller waits before, chain pops at end
         cb_b_obj.wait_front(1);
         eltwise_chain(
-            n,
+            EltwiseShape::tiles(n),
             BinaryFpu<
                 cb_a,
                 cb_b,

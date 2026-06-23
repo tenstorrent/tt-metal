@@ -300,7 +300,7 @@ void kernel_main() {
         // cb_ex2: InputLifecycle::Streaming (chain owns wait/pop). cb_eps: InputLifecycle::CallerManaged (waited once
         // outside the loop, never popped). cb_ex2pe: OutputLifecycle::Streaming (chain owns reserve/push).
         compute_kernel_lib::eltwise_chain(
-            1,
+            compute_kernel_lib::EltwiseShape::single(),
             compute_kernel_lib::BinaryFpu<
                 cb_ex2,
                 cb_eps,

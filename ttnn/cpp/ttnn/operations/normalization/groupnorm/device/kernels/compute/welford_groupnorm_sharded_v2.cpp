@@ -446,7 +446,7 @@ void kernel_main() {
                     // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
                     // PackTileReconfig::None.
                     compute_kernel_lib::eltwise_chain(
-                        1u,
+                        compute_kernel_lib::EltwiseShape::single(),
                         compute_kernel_lib::BinaryFpu<
                             cb_x_id,
                             cb_gamma_id,
@@ -472,7 +472,7 @@ void kernel_main() {
                     // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
                     // PackTileReconfig::None.
                     compute_kernel_lib::eltwise_chain(
-                        1u,
+                        compute_kernel_lib::EltwiseShape::single(),
                         compute_kernel_lib::BinaryFpu<
                             cb_x_id,
                             cb_beta_id,
@@ -506,7 +506,7 @@ void kernel_main() {
                     compute_kernel_lib::InputLifecycle::Streaming,
                     compute_kernel_lib::OutputLifecycle::Streaming,
                     compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None>(1u);
+                    compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::single());
             }
         }
 

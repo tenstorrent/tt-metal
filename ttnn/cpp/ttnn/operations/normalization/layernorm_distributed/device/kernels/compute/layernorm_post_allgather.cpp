@@ -181,7 +181,7 @@ void kernel_main() {
          */
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
         compute_kernel_lib::eltwise_chain(
-            1,
+            compute_kernel_lib::EltwiseShape::single(),
             compute_kernel_lib::BinaryFpu<
                 cb_stats_reduced,
                 cb_stats_reduced,
@@ -211,7 +211,7 @@ void kernel_main() {
             compute_kernel_lib::BroadcastDim::None,
             compute_kernel_lib::InputLifecycle::HeldBulk,
             compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OutputLifecycle::Bulk>(1);
+            compute_kernel_lib::OutputLifecycle::Bulk>(compute_kernel_lib::EltwiseShape::single());
 
         /*
          * 1/sqrt(var + eps)  — same shape as layernorm.cpp Var+eps prologue.
@@ -220,7 +220,7 @@ void kernel_main() {
          * Output.
          */
         compute_kernel_lib::eltwise_chain(
-            1,
+            compute_kernel_lib::EltwiseShape::single(),
             compute_kernel_lib::BinaryFpu<
                 cb_var,
                 cb_eps,

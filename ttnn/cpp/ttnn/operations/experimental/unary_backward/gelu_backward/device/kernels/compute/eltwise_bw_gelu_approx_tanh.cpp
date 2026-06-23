@@ -38,7 +38,7 @@ void kernel_main() {
 
     using D = ckl::Dst;
     ckl::eltwise_chain(
-        num_tiles,
+        ckl::EltwiseShape::tiles(num_tiles),
         // grad_out -> D0 ; x -> D1 (wait owner) / D2 / D5 (pop owner)
         ckl::CopyTile<cb_grad_out, D::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
         ckl::CopyTile<cb_input, D::D1, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
