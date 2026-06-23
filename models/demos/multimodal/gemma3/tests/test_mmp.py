@@ -39,7 +39,6 @@ from models.demos.multimodal.gemma3.tt.multi_modal_projector import TtGemma3Mult
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
-    pcc_required = 0.9999
     dtype = ttnn.bfloat16
     mode = "decode" if seq_len <= 32 else "prefill"
 
@@ -86,8 +85,9 @@ def test_multi_modal_inference(seq_len, batch_size, reset_seeds, device):
     tt_output = tt_model(tt_input)
 
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0)
-    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch)
 
+    pcc_required = 0.9999
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     assert passing, f"PCC value is lower than {pcc_required} for some of the outputs. Check Warnings!"

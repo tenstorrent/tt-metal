@@ -237,13 +237,7 @@
   model: janus-pro-7b
   skus:
     bh_p150:
-      timeout: 15
-      tier: 3
-    bh_p300:
-      timeout: 15
-      tier: 3
-    bh_quietbox_2:
-      timeout: 20
+      timeout: 2
       tier: 3
   owner_id: U0B25UFEEAX # Milos Micic
   team: models
