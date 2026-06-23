@@ -170,9 +170,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
 
     const bool stream_heads = HB < Hi;
 
-    // One-line schedule/mcast summary (per program-cache miss) so tests and profiling can read the
-    // active multicast directions without decoding compile-time args.
-    log_info(
+    // One-line schedule/mcast summary (per program-cache miss) so profiling can read the active
+    // multicast directions without decoding compile-time args.
+    log_debug(
         tt::LogOp,
         "indexer_score schedule: G={} U={} grid={}x{} rows_used={} cols_used={} num_groups={} "
         "max_bands={} stream_heads={} k_mcast={} q_mcast={}",
