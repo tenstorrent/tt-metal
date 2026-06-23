@@ -23,7 +23,6 @@ Uses bh_1d_mesh_device (auto-sizes to the BH box as a 1D line/ring; RS spans all
 import pytest
 import torch
 from loguru import logger
-import random
 
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
@@ -128,9 +127,6 @@ def test_reduce_scatter_batch_invariance(bh_1d_mesh_device, dtype, num_links):
     sub_device_manager = mesh_device.create_sub_device_manager([worker_sub_device], 0)
     mesh_device.load_sub_device_manager(sub_device_manager)
     mesh_device.set_sub_device_stall_group(sub_stall_group)
-
-    torch.manual_seed(2005)
-    random.seed(2005)
 
     try:
         torch.manual_seed(0)
