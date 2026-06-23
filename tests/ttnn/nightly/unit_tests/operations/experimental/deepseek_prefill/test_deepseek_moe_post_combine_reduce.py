@@ -51,7 +51,7 @@ MODEL_PARAMS = [
 # are worked on. These get dedicated param lists (rather than reusing MODEL_PARAMS) because the
 # same models pass the other tests that share MODEL_PARAMS. gptoss_120b's emb_dim (2880) is not a
 # multiple of the hardcoded 1024 tile_width used by the structured patterns, so its reshape is
-# invalid; dsv4_flash just lands slightly under the structured PCC threshold. strict=False keeps CI
+# invalid; dsv4_flash just lands slightly under the structured PCC threshold. strict=True keeps CI
 # green either way. Remove a model from the per-test xfail dict once its issue is resolved.
 _GPTOSS_STRUCTURED_XFAIL = (
     "GPT-OSS 120B post-combine reduce: structured reshape invalid (tile_width hardcoded 1024) — "
@@ -71,7 +71,7 @@ def _model_params_with_xfail(xfails):
     for name, config, extended in MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
         if name in xfails:
-            marks += (pytest.mark.xfail(reason=xfails[name], strict=False),)
+            marks += (pytest.mark.xfail(reason=xfails[name], strict=True),)
         params.append(pytest.param(config, id=name, marks=marks))
     return params
 

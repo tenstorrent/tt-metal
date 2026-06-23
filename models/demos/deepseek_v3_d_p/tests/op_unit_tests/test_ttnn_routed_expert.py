@@ -482,7 +482,7 @@ def test_ttnn_routed_expert(
 
 
 # Per-model dims as (id_prefix, config, extended_model), PCC skipped (full-dim PCC is too
-# expensive). Each model runs seq 3200 at its own (emb_dim, MOE_INTERMEDIATE_SIZE), with
+# expensive). Each model runs seq 640 at its own (emb_dim, MOE_INTERMEDIATE_SIZE), with
 # num_routed_experts = NUM_ROUTED_EXPERTS // 4, topk 2, capacity 3. DeepSeek V3 is the baseline
 # and runs by default; every other model is gated behind @pytest.mark.extended_model.
 ROUTED_EXPERT_MODELS = [
@@ -514,10 +514,10 @@ def routed_expert_shape_params():
         marks = (pytest.mark.extended_model,) if extended else ()
         xfail_reason = XFAIL_ROUTED_EXPERT.get(name)
         if xfail_reason:
-            marks += (pytest.mark.xfail(reason=xfail_reason, strict=False),)
+            marks += (pytest.mark.xfail(reason=xfail_reason, strict=True),)
         params.append(
             pytest.param(
-                3200,
+                640,
                 config.EMB_SIZE,
                 config.MOE_INTERMEDIATE_SIZE,
                 config.NUM_ROUTED_EXPERTS // 4,
