@@ -348,6 +348,14 @@ void call_unary_sfpu_operation_init()
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(log1p_init<APPROX_MODE, FAST_MODE, is_fp32_dest_acc_en>);
     }
+    else if constexpr (OPERATION == SfpuType::cosine)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(cosine_init<APPROX_MODE>);
+    }
+    else if constexpr (OPERATION == SfpuType::sine)
+    {
+        llk_math_eltwise_unary_sfpu_init<OPERATION>(sine_init<APPROX_MODE>);
+    }
     else if constexpr (OPERATION == SfpuType::reciprocal)
     {
         llk_math_eltwise_unary_sfpu_init<OPERATION>(recip_init<APPROX_MODE, is_fp32_dest_acc_en>);
