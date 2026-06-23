@@ -39,11 +39,9 @@ def extract_number_of_parameters(content: str, start_pos: int) -> Optional[int]:
     search_start = max(0, start_pos - 1000)
     text_before = content[search_start:start_pos]
     text_before = text_before.replace(",", "")
-    patterns = [r"Total parameters:\s*(\d+)", r"Model number of parameters:\s*(\d+)"]
-    for pattern in patterns:
-        match = re.search(pattern, text_before)
-        if match:
-            return int(match.group(1))
+    match = re.search(r"Total parameters:\s*(\d+)", text_before)
+    if match:
+        return int(match.group(1))
     return None
 
 
