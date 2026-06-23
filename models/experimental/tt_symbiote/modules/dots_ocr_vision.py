@@ -1719,6 +1719,15 @@ class TTNNDotsVisionPatchEmbed(TTNNModule):
         # See note above on the dim==2 path: BFP8 here keeps the residual
         # stream (and therefore every downstream matmul's in0) BFP8, which
         # is the dominant per-layer compute speedup.
+        #
+        # No explicit program_config -- auto is the only viable option for this
+        # shape. The op is the patch embed (real shape 11232x608x1536; the profiler
+        # prints "608x608" because it ignores transpose_b). A faithful sweep with
+        # bias + in-block L1 pressure (bench_patch_embed_tp4_wh_sweep.py, 2026-06-19)
+        # shows: AUTO ~0.602 ms PCC 1.0; every 1D M-shard config OOMs (CBs clash
+        # with the co-resident L1 buffer); the only 2D option needs per_core_M=117
+        # (M=11232=351 tiles can't tile <=8 rows at per_core_M<=64), which drops PCC
+        # to ~0.918 AND is slower. A working explicit PC requires padding M to 11264.
         out = ttnn.linear(
             x_tt,
             self.tt_proj_weight,
@@ -2597,21 +2606,57 @@ class TTNNDotsPatchMerger(TTNNModule):
 
         self.tt_ln_weight = _to_dev(self.tt_ln_weight)
         self.tt_ln_bias = _to_dev(self.tt_ln_bias)
-        self.tt_w1 = _to_dev(self.tt_w1)
-        self.tt_w1_bias = _to_dev(self.tt_w1_bias)
 
-        # Col-shard w2 across devices so the patch merger natively produces
-        # col-sharded output matching text embeddings.  Weight shape is
-        # [intermediate, H] (already transposed); sharding dim=-1 gives each
-        # device [intermediate, H/num_devices].
+        # TP axis = last mesh dim when > 1 (mirrors TTNNDotsVisionAttention._attn_tp_ndev).
+        shape = [int(x) for x in self.device.shape] if hasattr(self.device, "shape") else []
+        tp = int(shape[-1]) if shape and int(shape[-1]) > 1 else 1
+        self._tp_merger = tp > 1
         num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
-        if num_devices > 1:
+
+        if self._tp_merger:
+            # Megatron MLP tensor-parallel split across the TP axis (axis 1). The
+            # merger input is the replicated full hidden (the vision MLP down-proj
+            # all-reduces, so the residual stays replicated -- see _forward_tp), so
+            # fc1 needs no input collective. fc1 is COLUMN-parallel (shard the 6144
+            # intermediate / output dim) -> each device computes its 1536-wide
+            # intermediate slice (4x less compute than the old replicated
+            # 2816x6144x6144 fc1). fc2 is ROW-parallel (shard the 6144 contraction
+            # dim) and produces a full-width partial that a reduce_scatter (dim=3,
+            # TP axis) sums + scatters to the SAME col-sharded [.,.,M,H/tp] output
+            # the old col-sharded fc2 produced -- so the decoder contract is
+            # unchanged. fc2 bias is col-sharded and added AFTER reduce_scatter (a
+            # fused bias would be summed tp-times by the reduce).
+            col_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, -1), mesh_shape=list(self.device.shape))
+            row_mapper = ttnn.ShardTensor2dMesh(self.device, dims=(None, -2), mesh_shape=list(self.device.shape))
+
+            def _shard(w, mapper):
+                if w is None:
+                    return None
+                return ttnn.from_torch(
+                    w.to(torch.bfloat16),
+                    dtype=ttnn.bfloat8_b,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=self.device,
+                    memory_config=mem,
+                    mesh_mapper=mapper,
+                )
+
+            self.tt_w1 = _shard(self._w1_weight, col_mapper)
+            self.tt_w1_bias = _shard(self._w1_bias, col_mapper)  # [.,6144] -> [.,1536/dev]
+            self.tt_w2 = _shard(self._w2_weight, row_mapper)  # [6144,1536] -> [1536/dev,1536]
+            self.tt_w2_bias = _shard(self._w2_bias, col_mapper)  # [.,1536] -> [.,384] (added post-RS)
+        elif num_devices > 1:
+            self.tt_w1 = _to_dev(self.tt_w1)
+            self.tt_w1_bias = _to_dev(self.tt_w1_bias)
+            # Col-shard w2 across devices so the patch merger natively produces
+            # col-sharded output matching text embeddings.  Weight shape is
+            # [intermediate, H] (already transposed); sharding dim=-1 gives each
+            # device [intermediate, H/num_devices].
             col_shard_mapper = ttnn.ShardTensor2dMesh(
                 self.device,
                 dims=(None, -1),
                 mesh_shape=list(self.device.shape),
             )
-            # Re-create w2 on device with col-shard mapper
             self.tt_w2 = ttnn.from_torch(
                 self._w2_weight.to(torch.bfloat16),
                 dtype=ttnn.bfloat8_b,
@@ -2632,6 +2677,8 @@ class TTNNDotsPatchMerger(TTNNModule):
             else:
                 self.tt_w2_bias = None
         else:
+            self.tt_w1 = _to_dev(self.tt_w1)
+            self.tt_w1_bias = _to_dev(self.tt_w1_bias)
             self.tt_w2 = _to_dev(self.tt_w2)
             self.tt_w2_bias = _to_dev(self.tt_w2_bias)
 
@@ -2697,6 +2744,75 @@ class TTNNDotsPatchMerger(TTNNModule):
         )
 
         compute_kc = getattr(self, "compute_kernel_config", None)
+
+        if getattr(self, "_tp_merger", False):
+            # Tensor-parallel merger (see move_weights_to_device_impl): fc1
+            # column-parallel + fc2 row-parallel + reduce_scatter. fc1 is now
+            # M x mlp_size x (fc1_n/tp) and fc2 is M x (mlp_in/tp) x H -- 1/tp the
+            # compute of the old replicated fc1 (2816x6144x6144 -> 2816x6144x1536).
+            from models.experimental.tt_symbiote.modules.vision_tp4_wh import (
+                wh_tp4_matmul_pc,
+                wh_tp4_merger_fc1_col_pc,
+                wh_tp4_merger_fc2_row_pc,
+            )
+
+            fc1_k = int(self.mlp_size)
+            fc1_n = int(self.tt_w1.shape[-1])  # 6144/tp
+            # Tuned single-weight-pass PC (the generic enumerator picks small
+            # out_block_h -> many weight passes -> ~6.3 ms on this DRAM-bound shape).
+            fc1_pc = (
+                wh_tp4_merger_fc1_col_pc(self.device, seq_len=new_r, k=fc1_k, n=fc1_n)
+                or wh_tp4_matmul_pc(
+                    self.device, new_r, fc1_k, fc1_n, in0_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat8_b
+                )
+                or _vision_matmul_program_config(self.device, new_r, fc1_k, fc1_n)
+            )
+            hidden_states = ttnn.linear(
+                hidden_states,
+                self.tt_w1,
+                bias=self.tt_w1_bias,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                program_config=fc1_pc,
+                compute_kernel_config=compute_kc,
+            )
+            hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+            fc2_k = int(self.tt_w2.shape[-2])  # 6144/tp
+            fc2_n = int(self.tt_w2.shape[-1])  # H (full)
+            fc2_pc = (
+                wh_tp4_merger_fc2_row_pc(self.device, seq_len=new_r, k=fc2_k, n=fc2_n)
+                or wh_tp4_matmul_pc(
+                    self.device, new_r, fc2_k, fc2_n, in0_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat8_b
+                )
+                or _vision_matmul_program_config(self.device, new_r, fc2_k, fc2_n)
+            )
+            partial = ttnn.linear(
+                hidden_states,
+                self.tt_w2,
+                bias=None,  # added after reduce_scatter (a fused bias would be reduced tp-times)
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                program_config=fc2_pc,
+                compute_kernel_config=compute_kc,
+            )
+            ttnn.deallocate(hidden_states)
+            # reduce_scatter (dim=3, TP axis) sums the per-device partials and
+            # scatters H -> H/tp, giving the same col-sharded output the old fc2
+            # produced. Mirrors the vision MLP down-proj collective.
+            num_links = _ccl_num_links(self.device)
+            output = ttnn.reduce_scatter(
+                partial,
+                dim=3,
+                num_links=num_links,
+                cluster_axis=1,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+                topology=ttnn.Topology.Linear,
+            )
+            ttnn.deallocate(partial)
+            if self.tt_w2_bias is not None:
+                output = ttnn.add(output, self.tt_w2_bias, dtype=ttnn.bfloat8_b)
+            return output
 
         if fast_fc1_pc is not None:
             # fc1: 2D-mcast BFP8 in0 (DRAM) -> BFP4 interleaved out, GELU fused.

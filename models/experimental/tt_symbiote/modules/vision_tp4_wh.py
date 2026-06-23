@@ -323,6 +323,80 @@ def wh_tp4_merger_fc2_pc(device, *, seq_len: int = 2816, k: int = 6144, n: int =
     return None
 
 
+def wh_tp4_merger_fc1_col_pc(device, *, seq_len: int = 2816, k: int = 6144, n: int = 1536):
+    """Patch-merger fc1, COLUMN-parallel TP4 split ``2816×6144×1536``, BFP8 on WH 8×8.
+
+    After the merger MLP is tensor-parallel-split (dots_ocr_vision.py PatchMerger:
+    fc1 col-parallel + fc2 row-parallel + reduce_scatter), fc1's output dim is
+    sharded 6144→1536/dev, so each device does 1/4 the old replicated
+    2816×6144×6144 fc1. This matmul is weight-DRAM-bound, so the lever is a SINGLE
+    weight pass: out_block_h = per_core_M = 11 (M=2816 → 88 tiles / 8 rows).
+
+    Silicon sweep 2026-06-23: obh=11 ibw=8 sub=(1,6) ~565 µs vs the old replicated
+    fc1 ~1963 µs (3.5×). ibw=24 is the isolated optimum (~526 µs) but its ~574 KB
+    in0 CB risks the same traced-block CB clash that bit the o_proj (see
+    wh_tp4_o_proj_pc); ibw=8 (191 KB in0 CB) is the trace-safe pick. The generic
+    enumerator picks SMALL obh (its score favors -out_block_h) → many weight passes
+    → ~6.3 ms, so an explicit single-pass PC is mandatory here.
+    """
+    grid = device.compute_with_storage_grid_size()
+    tile = 32
+    if int(grid.x) < 8 or int(grid.y) < 8 or seq_len % (tile * 8) or k % tile or n % tile:
+        return None
+    per_core_m = (seq_len // tile) // 8
+    per_core_n = (n // tile) // 8
+    if per_core_m > 64 or per_core_n < 1 or (n // tile) % 8:
+        return None
+    sub_h, sub_w, _ = _best_dst_subblock(per_core_m, per_core_n)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=8,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
+def wh_tp4_merger_fc2_row_pc(device, *, seq_len: int = 2816, k: int = 1536, n: int = 1536):
+    """Patch-merger fc2, ROW-parallel TP4 split ``2816×1536×1536``, BFP8 on WH 8×8.
+
+    Row-parallel fc2 contracts this device's 1536-wide intermediate shard (K=6144/4)
+    into a full-width partial that a reduce_scatter sums + scatters to the col-sharded
+    output. Single weight pass (obh = per_core_M = 11). Silicon sweep 2026-06-23:
+    obh=11 ibw=6 sub=(1,6) ~164 µs (ibw 4..48 all within ~15 µs; ibw=6 best).
+    """
+    grid = device.compute_with_storage_grid_size()
+    tile = 32
+    if int(grid.x) < 8 or int(grid.y) < 8 or seq_len % (tile * 8) or k % tile or n % tile:
+        return None
+    per_core_m = (seq_len // tile) // 8
+    per_core_n = (n // tile) // 8
+    if per_core_m > 64 or per_core_n < 1 or (n // tile) % 8:
+        return None
+    k_tiles = k // tile
+    ibw = 6 if k_tiles % 6 == 0 else _largest_divisor_le(k_tiles, 8)
+    sub_h, sub_w, _ = _best_dst_subblock(per_core_m, per_core_n)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=ibw,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        out_block_h=per_core_m,
+        out_block_w=per_core_n,
+        per_core_M=per_core_m,
+        per_core_N=per_core_n,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
 def wh_tp4_o_proj_pc(device, *, seq_len: int = 11264, ctx_dim: int = 384):
     """o_proj ``11264×384×1536``, BFP8×BFP8→BFP8 L1, on WH 8×8.
 
@@ -359,16 +433,29 @@ def wh_tp4_o_proj_pc(device, *, seq_len: int = 11264, ctx_dim: int = 384):
         )
     if int(grid.x) >= 8 and int(grid.y) >= 8 and seq_len == 11264 and ctx_dim == 1536:
         # Replicated o_proj (Option B): full gathered ctx K=1536, BFP8×BFP8→BFP8 L1.
-        # Silicon sweep 2026-06-17 (bench_vision_attn_tp2_wh_sweep.py o_proj_repl):
-        # grid=(8,8) tm=False M=44 N=6 obh=4 ibw=8 sub=(4,2) ~619 µs vs the generic
-        # 48-core fallback ~1817 µs (~2.9×). obh=4 keeps the interm CB ~49 KB/core,
-        # well under the live-block L1 high-water (cf. the obh cap on the 384 case).
+        # Device-profiler sweep + full traced T3K validation 2026-06-23
+        # (bench_o_proj_repl_tp4_ctx_sweep.py + prof_o_proj_repl_tp4.py; in0=gathered
+        # ctx L1, BF16 bias fused, out L1): grid=(8,8) tm=False M=44 N=6 obh=11 ibw=6
+        # sub=(1,6) ~431 µs vs the prior obh=4 ibw=8 ~472 µs (−8.7%), VERIFIED in the
+        # real traced model (test_dots_ocr_vision passes). obh=11 gives the win (4×
+        # the M-reuse per pass over obh=4); the earlier obh=4 was forced only by the
+        # analytical enumerator's conservative L1 model, not a real OOM.
+        #
+        # ibw is 6, NOT 8: obh=11 ibw=8 (~427 µs in isolation) OOMs IN THE TRACED
+        # MODEL -- its in0+in1 CBs end at byte 606624 and clash with a persistent
+        # trace L1 buffer at 564384 (program.cpp:934, every vision layer's o_proj).
+        # The isolated bench + filler stress could NOT predict this (the trace-mode
+        # L1 layout differs from the interleaved allocator). Dropping ibw 8→6 frees
+        # ~74 KB of in0/in1 CB, clearing the clash for only ~4 µs (431 vs 427).
+        # obh=22/44 (toward the ~228 µs 64-core LoFi FLOP floor) OOM even in
+        # isolation -- far past the trace clash -- so <430 µs is unreachable without
+        # a DRAM output (which trades away the L1 residual add).
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=(8, 8),
-            in0_block_w=8,
-            out_subblock_h=4,
-            out_subblock_w=2,
-            out_block_h=4,
+            in0_block_w=6,
+            out_subblock_h=1,
+            out_subblock_w=6,
+            out_block_h=11,
             out_block_w=6,
             per_core_M=44,
             per_core_N=6,
