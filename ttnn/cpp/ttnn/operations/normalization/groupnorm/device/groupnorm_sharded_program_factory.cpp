@@ -79,7 +79,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     tt::DataFormat in_negative_mask_cb_data_format =
         negative_mask.has_value() ? tt::tt_metal::datatype_to_dataformat_converter(negative_mask.value().dtype())
                                   : tt::DataFormat::Float16_b;
-    uint32_t datum_size_bytes = 2;  // bfloat16
+    uint32_t datum_size_bytes = output.element_size();  // output datum size (out==in format, enforced below)
 
     TT_FATAL(
         out_data_format == in_data_format,

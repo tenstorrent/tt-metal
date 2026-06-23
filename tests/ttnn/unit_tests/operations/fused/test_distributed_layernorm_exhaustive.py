@@ -186,6 +186,52 @@ def test_smoke(mesh_device, batch_size, seq_len, hidden_dim, eps, norm_type, use
 
 
 # ============================================================================
+# FP32 Welford Test (issue #44650) - FP32 input/stats/gamma/beta through the
+# full pre-all-gather (Welford) -> all-gather -> post-all-gather (Welford) path.
+# ============================================================================
+
+
+@pytest.mark.parametrize("hidden_dim", [2048])
+@pytest.mark.parametrize("eps", [1e-5])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16], ids=["fp32", "bf16"])
+@pytest.mark.parametrize(
+    "weight_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["tile_gamma_beta", "rm_gamma_beta"]
+)
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+    ],
+    indirect=True,
+)
+def test_welford_fp32(mesh_device, hidden_dim, eps, input_dtype, weight_layout):
+    """FP32 (and bf16 control) Welford layer_norm across pre-AG -> all-gather -> post-AG.
+    input_dtype drives input, stats, gamma and beta dtypes; fp32 requires fp32_dest_acc_en
+    (use_high_precision=True). Covers both TILE and ROW_MAJOR gamma/beta."""
+    passes, max_abs_diff, max_rel_diff, mean_rel_diff = run_distributed_norm_test(
+        mesh_device=mesh_device,
+        batch_size=1,
+        seq_len=128,
+        hidden_dim=hidden_dim,
+        eps=eps,
+        norm_type="layer_norm",
+        use_legacy=False,
+        use_high_precision=True,
+        verbose=False,
+        use_welford=True,
+        weight_layout=weight_layout,
+        bias_layout=weight_layout,
+        input_dtype=input_dtype,
+    )
+    assert passes, (
+        f"TEST FAILED: Average relative difference {mean_rel_diff*100:.2f}% exceeds 5% threshold | "
+        f"max_abs_diff={max_abs_diff:.6e} | "
+        f"max_rel_diff={max_rel_diff:.6e}"
+    )
+
+
+# ============================================================================
 # Memory Layout Tests - Testing different layouts for gamma (weight) and beta (bias)
 # ============================================================================
 
