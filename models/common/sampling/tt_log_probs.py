@@ -231,8 +231,6 @@ class LogProbsCalculator:
             if self._all_gather_cluster_axis is not None:
                 dims = (0, None) if self._all_gather_cluster_axis == 0 else (None, 0)
                 mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-            elif num_devices > 1:
-                mesh_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
 
