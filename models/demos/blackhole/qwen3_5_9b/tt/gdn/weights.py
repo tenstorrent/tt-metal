@@ -47,7 +47,7 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
     tp = mesh_device.get_num_devices()
     num_k_heads, head_k_dim = args.linear_num_key_heads, args.linear_key_head_dim
     num_v_heads, head_v_dim = args.linear_num_value_heads, args.linear_value_head_dim
-    key_dim, value_dim = args.linear_q_dim, args.linear_v_dim
+    key_dim, value_dim = args.linear_q_and_k_dim, args.linear_v_dim
     conv_kernel_size = args.linear_conv_kernel_dim
 
     if tensor_cache_path is not None:

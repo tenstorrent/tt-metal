@@ -5,19 +5,17 @@
 The installed transformers ships native Qwen3.5 modeling code, so these tests
 compare TT modules against the real HF layer (the gemma4 test_attention.py
 pattern) instead of a hand-written torch reference:
-* model_path()/text_config() resolve the checkpoint (HF_MODEL or the local FP8 snapshot)
-* hf_attention()/hf_mlp() load one layer's dequantized weights into the HF module
+* model_path()/text_config() resolve the checkpoint (HF_MODEL or DEFAULT_CKPT)
+* hf_attention()/hf_mlp() load one layer's weights into the HF module
 * causal_mask() builds the explicit mask the eager attention path needs
-Single-layer loads keep host RAM in the low-GB range (full-model dequant OOMs).
+Single-layer loads keep host RAM in the low-GB range (loading the full model OOMs).
 """
 import os
 
 import torch
 
-# Local snapshot of the FP8 27B checkpoint; HF_MODEL overrides. The old
-# /home/ttuser/atupe/Qwen27b default used by tests/test_*_tp.py no longer
-# exists on this host.
-DEFAULT_CKPT = "/home/ttuser/models/Qwen3.5-27B-FP8"
+# Default reference checkpoint (hub id); HF_MODEL overrides.
+DEFAULT_CKPT = "Qwen/Qwen3.6-27B"
 
 
 def model_path():
@@ -38,7 +36,7 @@ def text_config(checkpoint_dir=None):
 
 
 def hf_attention(cfg, layer_state_dict):
-    """Qwen3_5Attention with the given (dequantized, raw) layer weights, float32.
+    """Qwen3_5Attention with the given raw layer weights, float32.
 
     q_norm/k_norm weights must be the RAW checkpoint values: the HF module adds
     the zero-centered +1 internally, while the TT loaders bake it into the
@@ -53,7 +51,7 @@ def hf_attention(cfg, layer_state_dict):
 
 
 def hf_mlp(cfg, mlp_state_dict):
-    """Qwen3_5MLP (SwiGLU) with the given dequantized weights, float32."""
+    """Qwen3_5MLP (SwiGLU) with the given layer weights, float32."""
     from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5MLP
 
     mlp = Qwen3_5MLP(cfg, intermediate_size=cfg.intermediate_size).to(torch.float32)

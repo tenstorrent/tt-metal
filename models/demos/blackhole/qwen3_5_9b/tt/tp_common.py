@@ -9,162 +9,16 @@ inert on a 1-device mesh — ``model_config.py`` only builds these configs and
 calls the sharding helpers when ``num_devices > 1``.
 
 Contents:
-- Hardware constants + compute-kernel configs
-- DRAM-sharded weight memory / matmul program config builders
-- 2D prefill matmul program config builder
+- Hardware constants
 - Mesh tensor helpers (shard / replicate)
-- FP8 block-wise dequantization
 - Weight-prep helpers that reorder HF weights for clean per-device sharding
 """
-import math
-
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 
 # ── Hardware constants ──────────────────────────────────────────────────────
 TILE_SIZE = 32
-DRAM_CORES = 8
-DRAM_GRID = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(DRAM_CORES - 1, 0))})
-
-
-# ── Compute kernel configs ──────────────────────────────────────────────────
-COMPUTE_HIFI2 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi2,
-    math_approx_mode=True,
-    fp32_dest_acc_en=True,
-    packer_l1_acc=True,
-)
-
-COMPUTE_HIFI4 = ttnn.WormholeComputeKernelConfig(
-    math_fidelity=ttnn.MathFidelity.HiFi4,
-    math_approx_mode=False,
-    fp32_dest_acc_en=True,
-    packer_l1_acc=True,
-)
-
-
-# ── Grid helpers ────────────────────────────────────────────────────────────
-def prefill_grid_default():
-    """BH P150: (x=8, y=10) = 80 cores; WH: (8, 8). See 27B notes for why y is
-    capped at 10 and why grid_x=10 garbles the regular matmul kernel."""
-    return (8, 10) if is_blackhole() else (8, 8)
-
-
-def _roundup(a, b):
-    return b * math.ceil(a / b)
-
-
-def _find_largest_divisor(n, max_div=8):
-    for d in range(max_div, 0, -1):
-        if n % d == 0:
-            return d
-    return 1
-
-
-def _find_grid(n_tiles, target=32):
-    max_r, max_c = 8, 8
-    possible = [k for k in range(1, max_r * max_c + 1) if n_tiles % k == 0]
-    possible.sort(key=lambda x: abs(x - target))
-    for cores in possible:
-        for rows in range(1, max_r + 1):
-            if cores % rows == 0:
-                cols = cores // rows
-                if cols <= max_c:
-                    return rows, cols
-    raise ValueError(f"Cannot find grid for {n_tiles} tiles")
-
-
-# ── DRAM-sharded config builders ────────────────────────────────────────────
-def create_dram_sharded_mem_config(k, n):
-    """WIDTH_SHARDED DRAM memory config for a weight matrix [k, n]."""
-    padded_n = _roundup(n, TILE_SIZE * DRAM_CORES)
-    shard_spec = ttnn.ShardSpec(
-        DRAM_GRID,
-        (k, padded_n // DRAM_CORES),
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-    return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.BufferType.DRAM,
-        shard_spec,
-    )
-
-
-def create_dram_sharded_matmul_program_config(m, k, n, num_cores=None):
-    """DRAM-sharded matmul program config (decode, small M)."""
-    m_tiles = math.ceil(m / TILE_SIZE)
-    k_tiles = math.ceil(k / TILE_SIZE)
-    n_padded = _roundup(n, TILE_SIZE * DRAM_CORES)
-    n_tiles = n_padded // TILE_SIZE
-
-    if num_cores is None:
-        rows, cols = _find_grid(k_tiles)
-        num_cores = rows * cols
-
-    k_tiles_per_core = k_tiles // num_cores
-    if k_tiles_per_core == 0:
-        k_tiles_per_core = k_tiles
-        num_cores = 1
-    in0_block_w = _find_largest_divisor(k_tiles_per_core)
-    per_core_N = n_tiles // num_cores if n_tiles >= num_cores else 1
-
-    return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-        in0_block_w=in0_block_w,
-        per_core_M=m_tiles,
-        per_core_N=per_core_N,
-        fused_activation=None,
-    )
-
-
-def create_activation_shard_config(k):
-    """WIDTH_SHARDED L1 activation config for a [*, k] activation."""
-    k_tiles = k // TILE_SIZE
-    rows, cols = _find_grid(k_tiles)
-    num_cores = rows * cols
-    width_per_core = k // num_cores
-    return ttnn.create_sharded_memory_config(
-        shape=(TILE_SIZE, width_per_core),
-        core_grid=ttnn.CoreGrid(x=cols, y=rows),
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-
-
-# ── 2D matmul config builder (prefill) ──────────────────────────────────────
-def _get_out_subblock_w(per_core_n, out_subblock_h):
-    for w in range(min(per_core_n, 4 // out_subblock_h), 0, -1):
-        if per_core_n % w == 0:
-            return w
-    return 1
-
-
-def create_prefill_matmul_program_config(m, k, n, grid_size=None):
-    """2D matmul program config for prefill (compute-bound, DRAM-interleaved)."""
-    if grid_size is None:
-        grid_size = prefill_grid_default()
-    per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
-    per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
-
-    out_subblock_h = 1
-    out_subblock_w = _get_out_subblock_w(per_core_N, out_subblock_h)
-
-    k_tiles = math.ceil(k / TILE_SIZE)
-    in0_block_w = min(4, max(1, k_tiles // grid_size[0]))
-
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=False,
-    )
 
 
 # ── Mesh tensor helpers ─────────────────────────────────────────────────────
@@ -232,15 +86,6 @@ def replicate_kv_weight(weight, n_kv_heads, tp, head_dim):
         kv_idx = (d * n_kv_heads) // tp
         parts.append(chunks[kv_idx])
     return torch.cat(parts, dim=0).reshape(tp * head_dim, -1)
-
-
-# ── FP8 dequantization ──────────────────────────────────────────────────────
-def dequant_fp8_block(weight_fp8, scale_inv, block_size=128):
-    """Dequantize a block-wise FP8 weight tensor to bfloat16."""
-    out_f, in_f = weight_fp8.shape
-    weight_bf16 = weight_fp8.to(torch.bfloat16).reshape(out_f // block_size, block_size, in_f // block_size, block_size)
-    weight_bf16 = weight_bf16 * scale_inv[:, None, :, None].to(torch.bfloat16)
-    return weight_bf16.reshape(out_f, in_f)
 
 
 # ── Weight-prep helpers (reorder HF weights for per-device sharding) ─────────

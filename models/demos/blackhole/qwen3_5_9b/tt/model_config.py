@@ -90,9 +90,8 @@ class Qwen35ModelArgs(ModelArgs):
             ["linear_attention", "linear_attention", "linear_attention", "full_attention"] * 8
         )
 
-        # Derived
-        self.linear_q_dim = self.linear_num_key_heads * self.linear_key_head_dim
-        self.linear_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
+        # Derived (q and k are equal, so a single dim covers both)
+        self.linear_q_and_k_dim = self.linear_num_key_heads * self.linear_key_head_dim
         self.linear_v_dim = self.linear_num_value_heads * self.linear_value_head_dim
 
         # Blackhole P150 device config (lazy import to allow CPU-only testing)
@@ -106,23 +105,22 @@ class Qwen35ModelArgs(ModelArgs):
             self.act_dtype = None
 
         # ------------------------------------------------------------------
-        # Tensor-parallel (multi-device) config. Inert on a single device:
-        # the entire block only runs when num_devices > 1, so the validated
-        # 9B single-device path is byte-for-byte unchanged. For 27B on a (1,4)
-        # mesh this sets the per-device sharded dims + DRAM-sharded matmul
-        # configs ported from models/demos/qwen35_27b. See tt/tp_common.py.
+        # Per-device (multi-device) config. Inert on a single device: head
+        # counts pass through unchanged when num_devices == 1, so the validated
+        # 9B single-device path is unchanged. Sets the per-device sharded head
+        # counts, the GDN dims consumed by the gdn unit tests, and the KV-cache
+        # shard config used by attention.
         # ------------------------------------------------------------------
         self.num_devices = mesh_device.get_num_devices() if mesh_device is not None else 1
-        if mesh_device is not None and self.num_devices >= 1:
+        if mesh_device is not None:
             self._init_tp_config(mesh_device)
 
     def _init_tp_config(self, mesh_device):
-        """Set per-device sharded dims + DRAM-sharded matmul/mem configs for TP.
+        """Set per-device sharded head counts, GDN dims, and the KV-cache shard config.
 
-        Only called when num_devices > 1. All dims are derived from the
-        HF-config values already parsed above (dim, n_heads, head_dim, and the
-        linear_* GDN dims) so the same code serves any Qwen3.5 size whose head
-        counts divide evenly by the device count.
+        Dims derive from the HF-config values already parsed above (n_heads,
+        head_dim, and the linear_* GDN dims) so the same code serves any
+        Qwen3.5 size whose head counts divide evenly by the device count.
         """
         import ttnn
         from models.demos.blackhole.qwen3_5_9b.tt import tp_common as tpc
@@ -130,61 +128,18 @@ class Qwen35ModelArgs(ModelArgs):
         tp = self.num_devices
         self.cluster_shape = list(mesh_device.shape)
 
-        # GDN dims (named to match the qwen35_27b reference helpers)
-        self.gdn_nk = self.linear_num_key_heads
-        self.gdn_dk = self.linear_key_head_dim
-        self.gdn_nv = self.linear_num_value_heads
-        self.gdn_dv = self.linear_value_head_dim
-        self.gdn_conv_kernel_size = self.linear_conv_kernel_dim
-        self.gdn_key_dim = self.linear_q_dim  # = nk * dk  (q and k are equal)
-        self.gdn_value_dim = self.linear_v_dim  # = nv * dv
-        self.gdn_qkv_dim = self.linear_q_dim + self.linear_k_dim + self.linear_v_dim
-        self.gdn_z_dim = self.linear_v_dim
+        # GDN dims consumed by the gdn unit tests (q and k are equal)
+        self.gdn_key_dim = self.linear_q_and_k_dim
+        self.gdn_value_dim = self.linear_v_dim
         self.gdn_chunk_size = 128  # gives the fastest TTFT with the current my_gdn implementation
 
-        # Per-device (sharded) dims
+        # Per-device (sharded) head counts
         assert self.n_heads % tp == 0, f"n_heads {self.n_heads} not divisible by TP={tp}"
-        assert self.gdn_nk % tp == 0 and self.gdn_nv % tp == 0, "GDN head counts must divide by TP"
+        assert (
+            self.linear_num_key_heads % tp == 0 and self.linear_num_value_heads % tp == 0
+        ), "GDN head counts must divide by TP"
         self.n_local_heads = self.n_heads // tp
         self.n_local_kv_heads = max(1, self.n_kv_heads // tp)
-        self.kv_replication = tp > self.n_kv_heads  # False at TP=4 (4 KV heads)
-        self.gdn_nk_tp = self.gdn_nk // tp
-        self.gdn_nv_tp = self.gdn_nv // tp
-        self.gdn_qkv_dim_tp = self.gdn_qkv_dim // tp
-        self.gdn_z_dim_tp = self.gdn_z_dim // tp
-        self.gdn_qkvz_dim_tp = (self.gdn_qkv_dim + self.gdn_z_dim) // tp
-        self.gdn_value_dim_tp = self.gdn_value_dim // tp
-        self.gdn_key_dim_tp = self.gdn_key_dim // tp
-        self.attn_out_dim_tp = (self.n_heads * self.head_dim) // tp
-
-        # DRAM-sharded weight memory configs ─ column-parallel: [hidden, out_tp]
-        self.gdn_qkvz_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.gdn_qkvz_dim_tp)
-        self.mlp_w1_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
-        self.mlp_w3_weight_memcfg = tpc.create_dram_sharded_mem_config(self.dim, self.hidden_dim // tp)
-        # row-parallel: [in_tp, hidden]
-        self.gdn_out_weight_memcfg = tpc.create_dram_sharded_mem_config(self.gdn_value_dim_tp, self.dim)
-        self.attn_wo_weight_memcfg = tpc.create_dram_sharded_mem_config(self.attn_out_dim_tp, self.dim)
-        self.mlp_w2_weight_memcfg = tpc.create_dram_sharded_mem_config(self.hidden_dim // tp, self.dim)
-
-        # DRAM-sharded matmul program configs (decode, m=1)
-        M = 1
-        self.gdn_qkvz_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.gdn_qkvz_dim_tp)
-        self.gdn_out_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.gdn_value_dim_tp, self.dim)
-        self.attn_wo_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.attn_out_dim_tp, self.dim)
-        self.mlp_w1_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
-        self.mlp_w3_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.dim, self.hidden_dim // tp)
-        self.mlp_w2_progcfg = tpc.create_dram_sharded_matmul_program_config(M, self.hidden_dim // tp, self.dim)
-
-        # 2D prefill matmul config factory (M varies with seq_len)
-        self._prefill_grid = tpc.prefill_grid_default()
-        self.prefill_progcfg = lambda seq_len, k, n: tpc.create_prefill_matmul_program_config(
-            seq_len, k, n, grid_size=self._prefill_grid
-        )
-
-        # Activation shard configs
-        self.act_shard_hidden = tpc.create_activation_shard_config(self.dim)
-        self.act_shard_gdn_value = tpc.create_activation_shard_config(self.gdn_value_dim_tp)
-        self.act_shard_attn_out = tpc.create_activation_shard_config(self.attn_out_dim_tp)
 
         # KV-cache height-shard config for paged_update_cache (decode). The op
         # dispatches one user per core, so the grid must have exactly
