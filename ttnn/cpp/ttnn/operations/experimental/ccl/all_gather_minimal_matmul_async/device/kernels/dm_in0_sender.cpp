@@ -364,6 +364,7 @@ void kernel_main() {
                 {
                     DeviceZoneScopedN("SNF-CHAIN");
                     if (is_injector_core) {
+                        DeviceZoneScopedN("DRAM-Latency");
                         read_in0_block_sync<M_block_tiles, K_block_tiles>(
                             in0_reader,
                             in0_shape,
@@ -385,6 +386,7 @@ void kernel_main() {
                             k_right_tiles);
                     } else {
                         // Get from previous device
+                        DeviceZoneScopedN("RECV-WAIT");
                         noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
                         noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
                         noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
@@ -394,6 +396,7 @@ void kernel_main() {
                     // This frees sender to start next read earlier
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
                     if (!is_sink_core) {
+                        DeviceZoneScopedN("NOC-LATENCY");
                         noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
                         noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 

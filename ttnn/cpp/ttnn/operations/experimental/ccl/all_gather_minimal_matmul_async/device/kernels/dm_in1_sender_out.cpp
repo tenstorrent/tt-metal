@@ -148,8 +148,10 @@ void kernel_main() {
             uint32_t current_N_tiles_bytes = current_N_block_tiles * in1_tile_size;
 
             for (uint32_t k_block_iter = 0; k_block_iter < K_num_blocks; k_block_iter++) {
+                DeviceZoneScopedN("AVAILABLE");
                 if (defer_write && k_block_iter == defer_write_k_block) {
                     if constexpr (is_output_writer) {
+                        DeviceZoneScopedN("DEFER-WRITE");
                         cb_wait_front(cb_id_out, out_block_num_tiles);
                         uint32_t out_read_ptr = get_read_ptr(cb_id_out);
                         // write_block_sync_split is more generic (support multiple output tensors)
@@ -183,6 +185,7 @@ void kernel_main() {
 
                 uint32_t in1_start_address = get_write_ptr(cb_id_in1);
                 if constexpr (is_injector_core) {
+                    DeviceZoneScopedN("DRAM-Latency");
                     uint32_t k_block_left_tile = 0;
                     uint32_t k_block_right_tile = 0;
                     uint32_t actual_k_block = k_forward ? k_block_iter : (K_num_blocks - 1 - k_block_iter);
@@ -212,6 +215,7 @@ void kernel_main() {
                         n_tile,
                         n_tile_end);
                 } else {
+                    DeviceZoneScopedN("RECV-WAIT");
                     noc_semaphore_set(in1_receiver_semaphore_addr_ptr, INVALID);
                     noc_semaphore_inc(in1_sender_semaphore_noc_addr, 1);
                     noc_semaphore_wait(in1_receiver_semaphore_addr_ptr, VALID);
