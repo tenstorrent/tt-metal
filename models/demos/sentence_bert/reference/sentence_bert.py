@@ -289,7 +289,7 @@ BERT_SELF_ATTENTION_CLASSES = {
 class BertAttention(nn.Module):
     def __init__(self, config, position_embedding_type=None):
         super().__init__()
-        self.self = BERT_SELF_ATTENTION_CLASSES[config._attn_implementation](
+        self.self = BERT_SELF_ATTENTION_CLASSES[config._attn_implementation or "eager"](
             config, position_embedding_type=position_embedding_type
         )
         self.output = BertSelfOutput(config)

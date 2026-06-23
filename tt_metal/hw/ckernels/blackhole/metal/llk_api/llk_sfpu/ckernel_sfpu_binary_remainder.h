@@ -8,7 +8,7 @@
 #include "ckernel_defs.h"
 #include "ckernel_sfpu_div_int32_floor.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_recip.h"
+#include "ckernel_sfpu_recip.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 
 namespace ckernel::sfpu {
@@ -110,7 +110,7 @@ sfpi_inline sfpi::vFloat _sfpu_binary_remainder_(sfpi::vFloat in0, sfpi::vFloat 
     sfpi::vFloat b = in1;
 
     // Compute a/b = a * (1/b)
-    sfpi::vFloat div_result = a * _sfpu_reciprocal_<2>(b);
+    sfpi::vFloat div_result = a * sfpu_reciprocal_iter<2>(b);
 
     // Compute floor(a/b)
     sfpi::vFloat floor_div = _floor_body_(div_result);

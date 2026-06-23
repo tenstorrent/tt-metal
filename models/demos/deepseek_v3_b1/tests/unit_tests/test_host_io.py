@@ -55,6 +55,13 @@ def test_host_io_loopback(mesh_device, tensor_size_bytes, fifo_size, num_iterati
     if not is_slow_dispatch():
         pytest.skip("Skipping test in fast dispatch mode")
 
+    # TODO(#43079): Blackhole DEVICE_PULL host IO loopback hangs under viommu.
+    if is_blackhole() and h2d_mode == ttnn.H2DMode.DEVICE_PULL:
+        pytest.skip(
+            "[SKIP REASON]: Blackhole HostIO DEVICE_PULL loopback hangs in the data-transfer loop "
+            "(device PCIe pull from host-pinned memory) under viommu. Issue: #43079"
+        )
+
     ttnn.enable_asynchronous_slow_dispatch(mesh_device)
 
     tensor_size_datums = tensor_size_bytes // 4

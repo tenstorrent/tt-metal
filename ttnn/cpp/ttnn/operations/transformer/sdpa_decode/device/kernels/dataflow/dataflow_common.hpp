@@ -33,8 +33,9 @@ void fill_tile(uint32_t cb_id, uint32_t tile_id, uint32_t val) {
         noc.write_zeros_l1_barrier();
     } else {
         // Fill 2 uint16 datums in each writes to optimize for performance
+        CircularBuffer cb(cb_id);
         volatile tt_l1_ptr uint32_t* ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
         constexpr int num_uint32_datums_tile = tile_bytes / 4;
         for (int k = 0; k < num_uint32_datums_tile; k++) {
             ptr[k] = val;
@@ -54,10 +55,11 @@ void fill_tile_partial(uint32_t cb_id, uint32_t tile_id, uint32_t cur_pos_in_til
         return;
     }
     const uint16_t datum_val = partial_val >> 16;
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint16_t* uint16_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
     int face_start = (cur_pos_in_tile < 15) ? 0 : 1;
     uint32_t fill_pos_in_face = (cur_pos_in_tile + 1) % 16;
     if (face_start == 0) {
@@ -116,10 +118,11 @@ void fill_tile_partial_sliding_window(
     }
 
     const uint16_t datum_val = partial_val >> 16;
+    CircularBuffer cb(cb_id);
     volatile tt_l1_ptr uint16_t* uint16_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
     volatile tt_l1_ptr uint32_t* uint32_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id) + tile_id * tile_bytes);
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes);
 
     // Determine which faces to fill completely (before the window_start_pos_in_tile)
     int face_start = (window_start_pos_in_tile < 16) ? 0 : 1;  // Last face to fill completely

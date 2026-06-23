@@ -29,10 +29,6 @@ set(UNIT_TESTS_API_SOURCES
     metal2_host_api/test_program_run_args.cpp
     metal2_host_api/test_table.cpp
     test_kernel_thread_sync.cpp
-    tensor/test_tensor_sharding.cpp
-    tensor/test_host_tensor.cpp
-    tensor/test_mesh_tensor.cpp
-    tensor/test_tensor_types.cpp
     test_banked.cpp
     test_bit_utils.cpp
     test_filesystem_utils.cpp
@@ -73,4 +69,19 @@ set(UNIT_TESTS_API_SOURCES
     test_core_local_mem_api.cpp
     test_zero_memory_api.cpp
     disaggregation/test_kv_chunk_address_table.cpp
+)
+
+# Runtime tensor tests build into their own executable (unit_tests_tensor),
+# mirroring unit_tests_ttnn_tensor, so they stay out of the tt-metalium smoke binary.
+set(UNIT_TESTS_API_TENSOR_SOURCES
+    tensor/common_tensor_test_utils.cpp
+    tensor/test_tensor_sharding.cpp
+    tensor/test_host_tensor.cpp
+    tensor/test_mesh_tensor.cpp
+    tensor/test_tensor_types.cpp
+    tensor/test_tensor_layout.cpp
+    tensor/test_create_tensor.cpp
+    tensor/test_create_tensor_with_layout.cpp
+    tensor/test_tensor_nd_sharding.cpp
+    tensor/test_vector_conversion.cpp
 )
