@@ -48,16 +48,12 @@ def clear_disk_kernel_cache() -> None:
 
 
 def _resolve_perf_device(device, test_module):
-    # model_traced ops open their own mesh device inside run() (fixture yields
-    # None); fall back to the device the module opened so the profiler read
-    # targets the real device.
+    # Some model_traced ops (e.g. paged SDPA) open their own mesh device inside
+    # run() (the fixture yields None); fall back to the module's _CUR_DEVICE so
+    # the profiler read targets the real device.
     if device is not None:
         return device
-    for _name in ("_CUR_DEVICE", "_CONV_DEV"):
-        d = getattr(test_module, _name, None)
-        if d is not None:
-            return d
-    return None
+    return getattr(test_module, "_CUR_DEVICE", None)
 
 
 def gather_single_test_perf(device, test_passed):
@@ -82,9 +78,7 @@ def gather_single_test_perf(device, test_passed):
         return None
 
     try:
-        from ttnn._ttnn import profiler as _ttnn_profiler
-
-        perf_by_chip = _ttnn_profiler.get_latest_programs_perf_data()
+        perf_by_chip = ttnn.get_latest_programs_perf_data()
     except Exception as e:
         logger.warning(f"Failed to get device profiler data: {e}")
         return None
@@ -93,15 +87,26 @@ def gather_single_test_perf(device, test_passed):
         logger.warning("No profiling data available.")
         return None
 
-    # The op is replicated/sharded across the mesh; aggregate each analysis as the
-    # max across chips (the bottleneck chip = the real op latency).
-    aggregated = {}
+    # Aggregate per distinct device program, keyed by its execution uid. Each
+    # program is replicated across the mesh, so take the max across chips (the
+    # bottleneck chip = that program's real latency). A single op may decompose
+    # into several device programs (composite op), so sum each analysis across the
+    # distinct programs -- matching the legacy CSV path's composite-op summation.
+    per_program: Dict[Any, Dict[str, int]] = {}
     core_count = 0
     for _chip, programs in perf_by_chip.items():
         for program in programs:
             core_count = max(core_count, int(getattr(program, "core_count", 0) or 0))
+            uid = program.program_execution_uid
+            key = (uid.runtime_id, uid.trace_id, uid.trace_id_counter)
+            slot = per_program.setdefault(key, {})
             for name, result in program.program_analyses_results.items():
-                aggregated[name] = max(aggregated.get(name, 0), int(result.duration))
+                slot[name] = max(slot.get(name, 0), int(result.duration))
+
+    aggregated: Dict[str, int] = {}
+    for slot in per_program.values():
+        for name, duration in slot.items():
+            aggregated[name] = aggregated.get(name, 0) + duration
 
     if not aggregated:
         logger.warning("No profiling analyses available.")
