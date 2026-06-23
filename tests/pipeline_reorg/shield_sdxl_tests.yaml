@@ -1,5 +1,5 @@
-# Test matrix for the shiel — non-ttnn-team residual entries.
-#
+# This file defines the test matrix for the shield sdxl tests pipeline.
+
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run for the test.
@@ -8,16 +8,12 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
+#   category: Selector used by shield_sdxl_tests.yaml's additional_test_categories
 #     dispatch input. On dispatch the impl filters this matrix to entries whose
 #     category appears in the comma-separated list; on schedule the filter is
 #     bypassed and every entry runs.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
-
-# =============================================================================
-# Model demos
-# =============================================================================
 
 - name: ttnn nightly sdxl tests (wormhole)
   cmd: |
