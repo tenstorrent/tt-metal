@@ -312,6 +312,7 @@ def fused_decay_and_write_ttnn(
     decay_t,
     beta_t,
     device=None,
+    apply_decay=True,
 ):
     """
     Logical fusion for the recurrent delta rule state update:
@@ -320,6 +321,10 @@ def fused_decay_and_write_ttnn(
 
     Implemented using existing TTNN ops so call sites are stable.
     Can be replaced by a true fused kernel later.
+
+    apply_decay=False: the caller has ALREADY decayed h (canonical gated-delta-rule
+    order is decay -> read -> write, so the decay must happen before the read and must
+    NOT be re-applied here). In that case this only adds the outer product: h = h + outer.
     """
     B = h.shape[0]
     H = h.shape[1]
@@ -364,8 +369,11 @@ def fused_decay_and_write_ttnn(
         memory_config=None,
     )
 
-    # fused-style update: decay * h + outer
-    h = ttnn.multiply(h, decay)
+    # fused-style update: decay * h + outer.
+    # When apply_decay is False, h has already been decayed by the caller (canonical
+    # decay -> read -> write order), so only the outer product is added here.
+    if apply_decay:
+        h = ttnn.multiply(h, decay)
     h = ttnn.add(h, outer)
 
     return h
@@ -413,6 +421,12 @@ def recurrent_delta_rule_step_ttnn(
         except Exception:
             pass
 
+    # Canonical gated-delta-rule order: DECAY the state BEFORE reading from it (matches the
+    # FLA reference + chunked prefill). Reading the un-decayed state uses the wrong state in
+    # the delta correction (v - k·h).
+    decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    h = ttnn.multiply(h, decay_bhkv)
+
     k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=None)
     k_row = ttnn.to_layout(k_row, ttnn.TILE_LAYOUT)
     k_row = ttnn.to_memory_config(k_row, ttnn.DRAM_MEMORY_CONFIG)
@@ -427,6 +441,7 @@ def recurrent_delta_rule_step_ttnn(
 
     delta = ttnn.subtract(v_t, v_read, memory_config=None)
 
+    # Write the outer product WITHOUT re-decaying (h already decayed above).
     h = fused_decay_and_write_ttnn(
         h=h,
         k_t=k_t,
@@ -434,6 +449,7 @@ def recurrent_delta_rule_step_ttnn(
         decay_t=decay_t,
         beta_t=beta_t,
         device=device,
+        apply_decay=False,
     )
 
     q_row = ttnn.reshape(q_t, [B, H, 1, K], memory_config=None)
@@ -556,16 +572,24 @@ def recurrent_gated_delta_rule_decode_ttnn(
         except Exception:
             pass
 
-    # Read from state: v_read = k @ h  (k_row already [B,H,1,K] TILE_LAYOUT)
+    # Canonical gated-delta-rule order: DECAY the state BEFORE reading from it. The FLA
+    # reference and the chunked prefill path both decay-then-read; reading the un-decayed
+    # state makes the delta correction (v - k·h) use the wrong state.
+    decay_bhkv = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    h = ttnn.multiply(h, decay_bhkv)
+
+    # Read from the DECAYED state: v_read = k @ h  (k_row already [B,H,1,K] TILE_LAYOUT)
     v_read = ttnn.matmul(
         k_row, h, memory_config=None, program_config=read_query_prog_cfg, compute_kernel_config=read_query_compute_cfg
     )
     v_read = ttnn.reshape(v_read, [B, H, V], memory_config=None)
 
-    # Delta and state update — extract k_t [B,H,K] from k_row for fused_decay_and_write
+    # Delta and state update — write the outer product WITHOUT re-decaying (h already decayed).
     delta = ttnn.subtract(v_t, v_read, memory_config=None)
     k_t = ttnn.reshape(k_row, [B, H, K], memory_config=None)
-    h = fused_decay_and_write_ttnn(h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device)
+    h = fused_decay_and_write_ttnn(
+        h=h, k_t=k_t, delta=delta, decay_t=decay_t, beta_t=beta_t, device=device, apply_decay=False
+    )
 
     # Query state: o = q @ h  (q_row already [B,H,1,K] TILE_LAYOUT)
     o_t = ttnn.matmul(
