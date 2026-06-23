@@ -69,14 +69,7 @@ struct ExpRingJointSDPAParams {
         num_workers_per_link(num_workers_per_link),
         num_buffers_per_channel(num_buffers_per_channel) {}
 
-    // Program-cache hash / canonical-key fields. Reproduces exactly the scalar field set the former
-    // custom compute_program_hash encoded (see exp_ring_joint_sdpa_device_operation.cpp, removed
-    // definition): {joint_strategy, scale, logical_n, ring_size, compute_kernel_config,
-    // program_config, dim, num_links, cluster_axis}. The conditional input_tensors list the old hash
-    // built is subsumed by the default full ExpRingJointSDPAInputs tensor_args walk (a collision-safe
-    // structural superset). Runtime-only / non-structural fields are intentionally EXCLUDED:
-    // output_memory_config, topology, semaphore (GlobalSemaphore, runtime-only), sub_device_id,
-    // num_workers_per_link, num_buffers_per_channel.
+    // for Program-cache hash calculation
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
         "scale",
