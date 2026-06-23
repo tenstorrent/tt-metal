@@ -82,14 +82,6 @@ jobs:
           fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-          # Garage is a cluster-internal service reached directly from inside a Docker bridge
-          # network — the same way build-artifact.yaml's container: job reaches it. The
-          # cibuildwheel build below runs in a bridge-networked container, so the
-          # ccache-storage-s3 helper connects DIRECTLY to garage:3900, bypassing the Squid proxy
-          # via NO_PROXY (the AWS Go SDK honors NO_PROXY). We export the bypass here so it is
-          # forwarded into the cibuildwheel container.
-          echo "NO_PROXY=${NO_PROXY:+${NO_PROXY},}garage.garage.svc.cluster.local" >> $GITHUB_ENV
-          echo "no_proxy=${no_proxy:+${no_proxy},}garage.garage.svc.cluster.local" >> $GITHUB_ENV
           # Enable debug logging from the ccache-storage-s3 helper binary.
           echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
           # AWS SDK Go v2 (≥1.32) computes CRC32 checksums on every PutObject by default.
