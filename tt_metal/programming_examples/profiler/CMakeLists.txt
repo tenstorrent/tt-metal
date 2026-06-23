@@ -13,4 +13,13 @@ set(PROFILER_EXAMPLES_SRCS
 
 CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 
-add_custom_target(profiler_examples DEPENDS ${PROGRAMMING_EXAMPLES_TEST_TARGETS})
+# X280 bare-metal counter example: built separately (needs internal Cluster
+# headers, so it can't go through the public-API-only CREATE_PGM_EXAMPLES_EXE).
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_counter)
+
+add_custom_target(
+    profiler_examples
+    DEPENDS
+        ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
+        test_x280_counter
+)
