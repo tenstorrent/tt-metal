@@ -74,20 +74,6 @@ def shard_small(torch_tensor, mesh, cache_path, dim=-1, dtype=ttnn.bfloat16):
     )
 
 
-def replicate_kv_weight(weight, n_kv_heads, tp, head_dim):
-    """Replicate a KV weight [n_kv_heads*head_dim, hidden] so each of ``tp``
-    devices gets at least one KV head. No-op when tp <= n_kv_heads (the TP=4
-    Qwen3.5 case: 4 KV heads / 4 devices = 1 head/device)."""
-    if tp <= n_kv_heads:
-        return weight
-    chunks = weight.reshape(n_kv_heads, head_dim, -1)
-    parts = []
-    for d in range(tp):
-        kv_idx = (d * n_kv_heads) // tp
-        parts.append(chunks[kv_idx])
-    return torch.cat(parts, dim=0).reshape(tp * head_dim, -1)
-
-
 # ── Weight-prep helpers (reorder HF weights for per-device sharding) ─────────
 def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
     """Interleave GDN Q/K/V heads so ShardTensorToMesh(dim=0) on the transposed

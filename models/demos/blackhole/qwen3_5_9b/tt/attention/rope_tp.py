@@ -12,29 +12,6 @@ import torch
 import ttnn
 
 
-def build_rope_tables(device, rope_dim, max_seq_len, theta):
-    """Precompute replicated cos/sin tables [1, max_seq_len, rope_dim] (HF split-halves)."""
-    inv_freq = 1.0 / (theta ** (torch.arange(0, rope_dim, 2).float() / rope_dim))
-    t = torch.arange(max_seq_len, dtype=torch.float32)
-    freqs = torch.outer(t, inv_freq)
-    emb = torch.cat([freqs, freqs], dim=-1)  # [max_seq_len, rope_dim]
-    cos = ttnn.from_torch(
-        emb.cos().unsqueeze(0).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
-    sin = ttnn.from_torch(
-        emb.sin().unsqueeze(0).to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-    )
-    return cos, sin
-
-
 def rot_mats_decode(device, rope_dim, max_seq_len, theta, positions):
     """Return [cos, sin] each [1, B, 1, rope_dim] for the given per-user positions.
 

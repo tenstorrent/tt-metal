@@ -51,7 +51,6 @@ class Qwen35GatedDeltaNet(LightweightModule):
         self.tt_ccl = tt_ccl
         tp = self.num_devices
 
-        self.hidden_size = args.dim
         self.num_v_heads = args.linear_num_value_heads // tp
         self.num_k_heads = args.linear_num_key_heads // tp
         self.head_k_dim = args.linear_key_head_dim
@@ -66,8 +65,6 @@ class Qwen35GatedDeltaNet(LightweightModule):
             mesh_device=mesh_device, state_dict=state_dict, args=args, tensor_cache_path=tensor_cache_path
         )
         self.mesh_device = mesh_device
-        self.recurrent_state = None
-        self.cache_params = None
         self.batch_size = args.max_batch_size
         self.chunk_size = args.gdn_chunk_size
         self.norm = Qwen35RMSNormGated(weight=self.weights.w_norm, eps=self.layer_norm_epsilon)
