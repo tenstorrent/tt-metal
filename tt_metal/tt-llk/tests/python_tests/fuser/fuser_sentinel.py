@@ -251,7 +251,7 @@ class FuserSentinel:
         if self._unpack_A_src is not None:
             return ""
 
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         unpack_A_src, unpack_A_dst, unpack_B_src, unpack_B_dst, _, _ = (
             self._infer_node_formats(config, compute_node, output_format)
         )
@@ -303,7 +303,7 @@ class FuserSentinel:
         and emits _llk_unpack_reconfig_data_format_src{a,b}_impl_ for channels that changed.
         When tile shapes differ, uses FACE_ROW_MAJOR to reprogram dim/stride registers.
         """
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         new_A_src, new_A_dst, new_B_src, new_B_dst, _, _ = self._infer_node_formats(
             config, compute_node, output_format
         )
@@ -411,7 +411,7 @@ class FuserSentinel:
         if self._math_format is not None:
             return ""
 
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         compute_node = self._find_format_node(operation)
         if compute_node is not None:
             _, _, _, _, math_fmt, _ = self._infer_node_formats(
@@ -442,7 +442,7 @@ class FuserSentinel:
         if compute_node.src_a is None:
             return ""
 
-        output_format = operation.math.pack_nodes[0].output.data_format
+        output_format = operation.math._get_pack_nodes()[0].output.data_format
         _, _, _, _, new_math, _ = self._infer_node_formats(
             config, compute_node, output_format
         )

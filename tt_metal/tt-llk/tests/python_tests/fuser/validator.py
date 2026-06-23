@@ -283,24 +283,50 @@ class FpuMathSchemaBase(BaseModel):
 class PackSchema(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    _packer_map: ClassVar[dict] = {}
+
+    type: Literal["Pack"] = "Pack"
     output: str = Field(..., min_length=1)
     packer: str = "Packer"
     pack_relu: PackerReluType = PackerReluType.NoRelu
     relu_threshold: float = 0.0
     pack_l1_accumulation: L1Accumulation = L1Accumulation.No
 
+    @field_validator("packer", mode="after")
+    @classmethod
+    def validate_packer(cls, v):
+        if cls._packer_map and v not in cls._packer_map:
+            raise ValueError(f"Unknown packer: {v}")
+        return v
+
+    def to_node(self, operands):
+        output = operands.get(name=self.output)
+        output.is_output = True
+
+        packer_cls, checks = type(self)._packer_map[self.packer]
+        if checks is not None:
+            for check, error_msg in checks:
+                if check(self, output):
+                    raise ValueError(error_msg)
+
+        return PackNode(
+            packer=packer_cls(),
+            output=output,
+            pack_relu=self.pack_relu,
+            relu_threshold=self.relu_threshold,
+            pack_l1_accumulation=self.pack_l1_accumulation,
+        )
+
 
 class OperationSchemaBase(BaseModel):
     """Base schema for a fused operation with one output and one or more math nodes.
 
-    Each architecture subclass sets _packer_map and adds its own math list field.
+    Each architecture subclass adds its own math and pack list fields.
     Blackhole also overrides _arch_validate() for tilize detection and _arch_kwargs()
     to forward the bh_tilize flag to FusedOperation.
     """
 
     model_config = ConfigDict(extra="forbid")
-
-    _packer_map: ClassVar[dict] = {}
 
     dest_sync: DestSync = DestSync.Half
     block_size: Annotated[List[int], Field(min_length=2, max_length=2)] = [32, 32]
@@ -308,9 +334,10 @@ class OperationSchemaBase(BaseModel):
 
     @model_validator(mode="after")
     def validate_operation(self) -> "OperationSchemaBase":
-        for entry in self.pack:
-            if entry.packer not in type(self)._packer_map:
-                raise ValueError(f"Unknown packer: {entry.packer}")
+        if not any(isinstance(e, PackSchema) for e in self.pack):
+            raise ValueError("pack list must contain at least one Pack entry")
+        if not isinstance(self.pack[-1], PackSchema):
+            raise ValueError("pack list must end with a Pack entry")
 
         self._arch_validate()
         return self
@@ -350,8 +377,12 @@ class OperationSchemaBase(BaseModel):
                     )
                 output_tile_shapes.append(src_a_ts)
 
+        pack_schemas = [e for e in self.pack if isinstance(e, PackSchema)]
+
         if not output_tile_shapes:
-            output_tile_shapes = [operands.get(e.output).tile_shape for e in self.pack]
+            output_tile_shapes = [
+                operands.get(e.output).tile_shape for e in pack_schemas
+            ]
 
         first = output_tile_shapes[0]
         for ts in output_tile_shapes[1:]:
@@ -361,7 +392,7 @@ class OperationSchemaBase(BaseModel):
                     f"Got {_tile_dims(first)} and {_tile_dims(ts)}"
                 )
 
-        for entry in self.pack:
+        for entry in pack_schemas:
             pack_ts = operands.get(entry.output).tile_shape
             if _tile_dims(pack_ts) != _tile_dims(first):
                 raise ValueError(
@@ -398,26 +429,7 @@ class OperationSchemaBase(BaseModel):
                 f"dest_sync={self.dest_sync.name}, dest_acc={dest_acc}"
             )
 
-        pack_nodes = []
-        for entry in self.pack:
-            output = operands.get(name=entry.output)
-            output.is_output = True
-
-            packer_cls, checks = type(self)._packer_map[entry.packer]
-            if checks is not None:
-                for check, error_msg in checks:
-                    if check(entry, output):
-                        raise ValueError(error_msg)
-
-            pack_nodes.append(
-                PackNode(
-                    packer=packer_cls(),
-                    output=output,
-                    pack_relu=entry.pack_relu,
-                    relu_threshold=entry.relu_threshold,
-                    pack_l1_accumulation=entry.pack_l1_accumulation,
-                )
-            )
+        pack_nodes = [entry.to_node(operands) for entry in self.pack]
 
         math_ops = [m.to_node(operands) for m in self.math]
 
@@ -461,7 +473,11 @@ class OperationSchemaBase(BaseModel):
                 dims.append(op_dims)
 
         if not dims:
-            dims = [operands.get(e.output).dimensions for e in self.pack]
+            dims = [
+                operands.get(e.output).dimensions
+                for e in self.pack
+                if isinstance(e, PackSchema)
+            ]
 
         bound_r = min(d[0] for d in dims)
         bound_c = min(d[1] for d in dims)

@@ -154,5 +154,8 @@ class SfpuNode:
             tensor_dst.reshape(operation.max_output_dimensions),
         )
 
+    def get_headers(self):
+        return self.sfpu.get_headers()
+
     def __str__(self):
         return f"{self.sfpu}"

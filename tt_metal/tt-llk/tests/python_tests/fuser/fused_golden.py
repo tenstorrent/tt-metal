@@ -9,6 +9,7 @@ from helpers.utils import passed_test, tolerances
 
 from .fused_operation import FusedOperation
 from .fuser_config import FuserConfig
+from .pack_node import PackNode
 
 DEFAULT_BASE_ATOL = 0.05
 DEFAULT_BASE_RTOL = 0.05
@@ -70,6 +71,8 @@ class FusedGolden:
 
         passed = True
         for pack_node in operation.math.pack_nodes:
+            if not isinstance(pack_node, PackNode):
+                continue
             if not self._check_output(pack_node.output):
                 passed = False
 
@@ -107,6 +110,8 @@ class FusedGolden:
         max_input_atol = max((s.acc_atol for s in sources), default=0.0)
 
         for pack in operation.math.pack_nodes:
+            if not isinstance(pack, PackNode):
+                continue
             output = pack.output
             base_tol = tolerances.get(output.data_format)
             base_rtol = base_tol.rtol if base_tol else DEFAULT_BASE_RTOL
