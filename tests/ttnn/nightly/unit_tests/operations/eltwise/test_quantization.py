@@ -588,3 +588,36 @@ def test_requant_all_tensors_per_channel_to_per_tensor_2d(device, x0, x1, input_
     result_tr = ttnn.to_torch(derequantized_tt)
     check_pcc(input_tr, result_tr, True)
     check_match_ratio(input_tr, result_tr, input_dtype)
+
+
+# Option A uint8 output probe: q_max=127 stays inside the SFPU's internal FP32_TO_INT8 clamp,
+# while q_max=255 exercises the full uint8 range and reveals whether the int8 clamp / packer
+# narrowing prevents exact uint8 results (which would push us to Option B).
+@pytest.mark.parametrize("x0", [32, 128])
+@pytest.mark.parametrize("x1", [32, 128])
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+@pytest.mark.parametrize("q_max", [127, 255])
+def test_quant_uint8_per_tensor_2d(device, x0, x1, input_dtype, q_max):
+    torch.manual_seed(0)
+    input_tr = torch.rand(x0, x1, dtype=torch.float32)
+    scale, zero_point = calculate_scale_zero_point_per_tensor(input_tr, 0, q_max)
+
+    quantized_tr = torch.quantize_per_tensor(input_tr, scale, zero_point, dtype=torch.quint8)
+    golden = quantized_tr.int_repr().to(torch.int32)
+
+    input_tt = ttnn.from_torch(input_tr, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    quantized_tt = ttnn.quantize(input_tt, scale, zero_point, dtype=ttnn.uint8)
+
+    assert quantized_tt.dtype == ttnn.uint8
+    result_tr = ttnn.to_torch(quantized_tt).to(torch.int32)
+
+    exact_ratio = (golden == result_tr).float().mean().item()
+    close_ratio = ((golden - result_tr).abs() <= 1).float().mean().item()
+    max_abs_err = (golden - result_tr).abs().max().item()
+    print(f"uint8 quant q_max={q_max} dtype={input_dtype}: exact_ratio={exact_ratio:.4f} max_abs_err={max_abs_err}")
+    if input_dtype == ttnn.float32:
+        # fp32 input must round identically to torch and narrow exactly to uint8.
+        assert exact_ratio == 1.0, f"exact_ratio={exact_ratio} max_abs_err={max_abs_err}"
+    else:
+        # bf16 input loses mantissa precision, so allow round-half-to-even off-by-one vs torch's fp32.
+        assert close_ratio > 0.99, f"close_ratio={close_ratio} max_abs_err={max_abs_err}"

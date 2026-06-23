@@ -183,7 +183,7 @@ inline void calculate_dequant_int32(const uint dst_index_in0, const uint dst_ind
     }
 }
 
-template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false>
+template <bool APPROXIMATION_MODE /*unused*/, bool SIGN_MAGNITUDE_FORMAT /*unused*/ = false, bool IS_UNSIGNED = false>
 void quant_init(const uint zero_point) {
     // One-time setup for calculate_quant:
     //   1. load the fp32 zero-point constant into LREG2;
@@ -212,15 +212,28 @@ void quant_init(const uint zero_point) {
         // only SFPU-pipe opcodes (a hard requirement for replay-buffer
         // playback - the replay buffer feeds the SFPU pipe directly).
         TTI_SFPNOP;
-        // fp32 -> int sign-magnitude. LCONST_0 (LREG9) is the HW-provided 0.0
-        // used as the zero descale.
-        TTI_SFP_STOCH_RND(
-            sfpi::SFPSTOCHRND_RND_EVEN,
-            0 /*imm8*/,
-            p_sfpu::LCONST_0,
-            p_sfpu::LREG0,
-            p_sfpu::LREG0,
-            sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        // fp32 -> int. LCONST_0 (LREG9) is the HW-provided 0.0 used as the zero
+        // descale. For unsigned (uint8) output, round into the full [0, 255]
+        // range; otherwise clamp to signed int8 [-128, 127]. Only this rounding
+        // mode differs - the recorded body length is identical either way, so
+        // the QUANT_REPLAY_LEN accounting above is unaffected.
+        if constexpr (IS_UNSIGNED) {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT8);
+        } else {
+            TTI_SFP_STOCH_RND(
+                sfpi::SFPSTOCHRND_RND_EVEN,
+                0 /*imm8*/,
+                p_sfpu::LCONST_0,
+                p_sfpu::LREG0,
+                p_sfpu::LREG0,
+                sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT8);
+        }
     }
 }
 

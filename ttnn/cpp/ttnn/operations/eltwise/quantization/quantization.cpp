@@ -200,13 +200,15 @@ Tensor quantize(
                                : input_tensor;
 
     const DataType a_dtype = input_a.dtype();
-    constexpr DataType c_dtype = DataType::INT32;
+    // Option A: the packer narrows the int32 SFPU result to the requested output format, so we only
+    // need to thread the resolved output dtype through to BinaryNg / the composite typecast tails.
+    const DataType c_dtype = get_output_dtype(output_dtype, optional_output_tensor, DataType::INT32);
 
     TT_FATAL(tt::tt_metal::is_floating_point(a_dtype), "Quantize only takes floating-point number inputs");
-    TT_FATAL(output_dtype.value_or(c_dtype) == c_dtype, "Quantize only supports int32 outputs for now");
-    if (optional_output_tensor.has_value()) {
-        TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Quantize only supports int32 outputs for now");
-    }
+    TT_FATAL(
+        c_dtype == DataType::INT32 || c_dtype == DataType::UINT8,
+        "Quantize only supports int32 or uint8 outputs for now, got {}",
+        c_dtype);
 
     constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 

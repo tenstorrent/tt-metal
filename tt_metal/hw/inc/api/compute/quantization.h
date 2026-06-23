@@ -87,6 +87,17 @@ ALWI void quant_tile_init(const uint32_t zero_point) {
 
 // clang-format off
 /**
+ * Same as quant_tile_init, but configures the quant SFPU to round into the unsigned
+ * uint8 range [0, 255] instead of the signed int8 range [-128, 127]. Pair with quant_tile
+ * when the quantize op output dtype is uint8 (the packer narrows the int32 result to uint8).
+ */
+// clang-format on
+ALWI void quant_uint8_tile_init(const uint32_t zero_point) {
+    MATH((SFPU_BINARY_INIT_FN_ARGS(quant_int32, sfpu::quant_init, (APPROX, false, true), zero_point)));
+}
+
+// clang-format off
+/**
  * Initialize the sfpu with the zero point argument of the re-quantization Op.
  * To be called once at beginning of a kernel.
  *
