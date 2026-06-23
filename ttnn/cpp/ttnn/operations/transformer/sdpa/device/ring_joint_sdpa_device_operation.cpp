@@ -478,9 +478,13 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_shape[2],
         v_shape[2]);
 
+    // Tensor-V supports GQA: V may be grouped (NVH < NQH) and is broadcast to the query heads in
+    // the reader (nv = nq / (NQH / NVH)), exactly like the existing K broadcast (nk = nq / (NQH /
+    // NKH)). Previously this required NVH == NQH, forcing GQA callers to repeat_interleave V up to
+    // NQH; the kernel already indexes V by the grouped formula, so only this check was blocking it.
     TT_FATAL(
-        has_latent_v || NQH == NVH,
-        "Tensor-V mode requires Q num_heads to equal V num_heads. Got Q: {}, V: {}",
+        has_latent_v || (NVH > 0 && NQH % NVH == 0),
+        "Tensor-V mode requires Q num_heads to be a multiple of V num_heads (GQA). Got Q: {}, V: {}",
         NQH,
         NVH);
     TT_FATAL(NKH == NVH || NKH == 1, "K num_heads must be equal to V num_heads or 1. Got K: {}, V: {}", NKH, NVH);
