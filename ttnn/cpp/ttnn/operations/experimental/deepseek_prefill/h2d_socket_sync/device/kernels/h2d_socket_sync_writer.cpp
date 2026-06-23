@@ -119,6 +119,7 @@ void kernel_main() {
     UnicastEndpoint service;
     const uint64_t consumed_noc =
         service.get_noc_unicast_addr(service_noc_x, service_noc_y, consumed_counter_addr, noc.get_noc_id());
+    // Device 2.0 migration: legacy primitive retained
     noc_semaphore_inc(consumed_noc, 1, noc.get_noc_id());
     noc.async_atomic_barrier();
 }
