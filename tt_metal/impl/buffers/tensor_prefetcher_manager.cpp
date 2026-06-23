@@ -596,19 +596,21 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     constexpr uint32_t kEntryBytes = sizeof(TensorPrefetcherEntry);
     constexpr uint32_t kLayoutBytes = sizeof(TensorPrefetcherTensorLayout);
 
-    // ---- Per-sender global ring-index map (single source of truth) ----
+    // ---- Per-socket global ring-index map (single source of truth) ----
     // Under the strided receiver-contiguous topology, sender s's local receiver r is the matmul
     // ring position g_r = bank + (recv_index_base + r) * num_dram_banks (bank == sender_logical.x;
     // recv_index_base accumulates within a bank for dual senders). The host uses this to slice a
     // caller-supplied global rotation array (indexed by ring position) into each sender's page.
     // The GCB no longer stamps g_r into the state block, so this is the only place that computes
-    // it. Built in GCB-mapping order, then reindexed to socket (sender_logical_cores_) order.
+    // it. ring_idx_by_socket is indexed by socket (sender_logical_cores_) order; max_receivers
+    // sizes the uniform rotation slot so every sender's page packs identically (dedup/fit
+    // decisions are sender-independent below) and is recovered kernel-side from max_num_receivers.
     uint32_t num_dram_banks = 0;
     for (const auto& [sender_logical, _r] : mapping) {
         num_dram_banks = std::max(num_dram_banks, static_cast<uint32_t>(sender_logical.x) + 1u);
     }
-    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> ring_by_core;
-    ring_by_core.reserve(mapping.size());
+    std::vector<std::vector<uint32_t>> ring_idx_by_socket(num_senders_);
+    uint32_t max_receivers = 0;
     {
         uint32_t recv_index_base = 0;
         uint32_t prev_bank = 0;
@@ -626,24 +628,16 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
                 // is not range-checked here (only when a streaming tensor indexes the rotation).
                 ring[r] = bank + (recv_index_base + r) * num_dram_banks;
             }
-            ring_by_core.emplace_back(sender_logical, std::move(ring));
             recv_index_base += n;
-        }
-    }
-    // Per-socket ring indices, plus max_receivers to size a uniform rotation slot so every
-    // sender's page packs identically (dedup/fit decisions are sender-independent below); each
-    // sender then materializes only its own ring.size() rotation entries. The kernel recovers
-    // this slot stride from max_num_receivers in the GCB state block.
-    std::vector<std::vector<uint32_t>> ring_idx_by_socket(num_senders_);
-    uint32_t max_receivers = 0;
-    for (uint32_t s = 0; s < num_senders_; ++s) {
-        for (const auto& [core, ring] : ring_by_core) {
-            if (core == sender_logical_cores_[s]) {
-                ring_idx_by_socket[s] = ring;
-                break;
+            max_receivers = std::max(max_receivers, n);
+            // Place this sender's ring at its socket (sender_logical_cores_) index.
+            for (uint32_t s = 0; s < num_senders_; ++s) {
+                if (sender_logical_cores_[s] == sender_logical) {
+                    ring_idx_by_socket[s] = std::move(ring);
+                    break;
+                }
             }
         }
-        max_receivers = std::max(max_receivers, static_cast<uint32_t>(ring_idx_by_socket[s].size()));
     }
     const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
     TT_FATAL(
@@ -774,12 +768,23 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
 
     // ---- Materialize each logical page into one byte buffer per sender ----
     // Header/entry/geometry bytes are identical across senders; only each slot's rotation region
-    // differs (this sender's slice of the caller's global rotation). Batched slots leave it zero.
+    // differs (this sender's slice of the caller's global rotation). A page whose every slot is
+    // batched (no rotation) is byte-identical for all senders, so it is emitted once as a broadcast
+    // page (per_sender size 1; worker_loop sends that single buffer to every sender) rather than
+    // num_senders_ identical copies.
     std::vector<std::vector<std::vector<uint8_t>>> pages;
     pages.reserve(plans.size());
     for (const auto& plan : plans) {
-        std::vector<std::vector<uint8_t>> per_sender(num_senders_);
-        for (uint32_t s = 0; s < num_senders_; ++s) {
+        bool page_has_rotation = false;
+        for (const auto& slot : plan.slots) {
+            if (!slot.rotation.empty()) {
+                page_has_rotation = true;
+                break;
+            }
+        }
+        const uint32_t num_variants = page_has_rotation ? num_senders_ : 1u;
+        std::vector<std::vector<uint8_t>> per_sender(num_variants);
+        for (uint32_t s = 0; s < num_variants; ++s) {
             std::vector<uint8_t> page(aligned_page_bytes, 0);
             auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
             header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
