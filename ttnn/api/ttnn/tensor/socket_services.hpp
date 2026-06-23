@@ -181,11 +181,13 @@ public:
     // @param timeout_ms Max wait time for the descriptor file (default 10s).
     // @param preprocessor Optional process-local hook; same contract as
     //     `Config::preprocessor`.
+    // @param parallel_host_push Process-local feeder choice (same as
+    //     `Config::parallel_host_push`); not carried by the descriptor.
     static std::unique_ptr<H2DStreamService> connect(
         const std::string& service_id,
         std::optional<uint32_t> timeout_ms = std::nullopt,
-        std::function<void(ttsl::Span<std::byte> bytes,
-                           ttsl::Span<const std::byte> metadata)> preprocessor = nullptr);
+        std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor = nullptr,
+        bool parallel_host_push = false);
 
 private:
     // Connector-mode ctor used by connect(): `mesh_device_` stays null; arity

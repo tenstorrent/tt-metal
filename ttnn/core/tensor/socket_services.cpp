@@ -1179,7 +1179,8 @@ std::string H2DStreamService::export_descriptor(const std::string& service_id) {
 std::unique_ptr<H2DStreamService> H2DStreamService::connect(
     const std::string& service_id,
     std::optional<uint32_t> timeout_ms,
-    std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor) {
+    std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor,
+    bool parallel_host_push) {
     auto desc = distributed::H2DStreamServiceDescriptor::wait_and_read(
         distributed::descriptor_path_for_service(service_id), timeout_ms.value_or(10000));
 
@@ -1208,8 +1209,9 @@ std::unique_ptr<H2DStreamService> H2DStreamService::connect(
         .socket_mode = desc.socket_mode,
         .worker_cores = std::nullopt,
         .metadata_size_bytes = desc.metadata_size_bytes,
-        // Preprocessor is process-local and not carried by the descriptor.
+        // Preprocessor and parallel-push are process-local; not carried by the descriptor.
         .preprocessor = std::move(preprocessor),
+        .parallel_host_push = parallel_host_push,
     };
 
     return std::unique_ptr<H2DStreamService>(new H2DStreamService(

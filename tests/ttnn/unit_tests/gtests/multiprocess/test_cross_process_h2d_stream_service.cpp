@@ -240,9 +240,12 @@ void run_owner(
 }
 
 // Rank-1 (connector) body. Holds no MeshDevice — only PCIe writes through
-// each connected H2DSocket.
-void run_connector(const std::string& service_id, uint32_t num_iterations, size_t volume) {
-    auto service = tt::tt_metal::H2DStreamService::connect(service_id, /*timeout_ms=*/30000);
+// each connected H2DSocket. `parallel_host_push` fans each transfer's per-socket
+// writes across host threads (connector-mode pool); the owner verifies identically
+// regardless, so the mode is a connector-local choice needing no cross-rank IPC.
+void run_connector(const std::string& service_id, uint32_t num_iterations, size_t volume, bool parallel_host_push) {
+    auto service = tt::tt_metal::H2DStreamService::connect(
+        service_id, /*timeout_ms=*/30000, /*preprocessor=*/nullptr, parallel_host_push);
     for (uint32_t iter = 0; iter < num_iterations; ++iter) {
         auto data = make_iter_data(iter, volume);
         auto bytes = ttsl::Span<const std::byte>(
@@ -395,7 +398,8 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
                                          << " chunk=" << ch.label);
 
                 // Service IDs must agree across ranks; use a deterministic counter.
-                const std::string service_id = "xproc_h2d_stream_" + std::to_string(case_counter++);
+                const int case_idx = case_counter++;
+                const std::string service_id = "xproc_h2d_stream_" + std::to_string(case_idx);
 
                 CrossProcessCase cs{
                     .global_shape = global_shape,
@@ -409,7 +413,10 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
                 if (rank_ == 0) {
                     run_owner(mesh_device_, cs, service_id);
                 } else {
-                    run_connector(service_id, kNumIterations, cs.global_shape.volume());
+                    // Interleave serial/parallel connector pushes across the matrix (orthogonal to
+                    // geometry): both ranks derive case_idx identically, so this needs no extra IPC.
+                    const bool parallel_host_push = (case_idx % 2 == 1);
+                    run_connector(service_id, kNumIterations, cs.global_shape.volume(), parallel_host_push);
                 }
             }
         }

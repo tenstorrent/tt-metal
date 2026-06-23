@@ -70,6 +70,7 @@ struct H2DServiceCase {
     uint32_t fifo_size_bytes = 0;
     H2DMode mode = H2DMode::DEVICE_PULL;
     uint32_t metadata_size_bytes = 0;  // optional inline metadata multicast, 0 = disabled
+    bool parallel_host_push = false;   // fan each transfer's per-socket writes across host threads
 };
 
 tt::tt_metal::distributed::MeshWorkload build_worker_workload(
@@ -193,7 +194,8 @@ void run_h2d_stream_service_case(
     uint32_t num_iterations = 2) {
     SCOPED_TRACE(
         ::testing::Message() << "global_shape=" << cs.global_shape << " scratch_cb=" << cs.scratch_cb_size_bytes
-                             << " fifo=" << cs.fifo_size_bytes << " input_path=" << input_path_name(input_path));
+                             << " fifo=" << cs.fifo_size_bytes << " input_path=" << input_path_name(input_path)
+                             << " parallel_host_push=" << cs.parallel_host_push);
 
     const auto tensor_layout = TensorLayout(
         DataType::UINT32,
@@ -210,6 +212,7 @@ void run_h2d_stream_service_case(
         .socket_mode = cs.mode,
         .worker_cores = worker_cores,
         .metadata_size_bytes = cs.metadata_size_bytes,
+        .parallel_host_push = cs.parallel_host_push,
     };
 
     tt::tt_metal::H2DStreamService service(mesh_device, std::move(cfg));
@@ -677,6 +680,88 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
             [&](uint32_t N, uint32_t per_row_size) {
                 return ttnn::Shape({1, 1, num_rows * N, num_cols * per_row_size});
             });
+    }
+}
+
+// Multi-threaded host-push coverage. parallel_host_push is orthogonal to chunk geometry -- it only
+// changes how the host fans the per-socket writes across threads; the data and the device side are
+// identical -- so this test is deliberately narrow on geometry (two chunkings) and instead spans the
+// scenarios that exercise the worker pool: replicated + sharded placements, the plain barrier()
+// completion path and the worker-sync handshake (with and without metadata multicast), and both
+// input paths. Verification is per-coord, so any race / dropped / partial / duplicated write,
+// handshake bug, or teardown issue surfaces as a data mismatch or a hang. Galaxy always has many
+// sockets, so the pool (parallel_host_push && sockets > 1) genuinely activates.
+TEST_F(H2DStreamServiceTest, MultiThreadedHostPush_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
+    const auto mesh_shape = this->mesh_device_->shape();
+    const bool mesh_2d = mesh_shape.dims() == 2;
+    const uint32_t num_cols = mesh_2d ? static_cast<uint32_t>(mesh_shape[1]) : 0u;
+
+    constexpr uint32_t per_row_size = 640;
+    constexpr uint32_t N = 16;  // per-device page count; divisible by the 4-worker grid below
+    const uint32_t per_row_bytes = per_row_size * sizeof(uint32_t);
+
+    struct Chunking {
+        uint32_t cb_pages;
+        uint32_t fifo_pages;
+        const char* label;
+    };
+    const Chunking chunkings[] = {
+        {1, 8, "cb1_fifo8"},    // socket page == one tensor page -> deep slot fill under parallel push
+        {4, 16, "cb4_fifo16"},  // coalesced socket page
+    };
+
+    struct PlacementCase {
+        const char* label;
+        ttsl::SmallVector<MeshMapperConfig::Placement> placements;
+        ttnn::Shape global_shape;
+    };
+    std::vector<PlacementCase> placement_cases;
+    placement_cases.push_back({"replicated", replicate_all(*this->mesh_device_), ttnn::Shape({1, 1, N, per_row_size})});
+    // Sharded (distinct data per socket) on a 2D mesh; per-device shape stays [1,1,N,per_row_size].
+    if (mesh_2d && num_cols >= 2) {
+        placement_cases.push_back(
+            {"shard_cols",
+             {MeshMapperConfig::Replicate{}, MeshMapperConfig::Shard{3}},
+             ttnn::Shape({1, 1, N, num_cols * per_row_size})});
+    }
+
+    // 4 workers; N=16 is divisible by 4.
+    const CoreRange worker_row{CoreCoord{0, 0}, CoreCoord{3, 0}};
+    struct Scenario {
+        std::optional<CoreRange> workers;
+        uint32_t metadata_size_bytes;
+        const char* label;
+    };
+    const Scenario scenarios[] = {
+        {std::nullopt, 0, "plain_barrier"},
+        {worker_row, 0, "worker_sync"},
+        {worker_row, 256, "worker_sync_meta256"},
+    };
+
+    for (const auto& pc : placement_cases) {
+        SCOPED_TRACE(::testing::Message() << "placement=" << pc.label);
+        for (const auto& ch : chunkings) {
+            for (const auto& sc : scenarios) {
+                H2DServiceCase cs{
+                    .global_shape = pc.global_shape,
+                    .placements = pc.placements,
+                    .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                    .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
+                    .metadata_size_bytes = sc.metadata_size_bytes,
+                    .parallel_host_push = true,
+                };
+                const uint32_t iters = sc.workers.has_value() ? 20u : 10u;
+                for (auto path : {InputPath::Tensor, InputPath::Bytes}) {
+                    SCOPED_TRACE(
+                        ::testing::Message()
+                        << "chunk=" << ch.label << " scenario=" << sc.label << " path=" << input_path_name(path));
+                    run_h2d_stream_service_case(this->mesh_device_, cs, path, sc.workers, iters);
+                }
+            }
+        }
     }
 }
 
