@@ -385,7 +385,10 @@ def multimodal_rope_from_hf(
     )
 
     # Qwen3VLModel.forward:
-    x = SimpleNamespace(device=SimpleNamespace(type="cpu"), dtype=torch.bfloat16)
+    # transformers 5.x Qwen3VLTextRotaryEmbedding.forward calls inv_freq.to(x.device), so x.device must be
+    # a real torch.device (a SimpleNamespace there makes tensor.to() raise TypeError). x only needs .device
+    # and .dtype, so a SimpleNamespace with a real device is enough without materializing a tensor.
+    x = SimpleNamespace(device=torch.device("cpu"), dtype=torch.bfloat16)
     cos, sin = reference_model.model.language_model.rotary_emb(x, position_ids)
     # apply_multimodal_rotary_pos_emb:
     unsqueeze_dim = 1
@@ -443,7 +446,10 @@ def multimodal_rope_single_user_from_hf(
     position_ids, rope_deltas = reference_model.model.get_rope_index(padded_inputs, **rope_index_kwargs)
 
     # Qwen3VLModel.forward:
-    x = SimpleNamespace(device=SimpleNamespace(type="cpu"), dtype=torch.bfloat16)
+    # transformers 5.x Qwen3VLTextRotaryEmbedding.forward calls inv_freq.to(x.device), so x.device must be
+    # a real torch.device (a SimpleNamespace there makes tensor.to() raise TypeError). x only needs .device
+    # and .dtype, so a SimpleNamespace with a real device is enough without materializing a tensor.
+    x = SimpleNamespace(device=torch.device("cpu"), dtype=torch.bfloat16)
     cos, sin = reference_model.model.language_model.rotary_emb(x, position_ids)
     # apply_multimodal_rotary_pos_emb:
     unsqueeze_dim = 1
