@@ -14,7 +14,7 @@ closed mesh axis (4-wide for TP=4, 8-wide for TP=8), replicate the other axis.
 |---|---|
 | `test_bench[wan_tp4_line]` (2×4 mesh) | Blackhole line-box config; a 2×4 mesh **wedges the WH galaxy** (env note). Validated on BH, not re-run here. |
 | `test_bench[wan_tp8_ring]` (1×8 mesh) | Blackhole 1×8 line-box config; same — not a WH-galaxy topology. |
-| FLUX `per_head_norm=True` (8 configs: `flux_tp{4,8}_N*_phn1`) | ~~Known deadlock~~ **FIXED 2026-06-23** (compute/writer `is_tp_1` mismatch, not an LLK wedge — see `ISSUE_per_head_norm_multidevice_deadlock.md`). All 8 now det=OK, PCC 99.81–100.00%. Still gated behind `WAN_FLUX_PHN=1`. |
+| FLUX `per_head_norm=True` (8 configs: `flux_tp{4,8}_N*_phn1`) | ~~Known deadlock~~ **FIXED 2026-06-23** (compute/writer `is_tp_1` mismatch, not an LLK wedge — see `ISSUE_per_head_norm_multidevice_deadlock.md`). All 8 now det=OK, PCC 99.81–100.00%, and run by default. |
 
 Everything else below was run on the galaxy.
 
