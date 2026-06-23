@@ -36,6 +36,28 @@ struct RingAttentionAllGatherAsyncParams {
     std::optional<uint32_t> cluster_axis;
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
+    RingAttentionAllGatherAsyncParams(
+        std::vector<IDevice*> devices,
+        int32_t dim,
+        uint32_t num_links,
+        uint32_t ring_size,
+        MemoryConfig output_mem_config,
+        ttnn::ccl::Topology topology,
+        std::vector<GlobalSemaphore> semaphore,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        std::optional<uint32_t> cluster_axis,
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR) :
+        devices(std::move(devices)),
+        dim(dim),
+        num_links(num_links),
+        ring_size(ring_size),
+        output_mem_config(std::move(output_mem_config)),
+        topology(topology),
+        semaphore(std::move(semaphore)),
+        sub_device_id(sub_device_id),
+        cluster_axis(cluster_axis),
+        core_allocation_strategy(core_allocation_strategy) {}
+
     // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
     // Excludes runtime-only `devices` (raw IDevice* pointers), `semaphore` (GlobalSemaphore objects
     // whose addresses are passed to runtime args), and `core_allocation_strategy` (effectively
