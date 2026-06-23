@@ -89,7 +89,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ (contains(matrix.test-group.sku, 'bh_') || contains(matrix.test-group.sku, 'blackhole')) && 'blackhole' || 'wormhole_b0' }}
         LOGURU_LEVEL: INFO
-        HF_HUB_CACHE: ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '' || '/mnt/MLPerf/huggingface/hub' }}
+        HF_HUB_CACHE: ${{ (matrix.test-group.sku == 'bh_p150b_civ2' || matrix.test-group.sku == 'wh_n150_civ2' || matrix.test-group.sku == 'wh_n300_civ2') && '' || '/mnt/MLPerf/huggingface/hub' }}
         TT_MM_THROTTLE_PERF: ${{ contains(matrix.test-group.sku, 'bh_') && '0' || '5' }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work
@@ -97,7 +97,7 @@ jobs:
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: >-
         --device /dev/tenstorrent
-        ${{ matrix.test-group.sku == 'bh_p150b_civ2' && '-e TT_GH_CI_INFRA=1' || '' }}
+        ${{ (matrix.test-group.sku == 'bh_p150b_civ2' || matrix.test-group.sku == 'wh_n150_civ2' || matrix.test-group.sku == 'wh_n300_civ2') && '-e TT_GH_CI_INFRA=1' || '' }}
     defaults:
       run:
         shell: bash
