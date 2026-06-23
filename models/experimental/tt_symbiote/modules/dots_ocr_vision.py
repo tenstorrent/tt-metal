@@ -2735,12 +2735,27 @@ class TTNNDotsPatchMerger(TTNNModule):
             print("Using RMSNorm")
             hidden_states = ttnn.rms_norm(hidden_states, weight=self.tt_ln_weight, epsilon=1e-6)
 
-        # Fold [B,1,S,H] -> [B,1,S',mlp_size] in TILE (avoids RM untilize/tilize).
-        # DRAM (not L1): under trace capture the ~590 KB L1-interleaved in0 gets
-        # placed overlapping the fc1 block-sharded CB region (clash). The 2D-mcast
-        # matmul streams in0 into CBs from DRAM just the same; frees the L1 edge.
+        # Fold [B,1,S,H] -> [B,1,S',mlp_size] via untilize -> ROW_MAJOR reshape
+        # (a free contiguous view) -> tilize. The spatial merge groups 4 adjacent
+        # patch rows into one (4*H == mlp_size), which is row-major-contiguous, so
+        # the RM reshape moves no data; only the untilize/tilize cost remains.
+        # Measured ~1.28 ms vs ~2.26 ms for a direct TILE-layout ttnn.reshape (which
+        # rearranges 16896 tiles across the grid); numerically identical (0.0 diff).
+        #
+        # The tilize emits BFP8 directly for the BFP8-in0 fc1 paths (TP-split / fast):
+        # ROW_MAJOR can't hold block-float, so untilize forces BF16 -- if the tilize
+        # also stayed BF16, fc1 would get a BF16 in0 and run ~2x slower (787 vs 432 us,
+        # 67 vs 123 TFLOPs). Tilizing to BFP8 restores the fast in0 AND folds the
+        # BF16->BFP8 cast into the tilize (drops the separate ~275 us typecast). The
+        # block-sharded fallback keeps BF16 (its PC sizes CBs for a BF16 in0). All in
+        # DRAM to avoid the trace-capture L1 clash with the fc1 CBs.
+        fold_dtype = ttnn.bfloat16 if use_bs else ttnn.bfloat8_b
+        hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         hidden_states = ttnn.reshape(
             hidden_states, (b0, b1, new_r, int(self.mlp_size)), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        hidden_states = ttnn.to_layout(
+            hidden_states, ttnn.TILE_LAYOUT, dtype=fold_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
 
         compute_kc = getattr(self, "compute_kernel_config", None)
@@ -2758,15 +2773,15 @@ class TTNNDotsPatchMerger(TTNNModule):
 
             fc1_k = int(self.mlp_size)
             fc1_n = int(self.tt_w1.shape[-1])  # 6144/tp
-            # Tuned single-weight-pass PC (the generic enumerator picks small
-            # out_block_h -> many weight passes -> ~6.3 ms on this DRAM-bound shape).
-            fc1_pc = (
-                wh_tp4_merger_fc1_col_pc(self.device, seq_len=new_r, k=fc1_k, n=fc1_n)
-                or wh_tp4_matmul_pc(
+            # Tuned single-weight-pass PC with GELU FUSED (the generic enumerator
+            # picks small out_block_h -> many weight passes -> ~6.3 ms on this
+            # DRAM-bound shape, and would need a separate ttnn.gelu op).
+            fc1_pc = wh_tp4_merger_fc1_col_pc(self.device, seq_len=new_r, k=fc1_k, n=fc1_n)
+            fc1_gelu_fused = fc1_pc is not None
+            if fc1_pc is None:
+                fc1_pc = wh_tp4_matmul_pc(
                     self.device, new_r, fc1_k, fc1_n, in0_dtype=ttnn.bfloat8_b, out_dtype=ttnn.bfloat8_b
-                )
-                or _vision_matmul_program_config(self.device, new_r, fc1_k, fc1_n)
-            )
+                ) or _vision_matmul_program_config(self.device, new_r, fc1_k, fc1_n)
             hidden_states = ttnn.linear(
                 hidden_states,
                 self.tt_w1,
@@ -2776,7 +2791,8 @@ class TTNNDotsPatchMerger(TTNNModule):
                 program_config=fc1_pc,
                 compute_kernel_config=compute_kc,
             )
-            hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if not fc1_gelu_fused:  # tuned PC fuses GELU; fallback applies it explicitly
+                hidden_states = ttnn.gelu(hidden_states, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
             fc2_k = int(self.tt_w2.shape[-2])  # 6144/tp
             fc2_n = int(self.tt_w2.shape[-1])  # H (full)

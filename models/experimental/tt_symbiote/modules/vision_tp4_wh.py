@@ -338,6 +338,10 @@ def wh_tp4_merger_fc1_col_pc(device, *, seq_len: int = 2816, k: int = 6144, n: i
     wh_tp4_o_proj_pc); ibw=8 (191 KB in0 CB) is the trace-safe pick. The generic
     enumerator picks SMALL obh (its score favors -out_block_h) → many weight passes
     → ~6.3 ms, so an explicit single-pass PC is mandatory here.
+
+    GELU is FUSED into the matmul (fused_activation) so the merger needs no separate
+    ttnn.gelu op -- mirrors the old replicated fast PC and saves a full BFP8
+    read+write pass over the 2816x1536 fc1 output (~160 us UnaryDeviceOperation).
     """
     grid = device.compute_with_storage_grid_size()
     tile = 32
@@ -358,7 +362,7 @@ def wh_tp4_merger_fc1_col_pc(device, *, seq_len: int = 2816, k: int = 6144, n: i
         per_core_M=per_core_m,
         per_core_N=per_core_n,
         transpose_mcast=False,
-        fused_activation=None,
+        fused_activation=(ttnn.UnaryOpType.GELU, False),
         fuse_batch=False,
     )
 
