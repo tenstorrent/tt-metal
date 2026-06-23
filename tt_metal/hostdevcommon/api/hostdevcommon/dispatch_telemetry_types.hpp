@@ -66,27 +66,22 @@ struct __attribute__((packed, aligned(8))) DispatchCoreTelemetry {
     // Computed average time a worker core was running, updated only on sub device count change.
     uint64_t avg_work_runtime_per_worker = 0;  //_per_worker
 
+    // dispatch_s_compute writes
+    // Amount of time the cq is running any work on any core.
+    uint64_t utilization_work_runtime = 0;
+
+    // dispatch_s_compute writes
+    // Timestamp for the active utilization interval. Set only while at least one sub-device is running work.
+    uint64_t work_runtime_start = 0;
+
     // dispatch_s writes
     uint64_t last_work_launch_timestamp[RESERVED_SUB_DEVICE_SPACE] = {0};
-
-    // dispatch_s writes
-    // Increments by 2 for every launched workload. An odd value means last_work_launch_timestamp
-    // is in progress of being written.
-    uint32_t launched_work_sequence_counter[RESERVED_SUB_DEVICE_SPACE] = {0};
-
-    // dispatch_s writes
-    // Records value of the stream semaphore when launching a new workload.
-    uint32_t launched_work_start_stream_sem[RESERVED_SUB_DEVICE_SPACE] = {0};
 
     // dispatch_s_compute writes
     // Cumulative current total worker runtime for each sub device. In the case of overflow, the
     // value is compressed into avg_work_runtime_per_worker and then reset to 0. Used to avoid
     // dropping work cycles if they were preemptively averaged.
     uint64_t current_sub_device_work_runtime[RESERVED_SUB_DEVICE_SPACE] = {0};
-
-    // dispatch_s_compute writes
-    // Amount of time the sub device is running any work on any core.
-    uint64_t utilization_sub_device_work_runtime[RESERVED_SUB_DEVICE_SPACE] = {0};
 
     // dispatch_s_compute writes
     uint32_t completion_count[RESERVED_SUB_DEVICE_SPACE] = {0};
@@ -103,6 +98,15 @@ struct __attribute__((packed, aligned(4))) DispatchTelemetryControl {
     uint32_t sub_device_worker_counts_update = 0;
     uint32_t worker_stream_reset_update = 0;
     uint32_t compute_terminate = 0;
+
+    // dispatch_s writes, dispatch_s_compute reads.
+    // Increments by 2 for every launched workload. An odd value means last_work_launch_timestamp
+    // is in progress of being written.
+    uint32_t launched_work_sequence_counter[RESERVED_SUB_DEVICE_SPACE] = {0};
+
+    // dispatch_s writes, dispatch_s_compute reads.
+    // Records value of the stream semaphore when launching a new workload.
+    uint32_t launched_work_start_stream_sem[RESERVED_SUB_DEVICE_SPACE] = {0};
 };
 
 }  // namespace tt::tt_metal

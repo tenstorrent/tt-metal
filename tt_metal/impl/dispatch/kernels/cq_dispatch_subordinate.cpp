@@ -419,10 +419,10 @@ void process_go_signal_mcast_cmd() {
         auto dispatch_telemetry =
             reinterpret_cast<volatile tt_l1_ptr tt::tt_metal::DispatchCoreTelemetry*>(dispatch_telemetry_base);
 
-        dispatch_telemetry->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
+        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
         dispatch_telemetry->last_work_launch_timestamp[stream_index] = get_timestamp();
-        dispatch_telemetry->launched_work_start_stream_sem[stream_index] = wait_count;
-        dispatch_telemetry->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
+        dispatch_telemetry_control->launched_work_start_stream_sem[stream_index] = wait_count;
+        dispatch_telemetry_control->launched_work_sequence_counter[stream_index] = ++local_launch_seq_counter;
     }
 
 #if DEVICE_PRINT_DISPATCH_ENABLED

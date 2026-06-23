@@ -206,45 +206,43 @@ public:
 
     uint32_t version() const { return DISPATCH_TELEMETRY_VERSION; }
 
-    float get_normalized_sub_device_utilization(
+    float get_normalized_utilization(
         const DispatchCoreTelemetry& current_dispatch_core_telemetry,
-        const DispatchCoreTelemetry& last_read_dispatch_core_telemetry,
-        size_t sub_device_idx) {
-        auto current_utilization_sub_device_work_runtime =
-            current_dispatch_core_telemetry.utilization_sub_device_work_runtime[sub_device_idx];
-        auto last_utilization_sub_device_work_runtime =
-            last_read_dispatch_core_telemetry.utilization_sub_device_work_runtime[sub_device_idx];
+        const DispatchCoreTelemetry& last_read_dispatch_core_telemetry) {
+        auto current_utilization_work_runtime = current_dispatch_core_telemetry.utilization_work_runtime;
+        auto last_utilization_work_runtime = last_read_dispatch_core_telemetry.utilization_work_runtime;
 
-        auto get_workers_in_flight =
-            [&sub_device_idx](const DispatchCoreTelemetry& dispatch_core_telemetry) -> uint64_t {
-            uint64_t utilization_runtime_in_flight = 0;
-            const bool workers_are_in_flight = dispatch_core_telemetry.completion_count[sub_device_idx] <
-                                               dispatch_core_telemetry.workers_per_sub_device[sub_device_idx];
-            if (workers_are_in_flight) {
-                utilization_runtime_in_flight += dispatch_core_telemetry.current_timestamp -
-                                                 dispatch_core_telemetry.last_work_launch_timestamp[sub_device_idx];
+        auto get_workers_in_flight_runtime = [](const DispatchCoreTelemetry& dispatch_core_telemetry) -> uint64_t {
+            if (dispatch_core_telemetry.work_runtime_start == 0) {
+                return 0;
             }
-            return utilization_runtime_in_flight;
+
+            for (size_t i = 0; i < MAX_SUB_DEVICES; ++i) {
+                if (dispatch_core_telemetry.workers_per_sub_device[i] == 0) {
+                    continue;
+                }
+                const bool workers_are_in_flight =
+                    dispatch_core_telemetry.completion_count[i] < dispatch_core_telemetry.workers_per_sub_device[i];
+                if (workers_are_in_flight) {
+                    return dispatch_core_telemetry.current_timestamp - dispatch_core_telemetry.work_runtime_start;
+                }
+            }
+            return 0;
         };
 
-        current_utilization_sub_device_work_runtime += get_workers_in_flight(current_dispatch_core_telemetry);
-        last_utilization_sub_device_work_runtime += get_workers_in_flight(last_read_dispatch_core_telemetry);
+        current_utilization_work_runtime += get_workers_in_flight_runtime(current_dispatch_core_telemetry);
+        last_utilization_work_runtime += get_workers_in_flight_runtime(last_read_dispatch_core_telemetry);
 
-        auto utilization_runtime =
-            calc_delta(current_utilization_sub_device_work_runtime, last_utilization_sub_device_work_runtime);
+        auto utilization_runtime = calc_delta(current_utilization_work_runtime, last_utilization_work_runtime);
 
         auto runtime = calc_delta(
             current_dispatch_core_telemetry.current_timestamp, last_read_dispatch_core_telemetry.current_timestamp);
         TT_ASSERT(runtime > 0, "Runtime must be greater than 0");
 
-        float sub_dev_utilization = static_cast<float>(utilization_runtime) / static_cast<float>(runtime);
-        TT_ASSERT(
-            sub_dev_utilization <= 1.0f,
-            "If sub_dev_utilization is greater than 100%, there is an issue with the telemetry");
-        TT_ASSERT(
-            sub_dev_utilization >= 0.0f,
-            "If sub_dev_utilization is less than 0%, there is an issue with the telemetry");
-        return std::clamp(sub_dev_utilization, 0.0f, 1.0f);
+        float utilization = static_cast<float>(utilization_runtime) / static_cast<float>(runtime);
+        TT_ASSERT(utilization <= 1.0f, "If utilization is greater than 100%, there is an issue with the telemetry");
+        TT_ASSERT(utilization >= 0.0f, "If utilization is less than 0%, there is an issue with the telemetry");
+        return std::clamp(utilization, 0.0f, 1.0f);
     }
 
     std::optional<float> get_normalized_core_efficiency(
@@ -405,14 +403,8 @@ public:
                 last_read_dispatch_core_telemetry_[cq].upstream_blocked_count);
             cq_info.program_count_since_last_read =
                 calc_delta(dispatch_telemetry.program_count, last_read_dispatch_core_telemetry_[cq].program_count);
-
-            for (size_t i = 0; i < MAX_SUB_DEVICES; ++i) {
-                if (dispatch_telemetry.workers_per_sub_device[i] == 0) {
-                    break;
-                }
-                cq_info.sub_device_utilization_since_last_read.push_back(get_normalized_sub_device_utilization(
-                    dispatch_telemetry, last_read_dispatch_core_telemetry_[cq], i));
-            }
+            cq_info.utilization_since_last_read =
+                get_normalized_utilization(dispatch_telemetry, last_read_dispatch_core_telemetry_[cq]);
 
             last_read_dispatch_core_telemetry_[cq] = dispatch_telemetry;
         }

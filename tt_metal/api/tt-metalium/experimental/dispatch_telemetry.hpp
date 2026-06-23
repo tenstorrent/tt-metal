@@ -23,20 +23,22 @@ struct DispatchTelemetryCqInfo {
     uint32_t prefetch_command_count_since_last_read = 0;
 
     /**
-     * @brief   Sub device utilization describes the percentage of time the sub device is actively executing any work.
-     * @note    sub_device_utilization = sub_device_runtime / uptime
-     * @note    Normalized utilization ratio: 1.0 = 100%, 0.0 = 0%
-     * @note    Requires worker dispatch
+     * @brief   Utilization describes the percentage of time the cq is actively executing any work.
+     *          Requires worker dispatch.
+     * @note    utilization = work_runtime / uptime
+     * @return  Normalized utilization since the last read, or std::nullopt if worker dispatch is
+     *          disabled. 1.0 = 100%, 0.0 = 0%.
      */
-    std::vector<float> sub_device_utilization_since_last_read;
+    std::optional<float> utilization_since_last_read = std::nullopt;
 };
 
 struct DispatchTelemetryDeviceInfo {
     /**
-     * @brief   Device core efficiency describes the percentage of time the cores are actively executing work.
+     * @brief   Device core efficiency describes the percentage of time the cores are actively
+     *          executing work. Requires worker dispatch.
      * @note    core_efficiency = avg_core_runtime / uptime
-     * @note    Normalized utilization ratio: 1.0 = 100%, 0.0 = 0%
-     * @note    Requires worker dispatch
+     * @return  Normalized core efficiency since the last read, or std::nullopt if worker dispatch is
+     *          disabled. 1.0 = 100%, 0.0 = 0%.
      */
     std::optional<float> device_core_efficiency_since_last_read = std::nullopt;
 
