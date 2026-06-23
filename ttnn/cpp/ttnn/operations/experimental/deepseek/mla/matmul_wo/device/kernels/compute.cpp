@@ -7,6 +7,7 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -56,7 +57,8 @@ void kernel_main() {
     reconfig_data_format_srca(cb_r2c_w);
 
     // Initialize matmul
-    mm_block_init(cb_s2c_in, cb_r2c_w, cb_c2w_out, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w, cb_c2w_out);
+    matmul_block_init(cb_s2c_in, cb_r2c_w, /*transpose=*/false, /*ct_dim=*/7, /*rt_dim=*/1, /*kt_dim=*/1);
 
     //---------------------------------------------------------------------
     // Compute in @ W

@@ -169,7 +169,7 @@ Example (legacy mode):
 tt-run \
   --rank-binding tests/tt_metal/distributed/config/bh_galaxy_sp4_rank_bindings.yaml \
   --mpi-args "--host <host0>,<host1>,... --map-by rankfile:file=<your_rankfile> --mca btl self,tcp --mca btl_tcp_if_include <nic> --bind-to none --tag-output" \
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
   --test_config path/to/test_config.yaml
 ```
 

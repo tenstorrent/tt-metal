@@ -858,6 +858,29 @@ def tracy_profile():
     profiler.disable()
 
 
+@pytest.fixture
+def expect_error():
+    """Use instead of pytest.raises. Adds info to the logs that these errors are expected,
+    which helps automated CI log triaging. message must appear in the real device error
+    text (the TT_FATAL line), since that's what the triager matches.
+
+        with expect_error(RuntimeError, "Out of Memory"):
+            ...
+    """
+
+    @contextlib.contextmanager
+    def expect_error_(error, message):
+        names = ", ".join(e.__name__ for e in (error if isinstance(error, tuple) else (error,)))
+        logger.info(f'[EXPECTED_ERROR BEGIN] {names} message="{message}"')
+        try:
+            with pytest.raises(error, match=message) as exc_info:
+                yield exc_info
+        finally:
+            logger.info(f'[EXPECTED_ERROR END] {names} message="{message}"')
+
+    return expect_error_
+
+
 ###############################
 # Modifying pytest hooks
 ###############################

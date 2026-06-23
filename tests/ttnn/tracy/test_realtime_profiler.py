@@ -48,18 +48,18 @@ from pathlib import Path
 
 import pytest
 
+from tools.tracy.common import PROFILER_ARTIFACTS_DIR, PROFILER_BIN_DIR, TT_METAL_HOME
+
 
 # ---------------------------------------------------------------------------
 # Common paths / constants
 # ---------------------------------------------------------------------------
 
-TT_METAL_HOME = Path(os.environ.get("TT_METAL_HOME", Path.cwd()))
-PROFILER_BIN_DIR = TT_METAL_HOME / "build" / "tools" / "profiler" / "bin"
-CAPTURE_TOOL = PROFILER_BIN_DIR / "capture-release"
-CSVEXPORT_TOOL = PROFILER_BIN_DIR / "csvexport-release"
+CAPTURE_TOOL = PROFILER_BIN_DIR / "tracy-capture"
+CSVEXPORT_TOOL = PROFILER_BIN_DIR / "tracy-csvexport"
 
 # Root artifact dir; each test writes into a named sub-directory.
-ARTIFACTS_ROOT = TT_METAL_HOME / "generated" / "profiler" / "realtime_profiler_tests"
+ARTIFACTS_ROOT = PROFILER_ARTIFACTS_DIR / "realtime_profiler_tests"
 
 # External workload scripts that are re-executed in a subprocess under Tracy
 # capture for the correlation / sync tests.  They are kept as standalone
@@ -105,7 +105,7 @@ def _run_under_tracy(
     timeout_s: int = 600,
 ):
     """
-    Launch `capture-release` in the background, run `workload_script` under
+    Launch `tracy-capture` in the background, run `workload_script` under
     it in a subprocess with stdout streamed to ``log_path`` (avoids the OS
     pipe buffer filling up and deadlocking the child), and return
     (workload_returncode, workload_stdout_text).
@@ -120,7 +120,7 @@ def _run_under_tracy(
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    time.sleep(2)  # let capture-release start listening
+    time.sleep(2)  # let tracy-capture start listening
 
     env = dict(os.environ)
     env["TRACY_PORT"] = port
@@ -783,7 +783,7 @@ def test_sync_accuracy(tmp_path):
     assert host_msgs, "No host SYNC_CHECK/FINISH_SYNC messages in trace"
     assert device_zones, (
         "No device SYNC_CHECK GPU zones found. If csvexport was built without the "
-        "GPU-zone fix the zones won't be emitted — rebuild csvexport-release."
+        "GPU-zone fix the zones won't be emitted — rebuild tracy-csvexport."
     )
 
     pairs = _pair_sync(host_msgs, device_zones)

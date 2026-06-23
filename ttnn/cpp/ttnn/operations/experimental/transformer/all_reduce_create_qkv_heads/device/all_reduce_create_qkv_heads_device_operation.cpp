@@ -239,9 +239,18 @@ AllReduceCreateQkvHeadsDeviceOperation::compute_output_specs(
     tt::tt_metal::ShardSpec q_shard_spec{q_shard_grid, {num_q_heads_padded, operation_attributes.head_dim}};
     tt::tt_metal::ShardSpec k_shard_spec{k_shard_grid, {num_kv_heads_padded, operation_attributes.head_dim}};
     tt::tt_metal::ShardSpec v_shard_spec{v_shard_grid, {num_kv_heads_padded, operation_attributes.head_dim}};
-    MemoryConfig q_mem_config = operation_attributes.final_mem_config.with_shard_spec(q_shard_spec);
-    MemoryConfig k_mem_config = operation_attributes.final_mem_config.with_shard_spec(k_shard_spec);
-    MemoryConfig v_mem_config = operation_attributes.final_mem_config.with_shard_spec(v_shard_spec);
+    MemoryConfig q_mem_config = MemoryConfig(
+        operation_attributes.final_mem_config.memory_layout(),
+        operation_attributes.final_mem_config.buffer_type(),
+        q_shard_spec);
+    MemoryConfig k_mem_config = MemoryConfig(
+        operation_attributes.final_mem_config.memory_layout(),
+        operation_attributes.final_mem_config.buffer_type(),
+        k_shard_spec);
+    MemoryConfig v_mem_config = MemoryConfig(
+        operation_attributes.final_mem_config.memory_layout(),
+        operation_attributes.final_mem_config.buffer_type(),
+        v_shard_spec);
 
     return {
         .all_reduce = all_reduce_tensor_spec,
