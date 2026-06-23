@@ -59,6 +59,18 @@ def _resolve_perf_device(device, test_module):
         d = getattr(test_module, _name, None)
         if d is not None:
             return d
+    # CCL ops (all_gather etc.) don't keep a module-global device; they hold it in
+    # ccl_common's persistent _DEVICE_CACHE (kept open across vectors when the
+    # profiler is on). Read the live cached device if present. The cache is set to
+    # None on teardown/failure, so this self-corrects -- never a stale/closed read.
+    try:
+        from sweep_utils import ccl_common
+
+        cached = ccl_common._DEVICE_CACHE.get("mesh_device")
+        if cached is not None:
+            return cached
+    except Exception:
+        pass
     return None
 
 

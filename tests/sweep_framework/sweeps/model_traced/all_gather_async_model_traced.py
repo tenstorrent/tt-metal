@@ -727,9 +727,19 @@ def run(
     # mesh and carve the submesh (direct MeshShape(submesh) opens fail fabric sync).
     _full_mesh_shape = _full_galaxy_mesh_for(mesh_shape, NUM_DEVICES)
 
+    # model_traced normally opens/closes the device per vector (disable_cache).
+    # But device-perf is gathered AFTER run() returns, so a per-vector close leaves
+    # nothing for the profiler read. When the profiler is on (the runner only
+    # enables it for the safe FABRIC_1D CCL case), keep the device in ccl_common's
+    # persistent cache so it stays open for gather_single_test_perf; the no-perf
+    # path is unchanged. (FABRIC_2D never reaches here with the profiler on -- the
+    # runner gates it off to avoid the idle-erisc dispatch-kernel overflow.)
+    _profiler_on = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+    _disable_cache = is_model_traced and not _profiler_on
+
     try:
         with device_context(
-            mesh_shape, fabric_config, _device_params, full_mesh_shape=_full_mesh_shape, disable_cache=is_model_traced
+            mesh_shape, fabric_config, _device_params, full_mesh_shape=_full_mesh_shape, disable_cache=_disable_cache
         ) as (
             device,
             device_err,
