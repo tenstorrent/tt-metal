@@ -107,27 +107,6 @@ struct RingJointSDPAParams {
 
     bool has_kv_pad_rotation() const { return kv_actual_isl.has_value(); }
 
-    // Program-cache hash / canonical-key fields. Reproduces exactly the field set the former custom
-    // compute_program_hash encoded (see ring_joint_sdpa_device_operation.cpp, removed definition):
-    //  - cache_key_logical_n: a COMPUTED value (has_kv_pad_rotation() ? 0 : logical_n). When KV-pad
-    //    rotation is enabled, logical_n is runtime-patched on a cache hit, so it must NOT be keyed by
-    //    its raw value (see validate_runtime_patched_scalars). Returned BY VALUE.
-    //  - kv_cache_batch_idx is runtime-patched on a cache hit, so only its PRESENCE (a bool) is keyed,
-    //    never the raw value. Returned BY VALUE.
-    //  - kv_pad_rotation_enabled == has_kv_pad_rotation() (== kv_actual_isl.has_value()): only the
-    //    presence is structural; the raw kv_actual_isl value is runtime-patched. Returned BY VALUE.
-    //  - latent_v_head_dim: structural V head dim used when the latent-V optimization is active.
-    //  - the nested all-gather contribution: the OLD hash folded in
-    //    RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash. We reproduce it by inlining
-    //    the all-gather's STRUCTURAL scalar fields {dim, num_links, ring_size, output_mem_config,
-    //    topology, sub_device_id, cluster_axis} directly (excludes the raw IDevice* `devices`,
-    //    `semaphore`, and `core_allocation_strategy`), plus the all-gather tensor_args on the default
-    //    full-tensor walk (a superset, collision-safe). The scalars are inlined (rather than nesting
-    //    the whole RingAttentionAllGatherAsyncParams) so this stays self-contained and avoids the
-    //    aggregate-vs-compile-time-attributes to_json ambiguity on that struct.
-    // The tensor-derived properties the old hash folded in (has_latent_v(), v_num_heads(),
-    // v_head_dim()) are NOT reproduced here: they are derived from the RingJointSDPAInputs tensors,
-    // which are hashed in full by the default tensor_args walk (a structural superset).
     static constexpr auto attribute_names = std::forward_as_tuple(
         "joint_strategy",
         "scale",
