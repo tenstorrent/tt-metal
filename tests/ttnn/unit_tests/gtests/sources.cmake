@@ -7,6 +7,7 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
     conv/test_conv2d.cpp
+    matmul/test_matmul_block_caller_owns_constraint.cpp
     test_multi_cq_multi_dev.cpp
     test_multiprod_queue.cpp
 )
