@@ -441,44 +441,14 @@ class DiffusionGemmaPipeline:
             soft_emb = (soft_probs @ embed_w).to(torch.bfloat16) * (text_cfg.hidden_size**0.5)
             tt_self_cond_signal = bf16_tensor(soft_emb.unsqueeze(0), device=mesh_device)
 
-        # Call the full ForBlockDiffusion: model + lm_head + softcap.
-        logits_tt = self.tt_model(
-            input_ids=None,  # encoder skipped; we already have the KV cache
-            position_ids=None,
-            encoder_attention_masks=None,
-            decoder_input_ids=tt_canvas,
-            decoder_position_ids=decoder_position_ids,
-            decoder_attention_masks=tt_decoder_masks,
-            self_conditioning_signal=tt_self_cond_signal,
-            pixel_values=None,
-            pixel_position_ids=None,
-            padding_positions=None,
-            input_ids_host=None,
-        )
-        # NOTE: the above signature passes ``input_ids=None`` to indicate the encoder
-        # cache is already populated. The current Model.forward DOES still re-run the encoder
-        # if input_ids is provided; we need a separate decoder-only entrypoint. For minimum
-        # change, we directly call into model.decoder and lm_head here:
-        ttnn.deallocate(logits_tt)
-
-        decoder_h = self.tt_model.model.decoder(
+        # Single clean decoder step: decoder + lm_head + softcap on-device.
+        out = self.tt_model.decoder_step(
             tt_canvas,
             decoder_position_ids,
             encoder_kv_cache=encoder_kv,
             decoder_attention_masks=tt_decoder_masks,
             self_conditioning_signal=tt_self_cond_signal,
         )
-        logits_tt = self.tt_model.lm_head(decoder_h)
-        ttnn.deallocate(decoder_h)
-        # Softcap on device.
-        cap = text_cfg.final_logit_softcapping
-        scaled = ttnn.multiply(logits_tt, 1.0 / cap)
-        capped = ttnn.tanh(scaled)
-        ttnn.deallocate(scaled)
-        out = ttnn.multiply(capped, cap)
-        ttnn.deallocate(capped)
-        ttnn.deallocate(logits_tt)
-
         # Bring to host, fp32 for the sampler math.
         return local_device_to_torch(out).squeeze(0).to(torch.float32)
 

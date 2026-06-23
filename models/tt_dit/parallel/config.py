@@ -18,13 +18,25 @@ class DiTParallelConfig(NamedTuple):
     cfg_parallel: ParallelFactor
     tensor_parallel: ParallelFactor
     sequence_parallel: ParallelFactor
+    # Expert parallel — separate axis from SP. Used by MoE models (DiffusionGemma) to
+    # shard the expert dimension across a mesh axis. ``None`` means no EP (replicated
+    # experts), which is the default for non-MoE DiT models (Wan, SD3.5, etc.).
+    expert_parallel: ParallelFactor | None = None
 
     @classmethod
-    def from_tuples(cls, *, cfg: tuple[int, int], sp: tuple[int, int], tp: tuple[int, int]) -> DiTParallelConfig:
+    def from_tuples(
+        cls,
+        *,
+        cfg: tuple[int, int],
+        sp: tuple[int, int],
+        tp: tuple[int, int],
+        ep: tuple[int, int] | None = None,
+    ) -> DiTParallelConfig:
         return cls(
             cfg_parallel=ParallelFactor(*cfg),
             sequence_parallel=ParallelFactor(*sp),
             tensor_parallel=ParallelFactor(*tp),
+            expert_parallel=ParallelFactor(*ep) if ep is not None else None,
         )
 
 

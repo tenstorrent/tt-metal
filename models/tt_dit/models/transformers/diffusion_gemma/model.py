@@ -106,13 +106,67 @@ class DiffusionGemmaForBlockDiffusion(Module):
         self,
         **kwargs,
     ) -> ttnn.Tensor:
-        """Run the model and apply lm_head + softcap. Returns logits ``[B, canvas, vocab]``."""
+        """Run the full model (encoder + decoder + lm_head + softcap). Returns logits ``[B, canvas, vocab]``.
+
+        For the diffusion sampling loop the encoder runs *once* per canvas and the decoder
+        runs many times — use :meth:`encoder_step` + :meth:`decoder_step` directly to avoid
+        re-running the encoder per denoising step.
+        """
         decoder_h, _encoder_kv = self.model(**kwargs)
+        return self._apply_lm_head(decoder_h)
+
+    def encoder_step(
+        self,
+        input_ids: "ttnn.Tensor",
+        position_ids,
+        encoder_attention_masks: dict,
+        *,
+        pixel_values=None,
+        pixel_position_ids=None,
+        padding_positions=None,
+        input_ids_host=None,
+    ) -> tuple["ttnn.Tensor", list]:
+        """Run only the encoder (multimodal). Returns (encoder_hidden, per_layer_kv)."""
+        return self.model.encoder(
+            input_ids,
+            position_ids,
+            encoder_attention_masks,
+            pixel_values=pixel_values,
+            pixel_position_ids=pixel_position_ids,
+            padding_positions=padding_positions,
+            input_ids_host=input_ids_host,
+        )
+
+    def decoder_step(
+        self,
+        decoder_input_ids: "ttnn.Tensor",
+        decoder_position_ids,
+        encoder_kv_cache: list,
+        decoder_attention_masks: dict,
+        self_conditioning_signal: "ttnn.Tensor | None" = None,
+    ) -> "ttnn.Tensor":
+        """Run one decoder forward + lm_head + softcap. Used per diffusion step.
+
+        The encoder cache is read-only here; the decoder does NOT modify it.
+        """
+        decoder_h = self.model.decoder(
+            decoder_input_ids,
+            decoder_position_ids,
+            encoder_kv_cache=encoder_kv_cache,
+            decoder_attention_masks=decoder_attention_masks,
+            self_conditioning_signal=self_conditioning_signal,
+        )
+        return self._apply_lm_head(decoder_h)
+
+    def _apply_lm_head(self, decoder_h: "ttnn.Tensor") -> "ttnn.Tensor":
+        """Project decoder hidden states to vocab logits and apply tanh softcap on-device."""
         logits = self.lm_head(decoder_h)
-        # Tanh logit-softcap: out = softcap * tanh(logits / softcap). Computed in bf16 on device.
+        ttnn.deallocate(decoder_h)
         cap = self.final_logit_softcapping
         scaled = ttnn.multiply(logits, 1.0 / cap)
         ttnn.deallocate(logits)
         capped = ttnn.tanh(scaled)
         ttnn.deallocate(scaled)
-        return ttnn.multiply(capped, cap)
+        out = ttnn.multiply(capped, cap)
+        ttnn.deallocate(capped)
+        return out

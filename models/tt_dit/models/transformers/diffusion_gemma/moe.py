@@ -84,9 +84,12 @@ class DiffusionGemmaMoE(Module):
         mesh_shape = tuple(mesh_device.shape)
 
         # Construct demos/gemma4 MeshConfig from our DiTParallelConfig.
-        # tp_axis matches; ep on the non-tp axis (the EP slot in DiTParallelConfig
-        # is the sequence_parallel placeholder until we extend the config).
-        ep_factor = mesh_shape[1 - tp_axis] if mesh_shape[1 - tp_axis] > 1 else 1
+        # Prefer the explicit expert_parallel slot when set; otherwise default to "the
+        # full non-tp axis" (replicated experts collapse to ep=1 if that axis is 1).
+        if parallel_config.expert_parallel is not None:
+            ep_factor = parallel_config.expert_parallel.factor
+        else:
+            ep_factor = mesh_shape[1 - tp_axis] if mesh_shape[1 - tp_axis] > 1 else 1
         mesh_config = MeshConfig(
             mesh_shape=mesh_shape,
             decode=ModeConfig(tp=tp_factor, ep=ep_factor, sp=1),

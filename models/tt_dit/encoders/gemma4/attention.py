@@ -72,15 +72,31 @@ class Gemma4Attention(Module):
         assert (
             num_attention_heads % tp_factor == 0
         ), f"num_attention_heads={num_attention_heads} must divide tp_factor={tp_factor}"
-        assert num_kv_heads % tp_factor == 0, (
-            f"num_kv_heads={num_kv_heads} must divide tp_factor={tp_factor}; "
-            f"higher TP requires KV-head replication."
-        )
         assert head_dim % TILE == 0, f"head_dim={head_dim} must be tile-aligned"
         assert hidden_size % TILE == 0
 
+        # KV-head sharding: either num_kv_heads divides tp_factor (standard shard, replication=1)
+        # OR tp_factor divides num_kv_heads (also standard shard, more KV heads per device) OR
+        # tp_factor > num_kv_heads AND num_kv_heads divides tp_factor (replicate each KV head
+        # ``tp_factor // num_kv_heads`` times so each rank gets exactly 1 effective KV head).
+        # This is necessary for full-attention layers where num_global_key_value_heads = 2 — without
+        # replication, TP > 2 would be impossible on the full layers.
+        if tp_factor <= num_kv_heads:
+            assert (
+                num_kv_heads % tp_factor == 0
+            ), f"num_kv_heads={num_kv_heads} must divide tp_factor={tp_factor} when tp_factor ≤ num_kv_heads"
+            self._kv_replication = 1
+            effective_num_kv_heads = num_kv_heads
+        else:
+            assert (
+                tp_factor % num_kv_heads == 0
+            ), f"tp_factor={tp_factor} must be a multiple of num_kv_heads={num_kv_heads} for KV replication"
+            self._kv_replication = tp_factor // num_kv_heads
+            effective_num_kv_heads = num_kv_heads * self._kv_replication  # == tp_factor
+
         self.num_local_heads = num_attention_heads // tp_factor
-        self.num_local_kv_heads = num_kv_heads // tp_factor
+        self.num_local_kv_heads = effective_num_kv_heads // tp_factor
+        self._effective_num_kv_heads = effective_num_kv_heads
 
         col_kwargs = dict(
             bias=False,
@@ -89,11 +105,14 @@ class Gemma4Attention(Module):
             ccl_manager=ccl_manager,
         )
 
-        # Projections.
+        # Projections. K/V output dim uses ``effective_num_kv_heads`` so the per-rank slice
+        # is ``self.num_local_kv_heads`` heads regardless of whether we replicated.
         self.q_proj = ColParallelLinear(hidden_size, num_attention_heads * head_dim, **col_kwargs)
-        self.k_proj = ColParallelLinear(hidden_size, num_kv_heads * head_dim, **col_kwargs)
+        self.k_proj = ColParallelLinear(hidden_size, effective_num_kv_heads * head_dim, **col_kwargs)
         # Full attention has no v_proj — V is sourced from the raw k_proj output (pre-k_norm, pre-RoPE).
-        self.v_proj = ColParallelLinear(hidden_size, num_kv_heads * head_dim, **col_kwargs) if is_sliding else None
+        self.v_proj = (
+            ColParallelLinear(hidden_size, effective_num_kv_heads * head_dim, **col_kwargs) if is_sliding else None
+        )
 
         # o_proj: heads are already TP-sharded → row-parallel into hidden_size.
         self.o_proj = RowParallelLinear(
@@ -123,6 +142,28 @@ class Gemma4Attention(Module):
             bias=False,
             mesh_device=mesh_device,
         )
+
+    def _prepare_torch_state(self, state: dict) -> None:
+        """When TP > num_kv_heads, replicate each K/V head ``kv_replication`` times along the
+        head axis so the per-rank slice has exactly one (replicated) KV head."""
+        import torch  # local import to keep top-level deps minimal
+
+        if self._kv_replication == 1:
+            return
+
+        H_kv = self.num_kv_heads
+        D = self.head_dim
+        rep = self._kv_replication
+        for name in ("k_proj", "v_proj"):
+            w = state.get(f"{name}.weight")
+            if w is None:
+                continue
+            # HF weight shape: [num_kv_heads * head_dim, hidden_size]. Repeat each KV head ``rep``
+            # times contiguously so the column-parallel split puts the right replica on each rank.
+            hidden = w.shape[-1]
+            w = w.reshape(H_kv, D, hidden)
+            w = w.repeat_interleave(rep, dim=0)
+            state[f"{name}.weight"] = w.reshape(H_kv * rep * D, hidden)
 
     def forward(
         self,

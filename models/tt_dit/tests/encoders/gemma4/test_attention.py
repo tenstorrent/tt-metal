@@ -75,8 +75,10 @@ def test_gemma4_attention(
     num_kv_heads = sliding_kv_heads if is_sliding else full_kv_heads
 
     tp_factor = tuple(mesh_device.shape)[tp_axis]
-    if num_kv_heads % tp_factor != 0:
-        pytest.skip(f"num_kv_heads={num_kv_heads} doesn't divide tp_factor={tp_factor}")
+    # KV-head sharding requires either num_kv_heads | tp_factor (standard shard) or
+    # tp_factor | num_kv_heads (KV replication path). Otherwise no integer split exists.
+    if num_kv_heads % tp_factor != 0 and tp_factor % num_kv_heads != 0:
+        pytest.skip(f"num_kv_heads={num_kv_heads} and tp_factor={tp_factor} aren't mutually divisible")
 
     hf_config = DiffusionGemmaTextConfig(
         hidden_size=hidden_size,
