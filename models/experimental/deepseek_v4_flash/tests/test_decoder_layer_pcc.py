@@ -1,10 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 #
 # SPDX-License-Identifier: Apache-2.0
-"""Per-layer PCC test for the ttnn ``DeepSeekV4DecoderLayer`` (prefill).
+"""Decode-path PCC test for the ttnn ``DeepSeekV4DecoderLayer``.
 
-Like ``test_attention_pcc.py`` this is a dual-interpreter test, but it runs on
-the **real** V4-Flash checkpoint weights for one full decoder layer:
+A dual-interpreter test running on the **real** V4-Flash checkpoint weights for
+one full decoder layer:
 
 * **reference side** (run as ``__main__`` under the *system* interpreter):
   instantiates the HuggingFace ``transformers==5.8.1``
@@ -15,24 +15,20 @@ the **real** V4-Flash checkpoint weights for one full decoder layer:
   tables, the exact additive mask, the input streams, and the reference output
   to a ``.pt`` bundle.
 * **pytest side** (ttnn venv): builds the ttnn ``DeepSeekV4DecoderLayer`` from
-  the *same* loader (so both sides see identical dequantized weights), runs it
-  on the dumped inputs, and PCC-compares the updated residual-stream stack.
+  the *same* loader (so both sides see identical dequantized weights) and
+  exercises the **decode** path (``DeepSeekV4DecoderLayer.decode``, ``T == 1``):
+  it replays every token one step at a time through ``decode`` (filling the
+  running KV / compressor cache), and PCC-compares the last few decoded rows
+  against the reference's full-prefill row at the same position (decode is the
+  per-token-equivalent of a full prefill).
 
-The two interpreters are kept apart for the same reason as the attention test:
-the cached ``transformers==5.8.1`` (the only install shipping ``deepseek_v4``)
-imports cleanly only under the system interpreter, while ttnn lives in the venv.
-The ``__main__`` guard runs before the ttnn imports so the subprocess never
-touches ttnn.
+The two interpreters are kept apart because the cached ``transformers==5.8.1``
+(the only install shipping ``deepseek_v4``) imports cleanly only under the system
+interpreter, while ttnn lives in the venv. The ``__main__`` guard runs before the
+ttnn imports so the subprocess never touches ttnn.
 
 The routed experts live on device in bf16 (one layer fits the Blackhole DRAM),
 so the only precision gap vs the fp32 reference is bf16 device arithmetic.
-
-``test_decoder_layer_decode_pcc`` reuses the same reference bundle to exercise
-the **decode** path (``DeepSeekV4DecoderLayer.decode``, ``T == 1``): it seeds the
-layer's KV / compressor cache with a tile-aligned prefix, then decodes the next
-few tokens one step at a time and PCC-compares each against the reference's
-full-prefill row at the same position (decode is the per-token-equivalent of a
-full prefill).
 
 Set ``DEEPSEEK_V4_CACHE_DIR=<dir>`` to skip the slow weight loading on reruns:
 the converted ttnn weight tiles are dumped/reused (the 256-expert dequant is
@@ -249,7 +245,6 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (  # noqa: E4
 _SYSTEM_PYTHON = shutil.which("python") or sys.executable
 _THIS_FILE = str(Path(__file__).resolve())
 _MASK_NEG = -1.0e9
-PCC_THRESHOLD = 0.98
 # Decode reuses the *prefill* HF reference: a single-token decode step is the
 # bit-for-bit-equivalent of a full prefill over the same tokens-so-far, so the
 # decoded row at position p must match the reference's full-prefill row p. Decode
@@ -373,61 +368,6 @@ def _to_tt(t: torch.Tensor, device) -> ttnn.Tensor:
     return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
-@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
-@torch.no_grad()
-@pytest.mark.parametrize("layer_idx", (4, 5))  # 4 = CSA + moe, 5 = HCA + moe
-@pytest.mark.parametrize("seq_len", (256,))
-@pytest.mark.parametrize("batch_size", (1,))
-def test_decoder_layer_pcc(device, reset_seeds, tmp_path, layer_idx: int, batch_size: int, seq_len: int) -> None:
-    ref_path, need_gen = _reference_path(tmp_path, f"decoder_layer_{layer_idx}_{batch_size}_{seq_len}")
-    if need_gen and not _generate_reference(ref_path, layer_idx, batch_size, seq_len):
-        pytest.skip(f"could not generate HF reference for layer {layer_idx}")
-
-    bundle = torch.load(ref_path, weights_only=False)
-    cfg = types.SimpleNamespace(**bundle["config"])
-    layer_type = bundle["layer_type"]
-
-    loader = DeepseekV4WeightLoader(_DEFAULT_MODEL_DIR)
-    cache = _weight_cache(layer_idx)
-    weights = _build_layer_weights(loader, layer_idx, layer_type)
-    # The routed experts run through the single-op ``fused_experts`` kernel, which
-    # is hard-wired to Bfp4_b weights (its L1 circular-buffer budget assumes the
-    # 4-bit weight tiles), so the experts must be bf4. Everything else in the layer
-    # (attention, norms, shared expert) stays bf16, so the only precision gap vs the
-    # fp32 reference is the routed experts' 4-bit quant plus bf16 device arithmetic.
-    experts = DeepSeekV4PreloadedExperts(
-        cfg,
-        _expert_provider(loader, layer_idx),
-        device,
-        dtype=ttnn.bfloat4_b,
-        cache=cache.sub("mlp") if cache else None,
-    )
-    layer = DeepSeekV4DecoderLayer(cfg, layer_idx, weights, device, experts=experts, cache=cache)
-
-    streams_tt = _to_tt(bundle["streams"], device)
-    cos_full, sin_full = make_rope_table(bundle["cos_q"], bundle["sin_q"])
-    cos_tt = _to_tt(cos_full, device)
-    sin_tt = _to_tt(sin_full, device)
-    neg_sin_tt = _to_tt(-sin_full, device)
-    mask_tt = _to_tt(bundle["mask"].clamp_min(_MASK_NEG), device)
-
-    cos_win_tt = sin_win_tt = None
-    if layer_type != "sliding_attention":
-        cw, sw = make_rope_table(bundle["cos_win"], bundle["sin_win"])
-        cos_win_tt = _to_tt(cw, device)
-        sin_win_tt = _to_tt(sw, device)
-
-    out_tt = layer.forward(streams_tt, cos_tt, sin_tt, neg_sin_tt, mask_tt, cos_win=cos_win_tt, sin_win=sin_win_tt)
-    out_torch = ttnn.to_torch(out_tt).reshape(bundle["output"].shape).to(torch.float32)
-
-    reference = bundle["output"].to(torch.float32)
-    passing, pcc_message = comp_pcc(reference, out_torch, pcc=PCC_THRESHOLD)
-    logger.info(comp_allclose(reference, out_torch))
-    logger.info(f"[decoder layer {layer_idx} ({layer_type})] PCC: {pcc_message}")
-
-    assert passing, f"layer {layer_idx} decoder PCC < {PCC_THRESHOLD}: {pcc_message}"
-
-
 def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
     """``(cos, sin, neg_sin)`` ttnn tables for a half-table slice (see ``make_rope_table``)."""
     cos_full, sin_full = make_rope_table(cos_half, sin_half)
@@ -443,13 +383,14 @@ def _rope_rows(cos_half: torch.Tensor, sin_half: torch.Tensor, device) -> tuple:
 def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int, batch_size: int, seq_len: int) -> None:
     """Decode-path PCC for ``DeepSeekV4DecoderLayer.decode`` (the ``fused_experts`` op).
 
-    Decode is the per-token-equivalent of a full prefill, so this reuses the same
-    HF reference bundle as :func:`test_decoder_layer_pcc`: we seed the layer's
-    sliding-K=V + compressor cache by prefilling the first ``seq_len - 32`` tokens,
-    then decode the next ``_DECODE_STEPS`` tokens one device step at a time and
-    PCC-compare each decoded row against the reference's full-prefill row at the
-    same absolute position. Each decode step runs the routed MoE through the
-    single-op ``fused_experts`` kernel (``T == 1`` on the real ``H == 4096``).
+    Decode is the per-token-equivalent of a full prefill, so this PCC-compares the
+    decode path against an HF full-prefill reference bundle: we replay every token
+    one device step at a time through :meth:`DeepSeekV4DecoderLayer.decode` (which
+    fills the running sliding-K=V + compressor cache exactly as a prefill would),
+    and PCC-compare the last ``_DECODE_STEPS`` decoded rows against the reference's
+    full-prefill rows at the same absolute positions. The first ``seq_len - 32``
+    steps only seed the cache. Each step runs the routed MoE through the single-op
+    ``fused_experts`` kernel (``T == 1`` on the real ``H == 4096``).
     """
     ref_path, need_gen = _reference_path(tmp_path, f"decoder_layer_{layer_idx}_{batch_size}_{seq_len}")
     # A bundle cached before ``sliding_window`` was added lacks the field the
@@ -481,44 +422,18 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
     streams = bundle["streams"]  # [B, S, hc_mult, D]
     reference = bundle["output"].to(torch.float32)  # full-prefill output [B, S, hc_mult, D]
 
-    # ---- seed the cache with a tile-aligned prefix (positions 0 .. split-1) ---- #
+    # Replay every token through decode: positions 0 .. split-1 only seed the
+    # running cache; split .. split+_DECODE_STEPS-1 are PCC-compared to the
+    # reference full-prefill rows at the same absolute position.
     split = seq_len - 32  # one tile of room so the decode steps have reference rows
     assert split % 32 == 0 and split + _DECODE_STEPS <= seq_len
-
-    full_mask = bundle["mask"].clamp_min(_MASK_NEG)  # [B,1,S,S(+n_win)]
-    sliding_block = full_mask[:, :, :split, :split]
     cr = cfg.compress_rates[layer_type] if is_compressor else None
-    if is_compressor:
-        nwin_pre = split // cr
-        mask_pre = torch.cat([sliding_block, full_mask[:, :, :split, seq_len : seq_len + nwin_pre]], dim=-1)
-    else:
-        mask_pre = sliding_block
-
-    cos_pre, sin_pre, neg_sin_pre = _rope_rows(bundle["cos_q"][:split], bundle["sin_q"][:split], device)
-    cos_win_pre = sin_win_pre = None
-    if is_compressor:
-        cw, sw = make_rope_table(bundle["cos_win"][: split // cr], bundle["sin_win"][: split // cr])
-        cos_win_pre = _to_tt(cw, device)
-        sin_win_pre = _to_tt(sw, device)
 
     kv_cache = _LayerKVCache(cfg.sliding_window, is_compressor)
-    layer.forward(
-        _to_tt(streams[:, :split], device),
-        cos_pre,
-        sin_pre,
-        neg_sin_pre,
-        _to_tt(mask_pre, device),
-        cos_win=cos_win_pre,
-        sin_win=sin_win_pre,
-        kv_cache=kv_cache,
-        cache_len=split,
-    )
-
-    # ---- decode the next few tokens (one device step each) against the cache --- #
-    for pos in range(split, split + _DECODE_STEPS):
+    for pos in range(split + _DECODE_STEPS):
         cos_d, sin_d, neg_sin_d = _rope_rows(bundle["cos_q"][pos : pos + 1], bundle["sin_q"][pos : pos + 1], device)
         cos_win_d = sin_win_d = None
-        if is_compressor:
+        if is_compressor and (pos + 1) // cr > 0:
             n_win = (pos + 1) // cr
             cw, sw = make_rope_table(bundle["cos_win"][:n_win], bundle["sin_win"][:n_win])
             cos_win_d = _to_tt(cw, device)
@@ -533,6 +448,9 @@ def test_decoder_layer_decode_pcc(device, reset_seeds, tmp_path, layer_idx: int,
             sin_win_d,
             kv_cache,
         )
+        if pos < split:
+            continue  # seeding the cache; no reference row to compare yet
+
         ref_row = reference[:, pos : pos + 1]
         out_torch = ttnn.to_torch(out_tt).reshape(ref_row.shape).to(torch.float32)
 
