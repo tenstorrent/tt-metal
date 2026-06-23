@@ -17,21 +17,27 @@ from ttnn.experimental.moe_compute_utils import (
     prepare_w2_tensor_for_moe_compute,
 )
 
+import os as _os_cfg
 MESH_SHAPE = (4, 8)
 H = 5120          # hidden
 N = 1536          # moe intermediate
 EXPERTS = 160
 K = 8             # experts per token
-TOKENS_PER_DEV = 16        # batch 64 / 4 dispatch devices
-CLUSTER_AXIS = 0
+# SMOKE_CLUSTER_AXIS selects the dispatch ring: 0 = 4-device row ring (the deadlocking
+# config, issue #47523), 1 = 8-device col ring (the model's working end-to-end path on
+# build 68e82deb155, TUNING_LOG). Every dependent quantity below derives from it.
+CLUSTER_AXIS = int(_os_cfg.environ.get("SMOKE_CLUSTER_AXIS", "0"))
+GLOBAL_TOKENS = 64        # model decode batch, constant across axes
 L1 = 1 << 15
 
 NUM_DEV = MESH_SHAPE[0] * MESH_SHAPE[1]            # 32
-NUM_DISPATCH = MESH_SHAPE[CLUSTER_AXIS]            # 4
-NUM_REPLICATED = NUM_DEV // NUM_DISPATCH           # 8
+NUM_DISPATCH = MESH_SHAPE[CLUSTER_AXIS]            # axis0=4, axis1=8
+NUM_REPLICATED = NUM_DEV // NUM_DISPATCH           # axis0=8, axis1=4
 EXPERTS_PER_DEV = EXPERTS // NUM_DEV               # 5
-EXPERTS_PER_CLUSTER = EXPERTS // NUM_REPLICATED    # 20
-TOTAL_TOKENS = TOKENS_PER_DEV * NUM_DISPATCH       # 64
+EXPERTS_PER_CLUSTER = EXPERTS // NUM_REPLICATED    # axis0=20, axis1=40
+TOKENS_PER_DEV = GLOBAL_TOKENS // NUM_DISPATCH     # axis0=16, axis1=8
+TOTAL_TOKENS = GLOBAL_TOKENS                       # 64
+EPILOGUE_AXIS = 1 - CLUSTER_AXIS                   # cross-axis TP reduce: axis0->1, axis1->0
 DRAIN_CORE = ttnn.CoreCoord(6, 9)
 OUTPUT_HEIGHT_SHARD_DIM = 4
 
@@ -181,8 +187,14 @@ def build_weights(device):
     return tt_w0w1, tt_w2
 
 
+# Dispatch tensors shard their dim-0 over the cluster mesh axis: axis0 -> over rows
+# (0,None); axis1 -> over cols (None,0). (The token dim is dim 0 for the router input;
+# the NUM_DISPATCH dim is dim 0 for the dispatch preallocs -- both go on the cluster axis.)
+CLUSTER_SHARD = (0, None) if CLUSTER_AXIS == 0 else (None, 0)
+
+
 def build_dispatch_prealloc(device):
-    shard_dims = (CLUSTER_AXIS, None) if CLUSTER_AXIS == 0 else (None, CLUSTER_AXIS)
+    shard_dims = CLUSTER_SHARD
     sparse = ttnn.from_torch(torch.zeros(NUM_DISPATCH, TOTAL_TOKENS, H, dtype=torch.bfloat16),
                              device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16,
                              memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -202,6 +214,17 @@ def build_dispatch_prealloc(device):
 
 
 def main():
+    # amorrison's suggestion: fix the RNG so weights+routing+activations are identical
+    # across runs, to test whether the hang reproduces consistently (input-independent)
+    # vs intermittently. Set SMOKE_SEED=<int> (default off = legacy random behaviour).
+    import os as _os_seed
+    _seed = _os_seed.environ.get("SMOKE_SEED")
+    if _seed is not None and _seed != "":
+        torch.manual_seed(int(_seed))
+        print(f"SMOKE_SEED: torch.manual_seed({int(_seed)}) -> deterministic inputs", flush=True)
+    print(f"SMOKE_CLUSTER_AXIS={CLUSTER_AXIS} -> NUM_DISPATCH={NUM_DISPATCH} (ring size), "
+          f"NUM_REPLICATED={NUM_REPLICATED}, TOKENS_PER_DEV={TOKENS_PER_DEV}, "
+          f"EPILOGUE_AXIS={EPILOGUE_AXIS}", flush=True)
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     # moe_compute hardwires tilize cores at the (5-6, 8-9) grid corner; with the
     # default ROW dispatch axis the DRAM matmul-core assignment spans the whole
@@ -269,10 +292,13 @@ def main():
         scr_t = torch.rand(TOTAL_TOKENS, 1, 1, K, dtype=torch.float32)
         x_t = (torch.randn(TOTAL_TOKENS, 1, 1, H) * 0.05)
 
+        # all_to_all_dispatch_metadata REQUIRES the router input (token dim = dim 0) sharded
+        # along the cluster axis: axis0 -> rows (0,None); axis1 -> cols (None,0). A mismatch
+        # leaves the fabric in a state that deadlocks the subsequent CCL.
         def to_dev(t, dt):
             return ttnn.from_torch(t, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=dt,
                                    memory_config=dram,
-                                   mesh_mapper=ttnn.ShardTensor2dMesh(device, MESH_SHAPE, (0, None)))
+                                   mesh_mapper=ttnn.ShardTensor2dMesh(device, MESH_SHAPE, CLUSTER_SHARD))
         x = to_dev(x_t, ttnn.bfloat16)
         idx = to_dev(idx_t, ttnn.uint16)
         scr = to_dev(scr_t, ttnn.bfloat16)
@@ -394,11 +420,11 @@ def main():
         hifi4 = ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,
                                                  math_approx_mode=False, fp32_dest_acc_en=True,
                                                  packer_l1_acc=False)
-        rs = ttnn.reduce_scatter(input_tensor=summed, dim=3, cluster_axis=1, subdevice_id=None,
+        rs = ttnn.reduce_scatter(input_tensor=summed, dim=3, cluster_axis=EPILOGUE_AXIS, subdevice_id=None,
                                  memory_config=dram, num_links=None, topology=ttnn.Topology.Linear,
                                  compute_kernel_config=hifi4)
         print("  ep5 reduce_scatter", tuple(rs.shape), flush=True)
-        ag = ttnn.all_gather(input_tensor=rs, dim=3, cluster_axis=1, subdevice_id=None,
+        ag = ttnn.all_gather(input_tensor=rs, dim=3, cluster_axis=EPILOGUE_AXIS, subdevice_id=None,
                              memory_config=dram, num_links=None, topology=ttnn.Topology.Linear)
         print("  ep6 all_gather", tuple(ag.shape), flush=True)
         sparse_output = ttnn.reshape(ag, [TOKENS_PER_DEV, H], memory_config=dram)

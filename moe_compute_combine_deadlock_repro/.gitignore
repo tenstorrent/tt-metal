@@ -1,0 +1,6 @@
+# transient run artifacts (raw per-run smoke/triage logs can be huge; keep them local)
+logs/*.txt
+*.pid
+logs/.axis*_state*
+# keep the curated bundle and the markdown writeups
+!logs/to_send/
