@@ -1492,6 +1492,13 @@ bool topology_sat_search(
         }
         if (num_host_groups >= 2 && max_group_capacity > 0) {
             const size_t k_min = (graph_data.n_target + max_group_capacity - 1) / max_group_capacity;
+            // Each tight host-budget solve is conflict-capped. Proving the minimum host count for a ring/chain
+            // embedded into a strictly larger physical graph (e.g. a 64-mesh decode ring on an 80-mesh / 20-host
+            // supercluster) is a Hamiltonian-cycle-with-cardinality search the SAT engine can spin on for minutes;
+            // the cap lets an intractable budget be abandoned so the loop (and then the unconstrained fall-through
+            // below) still returns a valid mapping quickly. Tractable budgets finish well within the cap and return
+            // the identical model they would unbounded, so existing golden mappings are unchanged.
+            static constexpr int kHostMinimizeConflictBudget = 300'000;
             for (size_t k = std::max<size_t>(k_min, 1); k < num_host_groups; ++k) {
                 TopologySatSolver solver;
                 TopologySatHardEncoding enc;
@@ -1501,7 +1508,8 @@ bool topology_sat_search(
                 if (!topology_sat_encode_host_group_budget(solver, constraint_data, enc, k)) {
                     continue;  // this budget is trivially unencodable; try a larger one
                 }
-                if (solver.solve() == TopologySatSolver::kSat && finalize_success(solver, enc)) {
+                if (solver.solve_limited(kHostMinimizeConflictBudget) == TopologySatSolver::kSat &&
+                    finalize_success(solver, enc)) {
                     if (!quiet_mode) {
                         log_info(
                             tt::LogFabric,
@@ -1512,7 +1520,7 @@ bool topology_sat_search(
                     return true;
                 }
             }
-            // No binding budget was satisfiable; fall through to the unconstrained solve below.
+            // No binding budget was satisfiable within the conflict cap; fall through to the unconstrained solve.
         }
     }
 
