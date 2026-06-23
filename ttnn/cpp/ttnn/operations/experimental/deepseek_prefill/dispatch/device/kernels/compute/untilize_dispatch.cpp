@@ -108,9 +108,16 @@ void kernel_main() {
             constexpr uint32_t tiles_per_iter = block_ht * block_ct_dim;
             cb_wait_front(cb_in_id, tiles_per_iter);
 
-            // ----- 1+2. per scale block: abs -> REDUCE_ROW amax -> clamp -> *1/448 -> scale; recip -> 1/scale -----
+            // One scale block's full pipeline per iteration, all under one DeviceZone:
+            // abs -> REDUCE_ROW amax -> scale/recip -> divide -> pack_untilize. cb_in is
+            // read from the current front (abs and divide read the same block_ct_dim tiles)
+            // and popped at the end of the block, so the next block slides to the front and
+            // every cb_in index counts from 0. Blocks are independent (own amax/scale/column),
+            // so fusing the loops is numerically identical to the phase-split form.
             for (uint32_t h = 0; h < block_ht; ++h) {
-                const uint32_t in_base = h * block_ct_dim;  // h-th scale block within the cb_in chunk
+                DeviceZoneScopedN("DISPATCH-UNTILIZE-BLOCK");
+
+                // ----- 1. abs of one 128-element scale block -----
                 reconfig_data_format_srca<false, true>(cb_in_id);
                 pack_reconfig_data_format(cb_abs_id);
                 copy_tile_init(cb_in_id);
@@ -118,7 +125,7 @@ void kernel_main() {
                 abs_tile_init();
                 tile_regs_acquire();
                 for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                    copy_tile(cb_in_id, in_base + k, k);
+                    copy_tile(cb_in_id, k, k);
                     abs_tile(k);
                 }
                 tile_regs_commit();
@@ -129,6 +136,7 @@ void kernel_main() {
                 tile_regs_release();
                 cb_push_back(cb_abs_id, block_ct_dim);
 
+                // ----- 2. REDUCE_ROW amax -> clamp -> *1/448 -> scale; recip -> 1/scale -----
                 cb_wait_front(cb_abs_id, block_ct_dim);
                 cb_reserve_back(cb_scale_tiles_id, 1);
                 cb_reserve_back(cb_inv_scale_tiles_id, 1);
@@ -158,45 +166,34 @@ void kernel_main() {
                 cb_push_back(cb_scale_tiles_id, 1);
                 cb_push_back(cb_inv_scale_tiles_id, 1);
                 cb_pop_front(cb_abs_id, block_ct_dim);
-            }
 
-            {
-                DeviceZoneScopedN("third-part-divide");
-                // ----- 3. divide: cb_out_tile = cb_in * bcast_col(1/scale), each scale block by its own 1/scale -----
+                // ----- 3. divide: cb_out_tile = cb_in * bcast_col(1/scale) -----
                 reconfig_data_format(cb_in_id, cb_inv_scale_tiles_id);
                 pack_reconfig_data_format(cb_out_tile_id);
                 mul_bcast_cols_init_short(cb_in_id, cb_inv_scale_tiles_id);
-                cb_wait_front(cb_inv_scale_tiles_id, block_ht);
-                cb_reserve_back(cb_out_tile_id, tiles_per_iter);
-                for (uint32_t h = 0; h < block_ht; ++h) {
-                    const uint32_t in_base = h * block_ct_dim;
-                    tile_regs_acquire();
-                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                        mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_tiles_id, in_base + k, h, k);
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    for (uint32_t k = 0; k < block_ct_dim; ++k) {
-                        pack_tile(k, cb_out_tile_id);
-                    }
-                    tile_regs_release();
+                cb_wait_front(cb_inv_scale_tiles_id, 1);
+                cb_reserve_back(cb_out_tile_id, block_ct_dim);
+                tile_regs_acquire();
+                for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                    mul_tiles_bcast_cols(cb_in_id, cb_inv_scale_tiles_id, k, 0, k);
                 }
-                cb_push_back(cb_out_tile_id, tiles_per_iter);
-                cb_pop_front(cb_in_id, tiles_per_iter);
-                cb_pop_front(cb_inv_scale_tiles_id, block_ht);
-            }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t k = 0; k < block_ct_dim; ++k) {
+                    pack_tile(k, cb_out_tile_id);
+                }
+                tile_regs_release();
+                cb_push_back(cb_out_tile_id, block_ct_dim);
+                cb_pop_front(cb_in_id, block_ct_dim);
+                cb_pop_front(cb_inv_scale_tiles_id, 1);
 
-            // ----- 4. pack_untilize each scale block -> e4m3 row-major output at column (block + h) -----
-            {
-                DeviceZoneScopedN("DISPATCH-UNTILIZE");
+                // ----- 4. pack_untilize this scale block -> e4m3 row-major output at column (block + h) -----
                 reconfig_data_format_srca(cb_out_tile_id);
                 pack_reconfig_data_format(cb_untilize_id);
                 pack_untilize_init<block_ct_dim, full_ct_dim>(cb_out_tile_id, cb_untilize_id);
-                cb_wait_front(cb_out_tile_id, tiles_per_iter);
-                for (uint32_t h = 0; h < block_ht; ++h) {
-                    pack_untilize_block<block_ct_dim, full_ct_dim>(cb_out_tile_id, 1, cb_untilize_id, block + h);
-                    cb_pop_front(cb_out_tile_id, block_ct_dim);
-                }
+                cb_wait_front(cb_out_tile_id, block_ct_dim);
+                pack_untilize_block<block_ct_dim, full_ct_dim>(cb_out_tile_id, 1, cb_untilize_id, block + h);
+                cb_pop_front(cb_out_tile_id, block_ct_dim);
                 pack_untilize_uninit(cb_untilize_id);
             }
         }
