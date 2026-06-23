@@ -306,7 +306,7 @@
 - name: Qwen3-VL-32B e2e tests
   cmd: |
     uv pip install -r models/demos/qwen3_vl/requirements.txt
-    export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K
+    export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K PYTEST_ADDOPTS="--tb=short"
     pytest models/demos/qwen3_vl/demo/demo.py --timeout 600
   model: qwen3-vl-32b
   skus:
