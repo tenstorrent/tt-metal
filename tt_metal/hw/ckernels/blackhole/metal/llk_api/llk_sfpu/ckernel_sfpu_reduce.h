@@ -1386,10 +1386,14 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
     // sign-magnitude<->two's-complement explicitly). Int32 MAX/MIN keep plain INT32 (sign-magnitude):
     // SFPSWAP(VEC_MIN_MAX) is a float/sign-magnitude comparator that orders sign-magnitude integers
     // correctly, whereas two's-complement negatives would be mis-ordered.
-    constexpr bool int32_sum_avg =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
+    // Option A (issue #47647): Int32 MAX/MIN revert to INT32_2S_COMP to match the column-reduce calculate
+    // path. init_reduce has no reduce_dim template arg; the row-MAX path re-records its own replay buffer
+    // and ignores this LOADMACRO setup, so selecting INT32_2S_COMP for all Int32 MAX/MIN is safe here.
+    constexpr bool int32_2s_comp =
+        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG ||
+                                         pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        int32_sum_avg ? InstrModLoadStore::INT32_2S_COMP : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
+        int32_2s_comp ? InstrModLoadStore::INT32_2S_COMP : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
 
     // Garbage high bits needs to be cleared when loading UInt16 data
     constexpr bool clear_high_bits = (is_fp32_dest_acc_en && format == DataFormat::UInt16);
@@ -1457,10 +1461,17 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     // explicitly). Int32 MAX/MIN (both dims) keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX) is a
     // float/sign-magnitude comparator that orders sign-magnitude integers correctly; two's-complement
     // negatives are mis-ordered (min of negatives would return the least-negative value).
+    // Option A (issue #47647): Int32 MAX/MIN column reduce reverts to INT32_2S_COMP (pre-#46231). Scoped
+    // to REDUCE_COL so the row-MAX path keeps plain sign-magnitude INT32 (its static_assert below requires
+    // FP32/INT32/FP16B). On Blackhole the mode-12 load/store conversion is a no-op, so this is benign here.
     constexpr bool int32_sum_avg =
         (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
-    constexpr InstrModLoadStore INSTRUCTION_MODE =
-        int32_sum_avg ? InstrModLoadStore::INT32_2S_COMP : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
+    constexpr bool int32_max_min_col =
+        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
+         reduce_dim == ReduceDim::REDUCE_COL);
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (int32_sum_avg || int32_max_min_col)
+                                                       ? InstrModLoadStore::INT32_2S_COMP
+                                                       : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
 
     // Garbage high bits needs to be cleared when loading UInt16 data (driven by INPUT format).
     constexpr bool clear_high_bits = (is_fp32_dest_acc_en && format == DataFormat::UInt16);

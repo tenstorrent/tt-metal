@@ -1223,8 +1223,12 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
     // on two's-complement values. Int32 MAX/MIN keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX)
     // is a float/sign-magnitude comparator and orders sign-magnitude integers correctly, whereas
     // two's-complement negatives would be mis-ordered.
+    // Option A (issue #47647): Int32 MAX/MIN revert to INT32_2S_COMP to match the column-reduce calculate
+    // path. init_reduce has no reduce_dim template arg; the row-MAX path re-records its own replay buffer
+    // and ignores this LOADMACRO setup, so selecting INT32_2S_COMP for all Int32 MAX/MIN is safe here.
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG))
+        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG ||
+                                         pool_type == PoolType::MAX || pool_type == PoolType::MIN))
             ? InstrModLoadStore::INT32_2S_COMP
         : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
                                             : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
@@ -1297,10 +1301,16 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
     // mis-ordered (max of negatives would return the most-negative value).
     constexpr bool int32_sum_avg =
         (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
-    constexpr InstrModLoadStore INSTRUCTION_MODE = int32_sum_avg ? InstrModLoadStore::INT32_2S_COMP
-                                                   : (format == DataFormat::Float16_b)
-                                                       ? InstrModLoadStore::DEFAULT
-                                                       : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
+    // Option A (issue #47647): Int32 MAX/MIN column reduce reverts to INT32_2S_COMP (pre-#46231 behavior).
+    // The transpose-based dim=0/dim=1 path feeds the column reduce sentinel-padded tiles; plain
+    // sign-magnitude INT32 mis-handles those lanes, so restore the two's-complement column-reduce mode.
+    constexpr bool int32_max_min_col =
+        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
+         reduce_dim == ReduceDim::REDUCE_COL);
+    constexpr InstrModLoadStore INSTRUCTION_MODE =
+        (int32_sum_avg || int32_max_min_col) ? InstrModLoadStore::INT32_2S_COMP
+        : (format == DataFormat::Float16_b)  ? InstrModLoadStore::DEFAULT
+                                             : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word
     // (driven by INPUT format).
