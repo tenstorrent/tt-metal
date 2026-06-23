@@ -513,7 +513,7 @@ for entry in \
     "SC16_revAB:${SP4_GLX_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC16_revC:${BH_110C_CLUSTER_DESC_MAPPING}:16 64" \
     "SC16_revC_subtorus_aisleD:${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}:16 48 64" \
-    "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" \
     "SC20_revAB:${BH_SC20_CLUSTER_DESC_MAPPING}:16 48 64 80" \
     "SC20_revC_subtorus:${BH_110C_SC20_SUBTORUS_CLUSTER_DESC_MAPPING}:16 48 64 80" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
