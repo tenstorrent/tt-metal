@@ -42,6 +42,7 @@ def _worker(
     barrier: mp.Barrier,
     result_dict: dict,
     cores_per_worker: int,
+    mean_pool: bool = False,
 ) -> None:
     """Single-chip: build model, warmup, barrier-sync, measure, report."""
     os.environ["TT_VISIBLE_DEVICES"] = str(chip_id)
@@ -133,6 +134,11 @@ def _worker(
         def _fwd_post(di):
             tr = model.transform_and_embed_prefill_inputs_device(*di)
             out = model.ttnn_prefill_forward(x=tr[0], page_table=tr[1], chunk_page_table=tr[2], **fwd_kw)
+            if mean_pool:
+                # Live serving path: full-sequence RMSNorm + mean-token pooling
+                # folded into the trace so only the pooled [H] vector is returned.
+                h = model.norm(out, mode="prefill")
+                return ttnn.mean(h, dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             if is_batched:
                 return model.process_hidden_states_after_prefill_trace_batched(out, get_last_token)
             return model.process_hidden_states_after_prefill_trace(out, last_token_idx)
@@ -159,7 +165,13 @@ def _worker(
             _ = ttnn.to_torch(ttnn.get_device_tensors(h)[0])
 
         # ---- All workers rendezvous here before measurement ----
-        barrier.wait()
+        # Best-effort sync: if a peer worker died before reaching the barrier it
+        # will have called barrier.abort(), so tolerate a broken/timed-out barrier
+        # and measure anyway rather than deadlocking the whole run.
+        try:
+            barrier.wait(timeout=300)
+        except Exception:
+            pass
 
         device_secs: list[float] = []
         for _ in range(iterations):
@@ -175,11 +187,10 @@ def _worker(
             ttnn.synchronize_device(device)
         except Exception:
             pass
-        try:
-            ttnn.close_device(device)
-        except Exception:
-            pass
 
+        # Record results BEFORE closing the device: close_device can SIGABRT in the
+        # profiler teardown (profiler.cpp marker stack), which would kill the worker
+        # and lose an otherwise-complete measurement.
         result_dict[chip_id] = {
             "chip": chip_id,
             "ok": True,
@@ -195,12 +206,34 @@ def _worker(
             "device_secs": device_secs,
             "total_sec": time.perf_counter() - wall0,
         }
+
+        # Hard-exit instead of ttnn.close_device(): with 32 processes tearing down
+        # simultaneously, the C++ device teardown (device-profiler marker-stack dump,
+        # profiler.cpp) can SIGABRT across all workers at once, which hangs the parent
+        # on join and can corrupt board state (requiring a reset). Results are already
+        # recorded in the manager dict above, so skip the crashy teardown and let the
+        # OS reclaim the device on process exit.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
     except Exception as exc:
+        import traceback
+
         result_dict[chip_id] = {
             "chip": chip_id,
             "ok": False,
             "error": f"{type(exc).__name__}: {exc}",
+            "trace": traceback.format_exc(),
         }
+        # Break the barrier so peers blocked in barrier.wait() don't deadlock the
+        # whole run waiting for this (now-dead) worker.
+        try:
+            barrier.abort()
+        except Exception:
+            pass
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
 
 
 def _orchestrate(args: argparse.Namespace) -> None:
@@ -213,12 +246,14 @@ def _orchestrate(args: argparse.Namespace) -> None:
     total_cores = os.cpu_count() or 64
     cores_per_worker = max(1, total_cores // n)
 
+    postproc = "RMSNorm + mean-token pooling (live embedding)" if args.mean_pool else "last-token slice + norm (proxy)"
     print(
         f"Multi-process DP={n} pplx-embed-v1-0.6B (bs={batch_size}, ISL={seq_len})\n"
         f"  warmup={warmup}  measured_iters={iterations}\n"
         f"  CPU cores: {total_cores} total, {cores_per_worker}/worker\n"
         f"  Barrier sync: all workers rendezvous after warmup\n"
         f"  Full pipeline: extended trace (fwd + post-proc) + D2H + torch\n"
+        f"  Post-processing: {postproc}\n"
         f"  Each worker: TT_VISIBLE_DEVICES=<chip>, open_device(0), "
         f"independent model + trace\n"
     )
@@ -233,7 +268,7 @@ def _orchestrate(args: argparse.Namespace) -> None:
     for i in range(n):
         p = ctx.Process(
             target=_worker,
-            args=(i, batch_size, seq_len, iterations, warmup, barrier, result_dict, cores_per_worker),
+            args=(i, batch_size, seq_len, iterations, warmup, barrier, result_dict, cores_per_worker, args.mean_pool),
             name=f"chip-{i}",
         )
         p.start()
@@ -353,6 +388,13 @@ Supported (batch-size, seq-len) combinations with optimized settings:
     p.add_argument("--seq-len", type=int, default=512, help="Input sequence length (default: 512)")
     p.add_argument("--iterations", type=int, default=10)
     p.add_argument("--warmup", type=int, default=2)
+    p.add_argument(
+        "--mean-pool",
+        action="store_true",
+        help="Use the live-serving post-processing (full-seq RMSNorm + mean-token pooling "
+        "folded into the trace) instead of the last-token benchmark proxy. Returns the "
+        "actual embedding vector. Currently bs=1 only.",
+    )
     args = p.parse_args()
     _orchestrate(args)
 

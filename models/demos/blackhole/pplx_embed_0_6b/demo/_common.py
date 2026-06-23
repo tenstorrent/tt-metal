@@ -171,6 +171,10 @@ def apply_recommended_env(batched_l1: bool) -> None:
     os.environ.setdefault("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "1")
     os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "1")
     os.environ.setdefault("QWEN_ROPE_PREFILL_L1", "1")
+    # RoPE is a cos/sin rotation (operands in [-1,1]); the rotary_embedding_llama
+    # op defaults to HiFi4, but LoFi is accuracy-neutral (STS-B 0.8487 vs 0.8481)
+    # and saves ~0.4ms on bs1/ISL512. See tt/attention.py:_mllama_rope_prefill.
+    os.environ.setdefault("QWEN_ROPE_FIDELITY", "lofi")
     os.environ.setdefault("QWEN_LN_BLOCK_SHARDED", "1")
     # Embedding-specific: skip KV cache fill (no decode)
     os.environ.setdefault("TT_SKIP_KV_CACHE_FILL", "1")
