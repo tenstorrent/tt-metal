@@ -71,7 +71,7 @@ DataFormat check_consistent_format_across_buffers(std::span<const DataFormat> da
         // Special case where Float32 can pair with any exponent precision, skip checking
         if ((format == DataFormat::Float32) || (format == DataFormat::RawUInt32) || (format == DataFormat::UInt32) ||
             (format == DataFormat::RawUInt16) || (format == DataFormat::RawUInt8) || (format == DataFormat::UInt16) ||
-            (format == DataFormat::UInt8) || (format == DataFormat::Int32)) {
+            (format == DataFormat::UInt8) || (format == DataFormat::Int32) || (format == DataFormat::Int16)) {
             continue;
         }
 
@@ -276,6 +276,8 @@ DataFormat get_single_pack_src_format(
             pack_src_format = DataFormat::Int32;
         } else if (data_format == DataFormat::UInt16) {
             pack_src_format = DataFormat::UInt16;
+        } else if (data_format == DataFormat::Int16) {
+            pack_src_format = DataFormat::Int16;
         } else if (data_format == DataFormat::UInt8) {
             pack_src_format = DataFormat::UInt8;
         } else if (data_format == DataFormat::Int8) {

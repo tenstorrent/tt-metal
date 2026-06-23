@@ -39,8 +39,10 @@
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/float32.hpp"
 #include "tt_metal/test_utils/int8.hpp"
+#include "tt_metal/test_utils/mx_utils.hpp"
 #include "tt_metal/test_utils/packing.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
+#include <tt-metalium/tile.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program.hpp>
 #include <tt-metalium/int8.hpp>
@@ -394,6 +396,195 @@ bool is_close_packed_sfpu_output_f32(
     return true;
 }
 
+// ---- Typecast (data-conversion) test helpers ----------------------------------------------------
+//
+// The Quasar typecast op is a single unified kernel (ckernel_sfpu_typecast.h) templated on
+// (SRC_FMT, DST_FMT). MX <-> float typecasts are a SFPU no-op (the unpack/pack gasket performs the
+// conversion). These helpers pack each endpoint format, decode it back, and build a host golden so
+// the metal test exercises each conversion class symmetrically, mirroring the tt-llk typecast test.
+// Whole-number stimulus keeps float<->int conversions lossless; the golden re-applies the
+// destination encoding's quantization so it matches what the packer produces.
+
+inline bool typecast_is_mx(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::MxFp8R || fmt == tt::DataFormat::MxFp8P;
+}
+
+// Integer endpoints whose value compares exactly (and that the SFPU round-to-nearest produces).
+inline bool typecast_is_int(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::Int16 || fmt == tt::DataFormat::UInt8;
+}
+
+inline bool typecast_is_unsigned(tt::DataFormat fmt) { return fmt == tt::DataFormat::UInt8; }
+
+// Device-side ckernel::DataFormat enum NAME (the kernel chain references formats by name, since the
+// compute kernel compiles against the device enum whose values differ from the host tt::DataFormat).
+inline std::string typecast_device_format_name(tt::DataFormat fmt) {
+    switch (fmt) {
+        case tt::DataFormat::Float16_b: return "Float16_b";
+        case tt::DataFormat::Float32: return "Float32";
+        case tt::DataFormat::Int32: return "Int32";
+        case tt::DataFormat::Int16: return "Int16";
+        case tt::DataFormat::UInt8: return "UInt8";
+        case tt::DataFormat::MxFp8R: return "MxFp8R";
+        case tt::DataFormat::MxFp8P: return "MxFp8P";
+        default: TT_THROW("typecast test: unsupported format {}", static_cast<int>(fmt));
+    }
+}
+
+// Pack tile-ordered whole-number floats into `fmt`'s on-device L1 tile encoding.
+inline std::vector<uint32_t> typecast_pack(tt::DataFormat fmt, const std::vector<float>& vals) {
+    switch (fmt) {
+        case tt::DataFormat::Float16_b: {
+            std::vector<bfloat16> bf(vals.begin(), vals.end());
+            return pack_vector<uint32_t, bfloat16>(bf);
+        }
+        case tt::DataFormat::Float32: {
+            std::vector<uint32_t> out(vals.size());
+            for (size_t i = 0; i < vals.size(); ++i) {
+                out[i] = float32(vals[i]).to_packed();
+            }
+            return out;
+        }
+        case tt::DataFormat::Int32: {
+            // Quasar Int32 in L1 is sign-magnitude (same encoding as the int8->int32 binary path).
+            std::vector<uint32_t> out(vals.size());
+            for (size_t i = 0; i < vals.size(); ++i) {
+                out[i] = int32_to_sign_mag_word(static_cast<int32_t>(std::lround(vals[i])));
+            }
+            return out;
+        }
+        case tt::DataFormat::Int16: {
+            // Quasar Int16 in L1 is sign-magnitude 16-bit (SMAG16): sign in bit 15, 14-bit magnitude;
+            // two elements packed per 32-bit word (element 2i in the low half, 2i+1 in the high half).
+            std::vector<uint32_t> out((vals.size() + 1) / 2, 0);
+            for (size_t i = 0; i < vals.size(); ++i) {
+                const int32_t s = static_cast<int32_t>(std::lround(vals[i]));
+                const uint16_t enc =
+                    static_cast<uint16_t>((s < 0 ? 0x8000u : 0u) | (static_cast<uint32_t>(std::abs(s)) & 0x7fffu));
+                out[i / 2] |= static_cast<uint32_t>(enc) << (16 * (i % 2));
+            }
+            return out;
+        }
+        case tt::DataFormat::UInt8: {
+            // UInt8 in L1 is raw unsigned bytes (four per 32-bit word).
+            std::vector<uint32_t> out((vals.size() + 3) / 4, 0);
+            for (size_t i = 0; i < vals.size(); ++i) {
+                const int32_t s = std::clamp<int32_t>(static_cast<int32_t>(std::lround(vals[i])), 0, 255);
+                out[i / 4] |= static_cast<uint32_t>(s & 0xff) << (8 * (i % 4));
+            }
+            return out;
+        }
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P: return pack_as_mx_tiles(fmt, vals, /*row_major_input=*/false);
+        default: TT_THROW("typecast test: unsupported pack format {}", static_cast<int>(fmt));
+    }
+}
+
+// Decode `fmt`'s L1 tile bytes back into tile-ordered floats (inverse of typecast_pack).
+inline std::vector<float> typecast_decode(tt::DataFormat fmt, const std::vector<uint32_t>& bytes) {
+    switch (fmt) {
+        case tt::DataFormat::Float16_b: {
+            auto bf = unpack_vector<bfloat16, uint32_t>(bytes);
+            std::vector<float> out(bf.size());
+            for (size_t i = 0; i < bf.size(); ++i) {
+                out[i] = static_cast<float>(bf[i]);
+            }
+            return out;
+        }
+        case tt::DataFormat::Float32: {
+            std::vector<float> out(bytes.size());
+            for (size_t i = 0; i < bytes.size(); ++i) {
+                out[i] = float32(bytes[i]).to_float();
+            }
+            return out;
+        }
+        case tt::DataFormat::Int32: {
+            std::vector<float> out(bytes.size());
+            for (size_t i = 0; i < bytes.size(); ++i) {
+                const uint32_t w = bytes[i];
+                const int32_t mag = static_cast<int32_t>(w & 0x7fffffffu);
+                out[i] = static_cast<float>((w & 0x80000000u) ? -mag : mag);
+            }
+            return out;
+        }
+        case tt::DataFormat::Int16: {
+            std::vector<float> out(bytes.size() * 2);
+            for (size_t i = 0; i < out.size(); ++i) {
+                const uint16_t h = static_cast<uint16_t>(bytes[i / 2] >> (16 * (i % 2)));
+                const int32_t mag = h & 0x7fff;
+                out[i] = static_cast<float>((h & 0x8000) ? -mag : mag);
+            }
+            return out;
+        }
+        case tt::DataFormat::UInt8: {
+            std::vector<float> out(bytes.size() * 4);
+            for (size_t i = 0; i < out.size(); ++i) {
+                out[i] = static_cast<float>((bytes[i / 4] >> (8 * (i % 4))) & 0xffu);
+            }
+            return out;
+        }
+        case tt::DataFormat::MxFp8R:
+        case tt::DataFormat::MxFp8P: return mx_to_floats(fmt, bytes, /*row_major_output=*/false);
+        default: TT_THROW("typecast test: unsupported decode format {}", static_cast<int>(fmt));
+    }
+}
+
+// Whole-number stimulus, range chosen so every endpoint represents it losslessly: small magnitudes
+// for MX (block-float steps), non-negative for an unsigned endpoint (UInt8), wider signed otherwise.
+inline std::vector<float> generate_typecast_input(
+    size_t numel, int seed, tt::DataFormat in_fmt, tt::DataFormat out_fmt) {
+    const bool mx = typecast_is_mx(in_fmt) || typecast_is_mx(out_fmt);
+    const bool has_unsigned = typecast_is_unsigned(in_fmt) || typecast_is_unsigned(out_fmt);
+    const float lo = (mx || has_unsigned) ? 0.0f : -64.0f;
+    const float hi = mx ? 8.0f : (has_unsigned ? 32.0f : 64.0f);
+    auto packed = generate_packed_uniform_random_vector<uint32_t, bfloat16>(lo, hi, numel, seed);
+    auto bf = unpack_vector<bfloat16, uint32_t>(packed);
+    std::vector<float> out(bf.size());
+    for (size_t i = 0; i < bf.size(); ++i) {
+        out[i] = std::round(static_cast<float>(bf[i]));
+    }
+    return out;
+}
+
+// Expected tile-ordered output values of a SRC->DST typecast of `vals` (packed_in is its SRC bytes).
+inline std::vector<float> typecast_golden(
+    tt::DataFormat in_fmt, tt::DataFormat out_fmt, const std::vector<uint32_t>& packed_in) {
+    // Effective source = what the SRC encoding actually represents (after any input quantization).
+    std::vector<float> golden = typecast_decode(in_fmt, packed_in);
+    if (typecast_is_int(out_fmt)) {
+        for (auto& v : golden) {
+            v = static_cast<float>(std::lround(v));  // float->int rounds to nearest
+            if (typecast_is_unsigned(out_fmt)) {
+                v = std::max(v, 0.0f);  // unsigned dst clamps negatives to 0 (matches the SFPU)
+            }
+        }
+    }
+    // Fold in the destination encoding's quantization so the golden matches what the packer emits.
+    if (typecast_is_mx(out_fmt) || out_fmt == tt::DataFormat::Float16_b) {
+        golden = typecast_decode(out_fmt, typecast_pack(out_fmt, golden));
+    }
+    return golden;
+}
+
+inline bool typecast_compare(tt::DataFormat out_fmt, const std::vector<float>& got, const std::vector<float>& want) {
+    if (got.size() != want.size()) {
+        return false;
+    }
+    const bool exact = typecast_is_int(out_fmt);
+    const float rtol = typecast_is_mx(out_fmt) ? 0.1f : 0.05f;
+    const float atol = typecast_is_mx(out_fmt) ? 0.1f : 0.05f;
+    for (size_t i = 0; i < got.size(); ++i) {
+        if (exact) {
+            if (got[i] != want[i]) {
+                return false;
+            }
+        } else if (std::fabs(got[i] - want[i]) > atol + rtol * std::fabs(want[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace unit_tests::sfpu_util
 
 namespace unit_tests::compute::sfpu {
@@ -411,73 +602,37 @@ struct SfpuConfig {
     bool en_32bit_dest = false;
 };
 
-/// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram. So far, enqueue APIs only added to
-/// grayskull
-/// @param device
-/// @param test_config - Configuration of the test -- see struct
-/// @return
-bool run_sfpu_all_same_buffer(
-    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
-    const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+/// Builds and runs the single-input SFPU pipeline on one core and returns the raw DST bytes:
+///
+///   DRAM(in) -> reader_unary -> in DFB(in_fmt) -> eltwise_sfpu(`defines`) -> out DFB(out_fmt) -> writer_unary -> DRAM
+///
+/// Generic over the (input, output) data formats in `cfg`, so scalar-math unary ops (in == out) and
+/// data-conversion ops like typecast (in != out, differing tile widths) share one harness. Cross-arch:
+/// keeps the Gen1+Gen2 data-movement config and the MeshWorkload dispatch path. Callers supply the
+/// compute `defines` (op selection / chain) and the packed SRC bytes, and verify the returned DST bytes.
+std::vector<uint32_t> run_sfpu_pipeline(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    const SfpuConfig& test_config,
+    const std::map<std::string, std::string>& defines,
+    const std::vector<uint32_t>& packed_input) {
     auto& cq = mesh_device->mesh_command_queue();
+    const size_t in_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_input_data_format);
+    const size_t out_bytes = test_config.num_tiles * tt::tile_size(test_config.l1_output_data_format);
 
-    tt::tt_metal::InterleavedBufferConfig dram_config{
+    tt::tt_metal::InterleavedBufferConfig in_dram{
         .device = mesh_device->get_devices()[0],
-        .size = byte_size,
-        .page_size = byte_size,
+        .size = in_bytes,
+        .page_size = in_bytes,
         .buffer_type = tt::tt_metal::BufferType::DRAM};
+    tt::tt_metal::InterleavedBufferConfig out_dram{
+        .device = mesh_device->get_devices()[0],
+        .size = out_bytes,
+        .page_size = out_bytes,
+        .buffer_type = tt::tt_metal::BufferType::DRAM};
+    auto input_dram_buffer = CreateBuffer(in_dram);
+    auto output_dram_buffer = CreateBuffer(out_dram);
 
-    auto input_dram_buffer = CreateBuffer(dram_config);
-    auto output_dram_buffer = CreateBuffer(dram_config);
-
-    // Input
-    const bool is_fp32 = (test_config.l1_input_data_format == tt::DataFormat::Float32);
-    // The Float32 device path only wires up relu in v1; the golden/input/check helpers below are
-    // format-generic, so this is the single place that pins the supported-op set for Float32.
-    TT_FATAL(!is_fp32 || test_config.sfpu_op == "relu", "Float32 SFPU path supports relu only in v1");
-    const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
-    const size_t numel = byte_size / element_size;
-    const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
-    // Float32 packs 1:1 into uint32 words (pack_vector accepts sizeof(PackType) >= sizeof(ValueType)),
-    // so the bf16 uniform-random generator works for both; relu uses the [-1, 1] default range.
-    std::vector<uint32_t> packed_input =
-        is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, numel, seed)
-                : sfpu_util::generate_packed_sfpu_input(numel, test_config.sfpu_op, seed);
-
-    // Golden output
-    std::vector<uint32_t> packed_golden;
-    if (is_fp32) {
-        // 1:1 element-to-word; bit_cast in/out per-element.
-        packed_golden.resize(packed_input.size());
-        for (size_t i = 0; i < packed_input.size(); ++i) {
-            const float in = std::bit_cast<float>(packed_input[i]);
-            packed_golden[i] = std::bit_cast<uint32_t>(sfpu_util::sfpu_function(test_config.sfpu_op, in));
-        }
-    } else {
-        auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
-        std::vector<bfloat16> golden(input.size());
-        std::transform(input.begin(), input.end(), golden.begin(), [&](const bfloat16& val) {
-            return sfpu_util::sfpu_function(test_config.sfpu_op, val);
-        });
-        packed_golden = pack_vector<uint32_t, bfloat16>(golden);
-    }
-
-    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
-    sfpu_defines["SFPU_UNARY_OP"] = "1";
-    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RSQRT_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
-    sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
-
-    // Every existing parametrization of this test uses a single-core CoreRangeSet of {0, 0};
+    // Every parametrization of these tests uses a single-core CoreRangeSet of {0, 0};
     // MakeProgramFromSpec models the kernel set per single-core WorkUnit.
     TT_FATAL(
         test_config.cores.ranges().size() == 1,
@@ -496,22 +651,20 @@ bool run_sfpu_all_same_buffer(
 
     experimental::DataflowBufferSpec in_dfb_spec{
         .unique_id = IN_DFB,
-        .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
+        .entry_size = static_cast<uint32_t>(tt::tile_size(test_config.l1_input_data_format)),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_input_data_format,
     };
     experimental::DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
-        .entry_size = static_cast<uint32_t>(test_config.tile_byte_size),
+        .entry_size = static_cast<uint32_t>(tt::tile_size(test_config.l1_output_data_format)),
         .num_entries = static_cast<uint32_t>(test_config.num_tiles),
         .data_format_metadata = test_config.l1_output_data_format,
     };
 
     experimental::KernelSpec reader_spec{
         .unique_id = READER,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = IN_DFB,
@@ -531,9 +684,7 @@ bool run_sfpu_all_same_buffer(
 
     experimental::KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
         .dfb_bindings = {{
             .dfb_spec_name = OUT_DFB,
@@ -552,15 +703,13 @@ bool run_sfpu_all_same_buffer(
     };
 
     experimental::KernelSpec::CompilerOptions::Defines compute_defines;
-    for (const auto& [k, v] : sfpu_defines) {
+    for (const auto& [k, v] : defines) {
         compute_defines.emplace(k, v);
     }
 
     experimental::KernelSpec compute_spec{
         .unique_id = COMPUTE,
-        .source =
-
-            "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_sfpu_2_0.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = std::move(compute_defines)},
         .dfb_bindings =
@@ -640,7 +789,66 @@ bool run_sfpu_all_same_buffer(
 
     std::vector<uint32_t> dest_buffer_data;
     tt_metal::detail::ReadFromBuffer(output_dram_buffer, dest_buffer_data);
+    return dest_buffer_data;
+}
 
+/// @brief Does Dram --> Reader --> CB --> Sfpu Compute --> CB --> Writer --> Dram. So far, enqueue APIs only added to
+/// grayskull
+/// @param device
+/// @param test_config - Configuration of the test -- see struct
+/// @return
+bool run_sfpu_all_same_buffer(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const SfpuConfig& test_config) {
+    const size_t byte_size = test_config.num_tiles * test_config.tile_byte_size;
+
+    // Input
+    const bool is_fp32 = (test_config.l1_input_data_format == tt::DataFormat::Float32);
+    // The Float32 device path only wires up relu in v1; the golden/input/check helpers below are
+    // format-generic, so this is the single place that pins the supported-op set for Float32.
+    TT_FATAL(!is_fp32 || test_config.sfpu_op == "relu", "Float32 SFPU path supports relu only in v1");
+    const size_t element_size = is_fp32 ? sizeof(float) : sizeof(bfloat16);
+    const size_t numel = byte_size / element_size;
+    const auto seed = std::chrono::system_clock::now().time_since_epoch().count();
+    // Float32 packs 1:1 into uint32 words (pack_vector accepts sizeof(PackType) >= sizeof(ValueType)),
+    // so the bf16 uniform-random generator works for both; relu uses the [-1, 1] default range.
+    std::vector<uint32_t> packed_input =
+        is_fp32 ? generate_packed_uniform_random_vector<uint32_t, float>(-1.0f, 1.0f, numel, seed)
+                : sfpu_util::generate_packed_sfpu_input(numel, test_config.sfpu_op, seed);
+
+    // Golden output
+    std::vector<uint32_t> packed_golden;
+    if (is_fp32) {
+        // 1:1 element-to-word; bit_cast in/out per-element.
+        packed_golden.resize(packed_input.size());
+        for (size_t i = 0; i < packed_input.size(); ++i) {
+            const float in = std::bit_cast<float>(packed_input[i]);
+            packed_golden[i] = std::bit_cast<uint32_t>(sfpu_util::sfpu_function(test_config.sfpu_op, in));
+        }
+    } else {
+        auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
+        std::vector<bfloat16> golden(input.size());
+        std::transform(input.begin(), input.end(), golden.begin(), [&](const bfloat16& val) {
+            return sfpu_util::sfpu_function(test_config.sfpu_op, val);
+        });
+        packed_golden = pack_vector<uint32_t, bfloat16>(golden);
+    }
+
+    std::map<std::string, std::string> sfpu_defines = sfpu_util::sfpu_op_to_op_name.at(test_config.sfpu_op);
+    sfpu_defines["SFPU_UNARY_OP"] = "1";
+    sfpu_defines["SFPU_OP_EXP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_GELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RECIP_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_SQRT_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RSQRT_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ERF_ERFC_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_ELU_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_NEG_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_RELU_FAMILY_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_COMPUTE_KERNEL_API_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_BINOP_WITH_SCALAR_INCLUDE"] = "1";
+    sfpu_defines["SFPU_OP_UNARY_COMP_INCLUDE"] = "1";
+
+    const auto dest_buffer_data = run_sfpu_pipeline(mesh_device, test_config, sfpu_defines, packed_input);
     return is_fp32 ? sfpu_util::is_close_packed_sfpu_output_f32(dest_buffer_data, packed_golden, test_config.sfpu_op)
                    : sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
@@ -1159,6 +1367,71 @@ bool run_sfpu_ternary_three_input_buffer(
     return sfpu_util::is_close_packed_sfpu_output(dest_buffer_data, packed_golden, test_config.sfpu_op);
 }
 
+/// High-level flow (single input, differing in/out formats):
+///
+///   DRAM(in, SRC) -> Reader -> in DFB(SRC) -> SFPU typecast(SRC->DST) -> out DFB(DST) -> Writer -> DRAM(out, DST)
+///
+/// MX <-> float pairs issue no SFPU op (the unpack/pack gasket performs the conversion); the kernel
+/// chain still runs copy_tile + pack_tile, so the conversion happens symmetrically on both threads.
+bool run_sfpu_typecast(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device,
+    tt::DataFormat in_fmt,
+    tt::DataFormat out_fmt,
+    size_t num_tiles) {
+    const size_t numel = num_tiles * 32 * 32;
+    const int seed = std::chrono::system_clock::now().time_since_epoch().count();
+    auto vals = sfpu_util::generate_typecast_input(numel, seed, in_fmt, out_fmt);
+    auto packed_in = sfpu_util::typecast_pack(in_fmt, vals);
+    auto golden = sfpu_util::typecast_golden(in_fmt, out_fmt, packed_in);
+
+    // Flag selection mirrors ttnn.typecast / the tt-llk typecast test (see test_eltwise_unary_typecast.py:
+    // _preserve_fp32_precision, _production_dest_acc, unpack_to_dest), so the compute-side datapath matches
+    // the LLK reference these conversions pass under.
+    const bool in_is_32bit = in_fmt == tt::DataFormat::Float32 || in_fmt == tt::DataFormat::Int32;
+    const bool out_is_32bit = out_fmt == tt::DataFormat::Float32 || out_fmt == tt::DataFormat::Int32;
+
+    // preserve_fp32_precision: a Float32 input, an 8-bit-output promotion from a bf16/MX source, or a
+    // UInt8 input.
+    const bool preserve_fp32 = in_fmt == tt::DataFormat::Float32 ||
+                               (out_fmt == tt::DataFormat::UInt8 &&
+                                (in_fmt == tt::DataFormat::Float16_b || sfpu_util::typecast_is_mx(in_fmt))) ||
+                               in_fmt == tt::DataFormat::UInt8;
+
+    // dest_acc (fp32_dest_acc_en): a 32-bit endpoint or preserve_fp32. Narrow integer pairs (e.g. Int16 ->
+    // Float16_b) stay in a 16-bit Dest, exactly as production runs them.
+    const bool fp32_dest_acc = preserve_fp32 || in_is_32bit || out_is_32bit;
+
+    // unpack-to-Dest only changes the datapath for genuine 32-bit inputs (the narrow-input unpack MOP gates
+    // on is_32bit_input, so the flag is inert for Int16/UInt8 -- they reach Dest via FPU A2D datacopy).
+    // Wiring UnpackToDestFp32 for a narrow input drives the wrong datapath (UInt8 hangs, Int16 corrupts).
+    const bool unpack_to_dest = in_is_32bit;
+
+    // typecast_tile_init<IN, OUT>() + typecast_tile<IN, OUT>(0), with the format pair baked into the
+    // template args via the device-side ckernel::DataFormat enum names.
+    std::map<std::string, std::string> defines;
+    defines["SFPU_UNARY_OP"] = "1";
+    defines["SFPU_OP_TYPECAST_INCLUDE"] = "1";
+    const std::string tmpl = "<static_cast<uint32_t>(DataFormat::" + sfpu_util::typecast_device_format_name(in_fmt) +
+                             "), static_cast<uint32_t>(DataFormat::" + sfpu_util::typecast_device_format_name(out_fmt) +
+                             ")>";
+    defines["SFPU_OP_CHAIN_0"] = "typecast_tile_init" + tmpl + "(); typecast_tile" + tmpl + "(0);";
+
+    const CoreRange core_range({0, 0}, {0, 0});
+    SfpuConfig cfg{
+        .num_tiles = num_tiles,
+        .l1_input_data_format = in_fmt,
+        .l1_output_data_format = out_fmt,
+        .cores = CoreRangeSet({core_range}),
+        .approx_mode = false,
+        .unpack_to_dest_fp32 = unpack_to_dest,
+        .en_32bit_dest = fp32_dest_acc,
+    };
+
+    const auto dest = run_sfpu_pipeline(mesh_device, cfg, defines, packed_in);
+    const auto got = sfpu_util::typecast_decode(out_fmt, dest);
+    return sfpu_util::typecast_compare(out_fmt, got, golden);
+}
+
 }  // namespace unit_tests::compute::sfpu
 
 void run_quasar_sfpu_unpack_to_dest_fp32(
@@ -1556,5 +1829,109 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, QuasarSfpuRelu) {
         }
     }
 }
+
+// Typecast (data-conversion) test fixture. Each instance is one (in_format -> out_format) pair,
+// covering the documented Quasar typecast matrix (block-float endpoints are the MX formats here;
+// UInt16 is replaced by Int16, and UInt32 is out of scope). Endpoints: Float16_b, Float32, Int32,
+// Int16 (SMAG16), UInt8, and MX (MxFp8P / MxFp8R). The compute API routes non-MX pairs through the
+// unified SFPU kernel; an MX endpoint behaves as Float16_b at the SFPU level (gasket).
+//
+// 32-bit inputs (Int32/Float32) are unpacked straight into a 32-bit Dest (UnpackToDestFp32); every other
+// input (Float16_b/MX/Int16) reaches Dest via the FPU A2D datacopy. run_sfpu_typecast picks
+// fp32_dest_acc_en and unpack_to_dest the way ttnn.typecast does (see tt-llk test_eltwise_unary_typecast):
+// narrow integer pairs (e.g. Int16 -> Float16_b) stay in a 16-bit Dest. Skipped classes: a 16-bit input
+// widening into a 32-bit output (Float16_b/Int16 -> Float32/Int32; an MX input counts as 16-bit, so
+// MX -> Float32/Int32 is skipped too), and any UInt8 endpoint (passes in tt-llk but needs datacopy /
+// pack_src parity before it works through this compute-API harness).
+class SingleCoreSingleMeshDeviceSfpuTypecastFixture
+    : public LLKMeshDeviceFixture,
+      public testing::WithParamInterface<std::tuple<tt::DataFormat, tt::DataFormat>> {};
+
+TEST_P(SingleCoreSingleMeshDeviceSfpuTypecastFixture, TensixSfpuTypecast) {
+    const auto in_fmt = std::get<0>(GetParam());
+    const auto out_fmt = std::get<1>(GetParam());
+
+    if (MetalContext::instance().get_cluster().arch() != ARCH::QUASAR) {
+        GTEST_SKIP() << "Typecast compute-API test is currently Quasar-only";
+    }
+
+    // UInt8 endpoints pass in tt-llk but not yet through this metal compute-API harness. A UInt8 INPUT
+    // hangs in copy_tile's unpack regardless of Dest width (confirmed with both 16- and 32-bit Dest) --
+    // likely the unpacker's UInt8->INT8 register masking (masked_data_format) is not applied on this path.
+    // A UInt8 OUTPUT mismatches on the 8-bit pack value encoding (also independent of Dest width; pack_src
+    // already follows the output format). Both need metal2 datapath fixes, not test-harness changes.
+    if (in_fmt == tt::DataFormat::UInt8 || out_fmt == tt::DataFormat::UInt8) {
+        GTEST_SKIP() << "UInt8 typecast not yet wired through the metal compute-API harness";
+    }
+
+    // A 16-bit input widening into a 32-bit output (e.g. Float16_b -> Int32) is not supported: the
+    // narrow source cannot widen into a 32-bit Dest. Only 16->16, 32->16 and 32->32 are supported. An
+    // MX input arrives in Dest as Float16_b, so it counts as 16-bit data here.
+    const bool in_is_16bit = in_fmt == tt::DataFormat::Float16_b || in_fmt == tt::DataFormat::Int16 ||
+                             unit_tests::sfpu_util::typecast_is_mx(in_fmt);
+    const bool out_is_32bit = out_fmt == tt::DataFormat::Float32 || out_fmt == tt::DataFormat::Int32;
+    if (in_is_16bit && out_is_32bit) {
+        GTEST_SKIP() << "16-bit input -> 32-bit output not supported";
+    }
+
+    log_info(
+        tt::LogTest,
+        "Testing typecast {} -> {}",
+        unit_tests::sfpu_util::typecast_device_format_name(in_fmt),
+        unit_tests::sfpu_util::typecast_device_format_name(out_fmt));
+    for (unsigned int id = 0; id < num_devices_; id++) {
+        EXPECT_TRUE(unit_tests::compute::sfpu::run_sfpu_typecast(devices_.at(id), in_fmt, out_fmt, 1));
+    }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SingleCoreSfpuTypecast,
+    SingleCoreSingleMeshDeviceSfpuTypecastFixture,
+    ::testing::Values(
+        // --- Float16_b <-> {Float32, Int32, Int16, UInt8} (X->Float16_b with 32-bit X is skipped) ---
+        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Float32),
+        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::Float16_b),
+        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Int32),
+        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::Float16_b),
+        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::Int16),
+        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::Float16_b),
+        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::UInt8),
+        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::Float16_b),
+        // --- Float32 <-> {Int32, Int16, UInt8} (Float32-input directions skipped) ---
+        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::Int32),
+        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::Float32),
+        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::Int16),
+        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::Float32),
+        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::UInt8),
+        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::Float32),
+        // --- Int16 <-> Int32 ---
+        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::Int32),
+        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::Int16),
+        // --- MxFp8P <-> {Float16_b, Float32, Int32, Int16, UInt8} (X->MX with 32-bit X is skipped) ---
+        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Float16_b),
+        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::MxFp8P),
+        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Float32),
+        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::MxFp8P),
+        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Int32),
+        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::MxFp8P),
+        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::Int16),
+        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::MxFp8P),
+        std::make_tuple(tt::DataFormat::MxFp8P, tt::DataFormat::UInt8),
+        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::MxFp8P),
+        // --- MxFp8R <-> {Float16_b, Float32, Int32, Int16, UInt8} ---
+        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Float16_b),
+        std::make_tuple(tt::DataFormat::Float16_b, tt::DataFormat::MxFp8R),
+        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Float32),
+        std::make_tuple(tt::DataFormat::Float32, tt::DataFormat::MxFp8R),
+        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Int32),
+        std::make_tuple(tt::DataFormat::Int32, tt::DataFormat::MxFp8R),
+        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::Int16),
+        std::make_tuple(tt::DataFormat::Int16, tt::DataFormat::MxFp8R),
+        std::make_tuple(tt::DataFormat::MxFp8R, tt::DataFormat::UInt8),
+        std::make_tuple(tt::DataFormat::UInt8, tt::DataFormat::MxFp8R)),
+    [](const testing::TestParamInfo<std::tuple<tt::DataFormat, tt::DataFormat>>& info) {
+        return unit_tests::sfpu_util::typecast_device_format_name(std::get<0>(info.param)) + "_to_" +
+               unit_tests::sfpu_util::typecast_device_format_name(std::get<1>(info.param));
+    });
 
 }  // namespace tt::tt_metal
