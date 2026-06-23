@@ -121,12 +121,13 @@ class resnet50Bottleneck:
                         else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                     ),
                     deallocate_activation=True,
-                    reallocate_halo_output=False,
+                    # bfloat16 doubles every tensor; mirror the large variant's minimal
+                    # downsample config (no double buffering / activation reuse / full
+                    # inner dim) and cap the activation block height at one tile so the
+                    # CBs fit alongside the pinned residual + the wide projection output.
+                    reallocate_halo_output=True,
+                    act_block_h_override=32,
                     reshard_if_not_optimal=reshard_if_not_optimal,
-                    enable_act_double_buffer=True if not (is_blackhole_p100(device) and batch_size > 16) else False,
-                    enable_weights_double_buffer=True if input_width < 56 else False,
-                    full_inner_dim=True,
-                    enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
                 ),
             }
 
@@ -144,6 +145,10 @@ class resnet50Bottleneck:
                 return_weights_and_bias=True,
                 dtype=self.model_config["ACTIVATIONS_DTYPE"],
             )
+            # Mirror the large variant: free the residual input and defragment the
+            # downsample output so the following convs have contiguous L1.
+            ttnn.deallocate(x)
+            ds_out = ttnn.reallocate(ds_out)
         else:
             ds_out = x
         return ds_out
@@ -210,8 +215,34 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        act_block_h_override = 0
+        # bfloat16 doubles every tensor and the residual is pinned through conv2, so the
+        # bfloat8_b-tuned act_block_h overflows L1. Cap conv2 at one tile on every arch
+        # (one tile divides any per-core height); throughput is not a concern here.
+        act_block_h_override = 32
+
+        # Mirror the large resnet50 variant: run the downsample before conv2 for the
+        # projection/strided modules. bfloat16 doubles every tensor, so the pinned
+        # residual input can no longer co-reside in L1 with conv2's circular buffers.
+        # Running the downsample first lets the residual be consumed/freed before
+        # conv2. layer1_module1 (input 56, 64 in-channels) keeps the original order.
+        run_downsample_before_conv2 = not (ds_input_height == 56 and self.conv1_input_channels == 64)
         ds_out = None
+        if run_downsample_before_conv2:
+            if ds_input_height == 56 and self.conv1_input_channels == 256 and self.downsample:
+                # Defragment L1 before the projection conv so it fits alongside conv2.
+                x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+                ttnn.deallocate(x)
+                x = ttnn.reallocate(x_rm)
+            ds_out = self.run_downsample_if_req(
+                x,
+                device,
+                batch_size,
+                ds_input_height,
+                ds_input_width,
+                reshard_if_not_optimal,
+                height_sharding,
+                packer_l1_accum_enabled=packer_l1_acc,
+            )
 
         logger.debug(f"Running conv2")
 
@@ -237,27 +268,11 @@ class resnet50Bottleneck:
                     ttnn.TensorMemoryLayout.HEIGHT_SHARDED if height_sharding else ttnn.TensorMemoryLayout.BLOCK_SHARDED
                 ),
                 reshard_if_not_optimal=reshard_if_not_optimal,
-                enable_act_double_buffer=True,
-                enable_weights_double_buffer=True,
-                full_inner_dim=True,
-                enable_activation_reuse=True if height_sharding and self.stride == 1 else False,
+                # bfloat16 doubles every tensor; mirror the large variant's minimal
+                # conv2 config (no double buffering / activation reuse / full inner
+                # dim) so the CBs fit in L1.
             ),
         }
-
-        if is_blackhole():
-            if layer_module == "layer1_module3":
-                conv_kwargs_2["conv_config"].act_block_h_override = 16 * 32
-            if batch_size == 32 and is_blackhole_p100(device):
-                if (
-                    layer_module == "layer1_module2"
-                    or layer_module == "layer1_module3"
-                    or layer_module == "layer2_module1"
-                ):
-                    conv_kwargs_2["conv_config"].act_block_h_override = 32
-
-        if is_wormhole_b0():
-            if layer_module == "layer1_module2" or layer_module == "layer1_module3":
-                conv_kwargs_2["conv_config"].act_block_h_override = 14 * 32
 
         (
             out,
@@ -317,16 +332,17 @@ class resnet50Bottleneck:
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
         )
 
-        ds_out = self.run_downsample_if_req(
-            x,
-            device,
-            batch_size,
-            ds_input_height,
-            ds_input_width,
-            reshard_if_not_optimal,
-            height_sharding,
-            packer_l1_accum_enabled=packer_l1_acc,
-        )
+        if not run_downsample_before_conv2:
+            ds_out = self.run_downsample_if_req(
+                x,
+                device,
+                batch_size,
+                ds_input_height,
+                ds_input_width,
+                reshard_if_not_optimal,
+                height_sharding,
+                packer_l1_accum_enabled=packer_l1_acc,
+            )
 
         if ds_out.memory_config() != out.memory_config():
             ds_out = ttnn.experimental.quasar.to_memory_config(ds_out, out.memory_config())
@@ -443,16 +459,17 @@ class resnet50:
         if is_blackhole() and self.batch_size == 32:
             act_block_h_override = 32 * 32 if is_blackhole_p100(device) else 49 * 32
 
+        # Mirror the large resnet50 variant's first-conv config: bfloat16 doubles the
+        # activation footprint, so activation reuse + double buffering no longer fit in
+        # L1. The large variant omits both and relies on reallocate_halo_output instead.
         self.conv1_config = ttnn.Conv2dConfig(
             weights_dtype=self.model_config["WEIGHTS_DTYPE"],
             activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
             deallocate_activation=dealloc_input,
+            reallocate_halo_output=True,
             act_block_h_override=act_block_h_override,
-            enable_act_double_buffer=True,
             shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             reshard_if_not_optimal=False,
-            # otherwise act block h is not big enough for the reuse
-            enable_activation_reuse=(not is_wormhole_b0() or device.get_num_devices() <= 8),
         )
         self.conv1_compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -907,7 +924,7 @@ class resnet50:
             stride=[1, 1],
             padding=[0, 0, 0, 0],
             output_layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
             compute_kernel_config=ttnn.init_device_compute_kernel_config(
                 self.device.arch(), math_fidelity=ttnn.MathFidelity.LoFi
             ),
