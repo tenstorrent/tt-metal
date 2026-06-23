@@ -982,6 +982,78 @@ class Pi0_5GLX1x8Pipeline:
             raise RuntimeError("iters must be >= 1")
         return last_actions[:1, :ah, :], times_ms
 
+    def sample_actions_traced_1cq_prestaged_loop(
+        self,
+        images: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+        iters: int,
+    ) -> Tuple[torch.Tensor, List[float]]:
+        """Single-CQ trace replay with host_chunks PRE-STAGED before the timed
+        loop (mirrors the 2CQ test's host-side amortization).
+
+        Use this to isolate the actual H2D-DMA cost on CQ0 vs the host-prep
+        cost. The standard `sample_actions_traced_timed` includes both per iter
+        (host prep + DMA on CQ0 + compute + D2H). This variant pre-stages all
+        host work outside the timed window — the per-iter window then contains:
+            DMA dispatch + actual PCIe transfer (CQ0, serial before compute) +
+            trace_exec + D2H readback.
+
+        Compare to sample_actions_traced_2cq_loop:
+            Both pre-stage host work outside the timed loop.
+            1CQ: DMA serialized BEFORE compute on CQ0.
+            2CQ: DMA on CQ1 in PARALLEL with compute on CQ0.
+            Difference = how much of the actual PCIe DMA hides behind compute.
+        """
+        if self._trace_id is None:
+            raise RuntimeError("capture_trace() must be called first")
+        if self.pixel_values_buf is None or self.lang_tokens_buf is None:
+            raise RuntimeError("input buffers must be allocated via capture_trace first")
+        mesh = self.mesh
+        ah = self.action_horizon
+        ah_padded = self._action_horizon_padded
+
+        # === Pre-stage host_chunks OUTSIDE the timed loop (same as 2CQ) ===
+        host_chunks: List[Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]] = []
+        for _ in range(iters):
+            pixel_host = self._stack_and_fold_pixels(images)
+            h_pix = ttnn.from_torch(
+                pixel_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
+            h_lang = ttnn.from_torch(
+                lang_tokens.to(torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            noise_pad = torch.zeros(1, ah_padded, self.action_dim, dtype=torch.float32)
+            noise_pad[:, :ah, :] = torch.randn(1, ah, self.action_dim)
+            h_noise = ttnn.from_torch(noise_pad, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            host_chunks.append((h_pix, h_lang, h_noise))
+
+        times_ms: List[float] = []
+        last_actions = None
+        for i in range(iters):
+            t0 = time.perf_counter()
+            # DMA this iter's pre-prepped inputs to device on CQ0 (serial).
+            hi_pix, hi_lang, hi_noise = host_chunks[i]
+            ttnn.copy_host_to_device_tensor(hi_pix, self.pixel_values_buf)
+            ttnn.copy_host_to_device_tensor(hi_lang, self.lang_tokens_buf)
+            ttnn.copy_host_to_device_tensor(hi_noise, self.x_t_fp32)
+            # Compute (still single-CQ — serial after DMAs above).
+            ttnn.execute_trace(mesh, self._trace_id, cq_id=0, blocking=True)
+            # D2H readback.
+            last_actions = ttnn.to_torch(
+                self._captured_actions,
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0),
+            )
+            times_ms.append((time.perf_counter() - t0) * 1000.0)
+
+        if last_actions is None:
+            raise RuntimeError("iters must be >= 1")
+        return last_actions[:1, :ah, :], times_ms
+
     def sample_actions_traced_timed(
         self,
         images: List[torch.Tensor],

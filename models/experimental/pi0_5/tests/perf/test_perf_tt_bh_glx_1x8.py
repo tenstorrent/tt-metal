@@ -358,6 +358,65 @@ def test_perf_1x8_traced_2cq():
         print("=" * 72)
 
 
+def test_perf_1x8_traced_1cq_prestaged():
+    """Single-CQ trace replay with host_chunks pre-staged before the timed loop.
+
+    Apples-to-apples comparison with test_perf_1x8_traced_2cq: both pre-stage
+    the host CPU work (tilize / shard / randn) outside the timed window. The
+    only difference is the command queue used for H2D:
+        1CQ-prestaged: DMA on CQ0 SERIAL BEFORE compute on CQ0.
+        2CQ:          DMA on CQ1 PARALLEL with compute on CQ0.
+
+    Use to isolate the actual PCIe-DMA cost from the host-prep cost. The
+    standard test_perf_1x8_traced reports ~50 ms per iter because host prep
+    (~15 ms) runs inside the timed window. This variant should drop to
+    ~36 ms (= compute 34 + actual DMA ~1.4 + D2H ~1.4), which is within
+    ~1 ms of the 2CQ wall-clock.
+    """
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+
+    _print_prod_env_status()
+
+    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
+        pipe, cfg = _make_pipeline(mesh)
+        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
+
+        pipe.capture_trace(images, lang_tokens)
+
+        ah = cfg.action_horizon
+        ad = cfg.action_dim
+
+        for _ in range(WARMUP_ITERS):
+            _ = pipe.sample_actions_traced(images, lang_tokens)
+
+        last_actions, times = pipe.sample_actions_traced_1cq_prestaged_loop(images, lang_tokens, PERF_ITERS)
+        assert last_actions.shape == (1, ah, ad), f"shape mismatch: {tuple(last_actions.shape)}"
+        assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
+
+        mean = _mean(times)
+        mn = min(times)
+        mx = max(times)
+        if len(times) > 1:
+            mean_excl0 = _mean(times[1:])
+        else:
+            mean_excl0 = mean
+
+        print("\n" + "=" * 72)
+        print(f"1×8 pi0.5 TRACED 1CQ-PRESTAGED replay  (PERF_ITERS={PERF_ITERS}, N_CAMS={N_CAMS})")
+        print("=" * 72)
+        print(f"  mean (incl iter 0)     : {mean:.2f} ms")
+        print(f"  mean (excl iter 0)     : {mean_excl0:.2f} ms")
+        print(f"  min                    : {mn:.2f} ms")
+        print(f"  max                    : {mx:.2f} ms")
+        print(f"  per-iter (first 5)     : {[f'{t:.2f}' for t in times[:5]]}")
+        print()
+        print("  Compare:")
+        print(f"    - test_perf_1x8_traced (host prep IN window)        : ~50 ms")
+        print(f"    - this test (host prep PRE-STAGED, DMA on CQ0)      : {mean_excl0:.2f} ms")
+        print(f"    - test_perf_1x8_traced_2cq (DMA on CQ1 || compute) : ~35 ms")
+        print("=" * 72)
+
+
 def test_perf_1x8_traced_staged():
     """Per-stage TRACED breakdown via 3 sub-traces on the single 1×8 mesh.
 
