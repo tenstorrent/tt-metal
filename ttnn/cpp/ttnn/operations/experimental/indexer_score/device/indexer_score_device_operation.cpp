@@ -14,8 +14,7 @@ namespace ttnn::operations::experimental::indexer_score {
 
 namespace {
 // chunk_start is hash-excluded (runtime), so this alignment + causal-window check runs on BOTH cache
-// miss and hit -- so no turn can run off the end of K with a stale program. The check is identical to
-// the one previously inlined in validate_on_program_cache_miss.
+// miss and hit -- no turn can run off the end of K by reusing a program built for a different window.
 void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
     const uint32_t Sq = tensor_args.q.logical_shape()[2];
     const uint32_t T = tensor_args.k.logical_shape()[2];

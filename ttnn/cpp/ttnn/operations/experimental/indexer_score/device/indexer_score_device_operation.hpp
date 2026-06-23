@@ -24,11 +24,9 @@ struct IndexerScoreDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Custom hash: chunk_start_idx is a per-turn RUNTIME value (patched in override_runtime_arguments),
-    // so it is EXCLUDED from the key -- distinct chunk_start values (and the valid k-width derived from
-    // it) reuse one compiled program at a fixed K capacity, the whole point of the padded-KV port. Every
-    // program-shaping field (config knobs, dtypes, shapes, memory) IS hashed. Do not re-add
-    // chunk_start_idx here or every turn will recompile.
+    // Custom hash EXCLUDING chunk_start_idx (a per-turn runtime value, patched in
+    // override_runtime_arguments), so distinct chunk_start values reuse one program at a fixed K capacity
+    // -- the point of the padded-KV port. Every program-shaping field (config, dtypes, shapes) is hashed.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
