@@ -59,9 +59,13 @@ public:
         // supply one (build via ttnn::distributed::create_mesh_mapper).
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
 
-        // Socket / scratch CB sizing. All required.
+        // Buffer type backing the socket FIFO (host pinned memory in DEVICE_PULL mode).
         BufferType socket_buffer_type = BufferType::L1;
+        // Host FIFO size in bytes. Required (> 0).
         uint32_t fifo_size_bytes = 0;
+        // Optional socket-page (read-coalescing) budget hint: caps the socket page size. 0 means use
+        // the burst-derived default. This is NOT the total scratch-CB size -- the data-CB slot depth
+        // is auto-sized to fill the service-core L1 regardless of this value.
         uint32_t scratch_cb_size_bytes = 0;
         distributed::H2DMode socket_mode = distributed::H2DMode::DEVICE_PULL;
 
@@ -82,9 +86,10 @@ public:
         std::function<void(ttsl::Span<std::byte> bytes,
                            ttsl::Span<const std::byte> metadata)> preprocessor;
 
-        // Experimental host-side feeder parallelism. When enabled, each
-        // forward_to_tensor call launches one async task per socket, and each
-        // task writes that socket's pages serially. Disabled by default.
+        // Experimental host-side feeder parallelism. When enabled (and there is more than one
+        // socket), the service runs a persistent pool of one worker thread per socket; each
+        // forward_to_tensor call fans the per-socket writes out to that pool and blocks until all
+        // workers finish. Each worker writes its own socket's pages serially. Disabled by default.
         bool parallel_host_push = false;
     };
 

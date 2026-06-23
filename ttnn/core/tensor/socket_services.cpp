@@ -156,9 +156,11 @@ uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes, uint64_t metadata_cb_
 // Size the socket page to a few NOC bursts for read coalescing (capped by `page_budget_hint`, which
 // is Config::scratch_cb_size_bytes -- 0 means use the burst-derived default), then fill the
 // remaining L1 with full-page slots above the kMinDataSlots overlap floor. No double-buffer
-// fallback: capping the page at usable/kMinDataSlots guarantees >= kMinDataSlots slots whenever a
-// single tensor page fits. Slots are pure producer/consumer depth (they decouple the reader from
-// the writer's worker-sync stall) -- help-or-neutral for throughput, at a per-transfer latency cost.
+// fallback: capping the page budget at usable/kMinDataSlots yields >= kMinDataSlots slots as long as
+// a single tensor page is itself <= usable/kMinDataSlots. A page that fits L1 but exceeds that (a
+// very large per-shard page) falls to a single slot -- correct, but no reader/writer overlap -- and
+// is warned about below. Slots are pure producer/consumer depth (they decouple the reader from the
+// writer's worker-sync stall) -- help-or-neutral for throughput, at a per-transfer latency cost.
 ChunkPlan derive_chunk_plan(
     uint32_t tensor_page_size, uint32_t tensor_num_pages, uint64_t usable_cb_l1_bytes, uint64_t page_budget_hint) {
     TT_FATAL(tensor_page_size > 0, "device_tensor page size must be > 0");
@@ -527,7 +529,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         kServiceScratchReserveBytes,
         service_core_free_l1);
 
-    log_info(
+    log_debug(
         tt::LogOp,
         "H2DStreamService L1: socket_page={} B, pages_per_chunk={}, num_socket_pages={}, slots={}, "
         "data_cb={} B, metadata_cb={} B, usable_for_cb={} B",
