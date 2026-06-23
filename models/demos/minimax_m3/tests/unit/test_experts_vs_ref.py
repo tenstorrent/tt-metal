@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Tier-2 PCC test for the MiniMax-M2 expert FFN (prefill) vs a torch reference.
+Tier-2 PCC test for the MiniMax-M3 expert FFN (prefill) vs a self-authored torch reference.
 
-Validates the expert math: per-expert SiLU SwiGLU (silu(w1 x) * (w3 x)) -> w2, no
-bias, weighted-summed over the routed experts using the dense routing weights from
-the router. Uses a REDUCED expert count (256 -> 32) so it fits/runs fast on a single
-card, and bfloat8_b weights to isolate the compute logic from bfp4 quantization
-(bfp4 accuracy is validated separately later). Runs at mesh (1,1)/TP=1/EP=1.
+Validates the expert math: per-expert M3 **clamped swigluoai** — gate = w1 x, up = w3 x;
+(up.clamp(±7) + 1) * (gate.clamp(≤7) * sigmoid(1.702·gate)) -> w2, no bias — weighted-summed over
+the routed experts using the dense routing weights from the router. Uses a REDUCED expert count
+(128 -> 32) so it fits/runs fast on a single card, and bfloat8_b weights to isolate the compute
+logic from bfp4 quantization. Runs at mesh (1,1)/TP=1/EP=1.
 """
 
 import pytest
@@ -28,7 +28,7 @@ from ..test_factory import minimax_config_dims, parametrize_mesh_with_fabric
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (1, 8)], linear_fabric=True)
 @pytest.mark.parametrize("seq_len", [128], ids=["s128"])
-def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds):
+def test_experts_prefill_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     cfg = minimax_config_dims()
     H, I = cfg["hidden_size"], cfg["intermediate_size"]
     E, K = 32, 8  # reduced expert count (tile-aligned) for a single-card test
@@ -46,10 +46,13 @@ def test_experts_prefill_vs_hf(mesh_device, device_params, seq_len, reset_seeds)
     top_w = top_w / top_w.sum(-1, keepdim=True)
     dense = torch.zeros(seq_len, E).scatter_(1, idx, top_w)
 
-    # --- torch reference: weighted sum over experts of silu(w1 h) * (w3 h) -> w2 ---
+    # --- torch reference: M3 clamped swigluoai per expert, weighted-summed over routed experts ---
+    LIMIT, ALPHA = 7.0, 1.702  # ExpertConfig defaults
     out_ref = torch.zeros(seq_len, H)
     for e in range(E):
-        gated = torch.nn.functional.silu(h @ w1[e].t()) * (h @ w3[e].t())  # [seq, I]
+        gate = (h @ w1[e].t()).clamp(max=LIMIT)
+        up = (h @ w3[e].t()).clamp(min=-LIMIT, max=LIMIT)
+        gated = (up + 1.0) * (gate * torch.sigmoid(ALPHA * gate))  # [seq, I]
         out_ref += dense[:, e : e + 1] * (gated @ w2[e].t())
 
     # --- TT experts ---
