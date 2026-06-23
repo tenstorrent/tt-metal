@@ -149,19 +149,16 @@ def _make_cfgs(model: str, tp: int) -> list[Cfg]:
     if model == WAN:
         return [Cfg(cid, WAN, tp, seq, 5120, 128, rope, 40, True) for (cid, seq, rope) in _WAN_RAW]
     if model == FLUX:
-        # 4 per-device row counts. Broadcast RoPE, head_dim 128.
-        # per_head_norm=True (FLUX.2 QK-norm) currently DEADLOCKS on a ring_size>1
-        # submesh: the per-head PRE does num_heads back-to-back row-reductions within
-        # one chunk and the compute pipeline wedges after ~3 (tracked in
-        # RMSNORM_FUSION_FINDINGS.md "Known issue: per_head_norm multidevice"). It
-        # works on a 1x1 mesh (device-op unit test). So only emit per_head_norm=False
-        # here until that LLK-level fix lands; set WAN_FLUX_PHN=1 to also emit the
-        # (currently-hanging) per_head_norm=True configs for fix work.
-        phns = (False, True) if _os.getenv("WAN_FLUX_PHN") == "1" else (False,)
+        # 4 per-device row counts. Broadcast RoPE, head_dim 128. Both per_head_norm
+        # variants run: =False (whole-row RMSNorm) and =True (FLUX.2 QK-norm, per-head
+        # reduce over head_dim, no AG). per_head_norm=True on ring_size>1 was fixed
+        # (the compute/writer is_tp_1 mismatch — see ISSUE_per_head_norm_multidevice_
+        # deadlock.md); the smallest shape (flux_tp4_N64_phn1) sits ~99.81% pcc(F:torch),
+        # matching the composite baseline's own accuracy for that tiny per-head shape.
         return [
             Cfg(f"flux_tp{tp}_N{n}_phn{int(phn)}", FLUX, tp, n, _FLUX_DIM, _FLUX_HD, True, _FLUX_HEADS, True, phn)
             for n in _FLUX_ROWS[tp]
-            for phn in phns
+            for phn in (False, True)
         ]
     v, a, hv, ha = _LTX_V, _LTX_A, _LTX_HV, _LTX_HA
     mk = lambda cid, rows, dim, hd, rope: Cfg(cid, LTX, tp, rows, dim, hd, rope, 32, False)  # noqa: E731
