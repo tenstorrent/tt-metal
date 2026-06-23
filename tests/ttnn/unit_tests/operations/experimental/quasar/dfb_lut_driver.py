@@ -108,7 +108,33 @@ _RR_SUPPORTED = {
 }
 
 
-def _parse_rr_meta(meta):
+def _log_expand_constant(activation):
+    """Base-specific log expansion constant logB(2) for the rr=log reconstruction
+    result = e*logB(2) + P(m) (rangered._eval_log / _build_log_params).
+
+    The deployed rr=log CSVs (log_n5d4, log10_n2d2, log2_*) do NOT emit a
+    `log_ln2_constant` METADATA field, so the kernel must source the per-base scale
+    from the GROUND-TRUTH activation JSON (range_reduction.log_scale), exactly as the
+    fitter does. Falls back to ln(2) (natural log) when the JSON is unavailable, which
+    is the fitter's own default in _build_log_params.
+
+    log(x):   ln(2)    = 0.6931471805599453
+    log10(x): log10(2) = 0.30102999566398114
+    log2(x):  1.0
+    """
+    cfg = _FITTER / "activations" / f"{activation}.json"
+    if cfg.exists():
+        import json
+
+        with open(cfg) as f:
+            rr = json.load(f).get("range_reduction", {})
+        s = rr.get("log_scale")
+        if s is not None:
+            return float(s)
+    return math.log(2.0)
+
+
+def _parse_rr_meta(meta, activation=None):
     """Parse the range-reduction METADATA into LutConfig RR kwargs.
 
     Mirrors the tt-llk generic_lut codegen: method code + method-specific constants.
@@ -130,7 +156,13 @@ def _parse_rr_meta(meta):
 
     rr = {"rr_method": _RR_CODE[method]}
     if method == "log":
-        rr["rr_log_ln2"] = mf("log_ln2_constant", 1.0)
+        # rr=log reconstruction is result = e*logB(2) + P(m). The deployed CSVs omit
+        # log_ln2_constant, so a default of 1.0 silently reconstructs log2 (e*1 + P(m))
+        # for natural log / log10 — the ~47% midrange error. Source logB(2) from the CSV
+        # if present, else from the ground-truth activation JSON (range_reduction.log_scale).
+        rr["rr_log_ln2"] = mf("log_ln2_constant", None)
+        if rr["rr_log_ln2"] is None:
+            rr["rr_log_ln2"] = _log_expand_constant(activation) if activation else math.log(2.0)
     elif method == "exp":
         rr["rr_exp_mult"] = mf("exp_log2_multiplier", 1.4426950408889634)
         rr["rr_exp_const"] = mf("exp_log2_constant", 0.6931471805599453)
@@ -179,7 +211,7 @@ def _parse_rr_meta(meta):
     return rr, True, method, orig
 
 
-def parse_csv(csv_path):
+def parse_csv(csv_path, activation=None):
     """Parse a fitter coefficient CSV into a LutConfig + sampling domain.
 
     Returns (lut_config_kwargs: dict, domain: (float, float)).
@@ -205,7 +237,8 @@ def parse_csv(csv_path):
 
     rational = "approximation_type" in header and any((len(r) > 3 and r[3] == "rational") for r in rows)
 
-    rr_kwargs, rr_enabled, rr_method, rr_orig = _parse_rr_meta(meta)
+    activation = activation or _activation_name_from_csv(csv_path)
+    rr_kwargs, rr_enabled, rr_method, rr_orig = _parse_rr_meta(meta, activation)
 
     # Ascending boundaries (the kernel selects segments by ascending b0..bN).
     rows.sort(key=lambda r: float(r[1]))
@@ -541,7 +574,7 @@ def run_dfb(device, csv_path, activation=None, tiles=4, seed=0, margin=0.02):
     `tiles`/`seed`/`margin` are retained for API compatibility but no longer drive sampling
     (the input set is fully determined by [lo, hi])."""
     activation = activation or _activation_name_from_csv(csv_path)
-    cfg, (lo, hi) = parse_csv(csv_path)
+    cfg, (lo, hi) = parse_csv(csv_path, activation)
     rr_enabled = cfg.get("_rr_enabled", False)
     lut = make_lut_config(cfg)
 
