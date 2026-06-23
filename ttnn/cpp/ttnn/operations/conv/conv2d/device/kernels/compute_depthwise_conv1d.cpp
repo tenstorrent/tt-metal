@@ -25,7 +25,7 @@ inline void mul_and_accumulate_block(
         in0_cb.wait_front(1);
 
         // Per-channel weight tiles streamed through in1 (one per output tile, index 0).
-        compute_kernel_lib::depthwise_fir_mac_tile(in0_cb_id, 0, in1_cb_id, 0, out_cb_id, idx == 0);
+        conv1d_depthwise::depthwise_fir_mac_tile(in0_cb_id, 0, in1_cb_id, 0, out_cb_id, idx == 0);
 
         in0_cb.pop_front(1);
         in1_cb.pop_front(1);

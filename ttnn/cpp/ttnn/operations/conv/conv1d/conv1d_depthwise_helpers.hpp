@@ -9,7 +9,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/reconfig_data_format.h"
 
-namespace compute_kernel_lib {
+namespace conv1d_depthwise {
 
 // Shared inner step of a 1D depthwise (FIR) convolution accumulation, used by both the conv2d
 // HEIGHT_SHARDED depthwise conv1d and the streaming conv1d_depthwise op. Per output tile:
@@ -48,4 +48,4 @@ inline void depthwise_fir_mac_tile(
     tile_regs_release();
 }
 
-}  // namespace compute_kernel_lib
+}  // namespace conv1d_depthwise

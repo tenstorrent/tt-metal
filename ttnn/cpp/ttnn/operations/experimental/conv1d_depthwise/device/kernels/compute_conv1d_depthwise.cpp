@@ -19,7 +19,7 @@ inline void mul_and_accumulate(uint32_t tilized_cb, uint32_t scalar_cb, uint32_t
     experimental::CB tilized(tilized_cb);
     tilized.wait_front(block_num_tiles);
     for (uint32_t i = 0; i < block_num_tiles; ++i) {
-        compute_kernel_lib::depthwise_fir_mac_tile(tilized_cb, i, scalar_cb, tap, out_cb, tap == 0);
+        conv1d_depthwise::depthwise_fir_mac_tile(tilized_cb, i, scalar_cb, tap, out_cb, tap == 0);
     }
     tilized.pop_front(block_num_tiles);
 }
