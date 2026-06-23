@@ -128,6 +128,16 @@ ALWI void matmul_block(
     constexpr bool pack_last_to_interm = (last_block_target == LastBlockTarget::Interm);
     constexpr bool pack_relu = (last_block_target == LastBlockTarget::OutWithRelu);
 
+    // caller_owns_pack_target is only correct with TileRowMajor + packer_l1_acc + Interm: that is the
+    // sole config where the software-reload accumulation path (the per-K-block spill push paired with the
+    // reload wait_front below) is statically dead. The reload wait_front is NOT gated by caller_owns, but
+    // its matching spill push IS — so any other combination leaves an orphaned wait_front and deadlocks
+    // (SubblockMajor also corrupts output). See caller_owns_pack_target_supported for the shared contract.
+    static_assert(
+        caller_owns_pack_target_supported(
+            caller_owns_pack_target, tile_order == OutputCBLayout::TileRowMajor, packer_l1_acc, pack_last_to_interm),
+        "caller_owns_pack_target requires TileRowMajor + packer_l1_acc + last_block_target == Interm");
+
     // Cache integer IDs for legacy LLK calls. buf_id() resolves to
     // get_cb_id() on CircularBuffer or get_id() on DataflowBuffer.
     const uint32_t in0_cb_id = buf_id(in0_buf);
