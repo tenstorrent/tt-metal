@@ -237,7 +237,10 @@ class Qwen35Model(LightweightModule):
         [1, 1, n_rows, 1] uint32 id; read one replica back with ttnn.get_device_tensors(tok)[0].
         """
         logits_rm = ttnn.untilize(logits, use_multicore=True)
-        return ttnn.argmax(logits_rm, dim=3, keepdim=True, use_multicore=True)
+        # ttnn.argmax dropped the use_multicore kwarg: a last-dim ROW_MAJOR reduction now runs
+        # multi-core by DEFAULT (sub_core_grids only narrows it), so passing use_multicore raises a
+        # signature TypeError. Omit it to keep the multi-core last-dim path the untilize above sets up.
+        return ttnn.argmax(logits_rm, dim=3, keepdim=True)
 
     # ── Public prefill / decode / generate ───────────────────────────────────────────
     def prefill(self, tokens, user_id=0, valid_len=None):

@@ -230,44 +230,160 @@ def chunk_triangular_masks(chunk_size, mesh_device, *, dtype=ttnn.float32, memor
     }
 
 
+# ════════════════════════════════════════════════════════════════════════════════════
+# Unit-lower-triangular solve  —  the intra-chunk delta-rule inverse
+# ════════════════════════════════════════════════════════════════════════════════════
+#
+# WHY THIS EXISTS
+#   Inside one chunk, the gated-delta-net recurrence is causal: token i's update depends
+#   on every earlier token j < i in the same chunk. Stacking those dependencies gives a
+#   linear system  (I - S) X = RHS  with S STRICTLY lower triangular (token i sees only
+#   j < i), so  L := I - S  is UNIT lower triangular (1s on the diagonal). Resolving the
+#   whole chunk in one shot means applying L^{-1}. The torch reference does this with
+#   textbook forward substitution — a row-by-row Python loop that mutates `attn` in place.
+#   TT-NN tensors are immutable (no scatter / in-place row writes) and that loop is a
+#   ragged sequential update, so we cannot transcribe it. We compute L^{-1} algebraically
+#   instead, combining the two identities below.
+#
+# IDENTITY (1) — BLOCK FORWARD SUBSTITUTION   [_solve_blocked, the outer recursion]
+#   Forward substitution works on blocks exactly as it does on scalars. Split L into four
+#   n/2 sub-blocks:
+#
+#         L = [ A  0 ]      A, B unit lower triangular ;  C dense ;  top-right block = 0.
+#             [ C  B ]
+#
+#   Solving  L · L^{-1} = I  for the four output blocks gives the closed form
+#
+#         L^{-1} = [   A^{-1}              0     ]
+#                  [ -B^{-1} · C · A^{-1}  B^{-1}].
+#
+#   So inverting L reduces to inverting the two SMALLER triangular blocks A and B (recurse)
+#   plus a few matmuls for the bottom-left corner. Every product stays n/2 × n/2 — no large
+#   intermediate is ever materialized.
+#
+# IDENTITY (2) — NEUMANN + NEWTON-SCHULZ   [_neumann_newton_schulz_leaf, the base case]
+#   The recursion bottoms out on a small block, inverted in closed form. Write L = I + N
+#   with N = L - I strictly lower, hence NILPOTENT (N^n = 0). The Neumann (geometric) series
+#   then TERMINATES exactly — no truncation error:
+#
+#         L^{-1} = (I + N)^{-1} = Σ_{k=0}^{n-1} (-N)^k .
+#
+#   We sum it in ceil(log2 n) matmuls by repeated doubling, then run two Newton-Schulz steps
+#   X ← X·(2I - L·X), each of which squares the residual ‖I - L·X‖ and so doubles the number
+#   of correct bits, mopping up float matmul rounding.
+#
+# WHY BLOCKED, NOT ONE BIG NEUMANN SERIES
+#   We used to apply identity (2) to the WHOLE chunk. It is exact in real arithmetic but
+#   unstable in float: ill-conditioned chunks (real deep-layer chunks reach cond ~65) make
+#   the partial sums (-N)^k blow up to ~6e28 before the alternating terms are supposed to
+#   cancel, and that cancellation never recovers — the "inverse" came back as garbage and
+#   turned the model's logits into token-salad. Block forward substitution keeps every
+#   intermediate O(1)-bounded at any conditioning (validated rel err ~4e-4 vs the exact
+#   inverse on real cond~65 L44 matrices). And since the chunk size is a compile-time
+#   constant, the recursion unrolls to a static, trace-capturable graph.
+# ════════════════════════════════════════════════════════════════════════════════════
+
+# Largest sub-block we hand to the Neumann leaf solver. The whole-block Neumann series is
+# stable only on tiny, well-conditioned matrices; real deep-layer chunk matrices reach
+# cond ~65, where a 32-wide leaf still diverges on device (the Neumann partials overflow
+# even HiFi4 precision before Newton-Schulz can recover the cancellation). 16 is the
+# largest leaf that stays stable; 8 works too but only adds sub-tile work for no gain.
+_SOLVE_LEAF = 16
+
+
 def solve_unit_lower_triangular(L, eye, chunk_size, *, compute_kernel_config=None):
     """Invert a batch of UNIT-lower-triangular matrices ``L`` (1s on the diagonal).
 
-    This is the device-side replacement for the torch reference's in-place forward-
-    substitution loop (``for i in range(1, chunk_size): attn[..., i, :i] = ...``).
-    TT-NN tensors are immutable (no ``__setitem__``/scatter) and that loop is a strict
-    sequential, ragged-slice row solve, so it cannot be transcribed. Instead we invert
-    the whole block algebraically: writing ``L = I + N`` with ``N = L - I`` strictly
-    lower-triangular (hence nilpotent, ``N**chunk_size == 0``), the Neumann series
-    ``L^{-1} = sum_k (-N)^k`` is exact and is summed in ``ceil(log2(chunk_size))``
-    doubling matmuls. Two Newton-Schulz steps (``X <- X(2I - L X)``) then mop up the
-    float32 matmul rounding. This matches the production solver in the experimental GDN
-    (ttnn_delta_rule_seq.py ``_solve_lower_triangular_ttnn``), specialized to unit
-    diagonal so the ``D = diag(L)`` rescaling drops out. Validated PCC ~0.99998 against
-    the torch loop on the real (l2-normalized) chunk matrices, which are well
-    conditioned (cond ~1.2); float32 is mandatory here or the inverse diverges.
+    Public entry point for the intra-chunk delta-rule inverse derived in the section header
+    above. Dispatches to the blocked forward-substitution solver :func:`_solve_blocked`.
 
     * ``L``   — ``[..., chunk_size, chunk_size]`` float32, unit lower triangular.
     * ``eye`` — ``[1, 1, chunk_size, chunk_size]`` float32 identity (broadcasts over the
                 leading batch dims), e.g. from :func:`chunk_identity`.
+    * ``compute_kernel_config`` — accepted for call-site symmetry with the other chunk ops
+                but DELIBERATELY ignored: this inverse needs HiFi4 (the chunk math's HiFi2
+                is too coarse and lets the leaf solver diverge), so we force it below.
+    """
+    # Force HiFi4 + fp32 accumulation regardless of the caller's config: this is the one
+    # chunk op where HiFi2 isn't enough to keep the leaf Neumann series from diverging.
+    kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+    return _solve_blocked(L, eye, chunk_size, kernel_config)
+
+
+def _solve_blocked(L, eye, n, kernel_config):
+    """Invert a unit-lower-triangular ``[..., n, n]`` block via 2x2 block forward substitution.
+
+    Implements identity (1) in the section header: split ``L = [[A, 0], [C, B]]``, recurse on
+    the triangular diagonal blocks ``A`` and ``B``, and assemble
+    ``L^{-1} = [[A^{-1}, 0], [-B^{-1} C A^{-1}, B^{-1}]]``. Bottoms out on blocks of size
+    ``<= _SOLVE_LEAF``, which go to :func:`_neumann_newton_schulz_leaf`.
+
+    ``n`` is the (fixed) chunk size — a compile-time constant — so the recursion unrolls to a
+    STATIC graph of device-only ops (sub-tile slice + ``to_layout`` re-tilize, ``concat``, and a
+    mul-by-0 to mint the zero block). Nothing is host-minted mid-graph (no ``ttnn.pad``/``zeros``),
+    so the whole thing stays trace-capturable.
+    """
+    if n <= _SOLVE_LEAF:
+        return _neumann_newton_schulz_leaf(L, eye, n, kernel_config)
+
+    h = n // 2
+    # Slicing a tiled tensor at a sub-tile (h not a multiple of 32) offset can drop tile
+    # layout, so re-tilize every block before it feeds a matmul. eye is sliced to the
+    # top-left h-corner — still the h-sized identity the recursion needs.
+    eye_h = ttnn.to_layout(eye[..., :h, :h], ttnn.TILE_LAYOUT)
+    A = ttnn.to_layout(L[..., :h, :h], ttnn.TILE_LAYOUT)
+    C = ttnn.to_layout(L[..., h:, :h], ttnn.TILE_LAYOUT)
+    B = ttnn.to_layout(L[..., h:, h:], ttnn.TILE_LAYOUT)
+
+    iA = _solve_blocked(A, eye_h, h, kernel_config)
+    iB = _solve_blocked(B, eye_h, h, kernel_config)
+
+    # Bottom-left block of the inverse: X21 = -B^{-1} @ C @ A^{-1}. Associate as
+    # B^{-1} @ (C @ A^{-1}) so each matmul stays h x h — no large intermediate forms.
+    X21 = ttnn.neg(
+        ttnn.matmul(iB, ttnn.matmul(C, iA, compute_kernel_config=kernel_config), compute_kernel_config=kernel_config)
+    )
+
+    # Top-right zero block: mul-by-0 keeps it a device op (vs a host-minted zeros tensor),
+    # so the graph stays trace-capturable. iA has the right [..., h, h] shape to zero out.
+    Z = ttnn.multiply(iA, 0.0)
+    # TODO ttnn.concat for TILE_LAYOUT inputs can return garbage values (Metal #47293); the
+    # to_layout re-tilize after each concat has held up here (validated below), but watch it.
+    top = ttnn.concat([iA, Z], dim=-1)
+    bot = ttnn.concat([X21, iB], dim=-1)
+    return ttnn.to_layout(ttnn.concat([top, bot], dim=-2), ttnn.TILE_LAYOUT)
+
+
+def _neumann_newton_schulz_leaf(L, eye, n, kernel_config):
+    """Closed-form inverse of a SMALL unit-lower-triangular block — the recursion base case.
+
+    Implements identity (2) in the section header: sum the finite Neumann series
+    ``L^{-1} = Σ (-N)^k`` by doubling, then refine with two Newton-Schulz steps. Only ever
+    called on blocks of size ``<= _SOLVE_LEAF``, where ``L`` is well conditioned (cond ~1) and
+    the series is numerically safe — the regime the old whole-block solver was always accurate in.
     """
     # N = L - I (strictly lower, nilpotent); P starts as (-N)**1 and is repeatedly
     # squared so step s holds (-N)**(2**s); R accumulates the running partial sum.
     N = ttnn.subtract(L, eye)
     P = ttnn.neg(N)
     R = ttnn.add(eye, P)  # f(2) = I + (-N)
-    P = ttnn.matmul(P, P, compute_kernel_config=compute_kernel_config)  # (-N)**2
-    for _ in range(math.ceil(math.log2(chunk_size)) - 1):
+    P = ttnn.matmul(P, P, compute_kernel_config=kernel_config)  # (-N)**2
+    for _ in range(math.ceil(math.log2(n)) - 1):
         # Doubling identity: f(2n) = f(n) @ (I + (-N)**n).
-        R = ttnn.matmul(R, ttnn.add(eye, P), compute_kernel_config=compute_kernel_config)
-        P = ttnn.matmul(P, P, compute_kernel_config=compute_kernel_config)
+        R = ttnn.matmul(R, ttnn.add(eye, P), compute_kernel_config=kernel_config)
+        P = ttnn.matmul(P, P, compute_kernel_config=kernel_config)
 
     # Newton-Schulz refinement: each step squares the residual ||I - L X||, cheaply
     # recovering the bits the bf16-mantissa'd matmuls shed even with fp32 accumulation.
     for _ in range(2):
-        LX = ttnn.matmul(L, R, compute_kernel_config=compute_kernel_config)
+        LX = ttnn.matmul(L, R, compute_kernel_config=kernel_config)
         two_I_minus_LX = ttnn.subtract(ttnn.add(eye, eye), LX)
-        R = ttnn.matmul(R, two_I_minus_LX, compute_kernel_config=compute_kernel_config)
+        R = ttnn.matmul(R, two_I_minus_LX, compute_kernel_config=kernel_config)
     return R
 
 
