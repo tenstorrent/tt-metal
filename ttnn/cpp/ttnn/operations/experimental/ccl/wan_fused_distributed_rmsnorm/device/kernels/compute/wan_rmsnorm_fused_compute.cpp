@@ -257,11 +257,12 @@ void kernel_main() {
                     cb_push_back(pre_intermediate_cb, 1);
                     PACK((llk_pack_reconfig_l1_acc(0)));
 
-                    compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                    compute_kernel_lib::reduce<
+                        PoolType::SUM,
+                        ReduceDim::REDUCE_ROW,
                         pre_intermediate_cb,
                         reduce_scalar_sum_cb,
-                        stats_dest_cb,
-                        compute_kernel_lib::ReduceInputBlockShape::single());
+                        stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
                 }
             } else {
                 uint32_t input_tiles_waited = 0;
@@ -314,11 +315,12 @@ void kernel_main() {
 
                         // Row/head reduce → 1 stat tile. SUM (col 0 = sum). Post phase
                         // divides by H_full or head_dim via the AVG scalar.
-                        compute_kernel_lib::reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(
+                        compute_kernel_lib::reduce<
+                            PoolType::SUM,
+                            ReduceDim::REDUCE_ROW,
                             pre_intermediate_cb,
                             reduce_scalar_sum_cb,
-                            stats_dest_cb,
-                            compute_kernel_lib::ReduceInputBlockShape::single());
+                            stats_dest_cb>(compute_kernel_lib::ReduceInputBlockShape::single());
                     }
                 }
             }
@@ -377,10 +379,12 @@ void kernel_main() {
                         {
                             DeviceZoneScopedN("P_NRED");
                             if constexpr (per_head_norm != 0) {
-                                compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                                compute_kernel_lib::reduce<
+                                    PoolType::AVG,
+                                    ReduceDim::REDUCE_ROW,
                                     stats_gathered_cb,
                                     reduce_scalar_avg_cb,
-                                    reduce_result_cb,
+                                    reduce_result_cb>(
                                     compute_kernel_lib::ReduceInputBlockShape::single(),
                                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                                     compute_kernel_lib::NoAccumulation{},
@@ -429,10 +433,12 @@ void kernel_main() {
                             } else {
                                 // TP=1: a single gathered tile; the matmul reduce is fine
                                 // (no multi-chunk x ring hang at ring_size==1).
-                                compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW>(
+                                compute_kernel_lib::reduce<
+                                    PoolType::AVG,
+                                    ReduceDim::REDUCE_ROW,
                                     stats_gathered_cb,
                                     reduce_scalar_avg_cb,
-                                    reduce_result_cb,
+                                    reduce_result_cb>(
                                     compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols),
                                     compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                                     compute_kernel_lib::NoAccumulation{},
