@@ -101,12 +101,13 @@ struct LocalDFBInterface {
     uint8_t num_entries_per_txn_id_per_tc;
     uint8_t num_txn_ids;
     uint8_t broadcast_tc;  // DM-DM ALL producer: post to all TCs instead of round-robin
+    uint8_t is_producer;
 
     DFBTCSlot tc_slots[dfb::MAX_NUM_TILE_COUNTERS_TO_RR];
 } __attribute__((packed));
 
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(LocalDFBInterface) == 121, "LocalDFBInterface size is incorrect");
+static_assert(sizeof(LocalDFBInterface) == 122, "LocalDFBInterface size is incorrect");
 
 #endif
 
