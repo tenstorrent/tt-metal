@@ -176,8 +176,151 @@ set — confirms the pi05_production.env was sourced.
 |---|---|
 | `PI0_NUM_CAMERAS` | Real-camera count (1..8); padded to 8 with zero dummies inside the pipeline. |
 | `PERF_ITERS` | Timed iters in `test_perf_1x8_traced*` (default 20). |
+| `WARMUP_ITERS` | Trace-replay warmup iters before timing (default 3). For tracy, set to 1 to slim the capture. |
 | `PI05_E2E_PCC` | Enable `test_pcc_1x8_all_stages` (default off; runs CPU torch ref → slow). |
 | `PI05_NUM_DENOISE_STEPS` | Override the 5-step default schedule (10 matches upstream training spec). |
+
+## Profiling (tracy + annotator) — reproduce the perf CSVs
+
+End-to-end recipe for capturing a tracy profile of the 1×8 pipeline and
+annotating it into a per-stage, per-layer CSV.
+
+### 1. Capture (1 warmup + 1 timed iter)
+
+`WARMUP_ITERS=1 PERF_ITERS=1` is the minimum that produces a usable canonical
+inference in the CSV (any less and the trace allocator's first-replay overhead
+contaminates the numbers).
+
+```bash
+# Setup (same env as perf runs)
+cd <tt-metal repo root>
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
+export PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
+set -a; source models/experimental/pi0_5/_bench_runs/pi05_production.env; set +a
+export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
+export PI0_TP=8 PI0_TP4_ATTN_HEADPAR=1 PI0_MLP_BS=1 PI0_MLP_FUSED_RS=0
+export PI0_NUM_CAMERAS=3   # or 2 for the 2-cam capture
+export PERF_ITERS=1 WARMUP_ITERS=1
+tt-smi -glx_reset
+
+# Tracy run — ~4-5 minutes (most of it is JIT'ing kernels for the first iter)
+P=models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py
+python_env/bin/python -m tracy -p -r -v --op-support-count 100000 \
+  -m pytest -sq $P::test_perf_1x8_traced_staged
+```
+
+When the run finishes, tracy prints the output path, e.g.:
+```
+OPs csv generated at: generated/profiler/reports/<TS>/ops_perf_results_<TS>.csv
+```
+
+The directory also contains `tracy_profile_log_host.tracy` (Tracy GUI file —
+open with the Tracy desktop app for an interactive flame-graph view across
+all 8 devices).
+
+### 2. Annotate (add STAGE / LAYER / SUBSTAGE columns)
+
+```bash
+CSV=$(ls -t generated/profiler/reports/*/ops_perf_results_*.csv | head -1)
+python_env/bin/python _bench_runs/annotate_ops_csv_v4.py "$CSV"
+# Writes <CSV>_annotated_v4.csv next to the raw + prints the per-stage summary.
+```
+
+The annotator's stdout prints the per-call breakdown — this is the canonical
+output you should use for headline timing:
+
+```
+=== Inference 32 (canonical = trace replay/last) — per-call breakdown ===
+  STAGE              rows                count   kernel_ms
+  ----------------------------------------------------------------
+  prefix_setup       95479..95491        13      0.081
+  siglip             95492..96153       662      5.676
+  vlm_prefill        96154..96586       433      3.740
+  denoise_step_1     96587..97026       440      3.779
+  denoise_step_2     97027..97465       439      3.750
+  denoise_step_3     97466..97904       439      3.769
+  denoise_step_4     97905..98343       439      3.768
+  denoise_step_5     98344..98782       439      3.761
+  ----------------------------------------------------------------
+  TOTAL/inference                              28.323  ← EXCLUDES init
+```
+
+### 3. How to read the annotated CSV
+
+The annotator adds 3 columns to every row: `STAGE`, `LAYER`, `SUBSTAGE`.
+
+| Column | Values | Meaning |
+|---|---|---|
+| `STAGE` | `init_one_time` / `prefix_setup` / `siglip` / `vlm_prefill` / `denoise_step_{1..5}` (clean = canonical timed iter) **OR** with suffix `_warmup{N}` / `_trace_capture` (the other inferences) | Pipeline stage + which inference this op belongs to |
+| `LAYER` | `1..18` (prefill / denoise) or `1..27` (siglip) | Transformer layer index within the stage |
+| `SUBSTAGE` | `attn` / `mlp` / `head` / `tail` / empty | Sub-region within a denoise step |
+
+> **Important caveat — multi-device labeling.** The v4 annotator was written
+> for single-device CSVs. On our 8-device capture it sees `8 chips × 4 iters
+> = 32` total inferences and only labels the very last GLOBAL inference as
+> canonical (suffixless). Devices 2-7's actual timed iter ends up tagged
+> `_warmup{N}` — about **80% of rows look like warmup** even when the per-row
+> timing data is real-iter data on a non-zero device. **Don't filter by
+> suffix-less STAGE on multi-device CSVs.**
+>
+> **What to do instead**: trust the annotator's printed per-call summary
+> (above) for headline timing; for per-op drill-down, filter on `STAGE` base
+> (ignoring suffix) + `LAYER` + `SUBSTAGE` on device 1 (sane; **device 0 has
+> corrupt `DEVICE KERNEL DURATION`** per the TP=8 note above), since trace
+> replay is deterministic so any iter's row gives identical timing.
+
+### 4. Useful drill-down recipes
+
+Per-stage kernel-time breakdown on device 1 (any iter — trace replay is
+deterministic, so each iter has identical kernel times):
+
+```bash
+CSV=generated/profiler/reports/<TS>/ops_perf_results_<TS>_annotated_v4.csv
+awk -F, '
+  NR>1 && $7=="1" && $1!="init_one_time" && $22+0>0 && $22+0<1e8 {
+    s = $1; sub(/_warmup[0-9]+$/, "", s); sub(/_trace_capture$/, "", s)
+    sum[s] += $22; cnt[s]++
+  }
+  END {
+    for (s in sum) printf "  %-22s  total %7.3f ms  /  %d ops total\n", s, sum[s]/1e6, cnt[s]
+  }' "$CSV" | sort
+```
+
+Top-10 slowest matmuls in `vlm_prefill` on device 1:
+
+```bash
+awk -F, 'NR>1 && $7=="1" && $1 ~ /^vlm_prefill/ && $4=="MatmulDeviceOperation" && $22+0<1e8 {
+  printf "%s/L%-2s\t%7.1f us\n", $1, $2, $22/1000
+}' "$CSV" | sort -t$'\t' -k2 -rn | head -10
+```
+
+CCL (cross-chip) ops per iter on device 1:
+
+```bash
+awk -F, 'NR>1 && $7=="1" && $4 ~ /AllGather|AllReduce|ReduceScatter/ && $22+0<1e8 && $22+0>0 {
+  c[$4]++; s[$4]+=$22
+}
+END {
+  for (k in c) printf "  %-30s %3d ops/4iters  %7.3f ms/iter\n", k, c[k], s[k]/1e6/4
+}' "$CSV"
+```
+
+### 5. Wall-clock vs kernel-time gap
+
+For commit `38ac051ee68`, 3-cam, PERF_ITERS=20:
+
+| Source | Value |
+|---|---:|
+| `trace_exec` wall-clock (`test_perf_1x8_traced`) | 33.97 ms |
+| Sum of `DEVICE KERNEL DURATION` (canonical iter, annotator) | 28.32 ms |
+| Gap | ~5.65 ms |
+
+The gap is **NOT** unaccounted CCL — CCL kernel time on each chip
+(~3.0-3.3 ms/iter from `AllGather` + `ReduceScatter`) already includes
+cross-chip fabric wait. The gap is **trace-dispatcher overhead** (~1-2 µs/op
+× ~1500 ops/iter ≈ 2-3 ms) + per-op firmware setup/teardown + L1↔DRAM DMA
+between consecutive ops — work that happens between kernel runs and isn't
+captured in any single op's `DEVICE KERNEL DURATION`.
 
 ## Reference numbers (commit `38ac051ee68`, 2026-06-23)
 
