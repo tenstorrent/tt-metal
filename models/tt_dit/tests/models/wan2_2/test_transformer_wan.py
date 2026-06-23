@@ -214,6 +214,158 @@ def test_wan_transformer_block(
     assert_quality(torch_spatial_out, tt_spatial_out, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
 
+# ---------------------------------------------------------------------------
+# Performance sweep: looped transformer block over a range of sequence lengths.
+# BH Galaxy only, 4x8, 2 links. No torch reference is run — this measures
+# end-to-end device performance of a transformer block via tracing.
+# ---------------------------------------------------------------------------
+SWEEP_SEQ_LENS = [4096, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 98304]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
+    [
+        # BH Galaxy (ring) on 4x8, 2 links
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize(
+    "seq_len",
+    [pytest.param(n, id=f"{n // 1024}k") for n in SWEEP_SEQ_LENS],
+)
+def test_sweep_wan_seqs(
+    mesh_device: ttnn.MeshDevice,
+    mesh_shape: tuple[int, int],
+    sp_axis: int,
+    tp_axis: int,
+    num_links: int,
+    seq_len: int,
+    topology: ttnn.Topology,
+    is_fsdp: bool,
+    reset_seeds,
+) -> None:
+    """Measure end-to-end performance of a looped transformer block via tracing.
+
+    A single transformer block is invoked NUM_BLOCK_INVOCATIONS times inside a captured
+    trace (output fed back as input). The trace is executed NUM_TRACE_STEPS times, each
+    timed with a host timer (device synchronized before/after), and the average
+    per-transformer-block wall time is reported. No torch reference is run.
+    """
+    NUM_BLOCK_INVOCATIONS = 100
+    NUM_TRACE_STEPS = 5
+    B = 1
+    prompt_seq_len = 512
+
+    parent_mesh_device = mesh_device
+    mesh_device = parent_mesh_device.create_submesh(ttnn.MeshShape(*mesh_shape))
+
+    sp_factor = tuple(mesh_device.shape)[sp_axis]
+    parallel_config = _make_parallel_config(mesh_device, sp_axis, tp_axis)
+    ccl_manager = _make_ccl_manager(mesh_device, num_links, topology)
+
+    N = seq_len
+
+    # Build a random-initialized block 0 (no HuggingFace download). The diffusers default
+    # config matches Wan2.2-T2V-14B (dim=5120, ffn_dim=13824, 40 heads), so the resulting
+    # weight shapes are correct. Weight values are irrelevant for a performance measurement.
+    parent_torch_model = TorchWanTransformer3DModel(num_layers=1)
+    torch_block = parent_torch_model.blocks[0]
+
+    # Create TT model
+    tt_model = WanTransformerBlock(
+        dim=DIM,
+        ffn_dim=FFN_DIM,
+        num_heads=NUM_HEADS,
+        cross_attention_norm=CROSS_ATTN_NORM,
+        eps=EPS,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        is_fsdp=is_fsdp,
+    )
+    tt_model.load_torch_state_dict(torch_block.state_dict())
+    del parent_torch_model, torch_block
+
+    # Create input tensors (random; values do not matter for a performance measurement)
+    torch.manual_seed(0)
+    spatial_input = torch.randn((B, N, DIM), dtype=torch.float32)
+    prompt_input = torch.randn((B, prompt_seq_len, DIM), dtype=torch.float32)
+    temb_input = torch.randn((B, 6, DIM), dtype=torch.float32)
+
+    # Create ROPE embeddings
+    rope_cos = torch.randn(B, N, 1, HEAD_DIM // 2)
+    rope_sin = torch.randn(B, N, 1, HEAD_DIM // 2)
+    torch_rope_cos, torch_rope_sin = stack_cos_sin(rope_cos, rope_sin)
+    rope_cos_stack = torch_rope_cos.permute(0, 2, 1, 3)
+    rope_sin_stack = torch_rope_sin.permute(0, 2, 1, 3)
+
+    spatial_padded = pad_vision_seq_parallel(spatial_input.unsqueeze(0), num_devices=sp_factor)
+    rope_cos_padded = pad_vision_seq_parallel(rope_cos_stack, num_devices=sp_factor)
+    rope_sin_padded = pad_vision_seq_parallel(rope_sin_stack, num_devices=sp_factor)
+
+    # Create TT tensors
+    tt_spatial = bf16_tensor_2dshard(spatial_padded, device=mesh_device, shard_mapping={sp_axis: 2, tp_axis: 3})
+    tt_prompt = bf16_tensor(prompt_input.unsqueeze(0), device=mesh_device)
+    tt_temb = from_torch(temb_input.unsqueeze(0), device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., tp_axis])
+    tt_rope_cos = from_torch(rope_cos_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+    tt_rope_sin = from_torch(rope_sin_padded, device=mesh_device, dtype=ttnn.float32, mesh_axes=[..., sp_axis, None])
+    tt_trans_mat = bf16_tensor(get_rot_transformation_mat(), device=mesh_device)
+
+    def run_blocks(spatial: ttnn.Tensor) -> ttnn.Tensor:
+        # Loop the transformer block, feeding its output back as the next input.
+        for _ in range(NUM_BLOCK_INVOCATIONS):
+            spatial = tt_model(
+                spatial_1BND=spatial,
+                prompt_1BLP=tt_prompt,
+                temb_1BTD=tt_temb,
+                N=N,
+                rope_cos=tt_rope_cos,
+                rope_sin=tt_rope_sin,
+                trans_mat=tt_trans_mat,
+            )
+        return spatial
+
+    logger.info(
+        f"seq_len={N}: warming up {NUM_BLOCK_INVOCATIONS} block invocations (untraced) with spatial shape "
+        f"{tt_spatial.shape}"
+    )
+    # Warmup / compile run (untraced).
+    run_blocks(tt_spatial)
+    ttnn.synchronize_device(mesh_device)
+
+    # Capture the trace of NUM_BLOCK_INVOCATIONS block invocations.
+    logger.info(f"seq_len={N}: capturing trace of {NUM_BLOCK_INVOCATIONS} block invocations")
+    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    run_blocks(tt_spatial)
+    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+
+    # Execute the trace NUM_TRACE_STEPS times, timing each step.
+    logger.info(f"seq_len={N}: executing {NUM_TRACE_STEPS} traced steps")
+    step_times = []
+    for step in range(NUM_TRACE_STEPS):
+        ttnn.synchronize_device(mesh_device)
+        start = time.perf_counter()
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        ttnn.synchronize_device(mesh_device)
+        elapsed = time.perf_counter() - start
+        step_times.append(elapsed)
+        logger.info(
+            f"seq_len={N}: trace step {step}: {elapsed * 1e3:.3f} ms for {NUM_BLOCK_INVOCATIONS} blocks "
+            f"({elapsed / NUM_BLOCK_INVOCATIONS * 1e3:.4f} ms/block)"
+        )
+
+    ttnn.release_trace(mesh_device, trace_id)
+
+    total_blocks = NUM_TRACE_STEPS * NUM_BLOCK_INVOCATIONS
+    avg_per_block_ms = sum(step_times) / total_blocks * 1e3
+    logger.info(
+        f"=== seq_len={N}: average per-transformer-block time over "
+        f"{NUM_TRACE_STEPS} steps x {NUM_BLOCK_INVOCATIONS} blocks: {avg_per_block_ms:.4f} ms ==="
+    )
+
+
 @pytest.mark.parametrize(
     "dit_unit_test",
     [{"1": True, "0": False}.get(os.environ.get("DIT_UNIT_TEST"), False)],
