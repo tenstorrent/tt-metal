@@ -13,6 +13,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include "device_fixture.hpp"
+#include "impl/emulation/host_sanitizers.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -29,14 +30,14 @@ TEST_F(MeshDeviceFixture, Tensor_Padding_Violation_SanityCheck) {
 
     // 1. Create a buffer mimicking a padded tensor layout:
     // 1024 bytes of logical data, but padded to a 2048-byte physical block size.
-    // Buffer::create only takes a single size — set_logical_size() declares
-    // that bytes [logical_size, physical_size) are hardware padding and
+    // Buffer::create only takes a single size — emule::register_logical_size()
+    // declares that bytes [logical_size, physical_size) are hardware padding and
     // registers them with LiveL1PaddingRanges so the kernel-side sanitizer
     // in __emule_local_l1_to_ptr will fire on accesses into that region.
     uint32_t logical_size = 1024;
     uint32_t physical_size = 2048;
     auto buffer = Buffer::create(device, physical_size, physical_size, BufferType::L1);
-    buffer->set_logical_size(logical_size);
+    tt::tt_metal::emule::register_logical_size(*buffer, logical_size);
 
     // 2. Add an inline kernel that attempts to modify a padded datum at byte
     // 1028 — inside the 2048-byte allocation (so it passes the OOB-tensor

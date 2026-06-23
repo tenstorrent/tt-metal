@@ -23,3 +23,10 @@ set_target_properties(
         RUNTIME_OUTPUT_DIRECTORY
             ${PROJECT_BINARY_DIR}/test/tt_metal
 )
+
+# Let dm_common.cpp see kEmuleAsanBuild=true so it registers its raw-L1 scratch
+# extent with the emule OOB sanitizer (see dm_common.cpp / SANITIZER_CHECKS.md).
+# PRIVATE on the metal lib, so the test target must opt in explicitly.
+if(TT_METAL_USE_EMULE)
+    target_compile_definitions(unit_tests_data_movement PRIVATE TT_METAL_USE_EMULE=1)
+endif()

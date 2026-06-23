@@ -187,14 +187,70 @@ that offset against the live extents. In none → abort.
 *Exercised by:* `test_write_outside_tensor.cpp` (L1 + DRAM gap death tests +
 in-bounds L1 and DRAM positive controls).
 
+#### Host-poked L1 regions (false-positive fix)
+The L1 OOB check assumes every legitimately-accessed L1 address ≥ the unreserved
+base is inside a tracked `Buffer` (the only thing that feeds `LiveL1Ranges`, via
+`Buffer::allocate_impl`). That assumption breaks for code that uses **raw L1**: the
+`tests/tt_metal/.../data_movement/` micro-benchmarks take the L1 scratch base from
+`get_l1_address_and_size()` (= `hal.get_dev_addr(DEFAULT_UNRESERVED)`), fill it with
+`WriteToDeviceL1`, and hand that bare address to a kernel. No `Buffer` is ever
+allocated, so `LiveL1Ranges` has no extent, and a kernel read of that address (e.g.
+the `noc_async_write_multicast_loopback_src` source in `sender_multicast_sem.cpp`)
+**false-positives** as an OOB write — the memory is valid, just untracked.
+
+Fix (two tiers, both feeding the add-only/deduped `LiveL1HostPokeRanges` registry
+in `[metal] emule_live_ranges.{hpp,cpp}`, snapshotted per launch into the kernel
+thread-local `__emule_l1_host_ranges`, which `__emule_asan_check_oob_tensor` scans
+**after** a tensor miss and **before** aborting):
+
+1. **Precise per-poke (general).** `WriteToDeviceL1` / `ReadFromDeviceL1`
+   (`[metal] host_api/tt_metal.cpp`) register the exact `[addr, addr+size)` they
+   touch when ASAN is on. This covers any host-declared raw L1 — sources, and
+   destinations the host pokes before launch — with no loss of precision, in any
+   context (not just DM tests).
+
+2. **DM-suite scratch extent (timing gap).** Tier 1 can't cover an output the
+   kernel *writes* and the host only `ReadFromDeviceL1`s **after** the launch (e.g.
+   the `all_from_all` / `transaction_id` / `one_packet` requestors): at
+   launch-snapshot time that region was never poked. So the DM test helper
+   `get_l1_address_and_size()` (`[metal] tests/.../data_movement/dm_common.cpp`)
+   registers the whole unreserved-L1 extent it hands out, ASAN-gated, when emule
+   ASAN is on. Every raw-L1 DM benchmark carves its src/dst from this extent, so
+   one registration covers the entire suite — including outputs read back
+   post-launch — pre-launch.
+
+   *Why this doesn't weaken the checker.* The registration lives in DM-test code,
+   so it only affects the `unit_tests_data_movement` binary, which allocates **no**
+   tracked `Buffer`s — the L1 OOB check there has no tensor to protect and could
+   only ever fire as a false positive. Production ttnn ops never call
+   `get_l1_address_and_size`, so their OOB precision is untouched. It is
+   `if constexpr (kEmuleAsanBuild)`-guarded so non-emule builds don't link the
+   registry.
+
+Two properties make this safe:
+- **Precise, not a blanket whitelist.** Only the exact `[addr, addr+size)` the host
+  poked is accepted — a kernel writing *past* that region, or into untouched L1,
+  still aborts. Real OOB bugs (e.g. the untilize / repeat / nd_reshard kernel
+  overruns) are not masked.
+- **Invisible to Object Intent (§12).** Host-poke ranges live in their own array,
+  are **not** appended to `__emule_l1_resolved_ranges`, and are **not** snapshotted
+  by Object Intent — so a host-NOC write into a poked destination can't be
+  misread as an "unintended write."
+
+This is L1-only. The DRAM OOB check (`__emule_dram_ptr`) uses a per-bank/flattened
+address convention distinct from the per-channel address `WriteToDeviceDRAMChannel`
+takes, so the same registration is not yet wired for DRAM; if a `dram_*` raw-DRAM
+benchmark surfaces the analogous false positive, it needs that convention resolved
+first.
+
 ### 5. Tensor Padding Violation
 **Lives in:** `__emule_asan_check_padding` in
 `[emule] include/jit_hw/asan/asan_l1_checks.h`; padding bands registered in `[metal] emule_live_ranges.{hpp,cpp}`
-(`LiveL1PaddingRanges`) from `Buffer::set_logical_size` in `[metal] buffers/buffer.cpp`.
+(`LiveL1PaddingRanges`) from `emule::register_logical_size` in `[metal] host_sanitizers.cpp`.
 **What it catches:** a kernel writing into the padding gap
 `[logical_end, physical_end)` of a buffer whose logical size is smaller than its
 allocated physical size.
-**How it works:** `set_logical_size` registers the padding band; the runner threads
+**How it works:** `register_logical_size` registers the padding band; the runner threads
 those `(logical_end, physical_end)` pairs into the kernel. After the OOB check, the
 normalized offset is tested against each padding band — inside one → abort.
 *Diagnostic:* `Tensor Padding Violation: Attempted to write to a padded memory region at 0x…`.

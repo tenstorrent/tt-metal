@@ -21,6 +21,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/tt_cluster.hpp"
+#include "emule_live_ranges.hpp"
 
 // Single definition lives in emule_asan_panic.cpp, linked into the same libtt_metal.
 extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...);
@@ -114,6 +115,31 @@ void check_program_metadata_size(Program& program) {
 void report_metadata_overflow(bool is_emulated, const char* what) {
     if (is_emulated && emule_asan_enabled()) {
         __emule_asan_panic("[ASAN ERROR] Metadata Overflow: Program metadata exceeds reserved L1 region — %s\n", what);
+    }
+}
+
+void register_logical_size(const Buffer& buffer, DeviceAddr logical_size) {
+    if (!emule_asan_enabled()) {
+        return;
+    }
+    TT_FATAL(
+        logical_size <= buffer.size(),
+        "logical_size ({}) must not exceed buffer size ({})",
+        logical_size,
+        buffer.size());
+    if (!buffer.is_allocated()) {
+        return;
+    }
+    if (buffer.buffer_type() != BufferType::L1 && buffer.buffer_type() != BufferType::L1_SMALL) {
+        return;
+    }
+    uint32_t start = static_cast<uint32_t>(buffer.address());
+    uint32_t physical_end = static_cast<uint32_t>(buffer.address() + buffer.size());
+    if (logical_size == buffer.size()) {
+        LiveL1PaddingRanges::clear(buffer.device()->id(), start);
+    } else {
+        uint32_t logical_end = static_cast<uint32_t>(buffer.address() + logical_size);
+        LiveL1PaddingRanges::set(buffer.device()->id(), start, logical_end, physical_end);
     }
 }
 

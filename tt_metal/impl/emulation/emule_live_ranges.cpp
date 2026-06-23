@@ -55,12 +55,28 @@ std::vector<uint64_t> snapshot_of(RangeRegistry& reg, int device_id) {
     return it->second;
 }
 
+// Host-poke add path: dedup, since the same scratch address is re-poked every
+// iteration of a benchmark loop and these ranges are never removed.
+void add_dedup_to(RangeRegistry& reg, int device_id, uint32_t start, uint32_t end) {
+    std::lock_guard<std::mutex> g(reg.mu);
+    auto& v = reg.per_device[device_id];
+    uint64_t packed = pack(start, end);
+    if (std::find(v.begin(), v.end(), packed) == v.end()) {
+        v.push_back(packed);
+    }
+}
+
 RangeRegistry& l1_registry() {
     static RangeRegistry r;
     return r;
 }
 
 RangeRegistry& dram_registry() {
+    static RangeRegistry r;
+    return r;
+}
+
+RangeRegistry& l1_host_poke_registry() {
     static RangeRegistry r;
     return r;
 }
@@ -89,6 +105,14 @@ void LiveDramRanges::remove(int device_id, uint32_t start) {
 
 std::vector<uint64_t> LiveDramRanges::snapshot(int device_id) {
     return snapshot_of(dram_registry(), device_id);
+}
+
+void LiveL1HostPokeRanges::add(int device_id, uint32_t start, uint32_t end) {
+    add_dedup_to(l1_host_poke_registry(), device_id, start, end);
+}
+
+std::vector<uint64_t> LiveL1HostPokeRanges::snapshot(int device_id) {
+    return snapshot_of(l1_host_poke_registry(), device_id);
 }
 
 namespace {

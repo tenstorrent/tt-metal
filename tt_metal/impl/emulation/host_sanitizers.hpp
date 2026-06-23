@@ -42,6 +42,16 @@ class Program;
 
 namespace tt::tt_metal::emule {
 
+// Compile-time build flag: true only in an emule build. Call sites in the core
+// host API wrap their emule additions in `if constexpr (kEmuleAsanBuild) { … }`
+// so the calls — and their argument evaluation — are eliminated entirely in a
+// non-emule build (rather than relying on the inline no-ops below at runtime).
+#ifdef TT_METAL_USE_EMULE
+inline constexpr bool kEmuleAsanBuild = true;
+#else
+inline constexpr bool kEmuleAsanBuild = false;
+#endif
+
 // ---- Master-switch readers (always safe; pure getenv) -------------------
 // Re-read every call: caching breaks combined test runs that toggle the var.
 inline bool emule_asan_enabled() {
@@ -88,6 +98,12 @@ void check_program_metadata_size(Program& program);
 // text) when emulating with ASAN on; the caller then rethrows. No-op otherwise.
 void report_metadata_overflow(bool is_emulated, const char* what);
 
+// Declares [logical_size, buffer.size()) as tensor padding for the kernel-side
+// Tensor-Padding sanitizer (registers it with LiveL1PaddingRanges); size()
+// clears it. L1/L1_SMALL only. Lives here — not on the Buffer API — because it
+// has no meaning on hardware. No-op when ASAN is off. See SANITIZER_CHECKS.md §5.
+void register_logical_size(const Buffer& buffer, DeviceAddr logical_size);
+
 #else  // !TT_METAL_USE_EMULE — inline no-ops so callers stay #ifdef-free.
 
 inline void check_buffer_allocated(const Buffer&, const char*) {}
@@ -95,6 +111,7 @@ inline void check_host_l1_alignment(const IDevice*, uint32_t, uint32_t, const ch
 inline void check_host_dram_alignment(const IDevice*, uint32_t, uint32_t, const char*) {}
 inline void check_program_metadata_size(Program&) {}
 inline void report_metadata_overflow(bool, const char*) {}
+inline void register_logical_size(const Buffer&, DeviceAddr) {}
 
 #endif  // TT_METAL_USE_EMULE
 

@@ -148,6 +148,8 @@ void set_sanitizer_thread_locals(const EmuleOobTensorState& oob, uint32_t sem_ba
     __emule_dram_tensor_ranges_count = oob.dram_tensor_ranges_count;
     __emule_l1_padding_ranges = oob.l1_padding_ranges;
     __emule_l1_padding_ranges_count = oob.l1_padding_ranges_count;
+    __emule_l1_host_ranges = oob.l1_host_ranges;
+    __emule_l1_host_ranges_count = oob.l1_host_ranges_count;
     __emule_cb_boundary_strict = oob.cb_boundary_strict;
 }
 
@@ -162,6 +164,8 @@ void clear_sanitizer_thread_locals() {
     __emule_dram_tensor_ranges_count = 0;
     __emule_l1_padding_ranges = nullptr;
     __emule_l1_padding_ranges_count = 0;
+    __emule_l1_host_ranges = nullptr;
+    __emule_l1_host_ranges_count = 0;
     for (uint32_t i = 0; i < EMULE_NUM_CBS; ++i) {
         __emule_cb_reserved_pages[i] = 0;
         __emule_cb_waited_pages[i] = 0;
@@ -288,6 +292,12 @@ OobStateOwner build_oob_tensor_state(IDevice* device, int device_id) {
     if (!owner.padding_ranges.empty()) {
         owner.state.l1_padding_ranges = owner.padding_ranges.data();
         owner.state.l1_padding_ranges_count = static_cast<uint32_t>(owner.padding_ranges.size());
+    }
+
+    owner.l1_host_ranges = tt::tt_metal::emule::LiveL1HostPokeRanges::snapshot(device_id);
+    if (!owner.l1_host_ranges.empty()) {
+        owner.state.l1_host_ranges = owner.l1_host_ranges.data();
+        owner.state.l1_host_ranges_count = static_cast<uint32_t>(owner.l1_host_ranges.size());
     }
     return owner;
 }

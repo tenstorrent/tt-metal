@@ -238,12 +238,6 @@ public:
     DeviceAddr page_size() const;
     void set_page_size(DeviceAddr page_size);
 
-    // Mark only the first `logical_size` bytes as live tensor data; the rest,
-    // [logical_size, size()), is padding the emule Tensor-Padding sanitizer aborts
-    // on if a kernel touches it (no-op without emule). size() clears it; L1/L1_SMALL
-    // only today. See SANITIZER_CHECKS.md §5.
-    void set_logical_size(DeviceAddr logical_size);
-
     uint32_t num_pages() const;
     uint32_t num_dev_pages() const;
 

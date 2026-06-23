@@ -72,6 +72,7 @@
 #include "impl/emulation/emulated_program_runner.hpp"
 #endif
 #include "impl/emulation/host_sanitizers.hpp"
+#include "impl/emulation/emule_live_ranges.hpp"
 
 namespace tt::tt_metal {
 struct RuntimeArgsData;
@@ -219,8 +220,10 @@ namespace detail {
 
 bool WriteToDeviceDRAMChannel(
     IDevice* device, int dram_channel, uint32_t address, std::span<const std::uint8_t> host_buffer) {
-    emule::check_host_dram_alignment(
-        device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceDRAMChannel");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_dram_alignment(
+            device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceDRAMChannel");
+    }
     TT_FATAL(
         address >= device->allocator()->get_base_allocator_addr(HalMemType::DRAM),
         "Cannot write to reserved DRAM region, addresses [0, {}) are reserved!",
@@ -239,8 +242,10 @@ bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t addres
 }
 
 bool ReadFromDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::span<uint8_t> host_buffer) {
-    emule::check_host_dram_alignment(
-        device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_dram_alignment(
+            device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceDRAMChannel");
+    }
     bool pass = true;
     MetalContext::instance().get_cluster().dram_barrier(device->id());
     MetalContext::instance().get_cluster().read_dram_vec(
@@ -262,7 +267,13 @@ bool WriteToDeviceL1(
     std::span<const std::uint8_t> host_buffer,
     CoreType core_type) {
     ZoneScoped;
-    emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceL1");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "WriteToDeviceL1");
+        if (emule::emule_asan_enabled()) {
+            emule::LiveL1HostPokeRanges::add(
+                device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
+        }
+    }
     auto worker_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().write_core(device->id(), worker_core, host_buffer, address);
     return true;
@@ -294,7 +305,13 @@ bool ReadFromDeviceL1(
     uint32_t address,
     std::span<uint8_t> host_buffer,
     CoreType core_type) {
-    emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceL1");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_l1_alignment(device, address, static_cast<uint32_t>(host_buffer.size()), "ReadFromDeviceL1");
+        if (emule::emule_asan_enabled()) {
+            emule::LiveL1HostPokeRanges::add(
+                device->id(), address, address + static_cast<uint32_t>(host_buffer.size()));
+        }
+    }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     MetalContext::instance().get_cluster().read_core(
@@ -309,7 +326,12 @@ bool ReadFromDeviceL1(
     uint32_t size,
     std::vector<uint32_t>& host_buffer,
     CoreType core_type) {
-    emule::check_host_l1_alignment(device, address, size, "ReadFromDeviceL1");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_host_l1_alignment(device, address, size, "ReadFromDeviceL1");
+        if (emule::emule_asan_enabled()) {
+            emule::LiveL1HostPokeRanges::add(device->id(), address, address + size);
+        }
+    }
     MetalContext::instance().get_cluster().l1_barrier(device->id());
     auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
     host_buffer = MetalContext::instance().get_cluster().read_core(device->id(), virtual_core, address, size);
@@ -665,7 +687,9 @@ void WriteToDevice(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, con
 }
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
-    emule::check_buffer_allocated(buffer, "WriteToBuffer");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "WriteToBuffer");
+    }
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough
@@ -785,7 +809,9 @@ void ReadFromBuffer(const std::shared_ptr<Buffer>& buffer, std::vector<uint32_t>
 }
 
 void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
-    emule::check_buffer_allocated(buffer, "ReadFromBuffer");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "ReadFromBuffer");
+    }
     IDevice* device = buffer.device();
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:
@@ -807,7 +833,9 @@ void ReadFromBuffer(Buffer& buffer, uint8_t* host_buffer) {
 }
 
 void ReadShard(Buffer& buffer, uint8_t* host_buffer, const uint32_t& core_id) {
-    emule::check_buffer_allocated(buffer, "ReadShard");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "ReadShard");
+    }
     IDevice* device = buffer.device();
     TT_ASSERT(is_sharded(buffer.buffer_layout()));
 
@@ -973,12 +1001,16 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
         // Emule-only static KERNEL_CONFIG-window overflow sanitizer (no-op on
         // hardware); a throw here is surfaced as an ASAN panic by the catch below.
-        emule::check_program_metadata_size(program);
+        if constexpr (emule::kEmuleAsanBuild) {
+            emule::check_program_metadata_size(program);
+        }
     } catch (const std::exception& e) {
         // Surface the overflow as an ASAN panic when emulating; no-op otherwise.
         // Routed through the facade so this TU carries no __emule_asan_panic
         // reference in a non-emule build. Always rethrows.
-        emule::report_metadata_overflow(is_emulated, e.what());
+        if constexpr (emule::kEmuleAsanBuild) {
+            emule::report_metadata_overflow(is_emulated, e.what());
+        }
         throw;
     }
 
@@ -1149,7 +1181,9 @@ void CompileProgram(IDevice* device, Program& program, bool force_slow_dispatch)
 namespace experimental::core_subset_write {
 
 void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer, const CoreRangeSet& logical_core_filter) {
-    emule::check_buffer_allocated(buffer, "WriteToBuffer (core_subset_write)");
+    if constexpr (emule::kEmuleAsanBuild) {
+        emule::check_buffer_allocated(buffer, "WriteToBuffer (core_subset_write)");
+    }
     switch (buffer.buffer_type()) {
         case BufferType::DRAM:  // fallthrough
         case BufferType::L1:    // fallthrough

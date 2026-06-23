@@ -38,6 +38,8 @@ extern thread_local const uint64_t* __emule_l1_tensor_ranges;
 extern thread_local uint32_t __emule_l1_tensor_ranges_count;
 extern thread_local const uint64_t* __emule_l1_padding_ranges;
 extern thread_local uint32_t __emule_l1_padding_ranges_count;
+extern thread_local const uint64_t* __emule_l1_host_ranges;
+extern thread_local uint32_t __emule_l1_host_ranges_count;
 extern thread_local uint64_t* __emule_l1_resolved_ranges;
 extern thread_local uint32_t* __emule_l1_resolved_ranges_count;
 extern thread_local uint32_t __emule_l1_resolved_ranges_capacity;
@@ -69,6 +71,10 @@ struct EmuleOobTensorState {
     bool cb_boundary_strict = false;
     const uint64_t* l1_padding_ranges = nullptr;
     uint32_t l1_padding_ranges_count = 0;
+    // Raw L1 the host poked outside the Buffer allocator (valid, but not a tensor):
+    // an extra valid-extent set for the OOB check, excluded from Object Intent.
+    const uint64_t* l1_host_ranges = nullptr;
+    uint32_t l1_host_ranges_count = 0;
     bool object_intent_strict = false;
 };
 
@@ -117,6 +123,7 @@ struct OobStateOwner {
     std::vector<uint64_t> live_ranges;
     std::vector<uint64_t> dram_live_ranges;
     std::vector<uint64_t> padding_ranges;
+    std::vector<uint64_t> l1_host_ranges;
 };
 
 OobStateOwner build_oob_tensor_state(IDevice* device, int device_id);
