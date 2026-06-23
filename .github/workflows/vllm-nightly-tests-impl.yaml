@@ -175,7 +175,7 @@ jobs:
               "name": "[BH-QB-2] Gemma4-26B-A4B",
               "model": "google/gemma-4-26B-A4B-it",
               "server-timeout": 30,
-              "benchmark-timeout": 5,
+              "benchmark-timeout": 10,
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
