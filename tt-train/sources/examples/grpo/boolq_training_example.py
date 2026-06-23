@@ -115,11 +115,12 @@ def boolq_reward(completions, answer, **kwargs):
     # to 8 (= grpo_config.num_generations); override via GRPO_QWEN_NUM_GEN_PRINT.
     # Gated on GRPO_QWEN_DEBUG to avoid log spam.
     if os.environ.get("GRPO_QWEN_DEBUG") and completions:
-        n_gen = min(int(os.environ.get("GRPO_QWEN_NUM_GEN_PRINT", "8")), len(completions))
-        print(f"[reward] first-prompt gt={answer[0]!r}: {n_gen} generations:", flush=True)
-        for i in range(n_gen):
-            preview = completions[i].strip().replace("\n", " ")[:300]
-            print(f"[reward]   gen[{i}] = {preview!r}", flush=True)
+        # n_gen = min(int(os.environ.get("GRPO_QWEN_NUM_GEN_PRINT", "8")), len(completions))
+        # print(f"[reward] first-prompt gt={answer[0]!r}: {n_gen} generations:", flush=True)
+        # for i in range(n_gen):
+        print(f"[reward] first-prompt gt={answer[0]!r}", flush=True)
+        preview = completions[0].strip().replace("\n", " ")[:300]
+        print(f"[reward]   gen[{0}] = {preview!r}", flush=True)
 
     return rewards
 
