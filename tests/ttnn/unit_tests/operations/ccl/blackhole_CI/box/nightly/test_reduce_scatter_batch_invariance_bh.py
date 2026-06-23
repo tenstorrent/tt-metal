@@ -3,39 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Minimal repro: ttnn.experimental.reduce_scatter_minimal_async is BATCH-VARIANT with num_links=2.
+Regression guard: reduce_scatter_minimal_async (Ring) must be BATCH-INVARIANT (tt-metal#47238,
+tt-inference-server#4004).
 
-Context (tenstorrent/tt-metal#47238, tt-inference-server#4004):
-  On Qwen3-32B / P150x4 (BH, 1x4 mesh, Ring), the attention output (wo) projection is followed
-  by a 4-device reduce-scatter on dim=3 (models/tt_transformers/tt/ccl.py:tt_all_reduce ->
-  ttnn.experimental.reduce_scatter_minimal_async). For this mesh the model uses num_links=2
-  (tt_ccl.get_num_links(0)). Per-op activation dumps proved the wo matmul output feeding the RS
-  is BIT-IDENTICAL between a single-user prefill (M=128) and a batched prefill (M=1024, 8 users
-  packed), yet the RS OUTPUT differs by ~1 ULP. That delta compounds across the 64 decoder layers
-  and changes which token seeded categorical sampling draws -> the seed=0 determinism test fails
-  only with batched prefill.
+Feeds bit-identical input rows at M=1024 and M=128 (the small one is a slice of the big one) and
+asserts output rows [0:128] are exactly equal. They weren't: the bidirectional ring sent even
+tile-chunks forward and odd backward, accumulating partials in opposite (non-associative) order,
+and that even/odd assignment was M-dependent -> a ~1-ULP delta that compounded over Qwen3-32B's
+layers and broke seeded sampling under batched prefill. Fixed by deriving chunk parity from the
+global tile index (chunk_ring_parity<>() in the 3 ring kernels: reader/reduction/writer).
 
-  The divergence is the multi-link work split: with num_links=2 the reduction/accumulation order
-  along the scatter dim depends on the M (row) dimension, so the same input rows reduce in a
-  different order at M=128 vs M=1024. With num_links=1 the op is batch-invariant.
+All cases (bf8/bf16 x 1/2 link) should PASS with 0 differing elements; pre-fix only num_links=2
+failed. PCC vs torch stays ~0.99994 throughout -- this was reduction order, never correctness.
 
-What this test does:
-  Builds ONE global input at M=1024 and derives the M=128 input by SLICING its first 128 rows, so
-  the per-device inputs for rows [0:128] are bit-identical between the two runs. Runs
-  reduce_scatter_minimal_async on both and compares output rows [0:128]. For a batch-INVARIANT op
-  these must be exactly equal.
-
-  Expected on current main: num_links=1 PASSES (invariant), num_links=2 FAILS (batch-variant) ->
-  the bug for the CCL team. Both outputs match the torch reference in PCC (not a correctness bug);
-  the failure is purely an M-dependent reduction order.
-
-Run (any multi-chip Blackhole line/ring, e.g. P150x4 / P300x2 / 8-chip box):
-  pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_batch_invariance_bh.py -s
-
-Uses the bh_1d_mesh_device fixture, which auto-sizes to whatever Blackhole box is present
-(1/2/4/8/32 chips) and presents it as a 1D line/ring. The reduce-scatter spans all available
-chips, so the per-device hidden stays fixed (PER_DEVICE_N) while the global hidden scales with
-the device count.
+Uses bh_1d_mesh_device (auto-sizes to the BH box as a 1D line/ring; RS spans all chips):
+  pytest .../blackhole_CI/box/nightly/test_reduce_scatter_batch_invariance_bh.py -s
 """
 
 import pytest
@@ -186,10 +168,10 @@ def test_reduce_scatter_batch_invariance(bh_1d_mesh_device, dtype, num_links):
         )
 
         assert max_abs_diff == 0.0, (
-            f"reduce_scatter_minimal_async is BATCH-VARIANT (dtype={dtype}, num_links={num_links}): identical "
-            f"inputs for rows [0:128] produced outputs differing by max {max_abs_diff:.3e} between M=1024 and "
-            f"M=128 ({num_diff}/{total} elements). This ~1-ULP delta is the root cause of "
-            f"tt-inference-server#4004 (seeded-sampling non-determinism under batched prefill)."
+            f"reduce_scatter_minimal_async regressed to BATCH-VARIANT (dtype={dtype}, num_links={num_links}): "
+            f"identical rows [0:128] differ by max {max_abs_diff:.3e} between M=1024 and M=128 "
+            f"({num_diff}/{total} elements) -- ring tile-chunk parity is M-dependent again; check "
+            f"chunk_ring_parity() in the 3 ring kernels."
         )
     finally:
         mesh_device.reset_sub_device_stall_group()
