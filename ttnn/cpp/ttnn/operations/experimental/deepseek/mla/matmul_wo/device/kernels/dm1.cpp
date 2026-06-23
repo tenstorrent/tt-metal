@@ -90,12 +90,6 @@ void kernel_main() {
     // Use semaphore_inc<posted=true> with 1 transaction ID and flush barrier for trids
     constexpr uint32_t semaphore_trid = 0x4;
 
-    // Device 2.0 migration: legacy primitives retained: noc_async_write_set_trid /
-    // noc_async_write_one_packet_set_state / noc_async_write_one_packet_with_state /
-    // noc_async_write_flushed_with_trid are the trid-pipelined posted state-machine API; the
-    // set_state/with_state pair plus noc_semaphore_inc use precomposed uint64_t NoC addresses
-    // (collector_dst_base_addr / partial_semaphore_noc_addr built from get_noc_addr(x, y, ...));
-    // Device 2.0 Noc wrapper does not yet expose typed equivalents for these.
     noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
