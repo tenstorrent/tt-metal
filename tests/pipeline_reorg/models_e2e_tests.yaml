@@ -147,13 +147,26 @@
     export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
     pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
     pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"
+  model: llama3.3-70b
+  skus:
+    bh_quietbox_2:
+      timeout: 30
+      tier: 2
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
 
+# wh_llmbox_perf is split into its own entry because the performance-ci-eval-32
+# case is temporarily disabled there: it fails with "RuntimeError: Timeout
+# waiting for Ethernet core service remote IO request" on the 8-device Wormhole
+# mesh. https://github.com/tenstorrent/tt-metal/issues/47126
+- name: Llama 3.3-70B e2e tests
+  cmd: |
+    export HF_MODEL=meta-llama/Llama-3.3-70B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/meta-llama/Llama-3.3-70B-Instruct
+    pytest --timeout 4200 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
+    # pytest --timeout 1800 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-eval-32"  # disabled, refs #47126
   model: llama3.3-70b
   skus:
     wh_llmbox_perf:
-      timeout: 30
-      tier: 2
-    bh_quietbox_2:
       timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
