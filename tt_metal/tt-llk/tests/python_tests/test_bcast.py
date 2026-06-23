@@ -91,13 +91,6 @@ def test_unpack_bcast(
         pytest.skip("32-bit formats require dest accumulation")
 
     if (
-        get_chip_architecture() == ChipArchitecture.BLACKHOLE
-        and formats.input_format
-        in (DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32, DataFormat.UInt16)
-    ):
-        pytest.skip("Unsupported for BH yet")
-
-    if (
         dest_acc == DestAccumulation.Yes
         and formats.input_format == DataFormat.UInt16
         and broadcast_type == BroadcastType.None_
