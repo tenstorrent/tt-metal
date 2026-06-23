@@ -4,14 +4,14 @@
 
 #pragma once
 
-#include <tt-metalium/program_descriptors.hpp>
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "interleaved_to_sharded_op_types.hpp"
 
 namespace ttnn::prim::qsr {
 
 struct InterleavedToShardedProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const InterleavedToShardedParams& operation_attributes,
         const InterleavedToShardedInputs& tensor_args,
         Tensor& output_tensor);
