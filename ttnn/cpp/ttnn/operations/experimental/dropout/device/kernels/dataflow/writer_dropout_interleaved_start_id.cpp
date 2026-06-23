@@ -37,7 +37,7 @@ void kernel_main() {
 #endif
         cb_out.wait_front(onetile);
         uint32_t l1_read_addr = cb_out.get_read_ptr();
-        noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), s, get_tile_size(cb_id_out), {.page_id = i}, {});
+        noc.async_write(CoreLocalMem<uint32_t>(l1_read_addr), s, get_tile_size(cb_id_out), {}, {.page_id = i});
         noc.async_write_barrier();
         cb_out.pop_front(onetile);
     }
