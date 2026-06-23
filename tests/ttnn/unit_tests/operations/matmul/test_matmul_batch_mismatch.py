@@ -21,6 +21,8 @@ from models.common.utility_functions import comp_pcc
         ((1, 128, 2048), (7, 2048, 256)),
         ((1, 1, 256, 512), (1, 3, 512, 64)),
         ((1, 64, 768), (5, 768, 192)),
+        ((1, 1, 1, 128, 512), (2, 3, 4, 512, 64)),
+        ((1, 1, 1, 1, 64, 512), (2, 3, 4, 5, 512, 128)),
     ],
 )
 def test_matmul_a_batch1_b_batched(a_shape, b_shape, device):
