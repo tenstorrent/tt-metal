@@ -8,26 +8,12 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/conv1d_depthwise_helpers.hpp"
+#include "ttnn/cpp/ttnn/operations/conv/conv1d/conv1d_depthwise_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
-// Compute one block (one kernel-tap slice) of a 1D depthwise conv.
-//
-// Per output tile:
-//   dst[0]  = in0 * in1                                                 (FPU mul)
-//   if idx > 0: dst[0] += prior partial loaded from out_cb              (FPU add via DST reuse)
-//   pack dst[0] -> out_cb
-//
-// `idx` is the kernel-tap block index (0 .. filter_h*filter_w-1). The very first call (idx == 0)
-// initializes out_cb with the tap-0 product; subsequent calls accumulate via the DST_TO_SRCB
-// dest-reuse pattern, which keeps the running partial in DST and only pulls the prior partial
-// from L1. This gives a single pack per output tile (to out_cb) and avoids the pack-format flips
-// that corrupt block-float (BFLOAT8_B/BFLOAT4_B) outputs in the round-tripped variant — while
-// still using FPU (not SFPU) for the add.
-//
-// srcB (cfg92) tile descriptor: must match in1 for the mul, and is repopulated from DST for the
-// dest-reuse add. We force srcB back to in1's format every iteration so block-float weights are
-// decoded correctly.
+// Compute one block (one kernel-tap slice) of a 1D depthwise conv. idx is the kernel-tap block
+// index (0 .. filter_h*filter_w-1); idx==0 seeds out_cb with the tap-0 product, later taps
+// accumulate via dest-reuse. See depthwise_fir_mac_tile for the per-tile mul/add/pack body.
 inline void mul_and_accumulate_block(
     experimental::CB in0_cb, experimental::CB in1_cb, experimental::CB out_cb, uint32_t block_num_tiles, uint32_t idx) {
     const uint32_t in0_cb_id = in0_cb.get_cb_id();
@@ -38,9 +24,7 @@ inline void mul_and_accumulate_block(
         in1_cb.wait_front(1);
         in0_cb.wait_front(1);
 
-        // Per-channel weight tiles are streamed through in1 (one per output tile, index 0). The
-        // mul -> idx>0 dest-reuse add -> single pack is the shared depthwise_fir_mac_tile body;
-        // it leaves srcA/srcB reconfigured, which the next iteration's mul resets.
+        // Per-channel weight tiles streamed through in1 (one per output tile, index 0).
         compute_kernel_lib::depthwise_fir_mac_tile(in0_cb_id, 0, in1_cb_id, 0, out_cb_id, idx == 0);
 
         in0_cb.pop_front(1);
@@ -109,9 +93,7 @@ void kernel_main() {
     experimental::CB cb_in1(in1_cb_id);
     experimental::CB cb_out(out_cb_id);
 
-    // binary_op_init_common configures pack for out_cb, math for in0/in1, and unpack for in0/in1.
-    // The pack target never changes (we only ever pack to out_cb), so no further pack reconfig is
-    // needed for the lifetime of the kernel.
+    // Configures pack for out_cb and math/unpack for in0/in1; pack target never changes after this.
     binary_op_init_common(in0_cb_id, in1_cb_id, out_cb_id);
 
     for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {

@@ -4,6 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t out_rm_cb_id = get_compile_time_arg_val(0);
@@ -25,20 +28,24 @@ void kernel_main() {
     constexpr uint32_t stick_bytes = C * 4;
     constexpr uint32_t padded_stick_bytes = C_pad * 4;
 
+    Noc noc;
+    CircularBuffer out_rm_cb(out_rm_cb_id);
+
     const uint32_t num_blocks = (num_rows + BLOCK_T - 1) / BLOCK_T;
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
-        cb_wait_front(out_rm_cb_id, block_num_tiles);
-        const uint32_t rptr = get_read_ptr(out_rm_cb_id);
+        out_rm_cb.wait_front(block_num_tiles);
         for (uint32_t i = 0; i < BLOCK_T; ++i) {
             const uint32_t local = blk * BLOCK_T + i;
             if (local >= num_rows) {
                 break;
             }
             const uint32_t out_page = row_start + local;
-            noc_async_write(rptr + i * padded_stick_bytes, dst.get_noc_addr(out_page), stick_bytes);
+            // Write the real C channels (stick_bytes) to the output page, dropping the C_pad tail.
+            noc.async_write(
+                out_rm_cb, dst, stick_bytes, {.offset_bytes = i * padded_stick_bytes}, {.page_id = out_page});
         }
-        noc_async_write_barrier();
-        cb_pop_front(out_rm_cb_id, block_num_tiles);
+        noc.async_write_barrier();
+        out_rm_cb.pop_front(block_num_tiles);
     }
 }

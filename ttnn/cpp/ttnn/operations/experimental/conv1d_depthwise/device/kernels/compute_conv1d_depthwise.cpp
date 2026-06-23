@@ -9,18 +9,19 @@
 #include "api/compute/reconfig_data_format.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/conv1d_depthwise_helpers.hpp"
+#include "ttnn/cpp/ttnn/operations/conv/conv1d/conv1d_depthwise_helpers.hpp"
+#include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 // Accumulate one tap-block into out_cb: out[i] = tilized[i] * scalar (+ prior partial when tap>0).
-// `scalar_cb` holds the K resident tap tiles (filled once); read tile `tap`, never popped. The
-// per-tile mul -> tap>0 dest-reuse add -> single pack is the shared depthwise_fir_mac_tile body.
+// scalar_cb holds the K resident tap tiles; read tile `tap`, never popped.
 template <uint32_t block_num_tiles>
 inline void mul_and_accumulate(uint32_t tilized_cb, uint32_t scalar_cb, uint32_t out_cb, uint32_t tap) {
-    cb_wait_front(tilized_cb, block_num_tiles);
+    experimental::CB tilized(tilized_cb);
+    tilized.wait_front(block_num_tiles);
     for (uint32_t i = 0; i < block_num_tiles; ++i) {
         compute_kernel_lib::depthwise_fir_mac_tile(tilized_cb, i, scalar_cb, tap, out_cb, tap == 0);
     }
-    cb_pop_front(tilized_cb, block_num_tiles);
+    tilized.pop_front(block_num_tiles);
 }
 
 void kernel_main() {
@@ -39,8 +40,9 @@ void kernel_main() {
 
     binary_op_init_common(tilized_cb, scalar_cb, out_cb);
 
-    // The K tap tiles are filled once by the reader and stay resident — wait for them once.
-    cb_wait_front(scalar_cb, K);
+    // The K tap tiles are filled once by the reader and stay resident; wait for them once.
+    experimental::CB scalar(scalar_cb);
+    scalar.wait_front(K);
 
     for (uint32_t blk = 0; blk < num_blocks; ++blk) {
         for (uint32_t tap = 0; tap < K; ++tap) {
