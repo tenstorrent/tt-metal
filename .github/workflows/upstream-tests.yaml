@@ -78,6 +78,7 @@ jobs:
     outputs:
       image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
       is-release: ${{ steps.detect-release.outputs.is-release }}
+      is-stable-release: ${{ steps.detect-release.outputs.is-stable-release }}
       release-name: ${{ steps.detect-release.outputs.release-name }}
       wh-6u-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-image-tag }}
       wh-6u-profiler-image-tag: ${{ steps.set-image-tags.outputs.wh-6u-profiler-image-tag }}
@@ -100,14 +101,24 @@ jobs:
         id: detect-release
         run: |
           # Releases are run off a version tag, e.g. refs/tags/v0.72.0.
-          # Pre-release tags like v0.73.1-rc2 or v0.74.0-dev20260623 are excluded.
-          if [[ "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "Running off release tag ${{ github.ref_name }}"
+          # Pre-release tags carry a suffix, e.g. v0.73.1-rc2 or v0.74.0-dev20260623.
+          # - is-release: any version tag -> gets a :release-<version> image tag.
+          # - is-stable-release: clean release (no suffix) -> additionally moves :release-latest.
+          if [[ "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
+            echo "Running off version tag ${{ github.ref_name }}"
             echo "is-release=true" >> "$GITHUB_OUTPUT"
             echo "release-name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+            if [[ "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "Stable release; :release-latest will be updated"
+              echo "is-stable-release=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "Pre-release (rc/dev); :release-latest will NOT be updated"
+              echo "is-stable-release=false" >> "$GITHUB_OUTPUT"
+            fi
           else
-            echo "Not running off a release tag (ref: ${{ github.ref }})"
+            echo "Not running off a version tag (ref: ${{ github.ref }})"
             echo "is-release=false" >> "$GITHUB_OUTPUT"
+            echo "is-stable-release=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Set image tags
         id: set-image-tags
@@ -609,7 +620,7 @@ jobs:
           docker-image-tag: ${{ matrix.image-config.image-tag }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Push :release-latest
-        if: ${{ needs.get-image-tags.outputs.is-release == 'true' }}
+        if: ${{ needs.get-image-tags.outputs.is-stable-release == 'true' }}
         uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ matrix.image-config.image-tag }}
