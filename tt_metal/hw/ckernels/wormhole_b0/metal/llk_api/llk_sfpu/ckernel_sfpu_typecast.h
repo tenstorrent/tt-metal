@@ -42,12 +42,21 @@ inline void disarm_sfploadmacro_misc() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
 inline void calculate_typecast_fp32_to_uint16() {
-#ifndef DISABLE_SFPLOADMACRO
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+        TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
+        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+        if (DST_ACCUM_MODE) {
+            TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
+        } else {
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
+        }
+    }
+#else
     if constexpr (!DST_ACCUM_MODE) {
-        // This uses SFPLOADMACRO to achieve a throughput of 2 cycles per input row.
-        // It is only used for the 16-bit Dest (LO16 store) case; the 32-bit Dest case
-        // needs the swap-hi-lo16 store, which the init-time macro store mode cannot
-        // express, so it falls through to the plain loop below.
+        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 2 cycles per input row.
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
         //
@@ -68,23 +77,20 @@ inline void calculate_typecast_fp32_to_uint16() {
         TTI_SFPNOP;
         TTI_SFPNOP;
         TTI_SFPNOP;
-        return;
-    }
-    // 32-bit Dest path: the init armed the macro but this plain loop never issues SFPLOADMACRO.
-    // Disarm the leftover Misc/WaitForElapsedInstructions state first (WH hangs otherwise, #46751).
-    disarm_sfploadmacro_misc();
-#endif
+    } else {
+        // 32-bit Dest: the swap-hi-lo16 store cannot be expressed by the init-time macro store
+        // mode, so this case uses the plain loop. The init still armed the macro Misc word, so
+        // disarm the leftover state first (WH hangs otherwise running a plain loop with it, #46751).
+        disarm_sfploadmacro_misc();
 #pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-        TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
-        TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
-        if (DST_ACCUM_MODE) {
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
+            TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
             TTI_SFPSTORE(p_sfpu::LREG0, SFPSTORE_MODE_SWAP_HI_LO16, ADDR_MOD_2, 0);
-        } else {
-            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
         }
     }
+#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -264,15 +270,19 @@ inline void calculate_typecast_fp32_to_fp16b() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
 inline void calculate_typecast_uint16_to_fp32() {
-#ifndef DISABLE_SFPLOADMACRO
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
+    }
+#else
     if constexpr (!DST_ACCUM_MODE) {
-        // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
-        // It is only used for the 16-bit Dest case; the 32-bit Dest (DST_ACCUM_MODE)
-        // case needs the INT32 load + 0xFFFF mask addressing, which the macro's LO16
-        // load schedule does not reproduce, so it falls through to the plain loop below.
-        //
-        // The LO16 load keeps only the low 16 bits (the UInt16 value), so casting it
-        // produces the same result as the plain loop's INT32 load + 0xFFFF mask + cast.
+        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
+        // keeps only the low 16 bits (the UInt16 value), so casting it matches the plain loop's
+        // INT32 load + 0xFFFF mask + cast.
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
         //
@@ -290,19 +300,20 @@ inline void calculate_typecast_uint16_to_fp32() {
         }
         TTI_SFPNOP;
         TTI_SFPNOP;
-        return;
-    }
-    // 32-bit Dest path: the init armed the macro but this plain loop never issues SFPLOADMACRO.
-    // Disarm the leftover Misc/WaitForElapsedInstructions state first (WH hangs otherwise, #46751).
-    disarm_sfploadmacro_misc();
-#endif
+    } else {
+        // 32-bit Dest: the macro's LO16 load cannot reproduce the INT32 + 0xFFFF mask path, so
+        // this case uses the plain loop. The init still armed the macro Misc word, so disarm the
+        // leftover state first (WH hangs otherwise running a plain loop with it, #46751).
+        disarm_sfploadmacro_misc();
 #pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+            TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPCAST(p_sfpu::LREG0, p_sfpu::LREG0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::FP32, ADDR_MOD_2, 0);
+        }
     }
+#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
@@ -471,16 +482,18 @@ inline void calculate_typecast_uint32_to_fp32() {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool DST_ACCUM_MODE>
 inline void calculate_typecast_uint16_to_uint32() {
-#ifndef DISABLE_SFPLOADMACRO
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+    }
+#else
     if constexpr (!DST_ACCUM_MODE) {
-        // This uses SFPLOADMACRO to achieve a throughput of 1 cycle per input row.
-        // It is only used for the 16-bit Dest case; the 32-bit Dest (DST_ACCUM_MODE)
-        // case needs the INT32 load + 0xFFFF mask addressing, which the macro's LO16
-        // load schedule does not reproduce, so it falls through to the plain loop below.
-        //
-        // The LO16 load keeps only the low 16 bits (the UInt16 value) and zero-extends
-        // them, so the INT32 store writes the same result as the plain loop's INT32
-        // load + 0xFFFF mask.
+        // 16-bit Dest: SFPLOADMACRO fast path, throughput of 1 cycle per input row. The LO16 load
+        // keeps only the low 16 bits (the UInt16 value) and zero-extends them, so the INT32 store
+        // matches the plain loop's INT32 load + 0xFFFF mask.
         //
         // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
         //
@@ -494,18 +507,19 @@ inline void calculate_typecast_uint16_to_uint32() {
             TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
         }
         TTI_SFPNOP;
-        return;
-    }
-    // 32-bit Dest path: the init armed the macro but this plain loop never issues SFPLOADMACRO.
-    // Disarm the leftover Misc/WaitForElapsedInstructions state first (WH hangs otherwise, #46751).
-    disarm_sfploadmacro_misc();
-#endif
+    } else {
+        // 32-bit Dest: the macro's LO16 load cannot reproduce the INT32 + 0xFFFF mask path, so
+        // this case uses the plain loop. The init still armed the macro Misc word, so disarm the
+        // leftover state first (WH hangs otherwise running a plain loop with it, #46751).
+        disarm_sfploadmacro_misc();
 #pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
-        TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
-        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+        for (int d = 0; d < ITERATIONS; d++) {
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
+            TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_2, 0);
+        }
     }
+#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
