@@ -4,7 +4,12 @@
 
 #include <stdint.h>
 
+#include "api/core_local_mem.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
 
 void kernel_main() {
@@ -18,9 +23,9 @@ void kernel_main() {
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t in0_tile_size = get_compile_time_arg_val(6);
     constexpr uint32_t out_tile_size = get_compile_time_arg_val(7);
-    const uint32_t in0_sender_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
-    const uint32_t in0_receiver_semaphore_addr = get_semaphore(get_compile_time_arg_val(9));
-    const uint32_t in0_valid_semaphore_addr = get_semaphore(get_compile_time_arg_val(10));
+    Semaphore in0_sender_sem(get_compile_time_arg_val(8));
+    Semaphore in0_receiver_sem(get_compile_time_arg_val(9));
+    Semaphore in0_valid_sem(get_compile_time_arg_val(10));
     constexpr uint32_t is_output_writer = get_compile_time_arg_val(11);
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(12);
     constexpr bool transpose_a = static_cast<bool>(get_compile_time_arg_val(13));
@@ -73,6 +78,8 @@ void kernel_main() {
     // OFFSET_K_MODE overrides K_tiles from on-device offsets[start..start+2].
     uint32_t K_tiles = get_arg_val<uint32_t>(out_addr_rt_arg_idx + 6);
 
+    Noc noc;
+
     // Read on-device offsets and override the matching host-derived values. One mode per role:
     //   OFFSET_ROW_MODE (InputAndOutputRow): offsets[start..start+2] → M_tiles + per-core M
     //                    (published on cb_ctrl), in0_row_offset_tiles, and — on the writer
@@ -89,9 +96,14 @@ void kernel_main() {
         // Limitation: this reads exactly ONE page (page 0) of the offsets tensor. The
         // (start, end) pair must therefore fall within page 0 — i.e. (E + 1) * sizeof(uint32_t)
         // <= the offsets tensor's page size, where E is num_experts.
-        const uint32_t offsets_l1_addr = get_write_ptr(tt::CBIndex::c_0);
-        noc_async_read_page(0, offsets_acc, offsets_l1_addr);
-        noc_async_read_barrier();
+        const uint32_t offsets_l1_addr = CircularBuffer(tt::CBIndex::c_0).get_write_ptr();
+        noc.async_read(
+            offsets_acc,
+            CoreLocalMem<uint32_t>(offsets_l1_addr),
+            offsets_acc.get_aligned_page_size(),
+            {.page_id = 0},
+            {});
+        noc.async_read_barrier();
         volatile tt_l1_ptr uint32_t* offsets_stage = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(offsets_l1_addr);
         const uint32_t row_start = offsets_stage[offsets_start_index];
         const uint32_t row_end = offsets_stage[offsets_start_index + 1U];
@@ -121,22 +133,22 @@ void kernel_main() {
         M_end_tile = per_core * (in0_idx + 1U);
         M_blocks_per_core = (per_core + M_block_tiles - 1U) / M_block_tiles;
         // Publish (M_start, M_end, M_blocks_per_core) to compute via cb_ctrl.
-        cb_reserve_back(tt::CBIndex::c_8, 1U);
-        volatile tt_l1_ptr uint32_t* ctrl_l1 =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
+        CircularBuffer cb_ctrl(tt::CBIndex::c_8);
+        cb_ctrl.reserve_back(1U);
+        volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_ctrl.get_write_ptr());
         ctrl_l1[0] = M_start_tile;
         ctrl_l1[1] = M_end_tile;
         ctrl_l1[2] = M_blocks_per_core;
-        cb_push_back(tt::CBIndex::c_8, 1U);
+        cb_ctrl.push_back(1U);
 #endif  // OFFSET_ROW_MODE
 #ifdef OFFSET_K_MODE
         in0_k_offset_tiles = row_start / 32U;
         K_tiles = (row_end - row_start) / 32U;
-        cb_reserve_back(tt::CBIndex::c_8, 1U);
-        volatile tt_l1_ptr uint32_t* ctrl_l1 =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(tt::CBIndex::c_8));
+        CircularBuffer cb_ctrl(tt::CBIndex::c_8);
+        cb_ctrl.reserve_back(1U);
+        volatile tt_l1_ptr uint32_t* ctrl_l1 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_ctrl.get_write_ptr());
         ctrl_l1[3] = K_tiles;
-        cb_push_back(tt::CBIndex::c_8, 1U);
+        cb_ctrl.push_back(1U);
 #endif  // OFFSET_K_MODE
     }
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
@@ -159,20 +171,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_out = tt::CBIndex::c_2;
+    CircularBuffer cb_in0(cb_id_in0);
 
-    volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
-    *(in0_valid_semaphore_addr_ptr) = VALID;
-    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_semaphore_addr);
-
-    volatile tt_l1_ptr uint32_t* in0_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_semaphore_addr);
-    const uint64_t in0_sender_semaphore_noc_addr =
-        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
-
-    const uint64_t in0_receiver_semaphore_noc_addr =
-        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
+    in0_valid_sem.set(VALID);
 
     /**
      * This is a Row-Major output block ordering.
@@ -223,9 +224,9 @@ void kernel_main() {
                     continue;
                 }
                 const uint32_t k_block = k_forward ? k_block_iter : (K_num_blocks - 1) - k_block_iter;
-                cb_reserve_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.reserve_back(in0_block_num_tiles);
 
-                const uint32_t in0_start_address = get_write_ptr(cb_id_in0);
+                const uint32_t in0_start_address = cb_in0.get_write_ptr();
                 if constexpr (is_injector_core) {
                     read_in0_block_sync<M_block_tiles, K_block_tiles, transpose_a, use_offset>(
                         in0_reader,
@@ -243,33 +244,35 @@ void kernel_main() {
                         parent_K_tiles_stride);
                 } else {
                     // Non-injector core: receive the block from the upstream sender core.
-                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+                    in0_receiver_sem.set(INVALID);
+                    in0_sender_sem.up(noc, in0_sender_noc_x, in0_sender_noc_y, 1);
+                    in0_receiver_sem.wait(VALID);
                 }
 
                 // Critical to performance for the sender to push data to compute before forwarding.
                 // This frees the sender to start the next read earlier.
-                cb_push_back(cb_id_in0, in0_block_num_tiles);
+                cb_in0.push_back(in0_block_num_tiles);
 
                 if (!is_sink_core) {
-                    noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
-
-                    const uint64_t in0_unicast_data_addr =
-                        get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
+                    in0_sender_sem.wait(1);
+                    in0_sender_sem.set(0);
 
                     /**
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                      * padded tiles. Use `current_block_bytes`.
                      */
-                    noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(in0_start_address),
+                        UnicastEndpoint{},
+                        current_block_bytes,
+                        {},
+                        {.noc_x = in0_dest_noc_x, .noc_y = in0_dest_noc_y, .addr = in0_start_address});
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                    noc.async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
+                    in0_valid_sem.relay_unicast(noc, in0_receiver_sem, in0_dest_noc_x, in0_dest_noc_y);
                 }
             }
 
@@ -309,6 +312,6 @@ void kernel_main() {
             }
         }
     }
-    noc_async_write_barrier();
-    noc_async_atomic_barrier();
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
 }
