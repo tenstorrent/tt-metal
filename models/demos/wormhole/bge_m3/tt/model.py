@@ -39,6 +39,7 @@ class BgeM3Model(LightweightModule):
         self._trace_device = None
         self._trace_cq_id = 0
         self._trace_output = None
+        self._trace_inputs = None
 
         embedding_weights = build_embedding_weights(state_dict, ttnn.bfloat16)
         self.embeddings = BgeM3Embedding.from_config(
@@ -201,6 +202,73 @@ class BgeM3Model(LightweightModule):
         attention_mask: ttnn.Tensor | None = None,
         token_type_ids: ttnn.Tensor | None = None,
         position_ids: ttnn.Tensor | None = None,
+        *,
+        mode: str = "eager",
+    ) -> ttnn.Tensor:
+        """Run the BGE-M3 encoder.
+
+        ``input_ids`` is required; ``attention_mask``, ``token_type_ids`` and
+        ``position_ids`` are optional and default to ``None`` (the model derives
+        sensible values internally), so callers that only have some inputs --
+        e.g. several PCC tests pass ``attention_mask=None`` and omit
+        ``position_ids`` -- keep working. ``model(**staged)`` /
+        ``model(**encode_prompts(...)["model_inputs"])`` also work since the dict
+        keys match these argument names.
+
+        ``mode`` selects how the forward runs:
+
+        * ``"eager"`` (default) -- run the graph directly::
+
+              inputs = model_args.encode_prompts(prompts)["model_inputs"]
+              output = model.forward(**inputs)
+
+        * ``"trace"`` -- capture the forward once, then replay it on every
+          subsequent call. The customer keeps calling the same one-liner; the
+          fixed-address trace bookkeeping (device->device copy of fresh inputs
+          into the captured slots) is handled internally::
+
+              inputs = model_args.encode_prompts(prompts)["model_inputs"]
+              output = model.forward(**inputs, mode="trace")   # capture-once, then replay
+        """
+        if mode == "eager":
+            return self._forward_graph(input_ids, attention_mask, token_type_ids, position_ids)
+
+        if mode == "trace":
+            if self._trace_id is None:
+                # First call: warm up (JIT-compile kernels) with an eager
+                # forward, since compilation synchronizes and that is illegal
+                # inside ``begin_trace_capture``. Then adopt these device
+                # tensors as the persistent trace input slots and capture.
+                warmup_out = self._forward_graph(input_ids, attention_mask, token_type_ids, position_ids)
+                ttnn.synchronize_device(self.mesh_device)
+                ttnn.deallocate(warmup_out)
+                self._trace_inputs = (input_ids, attention_mask, token_type_ids, position_ids)
+                self.capture_trace(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    token_type_ids=token_type_ids,
+                    position_ids=position_ids,
+                    mesh_device=self.mesh_device,
+                )
+            else:
+                # Later calls: copy the fresh inputs into the captured slots
+                # (the trace replays from those fixed device addresses).
+                for src, dst in zip(
+                    (input_ids, attention_mask, token_type_ids, position_ids),
+                    self._trace_inputs,
+                ):
+                    if src is not None and dst is not None:
+                        ttnn.copy(src, dst)
+            return self.execute_trace(blocking=True)
+
+        raise ValueError(f"mode must be 'eager' or 'trace', got {mode!r}")
+
+    def _forward_graph(
+        self,
+        input_ids: ttnn.Tensor,
+        attention_mask: ttnn.Tensor | None = None,
+        token_type_ids: ttnn.Tensor | None = None,
+        position_ids: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         self._require_rank2(input_ids, "input_ids")
 
@@ -344,11 +412,11 @@ class BgeM3Model(LightweightModule):
 
         trace_device = mesh_device if mesh_device is not None else self.mesh_device
         trace_id = ttnn.begin_trace_capture(trace_device, cq_id=cq_id)
-        trace_output = self.forward(
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
+        trace_output = self._forward_graph(
+            input_ids,
+            attention_mask,
+            token_type_ids,
+            position_ids,
         )
         ttnn.end_trace_capture(trace_device, trace_id, cq_id=cq_id)
         ttnn.synchronize_device(trace_device)
@@ -377,6 +445,7 @@ class BgeM3Model(LightweightModule):
         self._trace_device = None
         self._trace_cq_id = 0
         self._trace_output = None
+        self._trace_inputs = None
 
     @staticmethod
     def _require_rank2(tensor: ttnn.Tensor, name: str) -> None:
