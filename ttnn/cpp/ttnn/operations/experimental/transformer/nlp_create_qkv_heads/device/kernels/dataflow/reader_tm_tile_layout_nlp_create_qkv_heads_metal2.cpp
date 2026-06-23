@@ -36,10 +36,10 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t onetile = 1;
-    const auto s0 = TensorAccessor(ta::input_q);
+    const auto s0 = TensorAccessor(tensor::input_q);
 
 #ifdef READ_FROM_INPUT_TENSOR_KV
-    const auto s1 = TensorAccessor(ta::input_kv);
+    const auto s1 = TensorAccessor(tensor::input_kv);
 #endif
 
     DataflowBuffer cb_qv(cb_id_qv);

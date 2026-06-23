@@ -32,9 +32,9 @@ void kernel_main() {
     constexpr uint32_t q_out_HtWt = get_arg(args::q_out_HtWt);
     constexpr uint32_t q_out_c = get_arg(args::q_out_c);
     constexpr uint32_t kv_out_c = get_arg(args::kv_out_c);
-    const auto sq = TensorAccessor(ta::q_output);
-    const auto sk = TensorAccessor(ta::k_output);
-    const auto sv = TensorAccessor(ta::v_output);
+    const auto sq = TensorAccessor(tensor::q_output);
+    const auto sk = TensorAccessor(tensor::k_output);
+    const auto sv = TensorAccessor(tensor::v_output);
 
     constexpr auto cb_id_qv = dfb::qv;  // cb for Q, V heads tiles
 #ifdef TRANSPOSE_K_HEADS

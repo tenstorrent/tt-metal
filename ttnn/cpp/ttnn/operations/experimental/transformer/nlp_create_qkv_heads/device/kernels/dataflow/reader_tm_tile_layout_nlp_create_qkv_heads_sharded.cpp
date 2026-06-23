@@ -33,7 +33,7 @@ void kernel_main() {
 
     // Q input shard base (Case 2 bridge): get_bank_base_address() returns the per-shard local
     // address, identical across shard cores, which is exactly the legacy q_base_addr.
-    const auto input_q = TensorAccessor(ta::input_q);
+    const auto input_q = TensorAccessor(tensor::input_q);
     const uint32_t q_base_addr = input_q.get_bank_base_address();
 
     DataflowBuffer cb_q_out(dfb::q_out);
@@ -87,7 +87,7 @@ void kernel_main() {
         uint32_t num_kv_tiles = get_arg(args::num_kv_tiles);
 
 #ifdef READ_FROM_INPUT_TENSOR_KV
-        const auto input_kv = TensorAccessor(ta::input_kv);
+        const auto input_kv = TensorAccessor(tensor::input_kv);
         const uint32_t kv_source_base = input_kv.get_bank_base_address();
 #else
         const uint32_t kv_source_base = q_base_addr;
