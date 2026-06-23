@@ -46,7 +46,14 @@ set -o pipefail
 # pytest's own stdout/stderr pass through unchanged.
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DISPATCH_TIMEOUT=5
+# Dispatch-layer hang timeout (seconds). Default 5s is lean for the common case,
+# but full-mesh fabric ops (e.g. a 4x8-galaxy ring all-gather) can legitimately
+# exceed it and false-trip; override via SAFE_PYTEST_DISPATCH_TIMEOUT for those.
+DISPATCH_TIMEOUT="${SAFE_PYTEST_DISPATCH_TIMEOUT:-5}"
+# Reset command run to recover a dirty/hung device. Default suits single-chip
+# boards; a 4x8 galaxy needs `tt-smi -glx_reset` (and may require host-level
+# access), so override via SAFE_PYTEST_RESET_CMD.
+RESET_CMD="${SAFE_PYTEST_RESET_CMD:-tt-smi -r}"
 TRIAGE_SCRIPT="${REPO_DIR}/tools/tt-triage.py"
 WATCHER_LOG="${REPO_DIR}/generated/watcher/watcher.log"
 TRIAGE_LLM_DIR="${REPO_DIR}/generated/tt-triage"
@@ -142,9 +149,9 @@ if [[ "$SIM_MODE" == false ]]; then
 
     # --- Check if device needs reset from previous hang ---
     if [[ -f "$DIRTY_FLAG" ]]; then
-        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..."
-        if ! tt-smi -r; then
-            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed"
+        echo "SAFE_PYTEST: Device marked dirty from previous hang, resetting..." >&2
+        if ! $RESET_CMD; then
+            echo "SAFE_PYTEST_ERROR: Device reset (tt-smi -r) failed" >&2
             exit 3
         fi
         rm -f "$DIRTY_FLAG"
@@ -307,8 +314,8 @@ fi
 # Hangs and crashes corrupt device state. Normal test failures (PCC mismatch,
 # assertion errors) and collection errors don't touch the device.
 if [[ "$IS_HANG" == true ]]; then
-    echo "SAFE_PYTEST: Resetting device..."
-    if tt-smi -r; then
+    echo "SAFE_PYTEST: Resetting device..." >&2
+    if $RESET_CMD; then
         sleep 2
         rm -f "$DIRTY_FLAG"
         echo "SAFE_PYTEST: Device reset complete"
