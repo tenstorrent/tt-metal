@@ -34,7 +34,6 @@
 #include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/checkpoint.h"
-#include "api/debug/ring_buffer.h"
 
 // clang-format on
 

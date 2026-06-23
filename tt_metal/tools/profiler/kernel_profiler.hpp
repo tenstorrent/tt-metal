@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "api/debug/ring_buffer.h"
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
