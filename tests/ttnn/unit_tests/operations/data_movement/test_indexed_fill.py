@@ -271,7 +271,7 @@ def test_indexed_fill_program_cache(device, variant):
             ), "cache-hit run created a new program entry instead of reusing the cached one"
 
 
-def test_indexed_fill_dim_out_of_bounds(device):
+def test_indexed_fill_dim_out_of_bounds(device, expect_error):
     # Verify that a dim outside [-rank, rank) raises a fatal error.
     input_tensor_a = ttnn.rand((4, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
     input_tensor_b = ttnn.rand((2, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
@@ -280,8 +280,8 @@ def test_indexed_fill_dim_out_of_bounds(device):
         device, ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     )
 
-    with pytest.raises(Exception):
+    with expect_error(RuntimeError, "is out of bounds for rank"):
         ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, dim=4)  # rank=4, so dim=4 is out of bounds
 
-    with pytest.raises(Exception):
+    with expect_error(RuntimeError, "is out of bounds for rank"):
         ttnn.indexed_fill(batch_id_ttnn, input_tensor_a, input_tensor_b, dim=-5)  # -5 < -rank=-4
