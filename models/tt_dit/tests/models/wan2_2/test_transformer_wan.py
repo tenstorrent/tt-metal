@@ -225,13 +225,15 @@ SWEEP_SEQ_LENS = [4096, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 98304]
 # transformer-block invocations, so the region must be generously sized (the Wan pipeline reserves
 # 120 MB for ~40-80 blocks in a single trace). Tune up if trace capture reports an insufficient region.
 sweep_ring_params = {**ring_params, "trace_region_size": 300000000}
+sweep_line_params = {**line_params, "trace_region_size": 300000000}
 
 
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        # BH Galaxy (ring) on 4x8, 2 links
-        pytest.param((4, 8), (4, 8), 1, 0, 2, sweep_ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+        # BH Galaxy on 4x8, 2 links
+        pytest.param((4, 8), (4, 8), 1, 0, 2, sweep_ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, sweep_line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
