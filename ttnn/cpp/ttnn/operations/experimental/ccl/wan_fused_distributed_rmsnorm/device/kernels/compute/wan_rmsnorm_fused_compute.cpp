@@ -38,6 +38,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/matmul.h"
 #include "api/compute/transpose_wh.h"
+#include "api/compute/transpose_wh_dest.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -326,16 +327,34 @@ void kernel_main() {
             }
         }  // RMS_PRE
 
-        // Phase 9 pre: NO compute-side transpose needed. The writer extracts
-        // col 0 of each stats_local_cb tile directly via strided L1 loads
-        // (col 0 lives in face_00 col 0 + face_10 col 0 at byte offsets
-        // {0,64,...,960} and {2048,...,3008}). Skipping the transpose saves
-        // a TRISC-state reconfig + pack pass per chunk (~hundreds of cycles).
+        // Transpose each row's stat tile from COL 0 -> ROW 0 so the writer packs
+        // two contiguous 64 B face-rows (tile byte offsets {0, 1024}) instead of
+        // 32 strided fp32 col-0 loads. transpose_wh maps col 0 (face_00 col0 +
+        // face_10 col0) -> row 0 (face_00 row0 + face_01 row0). MUX/packed-AG path
+        // only; is_tp_1 keeps col 0 and reduces locally (no writer involved).
+        if constexpr (packed_ag_enabled != 0) {
+            transpose_wh_init_short(stats_local_cb);
+            pack_reconfig_data_format(stats_transposed_local_cb);
+            for (uint32_t r = 0; r < rows_in_chunk; r++) {
+                cb_wait_front(stats_local_cb, 1);
+                cb_reserve_back(stats_transposed_local_cb, 1);
+                tile_regs_acquire();
+                transpose_wh_tile(stats_local_cb, 0, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, stats_transposed_local_cb);
+                tile_regs_release();
+                cb_push_back(stats_transposed_local_cb, 1);
+                cb_pop_front(stats_local_cb, 1);
+            }
+        }
 
         // -------- WAIT FOR FORWARDER TO COMPLETE AG FOR THIS CHUNK --------
         {
             DeviceZoneScopedN("RMS_AGWAIT");
-            cb_wait_front(stats_gathered_cb, chunk_stats_tiles);
+            // MUX/packed-AG: writer scatters into the transposed (row-0) gathered
+            // CB; is_tp_1 / legacy single-worker fill the plain col-0 gathered CB.
+            cb_wait_front(stats_reduce_src_cb, chunk_stats_tiles);
         }
 
         // -------- PHASE 3: POST — finalize normalization --------
@@ -404,32 +423,70 @@ void kernel_main() {
                                 static_assert(stats_tiles_cols % 2 == 0, "eltwise stats-sum needs even ring_size");
                                 constexpr uint32_t recip_h_full_bits = __builtin_bit_cast(
                                     uint32_t, 1.0f / static_cast<float>(num_tile_cols * 32u * stats_tiles_cols));
-                                cb_wait_front(stats_gathered_cb, stats_tiles_cols);
-                                reconfig_data_format(stats_gathered_cb, stats_gathered_cb);
-                                pack_reconfig_data_format(reduce_result_cb);
-                                tile_regs_acquire();
-                                // dst[0] = t0 + t1, then dst[0] += t_k + t_{k+1} for the rest.
-                                binary_tiles_init<true, EltwiseBinaryType::ELWADD>(
-                                    stats_gathered_cb, stats_gathered_cb, false);
-                                add_tiles(stats_gathered_cb, stats_gathered_cb, 0, 1, 0);
-                                binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
-                                    stats_gathered_cb, stats_gathered_cb, true);
-                                for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
-                                    add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 1, 0);
+                                if constexpr (packed_ag_enabled != 0) {
+                                    // MUX path: the writer scatters each device's stats into ROW 0
+                                    // of stats_transposed_gathered_cb (two contiguous 64 B face-rows).
+                                    // FPU-add the ring_size row-0 tiles, then transpose the summed
+                                    // tile IN DST (row 0 -> col 0) with transpose_wh_dest — no CB
+                                    // round-trip — then *1/H + eps + rsqrt on col 0. One transpose
+                                    // total (deferred past the sum) vs one per gathered tile.
+                                    cb_wait_front(stats_transposed_gathered_cb, stats_tiles_cols);
+                                    reconfig_data_format(stats_transposed_gathered_cb, stats_transposed_gathered_cb);
+                                    pack_reconfig_data_format(reduce_result_cb);
+                                    tile_regs_acquire();
+                                    binary_tiles_init<true, EltwiseBinaryType::ELWADD>(
+                                        stats_transposed_gathered_cb, stats_transposed_gathered_cb, false);
+                                    add_tiles(stats_transposed_gathered_cb, stats_transposed_gathered_cb, 0, 1, 0);
+                                    binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
+                                        stats_transposed_gathered_cb, stats_transposed_gathered_cb, true);
+                                    for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
+                                        add_tiles(
+                                            stats_transposed_gathered_cb, stats_transposed_gathered_cb, k, k + 1, 0);
+                                    }
+                                    // row-0 sum -> col-0, in place (fp32 DST).
+                                    transpose_wh_dest_init_short<true>();
+                                    transpose_wh_dest<true>(0);
+                                    binop_with_scalar_tile_init();
+                                    mul_unary_tile(0, recip_h_full_bits);
+                                    add_unary_tile(0, eps_bits);
+                                    rsqrt_tile_init<use_legacy_rsqrt>();
+                                    rsqrt_tile<use_legacy_rsqrt>(0);
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    cb_reserve_back(reduce_result_cb, 1);
+                                    pack_tile(0, reduce_result_cb);
+                                    cb_push_back(reduce_result_cb, 1);
+                                    tile_regs_release();
+                                    cb_pop_front(stats_transposed_gathered_cb, stats_tiles_cols);
+                                } else {
+                                    // Legacy single-worker writer: gathered tiles are COL 0.
+                                    cb_wait_front(stats_gathered_cb, stats_tiles_cols);
+                                    reconfig_data_format(stats_gathered_cb, stats_gathered_cb);
+                                    pack_reconfig_data_format(reduce_result_cb);
+                                    tile_regs_acquire();
+                                    // dst[0] = t0 + t1, then dst[0] += t_k + t_{k+1} for the rest.
+                                    binary_tiles_init<true, EltwiseBinaryType::ELWADD>(
+                                        stats_gathered_cb, stats_gathered_cb, false);
+                                    add_tiles(stats_gathered_cb, stats_gathered_cb, 0, 1, 0);
+                                    binary_tiles_init<false, EltwiseBinaryType::ELWADD>(
+                                        stats_gathered_cb, stats_gathered_cb, true);
+                                    for (uint32_t k = 2; k < stats_tiles_cols; k += 2) {
+                                        add_tiles(stats_gathered_cb, stats_gathered_cb, k, k + 1, 0);
+                                    }
+                                    // mean = sum / H_full, then + eps, then rsqrt.
+                                    binop_with_scalar_tile_init();
+                                    mul_unary_tile(0, recip_h_full_bits);
+                                    add_unary_tile(0, eps_bits);
+                                    rsqrt_tile_init<use_legacy_rsqrt>();
+                                    rsqrt_tile<use_legacy_rsqrt>(0);
+                                    tile_regs_commit();
+                                    tile_regs_wait();
+                                    cb_reserve_back(reduce_result_cb, 1);
+                                    pack_tile(0, reduce_result_cb);
+                                    cb_push_back(reduce_result_cb, 1);
+                                    tile_regs_release();
+                                    cb_pop_front(stats_gathered_cb, stats_tiles_cols);
                                 }
-                                // mean = sum / H_full, then + eps, then rsqrt.
-                                binop_with_scalar_tile_init();
-                                mul_unary_tile(0, recip_h_full_bits);
-                                add_unary_tile(0, eps_bits);
-                                rsqrt_tile_init<use_legacy_rsqrt>();
-                                rsqrt_tile<use_legacy_rsqrt>(0);
-                                tile_regs_commit();
-                                tile_regs_wait();
-                                cb_reserve_back(reduce_result_cb, 1);
-                                pack_tile(0, reduce_result_cb);
-                                cb_push_back(reduce_result_cb, 1);
-                                tile_regs_release();
-                                cb_pop_front(stats_gathered_cb, stats_tiles_cols);
                             } else {
                                 // TP=1: a single gathered tile; the matmul reduce is fine
                                 // (no multi-chunk x ring hang at ring_size==1).
