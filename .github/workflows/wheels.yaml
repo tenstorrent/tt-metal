@@ -101,18 +101,6 @@ jobs:
           # if ccache does not forward |endpoint_url=... as CRSH_ATTR_* (defensive belt-and-suspenders).
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
-      # NOTE: build-artifact.yaml has a curl-based "Verify S3 connectivity" probe, but we do
-      # NOT replicate it here. That probe relies on `curl --aws-sigv4` sending the
-      # X-Amz-Content-Sha256 header, which Garage requires. The Ubuntu CI image used by
-      # build-artifact.yaml ships curl 8.x (sends the header → probe passes), but THIS job's
-      # manylinux image (quay.io/pypa/manylinux_2_34_x86_64) ships curl 7.76.1, whose
-      # --aws-sigv4 does NOT emit X-Amz-Content-Sha256. Garage therefore rejects the probe PUT
-      # with HTTP 400 "Missing X-Amz-Content-Sha256 field" — a limitation of that old curl, not
-      # of ccache or of connectivity. The actual ccache remote-storage path does not use curl:
-      # ccache spawns the ccache-storage-s3 Go helper, whose AWS Go SDK always sends
-      # X-Amz-Content-Sha256 correctly. So the curl probe would only ever test a tool ccache
-      # never uses. We drop it and let ccache exercise the real (Go SDK) path during the build;
-      # CCACHE_REMOTE_ONLY=true below keeps any remaining helper hiccup non-fatal to the build.
 
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
