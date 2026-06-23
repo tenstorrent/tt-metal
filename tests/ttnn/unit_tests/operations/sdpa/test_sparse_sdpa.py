@@ -223,7 +223,7 @@ def test_sparse_sdpa_nd_sharded_kv_len_change(device):
 # ---- program-cache HIT (validate_on_program_cache_hit re-checks the bound; without it the gather would run
 # ---- out of bounds silently). ----
 @run_for_blackhole()
-def test_sparse_sdpa_indexed_oob_rejected_on_hit(device):
+def test_sparse_sdpa_indexed_oob_rejected_on_hit(device, expect_error):
     H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 2
     device.clear_program_cache()
     q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B)
@@ -232,7 +232,8 @@ def test_sparse_sdpa_indexed_oob_rejected_on_hit(device):
     tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
     ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=0)  # miss: builds
     assert device.num_program_cache_entries() == 1
-    with pytest.raises(RuntimeError):  # cache HIT, slot B is out of range [0,B) -> rejected by the hit validator
+    # cache HIT, slot B is out of range [0,B) -> rejected by the hit validator
+    with expect_error(RuntimeError, "cache_batch_idx"):
         ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc, cache_batch_idx=B)
 
 
@@ -240,7 +241,7 @@ def test_sparse_sdpa_indexed_oob_rejected_on_hit(device):
 # ---- same shape/dtype must be rejected on a program-cache HIT too (validate_on_program_cache_hit re-checks
 # ---- all non-hashed input invariants; without it the cached row-major program would run on a tiled tensor). ----
 @run_for_blackhole()
-def test_sparse_sdpa_bad_layout_rejected_on_hit(device):
+def test_sparse_sdpa_bad_layout_rejected_on_hit(device, expect_error):
     H, S, T, TOPK, kc = 32, 64, 256, 64, 32
     device.clear_program_cache()
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
@@ -250,5 +251,5 @@ def test_sparse_sdpa_bad_layout_rejected_on_hit(device):
     ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)  # miss: builds the row-major program
     assert device.num_program_cache_entries() == 1
     tt_q_tile = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT)  # same shape+dtype (same hash) but wrong layout -> HIT
-    with pytest.raises(RuntimeError):
+    with expect_error(RuntimeError, "ROW_MAJOR"):
         ttnn.transformer.sparse_sdpa(tt_q_tile, tt_kv, tt_idx, V_DIM, k_chunk_size=kc)
