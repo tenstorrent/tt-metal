@@ -55,8 +55,8 @@ permissions:
 env:
   # Prio runner pool is reserved for merge-queue traffic; other triggers keep the
   # default stable labels so PR/push runs don't starve the merge-group queue.
-  CI_RUNS_ON_CPU_LARGE: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-stable-prio' || 'tt-ubuntu-2204-large-stable' }}
-  CI_RUNS_ON_CPU_MEDIUM: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-stable-prio' || 'tt-ubuntu-2204-medium-stable' }}
+  CI_RUNS_ON_CPU_LARGE: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+  CI_RUNS_ON_CPU_MEDIUM: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
 
 jobs:
   static-checks:
