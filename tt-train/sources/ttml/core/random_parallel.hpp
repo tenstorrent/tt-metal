@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstdint>
 #include <span>
 #include <thread>
 #include <vector>
@@ -21,7 +23,7 @@ inline size_t calculate_num_chunks(size_t total_size, size_t chunk_size) noexcep
 }
 
 inline uint64_t calculate_chunk_seed(uint32_t base_seed, size_t chunk_id, size_t chunk_size) noexcept {
-    return static_cast<uint64_t>(base_seed) + (static_cast<uint64_t>(chunk_id * chunk_size) << thread_seed_shift_bits);
+    return static_cast<uint64_t>(base_seed) + static_cast<uint64_t>(chunk_id * chunk_size);
 }
 
 // chunk_fn must be callable as chunk_fn(std::span<T>, uint32_t seed).
