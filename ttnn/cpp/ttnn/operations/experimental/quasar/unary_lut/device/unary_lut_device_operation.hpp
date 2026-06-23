@@ -41,7 +41,7 @@ struct LutConfig {
     // with NO per-activation special-casing. rr_method == 0 (none) => byte-identical to
     // the no-RR path. Method codes (match the kernel's LUT_RR_METHOD contract):
     //   0 none, 1 log, 2 exp (Cody-Waite), 3 cbrt, 4 expalu_exp2, 5 expalu_log2,
-    //   6 expalu_pow, 7 trig (sin/cos), 8 tan.
+    //   6 expalu_pow, 7 trig (sin/cos), 8 tan, 9 newton_root (standalone seed+Newton).
     uint32_t rr_method = 0;
     float rr_log_ln2 = 1.0f;                   // method 1
     float rr_exp_mult = 1.4426950408889634f;   // method 2
@@ -56,6 +56,17 @@ struct LutConfig {
     float rr_input_offset = 0.0f;        // method 5 (log1p)
     uint32_t rr_pow_n = 2;               // method 6
     uint32_t rr_pow_recip = 0;           // method 6 (rsqrt)
+
+    // ---- Newton-root (rr_method == 9). STANDALONE magic-seed + Newton/Householder
+    // evaluator (sqrt / rsqrt / cbrt); bypasses the segment cascade. Parsed by the
+    // driver from the fitter CSV newton_root_* METADATA, baked into the kernel as the
+    // LUT_NR_* defines. Defaults are the sqrt seed (harmless when rr_method != 9).
+    uint32_t nr_magic = 0x5f1110a0u;  // sqrt magic seed; rsqrt uses 0x5f3759df
+    float nr_c1 = 2.2825186f;
+    float nr_c2 = 2.2533049f;
+    uint32_t nr_iters = 2;
+    uint32_t nr_n = 2;           // root order (2 = sqrt/rsqrt)
+    uint32_t nr_reciprocal = 0;  // 0 = sqrt, 1 = rsqrt
 
     bool operator==(const LutConfig&) const = default;
 };

@@ -114,6 +114,22 @@ m2::KernelSpec::CompilerOptions::Defines make_lut_defines(const std::optional<Lu
         defines.emplace("LUT_RR_INPUT_OFFSET", float_literal(l.rr_input_offset));
         defines.emplace("LUT_RR_POW_N", std::to_string(l.rr_pow_n));
         defines.emplace("LUT_RR_POW_RECIP", std::to_string(l.rr_pow_recip));
+
+        // Newton-root (method 9) standalone evaluator constants. The magic seed is a
+        // 32-bit pattern reinterpreted as an int in the kernel, so emit it as a hex
+        // literal (round-trips exactly). C1/C2 are float literals; iters/n/reciprocal
+        // are integers (the kernel selects the sqrt vs rsqrt vs cbrt body by VALUE on
+        // LUT_NR_N / LUT_NR_RECIPROCAL).
+        if (l.rr_method == 9) {
+            std::ostringstream magic_os;
+            magic_os << "0x" << std::hex << l.nr_magic << "u";
+            defines.emplace("LUT_NR_MAGIC", magic_os.str());
+            defines.emplace("LUT_NR_C1", float_literal(l.nr_c1));
+            defines.emplace("LUT_NR_C2", float_literal(l.nr_c2));
+            defines.emplace("LUT_NR_ITERS", std::to_string(l.nr_iters));
+            defines.emplace("LUT_NR_N", std::to_string(l.nr_n));
+            defines.emplace("LUT_NR_RECIPROCAL", std::to_string(l.nr_reciprocal));
+        }
     }
     return defines;
 }

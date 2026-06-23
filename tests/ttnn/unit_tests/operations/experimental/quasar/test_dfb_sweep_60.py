@@ -70,6 +70,7 @@ _RR_IN_KERNEL = {
     "exponent_alu_pow",
     "trig",
     "tan",
+    "newton_root",  # STANDALONE magic-seed + Newton evaluator (sqrt / rsqrt)
 }
 
 # Shared results collector — every parametrized case appends one record; the

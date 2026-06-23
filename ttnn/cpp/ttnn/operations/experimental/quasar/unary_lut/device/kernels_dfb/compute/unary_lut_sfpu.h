@@ -95,7 +95,36 @@
 #ifndef LUT_RR_METHOD
 #define LUT_RR_METHOD \
     0  // 0 none, 1 log, 2 exp, 3 cbrt, 4 expalu_exp2,
-       // 5 expalu_log2, 6 expalu_pow, 7 trig (sin/cos), 8 tan
+       // 5 expalu_log2, 6 expalu_pow, 7 trig (sin/cos), 8 tan,
+       // 9 newton_root (magic-seed + Newton/Householder; STANDALONE evaluator,
+       //   bypasses the segment cascade — sqrt / rsqrt / cbrt)
+#endif
+
+// ---- Newton-root configuration (method 9). The fitter's deployed sqrt / rsqrt picks
+// use eval_method == newton_root: a magic-number bit-hack seed followed by a fixed
+// number of Newton/Householder iterations. This is a SELF-CONTAINED evaluator over the
+// FULL input domain — the magic seed already folds in the exponent decomposition, so
+// there is NO reduce / segment-select / reconstruct (the CSV carries a single trivial
+// segment). Constants are emitted by the factory from the fitter CSV METADATA
+// (newton_root_magic / _c1 / _c2 / _n / _iters / _reciprocal). Ported verbatim from
+// the proven tt-llk reference generic_lut_newton_root_quasar_test.cpp.
+#ifndef LUT_NR_MAGIC
+#define LUT_NR_MAGIC 0x5f1110a0  // sqrt magic seed (default); rsqrt uses 0x5f3759df
+#endif
+#ifndef LUT_NR_C1
+#define LUT_NR_C1 2.2825186f
+#endif
+#ifndef LUT_NR_C2
+#define LUT_NR_C2 2.2533049f
+#endif
+#ifndef LUT_NR_ITERS
+#define LUT_NR_ITERS 2
+#endif
+#ifndef LUT_NR_N
+#define LUT_NR_N 2  // root order (2 = sqrt/rsqrt)
+#endif
+#ifndef LUT_NR_RECIPROCAL
+#define LUT_NR_RECIPROCAL 0  // 0 = sqrt, 1 = rsqrt
 #endif
 #ifndef LUT_RR_LOG_LN2
 #define LUT_RR_LOG_LN2 1.0f
@@ -201,12 +230,12 @@ sfpi_inline void init_neg1_const_reg() {
 sfpi_inline sfpi::vFloat const_vf(float c) { return sfpi::vFloat(c); }
 
 // Fused multiply-add with a compile-time addend (SFPADDI avoidance, see header note).
-sfpi_inline sfpi::vFloat fma_const(sfpi::vFloat a, sfpi::vFloat b, float c) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat fma_const(sfpi::vFloat a, sfpi::vFloat b, float c) {
     return __builtin_rvtt_sfpmad(a.get(), b.get(), const_vf(c).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 }
 
 // Horner FMA step: acc*x + c. Passes the runtime register `x` as the SFPMAD multiplicand.
-sfpi_inline sfpi::vFloat horner_fma(sfpi::vFloat acc, sfpi::vFloat x, float c) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat horner_fma(sfpi::vFloat acc, sfpi::vFloat x, float c) {
     return __builtin_rvtt_sfpmad(x.get(), acc.get(), const_vf(c).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 }
 
@@ -230,7 +259,7 @@ sfpi_inline sfpi::vFloat horner_fma(sfpi::vFloat acc, sfpi::vFloat x, float c) {
 // whether or not the compare's constant operand survives. This is mathematically exact
 // (a < b <=> a - b < 0 for finite, non-overflowing operands; all boundaries and
 // clamped args here are small finite values).
-sfpi_inline sfpi::vFloat sub(sfpi::vFloat a, sfpi::vFloat b) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat sub(sfpi::vFloat a, sfpi::vFloat b) {
     return __builtin_rvtt_sfpmad(a.get(), sfpi::vFloat(1.0f).get(), (-b).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 }
 
@@ -238,7 +267,7 @@ sfpi_inline sfpi::vFloat sub(sfpi::vFloat a, sfpi::vFloat b) {
 // operator/; use the SFPNONLINEAR recip approximation plus two NR steps
 // (y <- y*(2 - x*y)), formed with fused FMA (no SFPADDI). Mirrors rr_recip in the
 // tt-llk reference.
-sfpi_inline sfpi::vFloat recip(sfpi::vFloat x) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat recip(sfpi::vFloat x) {
     sfpi::vFloat y = sfpi::approx_recip(x);
 #pragma GCC unroll 1
     for (int it = 0; it < 2; it++) {
@@ -248,6 +277,122 @@ sfpi_inline sfpi::vFloat recip(sfpi::vFloat x) {
     }
     return y;
 }
+
+// =====================================================================
+// NEWTON-ROOT evaluator (method 9). STANDALONE: magic-seed + Newton/Householder over
+// the full input domain (no segment cascade). Ported verbatim from the proven tt-llk
+// reference generic_lut_newton_root_quasar_test.cpp, which is itself a byte-faithful
+// replica of the production EVAL_METHOD_NEWTON_ROOT path. All intrinsics
+// (reinterpret, >>, vConst1, the int subtract MAGIC - i) exist on Quasar sfpi; the one
+// BH-only op (addexp(x,-1) == x*0.5 via SFPDIVP2) is missing on the Quasar ttsim build
+// and is substituted with the bit-identical multiply x * 0.5f.
+// =====================================================================
+#if LUT_RR_METHOD == 9
+
+// addexp(v, -1) == v * 0.5. 0.5 is an exact fp32 value, so x*0.5f is bit-identical to
+// the exponent-decrement op for all finite normal inputs (subnormals are out of the
+// newton_root domain). Used because SFPADDEXP / SFPDIVP2 is missing on Quasar ttsim.
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat nr_half(sfpi::vFloat v) { return v * sfpi::vFloat(0.5f); }
+
+#if (LUT_NR_N == 2) && (LUT_NR_RECIPROCAL == 0)
+// --- sqrt: magic seed + double-Newton (native parity) ------------------------
+// SFPADDI AVOIDANCE: the tt-llk reference forms `c1 + c*(c2 + c)` and `1 + neg_y*xy`
+// with bare vFloat+const adds. On Quasar a standalone `acc + const` lowers to SFPADDI,
+// which is UNIMPLEMENTED on the ttsim build (MissingSpecification: tensix_execute_sfpaddi).
+// Re-express every `acc + const` as a fused SFPMAD (fma_const / __builtin_rvtt_sfpmad)
+// with the constant in the SFPMAD operand slot — numerically identical, never SFPADDI.
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat newton_root_eval(sfpi::vFloat x) {
+    const sfpi::vInt magic_seed = (sfpi::vInt)(int)(LUT_NR_MAGIC);
+
+    sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(x) >> 1);
+    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(magic_seed - i);
+
+    sfpi::vFloat xy = x * y;
+    sfpi::vFloat negative_y = -y;
+    sfpi::vFloat c = negative_y * xy;
+    // y = y * (c1 + c*(c2 + c)); c2 + c == fma(c, 1, c2); then c1 + c*inner == fma(c, inner, c1).
+    const sfpi::vFloat inner = fma_const(c, sfpi::vFloat(1.0f), LUT_NR_C2);
+    const sfpi::vFloat poly =
+        __builtin_rvtt_sfpmad(c.get(), inner.get(), const_vf(LUT_NR_C1).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    y = y * poly;
+    xy = x * y;
+    negative_y = -y;
+    // one_minus_xyy = 1 + neg_y*xy == fma(neg_y, xy, 1.0) (1.0 in the SFPMAD addend slot, not SFPADDI).
+    sfpi::vFloat one_minus_xyy =
+        __builtin_rvtt_sfpmad(negative_y.get(), xy.get(), const_vf(1.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    sfpi::vFloat half_xy = nr_half(xy);  // addexp(xy,-1) substitute
+    sfpi::vFloat infinity = sfpi::sFloat16b(std::numeric_limits<float>::infinity());
+    v_if(sfpi::reinterpret<sfpi::vInt>(x) < sfpi::reinterpret<sfpi::vInt>(infinity)) {
+        // y = one_minus_xyy*half_xy + xy (xy is a register addend, a normal 3-reg FMA).
+        y = __builtin_rvtt_sfpmad(one_minus_xyy.get(), half_xy.get(), xy.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    }
+    v_endif;
+    v_if(x < 0.0f) { y = std::numeric_limits<float>::quiet_NaN(); }
+    v_endif;
+    return y;
+}
+#elif (LUT_NR_N == 2) && (LUT_NR_RECIPROCAL == 1)
+// --- rsqrt: classic inverse-sqrt magic seed + Newton -------------------------
+// y = y * (c1 - half_x*(y*y)) re-expressed as a fused SFPMAD (see sqrt note re SFPADDI):
+// c1 - half_x*yy == fma((-half_x), yy, c1) with c1 in the SFPMAD operand slot.
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat newton_root_eval(sfpi::vFloat x) {
+    const sfpi::vInt magic_seed = (sfpi::vInt)(int)(LUT_NR_MAGIC);
+
+    sfpi::vInt i = sfpi::reinterpret<sfpi::vInt>(sfpi::reinterpret<sfpi::vUInt>(x) >> 1);
+    sfpi::vFloat y = sfpi::reinterpret<sfpi::vFloat>(magic_seed - i);
+    const sfpi::vFloat neg_half_x = -nr_half(x);  // -0.5*x (addexp(x,-1) substitute, negated)
+#pragma GCC unroll 4
+    for (int s = 0; s < LUT_NR_ITERS; s++) {
+        const sfpi::vFloat yy = y * y;
+        const sfpi::vFloat inner = __builtin_rvtt_sfpmad(
+            neg_half_x.get(),
+            yy.get(),
+            const_vf(LUT_NR_C1).get(),
+            sfpi::SFPMAD_MOD1_OFFSET_NONE);  // c1 - 0.5*x*y*y
+        y = y * inner;
+    }
+    v_if(x < 0.0f) { y = std::numeric_limits<float>::quiet_NaN(); }
+    v_endif;
+    v_if(x == 0.0f) { y = std::numeric_limits<float>::infinity(); }
+    v_endif;
+    return y;
+}
+#elif (LUT_NR_N == 3)
+// --- cbrt: minimal exponent seed + DIVISION-FREE cubic Householder -----------
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat newton_root_eval(sfpi::vFloat x) {
+    sfpi::vInt sign_bits = sfpi::reinterpret<sfpi::vInt>(x) & (sfpi::vInt)0x80000000;
+    sfpi::vFloat ax = sfpi::setsgn(x, 0);
+
+    sfpi::vInt e_int = sfpi::exexp(ax, sfpi::ExponentMode::NoDebias) - 127;
+    sfpi::vFloat m = sfpi::setexp(ax, 127);
+
+    const sfpi::vFloat magic = sfpi::reinterpret<sfpi::vFloat>((sfpi::vInt)(int)0x4B400000);
+    // int -> float via vSMag (the only Quasar int->float path).
+    sfpi::vFloat ef = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(e_int), sfpi::RoundMode::Nearest);
+    v_if(e_int < 0) {
+        ef = -sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(~e_int + 1), sfpi::RoundMode::Nearest);
+    }
+    v_endif;
+    sfpi::vInt q = sfpi::reinterpret<sfpi::vInt>(ef * (1.0f / 3.0f) + magic) - sfpi::reinterpret<sfpi::vInt>(magic);
+
+    sfpi::vFloat wm = -0.27f * m + 1.25f;
+    sfpi::vFloat w = sfpi::setexp(wm, sfpi::exexp(wm, sfpi::ExponentMode::NoDebias) - q);
+
+    const sfpi::vFloat a13 = 1.0f / 3.0f;
+    const sfpi::vFloat a29 = 2.0f / 9.0f;
+    for (int s = 0; s < LUT_NR_ITERS; s++) {
+        sfpi::vFloat c = 1.0f - ax * (w * w * w);
+        w = w * (1.0f + c * a13 + (c * c) * a29);
+    }
+    sfpi::vFloat y = ax * w * w;
+    y = sfpi::reinterpret<sfpi::vFloat>(sfpi::reinterpret<sfpi::vInt>(y) | sign_bits);
+    v_if(x == 0.0f) { y = 0.0f; }
+    v_endif;
+    return y;
+}
+#endif
+
+#endif  // LUT_RR_METHOD == 9
 
 // =====================================================================
 // Range-reduction primitives (exponent / trig family). Ported verbatim from the
@@ -261,23 +406,23 @@ sfpi_inline sfpi::vFloat recip(sfpi::vFloat x) {
 
 // Reduced-domain mantissa m in [1,2): replace x's biased exponent with 127 (np.frexp
 // adjustment m=2*m, e=e-1 -> m in [1,2)). setexp idiom from the BH log kernel.
-sfpi_inline sfpi::vFloat rr_mantissa(sfpi::vFloat in) { return sfpi::setexp(in, 127); }
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat rr_mantissa(sfpi::vFloat in) { return sfpi::setexp(in, 127); }
 
 // int -> float (vInt -> vSMag -> vFloat); the only int->float path on Quasar.
-sfpi_inline sfpi::vFloat rr_int_to_float(sfpi::vInt v) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat rr_int_to_float(sfpi::vInt v) {
     const auto s = sfpi::convert<sfpi::vSMag>(v);
     return sfpi::convert<sfpi::vFloat>(s, sfpi::RoundMode::Nearest);
 }
 
 // True signed exponent e as float (e==0 for x in [1,2)). exexp(Debias) returns the
 // frexp-adjusted signed exponent directly (matches the BH log kernel pairing).
-sfpi_inline sfpi::vFloat rr_exp_float(sfpi::vFloat in) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat rr_exp_float(sfpi::vFloat in) {
     return rr_int_to_float(sfpi::exexp(in, sfpi::ExponentMode::Debias));
 }
 
 // Variable ldexp: result = mant * 2^(e_int). Synthesize 2^e by writing the biased
 // exponent field (e+127) onto 1.0 and multiplying. Valid for |e_int| <= 127.
-sfpi_inline sfpi::vFloat rr_ldexp(sfpi::vFloat mant, sfpi::vInt e_int) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat rr_ldexp(sfpi::vFloat mant, sfpi::vInt e_int) {
     const sfpi::vInt e_biased = e_int + sfpi::vInt(127);
     const sfpi::vFloat two_pow_e = sfpi::setexp(sfpi::vFloat(1.0f), e_biased);
     return mant * two_pow_e;
@@ -285,7 +430,7 @@ sfpi_inline sfpi::vFloat rr_ldexp(sfpi::vFloat mant, sfpi::vInt e_int) {
 
 // round-to-nearest float -> vInt via SFPSTOCHRND fp32->sm16 (RNE) then SFPCAST sm32->int.
 // Reduced exponent integers (|q|,|i|,|e| <= ~127) fit in 16 bits, so this is exact.
-sfpi_inline sfpi::vInt rr_round_to_int(sfpi::vFloat t) {
+__attribute__((always_inline)) sfpi_inline sfpi::vInt rr_round_to_int(sfpi::vFloat t) {
     const sfpi::vSMag s = sfpi::vSMag(
         __builtin_rvtt_sfpstochrnd_i(t.get(), 0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_SMAG16, sfpi::SFPSTOCHRND_RND_EVEN));
     return sfpi::convert<sfpi::vInt>(s);
@@ -295,7 +440,7 @@ sfpi_inline sfpi::vInt rr_round_to_int(sfpi::vFloat t) {
 // when the rounded value overshot the input (toward -inf). The fi > t compare is a
 // vFloat-vFloat compare; form (fi - t) and compare against literal 0.0f (the same
 // nonzero-constant-compare workaround used by sub() elsewhere in this kernel).
-sfpi_inline sfpi::vInt rr_floor_to_int(sfpi::vFloat t) {
+__attribute__((always_inline)) sfpi_inline sfpi::vInt rr_floor_to_int(sfpi::vFloat t) {
     sfpi::vInt i = rr_round_to_int(t);
     const sfpi::vFloat fi = rr_int_to_float(i);
     v_if(sub(fi, t) > 0.0f) { i = i - sfpi::vInt(1); }
@@ -306,7 +451,7 @@ sfpi_inline sfpi::vInt rr_floor_to_int(sfpi::vFloat t) {
 // Floored divmod by compile-time divisor d (>0): e = d*q + r, r in [0,d). |e| <= 127
 // is exactly fp32-representable. r is formed in the float domain via fused FMA (no
 // SFPADDI: vInt has no multiply on Quasar) then converted back to int.
-sfpi_inline void rr_divmod_floor(sfpi::vInt e, int d, sfpi::vInt& q, sfpi::vInt& r) {
+__attribute__((always_inline)) sfpi_inline void rr_divmod_floor(sfpi::vInt e, int d, sfpi::vInt& q, sfpi::vInt& r) {
     const sfpi::vFloat ef = rr_int_to_float(e);
     q = rr_floor_to_int(ef * sfpi::vFloat(1.0f / (float)d));
     const sfpi::vFloat qf = rr_int_to_float(q);
@@ -318,7 +463,7 @@ sfpi_inline void rr_divmod_floor(sfpi::vInt e, int d, sfpi::vInt& q, sfpi::vInt&
 // Multiply v by scale-table entry C[r], r in {0,1,2}. vInt == vInt(k) compares; these
 // are integer compares (not the float nonzero-constant-compare bug), used as in the
 // reference. Top-level v_if (no nesting) per the predicate-stack rule.
-sfpi_inline sfpi::vFloat rr_scale_by_r(sfpi::vFloat v, sfpi::vInt r) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat rr_scale_by_r(sfpi::vFloat v, sfpi::vInt r) {
     sfpi::vFloat out = v * sfpi::vFloat(LUT_RR_SCALE0);  // r==0 default
     v_if(r == sfpi::vInt(1)) { out = v * sfpi::vFloat(LUT_RR_SCALE1); }
     v_endif;
@@ -329,7 +474,7 @@ sfpi_inline sfpi::vFloat rr_scale_by_r(sfpi::vFloat v, sfpi::vInt r) {
 
 // Parity p in {0,1} of a signed integer kv: p = kv - 2*floor(kv/2), in the float
 // domain. Returns a vFloat exactly 0.0f (even) or 1.0f (odd).
-sfpi_inline sfpi::vFloat rr_parity_f(sfpi::vInt kv) {
+__attribute__((always_inline)) sfpi_inline sfpi::vFloat rr_parity_f(sfpi::vInt kv) {
     const sfpi::vFloat kf = rr_int_to_float(kv);
     const sfpi::vInt h = rr_floor_to_int(kf * sfpi::vFloat(0.5f));  // floor(k/2)
     const sfpi::vFloat hf = rr_int_to_float(h);
@@ -417,6 +562,14 @@ __attribute__((always_inline)) sfpi_inline void select_segment(sfpi::vFloat& res
 // and both blocks compile away -> byte-identical to the no-RR path.
 sfpi_inline void piecewise_generic_lut_row() {
     const sfpi::vFloat x_in = sfpi::dst_reg[0];
+
+#if LUT_RR_METHOD == 9
+    // NEWTON-ROOT (method 9) is a STANDALONE evaluator over the full input domain: the
+    // magic seed folds in the exponent decomposition, so there is no segment cascade,
+    // no clamp, and no reduce/reconstruct. Evaluate and store directly.
+    sfpi::dst_reg[0] = newton_root_eval(x_in);
+    return;
+#else
 
     // ---- REDUCE: r_arg = reduced polynomial argument; capture reconstruct state.
     sfpi::vFloat r_arg = x_in;
@@ -537,6 +690,7 @@ sfpi_inline void piecewise_generic_lut_row() {
 #endif
 
     sfpi::dst_reg[0] = result;
+#endif  // LUT_RR_METHOD == 9 (standalone) else (cascade)
 }
 
 }  // namespace lut_detail

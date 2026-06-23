@@ -39,7 +39,13 @@ ttsl::hash::hash_t UnaryLutDeviceOperation::operation_attributes_t::to_hash() co
             l.rr_log2_basis_mminus1,
             l.rr_input_offset,
             l.rr_pow_n,
-            l.rr_pow_recip);
+            l.rr_pow_recip,
+            l.nr_magic,
+            l.nr_c1,
+            l.nr_c2,
+            l.nr_iters,
+            l.nr_n,
+            l.nr_reciprocal);
     }
     return ttsl::hash::hash_objects_with_default_seed(memory_config, input_dtype, lut_sig);
 }

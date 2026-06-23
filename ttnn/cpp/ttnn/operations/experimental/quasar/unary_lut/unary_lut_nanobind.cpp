@@ -52,27 +52,40 @@ void bind_unary_lut(nb::module_& mod) {
                uint32_t rr_log2_basis_mminus1,
                float rr_input_offset,
                uint32_t rr_pow_n,
-               uint32_t rr_pow_recip) {
-                new (self) LutConfig{eval_method,
-                                     poly_degree,
-                                     num_segments,
-                                     num_degree,
-                                     den_degree,
-                                     std::move(data),
-                                     rr_method,
-                                     rr_log_ln2,
-                                     rr_exp_mult,
-                                     rr_exp_const,
-                                     rr_scale0,
-                                     rr_scale1,
-                                     rr_scale2,
-                                     rr_exp2_mult,
-                                     rr_compose,
-                                     rr_log2_scale,
-                                     rr_log2_basis_mminus1,
-                                     rr_input_offset,
-                                     rr_pow_n,
-                                     rr_pow_recip};
+               uint32_t rr_pow_recip,
+               uint32_t nr_magic,
+               float nr_c1,
+               float nr_c2,
+               uint32_t nr_iters,
+               uint32_t nr_n,
+               uint32_t nr_reciprocal) {
+                new (self) LutConfig{
+                    eval_method,
+                    poly_degree,
+                    num_segments,
+                    num_degree,
+                    den_degree,
+                    std::move(data),
+                    rr_method,
+                    rr_log_ln2,
+                    rr_exp_mult,
+                    rr_exp_const,
+                    rr_scale0,
+                    rr_scale1,
+                    rr_scale2,
+                    rr_exp2_mult,
+                    rr_compose,
+                    rr_log2_scale,
+                    rr_log2_basis_mminus1,
+                    rr_input_offset,
+                    rr_pow_n,
+                    rr_pow_recip,
+                    nr_magic,
+                    nr_c1,
+                    nr_c2,
+                    nr_iters,
+                    nr_n,
+                    nr_reciprocal};
             },
             nb::arg("eval_method") = 0,
             nb::arg("poly_degree") = 2,
@@ -93,7 +106,13 @@ void bind_unary_lut(nb::module_& mod) {
             nb::arg("rr_log2_basis_mminus1") = 0,
             nb::arg("rr_input_offset") = 0.0f,
             nb::arg("rr_pow_n") = 2,
-            nb::arg("rr_pow_recip") = 0)
+            nb::arg("rr_pow_recip") = 0,
+            nb::arg("nr_magic") = 0x5f1110a0u,
+            nb::arg("nr_c1") = 2.2825186f,
+            nb::arg("nr_c2") = 2.2533049f,
+            nb::arg("nr_iters") = 2,
+            nb::arg("nr_n") = 2,
+            nb::arg("nr_reciprocal") = 0)
         .def_rw("eval_method", &LutConfig::eval_method)
         .def_rw("poly_degree", &LutConfig::poly_degree)
         .def_rw("num_segments", &LutConfig::num_segments)
@@ -113,7 +132,13 @@ void bind_unary_lut(nb::module_& mod) {
         .def_rw("rr_log2_basis_mminus1", &LutConfig::rr_log2_basis_mminus1)
         .def_rw("rr_input_offset", &LutConfig::rr_input_offset)
         .def_rw("rr_pow_n", &LutConfig::rr_pow_n)
-        .def_rw("rr_pow_recip", &LutConfig::rr_pow_recip);
+        .def_rw("rr_pow_recip", &LutConfig::rr_pow_recip)
+        .def_rw("nr_magic", &LutConfig::nr_magic)
+        .def_rw("nr_c1", &LutConfig::nr_c1)
+        .def_rw("nr_c2", &LutConfig::nr_c2)
+        .def_rw("nr_iters", &LutConfig::nr_iters)
+        .def_rw("nr_n", &LutConfig::nr_n)
+        .def_rw("nr_reciprocal", &LutConfig::nr_reciprocal);
 
     const auto* doc = R"doc(
             Applies an embedded piecewise-LUT activation to a fully height/block-sharded

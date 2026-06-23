@@ -73,10 +73,21 @@ _RR_CODE = {
     "exponent_alu_pow": 6,
     "trig": 7,
     "tan": 8,
+    "newton_root": 9,  # STANDALONE magic-seed + Newton/Householder evaluator (sqrt/rsqrt/cbrt)
 }
 _RR_COMPOSE = {"": 0, "sigmoid": 1, "minus_one": 2}
-# Methods whose reduce/reconstruct is implemented in the DFB kernel.
-_RR_SUPPORTED = {"exp", "trig", "tan", "log", "cbrt", "exponent_alu_exp2", "exponent_alu_log2", "exponent_alu_pow"}
+# Methods whose reduce/reconstruct (or standalone eval) is implemented in the DFB kernel.
+_RR_SUPPORTED = {
+    "exp",
+    "trig",
+    "tan",
+    "log",
+    "cbrt",
+    "exponent_alu_exp2",
+    "exponent_alu_log2",
+    "exponent_alu_pow",
+    "newton_root",
+}
 
 
 def _parse_rr_meta(meta):
@@ -124,6 +135,16 @@ def _parse_rr_meta(meta):
             c = mf(f"expalu_pow_scale_c{i}")
             if c is not None:
                 rr[f"rr_scale{i}"] = c
+    elif method == "newton_root":
+        # STANDALONE seed+Newton evaluator: magic seed (hex) + Newton/Householder
+        # coefficients/iterations, all from the CSV METADATA. The kernel bypasses the
+        # segment cascade entirely (method 9), so only these nr_* params matter.
+        rr["nr_magic"] = int(str(meta["newton_root_magic"]).strip(), 0)  # 0x... hex -> int
+        rr["nr_c1"] = mf("newton_root_c1", 0.0)
+        rr["nr_c2"] = mf("newton_root_c2", 0.0)
+        rr["nr_iters"] = int(float(meta.get("newton_root_iters", 2)))
+        rr["nr_n"] = int(float(meta.get("newton_root_n", 2)))
+        rr["nr_reciprocal"] = 1 if str(meta.get("newton_root_reciprocal", "False")).lower() == "true" else 0
     # trig / tan carry no kernel-tunable params (pi / Cody-Waite constants are hardcoded).
 
     orig = None
@@ -259,6 +280,12 @@ _RR_KW = (
     "rr_input_offset",
     "rr_pow_n",
     "rr_pow_recip",
+    "nr_magic",
+    "nr_c1",
+    "nr_c2",
+    "nr_iters",
+    "nr_n",
+    "nr_reciprocal",
 )
 
 
