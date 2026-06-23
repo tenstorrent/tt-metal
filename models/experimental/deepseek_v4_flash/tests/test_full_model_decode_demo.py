@@ -3,11 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Autoregressive decode demo on the full ttnn ``DeepSeekV4Model``.
 
-Builds the whole model once via :class:`DeepSeekV4Model`, prefills a chat prompt
-to seed every layer's sliding K=V + compressor cache, then generates one token
-per step (``S = 1``) against that cache instead of re-running the growing
-context. The RoPE tables are produced once for the maximum length; prefill
-slices a length prefix and decode slices the single position row(s) it needs.
+Builds the whole model once via :class:`DeepSeekV4Model`. There is no dedicated
+prefill: a chat prompt is "prefilled" by replaying the decode step once per
+prompt token (at ascending absolute positions), seeding every layer's sliding
+K=V + compressor cache in place, then generation continues one token per step
+(``S = 1``) against that cache. The RoPE tables are produced once for the
+maximum length; each decode step slices the single position row(s) it needs.
 
 All weights live on device in ``bfloat4_b``. The full 43-layer stack does not fit
 a single Blackhole's 32 GB; cap it with ``DEEPSEEK_V4_DECODE_LAYERS=N`` and set
@@ -44,7 +45,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import (
 )
 
 _DEFAULT_MODEL_DIR = "/home/ttuser/.cache/huggingface/hub/models--deepseek-ai--DeepSeek-V4-Flash"
-_DEFAULT_TEXT = "I"
+_DEFAULT_TEXT = "Tell me the name of the top 10 songs of all time."
 _WEIGHT_DTYPE = ttnn.bfloat4_b
 _CACHE_DIR = os.environ.get("DEEPSEEK_V4_CACHE_DIR", "../cache")
 
@@ -93,19 +94,6 @@ def _build_rope(config, max_seq: int) -> dict:
     return rope
 
 
-def _slice_rope(rope: dict, seq_len: int) -> dict:
-    """Slice the max-length RoPE bundle down to ``seq_len`` (positions are a prefix)."""
-    out = {
-        "main": tuple(t[:seq_len].contiguous() for t in rope["main"]),
-        "compress": tuple(t[:seq_len].contiguous() for t in rope["compress"]),
-        "win": {},
-    }
-    for cr, (cw, sw) in rope["win"].items():
-        n_win = seq_len // cr
-        out["win"][cr] = (cw[:n_win].contiguous(), sw[:n_win].contiguous())
-    return out
-
-
 @pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
 @pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + many decode steps
 @torch.no_grad()
@@ -133,7 +121,7 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
     # tables for the longest sequence we might decode (prompt + new tokens).
     # ``DEEPSEEK_V4_TRACED_DECODE``: replay one captured ttnn trace per submesh per
     # step (fixed-size in-place caches) instead of the host-bound eager decode.
-    traced = False  # os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "0") not in ("0", "", "false", "False")
+    traced = True  # os.environ.get("DEEPSEEK_V4_TRACED_DECODE", "0") not in ("0", "", "false", "False")
 
     prompt = render_message(0, [{"role": "user", "content": text}], "chat")
     prompt_ids: list[int] = list(tokenizer(prompt)["input_ids"])
@@ -170,22 +158,29 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
     )
     logger.info(f"built DeepSeekV4Model with {model.num_layers}/{config.num_hidden_layers} layers")
 
-    # --- prefill the (tile-padded) prompt once, then 1 token / step --------- #
-    seq_len = _pad_to_tile(real_len)
-    padded = prompt_ids + [pad_id] * (seq_len - real_len)
-    input_ids = torch.tensor(padded, dtype=torch.long).unsqueeze(0)
+    # --- prefill the prompt by replaying decode one token at a time --------- #
+    # There is no dedicated prefill: each prompt token is fed at its absolute
+    # position through the (eager or traced) decode path, filling the in-place
+    # caches exactly as a full-sequence prefill would. The logits after the final
+    # prompt token give the first generated token. The fixed-size traced caches
+    # are allocated empty here (lm_head folded into the last submesh's trace).
+    if traced:
+        model.prepare_static_decode(rope, max_seq, lm_head=lm_head)
+        logger.info("traced decode: prepared empty static buffers; trace captured on first prefill step")
+    else:
+        model.reset_caches()
 
-    hidden = model.prefill(input_ids, _slice_rope(rope, seq_len), cache_len=real_len)  # [1, S, D]
-    logits = ttnn.to_torch(lm_head(hidden)).reshape(seq_len, -1).float()
-    next_id = int(logits[real_len - 1].argmax().item())
+    next_id = pad_id
+    for pos in range(real_len):
+        if traced:
+            logits_tt = model.decode_traced(prompt_ids[pos], pos)  # [1, 1, vocab] (lm_head in-trace)
+            logits = ttnn.to_torch(logits_tt).reshape(1, -1).float()
+        else:
+            hidden = model.decode(prompt_ids[pos], pos, rope)  # [1, 1, D]
+            logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
+        next_id = int(logits[0].argmax().item())
     generated: list[int] = [next_id]
     logger.info(f"prefill ({real_len} tokens) -> token id {next_id} {tokenizer.decode([next_id])!r}")
-
-    # Seed the fixed-size in-place decode caches from the prefill caches and fold
-    # the lm_head into the last submesh's trace (so a step returns logits directly).
-    if traced:
-        model.prepare_static_decode(rope, max_seq, real_len, lm_head=lm_head)
-        logger.info("traced decode: prepared static buffers; trace captured on first step")
 
     # Each step feeds the previously generated token at its absolute position and
     # reads back the single-token logits (no recompute over the prior context).
