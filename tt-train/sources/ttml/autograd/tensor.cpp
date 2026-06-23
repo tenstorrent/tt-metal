@@ -136,8 +136,8 @@ void Tensor::set_requires_grad(bool requires_grad) {
     m_requires_grad = requires_grad;
 }
 
-const tt::tt_metal::Tensor& Tensor::get_value(PreferredPrecision preferred_precision) const {
-    return m_value.get_tensor(preferred_precision);
+const tt::tt_metal::Tensor& Tensor::get_value(PreferredPrecision preferred_precision, bool autocast) const {
+    return m_value.get_tensor(preferred_precision, autocast);
 }
 
 const tt::tt_metal::Tensor& Tensor::get_grad() const {

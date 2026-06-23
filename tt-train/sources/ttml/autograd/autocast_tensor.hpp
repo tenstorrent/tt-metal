@@ -26,7 +26,7 @@ public:
 
     void set_tensor(const tt::tt_metal::Tensor &tensor);
     [[nodiscard]] const tt::tt_metal::Tensor &get_tensor(
-        PreferredPrecision preferred_precision = PreferredPrecision::HALF) const;
+        PreferredPrecision preferred_precision = PreferredPrecision::HALF, bool autocast = true) const;
 
     [[nodiscard]] bool has_half() const;
     [[nodiscard]] bool has_full() const;
