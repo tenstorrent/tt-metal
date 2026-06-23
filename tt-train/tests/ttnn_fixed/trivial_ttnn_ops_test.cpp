@@ -15,7 +15,6 @@
 #include "core/device.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/random_data.hpp"
-#include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -107,12 +106,9 @@ TEST_F(TrivialTnnFixedTest, TestOriginalStableSoftmax_AllNegative) {
     EXPECT_NEAR(tensor_data[0], -100.F, 1e-2);
     EXPECT_NEAR(tensor_data[1], -99.F, 1e-2);
     auto compute_kernel_config = ttml::core::ComputeKernelConfig::precise();
-    auto res = ttnn::softmax(
-        tensor,
-        /* dim */ 3,
-        /*memory_config */ std::nullopt,
-        compute_kernel_config,
-        /*stable*/ true);
+    static_cast<void>(compute_kernel_config);
+    // TODO(nuked-op softmax): restore real ttnn::softmax call
+    auto res = tensor;
     auto res_vector = ttml::core::to_vector(res);
     EXPECT_NEAR(res_vector[0], 0.2689F, 2e-2);
     EXPECT_NEAR(res_vector[1], 0.7311F, 2e-2);

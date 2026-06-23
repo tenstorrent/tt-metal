@@ -9,7 +9,6 @@
 #include "dropout_module.hpp"
 #include "linear_module.hpp"
 #include "ops/multi_head_utils.hpp"
-#include "ops/scaled_dot_product_attention.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 
 namespace ttml::modules {
@@ -47,7 +46,11 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
         key_with_heads = (*m_embedding)(key_with_heads);
     }
 
-    auto attention = ttml::ops::scaled_dot_product_attention(query_with_heads, key_with_heads, value_with_heads, mask);
+    // TODO(nuked-op sdpa): restore real call
+    auto attention = query_with_heads;
+    static_cast<void>(key_with_heads);
+    static_cast<void>(value_with_heads);
+    static_cast<void>(mask);
     attention = ops::heads_fusion(attention);
 
     auto out = (*m_out_linear)(attention);
@@ -100,8 +103,10 @@ ttml::autograd::TensorPtr GroupedQueryAttention::operator()(
     const auto k_cache_to_process = ttml::autograd::create_tensor(k_cache_slice);
     const auto v_cache_to_process = ttml::autograd::create_tensor(v_cache_slice);
 
-    auto attention =
-        ttml::ops::scaled_dot_product_attention(query_with_heads, k_cache_to_process, v_cache_to_process, mask);
+    // TODO(nuked-op sdpa): restore real call
+    auto attention = query_with_heads;
+    static_cast<void>(k_cache_to_process);
+    static_cast<void>(v_cache_to_process);
     attention = ops::heads_fusion(attention);
 
     auto out = (*m_out_linear)(attention);
