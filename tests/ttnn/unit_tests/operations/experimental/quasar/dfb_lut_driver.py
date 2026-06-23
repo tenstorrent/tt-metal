@@ -376,18 +376,21 @@ def run_dfb(device, csv_path, activation=None, tiles=4, seed=0, margin=0.02):
     rr_enabled = cfg.get("_rr_enabled", False)
     lut = make_lut_config(cfg)
 
-    # Sampling. RR: the (lo, hi) returned IS the original domain and the kernel
-    # reconstructs the full activation there, so sample it exactly (no margin past the
-    # ends — that would leave the activation's valid range for log/sqrt). No-RR: sample
-    # [b0, bN] with a margin to exercise the clamp.
+    # Sampling. We sample STRICTLY within the fit's valid domain [lo, hi] — the SAME
+    # domain the fitter's evaluate_csv (ttpoly.stages.s40_eval: x = linspace(lo, hi))
+    # and the tt-llk deployment validator use to compute their deployed metrics. The fit
+    # is only defined on [lo, hi]; for activations with poles or steep tails just OUTSIDE
+    # the domain (digamma/polygamma poles at <=0, cosh's exponential growth past +-10),
+    # the TRUE activation there is a value the fit was never built to reproduce, while the
+    # kernel clamps to the boundary — so an out-of-domain margin measures extrapolation
+    # error, not deployed-fit fidelity, and wrongly tanks PCC_vs_true. Clamp behaviour is
+    # still exercised implicitly (the kernel clamps every in-domain x to its segment span);
+    # `margin` is retained for API compatibility but no longer pushes samples past the ends.
     mc, shape = height_sharded_config(tiles)
     n = int(np.prod(shape))
     torch.manual_seed(seed)
     span = hi - lo
-    if rr_enabled:
-        x_np = lo + span * np.random.RandomState(seed).rand(n)
-    else:
-        x_np = (lo - margin * span) + (span * (1 + 2 * margin)) * np.random.RandomState(seed).rand(n)
+    x_np = lo + span * np.random.RandomState(seed).rand(n)
     x_np = x_np.astype(np.float32).reshape(tuple(shape))
     x_pt = torch.from_numpy(x_np).to(torch.bfloat16)
 
