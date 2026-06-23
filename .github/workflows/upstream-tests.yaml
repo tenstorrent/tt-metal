@@ -105,18 +105,18 @@ jobs:
           # - is-release: any version tag -> gets a :release-<version> image tag.
           # - is-stable-release: clean release (no suffix) -> additionally moves :release-latest.
           if [[ "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-.*)?$ ]]; then
-            echo "Running off version tag ${{ github.ref_name }}"
+            echo "::notice::Running off version tag ${{ github.ref_name }}"
             echo "is-release=true" >> "$GITHUB_OUTPUT"
             echo "release-name=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
             if [[ "${{ github.ref }}" =~ ^refs/tags/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              echo "Stable release; :release-latest will be updated"
+              echo "::notice::Stable release; :release-latest will be updated"
               echo "is-stable-release=true" >> "$GITHUB_OUTPUT"
             else
-              echo "Pre-release (rc/dev); :release-latest will NOT be updated"
+              echo "::notice::Pre-release (rc/dev); :release-latest will NOT be updated"
               echo "is-stable-release=false" >> "$GITHUB_OUTPUT"
             fi
           else
-            echo "Not running off a version tag (ref: ${{ github.ref }})"
+            echo "::notice::Not running off a version tag (ref: ${{ github.ref }})"
             echo "is-release=false" >> "$GITHUB_OUTPUT"
             echo "is-stable-release=false" >> "$GITHUB_OUTPUT"
           fi
