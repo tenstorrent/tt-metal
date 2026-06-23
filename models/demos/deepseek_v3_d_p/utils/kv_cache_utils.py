@@ -292,14 +292,16 @@ def init_kvpe_cache(kvpe_cache_head_dim, mesh_device, seq_len, mesh_shape, sp_ax
     )
     DRAMZeroFill.op(tt_kvpe_cache)
 
-    # allocate_tensor_on_device leaves topology unset; reproduce ReplicateTensorToMesh,
-    # which is a 1D MeshShape(num_devices) with a single Replicate placement.
+    # allocate_tensor_on_device assigns a default 2D fully-replicated topology, but the rest
+    # of the model produces replicated tensors via ReplicateTensorToMesh, which is a 1D
+    # MeshShape(num_devices) with a single Replicate placement. Reproduce that exactly: a 1D
+    # distribution_shape + single Replicate, with mesh_coords being the 2D physical device
+    # coordinates (row-major), matching what the ReplicateTensorToMesh mapper emits.
     num_devices = mesh_device.shape[0] * mesh_device.shape[1]
     dist_shape = ttnn.MeshShape([num_devices])
     placements = [ttnn.PlacementReplicate()]
-    coords = [
-        ttnn.MeshCoordinate([coord[i] for i in range(coord.dims())]) for coord in ttnn.MeshCoordinateRange(dist_shape)
-    ]
+    physical_mesh_shape = ttnn.MeshShape(mesh_device.shape[0], mesh_device.shape[1])
+    coords = list(ttnn.MeshCoordinateRange(physical_mesh_shape))
     tt_kvpe_cache.update_tensor_topology(ttnn.TensorTopology(dist_shape, placements, coords))
 
     return tt_kvpe_cache
