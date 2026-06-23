@@ -103,5 +103,5 @@ jobs:
             pgm_bench.json
             buffer_bench.json
           prefix: "perf_benchmarks_json_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()

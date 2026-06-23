@@ -153,5 +153,5 @@ jobs:
         if: ${{ failure() }}
         with:
           test-report-path: generated/test_reports/
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()
