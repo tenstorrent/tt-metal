@@ -273,7 +273,7 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     // + 2 fabric sems for middle chips, totaling 6 + k_s.  Excess untilizers assigned by the
     // initial split above are dropped: their row cores stay in the worker grid but get no
     // untilizer kernels.  k_s[i] = min(k_s[i], MAX_UNTILIZERS_PER_SENDER).
-    constexpr uint32_t MAX_UNTILIZERS_PER_SENDER = 5;
+    constexpr uint32_t MAX_UNTILIZERS_PER_SENDER = 4;
     {
         std::vector<CoreCoord> trimmed_all_untilizer_cores;
         std::vector<uint32_t> trimmed_untilizer_sender_map;
