@@ -208,6 +208,32 @@ using namespace ckernel::sfpu;
 #define LUT_RR_TAN_PI2_LO 0.0004837512969970703f // pi/2 remainder
 #endif
 
+// ---- Asymptotic-factoring contract (codegen emits these; default = none) ----
+// For a deployed pick whose tail segments are fit as f(x) = dominant(x) *
+// correction(x) (is_asymptotic=True in the fitter CSV), the fitter stores the
+// CORRECTION polynomial as that segment's ordinary Horner coefficients; the TRUE
+// value is dominant(x) times the Horner result. The kernel multiplies the
+// per-segment Horner output by dominant(x) for the segments flagged in
+// LUT_ASYM_MASK (bit SEG set => segment SEG is asymptotic), where dominant(x) is
+// selected by LUT_DOMINANT_CLASS. This reproduces precision/eval.py
+// DOMINANT_FACTORS exactly (the fitter ground truth). Tail segments are NEVER
+// dropped. All 0 (default) => no factoring; the block compiles away and the
+// kernel is byte-identical to the bare-polynomial cascade.
+//
+// LUT_DOMINANT_CLASS codes (mirror precision/eval.py DOMINANT_FACTORS keys):
+//   0 none, 1 "x", 2 "-exp(-x^2/2)/sqrt(2*pi)", 3 "exp(-x^2/2)/sqrt(2*pi)",
+//   4 "-exp(-x^2/2)", 5 "exp(-x^2/2)", 6 "exp(x)", 7 "exp(-x)", 8 "-exp(-x)",
+//   9 "1 - exp(-x)", 10 "x * exp(x)".
+#ifndef LUT_ASYM_MASK
+#define LUT_ASYM_MASK 0u // bitmask over segments: bit SEG => segment SEG is asymptotic
+#endif
+#ifndef LUT_DOMINANT_CLASS
+#define LUT_DOMINANT_CLASS 0 // dominant-factor class code (see table above); 0 = none
+#endif
+#ifndef LUT_INV_SQRT_2PI
+#define LUT_INV_SQRT_2PI 0.3989422917366028f // 1/sqrt(2*pi), fp32-exact constant
+#endif
+
 constexpr std::uint32_t POLY_DEGREE  = LUT_POLY_DEGREE;
 constexpr std::uint32_t NUM_SEGMENTS = LUT_NUM_SEGMENTS;
 constexpr std::uint32_t LUT_SIZE     = (NUM_SEGMENTS + 1) + NUM_SEGMENTS * (POLY_DEGREE + 1);
@@ -358,6 +384,124 @@ sfpi_inline sfpi::vFloat rr_parity_f(sfpi::vInt kv)
 
 #endif // LUT_RR_METHOD != 0
 
+// =====================================================================
+// Asymptotic factoring (dominant-factor multiply). For a tail segment fit as
+// f(x) = dominant(x) * correction(x) (is_asymptotic=True in the fitter CSV), the
+// stored coeffs are the CORRECTION polynomial; the kernel multiplies the segment's
+// Horner result by dominant(x). dominant(x) reproduces precision/eval.py
+// DOMINANT_FACTORS exactly. Adapted from the proven DFB unary_lut_sfpu.h port:
+// every `acc + const` is a fused SFPMAD (fma_const), never an SFPADDI
+// (UNIMPLEMENTED on the Quasar ttsim build). Compiled away when
+// LUT_DOMINANT_CLASS == 0 -> byte-identical bare-polynomial cascade.
+// =====================================================================
+#if LUT_DOMINANT_CLASS != 0
+
+// round-to-nearest float -> vInt via SFPSTOCHRND fp32->sm16 (RNE) then SFPCAST
+// sm32->int. Self-contained (does not depend on the LUT_RR_METHOD!=0 rr_*
+// helpers, which are compiled out for non-RR asymptotic poly picks like gelu).
+// |k| <= ~15 in the asymptotic exp domain, so 16 bits is exact.
+sfpi_inline sfpi::vInt asym_round_to_int(sfpi::vFloat t)
+{
+    const sfpi::vSMag s = sfpi::vSMag(__builtin_rvtt_sfpstochrnd_i(t.get(), 0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_SMAG16, sfpi::SFPSTOCHRND_RND_EVEN));
+    return sfpi::convert<sfpi::vInt>(s);
+}
+
+// vInt -> float via vSMag (the only Quasar int->float path).
+sfpi_inline sfpi::vFloat asym_int_to_float(sfpi::vInt v)
+{
+    return sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(v), sfpi::RoundMode::Nearest);
+}
+
+// Inline Cody-Waite exp(arg). The asymptotic region has a known bounded input
+// range, so no overflow/underflow guards are needed. Degree-5 Taylor for exp(r),
+// |r| < ln(2)/2. Mirrors the BH asymptotic_exp / DFB asym_exp exactly; all adds
+// are fused SFPMAD (SFPADDI avoidance).
+sfpi_inline sfpi::vFloat asym_exp(sfpi::vFloat arg)
+{
+    constexpr float INV_LN2 = 1.4426950408889634f;
+    const sfpi::vFloat z    = arg * sfpi::vFloat(INV_LN2);
+
+    // k = round(z); k_int as int and k as float (no SFPADDI: round via SFPSTOCHRND).
+    const sfpi::vInt k_int = asym_round_to_int(z);
+    const sfpi::vFloat k   = asym_int_to_float(k_int);
+
+    // Cody-Waite extended precision: r = arg - k*ln2 (two-part), via fused SFPMAD.
+    constexpr float NEG_LN2_HI = -0.6931152343750000f;
+    constexpr float NEG_LN2_LO = -3.19461832987e-05f;
+    sfpi::vFloat r             = __builtin_rvtt_sfpmad(k.get(), sfpi::vFloat(NEG_LN2_HI).get(), arg.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    r                          = __builtin_rvtt_sfpmad(k.get(), sfpi::vFloat(NEG_LN2_LO).get(), r.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+
+    // Degree-5 Taylor for exp(r), Horner form (each step fma_const, no SFPADDI).
+    sfpi::vFloat p = sfpi::vFloat(1.0f / 120.0f);
+    p              = fma_const(p, r, 1.0f / 24.0f);
+    p              = fma_const(p, r, 1.0f / 6.0f);
+    p              = fma_const(p, r, 0.5f);
+    p              = fma_const(p, r, 1.0f);
+    p              = fma_const(p, r, 1.0f);
+
+    // Scale by 2^k via exponent bit manipulation: setexp(p, exp(p) + k_int).
+    const sfpi::vInt p_exp = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
+    return sfpi::setexp(p, p_exp + k_int);
+}
+
+// dominant(x) for LUT_DOMINANT_CLASS, evaluated on the (already clamped) segment
+// argument x. Reproduces precision/eval.py DOMINANT_FACTORS verbatim. if-constexpr
+// selects the one live class; all others compile away.
+sfpi_inline sfpi::vFloat dominant_factor(sfpi::vFloat x)
+{
+    if constexpr (LUT_DOMINANT_CLASS == 1) // x
+    {
+        return x;
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 2) // -exp(-x^2/2) / sqrt(2*pi)
+    {
+        const sfpi::vFloat t =
+            __builtin_rvtt_sfpmad(x.get(), (x * sfpi::vFloat(-0.5f)).get(), sfpi::vFloat(0.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE); // -x*x/2
+        return asym_exp(t) * sfpi::vFloat(-LUT_INV_SQRT_2PI);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 3) // exp(-x^2/2) / sqrt(2*pi)
+    {
+        const sfpi::vFloat t = __builtin_rvtt_sfpmad(x.get(), (x * sfpi::vFloat(-0.5f)).get(), sfpi::vFloat(0.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        return asym_exp(t) * sfpi::vFloat(LUT_INV_SQRT_2PI);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 4) // -exp(-x^2/2)
+    {
+        const sfpi::vFloat t = __builtin_rvtt_sfpmad(x.get(), (x * sfpi::vFloat(-0.5f)).get(), sfpi::vFloat(0.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        return -asym_exp(t);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 5) // exp(-x^2/2)
+    {
+        const sfpi::vFloat t = __builtin_rvtt_sfpmad(x.get(), (x * sfpi::vFloat(-0.5f)).get(), sfpi::vFloat(0.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+        return asym_exp(t);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 6) // exp(x)
+    {
+        return asym_exp(x);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 7) // exp(-x)
+    {
+        return asym_exp(-x);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 8) // -exp(-x)
+    {
+        return -asym_exp(-x);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 9) // 1 - exp(-x): fma(-1, exp(-x), 1)
+    {
+        return __builtin_rvtt_sfpmad(sfpi::vFloat(-1.0f).get(), asym_exp(-x).get(), sfpi::vFloat(1.0f).get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    }
+    else if constexpr (LUT_DOMINANT_CLASS == 10) // x * exp(x)
+    {
+        return x * asym_exp(x);
+    }
+    else
+    {
+        return sfpi::vFloat(1.0f);
+    }
+}
+
+#endif // LUT_DOMINANT_CLASS != 0
+
 // Horner step recursion with COMPILE-TIME coefficient indices (FIX 4). Reading
 // LUT_DATA only through constexpr indices (never `&LUT_DATA[i]` with a runtime
 // index) lets the compiler constant-fold every coefficient into an SFPLOADI
@@ -406,7 +550,20 @@ sfpi_inline sfpi::vFloat eval_seg(sfpi::vFloat x_clamped)
     }
     v_endif;
     const sfpi::vFloat acc = sfpi::vFloat(LUT_DATA[base + POLY_DEGREE]);
-    return horner_step<base, static_cast<int>(POLY_DEGREE) - 1>(acc, xs);
+    sfpi::vFloat val       = horner_step<base, static_cast<int>(POLY_DEGREE) - 1>(acc, xs);
+#if LUT_DOMINANT_CLASS != 0
+    // Asymptotic factoring: for a segment flagged in LUT_ASYM_MASK the stored coeffs
+    // are a CORRECTION polynomial; the true value is dominant(xs) * correction(xs).
+    // The dominant factor is a pure function of the (already clamped) segment argument,
+    // so the multiply is correct exactly when this segment is selected. The mask test is
+    // compile-time -> folds away (and the whole block compiles out) for non-asymptotic
+    // segments, so the bare-polynomial path is byte-identical.
+    if constexpr ((LUT_ASYM_MASK >> SEG) & 1u)
+    {
+        val = val * dominant_factor(xs);
+    }
+#endif
+    return val;
 }
 
 // Cumulative segment-override chain via template recursion over compile-time SEG

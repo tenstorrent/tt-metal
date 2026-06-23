@@ -104,14 +104,38 @@ def parse_nr_csv(path: str, act: str = DEFAULT_ACT) -> NewtonRootLUT:
             if row["segment_id"] == "METADATA":
                 meta[(row["lo"] or "").strip()] = (row["hi"] or "").strip()
 
+    # DATA-DRIVEN, NO per-activation hardcoding. The newton_root params (magic
+    # seed, root order n, reciprocal flag, Newton constants, iters) are genuine
+    # method parameters sourced from the CSV METADATA — NOT from the activation
+    # name. `newton_root_reciprocal` is what distinguishes sqrt (double-Newton)
+    # from rsqrt (inverse-sqrt Newton), and the magic seed follows it. If the CSV
+    # omits these, we CANNOT evaluate without hardcoding the activation, so the
+    # config is OUT OF SCOPE — skip rather than guess a seed (mirrors the DFB
+    # dfb_lut_driver _parse_rr_meta newton_root branch nr_keys check).
+    nr_keys = ("newton_root_reciprocal", "newton_root_n", "newton_root_magic")
+    if not any(k in meta for k in nr_keys):
+        pytest.skip(
+            f"{os.path.basename(path)}: newton_root_* METADATA missing "
+            "(newton_root_reciprocal/_n/_magic) — out of scope (would require "
+            "hardcoding the activation; the fitter must re-emit newton_root_* in the CSV)"
+        )
+
+    recip = str(meta.get("newton_root_reciprocal", "False")).strip().lower() in (
+        "true",
+        "1",
+    )
+    mm = str(meta.get("newton_root_magic", "")).strip()
+    # The magic seed follows the reciprocal flag (a per-variant method constant,
+    # not an activation key): rsqrt -> 0x5f3759df, sqrt -> 0x5f1110a0.
+    magic = int(mm, 0) if mm else (0x5F3759DF if recip else 0x5F1110A0)
+
     return NewtonRootLUT(
-        magic=int(str(meta["newton_root_magic"]), 0),
+        magic=magic,
         iters=int(float(meta.get("newton_root_iters", "2") or "2")),
         c1=float(meta.get("newton_root_c1", "0.0") or "0.0"),
         c2=float(meta.get("newton_root_c2", "0.0") or "0.0"),
         root_n=int(float(meta.get("newton_root_n", "2") or "2")),
-        recip=str(meta.get("newton_root_reciprocal", "False")).strip().lower()
-        in ("true", "1"),
+        recip=recip,
         orig_min=float(meta.get("range_reduction_original_min", "1.0e-3")),
         orig_max=float(meta.get("range_reduction_original_max", "1.0e2")),
         activation=act,

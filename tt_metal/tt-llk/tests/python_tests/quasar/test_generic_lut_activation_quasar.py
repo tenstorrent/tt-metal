@@ -91,6 +91,25 @@ DEFAULT_COEFFS = [
     [0.61703646, 0.17515847, -0.02109685],  # seg3
 ]
 
+# Dominant-factor class codes for asymptotic factoring. MUST match the kernel's
+# LUT_DOMINANT_CLASS contract (generic_lut_activation_quasar_test.cpp) and reproduce
+# precision/eval.py DOMINANT_FACTORS. Each maps the fitter's dominant_factor string to
+# a class code; the kernel evaluates dominant(x) for that class and multiplies the
+# segment's correction polynomial by it. Keys are the EXACT strings the fitter writes.
+_DOMINANT_CLASS = {
+    "x": 1,
+    "-exp(-x^2/2) / sqrt(2*pi)": 2,
+    "exp(-x^2/2) / sqrt(2*pi)": 3,
+    "-exp(-x^2/2)": 4,
+    "exp(-x^2/2)": 5,
+    "exp(x)": 6,
+    "exp(-x)": 7,
+    "-exp(-x)": 8,
+    "1 - exp(-x)": 9,
+    "x * exp(x)": 10,
+}
+_INV_SQRT_2PI = float(1.0 / np.sqrt(2.0 * np.pi))
+
 
 # ---------------------------------------------------------------------------
 # Parsed LUT container.
@@ -111,6 +130,9 @@ class LutConfig:
     rr_reduced_min: float = None
     rr_reduced_max: float = None
     rr_params: dict = None  # method-specific (see _parse_fitter_csv)
+    # Asymptotic factoring (per-segment is_asymptotic + dominant_factor columns).
+    asym_mask: int = 0  # bit SEG => segment SEG is asymptotic (kernel seg order)
+    dom_class: int = 0  # dominant-factor class code (see _DOMINANT_CLASS); 0 = none
 
 
 def _default_lut() -> LutConfig:
@@ -162,11 +184,18 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
         reader = csv.reader(f)
         header = next(reader)
         # Coeff columns are the contiguous c0,c1,... columns after lo,hi.
-        coeff_idx = [i for i, h in enumerate(header) if h.strip().lower().startswith("c") and h.strip()[1:].isdigit()]
+        coeff_idx = [
+            i
+            for i, h in enumerate(header)
+            if h.strip().lower().startswith("c") and h.strip()[1:].isdigit()
+        ]
         coeff_idx.sort(key=lambda i: int(header[i].strip()[1:]))
         lo_idx = header.index("lo")
         hi_idx = header.index("hi")
         asy_idx = header.index("is_asymptotic") if "is_asymptotic" in header else None
+        dom_idx = (
+            header.index("dominant_factor") if "dominant_factor" in header else None
+        )
         for row in reader:
             if not row:
                 continue
@@ -181,7 +210,12 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
             hi = float(row[hi_idx])
             coeffs = [float(row[i]) for i in coeff_idx]
             asy = asy_idx is not None and str(row[asy_idx]).strip().lower() == "true"
-            seg_rows.append((lo, hi, coeffs, asy))
+            dom = (
+                str(row[dom_idx]).strip()
+                if (dom_idx is not None and len(row) > dom_idx)
+                else ""
+            )
+            seg_rows.append((lo, hi, coeffs, asy, dom))
 
     if not seg_rows:
         raise ValueError(f"No segment rows parsed from {path}")
@@ -194,7 +228,16 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
     rr_enabled = meta.get("range_reduction_enabled", "False").lower() == "true"
     # Only the exponent family is implemented in the kernel; everything else
     # (none/trig/tan) falls back to the legacy [b0,bN] path.
-    _SUPPORTED_RR = {"log", "exp", "cbrt", "exponent_alu_exp2", "exponent_alu_log2", "exponent_alu_pow", "trig", "tan"}
+    _SUPPORTED_RR = {
+        "log",
+        "exp",
+        "cbrt",
+        "exponent_alu_exp2",
+        "exponent_alu_log2",
+        "exponent_alu_pow",
+        "trig",
+        "tan",
+    }
     if rr_method not in _SUPPORTED_RR:
         rr_enabled = False
     params = {}
@@ -205,7 +248,11 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
             params["mult"] = _mf("exp_log2_multiplier")
             params["const"] = _mf("exp_log2_constant")
         elif rr_method == "cbrt":
-            params["scale"] = [_mf("cbrt_scale_c0"), _mf("cbrt_scale_c1"), _mf("cbrt_scale_c2")]
+            params["scale"] = [
+                _mf("cbrt_scale_c0"),
+                _mf("cbrt_scale_c1"),
+                _mf("cbrt_scale_c2"),
+            ]
         elif rr_method == "exponent_alu_exp2":
             params["mult"] = _mf("expalu_log2_multiplier")
             params["compose"] = meta.get("expalu_compose", "") or ""
@@ -216,7 +263,11 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
         elif rr_method == "exponent_alu_pow":
             params["n"] = int(float(meta["expalu_root_n"]))
             params["recip"] = meta.get("expalu_reciprocal", "False").lower() == "true"
-            params["scale"] = [_mf("expalu_pow_scale_c0"), _mf("expalu_pow_scale_c1"), _mf("expalu_pow_scale_c2")]
+            params["scale"] = [
+                _mf("expalu_pow_scale_c0"),
+                _mf("expalu_pow_scale_c1"),
+                _mf("expalu_pow_scale_c2"),
+            ]
         elif rr_method in ("trig", "tan"):
             # No kernel-tunable params: the kernel hardcodes pi / Cody-Waite
             # constants (matching range_reduction.py). trig_symmetry is metadata
@@ -226,26 +277,45 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
 
     # Sort by lo to guarantee ascending boundaries (kernel relies on this).
     seg_rows.sort(key=lambda r: r[0])
-    # RR (exponent-family) configs are fully-polynomial over the reduced domain
-    # and carry no asymptotic tails, so the asymptotic-run filter does not apply.
-    if rr_enabled:
-        poly_rows = seg_rows
-    else:
-        poly_rows = _longest_nonasymptotic_run(seg_rows)
-    if not poly_rows:
+
+    # ---- Asymptotic factoring: KEEP every segment (tail segments are NEVER
+    # dropped) and thread the per-segment is_asymptotic + dominant_factor columns
+    # into asym_mask (bit SEG => segment SEG is asymptotic, in the SAME ascending
+    # segment order the kernel selects) + dom_class. The fitter stores the
+    # CORRECTION polynomial as an asymptotic segment's ordinary coeffs; the kernel
+    # multiplies that segment's Horner result by dominant(x). When no segment is
+    # asymptotic (or the column is absent), asym_mask stays 0 -> no factoring,
+    # byte-identical bare-polynomial cascade. This mirrors the DFB dfb_lut_driver.
+    asym_mask = 0
+    dom_class = 0
+    for seg_idx, r in enumerate(seg_rows):  # already ascending == kernel seg order
+        if r[3]:  # is_asymptotic
+            asym_mask |= 1 << seg_idx
+            code = _DOMINANT_CLASS.get(r[4])
+            if code is not None:
+                # All asymptotic segments of a deployed pick share one dominant class
+                # (the activation's tail); assert that invariant. An unknown class
+                # leaves dom_class 0 (no factoring) for that segment.
+                assert dom_class in (
+                    0,
+                    code,
+                ), f"mixed dominant classes in {path}: {dom_class} vs {code}"
+                dom_class = code
+    # If segments are flagged asymptotic but we have no dominant class to apply
+    # (e.g. dominant_factor column absent), the correction-only Horner would be
+    # garbage on the tail -> out of scope rather than silently wrong.
+    if asym_mask and dom_class == 0:
         raise ValueError(
-            f"{path}: no non-asymptotic (pure polynomial) segments — this config "
-            f"is entirely asymptotic and not representable by the pure-polynomial kernel."
+            f"{path}: asymptotic segments present but no recognized dominant_factor "
+            f"-> cannot factor (out of scope; would need the dominant class)."
         )
-    n_dropped = len(seg_rows) - len(poly_rows)
-    if n_dropped:
-        print(
-            f"[generic_lut_activation_quasar] note: dropped {n_dropped} asymptotic "
-            f"segment(s); testing the {len(poly_rows)}-segment polynomial core "
-            f"[{poly_rows[0][0]}, {poly_rows[-1][1]}]"
-        )
-    seg_rows = poly_rows
+
     degree = len(seg_rows[0][2]) - 1
+    # All segments must share one degree (the kernel's POLY_DEGREE is a single
+    # template parameter). The fitter emits a uniform degree per pick.
+    assert all(
+        len(r[2]) - 1 == degree for r in seg_rows
+    ), f"{path}: non-uniform segment degree"
     num_segments = len(seg_rows)
 
     # Boundaries: b0..bS. Use each segment's lo, plus the last segment's hi.
@@ -266,6 +336,8 @@ def _parse_fitter_csv(path: str, activation: str) -> LutConfig:
         rr_reduced_min=_mf("range_reduction_reduced_min"),
         rr_reduced_max=_mf("range_reduction_reduced_max"),
         rr_params=params,
+        asym_mask=asym_mask,
+        dom_class=dom_class,
     )
 
 
@@ -319,9 +391,13 @@ class GENERIC_LUT_DATA(TemplateParameter):
 
         # Only /* */ block comments here: a // line comment inside a
         # backslash-spliced macro would swallow the following line.
-        parts = ["/* boundaries b0..bS */ " + ", ".join(f(b) for b in emit_boundaries) + ","]
+        parts = [
+            "/* boundaries b0..bS */ " + ", ".join(f(b) for b in emit_boundaries) + ","
+        ]
         for seg in range(self.lut.num_segments):
-            parts.append(f"/* seg{seg} */ " + ", ".join(f(c) for c in self.lut.coeffs[seg]) + ",")
+            parts.append(
+                f"/* seg{seg} */ " + ", ".join(f(c) for c in self.lut.coeffs[seg]) + ","
+            )
         # Trailing comma on the last line is fine inside { ... }.
         body = " \\\n    ".join(parts)
         lines = [
@@ -363,7 +439,9 @@ class GENERIC_LUT_DATA(TemplateParameter):
                 lines.append(f"#define LUT_RR_COMPOSE {_COMP[p['compose']]}")
             elif rr.rr_method == "exponent_alu_log2":
                 lines.append(f"#define LUT_RR_LOG2_SCALE {p['scale']:.10e}f")
-                lines.append(f"#define LUT_RR_LOG2_BASIS_MMINUS1 {1 if p['basis'] == 'm_minus_1' else 0}")
+                lines.append(
+                    f"#define LUT_RR_LOG2_BASIS_MMINUS1 {1 if p['basis'] == 'm_minus_1' else 0}"
+                )
                 lines.append(f"#define LUT_RR_INPUT_OFFSET {p['offset']:.10e}f")
             elif rr.rr_method == "exponent_alu_pow":
                 lines.append(f"#define LUT_RR_POW_N {p['n']}")
@@ -375,6 +453,13 @@ class GENERIC_LUT_DATA(TemplateParameter):
                 # Method code already emitted via LUT_RR_METHOD above; the kernel
                 # hardcodes pi / Cody-Waite constants, so no further #defines.
                 pass
+
+        # ---- Asymptotic-factoring macros (only when a tail segment is asymptotic).
+        # The kernel multiplies the flagged segments' Horner result by dominant(x)
+        # (LUT_DOMINANT_CLASS). dom_class==0 emits nothing -> byte-identical bare-poly.
+        if self.lut.dom_class != 0 and self.lut.asym_mask != 0:
+            lines.append(f"#define LUT_ASYM_MASK {self.lut.asym_mask}u")
+            lines.append(f"#define LUT_DOMINANT_CLASS {self.lut.dom_class}")
         return "\n".join(lines)
 
 
@@ -400,7 +485,9 @@ def _algorithmic_golden(lut: LutConfig, x: torch.Tensor) -> torch.Tensor:
     result = _eval_poly_horner(lut.coeffs[0], x_clamped)
     for seg in range(1, lut.num_segments):
         mask = x_clamped >= lut.boundaries[seg]
-        result = torch.where(mask, _eval_poly_horner(lut.coeffs[seg], x_clamped), result)
+        result = torch.where(
+            mask, _eval_poly_horner(lut.coeffs[seg], x_clamped), result
+        )
     return result
 
 
@@ -441,7 +528,9 @@ def _golden(lut: LutConfig, x: torch.Tensor) -> torch.Tensor:
 # fit's intrinsic error in fp32 terms, not a kernel defect. The bf16 ULP (= 1
 # here) is the operationally meaningful figure for the low-precision path.
 # ---------------------------------------------------------------------------
-def _max_ulp(golden: torch.Tensor, result: torch.Tensor, out_format: DataFormat) -> float:
+def _max_ulp(
+    golden: torch.Tensor, result: torch.Tensor, out_format: DataFormat
+) -> float:
     g = golden.to(torch.float32).flatten().numpy()
     r = result.to(torch.float32).flatten().numpy()
     finite = np.isfinite(g) & np.isfinite(r)
