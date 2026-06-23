@@ -342,8 +342,17 @@ void kernel_main() {
                 const uint64_t mcast_data_noc = get_noc_multicast_addr(
                     in0_mcast_nx_start, in0_mcast_ny_start, in0_mcast_nx_end, in0_mcast_ny_end, block_start);
                 const uint32_t block_bytes = g_in0_block_num_tiles * x_tile_bytes;
-                noc_async_write_multicast(
-                    block_start, mcast_data_noc, block_bytes, in0_num_receivers, /*linked=*/false);
+                // linked=true keeps the multicast path RESERVED so the in0_valid
+                // sem multicast below travels the SAME path and is delivered
+                // AFTER the data at every receiver. With linked=false the path is
+                // released and the (posted) valid-sem multicast can overtake the
+                // bulk data multicast at a receiver under NoC contention (heavy
+                // fabric load) -> the receiver observes in0_valid, pushes
+                // cb_in0_x, and compute reads STALE x from L1 -> wrong gate/up
+                // matmul output for that core (rare, timing-dependent). A write
+                // barrier does NOT fix this on Blackhole (multicast writes are
+                // posted; no completion ack). Mirrors the phase-4 activated mcast.
+                noc_async_write_multicast(block_start, mcast_data_noc, block_bytes, in0_num_receivers, /*linked=*/true);
                 cb_push_back(cb_in0_x, g_in0_block_num_tiles);
 
                 noc_async_writes_flushed();
@@ -414,21 +423,32 @@ void kernel_main() {
                     const uint64_t gate_mcast_noc = get_noc_multicast_addr(
                         in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, gate_block_start);
                     const uint32_t gate_block_bytes = g_in1_block_num_tiles * gate_tile_bytes;
-                    // Link gate to the up mcast that follows when up is mcast;
-                    // unlinked in UP_WRITER_MCAST (no up mcast).
+                    // The LAST in1 data multicast before the in1_valid sem must
+                    // be linked=true so the (posted) valid-sem multicast travels
+                    // the SAME reserved path and lands AFTER the data at every
+                    // receiver. Otherwise, under NoC contention (heavy fabric
+                    // load), the valid sem can overtake the weight data -> the
+                    // receiver pushes cb_in1_{gate,up} and compute reads STALE
+                    // weights -> wrong matmul output (rare, timing-dependent;
+                    // a flush/barrier does not fix posted multicast writes on
+                    // Blackhole). Mirrors the phase-4 activated mcast. When `up`
+                    // is mcast (LEGACY/UP_SPLIT) it is the last write, so gate
+                    // links into it and up holds the path for the sem; in the
+                    // retired UP_WRITER_MCAST mode (no up mcast) gate is last and
+                    // holds the path itself.
                     noc_async_write_multicast(
                         gate_block_start,
                         gate_mcast_noc,
                         gate_block_bytes,
                         in1_num_receivers,
-                        /*linked=*/reader_mcasts_up != 0);
+                        /*linked=*/true);
 
                     if constexpr (reader_mcasts_up) {
                         const uint64_t up_mcast_noc = get_noc_multicast_addr(
                             in1_mcast_nx_start, in1_mcast_ny_start, in1_mcast_nx_end, in1_mcast_ny_end, up_block_start);
                         const uint32_t up_block_bytes = g_in1_block_num_tiles * up_tile_bytes;
                         noc_async_write_multicast(
-                            up_block_start, up_mcast_noc, up_block_bytes, in1_num_receivers, /*linked=*/false);
+                            up_block_start, up_mcast_noc, up_block_bytes, in1_num_receivers, /*linked=*/true);
                     }
                 }
 
