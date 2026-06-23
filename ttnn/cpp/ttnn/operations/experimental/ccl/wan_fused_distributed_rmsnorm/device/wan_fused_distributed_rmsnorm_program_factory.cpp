@@ -1079,13 +1079,13 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             output_cb_id,
             num_tile_cols,
             block_size,
-            // Compute pushes col-0 stat tiles here (reduce<SUM,REDUCE_ROW>
-            // output: 32 sums in col 0, rest = 0 by LLK). The writer
-            // extracts col 0 directly via strided L1 loads to pack the page.
-            stats_local_cb_id,
-            // The writer scatters the gathered packed pages into row 0 of
-            // these tiles for compute to transpose back.
-            stats_gathered_cb_id,
+            // Compute transposes its col-0 stat tile to ROW 0 and pushes it here.
+            // The writer packs the two contiguous 64 B face-rows (tile offsets
+            // {0, 1024}) with NoC copies — no strided col-0 extraction.
+            stats_transposed_local_cb_id,
+            // The writer scatters gathered pages into ROW 0 of these tiles (two
+            // contiguous 64 B NoC copies); compute FPU-adds then transposes in DST.
+            stats_transposed_gathered_cb_id,
             // Packed-page staging + receive CBs.
             stats_packed_local_cb_id,
             stats_packed_gathered_cb_id,
