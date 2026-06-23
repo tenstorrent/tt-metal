@@ -5,9 +5,7 @@ on Tenstorrent Blackhole (P150 single device and 32× P150 Blackhole Galaxy via
 data parallelism).
 
 This README covers **how to run every script, what each one produces, the
-measured performance/accuracy, and the optimizations applied.** For the detailed
-engineering write-up (every experiment, rejected ideas, op-level analysis) see
-[`README2.md`](README2.md).
+measured performance/accuracy, and the optimizations applied.**
 
 ---
 
@@ -296,8 +294,7 @@ Applied by default across all workloads (centralized in
 Two optimizations were evaluated and **not enabled**: skipping the Q/K RMSNorm
 (saves ~0.5ms but collapses STS-B 0.848 → 0.236 — the trained norm is
 load-bearing) and a 2-command-queue input/compute overlap (no throughput benefit
-here — the per-request token input is tiny and the model is compute-bound). Both
-are documented in [`README2.md`](README2.md).
+here — the per-request token input is tiny and the model is compute-bound).
 
 ---
 
