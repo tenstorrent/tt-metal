@@ -84,11 +84,6 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
           # Enable debug logging from the ccache-storage-s3 helper binary.
           echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
-          # AWS SDK Go v2 (≥1.32) computes CRC32 checksums on every PutObject by default.
-          # Garage uses plain HTTP and ccache's payload arrives as an unseekable stream, so
-          # the SDK can't compute the checksum upfront and fails. "when_required" tells the
-          # SDK to skip checksum computation for regular PUTs.
-          # echo "AWS_REQUEST_CHECKSUM_CALCULATION=when_required" >> $GITHUB_ENV
           # Explicit Garage endpoint as an AWS SDK env var fallback. The helper reads this
           # if ccache does not forward |endpoint_url=... as CRSH_ATTR_* (defensive belt-and-suspenders).
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
