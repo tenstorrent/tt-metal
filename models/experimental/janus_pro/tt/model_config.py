@@ -129,7 +129,7 @@ class ModelArgs(TTModelArgs):
         return JanusForConditionalGeneration
 
     def load_state_dict(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return convert_vision_hf_to_meta(model.state_dict(), self.head_dim)
 
     def get_state_dict_prefix(self, module_name, layer_num, is_vision=False):
@@ -156,17 +156,12 @@ class ModelArgs(TTModelArgs):
 
         return prefix + layer_prefix + module_map[module_name]
 
-    def reference_vision_transformer(self):
-        from transformers import JanusForConditionalGeneration
-
-        return JanusForConditionalGeneration.from_pretrained(self.CKPT_DIR)
-
     def reference_siglip_patch_embed(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.embeddings.patch_embedding
 
     def reference_vision_embedding(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.embeddings
 
     def reference_vision_layernorm(self, layer_name="layer_norm1"):
@@ -178,21 +173,21 @@ class ModelArgs(TTModelArgs):
         return model.post_layernorm
 
     def reference_vision_attention(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.encoder.layers[0].self_attn
 
     def reference_vision_mlp(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.encoder.layers[0].mlp
 
     def reference_vision_encoder_block(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.encoder.layers[0]
 
     def reference_vision_encoder(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.encoder
 
     def reference_vision_model(self):
-        model = self.reference_vision_transformer()
+        model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model
