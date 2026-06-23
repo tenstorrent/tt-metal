@@ -32,9 +32,51 @@ from pathlib import Path
 import pytest
 import torch
 
+# 1×8-specific flags (not in pi05_production.env — they're pipeline-1x8 specific).
+# Set before _apply_production_env_defaults so the production file can't override.
+# Use setdefault so an explicit shell export still wins.
+for _k, _v in {
+    "PI0_TP": "8",  # 8-chip tensor parallel for prefill
+    "PI0_TP4_ATTN_HEADPAR": "1",  # head-parallel attention split
+    "PI0_MLP_BS": "1",  # block-sharded MLP (TP=8 tuned)
+    "PI0_MLP_FUSED_RS": "0",  # fused reduce-scatter off (TP=8 uses split RS+AG)
+    "TT_VISIBLE_DEVICES": "8,9,10,11,12,13,14,15",  # the second tray on this box
+}.items():
+    os.environ.setdefault(_k, _v)
+
+
+def _apply_production_env_defaults():
+    """Source _bench_runs/pi05_production.env as DEFAULTS so this test runs the
+    full validated production flag set without a manual `source`. setdefault
+    semantics — an explicitly-set env var still wins. Must run before any ttnn /
+    pi0_5 import so every flag is in place when modules read it."""
+    import re as _re
+
+    root = os.environ.get("TT_METAL_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), *([os.pardir] * 4))
+    )
+    envf = os.path.join(root, "_bench_runs", "pi05_production.env")
+    if not os.path.exists(envf):
+        print(f"[1x8-test] WARN: {envf} not found; production flags NOT applied", flush=True)
+        return
+    applied = []
+    with open(envf) as f:
+        for line in f:
+            m = _re.match(r"\s*export\s+([A-Z0-9_]+)=(\S+)", line)
+            if not m:
+                continue
+            k, v = m.group(1), m.group(2)
+            if k not in os.environ:
+                os.environ[k] = v
+                applied.append(f"{k}={v}")
+    print(f"[1x8-test] production env defaults applied ({len(applied)} flags)", flush=True)
+
+
+_apply_production_env_defaults()
+
 # Match production fold path before any ttnn / pi0_5 import (so PatchEmbeddingTTNN
-# reads the env at construction time). The full e2e also wants the matmul/head-par
-# defaults the bench env sets — leave those to the user's shell.
+# reads the env at construction time). Most of these are in pi05_production.env
+# now — kept here as a belt-and-braces fallback in case the env file is missing.
 os.environ.setdefault("PI0_SIGLIP_USE_FOLD", "1")
 os.environ.setdefault("QWEN_NLP_CREATE_HEADS_HEAD_SPLIT", "1")
 os.environ.setdefault("QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT", "1")
