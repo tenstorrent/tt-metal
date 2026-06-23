@@ -1219,13 +1219,11 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs. Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates
-    // on two's-complement values. Int32 MAX/MIN keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX)
-    // is a float/sign-magnitude comparator and orders sign-magnitude integers correctly, whereas
-    // two's-complement negatives would be mis-ordered.
-    // Option A (issue #47647): Int32 MAX/MIN revert to INT32_2S_COMP to match the column-reduce calculate
-    // path. init_reduce has no reduce_dim template arg; the row-MAX path re-records its own replay buffer
-    // and ignores this LOADMACRO setup, so selecting INT32_2S_COMP for all Int32 MAX/MIN is safe here.
+    // Determine InstrModLoadStore from llk_defs. Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates on
+    // two's-complement values. Option A (issue #47647): Int32 MAX/MIN also use INT32_2S_COMP to match the
+    // column-reduce calculate path. init_reduce has no reduce_dim template arg; the row-MAX path re-records
+    // its own replay buffer and ignores this LOADMACRO setup, so selecting INT32_2S_COMP for all Int32
+    // MAX/MIN is safe here.
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG ||
                                          pool_type == PoolType::MAX || pool_type == PoolType::MIN))
@@ -1295,15 +1293,14 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
     // Determine InstrModLoadStore from llk_defs.
-    // Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates on two's-complement values. Int32 MAX/MIN
-    // (both dims) keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX) is a float/sign-magnitude
-    // comparator that orders sign-magnitude integers correctly; two's-complement negatives are
-    // mis-ordered (max of negatives would return the most-negative value).
+    //   * SUM/AVG use SFPIADD (two's-complement adder) -> INT32_2S_COMP (mode 12) converts on load.
+    //   * Int32 MAX/MIN column reduce (REDUCE_COL) also uses INT32_2S_COMP (Option A, issue #47647):
+    //     this is the pre-#46231 behavior. The dim=0/dim=1 path (reduce_nd_loop) feeds the column reduce
+    //     transpose-padded tiles whose sentinel pad value assumes the two's-complement interpretation, so
+    //     plain sign-magnitude INT32 (mode 4) mis-handles those lanes. Scoped to REDUCE_COL so the row-MAX
+    //     path keeps plain sign-magnitude INT32.
     constexpr bool int32_sum_avg =
         (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
-    // Option A (issue #47647): Int32 MAX/MIN column reduce reverts to INT32_2S_COMP (pre-#46231 behavior).
-    // The transpose-based dim=0/dim=1 path feeds the column reduce sentinel-padded tiles; plain
-    // sign-magnitude INT32 mis-handles those lanes, so restore the two's-complement column-reduce mode.
     constexpr bool int32_max_min_col =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
          reduce_dim == ReduceDim::REDUCE_COL);
