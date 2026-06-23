@@ -4,16 +4,15 @@
 
 #pragma once
 
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-
 #include "ttnn/device_operation.hpp"
+#include "ttnn/metal_v2_artifacts.hpp"
 #include "pad_device_operation_types.hpp"
 
 namespace ttnn::prim::qsr {
 
+// Metal 2.0 (MetalV2FactoryConcept) factory for the height-only sharded ROW_MAJOR pad path.
 struct PadRmShardedHeightOnlyProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
-        const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& tensor_return_value);
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
+        const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output);
 };
 }  // namespace ttnn::prim::qsr
