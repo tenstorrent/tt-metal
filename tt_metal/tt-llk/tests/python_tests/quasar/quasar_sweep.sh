@@ -40,11 +40,24 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PYTESTS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"               # .../tests/python_tests
+LLK_TESTS_DIR="$(cd "$PYTESTS_DIR/.." && pwd)"            # .../tt-llk/tests
+# Repo root derived from THIS script's path -- portable, no hardcoded machine dirs.
+TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$PYTESTS_DIR/../../../.." && pwd)}"
 POLY="${TT_POLY_FIT_DIR:-/localdev/nkapre/tt-polynomial-fitter}"
 COEFF_DIR="$POLY/data/coefficients"
-TT_METAL_HOME="${TT_METAL_HOME:-/localdev/nkapre/tt-metal-nkapreTT}"
-TT_METAL_SIMULATOR="${TT_METAL_SIMULATOR:-/home/nkapre/sim-qsr/libttsim.so}"
-VENV_PY="${VENV_PY:-$PYTESTS_DIR/../.venv/bin/python}"
+# Pinned craq-sim Quasar sim (external build; override TT_METAL_SIMULATOR per machine).
+TT_METAL_SIMULATOR="${TT_METAL_SIMULATOR:-$(cd "$TT_METAL_HOME/.." 2>/dev/null && pwd)/craq-sim-quasar/src/_out/release_qsr/libttsim.so}"
+
+# Python autodetect: canonical tt-llk tests/.venv first, then repo python_env, then python3.
+# NO /tmp, no stray machine paths. Override with VENV_PY. Create the venv with:
+#   bash tt_metal/tt-llk/tests/setup_external_testing_env.sh   (installs requirements.txt -> tt-exalens 0.3.20)
+_py_ok() { [[ -x "$1" || "$1" == python3 ]] || return 1
+    "$1" -c "import torch, numpy; from ttexalens.tt_exalens_lib import ParsedElfFile" >/dev/null 2>&1; }
+VENV_PY="${VENV_PY:-}"
+for _cand in "$VENV_PY" "$LLK_TESTS_DIR/.venv/bin/python" "$TT_METAL_HOME/python_env/bin/python" "python3"; do
+    [[ -z "$_cand" ]] && continue
+    if _py_ok "$_cand"; then VENV_PY="$_cand"; break; fi
+done
 
 POLY_TEST="quasar/test_generic_lut_activation_quasar.py"
 RATIONAL_TEST="quasar/test_generic_lut_rational_quasar.py"
@@ -75,8 +88,11 @@ case "$APPROX" in
     *) echo "bad --approximation: $APPROX" >&2; exit 2 ;;
 esac
 
-[[ -x "$VENV_PY" || -f "$VENV_PY" ]] || { echo "venv python not found: $VENV_PY" >&2; exit 2; }
-[[ -f "$TT_METAL_SIMULATOR" ]] || { echo "simulator not found: $TT_METAL_SIMULATOR" >&2; exit 2; }
+[[ -n "$VENV_PY" ]] && _py_ok "$VENV_PY" || { echo "ERROR: no python with the tt-llk harness deps (torch, numpy, ttexalens.ParsedElfFile)." >&2
+    echo "       Create it:  bash $LLK_TESTS_DIR/setup_external_testing_env.sh   (-> tests/.venv, tt-exalens 0.3.20)" >&2
+    echo "       or export VENV_PY=<interpreter>." >&2; exit 2; }
+[[ -f "$TT_METAL_SIMULATOR" ]] || { echo "ERROR: simulator not found: $TT_METAL_SIMULATOR" >&2
+    echo "       Build the pinned craq-sim Quasar sim or export TT_METAL_SIMULATOR=<libttsim.so>." >&2; exit 2; }
 
 # Build the activation list.
 if [[ "$ACTS_ARG" == "all" ]]; then

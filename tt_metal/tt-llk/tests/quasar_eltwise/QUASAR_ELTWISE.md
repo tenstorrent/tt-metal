@@ -204,11 +204,30 @@ sfpi and are used verbatim.
   `sin_p3_s8`) correctly detect `parity=none` and use the natural-basis Horner
   fallback (validated). This matches the embedded-kernel behavior.
 - **Environment / pin drift (test runner only, not the kernels)**: the harness
-  needs `tt-exalens==0.3.20` (`ParsedElfFile`); the shared `python_env` has
-  0.3.21 (renamed to `ElfFile`), which blocks conftest import for *all* quasar
-  tests until 0.3.20 is restored. `pytest-xdist==3.8.0` is also required
-  (`worker_id` fixture, `--maxschedchunk`). `run_quasar.sh` auto-detects a
-  python with these deps; override with `VENV_PY`.
+  needs `tt-exalens==0.3.20` (`ParsedElfFile`) + `pytest-xdist==3.8.0`; the
+  shared `python_env` has 0.3.21 (renamed to `ElfFile`), which blocks conftest
+  import. The **canonical, portable** fix is the tt-llk test venv:
+
+  ```bash
+  bash tt_metal/tt-llk/tests/setup_external_testing_env.sh   # builds tests/.venv from requirements.txt (tt-exalens 0.3.20)
+  ```
+
+  Both `run_quasar.sh` and `quasar_sweep.sh` **auto-detect** `tests/.venv` first
+  (then repo `python_env`, then `python3`) — no machine-specific or `/tmp` paths.
+  Override with `VENV_PY=<interpreter>` if needed. The sim path defaults to the
+  pinned craq-sim Quasar build (override `TT_METAL_SIMULATOR` per machine).
+
+## Full corpus sweep
+
+Run all 60 fitter activations (polynomial + rational fits) on the pinned sim — no env setup beyond the venv above:
+
+```bash
+cd tt_metal/tt-llk/tests/python_tests/quasar
+./quasar_sweep.sh --activations all --approximation both        # 60 activations, poly + rational, bf16 + fp32
+./quasar_sweep.sh --activations gelu,exp,tanh --approximation polynomial   # subset
+```
+
+Results (PCC/ULP per activation × approximation × precision, threshold PCC≥0.99) → `/tmp/quasar_sweep_results.txt`. The specialized eval-methods (newton_root, expalu, parity) are validated per-op via `run_quasar.sh -m <method>` (the sweep covers the poly/rational fits that exist for every activation).
 
 ## File map
 
