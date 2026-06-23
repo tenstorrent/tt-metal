@@ -5,6 +5,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // add/sub/mul
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -93,25 +95,15 @@ void kernel_main() {
             // x - mean
             constexpr auto cb_xmm = cb_tmp3;
             CircularBuffer cb_xmm_obj(cb_xmm);
-            tile_regs_acquire();
-            cb_x_obj.wait_front(onetile);  // comes from the reader
-            cb_xmm_obj.reserve_back(onetile);
-
-            if (is_lastdim_layernorm) {
-                sub_bcast_cols_init_short_with_dt(cb_x, cb_mean);
-                sub_tiles_bcast_cols(cb_x, cb_mean, 0, 0, dst0);
-            } else {
-                sub_tiles_bcast_scalar_init_short_with_dt(cb_x, cb_mean);
-                sub_tiles_bcast_scalar(cb_x, cb_mean, 0, 0, dst0);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_xmm);
-
-            cb_x_obj.pop_front(onetile);
-            cb_xmm_obj.push_back(onetile);
-            tile_regs_release();
+            // x - mean. cb_x Streaming; cb_mean held -> CallerManaged + Scalar. is_lastdim -> Col bcast else
+            // Scalar. *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
+            compute_kernel_lib::sub<
+                cb_x,
+                cb_mean,
+                cb_xmm,
+                is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
             // Compute cb_y
             // (x - mean) * rstd and mask(optional)
@@ -267,22 +259,16 @@ void kernel_main() {
             // Compute cb_ydy and cb_ydyadd
             constexpr auto cb_ydy = cb_tmp3;
             CircularBuffer cb_ydy_obj(cb_ydy);
-            // Compute cb_ydy
-            tile_regs_acquire();
-            cb_y_obj.wait_front(onetile);
-            cb_ydy_obj.reserve_back(onetile);
-
-            mul_tiles_init_with_dt(cb_y, cb_dycopy);
-            mul_tiles(cb_y, cb_dycopy, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_ydy);
-
-            cb_y_obj.pop_front(onetile);
-            cb_dycopy_obj.pop_front(onetile);
-            cb_ydy_obj.push_back(onetile);
-            tile_regs_release();
+            // Compute cb_ydy = y * dycopy. cb_y Streaming; cb_dycopy NoWaitPop (waited above in the dyadd
+            // block, "we don't pop cb_dycopy there" -> chain pops it here per-tile). mul_tiles_init_with_dt
+            // -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
+            compute_kernel_lib::mul<
+                cb_y,
+                cb_dycopy,
+                cb_ydy,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::NoWaitPop>(onetile);
 
             // Compute cb_ydyadd
             if (wt == 0) {
@@ -334,23 +320,28 @@ void kernel_main() {
         // rstd / n -> cb_tmp3
         constexpr auto cb_recip_nrstd = cb_tmp3;
         CircularBuffer cb_recip_nrstd_obj(cb_recip_nrstd);
-        tile_regs_acquire();
-        cb_recip_nrstd_obj.reserve_back(onetile);
-
-        if (is_lastdim_layernorm) {
-            mul_bcast_cols_init_short_with_dt(cb_n_recip_n, cb_rstd);
-            mul_tiles_bcast_cols(cb_n_recip_n, cb_rstd, 1, 0, dst0);
-        } else {
-            mul_tiles_bcast_scalar_init_short_with_dt(cb_n_recip_n, cb_rstd);
-            mul_tiles_bcast_scalar(cb_n_recip_n, cb_rstd, 1, 0, dst0);
-        }
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_tile_with_dt(dst0, cb_recip_nrstd);
-
-        cb_recip_nrstd_obj.push_back(onetile);
-        tile_regs_release();
+        // rstd / n: cb_n_recip_n[1] * cb_rstd. cb_n_recip_n CallerManaged + Scalar + TileOffset::Set{1} (held);
+        // cb_rstd CallerManaged + Scalar (held); cb_recip_nrstd Streaming. is_lastdim -> Col else Scalar bcast.
+        // *_init_short_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
+        compute_kernel_lib::eltwise_chain(
+            onetile,
+            compute_kernel_lib::BinaryFpu<
+                cb_n_recip_n,
+                cb_rstd,
+                compute_kernel_lib::BinaryFpuOp::Mul,
+                is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::Dst::D0,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::OperandKind::Scalar,
+                compute_kernel_lib::TileOffset::Set,
+                compute_kernel_lib::TileOffset::Unset>{1u, 0u},
+            compute_kernel_lib::PackTile<
+                cb_recip_nrstd,
+                compute_kernel_lib::OutputLifecycle::Streaming,
+                compute_kernel_lib::PackTileReconfig::Output>{});
 
         // Compute cb_dx
         // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
@@ -442,44 +433,29 @@ void kernel_main() {
             // n * dy
             constexpr auto cb_ndy = cb_tmp1;
             CircularBuffer cb_ndy_obj(cb_ndy);
-            tile_regs_acquire();
-            cb_dycopy_obj.wait_front(onetile);
-            cb_ndy_obj.reserve_back(onetile);
-
-            mul_tiles_init_with_dt(cb_n_recip_n, cb_dycopy);
-            mul_tiles(cb_n_recip_n, cb_dycopy, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_ndy);
-
-            cb_dycopy_obj.pop_front(onetile);
-            cb_ndy_obj.push_back(onetile);
-            tile_regs_release();
+            // n * dy. cb_n_recip_n held -> CallerManaged + Scalar (idx 0); cb_dycopy Streaming.
+            // mul_tiles_init_with_dt -> Reconfig::Input, pack_tile_with_dt -> PackTileReconfig::Output.
+            compute_kernel_lib::mul<
+                cb_n_recip_n,
+                cb_dycopy,
+                cb_ndy,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::CallerManaged,
+                compute_kernel_lib::InputLifecycle::Streaming>(onetile);
 
             // Compute cb_ndymdysum
             // n * dy - Sum[dy]
             constexpr auto cb_ndymdysum = cb_tmp2;
             CircularBuffer cb_ndymdysum_obj(cb_ndymdysum);
-            tile_regs_acquire();
-            cb_ndy_obj.wait_front(onetile);
-            cb_ndymdysum_obj.reserve_back(onetile);
-
-            if (is_lastdim_layernorm) {
-                sub_bcast_cols_init_short_with_dt(cb_ndy, cb_dysum);
-                sub_tiles_bcast_cols(cb_ndy, cb_dysum, 0, 0, dst0);
-            } else {
-                sub_tiles_bcast_scalar_init_short_with_dt(cb_ndy, cb_dysum);
-                sub_tiles_bcast_scalar(cb_ndy, cb_dysum, 0, 0, dst0);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_ndymdysum);
-
-            cb_ndy_obj.pop_front(onetile);
-            cb_ndymdysum_obj.push_back(onetile);
-            tile_regs_release();
+            // n*dy - Sum[dy]. cb_ndy Streaming; cb_dysum held -> CallerManaged + Scalar. is_lastdim -> Col
+            // bcast else Scalar. *_init_short_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
+            compute_kernel_lib::sub<
+                cb_ndy,
+                cb_dysum,
+                cb_ndymdysum,
+                is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
             // Compute cb_xmm
             // x - mean and mask(optional)
@@ -522,88 +498,48 @@ void kernel_main() {
             tile_regs_release();
 
             // Compute cb_y
-            // (x - mean) * rstd
-            tile_regs_acquire();
-            cb_xmm_obj.wait_front(onetile);
-            cb_y_obj.reserve_back(onetile);
-
-            if (is_lastdim_layernorm) {
-                mul_bcast_cols_init_short_with_dt(cb_xmm, cb_rstd);
-                mul_tiles_bcast_cols(cb_xmm, cb_rstd, 0, 0, dst0);
-            } else {
-                mul_tiles_bcast_scalar_init_short_with_dt(cb_xmm, cb_rstd);
-                mul_tiles_bcast_scalar(cb_xmm, cb_rstd, 0, 0, dst0);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_y);
-
-            cb_xmm_obj.pop_front(onetile);
-            cb_y_obj.push_back(onetile);
-            tile_regs_release();
+            // (x - mean) * rstd. cb_xmm Streaming; cb_rstd held -> CallerManaged + Scalar. is_lastdim -> Col
+            // bcast else Scalar. *_init_short_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
+            compute_kernel_lib::mul<
+                cb_xmm,
+                cb_rstd,
+                cb_y,
+                is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
             // Compute cb_yydysum
             // y * Sum[y * dy]
             constexpr auto cb_yydysum = cb_tmp1;
             CircularBuffer cb_yydysum_obj(cb_yydysum);
-            tile_regs_acquire();
-            cb_y_obj.wait_front(onetile);
-            cb_yydysum_obj.reserve_back(onetile);
-
-            if (is_lastdim_layernorm) {
-                mul_bcast_cols_init_short_with_dt(cb_y, cb_ydysum);
-                mul_tiles_bcast_cols(cb_y, cb_ydysum, 0, 0, dst0);
-            } else {
-                mul_tiles_bcast_scalar_init_short_with_dt(cb_y, cb_ydysum);
-                mul_tiles_bcast_scalar(cb_y, cb_ydysum, 0, 0, dst0);
-            }
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_yydysum);
-
-            cb_y_obj.pop_front(onetile);
-            cb_yydysum_obj.push_back(onetile);
-            tile_regs_release();
+            // y * Sum[y*dy]. cb_y Streaming; cb_ydysum held -> CallerManaged + Scalar. is_lastdim -> Col
+            // bcast else Scalar. *_init_short_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
+            compute_kernel_lib::mul<
+                cb_y,
+                cb_ydysum,
+                cb_yydysum,
+                is_lastdim_layernorm ? compute_kernel_lib::BroadcastDim::Col : compute_kernel_lib::BroadcastDim::Scalar,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
 
             // Compute cb_tmp4
             // (n * dy - Sum[dy]) - (y * Sum[y * dy])
             constexpr auto cb_tmp4 = cb_y;
             CircularBuffer cb_tmp4_obj(cb_tmp4);
-            tile_regs_acquire();
-            cb_ndymdysum_obj.wait_front(onetile);
-            cb_yydysum_obj.wait_front(onetile);
-            cb_tmp4_obj.reserve_back(onetile);
-
-            sub_tiles_init_with_dt(cb_ndymdysum, cb_yydysum);
-            sub_tiles(cb_ndymdysum, cb_yydysum, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_tmp4);
-
-            cb_ndymdysum_obj.pop_front(onetile);
-            cb_yydysum_obj.pop_front(onetile);
-            cb_tmp4_obj.push_back(onetile);
-            tile_regs_release();
+            // (n*dy - Sum[dy]) - (y * Sum[y*dy]). both Streaming. sub_tiles_init_with_dt -> Reconfig::Input,
+            // pack_tile_with_dt -> PackTileReconfig::Output.
+            compute_kernel_lib::sub<cb_ndymdysum, cb_yydysum, cb_tmp4>(onetile);
 
             // Compute cb_dx
-            // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n)
-            tile_regs_acquire();
-            cb_tmp4_obj.wait_front(onetile);
-            cb_dx_obj.reserve_back(onetile);
-
-            mul_tiles_init_with_dt(cb_tmp4, cb_recip_nrstd);
-            mul_tiles(cb_tmp4, cb_recip_nrstd, 0, 0, dst0);
-            tile_regs_commit();
-
-            tile_regs_wait();
-            pack_tile_with_dt(dst0, cb_dx);
-
-            cb_tmp4_obj.pop_front(onetile);
-            cb_dx_obj.push_back(onetile);
-            tile_regs_release();
+            // ((n * dy - Sum[dy]) - (y * Sum[y * dy])) * (rstd / n). cb_tmp4 Streaming; cb_recip_nrstd held ->
+            // CallerManaged + Scalar. mul_tiles_init_with_dt -> Reconfig::Input, pack -> PackTileReconfig::Output.
+            compute_kernel_lib::mul<
+                cb_tmp4,
+                cb_recip_nrstd,
+                cb_dx,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::CallerManaged>(onetile);
         }  // Wt loop
         cb_recip_nrstd_obj.pop_front(onetile);
         cb_dysum_obj.pop_front(onetile);

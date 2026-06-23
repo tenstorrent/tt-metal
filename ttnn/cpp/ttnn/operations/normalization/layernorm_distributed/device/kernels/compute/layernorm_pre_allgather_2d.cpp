@@ -13,10 +13,10 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "api/compute/bcast.h"
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/layernorm.h"
+#include "api/dataflow/circular_buffer.h"  // CircularBuffer (was transitively via pre_add.h)
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/operations/normalization/kernel_util/compute/pre_add.h"
-
-namespace pre_add = norm::kernel_util::compute::pre_add;
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // add
 
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
@@ -51,8 +51,27 @@ void kernel_main() {
     CircularBuffer cb_zero(cb_zero_id);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
-        // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD)
-        pre_add::one_row<FUSE_PRE_ADD>(cb_in0, cb_res, cb_inp, Wt, blk);
+        // Fuse pre-add: cb_inp_id = cb_in0_id + cb_res_id (no-op when !FUSE_PRE_ADD). Migrated
+        // from pre_add::one_row to eltwise_chain: per-block (blk) bulk add over Wt tiles via
+        // Bulk + Block index, reproducing one_row's wait/pop/reserve/push(blk) loop. Reconfig
+        // Input (reconfig_data_format + add_tiles_init) + Output (pack_reconfig_data_format).
+        // NOTE: residual (FUSE_PRE_ADD) path is not validatable locally — the 2d-core-grid test
+        // is @skip + needs an 8-device mesh + passes no residual. Mechanically identical to the
+        // validated layernorm_pre_allgather.cpp / rmsnorm_pre_allgather.cpp migration.
+        if constexpr (FUSE_PRE_ADD) {
+            compute_kernel_lib::add<
+                cb_in0_id,
+                cb_res_id,
+                cb_inp_id,
+                compute_kernel_lib::BroadcastDim::None,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::InputLifecycle::Bulk,
+                compute_kernel_lib::OutputLifecycle::Bulk,
+                compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                compute_kernel_lib::PackTileReconfig::Output,
+                compute_kernel_lib::OperandKind::Block,
+                compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::of(Wt / blk, blk));
+        }
 
         /*
          * x**2

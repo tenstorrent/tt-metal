@@ -5,6 +5,10 @@
 #include <cstdint>
 
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp, Log, Recip
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -32,7 +36,14 @@ void kernel_main() {
     for (uint32_t n = 0; n < N; ++n) {
         // find max
         if (Wt == 1) {
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
+            // mask cb_in0[0] (Streaming) with cb_mask (held externally -> CallerManaged).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<cb_in0, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::
+                    CopyTile<cb_mask, compute_kernel_lib::Dst::D1, compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<cb_tmp>{});
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::single());
@@ -41,55 +52,104 @@ void kernel_main() {
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_in0, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
-            // Phase 2: mask the last tile and continue reducing into cb_max via Accumulate.
-            mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
+            // Phase 2: mask the last tile (eltwise chain from incoming/0106) and continue
+            // reducing into cb_max via Accumulate (reduce kept from main).
+            // mask cb_in0[0] (Streaming) with cb_mask (held externally -> CallerManaged).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::CopyTile<cb_in0, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::
+                    CopyTile<cb_mask, compute_kernel_lib::Dst::D1, compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<cb_tmp>{});
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_tmp, cb_max_scaler, cb_max>(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate::at(cb_max, /*iter=*/1));
         }
 
-        // step 1
+        // step 1: exp(x - max) accumulator over w. cb_in0 streaming + Scalar (pop=1).
+        // cb_max InputLifecycle::CallerManaged (held outside loop). cb_mask InputLifecycle::CallerManaged (popm=0).
         for (uint32_t w = 0; w < Wt; ++w) {
-            // compute exp(x)
+            // compute exp(x - max) [+ mask if last] OR rexp[+ mask] (!SOFTMAX last).
             if (w == Wt - 1) {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-                exp_tile_and_mask_tile_to_cb(
-                    cb_tmp,
-                    cb_mask,
-                    cb_exps,
-                    /*itile=*/0,
-                    /*mtile=*/0,
-                    /*pop=*/1,
-                    /*popm=*/0);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in0,
+                        cb_max,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Col,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::HeldStream>{},
+                    compute_kernel_lib::Exp<
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::HeldStream>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<cb_exps>{});
 #else
-                rexp_tile_and_mask_tile_to_cb(
-                    cb_in0,
-                    cb_mask,
-                    cb_exps,
-                    /*itile=*/0,
-                    /*mtile=*/0,
-                    /*pop=*/1,
-                    /*popm=*/0);
+                // rexp + mask (no sub); matches rexp_tile_and_mask_tile_to_cb.
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::CopyTile<cb_in0>{},
+                    compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::Exp<
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::CopyTile<
+                        cb_mask,
+                        compute_kernel_lib::Dst::D1,
+                        compute_kernel_lib::InputLifecycle::HeldStream>{},
+                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<cb_exps>{});
 #endif
             } else {
 #ifdef SOFTMAX
-                sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-                exp_tile_to_cb(cb_tmp, cb_exps);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in0,
+                        cb_max,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Col,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::HeldStream>{},
+                    compute_kernel_lib::Exp<
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<cb_exps>{});
 #else
-                sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-                rexp_tile_to_cb(cb_tmp, cb_exps);
+                compute_kernel_lib::eltwise_chain(
+                    onetile,
+                    compute_kernel_lib::BinaryFpu<
+                        cb_in0,
+                        cb_max,
+                        compute_kernel_lib::BinaryFpuOp::Sub,
+                        compute_kernel_lib::BroadcastDim::Col,
+                        compute_kernel_lib::InputLifecycle::Streaming,
+                        compute_kernel_lib::InputLifecycle::HeldStream>{},
+                    compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::Exp<
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Approx::Exact,
+                        compute_kernel_lib::Dst::D0>{},
+                    compute_kernel_lib::PackTile<cb_exps>{});
 #endif
             }
 
+            // Accumulator over w. Seed copy on first iteration.
             if (w == 0) {
-                copy_tile_to_cb(cb_exps, cb_add);
+                compute_kernel_lib::copy<cb_exps, cb_add>(onetile);
             } else {
-                add_tiles_to_cb(cb_add, cb_exps, cb_add);
+                compute_kernel_lib::add<cb_add, cb_exps, cb_add>(onetile);
             }
         }
 
@@ -131,29 +191,72 @@ void kernel_main() {
         for (uint32_t w = 0; w < Wt; w += onetile) {
 #ifdef LOG
 #ifdef SOFTMAX
-            // x - max - log(sum)
-            sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-            sub_tiles_bcast_cols_to_cb(cb_tmp, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            // x - max - log(sum). Two chains (cb_in0 -> cb_tmp -> cb_out0).
+            compute_kernel_lib::sub<
+                cb_in0,
+                cb_max,
+                cb_tmp,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
+            compute_kernel_lib::sub<
+                cb_tmp,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
 #else
-            // -x + max - log(sum)
-            // logsoftmin not implemented
+            // logsoftmin not implemented in original.
 #endif
 #else
 #ifdef SOFTMAX
-            // exp(x - max) / sum
-            sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-            exp_tile_to_cb(cb_tmp, cb_exps);
-
-            mul_tiles_bcast_cols_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            // exp(x - max) * 1/sum. Sub+Exp folded; then Mul by recip.
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_in0,
+                    cb_max,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream>{},
+                compute_kernel_lib::Exp<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<cb_exps>{});
+            compute_kernel_lib::mul<
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
 #else
-            // rexp(x - max) / sum
-            sub_tiles_bcast_cols_to_cb(cb_in0, cb_max, cb_tmp, 0, 0, /*pop0=*/1, /*pop1=*/0);
-
-            rexp_tile_to_cb(cb_tmp, cb_exps);
-
-            mul_tiles_bcast_cols_to_cb(cb_exps, cb_recipsumexps, cb_out0, 0, 0, /*pop0=*/1, /*pop1=*/0);
+            // rexp(x - max) / sum (softmin path).
+            compute_kernel_lib::eltwise_chain(
+                onetile,
+                compute_kernel_lib::BinaryFpu<
+                    cb_in0,
+                    cb_max,
+                    compute_kernel_lib::BinaryFpuOp::Sub,
+                    compute_kernel_lib::BroadcastDim::Col,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::InputLifecycle::HeldStream>{},
+                compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::Exp<
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Approx::Exact,
+                    compute_kernel_lib::Dst::D0>{},
+                compute_kernel_lib::PackTile<cb_exps>{});
+            compute_kernel_lib::mul<
+                cb_exps,
+                cb_recipsumexps,
+                cb_out0,
+                compute_kernel_lib::BroadcastDim::Col,
+                compute_kernel_lib::InputLifecycle::Streaming,
+                compute_kernel_lib::InputLifecycle::HeldStream>(onetile);
 #endif
 #endif
         }

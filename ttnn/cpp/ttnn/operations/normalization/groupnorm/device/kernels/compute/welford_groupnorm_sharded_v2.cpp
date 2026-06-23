@@ -19,6 +19,9 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -438,57 +441,72 @@ void kernel_main() {
                 ++tile_id;
 
                 if constexpr (do_gamma) {
-                    reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
-                    mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
-
-                    cb_x.wait_front(1);
-                    tile_regs_acquire();
-                    mul_tiles_bcast_rows(cb_x_id, cb_gamma_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    cb_x.pop_front(1);
-                    cb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_x_id);
-                    tile_regs_release();
-                    cb_x.push_back(1);
+                    // cb_x_id *= cb_gamma_id[nt] (bcast rows). Reconfig:
+                    // mul_bcast_rows_init_short + manual reconfig_data_format_srcb ->
+                    // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
+                    // PackTileReconfig::None.
+                    compute_kernel_lib::eltwise_chain(
+                        1u,
+                        compute_kernel_lib::BinaryFpu<
+                            cb_x_id,
+                            cb_gamma_id,
+                            compute_kernel_lib::BinaryFpuOp::Mul,
+                            compute_kernel_lib::BroadcastDim::Row,
+                            compute_kernel_lib::InputLifecycle::Streaming,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::TileOffset::Unset,
+                            compute_kernel_lib::TileOffset::Set>{0u, nt},
+                        compute_kernel_lib::PackTile<
+                            cb_x_id,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::PackTileReconfig::None>{});
                 }
 
                 if constexpr (do_beta) {
-                    reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
-                    add_bcast_rows_init_short(cb_x_id, cb_beta_id);
-
-                    cb_x.wait_front(1);
-                    tile_regs_acquire();
-                    add_tiles_bcast_rows(cb_x_id, cb_beta_id, 0, nt, dst0);
-                    tile_regs_commit();
-                    cb_x.pop_front(1);
-                    cb_x.reserve_back(1);
-                    tile_regs_wait();
-                    pack_tile(dst0, cb_x_id);
-                    tile_regs_release();
-                    cb_x.push_back(1);
+                    // cb_x_id += cb_beta_id[nt] (bcast rows). Reconfig:
+                    // add_bcast_rows_init_short + manual reconfig_data_format_srcb ->
+                    // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
+                    // PackTileReconfig::None.
+                    compute_kernel_lib::eltwise_chain(
+                        1u,
+                        compute_kernel_lib::BinaryFpu<
+                            cb_x_id,
+                            cb_beta_id,
+                            compute_kernel_lib::BinaryFpuOp::Add,
+                            compute_kernel_lib::BroadcastDim::Row,
+                            compute_kernel_lib::InputLifecycle::Streaming,
+                            compute_kernel_lib::InputLifecycle::CallerManaged,
+                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
+                            compute_kernel_lib::Dst::D0,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::OperandKind::Scalar,
+                            compute_kernel_lib::TileOffset::Unset,
+                            compute_kernel_lib::TileOffset::Set>{0u, nt},
+                        compute_kernel_lib::PackTile<
+                            cb_x_id,
+                            compute_kernel_lib::OutputLifecycle::Streaming,
+                            compute_kernel_lib::PackTileReconfig::None>{});
                 }
 
-                // Write out the final output
-                reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
-                copy_tile_init(cb_x_id);
-
-                cb_x.wait_front(1);
-                tile_regs_acquire();
-                copy_tile(cb_x_id, 0, dst0);
-                tile_regs_commit();
-                cb_x.pop_front(1);
+                // Write out the final output: cb_x -> write_cb.
+                // Reconfig: copy_tile_init + manual reconfig_data_format_srcb ->
+                // CopyTileReconfig::Input. pack_tile (no _with_dt) -> PackTileReconfig::None.
 #ifdef UNTILIZE_OUT
-                auto write_cb_id = cb_untilize_in_id;
+                constexpr auto write_cb_id = cb_untilize_in_id;
 #else
-                auto write_cb_id = cb_out0_id;
+                constexpr auto write_cb_id = cb_out0_id;
 #endif
-                CircularBuffer write_cb(write_cb_id);
-                write_cb.reserve_back(1);
-                tile_regs_wait();
-                pack_tile(dst0, write_cb_id);
-                tile_regs_release();
-                write_cb.push_back(1);
+                compute_kernel_lib::copy<
+                    cb_x_id,
+                    write_cb_id,
+                    compute_kernel_lib::InputLifecycle::Streaming,
+                    compute_kernel_lib::OutputLifecycle::Streaming,
+                    compute_kernel_lib::CopyTileReconfig::Input,
+                    compute_kernel_lib::PackTileReconfig::None>(1u);
             }
         }
 
