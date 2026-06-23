@@ -209,7 +209,7 @@ int main(int argc, char** argv) {
     std::string bin_path = "tools/x280_bm/build/dma_probe.bin";
     int device_id = 0, l2cpu = 0, pll = 1000;
     int src_x = 0, src_y = 0;
-    uint64_t src_l1 = 0x80000, dst_lim = 0x08012000, nbytes = 256;
+    uint64_t src_l1 = 0x80000, dst_lim = 0x08012000, nbytes = 256, repeats = 1;
     bool do_reset = true, do_boot = true;
 
     for (int i = 1; i < argc; i++) {
@@ -232,6 +232,8 @@ int main(int argc, char** argv) {
             dst_lim = std::stoull(next(), nullptr, 0);
         } else if (a == "--nbytes") {
             nbytes = std::stoull(next());
+        } else if (a == "--repeats") {
+            repeats = std::stoull(next());
         } else if (a == "--no-reset") {
             do_reset = false;
         } else if (a == "--no-boot") {
@@ -305,6 +307,7 @@ int main(int argc, char** argv) {
     pack<uint64_t>(params, 0x08, src_l1);
     pack<uint64_t>(params, 0x10, dst_lim);
     pack<uint64_t>(params, 0x18, nbytes);
+    pack<uint64_t>(params, 0x20, repeats);
     x280.write_mailbox(params, MBOX_PARAMS);
 
     x280.set_reset_vectors(LIM_BASE);
@@ -337,6 +340,8 @@ int main(int argc, char** argv) {
     uint64_t cycles = x280.lim_rd_u64(MBOX_RESULTS + 0x08);
     uint32_t fw_first = x280.lim_rd_u32(MBOX_RESULTS + 0x10);
     uint32_t fw_last = x280.lim_rd_u32(MBOX_RESULTS + 0x14);
+    uint64_t retrig_avg = x280.lim_rd_u64(MBOX_RESULTS + 0x20);
+    uint64_t retrig_min = x280.lim_rd_u64(MBOX_RESULTS + 0x28);
 
     // ---- Read the LIM destination over the NOC and compare to the pattern ----
     std::vector<uint8_t> got(nbytes, 0);
@@ -354,7 +359,22 @@ int main(int argc, char** argv) {
     const char* rcs = (rc == 0) ? "success" : (rc == 1) ? "DMA error" : (rc == 2) ? "timeout" : "?";
     printf("\n=== X280 DMA NOC->LIM validation ===\n");
     printf("  dma rc       : %llu (%s)\n", (unsigned long long)rc, rcs);
-    printf("  dma cycles   : %llu  (@ %d MHz X280 PLL)\n", (unsigned long long)cycles, pll);
+    printf("  dma cycles   : %llu  (first transfer, full setup; @ %d MHz)\n", (unsigned long long)cycles, pll);
+    if (repeats > 1 && retrig_avg > 0) {
+        double first_bw = (double)nbytes * pll / (double)cycles;   // MB/s
+        double rt_bw = (double)nbytes * pll / (double)retrig_min;  // MB/s
+        printf(
+            "  re-trigger   : avg %llu, min %llu cycles  (setup-once, x%llu)\n",
+            (unsigned long long)retrig_avg,
+            (unsigned long long)retrig_min,
+            (unsigned long long)(repeats - 1));
+        printf(
+            "  setup saved  : %lld cycles/transfer (%.1fx faster: %.0f -> %.0f MB/s)\n",
+            (long long)cycles - (long long)retrig_min,
+            (double)cycles / (double)retrig_min,
+            first_bw,
+            rt_bw);
+    }
     printf("  fw readback  : first=0x%08x last=0x%08x\n", fw_first, fw_last);
     uint32_t exp_first = 0xA5A50000u, exp_last = 0xA5A50000u | (uint32_t)(nbytes / 4 - 1);
     printf("  expected     : first=0x%08x last=0x%08x\n", exp_first, exp_last);
