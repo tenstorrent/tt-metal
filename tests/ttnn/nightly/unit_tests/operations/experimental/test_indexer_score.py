@@ -314,7 +314,7 @@ def test_indexer_score_indexed_cache_nd_sharded_k(device):
         _check_slot(out, q, k_cache, w, b)
 
 
-def test_indexer_score_indexed_cache_rejects_oob(device):
+def test_indexer_score_indexed_cache_rejects_oob(device, expect_error):
     """An out-of-range cache_batch_idx (>= B) is rejected -- including on a warm program cache, since the
     slot is re-validated on a cache hit (validate_on_program_cache_hit), not only at miss time."""
     c = IDX_CACHE
@@ -329,13 +329,13 @@ def test_indexer_score_indexed_cache_rejects_oob(device):
     ttnn.experimental.indexer_score(
         q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=0
     )
-    with pytest.raises(RuntimeError, match="cache_batch_idx"):
+    with expect_error(RuntimeError, "cache_batch_idx"):
         ttnn.experimental.indexer_score(
             q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, cache_batch_idx=B
         )
 
 
-def test_indexer_score_indexed_cache_requires_idx_for_multislot(device):
+def test_indexer_score_indexed_cache_requires_idx_for_multislot(device, expect_error):
     """A multi-slot [B,1,T,D] k cache with NO cache_batch_idx is ambiguous (which slot?) and must be
     rejected -- the non-indexed batch guard in validate_non_hashed. Pairs with the OOB-slot rejection to
     cover the indexed-cache batch invariants the program hash does not pin."""
@@ -343,11 +343,11 @@ def test_indexer_score_indexed_cache_requires_idx_for_multislot(device):
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
     q, w, k_cache = _indexed_inputs(2)  # B=2 slots, but no cache_batch_idx supplied below
     q_dev, w_dev, k_dev = to_device(q, device), to_device(w, device), to_device(k_cache, device)
-    with pytest.raises(RuntimeError, match="batch must be 1"):
+    with expect_error(RuntimeError, "batch must be 1"):
         ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
 
 
-def test_indexer_score_rejects_sharded_q(device):
+def test_indexer_score_rejects_sharded_q(device, expect_error):
     """Only k may be sharded; q (and weights) must stay interleaved. A sharded q is refused by the input
     validation (validate_non_hashed)."""
     c = IDX_CACHE
@@ -356,7 +356,7 @@ def test_indexer_score_rejects_sharded_q(device):
     q_mem = _nd_sharded_dram_config(device, rows_per_shard=32)  # shard q -> must be rejected (q stays interleaved)
     q_dev = ttnn.from_torch(q, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=q_mem)
     w_dev, k_dev = to_device(w, device), to_device(k_cache, device)
-    with pytest.raises(RuntimeError, match="interleaved"):
+    with expect_error(RuntimeError, "interleaved"):
         ttnn.experimental.indexer_score(q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg)
 
 
@@ -440,7 +440,7 @@ def test_indexer_score_runtime_kv_len(device, q_chunk, k_chunk, head_group):
     assert device.num_program_cache_entries() == entries_after_first, "changing kv_len recompiled"
 
 
-def test_indexer_score_rejects_bad_kv_len(device):
+def test_indexer_score_rejects_bad_kv_len(device, expect_error):
     """kv_len must be tile-aligned, within (0, T], and leave room for the causal window
     (chunk_start + Sq <= kv_len). Each violation is rejected -- on a WARM cache too, since kv_len is excluded
     from the hash and re-validated on a program-cache hit (validate_on_program_cache_hit)."""
@@ -454,7 +454,7 @@ def test_indexer_score_rejects_bad_kv_len(device):
         q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=128
     )
     for bad, why in [(c["t"] + 32, "above T"), (100, "not tile-aligned"), (32, "causal window > kv_len")]:
-        with pytest.raises(RuntimeError, match="kv_len"):
+        with expect_error(RuntimeError, "kv_len"):
             ttnn.experimental.indexer_score(
                 q_dev, k_dev, w_dev, chunk_start_idx=c["chunk_start"], program_config=cfg, kv_len=bad
             )
