@@ -3076,6 +3076,9 @@ const m2::DFBSpecName RO_BIAS_DFB{"cb_bias"};
 const m2::DFBSpecName RO_OUT_DFB{"cb_out"};
 const m2::DFBSpecName RO_INTERM0_DFB{"cb_intermed0"};
 const m2::DFBSpecName RO_SPARSITY_DFB{"cb_sparsity"};
+// Per-kernel sparsity scratch for the in1 sender writer (separate DFB from the in0 sender's
+// so their self-loops do not put two producers on overlapping cores). Inert (batchB == 0).
+const m2::DFBSpecName RO_SPARSITY_IN1_DFB{"cb_sparsity_in1"};
 const m2::DFBSpecName RO_IN0_TRANSPOSE_DFB{"cb_in0_transposed"};
 
 const m2::TensorParamName RO_IN0_TENSOR{"in0"};
@@ -3634,9 +3637,21 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         }
         dataflow_buffers.push_back(std::move(in0_dfb));
     }
-    // Inert sparsity scratch DFB (bound by in0/in1 sender cb_sparsity; only used when batchB > 0).
+    // Inert sparsity scratch DFB for the in0 sender (only the interleaved/height-sharded in0
+    // sender fork references cb_sparsity; the block-sharded fork does not, so only define it
+    // there). Self-looped (PRODUCER+CONSUMER) on that single kernel.
+    if (!in0_block_sharded) {
+        dataflow_buffers.push_back(m2::DataflowBufferSpec{
+            .unique_id = RO_SPARSITY_DFB,
+            .entry_size = in0_single_tile_size,
+            .num_entries = 1,
+            .data_format_metadata = in0_data_format,
+            .tile_format_metadata = in0_tile,
+        });
+    }
+    // Inert sparsity scratch DFB for the in1 sender writer (always present). Self-looped.
     dataflow_buffers.push_back(m2::DataflowBufferSpec{
-        .unique_id = RO_SPARSITY_DFB,
+        .unique_id = RO_SPARSITY_IN1_DFB,
         .entry_size = in0_single_tile_size,
         .num_entries = 1,
         .data_format_metadata = in0_data_format,
@@ -3813,19 +3828,37 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 .dfb_spec_name = RO_IN0_DFB, .accessor_name = "cb_in0", .endpoint_type = m2::DFBEndpointType::PRODUCER},
         };
         if (in0_block_sharded) {
+            // cb_in0_sharded is the borrowed resident in0 shard. The sender reserve_back's it
+            // (a PRODUCER op) to obtain the mcast source address; there is no separate consumer
+            // (receivers read cb_in0). Self-loop PRODUCER+CONSUMER on this single kernel so the
+            // producer view exists and the SPSC completeness check holds.
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_IN0_SHARDED_DFB,
+                .accessor_name = "cb_in0_sharded",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
             b.push_back(m2::DFBBinding{
                 .dfb_spec_name = RO_IN0_SHARDED_DFB,
                 .accessor_name = "cb_in0_sharded",
                 .endpoint_type = m2::DFBEndpointType::CONSUMER});
+            // cb_l1_array is an inert L1 scratch (no kernel currently reads it back). Self-loop.
             b.push_back(m2::DFBBinding{
                 .dfb_spec_name = RO_L1_ARRAY_DFB,
                 .accessor_name = "cb_l1_array",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_L1_ARRAY_DFB,
+                .accessor_name = "cb_l1_array",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
         } else {
+            // Inert sparsity scratch self-loop (PRODUCER+CONSUMER on this single kernel).
             b.push_back(m2::DFBBinding{
                 .dfb_spec_name = RO_SPARSITY_DFB,
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
         }
         return b;
     };
@@ -3990,9 +4023,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             m2::DFBBinding{
                 .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
-                .dfb_spec_name = RO_SPARSITY_DFB,
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            // Inert sparsity scratch self-loop (PRODUCER+CONSUMER on this single kernel).
+            m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},

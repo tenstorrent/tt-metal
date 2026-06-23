@@ -5145,6 +5145,12 @@ const m2::DFBSpecName RO_BIAS_DFB{"cb_bias"};
 const m2::DFBSpecName RO_OUT_DFB{"cb_out"};
 const m2::DFBSpecName RO_INTERM0_DFB{"cb_intermed0"};
 const m2::DFBSpecName RO_SPARSITY_DFB{"cb_sparsity"};
+// The in0 sender and in1 sender writer both reference dfb::cb_sparsity (inert scratch:
+// batchB == 0 for these non-sparse forks, so it is never actually filled/read), and they
+// run on overlapping cores. A single shared DFB self-looped on both kernels would put two
+// producers on the overlap cores (per-node census violation), so give each kernel its own
+// sparsity scratch DFB (each a single-kernel PRODUCER+CONSUMER self-loop).
+const m2::DFBSpecName RO_SPARSITY_IN1_DFB{"cb_sparsity_in1"};
 const m2::DFBSpecName RO_IN0_TRANSPOSE_DFB{"cb_in0_transposed"};
 
 const m2::TensorParamName RO_IN0_TENSOR{"in0"};
@@ -5632,6 +5638,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         .data_format_metadata = in0_data_format,
         .tile_format_metadata = in0_tile,
     });
+    // Per-kernel sparsity scratch for the in1 sender writer (separate DFB so the in0 sender
+    // and in1 sender writer self-loops do not collide on overlapping cores).
+    dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = RO_SPARSITY_IN1_DFB,
+        .entry_size = in0_single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    });
     {
         m2::DataflowBufferSpec in1_dfb{
             .unique_id = RO_IN1_DFB,
@@ -5795,8 +5810,22 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 .dfb_spec_name = RO_SPARSITY_DFB,
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            // Inert sparsity scratch self-loop: the sender both fills (NoC read) and reads it
+            // back, but only when batchB > 0 (never for resnet50). Bind the consumer endpoint
+            // on the same kernel so the SPSC completeness check holds.
+            m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
         if (in0_is_sharded) {
+            // cb_in0_sharded is the borrowed resident in0 shard; the sender reads it
+            // (get_read_ptr). There is no real producer (the data is resident), so self-loop
+            // PRODUCER+CONSUMER on this single kernel to satisfy SPSC completeness.
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_IN0_SHARDED_DFB,
+                .accessor_name = "cb_in0_sharded",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
             b.push_back(m2::DFBBinding{
                 .dfb_spec_name = RO_IN0_SHARDED_DFB,
                 .accessor_name = "cb_in0_sharded",
@@ -5915,9 +5944,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             m2::DFBBinding{
                 .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
-                .dfb_spec_name = RO_SPARSITY_DFB,
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            // Inert sparsity scratch self-loop: the sender both fills (NoC read) and reads it
+            // back, but only when batchB > 0 (never for resnet50). Bind the consumer endpoint
+            // on the same kernel so the SPSC completeness check holds.
+            m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
@@ -6475,6 +6511,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
     }
+    // Gate the kernel's dfb::cb_in0_sharded reference to exactly when the DFB is bound below
+    // (in0_is_sharded && extract_shard_sub_blocks). IN0_SHARDED alone is broader, so the kernel
+    // must key the token off this narrower define instead.
+    if (in0_is_sharded && extract_shard_sub_blocks) {
+        mm_kernel_in0_sender_defines["EXTRACT_SHARD_SUB_BLOCKS"] = "1";
+    }
     if (output_is_sharded) {
         mm_kernel_in1_sender_writer_defines["OUT_SHARDED"] = "1";
         mm_kernel_in1_receiver_writer_defines["OUT_SHARDED"] = "1";
@@ -6515,6 +6557,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     // Inert sparsity scratch DFB (bound by in0/in1 sender cb_sparsity; only used when batchB > 0).
     dataflow_buffers.push_back(m2::DataflowBufferSpec{
         .unique_id = RO_SPARSITY_DFB,
+        .entry_size = in0_single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = in0_data_format,
+        .tile_format_metadata = in0_tile,
+    });
+    // Per-kernel sparsity scratch for the in1 sender writer (separate DFB so the in0 sender
+    // and in1 sender writer self-loops do not collide on overlapping cores).
+    dataflow_buffers.push_back(m2::DataflowBufferSpec{
+        .unique_id = RO_SPARSITY_IN1_DFB,
         .entry_size = in0_single_tile_size,
         .num_entries = 1,
         .data_format_metadata = in0_data_format,
@@ -6617,8 +6668,22 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 .dfb_spec_name = RO_SPARSITY_DFB,
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            // Inert sparsity scratch self-loop: the sender both fills (NoC read) and reads it
+            // back, but only when batchB > 0 (never for resnet50). Bind the consumer endpoint
+            // on the same kernel so the SPSC completeness check holds.
+            m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
         if (in0_is_sharded && extract_shard_sub_blocks) {
+            // cb_in0_sharded is the borrowed resident in0 shard; the sender reads it
+            // (get_read_ptr). There is no real producer (the data is resident), so self-loop
+            // PRODUCER+CONSUMER on this single kernel to satisfy SPSC completeness.
+            b.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_IN0_SHARDED_DFB,
+                .accessor_name = "cb_in0_sharded",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
             b.push_back(m2::DFBBinding{
                 .dfb_spec_name = RO_IN0_SHARDED_DFB,
                 .accessor_name = "cb_in0_sharded",
@@ -6692,9 +6757,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             m2::DFBBinding{
                 .dfb_spec_name = RO_OUT_DFB, .accessor_name = "cb_out", .endpoint_type = m2::DFBEndpointType::CONSUMER},
             m2::DFBBinding{
-                .dfb_spec_name = RO_SPARSITY_DFB,
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
                 .accessor_name = "cb_sparsity",
                 .endpoint_type = m2::DFBEndpointType::PRODUCER},
+            // Inert sparsity scratch self-loop: the sender both fills (NoC read) and reads it
+            // back, but only when batchB > 0 (never for resnet50). Bind the consumer endpoint
+            // on the same kernel so the SPSC completeness check holds.
+            m2::DFBBinding{
+                .dfb_spec_name = RO_SPARSITY_IN1_DFB,
+                .accessor_name = "cb_sparsity",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER},
         };
         std::vector<m2::TensorBinding> tb = {
             m2::TensorBinding{.tensor_parameter_name = RO_IN1_TENSOR, .accessor_name = "in1"},
@@ -6815,6 +6887,28 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             {"in3_block_w", bias_tensor.has_value() ? in1_block_w : 0u},
             {"fuse_op_reduce_scatter", 0u},
         };
+        // The kernel reads last_num_blocks_h_dim/last_num_blocks_w_dim only under
+        // #ifndef OUT_SHARDED, and the run-args below add them only when !output_is_sharded.
+        // The schema must match (output_is_sharded == output.is_sharded(), true for
+        // height/width/block sharded) or the per-node named-RTA count check fails.
+        m2::Group<std::string> in1_recv_rta_names = {
+            "in1_mcast_sender_noc_x",
+            "in1_mcast_sender_noc_y",
+            "out_tensor_start_tile_id",
+            "out_num_nonzero_subblocks_h",
+            "out_last_num_nonzero_subblocks_h",
+            "out_last_subblock_h",
+            "padded_block_tiles_h_skip",
+            "out_num_nonzero_subblocks_w",
+            "out_last_num_nonzero_subblocks_w",
+            "out_last_subblock_w",
+            "padded_subblock_tiles_addr_skip",
+            "padded_block_tiles_w_skip",
+        };
+        if (!output_is_sharded) {
+            in1_recv_rta_names.push_back("last_num_blocks_h_dim");
+            in1_recv_rta_names.push_back("last_num_blocks_w_dim");
+        }
         kernels.push_back(m2::KernelSpec{
             .unique_id = RO_IN1_RECEIVER_WRITER_KERNEL,
             .source = std::filesystem::path(IN1_RECEIVER_WRITER_KERNEL_PATH),
@@ -6830,24 +6924,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                     m2::TensorBinding{.tensor_parameter_name = RO_OUT_TENSOR, .accessor_name = "out"},
                 },
             .compile_time_args = std::move(cta),
-            .runtime_arg_schema =
-                {.runtime_arg_names =
-                     {
-                         "in1_mcast_sender_noc_x",
-                         "in1_mcast_sender_noc_y",
-                         "out_tensor_start_tile_id",
-                         "out_num_nonzero_subblocks_h",
-                         "out_last_num_nonzero_subblocks_h",
-                         "out_last_subblock_h",
-                         "padded_block_tiles_h_skip",
-                         "out_num_nonzero_subblocks_w",
-                         "out_last_num_nonzero_subblocks_w",
-                         "out_last_subblock_w",
-                         "padded_subblock_tiles_addr_skip",
-                         "padded_block_tiles_w_skip",
-                         "last_num_blocks_h_dim",
-                         "last_num_blocks_w_dim",
-                     }},
+            .runtime_arg_schema = {.runtime_arg_names = std::move(in1_recv_rta_names)},
             .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
         });
     }

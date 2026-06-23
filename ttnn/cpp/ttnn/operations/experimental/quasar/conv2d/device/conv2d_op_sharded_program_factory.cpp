@@ -709,7 +709,12 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
         .enable_act_double_buffer = enable_act_double_buffer,
         .enable_weights_double_buffer = enable_weights_double_buffer,
         .enable_activation_reuse = enable_activation_reuse,
-        .force_split_reader = force_split_reader};
+        // This factory forces single-DM-fill (enable_split_reader = false below): the reader fills the
+        // WHOLE ACT block into the ACT CB alone. get_cb_info() independently decides split-reader via
+        // is_split_reader_viable() when force_split_reader is nullopt, and would then size ACT for the
+        // split layout (half-blocks + a separate ACT_SECOND_READER CB) — inconsistent with the reader,
+        // which deadlocks the act producer/consumer. Force it off here so the CB sizing matches.
+        .force_split_reader = false};
 
     // ---- Determine split_reader_cb_shared up front so we can reject it (resolution #3) ----
     // get_cb_info needs the indices page size first; compute the shared-overlap flag after CB info.
