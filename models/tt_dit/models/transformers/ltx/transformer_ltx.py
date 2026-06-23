@@ -261,9 +261,8 @@ class LTXTransformerBlock(Module):
         if self.cross_attention_adaln:
             v_shift_ca, v_scale_ca_p1, v_gate_ca = chunks[6], chunks[7], chunks[8]
 
-        # Video self-attention
-        video_normed = self.norm1(video_1BND)
-        video_normed = ttnn.addcmul(v_shift_sa, video_normed, v_scale_sa_p1)
+        # Video self-attention (adaLN modulation folded into the norm op: shift + norm*scale_p1)
+        video_normed = self.norm1(video_1BND, modulation_scale=v_scale_sa_p1, modulation_shift=v_shift_sa)
         video_1BND = self.attn1(
             spatial_1BND=video_normed,
             N=video_N,
@@ -277,7 +276,7 @@ class LTXTransformerBlock(Module):
 
         # Video text cross-attention
         if self.cross_attention_adaln:
-            video_ca_input = ttnn.addcmul(v_shift_ca, self.norm2(video_1BND), v_scale_ca_p1)
+            video_ca_input = self.norm2(video_1BND, modulation_scale=v_scale_ca_p1, modulation_shift=v_shift_ca)
             if video_prompt_temb is not None:
                 shifted_prompt_v = self.prompt_scale_shift_table.data + video_prompt_temb
                 v_kv_shift, v_kv_scale_p1 = ttnn.chunk(shifted_prompt_v, 2, dim=0)
@@ -303,9 +302,8 @@ class LTXTransformerBlock(Module):
             video_1BND = video_1BND + video_ca_out
 
         if not self.has_audio:
-            # Video-only feed forward
-            video_normed = self.norm3(video_1BND)
-            video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
+            # Video-only feed forward (adaLN folded into the norm op)
+            video_normed = self.norm3(video_1BND, modulation_scale=v_scale_ff_p1, modulation_shift=v_shift_ff)
             # Ring fuses ff1(AG) + ff2 + RS + addcmul; Linear needs explicit AG + plain ffn().
             if self.ccl_manager.topology == ttnn.Topology.Ring:
                 video_1BND = self.ffn.forward_fused_addcmul(
@@ -333,9 +331,8 @@ class LTXTransformerBlock(Module):
         if self.cross_attention_adaln:
             a_shift_ca, a_scale_ca_p1, a_gate_ca = a_chunks[6], a_chunks[7], a_chunks[8]
 
-        # Audio self-attention
-        audio_normed = self.audio_norm1(audio_1BND)
-        audio_normed = ttnn.addcmul(a_shift_sa, audio_normed, a_scale_sa_p1)
+        # Audio self-attention (adaLN folded into the norm op)
+        audio_normed = self.audio_norm1(audio_1BND, modulation_scale=a_scale_sa_p1, modulation_shift=a_shift_sa)
         audio_1BND = self.audio_attn1(
             spatial_1BND=audio_normed,
             N=audio_N,
@@ -350,7 +347,7 @@ class LTXTransformerBlock(Module):
 
         # Audio text cross-attention
         if self.cross_attention_adaln:
-            audio_ca_input = ttnn.addcmul(a_shift_ca, self.audio_norm2(audio_1BND), a_scale_ca_p1)
+            audio_ca_input = self.audio_norm2(audio_1BND, modulation_scale=a_scale_ca_p1, modulation_shift=a_shift_ca)
             if audio_prompt_temb is not None:
                 shifted_prompt_a = self.audio_prompt_scale_shift_table.data + audio_prompt_temb
                 a_kv_shift, a_kv_scale_p1 = ttnn.chunk(shifted_prompt_a, 2, dim=0)
@@ -424,9 +421,8 @@ class LTXTransformerBlock(Module):
             )
             audio_1BND = ttnn.addcmul(audio_1BND, v2a_output, a_ca_gate)
 
-        # Video feed forward
-        video_normed = self.norm3(video_1BND)
-        video_normed = ttnn.addcmul(v_shift_ff, video_normed, v_scale_ff_p1)
+        # Video feed forward (adaLN folded into the norm op)
+        video_normed = self.norm3(video_1BND, modulation_scale=v_scale_ff_p1, modulation_shift=v_shift_ff)
         if self.ccl_manager.topology == ttnn.Topology.Ring:
             video_1BND = self.ffn.forward_fused_addcmul(
                 video_normed,
@@ -444,9 +440,8 @@ class LTXTransformerBlock(Module):
             video_ff = self.ffn(video_normed, compute_kernel_config=self.ff_compute_kernel_config)
             video_1BND = ttnn.addcmul(video_1BND, video_ff, v_gate_ff)
 
-        # Audio feed forward
-        audio_normed = self.audio_norm3(audio_1BND)
-        audio_normed = ttnn.addcmul(a_shift_ff, audio_normed, a_scale_ff_p1)
+        # Audio feed forward (adaLN folded into the norm op)
+        audio_normed = self.audio_norm3(audio_1BND, modulation_scale=a_scale_ff_p1, modulation_shift=a_shift_ff)
         if self.ccl_manager.topology == ttnn.Topology.Ring:
             audio_1BND = self.audio_ff.forward_fused_addcmul(
                 audio_normed,

@@ -11,7 +11,7 @@ from models.common.utility_functions import is_blackhole
 
 from ....layers.linear import ColParallelLinear
 from ....layers.module import Module
-from ....layers.normalization import DistributedRMSNorm
+from ....layers.normalization import _USE_FUSED_RMSNORM, DistributedRMSNorm
 from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config
@@ -439,9 +439,31 @@ class LTXAttention(Module):
                 parallel_config=kv_parallel_config,
             )
 
+        # Fold RoPE into the Q/K norm op (norm + head-split + RoPE in one) wherever the
+        # op output still has the right positions. Q is never SP-gathered, so its RoPE
+        # always folds. K folds too EXCEPT on the explicit cross-attn SP-gather path
+        # below, where K is all-gathered between norm and RoPE — an in-norm RoPE can't
+        # straddle that gather, so there K keeps a separate post-gather RoPE. Ring-cross
+        # keeps K sharded with matching sharded k_rope_cos, so it folds fine.
+        is_cross = prompt_1BLP is not None
+        sp_factor = self.parallel_config.sequence_parallel.factor
+        use_ring_cross = is_cross and sp_factor > 1 and not kv_replicated and kv_logical_n is not None
+        k_explicit_gather = is_cross and sp_factor > 1 and not use_ring_cross
+        _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
+        _k_cos = _k_cos_pe if _k_cos_pe is not None else rope_cos
+        _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
+
+        # Only the fused op absorbs LTX's per-head RoPE; the composite two-op path
+        # (WAN_USE_FUSED_RMSNORM unset) asserts a non-per-head rope shape, so there RoPE
+        # stays a separate op below.
+        fuse_q_rope = _USE_FUSED_RMSNORM and rope_cos is not None
+        fuse_k_rope = fuse_q_rope and not k_explicit_gather
+        q_rope_kw = dict(rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat) if fuse_q_rope else {}
+        k_rope_kw = dict(rope_cos=_k_cos, rope_sin=_k_sin, trans_mat=trans_mat) if fuse_k_rope else {}
+
         # RMSNorm on Q/K fused with the head split (emits BHNE via num_heads_per_device).
-        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads)
-        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads)
+        q_BHNE = self.norm_q(q_1BNF, num_heads_per_device=self.n_local_heads, **q_rope_kw)
+        k_BHNE = self.norm_k(k_1BNF, num_heads_per_device=self.n_local_heads, **k_rope_kw)
 
         def create_heads(inp):
             out, _, _ = ttnn.experimental.nlp_create_qkv_heads(
@@ -453,13 +475,8 @@ class LTXAttention(Module):
         v_BHNE = create_heads(v_1BNF)
 
         # Cross-attn K/V must be full-seq for SDPA; gather across SP only when genuinely sharded.
-        is_cross = prompt_1BLP is not None
-        sp_factor = self.parallel_config.sequence_parallel.factor
-        _k_cos_pe = k_rope_cos if k_rope_cos is not None else rope_cos
-        # V2A cross: K/V stay SP-sharded (caller passes the sharded K-rope and kv_logical_n) so the
-        # ring SDPA fuses the gather instead of an explicit K/V all-gather + local SDPA.
-        use_ring_cross = is_cross and sp_factor > 1 and not kv_replicated and kv_logical_n is not None
-        if is_cross and sp_factor > 1 and not use_ring_cross:
+        # (is_cross / sp_factor / use_ring_cross / _k_cos_pe computed above for the RoPE-fold gate.)
+        if k_explicit_gather:
             sp_axis = self.parallel_config.sequence_parallel.mesh_axis
             if kv_replicated:
                 need_gather = False
@@ -472,15 +489,18 @@ class LTXAttention(Module):
                 k_BHNE = self.ccl_manager.all_gather_persistent_buffer(k_BHNE, dim=2, mesh_axis=sp_axis)
                 v_BHNE = self.ccl_manager.all_gather_persistent_buffer(v_BHNE, dim=2, mesh_axis=sp_axis)
 
+        # Separate RoPE for whatever wasn't folded into the norm op: Q when not fused
+        # (composite path), K when not fused (composite path, or the explicit-gather cross
+        # path where K was all-gathered above so RoPE runs on the full-seq K).
         if rope_cos is not None:
-            _k_cos = _k_cos_pe if _k_cos_pe is not None else rope_cos
-            _k_sin = k_rope_sin if k_rope_sin is not None else rope_sin
-            q_BHNE = ttnn.experimental.rotary_embedding_llama(
-                q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
-            k_BHNE = ttnn.experimental.rotary_embedding_llama(
-                k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
-            )
+            if not fuse_q_rope:
+                q_BHNE = ttnn.experimental.rotary_embedding_llama(
+                    q_BHNE, rope_cos, rope_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                )
+            if not fuse_k_rope:
+                k_BHNE = ttnn.experimental.rotary_embedding_llama(
+                    k_BHNE, _k_cos, _k_sin, trans_mat, compute_kernel_config=self.rope_compute_kernel_config
+                )
 
         if skip_qk:
             # STG perturbation: skip Q/K attention, use V passthrough.

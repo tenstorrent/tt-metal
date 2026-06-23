@@ -19,6 +19,12 @@ from .module import Module, Parameter
 # Set WAN_USE_FUSED_RMSNORM=1 to enable.
 _USE_FUSED_RMSNORM = os.getenv("WAN_USE_FUSED_RMSNORM") == "1"
 
+# Fabric links for the fused op's all-gather. 2 = the BH MUX fast path (matches the
+# standalone benchmark); must not exceed the eth channels available on the TP-axis
+# neighbor pair, or the op asserts (link_idx out of bounds). Buffer geometry and the
+# op MUST share this value (workers round to a multiple of num_links).
+_FUSED_NUM_LINKS = int(os.getenv("WAN_FUSED_RMSNORM_LINKS", "2"))
+
 
 class RMSNorm(Module):
     def __init__(
@@ -200,20 +206,21 @@ class DistributedRMSNorm(Module):
             state["weight"] = state["weight"].reshape(1, self.embedding_dim)
 
     def _ensure_fused_stats_buffer(
-        self, x: ttnn.Tensor, num_heads_per_device: int, rope_cos=None, rope_sin=None, trans_mat=None
+        self, x: ttnn.Tensor, num_heads_per_device: int, rope_cos=None, rope_sin=None, trans_mat=None, weight=None
     ):
         """Lazy-allocate the persistent stats buffer for the fused device op.
 
         The buffer's chunk/window geometry is computed by the SAME compute_sizing
         the device op uses, so it MUST be fed the same inputs that affect chunking:
         weight/RoPE (per-head-RoPE & streaming chunk clamp) and num_links (workers
-        are rounded to a multiple of num_links). The op here is invoked with the
-        default num_links (=1), so we leave create_stats_buffer at its default too;
-        but we MUST forward weight/RoPE or the buffer is sized for a different chunk
-        than the kernel writes, silently corrupting each chunk's last AG row.
+        are rounded to a multiple of num_links). Buffer and op share _FUSED_NUM_LINKS;
+        if they diverge the buffer is sized for a different chunk than the kernel
+        writes, silently corrupting each chunk's last AG row. Likewise we MUST forward
+        weight/RoPE for the same reason.
         """
         has_rope = rope_cos is not None
-        key = (tuple(x.shape), num_heads_per_device, has_rope)
+        weight = weight if weight is not None else (self.weight.data if self.weight is not None else None)
+        key = (tuple(x.shape), num_heads_per_device, has_rope, weight is not None)
         cache = getattr(self, "_fused_stats_buffer_cache", None)
         if cache is None:
             cache = {}
@@ -235,7 +242,8 @@ class DistributedRMSNorm(Module):
                     self.mesh_axis,
                     self.mesh_device,
                     num_heads_per_device=num_heads_per_device,
-                    weight=self.weight.data if self.weight is not None else None,
+                    num_links=_FUSED_NUM_LINKS,
+                    weight=weight,
                     transformation_mat=trans_mat,
                     rope_cos=rope_cos,
                     rope_sin=rope_sin,
@@ -260,6 +268,8 @@ class DistributedRMSNorm(Module):
         rope_sin=None,
         trans_mat=None,
         dtype=None,
+        modulation_scale=None,
+        modulation_shift=None,
     ) -> ttnn.Tensor:
         expected_dim = self.embedding_dim // self.mesh_width
         if x.shape[-1] != expected_dim:
@@ -269,11 +279,23 @@ class DistributedRMSNorm(Module):
             )
             raise ValueError(msg)
 
+        # adaLN fusion: `shift + norm(x) * scale_p1` == the op's `norm(x)*weight + bias`.
+        # The LTX block norms are weightless, so the weight slot carries the dynamic scale.
+        # Flatten the modulation to [rows, H]: rows==1 → per-channel broadcast (per-batch adaLN),
+        # rows==N → per-token (the distilled pipeline's per-token video timestep). The op handles
+        # both (weight/bias second-to-last dim must be 1 or the input token count). The composite
+        # path can't fuse bias → applies addcmul after instead.
+        fused_weight = self.weight.data if self.weight is not None else None
+        fused_bias = None
+        if modulation_scale is not None:
+            fused_weight = ttnn.reshape(modulation_scale, (-1, modulation_scale.shape[-1]))
+            fused_bias = ttnn.reshape(modulation_shift, (-1, modulation_shift.shape[-1]))
+
         if _USE_FUSED_RMSNORM:
             persistent_output_buffer = self._ensure_fused_stats_buffer(
-                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat
+                x, num_heads_per_device, rope_cos=rope_cos, rope_sin=rope_sin, trans_mat=trans_mat, weight=fused_weight
             )
-            return ttnn.experimental.wan_fused_distributed_rmsnorm(
+            out = ttnn.experimental.wan_fused_distributed_rmsnorm(
                 x,
                 self.mesh_axis,
                 self.mesh_device,
@@ -282,14 +304,17 @@ class DistributedRMSNorm(Module):
                 persistent_output_buffer=persistent_output_buffer,
                 epsilon=self.norm_eps,
                 num_heads_per_device=num_heads_per_device,
-                weight=self.weight.data if self.weight is not None else None,
+                weight=fused_weight,
+                bias=fused_bias,
                 compute_kernel_config=compute_kernel_config or self.compute_kernel_config,
                 transformation_mat=trans_mat,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 dtype=dtype,
+                num_preferred_links=_FUSED_NUM_LINKS,
                 use_device_op=True,
             )
+            return out
 
         stats = ttnn.experimental.wan_fused_rmsnorm_pre_allgather(
             x, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config or self.compute_kernel_config
@@ -314,6 +339,8 @@ class DistributedRMSNorm(Module):
             rope_sin=rope_sin,
             dtype=dtype,
         )
+        if modulation_scale is not None:  # composite path can't fuse bias — apply adaLN separately
+            x = ttnn.addcmul(modulation_shift, x, modulation_scale)
         return x
 
 
