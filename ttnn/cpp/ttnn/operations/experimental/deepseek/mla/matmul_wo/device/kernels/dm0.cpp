@@ -109,11 +109,6 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Expert loop
     //-------------------------------------------------------------------------
-    // Device 2.0 migration: legacy primitives retained: noc_async_read_set_trid /
-    // noc_async_read_one_packet_set_state / noc_async_read_one_packet_with_state_with_trid /
-    // noc_async_read_barrier_with_trid are the trid-pipelined state-machine API used to
-    // drive a triple-buffered DRAM read pipeline; Device 2.0 Noc wrapper does not yet expose
-    // typed equivalents for the set_state / with_state / with_trid family
     // Set w state once before loop (will be reused for all txns)
     noc_async_read_one_packet_set_state<true>(dram_noc_addr, w_bytes_per_txn, vchannel);
 
