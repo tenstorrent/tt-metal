@@ -29,6 +29,10 @@
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async/recv_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/recv_async_h2d/recv_async_h2d_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/send_recv_async/send_async_d2h/send_async_d2h_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/send_direct_async/send_direct_async_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/recv_direct_async/recv_direct_async_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/buffered_send/buffered_send_nanobind.hpp"
+#include "ttnn/operations/experimental/ccl/send_recv_async/buffered_recv/buffered_recv_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/neighbor_pad_async_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_halo/neighbor_pad_halo_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/slice_reshard_async/slice_reshard_async_nanobind.hpp"
@@ -67,6 +71,10 @@ void py_module(nb::module_& mod) {
     ccl::bind_recv_async(mod);
     ccl::bind_recv_async_h2d(mod);
     ccl::bind_send_async_d2h(mod);
+    ccl::bind_send_direct_async(mod);
+    ccl::bind_recv_direct_async(mod);
+    ccl::bind_buffered_send(mod);
+    ccl::bind_buffered_recv(mod);
     ccl::bind_neighbor_pad_async(mod);
     ccl::bind_neighbor_pad_halo(mod);
     ccl::bind_halo_scatter(mod);
