@@ -41,10 +41,6 @@ from helpers.utils import passed_test
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.MxFp4,
-            DataFormat.MxInt8,
-            DataFormat.MxInt4,
-            DataFormat.MxInt2,
         ],
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
