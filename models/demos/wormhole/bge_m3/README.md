@@ -190,6 +190,38 @@ TT_VISIBLE_DEVICES=0 pytest "models/demos/wormhole/bge_m3/tests/perf/perf.py::te
 TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_embedding_perf -s
 ```
 
+### Accuracy evaluation (MTEB)
+
+`demo/mteb_eval_minimal.py` evaluates embedding quality on standard
+[MTEB](https://github.com/embeddings-benchmark/mteb) tasks (`STSBenchmark`,
+`SICK-R`, `ArguAna`) and can compare the TT model against the HuggingFace
+reference side by side.
+
+Install the MTEB requirements first:
+
+```bash
+source python_env/bin/activate
+uv pip install -r models/demos/wormhole/bge_m3/demo/requirements_mteb.txt
+```
+
+Run STSBenchmark on a single chip (TT only):
+
+```bash
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
+    --task STSBenchmark --mode tt --batch-size 32 --max-seq-len 512
+```
+
+To also run the HuggingFace reference and print a side-by-side comparison, use
+`--mode both` (the default):
+
+```bash
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/mteb_eval_minimal.py \
+    --task STSBenchmark --mode both
+```
+
+The TT model scores ~0.846 (Spearman) on STSBenchmark, matching the BGE-M3
+reference. Results are written to `./mteb_eval_results/comparison.json`.
+
 ### `tracy_perf.py` — Kernel-level profiling
 
 Runs a single forward pass inside Tracy signposts for device-level op reports. Requires `TT_METAL_DEVICE_PROFILER=1` — the test will error if it's not set.
