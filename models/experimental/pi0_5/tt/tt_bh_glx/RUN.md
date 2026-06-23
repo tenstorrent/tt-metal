@@ -114,3 +114,124 @@ CSV lands at `generated/profiler/reports/<TS>/ops_perf_results_<TS>.csv`.
 SDPA is the largest single op (~2.16 ms @ seq=1024, O(seq²) → ~0.72 ms @ seq=768) and is
 at its compute floor. Head-parallel attention & fused/async CCL are gated by the fabric
 (4-node Linear, no ring) — see the design spec under `docs/superpowers/specs/`.
+
+---
+
+# 1×8 full e2e pipeline — vision + prefill + denoise on a single mesh
+
+`Pi0_5GLX1x8Pipeline` (pipeline_1x8.py) runs all three stages on the same 1×8
+mesh (chips 8–15): SigLIP DP (3 real + 5 zero-dummy cams), Prefill TP=8,
+replicated 5-step denoise. On-device CCL for cross-stage handoff (no host
+bounce, no fabric sockets). TIER A precompute eliminates per-step block-mod
+matmuls; staged sub-traces give true per-stage traced timing.
+
+## Setup
+
+```bash
+cd <tt-metal repo root>
+export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
+export PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
+set -a; source models/experimental/pi0_5/_bench_runs/pi05_production.env; set +a
+export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
+export PI0_TP=8 PI0_TP4_ATTN_HEADPAR=1 PI0_MLP_BS=1 PI0_MLP_FUSED_RS=0
+# camera count (3 = production training spec; 2-cam supported but PCC drops, see notes)
+export PI0_NUM_CAMERAS=3
+tt-smi -glx_reset   # always start clean
+```
+
+`P=models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py`
+
+## Tests
+
+| Test | What it does | Gating |
+|---|---|---|
+| `test_perf_1x8_eager` | One eager `sample_actions`; asserts shape + finite. | Always on |
+| `test_perf_1x8_traced` | Captures e2e trace; reports `input_upload / trace_exec / output_readback` over `PERF_ITERS=20` replays + eager per-stage proportions. | Always on |
+| `test_perf_1x8_traced_staged` | Captures 3 sub-traces (vision / prefill / denoise) on the same mesh, replays each separately, reports true per-stage traced ms. Trace region bumped to 256 MiB. | Always on |
+| `test_pcc_1x8_all_stages` | Vision + Prefill (isolated, same random prefix on both sides) + e2e (matched-seed noise) + estimated denoise = e2e / (vision · prefill). | `PI05_E2E_PCC=1` |
+
+### Run all tests
+
+```bash
+# Perf — e2e single-trace breakdown (host overhead split)
+python_env/bin/pytest -sq $P::test_perf_1x8_traced
+
+# Perf — per-stage traced breakdown via 3 sub-traces
+python_env/bin/pytest -sq $P::test_perf_1x8_traced_staged
+
+# PCC — vision + prefill + e2e + estimated denoise
+PI05_E2E_PCC=1 python_env/bin/pytest -sq $P::test_pcc_1x8_all_stages
+
+# 2-cam variant: rerun with PI0_NUM_CAMERAS=2
+PI0_NUM_CAMERAS=2 python_env/bin/pytest -sq $P::test_perf_1x8_traced_staged
+```
+
+Each test prints a startup `[env]` block listing which production flags are
+set — confirms the pi05_production.env was sourced.
+
+### Knobs (1×8 pipeline)
+
+| env | effect |
+|---|---|
+| `PI0_NUM_CAMERAS` | Real-camera count (1..8); padded to 8 with zero dummies inside the pipeline. |
+| `PERF_ITERS` | Timed iters in `test_perf_1x8_traced*` (default 20). |
+| `PI05_E2E_PCC` | Enable `test_pcc_1x8_all_stages` (default off; runs CPU torch ref → slow). |
+| `PI05_NUM_DENOISE_STEPS` | Override the 5-step default schedule (10 matches upstream training spec). |
+
+## Reference numbers (final commit `7f11f571159`, 2026-06-23)
+
+### Perf — per-stage TRACED breakdown (`test_perf_1x8_traced_staged`, PERF_ITERS=20)
+
+| Stage | 3-cam mean | 2-cam mean | Δ (3→2 cam) |
+|---|---:|---:|---:|
+| input_upload (host) | 13.70 ms | 13.86 ms | — |
+| **vision** (SigLIP DP, 8 chips) | **5.01 ms** | **5.01 ms** | 0 (DP pads to 8 cams regardless) |
+| **prefill** (TP=8) | **9.62 ms** | **8.27 ms** | −1.35 (1024→768 prefix) |
+| **denoise** (5 step, replicated) | **18.80 ms** | **17.69 ms** | −1.11 (shorter KV in cross-attn) |
+| output_readback | 1.27 ms | 1.30 ms | — |
+| **compute (v+p+d)** | **33.43 ms** | **30.98 ms** | −2.45 |
+| traced_total | 48.40 ms | 46.14 ms | — |
+
+### Perf — e2e single-trace replay (`test_perf_1x8_traced`, PERF_ITERS=20)
+
+| Bucket | 3-cam mean / min | 2-cam mean / min |
+|---|---:|---:|
+| input_upload | 14.68 / 13.66 ms | 7.10 / 6.23 ms |
+| **trace_exec (pure compute)** | **33.36 / 33.33 ms** | **30.85 / 30.84 ms** |
+| output_readback | 1.28 / 1.10 ms | 1.07 / 0.86 ms |
+| traced_total | 49.32 / 48.12 ms | 39.02 / 38.10 ms |
+
+`trace_exec` matches the staged sum to within 0.1 ms — sub-trace decomposition
+is faithful. `input_upload` is noisy host-side (host load); `trace_exec` is
+the canonical device-compute metric.
+
+### PCC (`test_pcc_1x8_all_stages`, PI05_E2E_PCC=1)
+
+| Stage | 3-cam | 2-cam | Target |
+|---|---:|---:|---:|
+| vision | 0.999684 ✓ | 0.999685 ✓ | ≥ 0.997 |
+| prefill | 0.994639 ✓ | 0.994757 ✓ | ≥ 0.99 |
+| denoise (est) | 0.997504 | 0.906915 | — |
+| **e2e** | **0.991842 ✓** | **0.901876 ✗** | ≥ 0.95 |
+
+**3-cam (production)** all stages pass. **2-cam e2e fails the 0.95 target** —
+vision and prefill PCCs are essentially identical to 3-cam, so the drift comes
+from the denoise loop interacting with a shorter prefix. Investigation pending.
+
+## Notes
+
+- The reported `denoise` PCC is the multiplicative-drift estimate `e2e /
+  (vision · prefill)` (rough proxy; PCC isn't strictly multiplicative). Pure
+  isolation would require injecting torch-computed KV into TT denoise (per-layer
+  shape/layout conversion — not implemented).
+- E2E noise matches via the "seed-around-both" pattern: `torch.manual_seed(SEED)`
+  before `pipe.sample_actions` AND before constructing `Pi0_5Model` then calling
+  its `sample_actions`. Empirically better than the 28-chip `seed(SEED+1) just
+  before each call` pattern on this 1×8 path (verified during dev).
+- TIER A precompute (commit 7f11f571159) brought 3-cam denoise from 24.6 → 18.8 ms
+  and e2e PCC from 0.986 → 0.992 — by moving 18×N_steps mod-Dense matmuls + the
+  final-norm Dense to host, fewer bf16 rounding cascades.
+- TIER B (`keep_padded` + phantom mask + `fill_implicit_tile_padding`) was
+  ported then reverted: +0.8 ms denoise for +0.003 PCC on this pipeline,
+  because the prefix is already tile-aligned (1024 / 768) so the prefix-side
+  benefit is zero. See commit notes if you want to revisit.
