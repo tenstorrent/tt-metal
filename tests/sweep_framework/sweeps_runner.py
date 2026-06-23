@@ -1289,21 +1289,31 @@ def disable_watcher():
 
 
 def _is_multidevice_ccl_module(module_name):
-    """CCL / multi-device ops (all_gather, all_reduce, reduce_scatter, ...) where
-    device-perf is unsupported (gather_single_test_perf returns None for >1 device).
-
-    The device profiler not only measures nothing for them, it deadlocks multi-device
-    FABRIC_2D ops: TT_METAL_DEVICE_PROFILER + MID_RUN_DUMP make the host read profiler
-    data from the ETH/fabric (erisc) cores mid-run, which hangs the gather (5-min
-    timeout -> FAIL_CRASH_HANG, then run_mailbox 0x40 wedge on the erisc cores). The
-    runner can't disable it per-op (it's a process-global env read at ttnn import), so
-    never enable it when the run targets a CCL module. Validated on T3K: --device-perf
-    + profiler -> hang; --device-perf + this gate -> 36/36 pass.
-    """
+    """True if module_name is a CCL / multi-device op (all_gather, all_reduce,
+    reduce_scatter, all_to_all, all_broadcast). Used to decide whether the device
+    profiler is safe to enable for the run -- see _should_skip_device_profiler."""
     if not module_name:
         return False
     _ccl = ("all_gather", "all_reduce", "reduce_scatter", "all_to_all", "all_broadcast")
     return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
+
+
+def _should_skip_device_profiler(config):
+    """The device profiler is safe for single-device and FABRIC_1D CCL runs, but it
+    deadlocks a FABRIC_2D mesh open: with the profiler on, the cq_prefetch dispatch
+    kernel that FABRIC_2D pushes onto the idle-erisc cores overflows the idle-erisc
+    code region (idle_erisc.elf segment 0x5544 > 0x5390 limit) and wedges the erisc
+    cores (run_mailbox 0x40) before any op runs. Confirmed on T3K 2x4 FABRIC_2D.
+
+    CCL ops pick their fabric family by mesh dimensionality (1D mesh -> FABRIC_1D/RING,
+    2D mesh -> FABRIC_2D), and the runner already splits the two into separate
+    --mesh-dims jobs. So skip the profiler for a CCL run only when it can touch a 2D
+    mesh: mesh_dims == "2d", or mesh_dims is None (a mixed run that could hit a 2D
+    vector). A 1D-only CCL run keeps device-perf (validated on T3K FABRIC_1D: real
+    per-RISC numbers, no hang). Non-CCL runs never use FABRIC_2D, so always keep it."""
+    if not _is_multidevice_ccl_module(config.module_name):
+        return False
+    return config.mesh_dims != "1d"
 
 
 def enable_profiler():
@@ -1476,16 +1486,15 @@ if __name__ == "__main__":
     if config.watcher:
         enable_watcher()
 
-    if config.measure_device_perf and not _is_multidevice_ccl_module(config.module_name):
+    if config.measure_device_perf and not _should_skip_device_profiler(config):
         enable_profiler()
     elif config.measure_device_perf:
         logger.info(
-            f"Skipping device profiler for multi-device CCL module(s) {config.module_name!r}: "
-            "device-perf is unsupported for >1 device (gather_single_test_perf bails on "
-            "get_num_devices()>1 before reading any profiler data), so enabling the profiler yields "
-            "no perf number for 1D or 2D; and on FABRIC_2D the profiler-instrumented dispatch kernel "
-            "(cq_prefetch on idle-erisc) overflows the idle-erisc code region at mesh open and "
-            "deadlocks. Skipping it for all CCL avoids the hang at no measurable cost."
+            f"Skipping device profiler for CCL module(s) {config.module_name!r} on a 2D/unspecified "
+            f"mesh (mesh_dims={config.mesh_dims!r}): FABRIC_2D pushes the cq_prefetch dispatch kernel "
+            "onto idle-erisc, whose profiler-instrumented build overflows the idle-erisc code region "
+            "at mesh open and wedges the device (idle_erisc.elf 0x5544 > 0x5390; run_mailbox 0x40). "
+            "1D-only CCL runs (--mesh-dims 1d) keep device-perf."
         )
 
     # Generate run contents description
