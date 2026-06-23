@@ -235,8 +235,12 @@ MX_FORMAT_MAX_NORMAL = {
     DataFormat.MxFp8P: float(
         ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).max
     ),  # 448.0 from dtype,
-    DataFormat.MxFp6R: 28.0,  # E3M2: 2^4 × 1.75
-    DataFormat.MxFp6P: 7.5,  # E2M3: 2^2 × 1.875
+    DataFormat.MxFp6R: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).max
+    ),  # 28.0 from dtype
+    DataFormat.MxFp6P: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).max
+    ),  # 7.5 from dtype
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).max
     ),  # 6.0 from dtype,
@@ -250,8 +254,12 @@ MX_FORMAT_MAX_NORMAL = {
 MX_FORMAT_MIN_NORMAL = {
     DataFormat.MxFp8R: float(ml_dtypes.finfo(ml_dtypes.float8_e5m2).smallest_normal),
     DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal),
-    DataFormat.MxFp6R: 0.25,  # E3M2: 2^-2
-    DataFormat.MxFp6P: 1.0,  # E2M3: 2^0
+    DataFormat.MxFp6R: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).smallest_normal
+    ),  # 0.25 from dtype
+    DataFormat.MxFp6P: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).smallest_normal
+    ),  # 1.0 from dtype
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal
     ),  # 1.0 from dtype
@@ -267,8 +275,10 @@ MX_FORMAT_MAX_SUBNORMAL = {
     * 0.75,
     DataFormat.MxFp8P: float(ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_normal)
     * 0.875,
-    DataFormat.MxFp6R: 0.1875,  # E3M2: 2^-2 × 0.75
-    DataFormat.MxFp6P: 0.875,  # E2M3: 2^0 × 0.875
+    DataFormat.MxFp6R: float(ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).smallest_normal)
+    * 0.75,  # (2^2 - 1) / 2^2, E3M2 has 2 mantissa bits
+    DataFormat.MxFp6P: float(ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).smallest_normal)
+    * 0.875,  # (2^3 - 1) / 2^3, E2M3 has 3 mantissa bits
     DataFormat.MxFp4: float(ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_normal)
     * 0.5,
 }
@@ -283,8 +293,12 @@ MX_FORMAT_MIN_SUBNORMAL = {
     DataFormat.MxFp8P: float(
         ml_dtypes.finfo(ml_dtypes.float8_e4m3fn).smallest_subnormal
     ),
-    DataFormat.MxFp6R: 0.0625,  # E3M2: 2^-2 × 0.25
-    DataFormat.MxFp6P: 0.125,  # E2M3: 2^0 × 0.125
+    DataFormat.MxFp6R: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e3m2fn).smallest_subnormal
+    ),  # 0.0625 from dtype
+    DataFormat.MxFp6P: float(
+        ml_dtypes.finfo(ml_dtypes.float6_e2m3fn).smallest_subnormal
+    ),  # 0.125 from dtype
     DataFormat.MxFp4: float(
         ml_dtypes.finfo(ml_dtypes.float4_e2m1fn).smallest_subnormal
     ),
