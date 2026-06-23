@@ -29,6 +29,7 @@ void kernel_main() {
 
     // True iff the factory flagged cb_inp (c_0) UnpackToDestFp32 (FP32 input + fp32_dest_acc_en).
     constexpr bool welford_unpack_fp32_active = get_named_compile_time_arg_val("welford_unpack_fp32_active") != 0;
+    constexpr bool fp32_dest = get_named_compile_time_arg_val("fp32_dest_acc_en") != 0;
 
     constexpr uint32_t cb_inp = tt::CBIndex::c_0;
     constexpr uint32_t cb_out = tt::CBIndex::c_14;
@@ -97,27 +98,19 @@ void kernel_main() {
 
         welford_finalize_to_row<W>(dst1, W - 1, *p_reciprocals);
 
-        cb_reserve_back(cb_x2, 2);
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile(dst1, cb_x2);
-        pack_tile(dst2, cb_x2);
-        cb_push_back(cb_x2, 2);
-        tile_regs_release();
-        reconfig_data_format(cb_x2, cb_x2);
-        pack_reconfig_data_format(cb_out);
-        transpose_wh_init_short(cb_x2);
-        tile_regs_acquire();
-        cb_wait_front(cb_x2, 2);
-        transpose_wh_tile(cb_x2, 0, dst0);
-        transpose_wh_tile(cb_x2, 1, dst1);
-        cb_pop_front(cb_x2, 2);
-        cb_reserve_back(cb_out, 2);
+        // Transpose mean (dst1) and variance (dst2) tiles in-place in DEST.
+        // This avoids a round-trip through intermediate CB c_1 which produces
+        // corrupted tile face layout when the CB uses Float32 format.
+        transpose_wh_dest_init_short<fp32_dest>();
+        transpose_wh_dest<fp32_dest>(dst1);
+        transpose_wh_dest<fp32_dest>(dst2);
 
+        pack_reconfig_data_format(cb_out);
+        cb_reserve_back(cb_out, 2);
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(dst0, cb_out);
         pack_tile(dst1, cb_out);
+        pack_tile(dst2, cb_out);
         cb_push_back(cb_out, 2);
         tile_regs_release();
     }
