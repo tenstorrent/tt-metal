@@ -197,7 +197,7 @@ tt-smi -glx_reset
 |---|---|
 | `PI0_NUM_CAMERAS` | Real-camera count (1..8); padded to 8 with zero dummies inside the pipeline. |
 | `PERF_ITERS` | Timed iters in `test_perf_1x8_traced*` (default 20). |
-| `WARMUP_ITERS` | Trace-replay warmup iters before timing (default 3). For tracy, set to 1 to slim the capture. |
+| `WARMUP_ITERS` | Trace-replay warmup iters before timing (default **0**). The pipeline's `capture_trace*` already runs an internal eager warmup that JIT-compiles all kernels, so explicit replay-warmup isn't needed. The 2CQ test reports `mean (excl iter 0)` which drops the slight first-replay cost (~1 ms). Set to 1 if you want to drop that iter from the mean directly. |
 | `PI05_E2E_PCC` | Enable `test_pcc_1x8_all_stages` (default off; runs CPU torch ref → slow). |
 | `PI05_NUM_DENOISE_STEPS` | Override the 5-step default schedule (10 matches upstream training spec). |
 
@@ -206,11 +206,14 @@ tt-smi -glx_reset
 End-to-end recipe for capturing a tracy profile of the 1×8 pipeline and
 annotating it into a per-stage, per-layer CSV.
 
-### 1. Capture (1 warmup + 1 timed iter)
+### 1. Capture (1 timed iter — eager warmup is internal)
 
-`WARMUP_ITERS=1 PERF_ITERS=1` is the minimum that produces a usable canonical
-inference in the CSV (any less and the trace allocator's first-replay overhead
-contaminates the numbers).
+`WARMUP_ITERS=0 PERF_ITERS=1` is enough — `capture_trace*` already runs an
+internal eager warmup that JIT-compiles every kernel before the trace is
+recorded, so no explicit replay-warmup is needed for the kernels. The single
+timed iter still produces a usable canonical inference in the CSV. (Use
+`WARMUP_ITERS=1` if you want the first-replay's small ~1 ms first-call cost
+to land in a separate inference instead of the timed one.)
 
 ```bash
 # Setup (same env as perf runs)
@@ -221,7 +224,7 @@ set -a; source models/experimental/pi0_5/_bench_runs/pi05_production.env; set +a
 export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
 export PI0_TP=8 PI0_TP4_ATTN_HEADPAR=1 PI0_MLP_BS=1 PI0_MLP_FUSED_RS=0
 export PI0_NUM_CAMERAS=3   # or 2 for the 2-cam capture
-export PERF_ITERS=1 WARMUP_ITERS=1
+export PERF_ITERS=1 WARMUP_ITERS=0
 tt-smi -glx_reset
 
 # Tracy run — ~4-5 minutes (most of it is JIT'ing kernels for the first iter)

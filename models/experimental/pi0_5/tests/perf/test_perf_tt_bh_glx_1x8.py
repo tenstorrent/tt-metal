@@ -47,7 +47,12 @@ SEED = 42
 N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])
 LANG_LEN = 256
 PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
-WARMUP_ITERS = int(os.environ.get("WARMUP_ITERS", "3"))
+# Explicit replay-warmup default = 0: capture_trace / capture_traces_staged
+# already run an internal eager warmup that JIT-compiles every kernel before
+# trace recording. The first traced replay does have a small first-call cost
+# (~1 ms above steady-state), which the 2CQ test reports via the "excl iter 0"
+# mean — set WARMUP_ITERS=1 if you prefer to drop that from the timing.
+WARMUP_ITERS = int(os.environ.get("WARMUP_ITERS", "0"))
 
 # Production env flags worth asserting present (set by _bench_runs/pi05_production.env).
 # Logged at test start so the run-log shows which optimizations were active.
