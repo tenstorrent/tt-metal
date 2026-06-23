@@ -1161,7 +1161,14 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,
-        /*is_tp_1=*/(args.ring_size == 1) ? 1u : 0u,
+        // is_tp_1 must match the factory-level is_tp_1 (== ring_size==1 ||
+        // per_head_norm). per_head_norm reduces locally per head (no AG), so the
+        // compute must take the is_tp_1 path too: push the num_heads per-row stat
+        // tiles straight into stats_gathered_cb (sized for num_heads) and consume
+        // them locally in POST. With the old (ring_size==1)-only form, per_head
+        // ring>1 routed PRE to stats_local_cb (sized 1 tile, no consumer) and
+        // wedged on the 2nd head's cb_reserve_back.
+        /*is_tp_1=*/static_cast<uint32_t>(is_tp_1 ? 1u : 0u),
         // Phase 9 packed AG CBs (used when is_tp_1 == 0 AND use_mux). For
         // is_tp_1 the compute kernel sidesteps the packed path entirely
         // (pushes col-0 stats straight into stats_gathered_cb).

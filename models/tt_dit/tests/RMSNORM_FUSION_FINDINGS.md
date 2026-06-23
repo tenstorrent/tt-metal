@@ -103,28 +103,23 @@ TP=8 RING — `det=OK` (0/9, bit-exact), `pcc(fused:torch)` 99.985–100.00%, fl
 Same big-shape-wins / small-shape-wash pattern as Wan/LTX (the N=64 TP=4 config is the one
 slight regression at 0.89×, a dispatch-bound shape with little to fold).
 
-> **Known issue — `per_head_norm=True` (FLUX.2 QK-norm) DEADLOCKS on `ring_size>1`.**
-> Per-head RMSNorm (reduce over head_dim per head, no AG → `is_tp_1`) works on a 1×1 mesh
-> (device-op unit test, up to 8 heads) but **hangs on a TP-sharded submesh** (4-/8-wide
-> ring). The test harness emits only `per_head_norm=False` FLUX configs by default; set
-> `WAN_FLUX_PHN=1` to also emit the (hanging) `per_head_norm=True` configs for fix work.
+> **`per_head_norm=True` (FLUX.2 QK-norm) on `ring_size>1` — FIXED (2026-06-23).**
+> All 8 FLUX TP=4/TP=8 ring `per_head_norm=True` configs now run deterministically
+> (det=OK, PCC 99.81–100.00% vs fp32 torch). Enable with `WAN_FLUX_PHN=1`.
 >
-> *Root cause (DPRINT-localized):* the per-head PRE does `num_heads_per_device` back-to-back
-> row-reductions **within one chunk** (whole-row norm does exactly one per chunk, separated
-> by the AG-wait/POST boundary). After ~3 the compute math/pack pipeline wedges — the SAME
-> matmul-reduce → pack wedge already documented for the POST whole-row reduce (fixed there by
-> the FPU eltwise-add, commit `11bc6a0e056`). A two-pass DPRINT test was the clincher: all 12
-> per-head **squares** complete on every device (`pre_pass1_done` ×32), then the 12 **reduces**
-> wedge before producing any output.
+> *Real root cause:* NOT the matmul-reduce → pack wedge the "reduce fan-out" theory
+> assumed (every LLK-level workaround failed because the LLK was never the problem).
+> The program factory passed the compute kernel an `is_tp_1` compile-time arg of
+> `(ring_size==1)` only, while the writer got `(ring_size==1) || per_head_norm`. So
+> for `per_head_norm && ring_size>1` the compute took the `is_tp_1==0` branch →
+> `stats_dest_cb = stats_local_cb`, which for per-head is sized **1 tile** with **no
+> consumer** (the writer is drain-only). PRE produces `num_heads` stat tiles/row, so
+> it blocked on `cb_reserve_back` at the **2nd head's** reduce — read as a "reduce wedge".
 >
-> *Ruled out (each verified on-device):* (1) deepen `pre_intermediate_cb` 1→`num_heads`; (2)
-> force `num_workers=1`; (3) split PRE into squares-pass + reduces-pass; (4) `reduce_uninit()`
-> drain between reduces; (5) raw classic `reduce_tile` (non-matmul) instead of the matmul
-> `compute_kernel_lib::reduce`; (6) + explicit scaler `cb_wait_front`. All still hang in the
-> reduce fan-out. The POST eltwise-add fix doesn't transfer directly: POST sums `ring_size`
-> *tiles* (`add_tiles`), but the per-head PRE needs a *column* sum within a tile — an LLK-level
-> change (transpose+reduce, or a fused squared-row-reduce LLK). Needs compute-kernel/LLK
-> expertise, not black-box galaxy iteration.
+> *Fix:* set compute's `is_tp_1` arg to the factory-level `is_tp_1` (incl. `per_head_norm`).
+> PRE then pushes the `num_heads` per-row stat tiles straight into `stats_gathered_cb`
+> (sized for `num_heads`) and POST consumes them locally — self-contained, no AG, matching
+> the drain-only writer. One line. See `ISSUE_per_head_norm_multidevice_deadlock.md`.
 
 ---
 
