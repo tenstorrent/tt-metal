@@ -19,6 +19,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include "api/dataflow/circular_buffer.h"
+#include "api/debug/dprint.h"
+#include "api/debug/dprint_tile.h"
 
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
@@ -487,6 +489,10 @@ void kernel_main() {
                 tile_regs_wait();
                 pack_tile(dst0, write_cb_id);
                 tile_regs_release();
+                DPRINT_PACK(
+                    "WLF outcb t0 r0: {}\n",
+                    TileSlice(
+                        write_cb_id, 0, SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1}, true, false));
                 write_cb.push_back(1);
             }
         }
