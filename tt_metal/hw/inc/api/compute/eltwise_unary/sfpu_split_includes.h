@@ -192,6 +192,10 @@
 #include "api/compute/eltwise_unary/digamma.h"
 #endif
 
+#if SFPU_OP_TANHSHRINK_INCLUDE
+#include "api/compute/eltwise_unary/tanhshrink.h"
+#endif
+
 #if SFPU_OP_POLYGAMMA_INCLUDE
 #include "api/compute/eltwise_unary/polygamma.h"
 #endif

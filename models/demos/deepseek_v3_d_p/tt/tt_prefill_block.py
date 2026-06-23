@@ -197,8 +197,10 @@ class TtPrefillBlock(LightweightModule):
         layer_num: Optional[int] = None,
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
+        routing_use_l1_small_for_semaphores: bool = False,
     ):
         super().__init__()
+        self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
         # In chunked prefill the flat KV-cache slot is cache_user_id * layer_num + cache_layer_idx, so
         # layer_num must be the model's actual layer count — there is no safe default to fall back to.
         assert not is_chunked or layer_num is not None, "chunked prefill requires layer_num (model layer count)"
@@ -284,6 +286,7 @@ class TtPrefillBlock(LightweightModule):
                 weight_cache_path=weight_cache_path,
                 layer_idx=layer_idx,
                 dispatch_buffer_capacity_factor=dispatch_buffer_capacity_factor,
+                routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
             )
         else:
             self.ffn = TtFfn(
@@ -313,6 +316,7 @@ class TtPrefillBlock(LightweightModule):
         dispatch_buffer_capacity_factor,
         weight_cache_path=None,
         layer_idx=0,
+        routing_use_l1_small_for_semaphores=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -361,6 +365,7 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_idx=layer_idx,
             overlap_shared_expert_with_dispatch=True,
+            routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
         )
 
     def forward(

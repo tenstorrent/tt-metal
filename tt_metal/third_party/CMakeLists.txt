@@ -96,6 +96,14 @@ set(BUILD_SHARED_LIBS OFF)
 # Disable Tracy's -march=native for portable CLI binaries in CI.
 set(NO_ISA_EXTENSIONS ON)
 
+# Tracy's csvexport/capture each include cmake/config.cmake, which sets
+# RULE_LAUNCH_COMPILE ccache as a GLOBAL property.  tt-metal already wires
+# ccache via CMAKE_CXX_COMPILER_LAUNCHER (cmake/ccache.cmake), so having both
+# active causes double-wrapping: the outer ccache sees the entire
+# "cmake -E env ... ccache clang++ -c file.cpp" as its argument list and
+# rejects every tt_metal translation unit as "Multiple source files".
+# Suppress Tracy's own ccache logic; ours handles it correctly.
+set(NO_CCACHE ON)
 add_subdirectory(tracy/csvexport)
 add_subdirectory(tracy/capture)
 
@@ -150,10 +158,6 @@ add_custom_target(
 )
 
 # Tracy profiler WASM viewer (Emscripten).
-# Fetch emsdk via CPM, but install toolchain artifacts under the build tree (not shared CPM cache).
-# Note emsdk has to be installed the repo just has the scripts, not the toolchain artifacts.
-set(_cpm_source_cache_save "${CPM_SOURCE_CACHE}")
-set(CPM_SOURCE_CACHE "")
 CPMAddPackage(
     NAME emsdk
     GITHUB_REPOSITORY emscripten-core/emsdk
@@ -161,8 +165,6 @@ CPMAddPackage(
         0dfff153dc3c596948ac088b8853006c570f2609 # 5.0.7-4-g0dfff15
     DOWNLOAD_ONLY YES
 )
-set(CPM_SOURCE_CACHE "${_cpm_source_cache_save}")
-unset(_cpm_source_cache_save)
 
 set(EMSDK_DIR "${emsdk_SOURCE_DIR}")
 set(EMSCRIPTEN_TOOLCHAIN_FILE "${EMSDK_DIR}/upstream/emscripten/cmake/Modules/Platform/Emscripten.cmake")
