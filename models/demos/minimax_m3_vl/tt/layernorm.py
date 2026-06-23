@@ -20,12 +20,9 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.minimax_m3_vl.tt.common import hifi4_compute_config, mesh_mapper
 
 TILE = ttnn.TILE_SIZE  # 32
-
-
-def _is_mesh_device(device) -> bool:
-    return type(device).__name__ == "MeshDevice"
 
 
 class M3VLLayerNorm(LightweightModule):
@@ -68,7 +65,7 @@ class M3VLLayerNorm(LightweightModule):
         torch_bias = bias.detach().to(torch.bfloat16).view(1, 1, self.dim).expand(1, TILE, self.dim).contiguous()
 
         mem_cfg = weight_memory_config if weight_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _is_mesh_device(mesh_device) else None
+        mm = mesh_mapper(mesh_device)
 
         self.weight = ttnn.as_tensor(
             torch_weight,
@@ -76,7 +73,7 @@ class M3VLLayerNorm(LightweightModule):
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem_cfg,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mm,
         )
         self.bias = ttnn.as_tensor(
             torch_bias,
@@ -84,7 +81,7 @@ class M3VLLayerNorm(LightweightModule):
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=mem_cfg,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mm,
         )
 
     @classmethod
@@ -103,11 +100,9 @@ class M3VLLayerNorm(LightweightModule):
         """
         assert isinstance(ref, torch.nn.LayerNorm), f"expected nn.LayerNorm, got {type(ref).__name__}"
         # normalized_shape is a tuple; LayerNorm normalizes over the last
-        # `len(normalized_shape)` dims. For MoonViT it's always a 1-tuple.
+        # `len(normalized_shape)` dims. For M3-VL it's always a 1-tuple (1280).
         if len(ref.normalized_shape) != 1:
-            raise NotImplementedError(
-                f"MoonVisionLayerNorm only supports 1-d normalized_shape, got {ref.normalized_shape}"
-            )
+            raise NotImplementedError(f"M3VLLayerNorm only supports 1-d normalized_shape, got {ref.normalized_shape}")
         return cls(
             mesh_device=mesh_device,
             dim=ref.normalized_shape[0],
@@ -125,12 +120,7 @@ class M3VLLayerNorm(LightweightModule):
             bias=self.bias,
             epsilon=self.eps,
             memory_config=memory_config,
-            compute_kernel_config=ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi4,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            ),
+            compute_kernel_config=hifi4_compute_config(fp32_dest_acc=False),
         )
 
     # `__call__` is provided by LightweightModule and dispatches to forward.

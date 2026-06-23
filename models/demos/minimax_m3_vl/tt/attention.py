@@ -37,15 +37,8 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.minimax_m3_vl.tt.common import hifi4_compute_config, mesh_mapper, next_tile_multiple
 from models.demos.minimax_m3_vl.tt.rope import rope_rotate_matrix
-
-
-def _is_mesh_device(device) -> bool:
-    return type(device).__name__ == "MeshDevice"
-
-
-def _next_tile_multiple(x: int, tile: int = ttnn.TILE_SIZE) -> int:
-    return ((x + tile - 1) // tile) * tile
 
 
 def _pack_wqkv_weight(
@@ -113,15 +106,17 @@ class M3VLAttention(LightweightModule):
         dtype=ttnn.bfloat16,
     ):
         super().__init__()
+        assert (
+            num_heads * head_dim == hidden_size
+        ), f"num_heads*head_dim ({num_heads}*{head_dim}) != hidden_size {hidden_size}"
         self.device = mesh_device
         self.dtype = dtype
-        self.hidden_size = int(hidden_size)
         self.num_heads = int(num_heads)
         self.head_dim = int(head_dim)
-        self.padded_head_dim = _next_tile_multiple(self.head_dim)
+        self.padded_head_dim = next_tile_multiple(self.head_dim)
         self.scale = 1.0 / math.sqrt(self.head_dim)
 
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _is_mesh_device(mesh_device) else None
+        mm = mesh_mapper(mesh_device)
 
         self.wqkv = ttnn.as_tensor(
             wqkv_weight,
@@ -129,7 +124,7 @@ class M3VLAttention(LightweightModule):
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mm,
         )
         self.wqkv_bias = (
             ttnn.as_tensor(
@@ -138,7 +133,7 @@ class M3VLAttention(LightweightModule):
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
+                mesh_mapper=mm,
             )
             if wqkv_bias is not None
             else None
@@ -150,7 +145,7 @@ class M3VLAttention(LightweightModule):
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mm,
         )
         self.wo_bias = (
             ttnn.as_tensor(
@@ -159,7 +154,7 @@ class M3VLAttention(LightweightModule):
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=mesh_mapper,
+                mesh_mapper=mm,
             )
             if wo_bias is not None
             else None
@@ -173,15 +168,10 @@ class M3VLAttention(LightweightModule):
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mm,
         )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        self.compute_kernel_config = hifi4_compute_config()
 
     @classmethod
     def from_torch(
@@ -195,7 +185,7 @@ class M3VLAttention(LightweightModule):
     ) -> "M3VLAttention":
         for n in ("q_proj", "k_proj", "v_proj", "out_proj"):
             assert hasattr(ref_attn, n), f"expected {n} on {type(ref_attn).__name__}"
-        padded = _next_tile_multiple(head_dim)
+        padded = next_tile_multiple(head_dim)
         wqkv = _pack_wqkv_weight(
             ref_attn.q_proj.weight.data,
             ref_attn.k_proj.weight.data,
@@ -240,14 +230,14 @@ class M3VLAttention(LightweightModule):
         assert (
             cos_pt.shape[-1] == self.padded_head_dim
         ), f"cos head_dim {cos_pt.shape[-1]} != padded {self.padded_head_dim} (use rope_cos_sin_padded)"
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.device) if _is_mesh_device(self.device) else None
+        mm = mesh_mapper(self.device)
         cos_tt = ttnn.from_torch(
             cos_pt.view(1, 1, *cos_pt.shape).to(torch.bfloat16).contiguous(),
             device=self.device,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mm,
         )
         sin_tt = ttnn.from_torch(
             sin_pt.view(1, 1, *sin_pt.shape).to(torch.bfloat16).contiguous(),
@@ -255,7 +245,7 @@ class M3VLAttention(LightweightModule):
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mm,
         )
         return cos_tt, sin_tt
 

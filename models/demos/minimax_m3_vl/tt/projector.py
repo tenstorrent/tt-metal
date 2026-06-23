@@ -23,36 +23,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-
-def _is_mesh_device(device) -> bool:
-    return type(device).__name__ == "MeshDevice"
-
-
-def _as_linear_weight(mesh_device, torch_w: torch.Tensor, dtype) -> ttnn.Tensor:
-    w = torch_w.detach().to(torch.bfloat16).transpose(-2, -1).contiguous()  # [in, out]
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _is_mesh_device(mesh_device) else None
-    return ttnn.as_tensor(
-        w,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper,
-    )
-
-
-def _as_linear_bias(mesh_device, torch_b: torch.Tensor, dtype) -> ttnn.Tensor:
-    b = torch_b.detach().to(torch.bfloat16).view(1, 1, 1, -1).contiguous()
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _is_mesh_device(mesh_device) else None
-    return ttnn.as_tensor(
-        b,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper,
-    )
+from models.demos.minimax_m3_vl.tt.common import as_linear_bias, as_linear_weight, hifi4_compute_config
 
 
 class M3VLProjector(LightweightModule):
@@ -73,21 +44,16 @@ class M3VLProjector(LightweightModule):
         for n in ("linear_1", "linear_2", "merge_linear_1", "merge_linear_2"):
             assert hasattr(ref_projector, n), f"expected {n} on {type(ref_projector).__name__}"
 
-        self.linear_1_w = _as_linear_weight(mesh_device, ref_projector.linear_1.weight.data, dtype)
-        self.linear_1_b = _as_linear_bias(mesh_device, ref_projector.linear_1.bias.data, dtype)
-        self.linear_2_w = _as_linear_weight(mesh_device, ref_projector.linear_2.weight.data, dtype)
-        self.linear_2_b = _as_linear_bias(mesh_device, ref_projector.linear_2.bias.data, dtype)
-        self.merge_1_w = _as_linear_weight(mesh_device, ref_projector.merge_linear_1.weight.data, dtype)
-        self.merge_1_b = _as_linear_bias(mesh_device, ref_projector.merge_linear_1.bias.data, dtype)
-        self.merge_2_w = _as_linear_weight(mesh_device, ref_projector.merge_linear_2.weight.data, dtype)
-        self.merge_2_b = _as_linear_bias(mesh_device, ref_projector.merge_linear_2.bias.data, dtype)
+        self.linear_1_w = as_linear_weight(mesh_device, ref_projector.linear_1.weight.data, dtype)
+        self.linear_1_b = as_linear_bias(mesh_device, ref_projector.linear_1.bias.data, dtype)
+        self.linear_2_w = as_linear_weight(mesh_device, ref_projector.linear_2.weight.data, dtype)
+        self.linear_2_b = as_linear_bias(mesh_device, ref_projector.linear_2.bias.data, dtype)
+        self.merge_1_w = as_linear_weight(mesh_device, ref_projector.merge_linear_1.weight.data, dtype)
+        self.merge_1_b = as_linear_bias(mesh_device, ref_projector.merge_linear_1.bias.data, dtype)
+        self.merge_2_w = as_linear_weight(mesh_device, ref_projector.merge_linear_2.weight.data, dtype)
+        self.merge_2_b = as_linear_bias(mesh_device, ref_projector.merge_linear_2.bias.data, dtype)
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        self.compute_kernel_config = hifi4_compute_config()
 
     @classmethod
     def from_torch(cls, mesh_device, ref_projector, spatial_merge_size, dtype=ttnn.bfloat16) -> "M3VLProjector":

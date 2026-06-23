@@ -30,16 +30,13 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.minimax_m3_vl.tt.common import hifi4_compute_config, mesh_mapper
 
 PATCH_SIZE = 14
 IN_CHANNELS = 3
 TEMPORAL_PATCH_SIZE = 2
 # Flattened patch dim: 3 * 2 * 14 * 14 = 1176.
 PATCH_FLAT_DIM = IN_CHANNELS * TEMPORAL_PATCH_SIZE * PATCH_SIZE * PATCH_SIZE
-
-
-def _is_mesh_device(device) -> bool:
-    return type(device).__name__ == "MeshDevice"
 
 
 class M3VLPatchEmbed(LightweightModule):
@@ -76,22 +73,16 @@ class M3VLPatchEmbed(LightweightModule):
 
         # Flatten to ttnn.linear convention [in, out].
         flat_weight = flat.detach().to(torch.bfloat16).transpose(0, 1).contiguous()  # [1176, out_dim]
-        mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _is_mesh_device(mesh_device) else None
         self.weight = ttnn.as_tensor(
             flat_weight,
             device=mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=mesh_mapper(mesh_device),
         )
 
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        self.compute_kernel_config = hifi4_compute_config()
 
     @classmethod
     def from_torch(
@@ -109,17 +100,6 @@ class M3VLPatchEmbed(LightweightModule):
             proj_weight=weight,
             dtype=dtype,
         )
-
-    @staticmethod
-    def flatten_patches(x: torch.Tensor) -> torch.Tensor:
-        """(L, 3, 2, 14, 14) -> (L, 1176). For tests / host preprocessing of raw patches."""
-        assert x.ndim == 5 and x.shape[1:] == (
-            IN_CHANNELS,
-            TEMPORAL_PATCH_SIZE,
-            PATCH_SIZE,
-            PATCH_SIZE,
-        ), f"expected (L, {IN_CHANNELS}, {TEMPORAL_PATCH_SIZE}, {PATCH_SIZE}, {PATCH_SIZE}), got {tuple(x.shape)}"
-        return x.reshape(x.shape[0], -1)
 
     def forward(self, x_flat: ttnn.Tensor, memory_config: Optional["ttnn.MemoryConfig"] = None) -> ttnn.Tensor:
         """Apply the per-patch projection.

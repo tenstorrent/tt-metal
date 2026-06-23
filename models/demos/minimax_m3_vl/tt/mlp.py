@@ -29,43 +29,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-
-
-def _is_mesh_device(device) -> bool:
-    return type(device).__name__ == "MeshDevice"
-
-
-def _as_linear_weight(mesh_device, torch_w: torch.Tensor, dtype) -> ttnn.Tensor:
-    """Move a torch Linear weight to device in ttnn.linear convention.
-
-    PyTorch stores nn.Linear.weight as [out_features, in_features].
-    ttnn.linear expects [in_features, out_features] (operand-b semantics
-    for matmul), so we transpose.
-    """
-    w = torch_w.detach().to(torch.bfloat16).transpose(-2, -1).contiguous()
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _is_mesh_device(mesh_device) else None
-    return ttnn.as_tensor(
-        w,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper,
-    )
-
-
-def _as_linear_bias(mesh_device, torch_b: torch.Tensor, dtype) -> ttnn.Tensor:
-    """Bias goes in as [1, 1, 1, out_features], TILE_LAYOUT, replicated."""
-    b = torch_b.detach().to(torch.bfloat16).view(1, 1, 1, -1).contiguous()
-    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if _is_mesh_device(mesh_device) else None
-    return ttnn.as_tensor(
-        b,
-        device=mesh_device,
-        dtype=dtype,
-        layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=mesh_mapper,
-    )
+from models.demos.minimax_m3_vl.tt.common import as_linear_bias, as_linear_weight, hifi4_compute_config
 
 
 class M3VLMLP(LightweightModule):
@@ -100,19 +64,13 @@ class M3VLMLP(LightweightModule):
         assert fc1_bias.shape[0] == intermediate_size, f"fc1.bias shape {fc1_bias.shape}"
         assert fc2_bias.shape[0] == hidden_size, f"fc2.bias shape {fc2_bias.shape}"
 
-        self.fc1_weight = _as_linear_weight(mesh_device, fc1_weight, dtype)
-        self.fc1_bias = _as_linear_bias(mesh_device, fc1_bias, dtype)
-        self.fc2_weight = _as_linear_weight(mesh_device, fc2_weight, dtype)
-        self.fc2_bias = _as_linear_bias(mesh_device, fc2_bias, dtype)
+        self.fc1_weight = as_linear_weight(mesh_device, fc1_weight, dtype)
+        self.fc1_bias = as_linear_bias(mesh_device, fc1_bias, dtype)
+        self.fc2_weight = as_linear_weight(mesh_device, fc2_weight, dtype)
+        self.fc2_bias = as_linear_bias(mesh_device, fc2_bias, dtype)
 
-        # HiFi4 for the matmul accumulation — same as our LayerNorm,
-        # consistent with Qwen-VL/Llama-Vision precedents.
-        self.compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,  # FP32 dst accum for MLP matmuls — small accuracy boost.
-            packer_l1_acc=False,
-        )
+        # HiFi4 + FP32 dst accum for the matmuls (small accuracy boost).
+        self.compute_kernel_config = hifi4_compute_config()
 
     @classmethod
     def from_torch(
