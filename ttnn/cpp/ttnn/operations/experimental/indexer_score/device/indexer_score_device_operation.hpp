@@ -29,8 +29,8 @@ struct IndexerScoreDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    // Re-checks the non-hashed invariants (placement/layout, slot < B, kv_len bounds) since the slot/kv_len
-    // values can change on a hit. See validate_non_hashed.
+    // Only re-checks the runtime values (slot < B, kv_len bounds) that can change on a hit; the hash pins
+    // everything else. See validate_runtime_values.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

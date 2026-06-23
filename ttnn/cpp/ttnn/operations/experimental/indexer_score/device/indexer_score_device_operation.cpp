@@ -16,11 +16,11 @@
 namespace ttnn::operations::experimental::indexer_score {
 
 namespace {
-// Invariants the hash does NOT pin, so they can change on a cache hit and must be re-checked every dispatch
-// (miss AND hit): device residency/allocation, q/w layout, the indexed-cache slot, and runtime kv_len. The
-// hash keys k's full spec (shape incl. T/B, dtype, layout) + whether indexed -- but not the slot/kv_len
-// values (runtime args). Shared by validate_on_program_cache_miss/_hit.
-void validate_non_hashed(const operation_attributes_t& attrs, const tensor_args_t& t) {
+// Miss-only checks: either hash-pinned (placement, non-indexed k batch shape) so they can't differ on a
+// hit, or caller errors the framework rules out anyway (device residency, allocation, same-device) and
+// never checked on a hit pre-PR. The slot/kv_len values that do differ on a hit live in
+// validate_runtime_values.
+void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& q = t.q;
     const auto& k = t.k;
     const auto& w = t.weights;
@@ -37,17 +37,29 @@ void validate_non_hashed(const operation_attributes_t& attrs, const tensor_args_
     TT_FATAL(
         q.device() == k.device() && q.device() == w.device(), "indexer_score q, k, weights must be on the same device");
 
-    // Indexed KV cache: k is [B,1,T,D] with B slots, cache_batch_idx picks one (q/weights are batch 1). B is
-    // hashed, the slot is not -> re-checked on hit too. Non-indexed: k is [1,1,T,D].
-    const uint32_t kB = k.logical_shape()[0];
+    // Non-indexed k must be single-slot [1,1,T,D]. has_value() and kB are both hashed, so this only fires on
+    // a miss (the indexed slot < B check is a runtime value -> validate_runtime_values).
+    if (!attrs.cache_batch_idx.has_value()) {
+        const uint32_t kB = k.logical_shape()[0];
+        TT_FATAL(kB == 1, "indexer_score k batch must be 1 unless cache_batch_idx is set (got {})", kB);
+    }
+}
+
+// The slot/kv_len values: hashed only by has_value(), so they can differ on a cache hit and feed kernel
+// addressing (page offset / read width). Cheap integer checks on shape metadata, run on miss AND hit.
+void validate_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const auto& q = t.q;
+    const auto& k = t.k;
+
+    // Indexed KV cache: k is [B,1,T,D]; cache_batch_idx picks a slot (q/weights are batch 1). An
+    // out-of-range slot offsets every k page id OOB.
     if (attrs.cache_batch_idx.has_value()) {
+        const uint32_t kB = k.logical_shape()[0];
         TT_FATAL(
             attrs.cache_batch_idx.value() < kB,
             "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
             attrs.cache_batch_idx.value(),
             kB);
-    } else {
-        TT_FATAL(kB == 1, "indexer_score k batch must be 1 unless cache_batch_idx is set (got {})", kB);
     }
 
     // Runtime KV length: k is a persistent buffer of (hashed) length T; kv_len <= T is the valid prefix this
@@ -120,9 +132,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         "indexer_score requires fp32_dest_acc_en=false (bf16 DEST; the custom LLK is not validated for fp32 DEST)");
     TT_FATAL(!dst_full_sync_en, "indexer_score requires dst_full_sync_en=false (the kernel is built half-sync)");
 
-    // Placement, layout, same-device and the indexed-cache batch relationship live in validate_non_hashed
-    // (also re-run on cache hit, since the slot/kv_len values aren't hashed).
-    validate_non_hashed(attrs, tensor_args);
+    // Placement, layout, same-device and the non-indexed k batch shape are hash-pinned (miss only). The
+    // slot/kv_len runtime values are re-checked on every dispatch (here and on a cache hit).
+    validate_static(attrs, tensor_args);
+    validate_runtime_values(attrs, tensor_args);
 
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4 && w_shape.rank() == 4, "q, k, weights must be rank 4");
@@ -131,8 +144,8 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         w_shape[1] == q_shape[1] && w_shape[2] == q_shape[2] && w_shape[3] == 1,
         "weights must be [B, Hi, Sq, 1] matching q [B, Hi, Sq, D]");
-    // q/weights are always batch 1; k's batch is the cache-slot count B (checked in validate_non_hashed), so
-    // it is intentionally NOT tied to q's batch here.
+    // q/weights are always batch 1; k's batch is the cache-slot count B (checked in validate_static /
+    // validate_runtime_values), so it is intentionally NOT tied to q's batch here.
     TT_FATAL(q_shape[0] == w_shape[0], "q/weights batch mismatch ({} vs {})", q_shape[0], w_shape[0]);
     TT_FATAL(q_shape[0] == 1, "q/weights batch 1 only, got {}", q_shape[0]);
 
@@ -199,9 +212,9 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Everything else is pinned by the hash (passed at miss time); only the non-hashed slot/kv_len values can
-    // change on a hit, so re-validate them against this dispatch's k.
-    validate_non_hashed(attrs, tensor_args);
+    // Equal hash already pins everything else (placement, shapes, configs); only the slot/kv_len values can
+    // differ on a hit, so re-check just those. Static invariants stay miss-only (validate_static).
+    validate_runtime_values(attrs, tensor_args);
 }
 
 IndexerScoreDeviceOperation::spec_return_value_t IndexerScoreDeviceOperation::compute_output_specs(
