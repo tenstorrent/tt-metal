@@ -82,8 +82,9 @@ jobs:
           fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-          # Enable debug logging from the ccache-storage-s3 helper binary.
-          echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          if [ "${CCACHE_S3_DEBUG}" = "true" ]; then
+            echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          fi
           # Explicit Garage endpoint as an AWS SDK env var fallback. The helper reads this
           # if ccache does not forward |endpoint_url=... as CRSH_ATTR_* (defensive belt-and-suspenders).
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
@@ -131,7 +132,7 @@ jobs:
             AWS_SECRET_ACCESS_KEY="${{ env.AWS_SECRET_ACCESS_KEY }}"
             AWS_DEFAULT_REGION=garage
             AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900
-            CRSH_LOGFILE=/tmp/ccache-storage-s3.log
+            CRSH_LOGFILE="${{ env.CRSH_LOGFILE }}"
             CIBW_ENABLE_TRACY="${{ inputs.tracy && 'ON' || 'OFF' }}"
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
             CIBW_ENABLE_LTO="${{ inputs.enable-lto && 'ON' || 'OFF' }}"

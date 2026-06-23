@@ -440,7 +440,9 @@ jobs:
           fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-          echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          if [ "${CCACHE_S3_DEBUG}" = "true" ]; then
+            echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          fi
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
       - name: Verify S3 connectivity (write / read-back / delete)
@@ -643,9 +645,7 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
 
-          # Publish ccache-storage-s3 helper debug log (set via CRSH_LOGFILE).
-          # Show first 30 lines (startup: version, bucket, CRSH_NUM_ATTR, Attribute: lines)
-          # and last 80 lines (recent activity / errors) so both ends are visible.
+          # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
           if [ -f /tmp/ccache-storage-s3.log ]; then
             echo "=== ccache-storage-s3 log (first 30 lines) ==="
             head -30 /tmp/ccache-storage-s3.log
@@ -657,8 +657,6 @@ jobs:
             echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
             tail -200 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-          else
-            echo "WARNING: /tmp/ccache-storage-s3.log not found — helper may not have been spawned by ccache"
           fi
 
       - name: ☁️ Upload packages
