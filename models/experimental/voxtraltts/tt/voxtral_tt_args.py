@@ -253,6 +253,11 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 # Prefill: L1 interleaved activations (Matmul/LayerNorm/SDPA Tracy labels; lower DRAM BW).
                 # Disable with VOXTRAL_TEXT_PREFILL_L1=0 if prefill OOMs on very long sequences.
                 self.prefill_activations_l1 = os.environ.get("VOXTRAL_TEXT_PREFILL_L1", "1") != "0"
+                # Keep the fast L1 prefill path only for short prompts. At the 512-token BH cutoff,
+                # MLP prefill matmul CBs can collide with L1-resident activations, so longer prefills
+                # fall back to the standard DRAM activation path.
+                self.prefill_l1_max_seq_len = int(os.environ.get("VOXTRAL_TEXT_PREFILL_L1_MAX_SEQ_LEN", "256"))
+                self._current_prefill_seq_len = None
                 self._apply_voxtral_decode_mlp_dram_grid_overrides()
             finally:
                 if prev_hf_model is None:
@@ -460,7 +465,12 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
             return state_dict
 
         def _prefill_l1_mem(self, mode: Mode) -> bool:
-            return bool(getattr(self, "prefill_activations_l1", False)) and mode == Mode.PREFILL
+            if not (bool(getattr(self, "prefill_activations_l1", False)) and mode == Mode.PREFILL):
+                return False
+            seq_len = getattr(self, "_current_prefill_seq_len", None)
+            if seq_len is None:
+                seq_len = self.max_seq_len
+            return seq_len <= getattr(self, "prefill_l1_max_seq_len", 256)
 
         def get_residual_mem_config(self, mode: Mode, prefetcher: Prefetcher = None):
             if self._prefill_l1_mem(mode):

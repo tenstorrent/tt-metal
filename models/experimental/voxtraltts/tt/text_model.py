@@ -205,11 +205,14 @@ class VoxtralTTTextModel:
         )
 
     def prepare_inputs_prefill(self, *args, **kwargs):
+        tokens = args[0] if args else kwargs.get("tokens")
+        if hasattr(tokens, "shape") and len(tokens.shape) >= 1:
+            self.inner.args._current_prefill_seq_len = int(tokens.shape[-1])
+
         tt_embd, *rest = self.inner.prepare_inputs_prefill(*args, **kwargs)
-        if getattr(self.inner.args, "prefill_activations_l1", False):
-            target = self.inner.args.get_residual_mem_config(Mode.PREFILL, self.inner.prefetcher)
-            if tt_embd.memory_config() != target:
-                tt_embd = ttnn.to_memory_config(tt_embd, target)
+        target = self.inner.args.get_residual_mem_config(Mode.PREFILL, self.inner.prefetcher)
+        if tt_embd.memory_config() != target:
+            tt_embd = ttnn.to_memory_config(tt_embd, target)
         return (tt_embd, *rest)
 
     def prepare_inputs_decode(self, *args, **kwargs):

@@ -74,6 +74,11 @@ def _build_text_config(model_name_or_path: str) -> MistralConfig:
         max_position_embeddings=config.max_position_embeddings,
         rms_norm_eps=config.norm_eps,
         rope_theta=config.rope_theta,
+        # Voxtral's text backbone uses full causal attention (no sliding window): the config defines no
+        # sliding-window layers and the TT model runs with sliding_window=None. MistralConfig otherwise
+        # defaults sliding_window=4096, which would make this reference attend to only the last 4096 keys
+        # and diverge from the model at context >4096 (decode logits PCC ~0.96 at 8192). Disable it.
+        sliding_window=getattr(config, "sliding_window", None),
         attention_dropout=0.0,
         bos_token_id=1,
         eos_token_id=2,

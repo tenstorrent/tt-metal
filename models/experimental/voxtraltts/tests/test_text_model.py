@@ -43,6 +43,27 @@ def _is_ci() -> bool:
     return os.environ.get("CI") == "true"
 
 
+def _use_paged_kv(seq_len: int) -> bool:
+    return seq_len > 256
+
+
+def _build_decode_page_table_tt(model, seq_len: int, *, max_seq_len: int, paged_block_size: int = 32):
+    """Full-pool page table for paged-KV decode, or ``None`` when paged KV is disabled.
+
+    When ``seq_len > 256`` the model allocates its KV cache in **paged** layout
+    (``[max_num_blocks, n_kv_heads, block_size, head_dim]``), so ``paged_update_cache`` /
+    paged SDPA require a page table — mirrors ``VoxtralTTSPipeline._build_page_table``. Built
+    once per test and reused across all KV-fill + decode steps (single device allocation).
+    """
+    if not _use_paged_kv(seq_len):
+        return None
+    return build_voxtral_text_page_table_tt(
+        model.inner.mesh_device,
+        max_seq_len=max_seq_len,
+        paged_block_size=paged_block_size,
+    )
+
+
 def _create_text_model_for_logit_pcc(device):
     return create_real_voxtral_text_model_or_skip(
         device,
@@ -121,10 +142,19 @@ def _assert_decode_multistep_logits_pcc(
     *,
     pcc_threshold: float,
     log_name: str,
+    page_table_tt: ttnn.Tensor | None = None,
+    early_pcc_threshold: float = 0.99,
+    early_steps: int = 25,
 ) -> None:
+    """Teacher-forced decode logits PCC for each step (TT ``process_output_decode`` vs HF cache).
+
+    The first ``early_steps`` steps are held to the stricter ``early_pcc_threshold`` (0.99); later
+    steps (where small KV/RoPE differences have had more positions to accumulate) are allowed down to
+    ``pcc_threshold`` (0.98).
+    """
     seq_len = prompt_tokens.shape[1]
     decode_steps = decode_tokens.shape[1]
-    _fill_tt_kv_cache(model, prompt_tokens)
+    _fill_tt_kv_cache(model, prompt_tokens, page_table_tt=page_table_tt)
 
     hf_ref = hf_voxtral_text_reference_or_skip()
     hf_past = hf_ref(input_ids=prompt_tokens, use_cache=True).past_key_values
@@ -132,18 +162,32 @@ def _assert_decode_multistep_logits_pcc(
     for step in range(decode_steps):
         current_pos = seq_len + step
         step_token = decode_tokens[:, step]
-        tt_last_logits = _tt_decode_step_logits(model, step_token, current_pos)
+        tt_tokens, tt_current_pos, tt_rope_idxs, tt_page_table = model.prepare_inputs_decode(
+            step_token, torch.tensor([current_pos], dtype=torch.int64)
+        )
+        tt_decode_logits, _ = model.inner.ttnn_decode_forward(
+            tt_tokens,
+            tt_current_pos,
+            rot_mat_idxs=tt_rope_idxs,
+            page_table=page_table_tt if page_table_tt is not None else tt_page_table,
+            kv_cache=None,
+        )
+        tt_last_logits = model.inner.process_output_decode(tt_decode_logits, B=1, S=1, is_tokens=False)[0, 0].float()
 
         hf_step = hf_ref(input_ids=step_token.view(1, 1), past_key_values=hf_past, use_cache=True)
         hf_past = hf_step.past_key_values
         ref_last_logits = hf_step.logits[0, -1].float()
 
-        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=pcc_threshold)
+        step_pcc_threshold = early_pcc_threshold if step < early_steps else pcc_threshold
+        passing, pcc_value = comp_pcc(ref_last_logits, tt_last_logits, pcc=step_pcc_threshold)
         logger.info(
             f"{log_name} seq_len={seq_len} steps={decode_steps} step={step} "
-            f"pos={current_pos} PCC={float(pcc_value):.6f}"
+            f"pos={current_pos} PCC={float(pcc_value):.6f} threshold={step_pcc_threshold}"
         )
-        assert passing, f"Decode logits mismatch vs HF (seq_len={seq_len}, step={step}, pos={current_pos}): {pcc_value}"
+        assert passing, (
+            f"Step {step} decode logits mismatch vs reference "
+            f"(seq_len={seq_len}, pos={current_pos}): {pcc_value} < {step_pcc_threshold}"
+        )
 
 
 def _decode_multistep_logit_pcc_cases():
@@ -182,10 +226,18 @@ def test_text_model_decode_multistep_logit_pcc(device, reset_seeds, seq_len, dec
     model = _create_text_model_for_logit_pcc(device)
     prompt_tokens = tale_prompt_tokens(seq_len)
     decode_tokens = tale_continuation_tokens(seq_len, decode_steps)
+
+    logger.info(
+        f"test_text_model_decode_tail_context_multistep_pcc: "
+        f"prompt_len={seq_len}, decode_steps={decode_steps}, max_pos={seq_len + decode_steps - 1}, "
+        f"tale_tokens=True"
+    )
+    page_table_tt = _build_decode_page_table_tt(model, seq_len, max_seq_len=DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN)
     _assert_decode_multistep_logits_pcc(
         model,
         prompt_tokens,
         decode_tokens,
         pcc_threshold=_DECODE_LOGIT_PCC_THRESHOLD,
         log_name=f"decode_multistep_{decode_steps}",
+        page_table_tt=page_table_tt,
     )
