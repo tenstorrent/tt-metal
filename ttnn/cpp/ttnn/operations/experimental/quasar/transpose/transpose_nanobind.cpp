@@ -37,7 +37,7 @@ void bind_transpose(nb::module_& mod) {
                 * :attr:`memory_config`: Memory Config of the output tensor
         )doc";
 
-    ttnn::bind_function<"transpose">(
+    ttnn::bind_function<"transpose", "ttnn.experimental.quasar.">(
         mod,
         doc,
 
