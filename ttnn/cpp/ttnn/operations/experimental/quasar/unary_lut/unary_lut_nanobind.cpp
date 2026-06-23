@@ -58,7 +58,9 @@ void bind_unary_lut(nb::module_& mod) {
                float nr_c2,
                uint32_t nr_iters,
                uint32_t nr_n,
-               uint32_t nr_reciprocal) {
+               uint32_t nr_reciprocal,
+               uint32_t asym_mask,
+               uint32_t dom_class) {
                 new (self) LutConfig{
                     eval_method,
                     poly_degree,
@@ -85,7 +87,9 @@ void bind_unary_lut(nb::module_& mod) {
                     nr_c2,
                     nr_iters,
                     nr_n,
-                    nr_reciprocal};
+                    nr_reciprocal,
+                    asym_mask,
+                    dom_class};
             },
             nb::arg("eval_method") = 0,
             nb::arg("poly_degree") = 2,
@@ -112,7 +116,9 @@ void bind_unary_lut(nb::module_& mod) {
             nb::arg("nr_c2") = 2.2533049f,
             nb::arg("nr_iters") = 2,
             nb::arg("nr_n") = 2,
-            nb::arg("nr_reciprocal") = 0)
+            nb::arg("nr_reciprocal") = 0,
+            nb::arg("asym_mask") = 0,
+            nb::arg("dom_class") = 0)
         .def_rw("eval_method", &LutConfig::eval_method)
         .def_rw("poly_degree", &LutConfig::poly_degree)
         .def_rw("num_segments", &LutConfig::num_segments)
@@ -138,7 +144,9 @@ void bind_unary_lut(nb::module_& mod) {
         .def_rw("nr_c2", &LutConfig::nr_c2)
         .def_rw("nr_iters", &LutConfig::nr_iters)
         .def_rw("nr_n", &LutConfig::nr_n)
-        .def_rw("nr_reciprocal", &LutConfig::nr_reciprocal);
+        .def_rw("nr_reciprocal", &LutConfig::nr_reciprocal)
+        .def_rw("asym_mask", &LutConfig::asym_mask)
+        .def_rw("dom_class", &LutConfig::dom_class);
 
     const auto* doc = R"doc(
             Applies an embedded piecewise-LUT activation to a fully height/block-sharded

@@ -68,6 +68,18 @@ struct LutConfig {
     uint32_t nr_n = 2;           // root order (2 = sqrt/rsqrt)
     uint32_t nr_reciprocal = 0;  // 0 = sqrt, 1 = rsqrt
 
+    // ---- Asymptotic factoring. The tail segments of some deployed picks are fit as
+    // f(x) = dominant(x) * correction(x) (is_asymptotic=True in the fitter CSV): the CSV
+    // stores the CORRECTION polynomial as the segment's ordinary Horner coeffs, and the
+    // TRUE value is dominant(x) times the Horner result. The driver parses the per-segment
+    // is_asymptotic column into a bitmask (bit SEG => segment SEG is asymptotic) and the
+    // shared dominant_factor class into dom_class; the factory bakes them as the
+    // LUT_ASYM_MASK / LUT_DOMINANT_CLASS defines so the kernel multiplies by dominant(x)
+    // for the flagged segments. dom_class == 0 (default) => no factoring; tail segments are
+    // never dropped. Class codes mirror precision/eval.py DOMINANT_FACTORS (see kernel).
+    uint32_t asym_mask = 0;  // bitmask over segments; bit SEG set => segment SEG is asymptotic
+    uint32_t dom_class = 0;  // dominant-factor class code (0 = none)
+
     bool operator==(const LutConfig&) const = default;
 };
 

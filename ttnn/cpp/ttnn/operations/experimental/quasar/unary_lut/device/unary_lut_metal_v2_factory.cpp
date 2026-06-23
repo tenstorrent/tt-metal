@@ -131,6 +131,17 @@ m2::KernelSpec::CompilerOptions::Defines make_lut_defines(const std::optional<Lu
             defines.emplace("LUT_NR_RECIPROCAL", std::to_string(l.nr_reciprocal));
         }
     }
+
+    // ---- Asymptotic-factoring defines. For a deployed pick whose tail segments are fit as
+    // f(x) = dominant(x) * correction(x), the driver parsed the per-segment is_asymptotic
+    // column into asym_mask (bit SEG => segment SEG asymptotic) and the shared dominant_factor
+    // class into dom_class. Emit them so the kernel multiplies the per-segment Horner result by
+    // dominant(x). dom_class == 0 => emit nothing (kernel default = no factoring, byte-identical
+    // to the bare-poly cascade). Generic over all classes; no per-activation special-casing.
+    if (l.dom_class != 0) {
+        defines.emplace("LUT_ASYM_MASK", std::to_string(l.asym_mask) + "u");
+        defines.emplace("LUT_DOMINANT_CLASS", std::to_string(l.dom_class));
+    }
     return defines;
 }
 

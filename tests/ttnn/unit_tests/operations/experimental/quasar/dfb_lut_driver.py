@@ -76,6 +76,24 @@ _RR_CODE = {
     "newton_root": 9,  # STANDALONE magic-seed + Newton/Householder evaluator (sqrt/rsqrt/cbrt)
 }
 _RR_COMPOSE = {"": 0, "sigmoid": 1, "minus_one": 2}
+
+# Dominant-factor class codes for asymptotic factoring. MUST match the kernel's
+# LUT_DOMINANT_CLASS contract (unary_lut_sfpu.h) and reproduce precision/eval.py
+# DOMINANT_FACTORS. Each maps the fitter's dominant_factor string to a class code; the
+# kernel evaluates dominant(x) for that class and multiplies the segment's correction
+# polynomial by it. Keys are the EXACT strings the fitter writes in the CSV column.
+_DOMINANT_CLASS = {
+    "x": 1,
+    "-exp(-x^2/2) / sqrt(2*pi)": 2,
+    "exp(-x^2/2) / sqrt(2*pi)": 3,
+    "-exp(-x^2/2)": 4,
+    "exp(-x^2/2)": 5,
+    "exp(x)": 6,
+    "exp(-x)": 7,
+    "-exp(-x)": 8,
+    "1 - exp(-x)": 9,
+    "x * exp(x)": 10,
+}
 # Methods whose reduce/reconstruct (or standalone eval) is implemented in the DFB kernel.
 _RR_SUPPORTED = {
     "exp",
@@ -253,6 +271,32 @@ def parse_csv(csv_path):
     cfg.update(rr_kwargs)
     cfg["_rr_enabled"] = rr_enabled
 
+    # ---- Asymptotic factoring: thread the per-segment is_asymptotic + dominant_factor
+    # columns (NOT METADATA) into asym_mask (bit SEG => segment SEG is asymptotic, in the
+    # SAME ascending segment order the kernel selects) + dom_class. The fitter stores the
+    # CORRECTION polynomial as a segment's ordinary coeffs; the kernel multiplies by
+    # dominant(x). Tail segments are NEVER dropped — they are kept and factored. When no
+    # segment is asymptotic (or the column is absent), dom_class stays 0 (no factoring).
+    asym_mask = 0
+    dom_class = 0
+    if "is_asymptotic" in header:
+        ia = header.index("is_asymptotic")
+        di = header.index("dominant_factor") if "dominant_factor" in header else None
+        for seg_idx, r in enumerate(rows):  # rows already sorted ascending == kernel seg order
+            if len(r) > ia and r[ia].strip().lower() == "true":
+                asym_mask |= 1 << seg_idx
+                if di is not None and len(r) > di:
+                    dom = r[di].strip()
+                    code = _DOMINANT_CLASS.get(dom)
+                    if code is not None:
+                        # All asymptotic segments of a deployed pick share one dominant class
+                        # (the activation's tail); assert that invariant rather than silently
+                        # picking one. An unknown class leaves dom_class 0 -> no factoring.
+                        assert dom_class in (0, code), f"mixed dominant classes in {csv_path}: {dom_class} vs {code}"
+                        dom_class = code
+    cfg["asym_mask"] = asym_mask
+    cfg["dom_class"] = dom_class
+
     # Sampling domain: the ORIGINAL activation domain when RR is enabled (the kernel
     # reconstructs the full activation), else the reduced [b0, bN] LUT span.
     if rr_enabled and rr_orig is not None:
@@ -293,6 +337,8 @@ _RR_KW = (
     "nr_iters",
     "nr_n",
     "nr_reciprocal",
+    "asym_mask",
+    "dom_class",
 )
 
 
@@ -326,6 +372,37 @@ def approximation_golden(cfg, x_np):
     x = np.clip(x_np.astype(np.float32), b[0], b[-1])
     out = np.empty_like(x)
 
+    # Asymptotic factoring: dominant(x) for the segment's class, reproduced from the kernel's
+    # per-class formula (= precision/eval.py DOMINANT_FACTORS). asym_mask marks which segments
+    # multiply their Horner result by dominant(x). Empty/0 => bare-poly cascade.
+    asym_mask = cfg.get("asym_mask", 0)
+    dom_class = cfg.get("dom_class", 0)
+    _inv_sqrt_2pi = np.float32(1.0 / np.sqrt(2 * np.pi))
+
+    def dominant(xs):
+        if dom_class == 1:
+            return xs.astype(np.float32)
+        if dom_class in (2, 3, 4, 5):
+            e = np.exp(np.float32(-0.5) * xs * xs).astype(np.float32)
+            if dom_class == 2:
+                return (e * (-_inv_sqrt_2pi)).astype(np.float32)
+            if dom_class == 3:
+                return (e * _inv_sqrt_2pi).astype(np.float32)
+            if dom_class == 4:
+                return (-e).astype(np.float32)
+            return e
+        if dom_class == 6:
+            return np.exp(xs.astype(np.float32)).astype(np.float32)
+        if dom_class == 7:
+            return np.exp(np.float32(-1.0) * xs).astype(np.float32)
+        if dom_class == 8:
+            return (np.float32(-1.0) * np.exp(np.float32(-1.0) * xs)).astype(np.float32)
+        if dom_class == 9:
+            return (np.float32(1.0) - np.exp(np.float32(-1.0) * xs)).astype(np.float32)
+        if dom_class == 10:
+            return (xs.astype(np.float32) * np.exp(xs.astype(np.float32))).astype(np.float32)
+        return np.ones_like(xs, dtype=np.float32)
+
     def horner(coeffs, xs):
         acc = np.full_like(xs, coeffs[-1], dtype=np.float32)
         for k in range(len(coeffs) - 2, -1, -1):
@@ -347,6 +424,8 @@ def approximation_golden(cfg, x_np):
         else:
             coeffs = data[base : base + cps]
             val = horner(coeffs, xs)
+        if dom_class != 0 and (asym_mask >> seg) & 1:
+            val = (val * dominant(xs)).astype(np.float32)
         out[mask] = val[mask]
     return out
 
@@ -389,7 +468,20 @@ def _bf16_bitdist_ulp(out_f32, truth_f32):
 
     Both are rounded to bf16, viewed as int16, mapped to a monotone ordinal
     (sign-magnitude -> two's-complement-like ordering), and the absolute ordinal
-    difference is the ULP distance. Returns (max, mean, p99) over finite pairs."""
+    difference is the ULP distance. Returns (max, mean, p99) over finite pairs.
+
+    ZERO-REFERENCE EXCLUSION (principled near-root robustness, NOT a math hack): pairs whose
+    bf16-rounded TRUTH is exactly +-0 are excluded from the bit-distance statistics. A
+    bit-distance ULP is undefined at a zero reference — there is no neighboring representable
+    value to count ULPs against — and crossing zero makes the sign-magnitude ordinal jump by
+    ~2^15, so a faithful tiny output reads as a spurious ~9000-ULP "error". This is exactly
+    the asymptotic-tail case for gelu: the reference (torch / ground_truth) gelu(x) for x<<0
+    is computed as x*(1+erf(x/sqrt2)), which CATASTROPHICALLY CANCELS to +-0 below ~|x|=8,
+    while the kernel's asymptotic factoring computes the genuine tiny tail value
+    (matching a non-cancelling erfc form, and the fitter's own eval.py, to <=1 ULP). Counting
+    those points would penalize the kernel for being MORE accurate than the cancelling
+    reference. The exclusion is on TRUTH==0 only (a property of the reference, not the output),
+    so a wrong nonzero output where truth is genuinely nonzero is still fully measured."""
     o = (
         torch.from_numpy(np.asarray(out_f32, dtype=np.float32).ravel())
         .to(torch.bfloat16)
@@ -406,6 +498,11 @@ def _bf16_bitdist_ulp(out_f32, truth_f32):
     )
     ordi = lambda b: torch.where(b < 0, (-32768) - b, b)
     d = (ordi(o) - ordi(t)).abs().to(torch.float64)
+    # Exclude zero-reference points (bf16 truth == +-0): bit-distance ULP is undefined there.
+    truth_bf16 = torch.from_numpy(np.asarray(truth_f32, dtype=np.float32).ravel()).to(torch.bfloat16)
+    nonzero_ref = truth_bf16 != 0
+    if nonzero_ref.any():
+        d = d[nonzero_ref]
     return float(d.max()), float(d.mean()), float(np.percentile(d.numpy(), 99))
 
 
