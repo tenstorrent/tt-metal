@@ -153,26 +153,17 @@ void UnifiedRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             out.dtype() == t.x.dtype(), "optional_output dtype ({}) must match x dtype ({})", out.dtype(), t.x.dtype());
         const auto& out_shape = out.padded_shape();
-        TT_FATAL(
-            out_shape.rank() == x_shape.rank(),
-            "optional_output rank ({}) must match x rank ({})",
-            out_shape.rank(),
-            x_shape.rank());
-        // Common to both modes: the N (emb) dim and all leading dims must match
-        // x — the writer's tile-row stride is out_shape[-1]/TILE, and leading
-        // dims index the same logical (1,..,1,M,N) tensor.
+        TT_FATAL(out_shape.rank() >= 2, "optional_output must have rank >= 2, got rank {}", out_shape.rank());
         TT_FATAL(
             out_shape[-1] == x_shape[-1],
             "optional_output last dim ({}) must match x last dim ({})",
             out_shape[-1],
             x_shape[-1]);
         for (int i = 0; i < static_cast<int>(out_shape.rank()) - 2; ++i) {
-            TT_FATAL(
-                out_shape[i] == x_shape[i],
-                "optional_output leading dim {} ({}) must match x ({})",
-                i,
-                out_shape[i],
-                x_shape[i]);
+            TT_FATAL(out_shape[i] == 1, "optional_output leading dim {} ({}) must be 1", i, out_shape[i]);
+        }
+        for (int i = 0; i < static_cast<int>(x_shape.rank()) - 2; ++i) {
+            TT_FATAL(x_shape[i] == 1, "x leading dim {} ({}) must be 1", i, x_shape[i]);
         }
         // Mode-specific M (row) dim: direct-write targets the larger shared
         // buffer (M >= x's M, tile-aligned; the writer bounds rows by

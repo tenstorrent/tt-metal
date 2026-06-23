@@ -408,7 +408,9 @@ def test_extract_2d_indices_matches_torch_slice(device):
 )
 def test_extract_leading_singleton_dims_matches_2d(device, leading_dims):
     """A global_tensor presented with leading singleton dims must extract the same
-    slice as the equivalent flat 2D buffer (the op treats it as effectively 2D)."""
+    slice as the equivalent flat 2D buffer (the op treats it as effectively 2D).
+    The output mirrors the input's rank: those leading singleton dims are carried
+    through, so a (1, 1, rows, hidden) input yields a (1, 1, max_tokens, hidden) output."""
     hidden_dim = 128
     starts = [0, 32, 64, 96]
     counts = [32, 17, 32, 32]
@@ -426,14 +428,17 @@ def test_extract_leading_singleton_dims_matches_2d(device, leading_dims):
     out = _run(g, s, c, global_expert_id=expert_id, max_tokens=max_tokens)
     out_torch = ttnn.to_torch(out)
 
-    # Output is always flat 2D [max_tokens, hidden] regardless of input rank.
-    assert out_torch.shape == (max_tokens, hidden_dim)
+    # Output carries the same leading singleton dims as the input, with the last two
+    # dims being [max_tokens, hidden].
+    assert out_torch.shape == (*leading_dims, max_tokens, hidden_dim)
+    # Flatten the leading singleton dims for the row-slice comparison.
+    out_flat = out_torch.reshape(max_tokens, hidden_dim)
     rows = _ceil_to_tile(counts[expert_id])
     global_quantized = ttnn.to_torch(g).reshape(global_rows, hidden_dim)
     expected = global_quantized[starts[expert_id] : starts[expert_id] + rows, :]
-    torch.testing.assert_close(out_torch[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
+    torch.testing.assert_close(out_flat[:rows, :].float(), expected.float(), atol=0.0, rtol=0.0)
     original = global_torch[starts[expert_id] : starts[expert_id] + rows, :]
-    assert_with_pcc(original.float(), out_torch[:rows, :].float(), pcc=0.9999)
+    assert_with_pcc(original.float(), out_flat[:rows, :].float(), pcc=0.9999)
 
 
 # ---------------------------------------------------------------------------

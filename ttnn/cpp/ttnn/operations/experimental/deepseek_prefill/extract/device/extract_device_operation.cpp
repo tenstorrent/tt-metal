@@ -149,12 +149,22 @@ void ExtractDeviceOperation::validate_on_program_cache_hit(
 ExtractDeviceOperation::spec_return_value_t ExtractDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& global_tensor = tensor_args.global_tensor;
-    const auto hidden_dim = global_tensor.logical_shape()[-1];
-    // Output shape: [max_dispatched_tokens_per_expert, hidden_dim], TILE layout,
-    // dtype inherited from global_tensor (BFLOAT8_B or BFLOAT16), DRAM interleaved.
-    // Kernels fill only the first ceil_tile(counts[global_expert_id]) rows/tokens;
-    // the rest is undefined.
-    const ttnn::Shape output_shape({operation_attributes.max_dispatched_tokens_per_expert, hidden_dim});
+    const auto& global_shape = global_tensor.logical_shape();
+    const auto rank = global_shape.rank();
+    const auto hidden_dim = global_shape[-1];
+    // Output shape mirrors global_tensor's rank: the last two dims are
+    // [max_dispatched_tokens_per_expert, hidden_dim] and every leading dim is 1
+    // (global_tensor's leading dims are validated to be 1). So a global tensor of
+    // (1, 1, rows, hidden) yields an output of (1, 1, max_tokens, hidden) — the
+    // extracted per-expert tokens keep the source buffer's rank, which lets the
+    // routed-expert FFN's direct-write path see matching ranks for x and the
+    // shared output without a squeeze. TILE layout, dtype inherited from
+    // global_tensor (BFLOAT8_B or BFLOAT16), DRAM interleaved. Kernels fill only
+    // the first ceil_tile(counts[global_expert_id]) rows/tokens; the rest is undefined.
+    ttnn::SmallVector<uint32_t> output_dims(rank, 1u);
+    output_dims[rank - 2] = operation_attributes.max_dispatched_tokens_per_expert;
+    output_dims[rank - 1] = static_cast<uint32_t>(hidden_dim);
+    const ttnn::Shape output_shape(output_dims);
     const auto mem_config =
         tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
     return TensorSpec(
