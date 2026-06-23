@@ -10,7 +10,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.janus_pro.tt.janus_pro_conv2d_patch import TtJanusConv2dPatch
+from models.experimental.janus_pro.tt.janus_pro_conv2d_patch import TtJanusProConv2dPatch
 from models.experimental.janus_pro.tt.model_config import ModelArgs
 from ttnn import ConcatMeshToTensor
 
@@ -73,7 +73,7 @@ def test_conv2d_inference(
     reference_output = reference_model(input_tensor)
     del reference_model
 
-    tt_model = TtJanusConv2dPatch(
+    tt_model = TtJanusProConv2dPatch(
         mesh_device,
         state_dict,
         tt_layer_prefix,
