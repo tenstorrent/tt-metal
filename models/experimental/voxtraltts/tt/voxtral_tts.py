@@ -610,6 +610,28 @@ class VoxtralTTSPipeline:
         codes_b37t = audio_tokens.T.unsqueeze(0).long()
         return shifted_audio_tokens, audio_tokens, codes_b37t, hit_end_audio
 
+    def _finalize_host_stacked_codes(
+        self,
+        stacked: torch.Tensor,
+        *,
+        ar_stopped_on_end: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Host-accumulated model code rows → trimmed shifted table + unshifted tokenizer codes.
+
+        On 1×4 the device ``is_end_audio`` flag is reliable, but col-0 semantic readback can miss
+        ``END_AUDIO`` (id 1). When the AR loop stopped on END, drop the last stashed frame so it is
+        never vocoded (otherwise it decodes as garbage / audible noise).
+        """
+        if ar_stopped_on_end and stacked.shape[0] > 0:
+            stacked = stacked[:-1]
+        sem_col = stacked[:, 0]
+        eoa = (sem_col == self.end_audio_id).nonzero(as_tuple=False)
+        cut = int(eoa[0].item()) if len(eoa) else stacked.shape[0]
+        shifted_audio_tokens = stacked[:cut]
+        audio_tokens = shifted_audio_tokens - 2
+        codes_b37t = audio_tokens.T.unsqueeze(0).long()
+        return shifted_audio_tokens, audio_tokens, codes_b37t
+
     def _stage_acoustic_hidden_to_fm_buffer(self, llm_hidden_tt: ttnn.Tensor, dest: ttnn.Tensor) -> None:
         """Device copy of text hidden into ``[bsz, 1, dim]`` FM trace buffer (no host round-trip)."""
         tile = self._acoustic_hidden_tile_copy_qb2(llm_hidden_tt)
@@ -885,9 +907,7 @@ class VoxtralTTSPipeline:
 
         current_pos = S_prompt
         env_noise_rng = os.environ.get("VOXTRAL_ACOUSTIC_NOISE_RNG")
-        acoustic_noise_rng = (
-            env_noise_rng.strip().lower() if env_noise_rng is not None else ("ttnn" if debug is None else "torch")
-        )
+        acoustic_noise_rng = env_noise_rng.strip().lower() if env_noise_rng is not None else "torch"
         acoustic_noise_scale = _env_float("VOXTRAL_ACOUSTIC_NOISE_SCALE", 1.0)
 
         # Staged trace replay: text-decode trace (+ acoustic FM trace on multi-device). Default ON
@@ -1145,19 +1165,21 @@ class VoxtralTTSPipeline:
 
             shifted_bt37_tt = None
             if _codes_host_accum:
-                # 1x1: codes accumulated on host (trace-clobber-safe). Rebuild the device code tables
-                # with a single upload so the tokenizer/waveform path below is unchanged.
-                stacked_host = torch.stack(generated_codes, dim=0)  # [n_frames, 37] shifted
-                n_frames = int(stacked_host.shape[0])
+                # Host-accumulated codes (trace-clobber-safe). Rebuild device tables after END trim.
+                stacked_host = torch.stack(generated_codes, dim=0)
+                shifted_audio_tokens, audio_tokens, _ = self._finalize_host_stacked_codes(
+                    stacked_host, ar_stopped_on_end=ar_stopped_on_end
+                )
+                n_frames = int(shifted_audio_tokens.shape[0])
                 shifted_codes_t37_tt = voxtral_from_torch(
-                    stacked_host.to(torch.uint32).contiguous(),
+                    shifted_audio_tokens.to(torch.uint32).contiguous(),
                     self.mesh_device,
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 audio_2d_tt = voxtral_from_torch(
-                    (stacked_host - 2).to(torch.uint32).contiguous(),
+                    audio_tokens.to(torch.uint32).contiguous(),
                     self.mesh_device,
                     dtype=ttnn.uint32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1258,12 +1280,9 @@ class VoxtralTTSPipeline:
             generated_codes_tt.clear()
         elif generated_codes:
             stacked = torch.stack(generated_codes, dim=0)
-            sem_col = stacked[:, 0]
-            eoa = (sem_col == self.end_audio_id).nonzero(as_tuple=False)
-            cut = int(eoa[0].item()) if len(eoa) else stacked.shape[0]
-            shifted_audio_tokens = stacked[:cut]
-            audio_tokens = shifted_audio_tokens - 2
-            codes_b37t = audio_tokens.T.unsqueeze(0).long()
+            shifted_audio_tokens, audio_tokens, codes_b37t = self._finalize_host_stacked_codes(
+                stacked, ar_stopped_on_end=ar_stopped_on_end
+            )
             hit_end_audio = ar_stopped_on_end
             for tensor in generated_codes_tt:
                 if tensor.is_allocated():
