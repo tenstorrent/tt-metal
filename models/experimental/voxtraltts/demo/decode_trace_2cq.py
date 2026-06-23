@@ -422,11 +422,15 @@ def stage_acoustic_inputs(
 
     bsz = int(bufs.llm_dev.shape[0])
     if voxtral_is_multi_device_mesh(pipe.mesh_device):
+        # TP hidden must stay device-resident; FM noise matches the proven P150 host-torch path.
         pipe._stage_acoustic_hidden_to_fm_buffer(last_hidden_tt, bufs.llm_dev)
-        noise_tt = acoustic.fm_noise_tt(bsz, seed, rng=noise_rng)
-        ttnn.copy(noise_tt, bufs.noise_dev)
-        if noise_tt.is_allocated():
-            ttnn.deallocate(noise_tt)
+        if noise_rng == "ttnn":
+            noise_tt = acoustic.fm_noise_tt(bsz, seed, rng=noise_rng)
+            ttnn.copy(noise_tt, bufs.noise_dev)
+            if noise_tt.is_allocated():
+                ttnn.deallocate(noise_tt)
+        else:
+            ttnn.copy_host_to_device_tensor(acoustic.fm_noise_host_tt(bsz, seed), bufs.noise_dev)
         return
     # 1×1 P150 path — host-staged hidden + host FM noise (matches the 392-frame reference numerics).
     llm_host = pipe._acoustic_hidden_host_torch(last_hidden_tt)
