@@ -60,22 +60,35 @@ void kernel_main() {
 
     constexpr uint32_t f32_tile = get_tile_size(cb_S);
 
-    const InterleavedAddrGenFast<true> lu_gen = {.bank_base_address = lu_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> vbs_gen = {.bank_base_address = vbs_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> kbs_gen = {.bank_base_address = kbs_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> att_gen = {.bank_base_address = att_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> qdec_gen = {.bank_base_address = qdec_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> kdt_gen = {.bank_base_address = kdt_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> dle_gen = {.bank_base_address = dle_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> linv_gen = {.bank_base_address = linv_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> s0_gen = {.bank_base_address = s0_addr, .page_size = f32_tile};
+    // TensorAccessors for the interleaved fp32 DRAM inputs. The per-tensor
+    // TensorAccessorArgs compile-time blocks are appended (in this order) by the
+    // program factory right after the {Ct, Kt, Vt} compile-time args, so the first
+    // block starts at compile-time-arg offset 3 and each chains off the previous.
+    constexpr auto lu_args = TensorAccessorArgs<3>();
+    const auto lu_gen = TensorAccessor(lu_args, lu_addr, f32_tile);
+    constexpr auto vbs_args = TensorAccessorArgs<lu_args.next_compile_time_args_offset()>();
+    const auto vbs_gen = TensorAccessor(vbs_args, vbs_addr, f32_tile);
+    constexpr auto kbs_args = TensorAccessorArgs<vbs_args.next_compile_time_args_offset()>();
+    const auto kbs_gen = TensorAccessor(kbs_args, kbs_addr, f32_tile);
+    constexpr auto att_args = TensorAccessorArgs<kbs_args.next_compile_time_args_offset()>();
+    const auto att_gen = TensorAccessor(att_args, att_addr, f32_tile);
+    constexpr auto qdec_args = TensorAccessorArgs<att_args.next_compile_time_args_offset()>();
+    const auto qdec_gen = TensorAccessor(qdec_args, qdec_addr, f32_tile);
+    constexpr auto kdt_args = TensorAccessorArgs<qdec_args.next_compile_time_args_offset()>();
+    const auto kdt_gen = TensorAccessor(kdt_args, kdt_addr, f32_tile);
+    constexpr auto dle_args = TensorAccessorArgs<kdt_args.next_compile_time_args_offset()>();
+    const auto dle_gen = TensorAccessor(dle_args, dle_addr, f32_tile);
+    constexpr auto linv_args = TensorAccessorArgs<dle_args.next_compile_time_args_offset()>();
+    const auto linv_gen = TensorAccessor(linv_args, linv_addr, f32_tile);
+    constexpr auto s0_args = TensorAccessorArgs<linv_args.next_compile_time_args_offset()>();
+    const auto s0_gen = TensorAccessor(s0_args, s0_addr, f32_tile);
 
     // === Load initial state S into CB8 ===
     cb_reserve_back(cb_S, state_tiles);
     uint32_t s0_base_tile = head_idx * state_tiles;
     if (s0_addr != 0) {
         for (uint32_t t = 0; t < state_tiles; t++) {
-            uint64_t na = get_noc_addr(s0_base_tile + t, s0_gen);
+            uint64_t na = s0_gen.get_noc_addr(s0_base_tile + t);
             noc_async_read(na, get_write_ptr(cb_S) + t * f32_tile, f32_tile);
         }
         noc_async_read_barrier();
@@ -111,7 +124,7 @@ void kernel_main() {
         // L_unit [C,C]
         cb_reserve_back(cb_L_unit, attn_tiles);
         for (uint32_t t = 0; t < attn_tiles; t++) {
-            uint64_t na = get_noc_addr(lu_off + t, lu_gen);
+            uint64_t na = lu_gen.get_noc_addr(lu_off + t);
             noc_async_read(na, get_write_ptr(cb_L_unit) + t * f32_tile, f32_tile);
         }
         noc_async_read_barrier();
@@ -120,7 +133,7 @@ void kernel_main() {
         // v_beta_sc [C,Dv]
         cb_reserve_back(cb_v_beta_sc, out_tiles);
         for (uint32_t t = 0; t < out_tiles; t++) {
-            uint64_t na = get_noc_addr(vbs_off + t, vbs_gen);
+            uint64_t na = vbs_gen.get_noc_addr(vbs_off + t);
             noc_async_read(na, get_write_ptr(cb_v_beta_sc) + t * f32_tile, f32_tile);
         }
         noc_async_read_barrier();
@@ -129,7 +142,7 @@ void kernel_main() {
         // k_bd_sc [C,Dk]
         cb_reserve_back(cb_k_bd_sc, in_kv_tiles);
         for (uint32_t t = 0; t < in_kv_tiles; t++) {
-            uint64_t na = get_noc_addr(kbs_off + t, kbs_gen);
+            uint64_t na = kbs_gen.get_noc_addr(kbs_off + t);
             noc_async_read(na, get_write_ptr(cb_k_bd_sc) + t * f32_tile, f32_tile);
         }
         noc_async_read_barrier();
@@ -138,7 +151,7 @@ void kernel_main() {
         // intra_attn [C,C]
         cb_reserve_back(cb_intra_att, attn_tiles);
         for (uint32_t t = 0; t < attn_tiles; t++) {
-            uint64_t na = get_noc_addr(att_off + t, att_gen);
+            uint64_t na = att_gen.get_noc_addr(att_off + t);
             noc_async_read(na, get_write_ptr(cb_intra_att) + t * f32_tile, f32_tile);
         }
         noc_async_read_barrier();
@@ -147,7 +160,7 @@ void kernel_main() {
         // q_decay [C,Dk]
         cb_reserve_back(cb_q_decay, in_kv_tiles);
         for (uint32_t t = 0; t < in_kv_tiles; t++) {
-            uint64_t na = get_noc_addr(qdec_off + t, qdec_gen);
+            uint64_t na = qdec_gen.get_noc_addr(qdec_off + t);
             noc_async_read(na, get_write_ptr(cb_q_decay) + t * f32_tile, f32_tile);
         }
         noc_async_read_barrier();
@@ -156,7 +169,7 @@ void kernel_main() {
         // k_decay_t [Dk,C]
         cb_reserve_back(cb_k_dt, kdt_tiles);
         for (uint32_t t = 0; t < kdt_tiles; t++) {
-            uint64_t na = get_noc_addr(kdt_off + t, kdt_gen);
+            uint64_t na = kdt_gen.get_noc_addr(kdt_off + t);
             noc_async_read(na, get_write_ptr(cb_k_dt) + t * f32_tile, f32_tile);
         }
         noc_async_read_barrier();
@@ -165,7 +178,7 @@ void kernel_main() {
         // dl_exp (fp32 scalar tile)
         cb_reserve_back(cb_dl_exp, 1);
         {
-            uint64_t na = get_noc_addr(dle_off, dle_gen);
+            uint64_t na = dle_gen.get_noc_addr(dle_off);
             noc_async_read(na, get_write_ptr(cb_dl_exp), f32_tile);
             noc_async_read_barrier();
         }
@@ -175,28 +188,28 @@ void kernel_main() {
         // L_inv shape: [BH, NC, C, 32] with Ct = C/32 tiles per chunk.
         // Tile i holds L^{-1}[i*32:(i+1)*32, 0:32] (the i-th diagonal block inverse).
         {
-            uint64_t na0 = get_noc_addr(linv_off + 0, linv_gen);
+            uint64_t na0 = linv_gen.get_noc_addr(linv_off + 0);
             cb_reserve_back(cb_L_inv_0, 1);
             noc_async_read(na0, get_write_ptr(cb_L_inv_0), f32_tile);
             noc_async_read_barrier();
             cb_push_back(cb_L_inv_0, 1);
         }
         {
-            uint64_t na1 = get_noc_addr(linv_off + 1, linv_gen);
+            uint64_t na1 = linv_gen.get_noc_addr(linv_off + 1);
             cb_reserve_back(cb_L_inv_1, 1);
             noc_async_read(na1, get_write_ptr(cb_L_inv_1), f32_tile);
             noc_async_read_barrier();
             cb_push_back(cb_L_inv_1, 1);
         }
         {
-            uint64_t na2 = get_noc_addr(linv_off + 2, linv_gen);
+            uint64_t na2 = linv_gen.get_noc_addr(linv_off + 2);
             cb_reserve_back(cb_L_inv_2, 1);
             noc_async_read(na2, get_write_ptr(cb_L_inv_2), f32_tile);
             noc_async_read_barrier();
             cb_push_back(cb_L_inv_2, 1);
         }
         {
-            uint64_t na3 = get_noc_addr(linv_off + 3, linv_gen);
+            uint64_t na3 = linv_gen.get_noc_addr(linv_off + 3);
             cb_reserve_back(cb_L_inv_3, 1);
             noc_async_read(na3, get_write_ptr(cb_L_inv_3), f32_tile);
             noc_async_read_barrier();

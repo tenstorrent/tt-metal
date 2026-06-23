@@ -32,8 +32,14 @@ void kernel_main() {
 
     constexpr uint32_t f32_tile = get_tile_size(cb_out);
 
-    const InterleavedAddrGenFast<true> out_gen = {.bank_base_address = out_addr, .page_size = f32_tile};
-    const InterleavedAddrGenFast<true> st_gen = {.bank_base_address = st_addr, .page_size = f32_tile};
+    // TensorAccessors for the interleaved fp32 DRAM outputs. The per-tensor
+    // TensorAccessorArgs compile-time blocks are appended (in this order) by the
+    // program factory right after the {Ct, Kt, Vt} compile-time args, so the first
+    // block starts at compile-time-arg offset 3 and the second chains off it.
+    constexpr auto out_args = TensorAccessorArgs<3>();
+    const auto out_gen = TensorAccessor(out_args, out_addr, f32_tile);
+    constexpr auto st_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    const auto st_gen = TensorAccessor(st_args, st_addr, f32_tile);
 
     const uint32_t h_off_out = head_idx * NC * out_tiles;
     const uint32_t h_off_st = head_idx * state_tiles;
@@ -43,7 +49,7 @@ void kernel_main() {
         cb_wait_front(cb_out, out_tiles);
         uint32_t tile_off = h_off_out + c * out_tiles;
         for (uint32_t t = 0; t < out_tiles; t++) {
-            uint64_t na = get_noc_addr(tile_off + t, out_gen);
+            uint64_t na = out_gen.get_noc_addr(tile_off + t);
             noc_async_write(get_read_ptr(cb_out) + t * f32_tile, na, f32_tile);
         }
         noc_async_write_barrier();
@@ -53,7 +59,7 @@ void kernel_main() {
     // Write final state (pushed by compute kernel after all chunks complete).
     cb_wait_front(cb_final_state, state_tiles);
     for (uint32_t t = 0; t < state_tiles; t++) {
-        uint64_t na = get_noc_addr(h_off_st + t, st_gen);
+        uint64_t na = st_gen.get_noc_addr(h_off_st + t);
         noc_async_write(get_read_ptr(cb_final_state) + t * f32_tile, na, f32_tile);
     }
     noc_async_write_barrier();
