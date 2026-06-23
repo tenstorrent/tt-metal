@@ -127,17 +127,39 @@ matmuls; staged sub-traces give true per-stage traced timing.
 
 ## Setup
 
+The 1×8 test file (`test_perf_tt_bh_glx_1x8.py`) auto-applies the full
+production env + the four 1×8-specific flags via `os.environ.setdefault`
+at import time, so you only need to set 3 vars in your shell:
+
 ```bash
 cd <tt-metal repo root>
 export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
 export PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
-set -a; source models/experimental/pi0_5/_bench_runs/pi05_production.env; set +a
-export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
-export PI0_TP=8 PI0_TP4_ATTN_HEADPAR=1 PI0_MLP_BS=1 PI0_MLP_FUSED_RS=0
 # camera count (3 = production training spec; 2-cam supported but PCC drops, see notes)
 export PI0_NUM_CAMERAS=3
 tt-smi -glx_reset   # always start clean
 ```
+
+The test prints `[1x8-test] production env defaults applied (N flags)` at
+startup confirming what was auto-set. An explicit shell `export` of any of
+those vars still wins (setdefault semantics) — so you can override individual
+flags from your shell if you need to A/B test something.
+
+The flags baked into the test (so you don't need to set them manually):
+
+- **From `_bench_runs/pi05_production.env`** (16 flags): `PI0_EXPERT_MM_LOFI`,
+  `PI0_ROPE_TABLES_L1`, `PI0_MM_SWEEP_V2`, `PI0_DENOISE_MM_TUNE`,
+  `PI0_PREFILL_MM_TUNE`, `PI0_UPSTREAM_MASKS`, `QWEN_NLP_*_HEAD_SPLIT`,
+  `PI0_MQA_HEAD_SPLIT`, `PI0_SDPA_DENOISE_K_FORCE`, `PI0_VLM_CHUNK_SIZE`,
+  `PI0_VLM_MLP_BF8_OUT`, `PI0_VLM_MLP_MINIMAL`, `PI0_VLM_MINIMAL_CFG`,
+  `PI0_SIGLIP_USE_FOLD`, `PI05_NUM_DENOISE_STEPS`.
+- **1×8-specific** (5 flags, hardcoded in the test): `PI0_TP=8`,
+  `PI0_TP4_ATTN_HEADPAR=1`, `PI0_MLP_BS=1`, `PI0_MLP_FUSED_RS=0`,
+  `TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15`.
+
+Verified: `env -i HOME=$HOME PATH=$PATH PYTHONPATH=$PWD TT_METAL_HOME=$PWD
+PI05_CHECKPOINT_DIR=... PI0_NUM_CAMERAS=3 PERF_ITERS=5 pytest ...` reproduces
+the reference numbers (35.6 ms 3-cam 2CQ) — so the bake-in is self-contained.
 
 `P=models/experimental/pi0_5/tests/perf/test_perf_tt_bh_glx_1x8.py`
 
@@ -216,13 +238,10 @@ timed iter still produces a usable canonical inference in the CSV. (Use
 to land in a separate inference instead of the timed one.)
 
 ```bash
-# Setup (same env as perf runs)
+# Setup — only 3 env vars needed; the test auto-applies the rest via setdefault.
 cd <tt-metal repo root>
 export PYTHONPATH=$PWD TT_METAL_HOME=$PWD
 export PI05_CHECKPOINT_DIR=/home/tt-admin/pi05_cache/pi05_libero_upstream
-set -a; source models/experimental/pi0_5/_bench_runs/pi05_production.env; set +a
-export TT_VISIBLE_DEVICES=8,9,10,11,12,13,14,15
-export PI0_TP=8 PI0_TP4_ATTN_HEADPAR=1 PI0_MLP_BS=1 PI0_MLP_FUSED_RS=0
 export PI0_NUM_CAMERAS=3   # or 2 for the 2-cam capture
 export PERF_ITERS=1 WARMUP_ITERS=0
 tt-smi -glx_reset
