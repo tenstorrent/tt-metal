@@ -60,7 +60,7 @@ struct dfb_init_entry_hdr_t {
     uint8_t flags;
     uint8_t capacity;
     uint32_t entry_size;
-    uint32_t stride_in_entries;
+    uint32_t stride_size_precomp;  // host pre-computed: DM=raw bytes, TRISC=tile units (no device multiply needed)
     uint8_t stride_size_tiles;
     uint8_t num_txn_ids;
     uint8_t threshold;
@@ -79,7 +79,7 @@ struct dfb_init_entry_hdr_t {
 // Little-endian byte layout:
 //   w0 [7:0]=logical_dfb_id  [15:8]=num_tcs  [23:16]=flags  [31:24]=capacity
 //   w1 = entry_size (u32)
-//   w2 = stride_in_entries (u32)
+//   w2 = stride_size_precomp (u32): host pre-computed per hart type — DM=raw bytes, TRISC=tile units
 //   w3 [7:0]=stride_size_tiles  [15:8]=num_txn_ids  [23:16]=threshold  [31:24]=num_entries_per_txn_id
 //   w4 [7:0]=num_entries_per_txn_id_per_tc  [15:8]=producer_signal_bit  [23:16]=txn_ids[0]  [31:24]=txn_ids[1]
 //   w5 [7:0]=txn_ids[2]  [15:8]=txn_ids[3]  [23:16]=remapper_pair_index  [31:24]=_pad
@@ -94,7 +94,7 @@ FORCE_INLINE dfb_init_entry_hdr_t dfb_unpack_entry_header(PtrT s) {
     h.flags                      = static_cast<uint8_t>(w0 >> 16);
     h.capacity                   = static_cast<uint8_t>(w0 >> 24);
     h.entry_size                 = w1;
-    h.stride_in_entries          = w2;
+    h.stride_size_precomp        = w2;
     h.stride_size_tiles          = static_cast<uint8_t>(w3);
     h.num_txn_ids                = static_cast<uint8_t>(w3 >> 8);
     h.threshold                  = static_cast<uint8_t>(w3 >> 16);
@@ -568,8 +568,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
     //   use cached TL1 pointers so the DM's L1 D$ + L2 absorb the per-word latency.
     // -----------------------------------------------------------------------
 
-    // Replaces dfb_hart_init_entry_byte_size for num_tcs 0..6: avoids MUL×9 per entry.
-    // Values: 24 + round_up4(num_tcs * 9). See dfb_hart_init_entry_byte_size().
+    // Replaces dfb_hart_init_entry_byte_size for num_tcs 0..6: avoids MUL per entry.
+    // AoP tail: 24B header + (num_tcs*9 + 3)&~3. Identical to original SoA byte count.
     static constexpr uint8_t k_entry_byte_size_lut[7] = {24, 36, 44, 52, 60, 72, 80};
 
     const uint8_t num_init = dfb_hart_participation_count(participation_mask);
@@ -591,6 +591,14 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         const uintptr_t blob_end   = blob_start + static_cast<uintptr_t>(num_init) * 80u;
         invalidate_l2_cache_range(blob_start, blob_end - blob_start);
     }
+
+    // Opt 3: compute the starting g_dfb_interface pointer from the first blob entry's
+    // logical_dfb_id (1 multiply, amortised). Subsequent iterations use pointer increment
+    // (1 addi) instead of recomputing &g_dfb_interface[id] (id×140 multiply) per entry.
+    // Precondition: host emits blob entries in ascending consecutive DFB ID order.
+    LocalDFBInterface* iface_ptr = (num_init > 0)
+        ? &g_dfb_interface[*reinterpret_cast<const uint8_t*>(reinterpret_cast<uintptr_t>(p))]
+        : nullptr;
 #endif
 
     for (uint8_t i = 0; i < num_init; i++) {
@@ -612,10 +620,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             : dfb_hart_init_entry_byte_size(num_tcs);
         p = reinterpret_cast<const volatile uint8_t*>(e_addr + entry_bytes);
 
-        // TC sub-arrays sit right after the 24B header; use SHL instead of separate muls.
-        const uintptr_t tc_base_addr   = e_addr + sizeof(dfb_hart_init_entry_t);
-        const uintptr_t tc_limit_addr  = tc_base_addr  + (static_cast<uintptr_t>(num_tcs) << 2u);
-        const uintptr_t packed_tc_addr = tc_limit_addr + (static_cast<uintptr_t>(num_tcs) << 2u);
+        // AoP TC tail starts right after the 24B header: pairs first, ptc bytes after all pairs.
+        const uintptr_t tc_base_addr = e_addr + sizeof(dfb_hart_init_entry_t);
 
         WAYPOINT("L1");
 
@@ -625,8 +631,11 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         const uint8_t compact_id = compact_dfb_count++;
         g_dfb_logical_to_compact[eh.logical_dfb_id] = compact_id;
         LocalDFBInterface& iface = g_dfb_interface[compact_id];
-#else
+#elif defined(COMPILE_FOR_TRISC)
         LocalDFBInterface& iface = g_dfb_interface[eh.logical_dfb_id];
+#else
+        // Opt 3: advance running pointer (addi, not mul) — see initialisation above.
+        LocalDFBInterface& iface = *iface_ptr++;
 #endif
 
         // --- Common scalar fields ---
@@ -638,8 +647,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         // --- Role-specific scalar fields ---
 #ifdef COMPILE_FOR_TRISC
         iface.entry_size        = static_cast<uint16_t>(eh.entry_size >> cb_addr_shift);
-        iface.stride_size       = static_cast<uint16_t>(
-            static_cast<uint32_t>(iface.entry_size) * static_cast<uint32_t>(eh.stride_in_entries));
+        // Opt 2: stride_size_precomp already has (entry_size >> shift) * stride_in_entries — no multiply.
+        iface.stride_size       = static_cast<uint16_t>(eh.stride_size_precomp);
         iface.stride_size_tiles = eh.stride_size_tiles;
 #if defined(UCK_CHLKC_PACK)
         iface.wr_entry_ptr = 0;
@@ -647,8 +656,9 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
         iface.tensix_trisc_mask = static_cast<uint8_t>(eh.flags & DFB_HART_FLAG_TRISC_MASK);
 #endif
 #else  // DM
-        iface.entry_size    = eh.entry_size >> cb_addr_shift;
-        iface.stride_size   = iface.entry_size * eh.stride_in_entries;
+        iface.entry_size  = eh.entry_size >> cb_addr_shift;
+        // Opt 2: stride_size_precomp already has entry_size_raw * stride_in_entries — no multiply.
+        iface.stride_size = eh.stride_size_precomp;
         iface.broadcast_tc  = (eh.flags & DFB_HART_FLAG_BROADCAST_TC) ? 1u : 0u;
         iface.num_txn_ids               = eh.num_txn_ids;
         iface.threshold                 = eh.threshold;
@@ -665,45 +675,44 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
 
         WAYPOINT("L3");
 
-        // --- TC slot population (TC arrays follow header) ---
-        // Fix A: base/limit loaded as back-to-back u32 words; ptc pre-loaded as packed u32s.
-        // Fix C: on DM, use cached pointers (blob lines already in L2 after invalidate above).
-        //        On TRISC, keep uncached alias (no private L2, no coherent invalidate path).
+        // --- TC slot population ---
+        // AoP TC tail: dfb_blob_tc_pair_t[num_tcs] (8B each, base+limit adjacent per slot)
+        // immediately after the 24B header, then uint8_t ptc[num_tcs] padded to 4B.
+        // Preload ptc as 1–2 word reads before the loop; in-loop ptc is a register bit-extract
+        // (zero additional memory traffic). Running pair pointer advances 8B per slot.
+        // Fix C: DM path uses cached pointer (blob in L2 after invalidate); TRISC uses uncached alias.
+        const uintptr_t ptc_base_addr = tc_base_addr + (static_cast<uintptr_t>(num_tcs) << 3u);
 #ifdef COMPILE_FOR_TRISC
-        const volatile uint32_t* bases_ptr   = dfb_l1_uncached_u32_ptr(tc_base_addr);
-        const volatile uint32_t* limits_ptr  = dfb_l1_uncached_u32_ptr(tc_limit_addr);
-        const volatile uint32_t* ptc_u32_ptr = dfb_l1_uncached_u32_ptr(packed_tc_addr);
+        const volatile dfb_blob_tc_pair_t* pairs = reinterpret_cast<const volatile dfb_blob_tc_pair_t*>(
+            dfb_l1_uncached_u32_ptr(tc_base_addr));
+        const uint32_t ptc_w0 = (num_tcs > 0u) ? *dfb_l1_uncached_u32_ptr(ptc_base_addr) : 0u;
+        const uint32_t ptc_w1 = (num_tcs > 4u) ? *dfb_l1_uncached_u32_ptr(ptc_base_addr + 4u) : 0u;
 #else
-        const uint32_t* bases_ptr   = reinterpret_cast<const uint32_t*>(tc_base_addr);
-        const uint32_t* limits_ptr  = reinterpret_cast<const uint32_t*>(tc_limit_addr);
-        const uint32_t* ptc_u32_ptr = reinterpret_cast<const uint32_t*>(packed_tc_addr);
+        const dfb_blob_tc_pair_t* pairs = reinterpret_cast<const dfb_blob_tc_pair_t*>(tc_base_addr);
+        const uint32_t ptc_w0 = (num_tcs > 0u) ? *reinterpret_cast<const uint32_t*>(ptc_base_addr) : 0u;
+        const uint32_t ptc_w1 = (num_tcs > 4u) ? *reinterpret_cast<const uint32_t*>(ptc_base_addr + 4u) : 0u;
 #endif
-        // Pre-load ptc words covering all num_tcs bytes (max 4 TCs → 1 u32; >4 → 2 u32s).
-        const uint32_t ptc_w0 = ptc_u32_ptr[0];
-        const uint32_t ptc_w1 = (num_tcs > 4) ? ptc_u32_ptr[1] : 0u;
-        (void)ptc_w1;
-
         const uint32_t t_slots_start = rdcycle();
-        for (uint8_t t = 0; t < num_tcs; t++) {
-            const uint32_t base  = bases_ptr[t]  >> cb_addr_shift;
-            const uint32_t limit = limits_ptr[t] >> cb_addr_shift;
-            const uint8_t packed_ptc = static_cast<uint8_t>((t < 4 ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
-            iface.tc_slots[t].packed_tile_counter = packed_ptc;
+        for (uint8_t t = 0; t < num_tcs; t++, pairs++) {
+            const uint32_t base      = pairs->base_addr >> cb_addr_shift;
+            const uint32_t limit     = pairs->limit     >> cb_addr_shift;
+            const uint8_t  ptc       = static_cast<uint8_t>((t < 4u ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
+            iface.tc_slots[t].packed_tile_counter = ptc;
 
 #if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-            iface.tc_slots[t].base_addr    = base;
-            iface.tc_slots[t].wr_offset    = 0;
-            iface.tc_slots[t].ring_size    = static_cast<uint16_t>(limit - base);
+            iface.tc_slots[t].base_addr      = base;
+            iface.tc_slots[t].wr_offset      = 0;
+            iface.tc_slots[t].ring_size      = static_cast<uint16_t>(limit - base);
             iface.tc_slots[t].base_entry_idx = static_cast<uint16_t>(
                 (base - iface.tc_slots[0].base_addr) / iface.entry_size);
-            iface.tc_slots[t].wr_entry_idx = iface.tc_slots[t].base_entry_idx;
+            iface.tc_slots[t].wr_entry_idx   = iface.tc_slots[t].base_entry_idx;
 #elif defined(COMPILE_FOR_TRISC)  // unpack
-            iface.tc_slots[t].base_addr    = base;
-            iface.tc_slots[t].rd_offset    = 0;
-            iface.tc_slots[t].ring_size    = static_cast<uint16_t>(limit - base);
+            iface.tc_slots[t].base_addr      = base;
+            iface.tc_slots[t].rd_offset      = 0;
+            iface.tc_slots[t].ring_size      = static_cast<uint16_t>(limit - base);
             iface.tc_slots[t].base_entry_idx = static_cast<uint16_t>(
                 (base - iface.tc_slots[0].base_addr) / iface.entry_size);
-            iface.tc_slots[t].rd_entry_idx = iface.tc_slots[t].base_entry_idx;
+            iface.tc_slots[t].rd_entry_idx   = iface.tc_slots[t].base_entry_idx;
 #else  // DM
             iface.tc_slots[t].base_addr = base;
             iface.tc_slots[t].limit     = limit;

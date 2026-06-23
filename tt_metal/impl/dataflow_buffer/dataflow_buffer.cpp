@@ -526,8 +526,18 @@ size_t serialize_dfb_config_for_core(
             entry.logical_dfb_id = static_cast<uint8_t>(dfb->id);
             entry.num_tcs        = num_tcs;
             entry.capacity       = rc.is_producer ? static_cast<uint8_t>(dfb->capacity) : 0u;
-            entry.entry_size     = dfb->entry_size;
-            entry.stride_in_entries = dfb->stride_in_entries;
+            entry.entry_size = dfb->entry_size;
+            // Opt 2: pre-compute hart-type-specific stride_size so device can do a direct
+            // copy instead of a multiply in setup_local_dfb_interfaces.
+            //   DM harts   (h < TENSIX_RISC_OFFSET): stride_size = entry_size_raw * stride_in_entries
+            //   TRISC harts (h >= TENSIX_RISC_OFFSET): stride_size = (entry_size_raw >> 4) * stride_in_entries
+            // kTRISCCbAddrShift == 4 matches the cb_addr_shift constant in dataflow_buffer_init.h.
+            constexpr uint32_t kTRISCCbAddrShift = 4u;
+            if (h < ::dfb::TENSIX_RISC_OFFSET) {
+                entry.stride_size_precomp = dfb->entry_size * dfb->stride_in_entries;
+            } else {
+                entry.stride_size_precomp = (dfb->entry_size >> kTRISCCbAddrShift) * dfb->stride_in_entries;
+            }
             entry.stride_size_tiles = static_cast<uint8_t>(dfb->stride_in_entries);
 
             uint8_t flags = 0;
@@ -566,20 +576,24 @@ size_t serialize_dfb_config_for_core(
             // Write fixed header.
             std::memcpy(out.data() + offset, &entry, sizeof(entry));
 
-            // Write TC arrays immediately after header (header is 24B = 4B-aligned).
-            uint32_t tc_off = offset + static_cast<uint32_t>(sizeof(entry));
+            // Write AoP TC tail: dfb_blob_tc_pair_t[num_tcs] immediately after the 24B header,
+            // followed by uint8_t packed_tile_counter[num_tcs] padded to 4B.
+            // Each pair is {base_addr(4B), limit(4B)} = 8B; ptc bytes are packed contiguously.
+            // Total TC section = (num_tcs*9 + 3) & ~3 — identical to original SoA byte count.
+            // Device reads: running pair pointer (8B stride, base+limit adjacent per slot) +
+            // two preloaded ptc words covering all TCs before the loop (zero in-loop memory traffic).
+            uint32_t tc_pairs_off = offset + static_cast<uint32_t>(sizeof(entry));
             for (uint8_t t = 0; t < num_tcs; t++) {
-                std::memcpy(out.data() + tc_off, &rc.config.base_addr[t], sizeof(uint32_t));
-                tc_off += sizeof(uint32_t);
+                dfb_blob_tc_pair_t pair = {};
+                pair.base_addr = rc.config.base_addr[t];
+                pair.limit     = rc.config.limit[t];
+                std::memcpy(out.data() + tc_pairs_off, &pair, sizeof(pair));
+                tc_pairs_off += static_cast<uint32_t>(sizeof(pair));
             }
+            // ptc bytes follow all pairs (region already zero-initialised by memset above).
             for (uint8_t t = 0; t < num_tcs; t++) {
-                std::memcpy(out.data() + tc_off, &rc.config.limit[t], sizeof(uint32_t));
-                tc_off += sizeof(uint32_t);
+                out[tc_pairs_off + t] = rc.config.packed_tile_counter[t];
             }
-            for (uint8_t t = 0; t < num_tcs; t++) {
-                out[tc_off++] = rc.config.packed_tile_counter[t];
-            }
-            // (padding already zeroed by memset above)
 
             offset += entry_sz;
         }

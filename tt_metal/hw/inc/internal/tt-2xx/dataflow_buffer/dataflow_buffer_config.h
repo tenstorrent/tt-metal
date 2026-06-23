@@ -134,19 +134,33 @@ constexpr uint8_t DFB_HART_FLAG_REMAPPER_EN  = (1u << 6);
 constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK   = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
+// AoP (array-of-pairs) per-TC pair in the blob tail.
+// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 24B header, followed by
+// uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
+// This keeps base_addr and limit for the same slot adjacent (8B apart, same cache line)
+// while eliminating the 3B-per-slot padding of the 12B AoS format.
+// Total TC section = num_tcs*9B rounded up to 4B — identical to the original SoA byte count.
+// No __attribute__((packed)): both u32 fields are naturally 4B-aligned.
+struct dfb_blob_tc_pair_t {
+    uint32_t base_addr;  // raw bytes; device applies >> cb_addr_shift
+    uint32_t limit;      // raw bytes; device applies >> cb_addr_shift
+};
+static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
+
 // Per-(hart, DFB) init entry in this hart's sequential blob.
-// Fixed 24B header immediately followed (4B-aligned) by variable TC address arrays:
-//   uint32_t tc_base_bytes[num_tcs]  — raw byte addresses; device applies >> cb_addr_shift
-//   uint32_t tc_limit_bytes[num_tcs] — raw byte addresses; device applies >> cb_addr_shift
-//   uint8_t  packed_tc[num_tcs]
-//   uint8_t  _pad[] → next 4B boundary
+// Fixed 24B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
+// uint8_t packed_tile_counter[num_tcs] padded to 4B.
+// Total entry size = 24 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
     uint8_t  logical_dfb_id;
     uint8_t  num_tcs;
     uint8_t  flags;                          // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
     uint8_t  capacity;                       // producer: TC capacity; consumer: 0
     uint32_t entry_size;                     // raw bytes; device applies >> cb_addr_shift
-    uint32_t stride_in_entries;              // device: stride_size = (entry_size >> shift) * stride_in_entries
+    // Host pre-computes the ready-to-copy stride_size per hart type (Opt 2 — eliminates on-device multiply):
+    //   DM harts:    stride_size_precomp = entry_size_raw * stride_in_entries  (raw bytes)
+    //   TRISC harts: stride_size_precomp = (entry_size_raw >> cb_addr_shift) * stride_in_entries  (tile units)
+    uint32_t stride_size_precomp;
     uint8_t  stride_size_tiles;              // = (uint8_t)stride_in_entries — stored for TRISC direct use
     uint8_t  num_txn_ids;                    // DM only; 0 for TRISC
     uint8_t  threshold;                      // DM only
@@ -160,10 +174,11 @@ struct dfb_hart_init_entry_t {
 static_assert(sizeof(dfb_hart_init_entry_t) == 24, "dfb_hart_init_entry_t must be 24B");
 
 // Returns total serialized bytes for one dfb_hart_init_entry_t with num_tcs TC slots.
+// AoP tail: num_tcs pairs (8B each) + num_tcs ptc bytes, rounded up to 4B.
+// = (num_tcs * 9 + 3) & ~3 — identical to original SoA byte count.
 inline uint32_t dfb_hart_init_entry_byte_size(uint8_t num_tcs) {
-    const uint32_t tail =
-        static_cast<uint32_t>(num_tcs) * (sizeof(uint32_t) + sizeof(uint32_t) + sizeof(uint8_t));
-    return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tail + 3u) & ~3u);
+    const uint32_t tc_bytes = static_cast<uint32_t>(num_tcs) * 9u;
+    return static_cast<uint32_t>(sizeof(dfb_hart_init_entry_t)) + ((tc_bytes + 3u) & ~3u);
 }
 
 struct dfb_txn_id_descriptor_t {
