@@ -119,7 +119,7 @@ slight regression at 0.89×, a dispatch-bound shape with little to fold).
 > *Fix:* set compute's `is_tp_1` arg to the factory-level `is_tp_1` (incl. `per_head_norm`).
 > PRE then pushes the `num_heads` per-row stat tiles straight into `stats_gathered_cb`
 > (sized for `num_heads`) and POST consumes them locally — self-contained, no AG, matching
-> the drain-only writer. One line. See `ISSUE_per_head_norm_multidevice_deadlock.md`.
+> the drain-only writer. One line in the program factory.
 
 ---
 
