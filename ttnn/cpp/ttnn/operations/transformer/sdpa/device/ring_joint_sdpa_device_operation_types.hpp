@@ -71,34 +71,6 @@ struct RingJointSDPAParams {
         kv_actual_isl(kv_actual_isl),
         latent_v_head_dim(latent_v_head_dim) {}
 
-    auto attributes() const {
-        using ttsl::reflection::Attribute;
-        std::vector<std::tuple<std::string, Attribute>> attrs;
-        attrs.emplace_back("joint_strategy", joint_strategy);
-        attrs.emplace_back("is_causal", is_causal);
-        attrs.emplace_back("is_balanced", is_balanced);
-        attrs.emplace_back("is_cross", is_cross);
-        attrs.emplace_back("logical_n", logical_n);
-        attrs.emplace_back("ring_size", ring_size);
-        attrs.emplace_back("output_memory_config", output_memory_config);
-        attrs.emplace_back("compute_kernel_config", compute_kernel_config);
-        attrs.emplace_back("ccl_core_grid_offset", ccl_core_grid_offset);
-        if (kv_cache_batch_idx.has_value()) {
-            attrs.emplace_back("kv_cache_batch_idx", kv_cache_batch_idx.value());
-        }
-        if (kv_actual_isl.has_value()) {
-            attrs.emplace_back("kv_actual_isl", kv_actual_isl.value());
-        }
-        attrs.emplace_back("latent_v_head_dim", latent_v_head_dim);
-        if (scale.has_value()) {
-            attrs.emplace_back("scale", scale);
-        }
-        if (program_config.has_value()) {
-            attrs.emplace_back("program_config", program_config);
-        }
-        return attrs;
-    }
-
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
     std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
