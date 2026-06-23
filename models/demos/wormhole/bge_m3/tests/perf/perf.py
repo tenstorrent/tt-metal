@@ -245,17 +245,28 @@ def test_embedding_perf(mesh_device, batch_size):
 
     # ── Trace capture ────────────────────────────────────────────────
     logger.info("Capturing trace...")
-    model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
+    trace_out = model.capture_trace(**device_tensors, mesh_device=mesh_device, cq_id=0)
 
     # Trace warmup
     for _ in range(3):
         model.execute_trace(blocking=True)
 
+    # ── Set up the optimized D2H stack (read result back to torch) ───
+    # The forward pass time below includes the device->host transfer of the
+    # output, using the optimized stack: untilize_with_unpadding ->
+    # on-device DRAM staging copy -> copy_device_to_torch (direct PCIe DMA).
+    hidden = 1024  # BGE-M3 hidden dim
+    num_devices = mesh_device.get_num_devices()
+    global_batch = batch_size * num_devices
+    dram_staging, dest_torch = _allocate_d2h_stack(trace_out, mesh_device, global_batch, hidden)
+    for _ in range(3):
+        _d2h_step_optimized(trace_out, mesh_device, dram_staging, dest_torch)
+
     # ── Benchmark ────────────────────────────────────────────────────
     # Each iteration:
     #   1. Generate new random inputs on host
     #   2. Copy them into the persistent device tensors (same addresses the trace reads from)
-    #   3. Execute the trace (this is the only part we time)
+    #   3. Execute the trace AND read the output back to torch (D2H) -- both timed
     #
     # copy_host_to_device_tensor overwrites the device memory that the captured
     # trace will read. This is how you feed fresh data to a trace without
@@ -270,9 +281,10 @@ def test_embedding_perf(mesh_device, batch_size):
         # Copy new data into the device tensors the trace reads from
         copy_inputs_to_device(new_host_tensors, device_tensors)
 
-        # Time only the trace execution (device compute)
+        # Time the trace execution (device compute) + D2H readback to torch
         t0 = time.perf_counter()
         model.execute_trace(blocking=True)
+        _d2h_step_optimized(trace_out, mesh_device, dram_staging, dest_torch)
         t1 = time.perf_counter()
         times.append(t1 - t0)
 
@@ -297,8 +309,8 @@ def test_embedding_perf(mesh_device, batch_size):
     logger.info(f"  Model build time:     {build_time:.1f}s")
     logger.info(f"  Compile (1st run):    {compile_time:.2f}s")
     logger.info("-" * 60)
-    logger.info(f"  Avg prefill time:     {avg_ms:.3f}ms")
-    logger.info(f"  Best prefill time:    {best_ms:.3f}ms")
+    logger.info(f"  Avg time:             {avg_ms:.3f}ms")
+    logger.info(f"  Best time:            {best_ms:.3f}ms")
     logger.info(f"  Avg embeddings/s:     {batch_size / (avg_ms / 1000):.1f}")
     logger.info(f"  Best embeddings/s:    {batch_size / (best_ms / 1000):.1f}")
     logger.info(f"  Avg tokens/s:         {total_tokens / (avg_ms / 1000):.0f}")
