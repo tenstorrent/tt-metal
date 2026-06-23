@@ -19,10 +19,12 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
         for (uint32_t n = 0; n < N_block_tiles; n++) {
-            acquire_dst();
+            tile_regs_acquire();
             copy_tile(in_cb, tile_id, dst_id /*dst*/);
+            tile_regs_commit();
+            tile_regs_wait();
             pack_tile(dst_id, out_cb);
-            release_dst();
+            tile_regs_release();
             tile_id++;
         }
         cb_push_back(out_cb, N_block_tiles);
