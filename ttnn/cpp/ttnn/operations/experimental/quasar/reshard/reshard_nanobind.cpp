@@ -40,7 +40,7 @@ void bind_reshard(nb::module_& mod) {
 
         )doc";
 
-    ttnn::bind_function<"reshard">(
+    ttnn::bind_function<"reshard", "ttnn.experimental.quasar.">(
         mod,
         doc,
         &ttnn::operations::experimental::quasar::reshard,

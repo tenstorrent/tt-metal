@@ -40,7 +40,11 @@ from helpers.test_variant_parameters import (
     TEST_FACE_DIMS,
     TILE_COUNT,
 )
-from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
+from helpers.tile_constants import (
+    MX_SUPPORTED_TILE_SIZES,
+    SUPPORTED_TILE_SIZES,
+    is_mx_unsupported_tile_dims,
+)
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
@@ -123,6 +127,13 @@ def generate_qsr_pack_combinations(
                 for dest_sync in dest_sync_modes:
                     for tile_dims in SUPPORTED_TILE_SIZES:
                         if is_mx_unsupported_tile_dims(in_fmt, out_fmt, tile_dims):
+                            continue
+                        # Unpack-to-dest (required for 32-bit formats) does not support tiny tiles.
+                        if (
+                            in_fmt.is_32_bit()
+                            and dest_acc == DestAccumulation.Yes
+                            and tile_dims not in MX_SUPPORTED_TILE_SIZES
+                        ):
                             continue
                         tile_shape = construct_tile_shape(tile_dims)
                         for dimensions in generate_unary_input_dimensions(

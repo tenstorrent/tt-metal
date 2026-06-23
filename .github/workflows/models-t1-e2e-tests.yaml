@@ -22,6 +22,8 @@ on:
           - gemma-4-12b
           - gemma-4-26b-a4b
           - gemma-4-31b
+          - flux.1-schnell
+          - flux.1-dev
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
