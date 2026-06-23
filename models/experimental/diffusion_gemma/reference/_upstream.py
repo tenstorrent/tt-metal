@@ -12,6 +12,13 @@
 # **drift oracle** for #47468: ``tests/test_upstream_parity.py`` asserts our
 # ``reference/`` primitives reproduce these bit-for-bit, so the reference cannot
 # silently diverge from the released model.
+#
+# NOTE: ``transformers`` ships ``diffusion_gemma`` since **5.12**, so the
+# AUTHORITATIVE parity guard is now ``tests/test_real_transformers_parity.py``,
+# which tests our ``reference/`` against the **actually installed** classes (can't
+# drift from a frozen copy; auto-tracks future transformers). This vendored module
+# is the **fallback** for envs without ``diffusion_gemma`` (old CI / the 4.53 LTX
+# env). Keep it byte-faithful; prefer the real-class test where 5.12+ is present.
 
 from __future__ import annotations
 
