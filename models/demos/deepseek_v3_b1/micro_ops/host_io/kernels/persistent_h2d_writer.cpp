@@ -23,35 +23,15 @@ constexpr uint32_t metadata_cb_index = get_compile_time_arg_val(5);
 constexpr uint32_t worker_sync_enabled = get_compile_time_arg_val(6);
 constexpr auto output_tensor_accessor_args = TensorAccessorArgs<7>();
 
-// Runtime args:
-//   [0]  termination_semaphore_addr
-//   [1]  output_tensor_addr
-//   [2]  data_ready_sem_addr
-//   [3]  consumed_counter_addr
-//   [4]  worker_mcast_noc_x_start
-//   [5]  worker_mcast_noc_y_start
-//   [6]  worker_mcast_noc_x_end
-//   [7]  worker_mcast_noc_y_end
-//   [8]  num_workers
-//   [9]  metadata_size_bytes
-//   [10] metadata_l1_addr
-//   [11] completion_pcie_xy_enc
-//   [12] completion_pcie_addr_lo
-//   [13] completion_pcie_addr_hi
-//   [14] completion_src_l1_addr
-//
 // DRAM-completion push block. After a transfer's tensor pages have committed
 // to DRAM the writer bumps a monotonic counter and pushes it to its host-pinned slot over PCIe,
 // so the host-side barrier() can confirm the backing tensor (not just the socket FIFO) has
 // drained. The reader's early socket ack only recycles the host FIFO slot; it no longer
-// implies the data has landed in DRAM, so this counter -- not the socket ack -- is what
-// barrier() keys on. The PCIe encoding is built from TRANSLATED coords, so it is
-// NOC-independent and valid on this kernel's NOC (RISCV_1_default) even though the socket
-// reader issues PCIe transactions on the other NOC.
+// implies the data has landed in DRAM, so this counter and not the socket ack is what
+// barrier() keys on.
 
 // Push the monotonic transfers-completed counter from an L1 scratch word to its host pinned slot
-// over PCIe. Mirrors socket_notify_sender's bytes_acked push; the 64-bit PCIe offset requires
-// the stateful write path. Fire-and-forget -- the host polls the pinned slot in barrier().
+// over PCIe.
 inline void push_completion_counter(
     uint32_t value,
     uint32_t completion_pcie_xy_enc,
@@ -93,9 +73,6 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* consumed_ptr = nullptr;
     uint32_t last_consumed = 0;
     if constexpr (worker_sync_enabled) {
-        // The host (set_worker_mcast_corners) already ordered these corners for this kernel's
-        // NOC, so "start" is the corner the NOC reaches first (the high corner on NOC 1) --
-        // pass them through verbatim rather than assuming start < end.
         worker_mcast_addr = get_noc_multicast_addr(
             worker_mcast_noc_x_start,
             worker_mcast_noc_y_start,
@@ -120,8 +97,7 @@ void kernel_main() {
     bool terminated = false;
     while (!terminated) {
         // Drain one full transfer's worth of socket pages from the data CB and scatter each
-        // into the backing tensor. A terminable wait lets the writer exit once the reader has
-        // stopped and the CB has drained, rather than blocking forever.
+        // into the backing tensor.
         for (uint32_t chunk = 0; chunk < num_socket_pages; ++chunk) {
             if (!deepseek_b1_ops::cb_wait_for_pages_with_termination(data_cb_index, 1, termination_semaphore)) {
                 terminated = true;
@@ -162,7 +138,6 @@ void kernel_main() {
             completion_pcie_addr_lo,
             completion_pcie_addr_hi,
             completion_src_l1_addr);
-        noc_async_write_barrier();
 
         if constexpr (worker_sync_enabled) {
             noc_semaphore_inc_multicast(worker_mcast_addr, /*incr=*/1, /*num_dests=*/num_workers);

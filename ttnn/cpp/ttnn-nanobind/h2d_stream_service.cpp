@@ -184,11 +184,7 @@ void py_module_types(nb::module_& mod) {
             R"doc(
                 Block until every forwarded transfer has fully landed in the backing
                 tensor (committed to DRAM), then return. Safe to read the backing
-                tensor afterward. The device-side reader acknowledges each socket page
-                as soon as it is staged in L1 -- which recycles the host FIFO slot
-                early but does not mean the data has reached DRAM -- so barrier() also
-                waits on the writer's DRAM-completion signal, not just the socket acks.
-                Call before reading the backing tensor or destroying the service.
+                tensor afterward.
             )doc")
         .def(
             "get_backing_tensor",

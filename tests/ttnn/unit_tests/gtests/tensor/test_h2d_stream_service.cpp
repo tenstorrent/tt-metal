@@ -685,12 +685,7 @@ TEST_F(H2DStreamServiceTest, Sharded_WorkerSync_Sweep) {
 
 // Multi-threaded host-push coverage. parallel_host_push is orthogonal to chunk geometry -- it only
 // changes how the host fans the per-socket writes across threads; the data and the device side are
-// identical -- so this test is deliberately narrow on geometry (two chunkings) and instead spans the
-// scenarios that exercise the worker pool: replicated + sharded placements, the plain barrier()
-// completion path and the worker-sync handshake (with and without metadata multicast), and both
-// input paths. Verification is per-coord, so any race / dropped / partial / duplicated write,
-// handshake bug, or teardown issue surfaces as a data mismatch or a hang. Galaxy always has many
-// sockets, so the pool (parallel_host_push && sockets > 1) genuinely activates.
+// identical -- so this test is deliberately narrow on geometry (two chunkings).
 TEST_F(H2DStreamServiceTest, MultiThreadedHostPush_Sweep) {
     if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
         GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";

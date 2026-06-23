@@ -118,12 +118,8 @@ public:
         const Tensor& host_tensor,
         ttsl::Span<const std::byte> metadata = {});
 
-    // Block until every in-flight transfer has fully landed in the backing tensor.
-    // The reader acks each socket page as soon as it is staged in L1 (recycling the
-    // host FIFO slot early), so the socket ack no longer implies the DRAM write is
-    // done; barrier() therefore also waits on the per-coord writer DRAM-completion
-    // counters (pushed to shared host pinned memory) before returning. Safe to read
-    // the backing tensor afterward from the owner.
+    // Block until every in-flight host->socket write has been ACKed by the
+    // device-side kernel.
     void barrier();
 
     const Tensor& get_backing_tensor() const;
@@ -144,8 +140,7 @@ public:
     // overload must be used.
     std::size_t metadata_size_bytes() const;
 
-    // Data-CB depth (full socket-page slots) the service derived from service-core L1. Lets a
-    // benchmark report/size against the real device pipeline depth. Owner-only.
+    // Data-CB depth (full socket-page slots) the service derived from service-core L1.
     uint32_t get_slot_count() const;
 
     std::vector<distributed::H2DSocket*> get_sockets() const;
@@ -294,25 +289,27 @@ private:
 
     // Writer DRAM-completion tracking. The owner creates one shared completion
     // region and maps it to every participating coord; connectors map the same
-    // SHM through the exported descriptor. Layout:
+    // SHM through the exported descriptor. Every slot is padded to host PCIe
+    // alignment (device PCIe writes have stricter target alignment than host
+    // reads), so the layout is:
     //
-    //   issued:        uint32_t, incremented once per logical forward_to_tensor
-    //   completed[i]:  uint32_t, pushed by writer i after DRAM commit
+    //   offset 0                 -> issued:       uint32, incremented once per logical forward_to_tensor
+    //   offset PCIe_align*(i+1)   -> completed[i]: uint32, pushed by writer i after its DRAM commit
     //
-    // Completed slots are spaced by host PCIe alignment because device PCIe
-    // writes have stricter target alignment requirements than host reads.
-    //
-    // uint32_t modulo equality is intentional: barrier correctness requires
-    // fewer than 2^32 uncompleted logical transfers outstanding.
+    // i.e. both completed_offset and completed_stride are the PCIe alignment, NOT
+    // sizeof(uint32_t). uint32_t modulo equality is intentional: barrier correctness
+    // requires fewer than 2^32 uncompleted logical transfers outstanding.
     std::unique_ptr<distributed::NamedShm> completion_shm_;
     std::shared_ptr<uint32_t[]> completion_host_mem_;
     std::shared_ptr<experimental::PinnedMemory> completion_pinned_;
     volatile uint32_t* completion_issued_ = nullptr;
     std::vector<volatile uint32_t*> completion_counters_;
     uint64_t completion_shm_size_ = 0;
+    // Assigned at construction (owner: make_completion_layout; connector: from the descriptor) to the
+    // PCIe alignment; these in-class values are placeholders, not the runtime layout.
     uint32_t completion_issued_offset_ = 0;
     uint32_t completion_completed_offset_ = 0;
-    uint32_t completion_completed_stride_ = sizeof(uint32_t);
+    uint32_t completion_completed_stride_ = 0;
     // Per-coord L1 scratch word the writer stages the count in before pushing it.
     std::map<distributed::MeshCoordinate, DeviceAddr> completion_src_addrs_;
 

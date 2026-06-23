@@ -245,11 +245,11 @@ WarmupPlan compute_warmup_plan(
 }
 
 bool benchmark_supported(benchmark::State& state) {
-    // const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    //  if (!cluster.is_ubb_galaxy()) {
-    //      state.SkipWithMessage("H2DStreamService kernels are only available on UBB Galaxy systems");
-    //      return false;
-    //  }
+    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+    if (!cluster.is_ubb_galaxy()) {
+        state.SkipWithMessage("H2DStreamService kernels are only available on UBB Galaxy systems");
+        return false;
+    }
     if (!tt::tt_metal::experimental::GetMemoryPinningParameters(*g_mesh_device).can_map_to_noc) {
         state.SkipWithMessage("Mapping host memory to NOC is not supported on this system");
         return false;

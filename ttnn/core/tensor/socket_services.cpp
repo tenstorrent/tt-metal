@@ -265,7 +265,7 @@ struct CompletionLayout {
     uint64_t shm_size = 0;
     uint32_t issued_offset = 0;
     uint32_t completed_offset = 0;
-    uint32_t completed_stride = sizeof(uint32_t);
+    uint32_t completed_stride = 0;  // make_completion_layout always sets this to the PCIe alignment
 };
 
 CompletionLayout make_completion_layout(uint32_t num_counters) {
