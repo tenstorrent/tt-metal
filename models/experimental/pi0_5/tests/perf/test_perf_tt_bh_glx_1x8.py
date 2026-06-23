@@ -27,8 +27,6 @@ Run:
 from __future__ import annotations
 
 import os
-import statistics
-import time
 from pathlib import Path
 
 import pytest
@@ -46,10 +44,55 @@ import ttnn  # noqa: E402
 
 CHECKPOINT_DIR = Path(os.environ.get("PI05_CHECKPOINT_DIR", "/home/tt-admin/pi05_cache/pi05_libero_upstream"))
 SEED = 42
-N_CAMS = 3
+N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])
 LANG_LEN = 256
 PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
 WARMUP_ITERS = 3
+
+# Production env flags worth asserting present (set by _bench_runs/pi05_production.env).
+# Logged at test start so the run-log shows which optimizations were active.
+_PROD_ENV_KEYS = (
+    "PI0_EXPERT_MM_LOFI",
+    "PI0_ROPE_TABLES_L1",
+    "PI0_MM_SWEEP_V2",
+    "PI0_DENOISE_MM_TUNE",
+    "PI0_PREFILL_MM_TUNE",
+    "PI0_UPSTREAM_MASKS",
+    "QWEN_NLP_CONCAT_HEADS_HEAD_SPLIT",
+    "QWEN_NLP_CREATE_HEADS_HEAD_SPLIT",
+    "PI0_MQA_HEAD_SPLIT",
+    "PI0_SDPA_DENOISE_K_FORCE",
+    "PI0_NUM_CAMERAS",
+    "PI0_VLM_CHUNK_SIZE",
+    "PI0_VLM_MLP_BF8_OUT",
+    "PI0_VLM_MLP_MINIMAL",
+    "PI0_VLM_MINIMAL_CFG",
+    "PI0_SIGLIP_USE_FOLD",
+    "PI0_TP",
+    "PI0_TP4_ATTN_HEADPAR",
+    "PI0_MLP_BS",
+    "PI0_MLP_FUSED_RS",
+    "PI05_NUM_DENOISE_STEPS",
+    "TT_VISIBLE_DEVICES",
+)
+
+
+def _print_prod_env_status():
+    present = []
+    missing = []
+    for k in _PROD_ENV_KEYS:
+        v = os.environ.get(k)
+        if v is not None:
+            present.append(f"{k}={v}")
+        else:
+            missing.append(k)
+    print(f"\n[env] {len(present)}/{len(_PROD_ENV_KEYS)} production flags set:")
+    for s in present:
+        print(f"      {s}")
+    if missing:
+        print(f"[env] MISSING ({len(missing)}): {', '.join(missing)}")
+    print(f"[env] N_CAMS (test) = {N_CAMS}")
+
 
 pytestmark = pytest.mark.skipif(
     not (CHECKPOINT_DIR / "model.safetensors").exists(),
@@ -112,12 +155,29 @@ def test_perf_1x8_eager():
         )
 
 
-def test_perf_1x8_traced():
-    """Capture the full e2e trace and time PERF_ITERS replays.
+def _mean(xs):
+    return sum(xs) / len(xs) if xs else 0.0
 
-    Reports mean / min / max ms over the replay loop after a warmup. The
-    trace covers SigLIP DP + all_gather + slice + prefix concat + prefill TP=8
-    + 5-step denoise + output extract — exactly what production replay does.
+
+def test_perf_1x8_traced():
+    """Capture the full e2e trace and time PERF_ITERS replays, broken down.
+
+    Two breakdowns are produced:
+
+    1. EAGER per-stage breakdown — 3 iters of sample_actions_timed, which
+       synchronizes between SigLIP / prefix / prefill / denoise stages and
+       times each. Proportions match the traced replay; absolute numbers will
+       be larger because eager has per-op host dispatch (the "trace dispatch
+       savings" line below quantifies that delta).
+
+    2. TRACED replay breakdown — PERF_ITERS iters of sample_actions_traced_timed,
+       which splits the host-observable parts of the replay loop:
+            - input_upload_ms : pixel + lang + noise refresh (host→device)
+            - trace_exec_ms   : ttnn.execute_trace (pure on-device compute)
+            - output_readback_ms : ttnn.to_torch (single concat → host)
+       These three are the only host-observable knobs once the trace is
+       captured; their sum is the wall-clock per-call cost. The 28-chip
+       baseline reported ≈43 ms total.
     """
     from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
 
@@ -125,39 +185,304 @@ def test_perf_1x8_traced():
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
 
-        # capture_trace runs an eager warmup internally (JIT compile every kernel)
-        # before begin_trace_capture, so the first replay is already cache-warm.
         pipe.capture_trace(images, lang_tokens)
 
         ah = cfg.action_horizon
         ad = cfg.action_dim
 
-        # Warm a few replays — the kernel caches are populated by capture_trace's
-        # eager warmup, but the *trace replay* still benefits from a couple of
-        # iterations to settle any first-replay cost.
+        # ---- EAGER per-stage breakdown (3 iters, average) ----
+        eager_runs = []
+        for _ in range(3):
+            _, t = pipe.sample_actions_timed(images, lang_tokens)
+            eager_runs.append(t)
+        eag = {
+            "input_upload_ms": _mean([r["input_upload_ms"] for r in eager_runs]),
+            "vision_ms": _mean([r["vision_ms"] for r in eager_runs]),
+            "prefix_ms": _mean([r["prefix_ms"] for r in eager_runs]),
+            "prefill_ms": _mean([r["prefill_ms"] for r in eager_runs]),
+            "denoise_ms": _mean([r["denoise_ms"] for r in eager_runs]),
+            "output_readback_ms": _mean([r["output_readback_ms"] for r in eager_runs]),
+            "eager_total_ms": _mean([r["eager_total_ms"] for r in eager_runs]),
+        }
+        # Per-step denoise (averaged across runs and steps).
+        per_step = [r["denoise_step_ms"] for r in eager_runs]
+        n_steps = len(per_step[0]) if per_step else 0
+        eag_step_means = [_mean([per_step[r][s] for r in range(len(per_step))]) for s in range(n_steps)]
+
+        # ---- TRACED replay breakdown ----
         for _ in range(WARMUP_ITERS):
             _ = pipe.sample_actions_traced(images, lang_tokens)
 
-        # Timed replays.
-        ts = []
+        traced_runs = []
         last_actions = None
         for _ in range(PERF_ITERS):
-            t0 = time.perf_counter()
-            last_actions = pipe.sample_actions_traced(images, lang_tokens)
-            ts.append((time.perf_counter() - t0) * 1000.0)
-
+            last_actions, t = pipe.sample_actions_traced_timed(images, lang_tokens)
+            traced_runs.append(t)
         assert last_actions is not None
         assert last_actions.shape == (1, ah, ad), f"shape mismatch: {tuple(last_actions.shape)}"
         assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
 
-        mean = statistics.mean(ts)
-        mn = min(ts)
-        mx = max(ts)
+        keys = ["input_upload_ms", "trace_exec_ms", "output_readback_ms", "traced_total_ms"]
+        tr_mean = {k: _mean([r[k] for r in traced_runs]) for k in keys}
+        tr_min = {k: min(r[k] for r in traced_runs) for k in keys}
+
+        # ---- Derived overhead numbers ----
+        sum_compute_eager = eag["vision_ms"] + eag["prefix_ms"] + eag["prefill_ms"] + eag["denoise_ms"]
+        trace_dispatch_savings = sum_compute_eager - tr_mean["trace_exec_ms"]
+
+        print("\n" + "=" * 72)
+        print(f"1×8 pi0.5 perf breakdown   (PERF_ITERS={PERF_ITERS}, denoise_steps={n_steps})")
+        print("=" * 72)
+        print(" EAGER per-stage (3-iter mean, with synchronize_device between stages):")
+        print(f"   input_upload     : {eag['input_upload_ms']:7.2f} ms")
+        print(f"   vision (SigLIP)  : {eag['vision_ms']:7.2f} ms")
+        print(f"   prefix concat    : {eag['prefix_ms']:7.2f} ms")
+        print(f"   prefill TP=8     : {eag['prefill_ms']:7.2f} ms")
+        print(f"   denoise (5 step) : {eag['denoise_ms']:7.2f} ms  per-step={['%.2f' % s for s in eag_step_means]}")
+        print(f"   output_readback  : {eag['output_readback_ms']:7.2f} ms")
+        print(f"   ─────────────────────────────────")
+        print(f"   eager_total      : {eag['eager_total_ms']:7.2f} ms")
+        print()
+        print(f" TRACED replay ({PERF_ITERS}-iter mean / min):")
+        print(f"   input_upload     : {tr_mean['input_upload_ms']:7.2f} / {tr_min['input_upload_ms']:7.2f} ms")
+        print(f"   trace_exec       : {tr_mean['trace_exec_ms']:7.2f} / {tr_min['trace_exec_ms']:7.2f} ms")
+        print(f"   output_readback  : {tr_mean['output_readback_ms']:7.2f} / {tr_min['output_readback_ms']:7.2f} ms")
+        print(f"   ─────────────────────────────────")
+        print(f"   traced_total     : {tr_mean['traced_total_ms']:7.2f} / {tr_min['traced_total_ms']:7.2f} ms")
+        print()
+        print(" DERIVED:")
+        print(f"   eager compute sum : {sum_compute_eager:7.2f} ms  (vision+prefix+prefill+denoise)")
+        print(f"   traced compute    : {tr_mean['trace_exec_ms']:7.2f} ms")
+        print(f"   dispatch savings  : {trace_dispatch_savings:7.2f} ms  (eager compute − traced compute)")
+        print(f"   28-chip baseline  : ≈43 ms (single-mesh 1×8 expected substantially faster, no socket hops)")
+        print("=" * 72)
+
+
+def test_perf_1x8_traced_staged():
+    """Per-stage TRACED breakdown via 3 sub-traces on the single 1×8 mesh.
+
+    Captures vision / prefill / denoise as three independent traces (with
+    persistent vision_real and per_layer_kv intermediates living across trace
+    boundaries via the deterministic trace allocator). Replays each in
+    sequence, times each replay with perf_counter + blocking=True.
+
+    These are TRUE traced per-stage numbers (no eager dispatch overhead),
+    unlike the eager-with-sync proportions in test_perf_1x8_traced.
+    """
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+
+    _print_prod_env_status()
+
+    # 3 sub-traces share the trace region — bump from 128 MiB to 256 MiB.
+    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=256 * 1024 * 1024) as mesh:
+        pipe, cfg = _make_pipeline(mesh)
+        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
+
+        pipe.capture_traces_staged(images, lang_tokens)
+
+        ah = cfg.action_horizon
+        ad = cfg.action_dim
+
+        for _ in range(WARMUP_ITERS):
+            _ = pipe.sample_actions_traced_staged_timed(images, lang_tokens)
+
+        runs = []
+        last_actions = None
+        for _ in range(PERF_ITERS):
+            last_actions, t = pipe.sample_actions_traced_staged_timed(images, lang_tokens)
+            runs.append(t)
+        assert last_actions is not None
+        assert last_actions.shape == (1, ah, ad), f"shape mismatch: {tuple(last_actions.shape)}"
+        assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
+
+        keys = [
+            "input_upload_ms",
+            "vision_ms",
+            "prefill_ms",
+            "denoise_ms",
+            "output_readback_ms",
+            "compute_total_ms",
+            "traced_total_ms",
+        ]
+        means = {k: _mean([r[k] for r in runs]) for k in keys}
+        mins = {k: min(r[k] for r in runs) for k in keys}
+
+        compute = means["compute_total_ms"]
+        pct = lambda x: 100.0 * x / compute if compute > 0 else 0.0
+
+        print("\n" + "=" * 72)
         print(
-            f"\n✅ 1×8 traced replay over {PERF_ITERS} iters: "
-            f"mean={mean:.2f} ms  min={mn:.2f}  max={mx:.2f}  "
-            f"(28-chip baseline ≈ 43 ms — should be substantially faster, no socket hops)"
+            f"1×8 pi0.5 TRACED per-stage breakdown   (PERF_ITERS={PERF_ITERS}, steps={cfg.num_denoising_steps}, N_CAMS={N_CAMS})"
         )
+        print("=" * 72)
+        print(f"  {'stage':<20} {'mean ms':>10} {'min ms':>10} {'% compute':>10}")
+        print(f"  {'-'*20} {'-'*10} {'-'*10} {'-'*10}")
+        print(
+            f"  {'input_upload (host)':<20} {means['input_upload_ms']:10.2f} {mins['input_upload_ms']:10.2f} {'-':>10}"
+        )
+        print(
+            f"  {'vision (trace)':<20} {means['vision_ms']:10.2f} {mins['vision_ms']:10.2f} {pct(means['vision_ms']):9.1f}%"
+        )
+        print(
+            f"  {'prefill (trace)':<20} {means['prefill_ms']:10.2f} {mins['prefill_ms']:10.2f} {pct(means['prefill_ms']):9.1f}%"
+        )
+        print(
+            f"  {'denoise (trace)':<20} {means['denoise_ms']:10.2f} {mins['denoise_ms']:10.2f} {pct(means['denoise_ms']):9.1f}%"
+        )
+        print(
+            f"  {'output_readback':<20} {means['output_readback_ms']:10.2f} {mins['output_readback_ms']:10.2f} {'-':>10}"
+        )
+        print(f"  {'-'*20} {'-'*10} {'-'*10} {'-'*10}")
+        print(f"  {'compute (v+p+d)':<20} {means['compute_total_ms']:10.2f} {mins['compute_total_ms']:10.2f}")
+        print(f"  {'traced_total':<20} {means['traced_total_ms']:10.2f} {mins['traced_total_ms']:10.2f}")
+        print("=" * 72)
+
+
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    """Standard PCC formula matching tests/pcc/test_pcc_tt_bh_glx_stages.py."""
+    t1 = a.flatten().float()
+    t2 = b.flatten().float()
+    m1, m2 = torch.mean(t1), torch.mean(t2)
+    s1, s2 = torch.std(t1), torch.std(t2)
+    if s1 < 1e-6 or s2 < 1e-6:
+        return 1.0 if torch.allclose(t1, t2, atol=1e-5) else 0.0
+    cov = torch.mean((t1 - m1) * (t2 - m2))
+    return float((cov / (s1 * s2)).item())
+
+
+@pytest.mark.skipif(
+    os.environ.get("PI05_E2E_PCC", "").lower() not in ("1", "true", "yes", "on"),
+    reason="PCC check off by default; set PI05_E2E_PCC=1 to enable (slow — runs CPU torch ref)",
+)
+def test_pcc_1x8_all_stages():
+    """Per-stage + end-to-end PCC check on the 1×8 pipeline.
+
+    Three isolated stage checks (same input to TT and torch, compare output):
+      1. Vision : TT vision DP (8 chips, slice to N_CAMS) vs torch SigLIP+projector
+      2. Prefill: TT prefill TP=8 vs torch PaliGemmaBackbone.forward_vlm
+      3. E2E    : TT pipe.sample_actions vs torch Pi0_5Model.sample_actions
+
+    Single mesh open, single torch-model load — amortizes the ~30 s setup.
+
+    Targets (matching tests/pcc/test_pcc_tt_bh_glx_stages.py):
+      vision ≥ 0.997   prefill ≥ 0.99   e2e ≥ 0.95
+    """
+    from models.experimental.pi0_5.common.weight_loader import Pi0_5WeightLoader
+    from models.experimental.pi0_5.reference.torch_paligemma import Pi0_5PaliGemmaBackbone as TorchBackbone
+    from models.experimental.pi0_5.reference.torch_pi0_5_model import Pi0_5Model
+    from models.experimental.pi0_5.reference.torch_siglip import (
+        MultiModalProjector as TorchMMProjector,
+        SigLIPVisionTower as TorchSigLIPVisionTower,
+    )
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+
+    _print_prod_env_status()
+
+    with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
+        pipe, cfg = _make_pipeline(mesh)
+        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
+        img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(N_CAMS)]
+        lang_masks = torch.ones(1, LANG_LEN, dtype=torch.bool)
+
+        weights = Pi0_5WeightLoader(str(CHECKPOINT_DIR)).categorized_weights
+
+        # ---- 0. E2E PCC FIRST (original "seed-around-both" pattern) ----------
+        # IMPORTANT: this pattern (torch.manual_seed(SEED) before pipe AND before
+        # ref_model construction+call) gives the best PCC because Pi0_5Model
+        # construction happens to consume the exact RNG offset that aligns torch's
+        # denoising.sample_noise with TT's _refresh_noise_buffer randn. The
+        # alternative "seed-before-call" pattern from the 28-chip test gives WORSE
+        # PCC (~0.93 vs ~0.99) on this 1×8 pipeline — empirically verified.
+        # Done first so vision/prefill PCC sections don't pollute the RNG state.
+        torch.manual_seed(SEED)
+        tt_actions = pipe.sample_actions(images, lang_tokens=lang_tokens)
+
+        torch.manual_seed(SEED)
+        ref_model = Pi0_5Model(cfg, Pi0_5WeightLoader(str(CHECKPOINT_DIR)))
+        with torch.no_grad():
+            ref_actions = ref_model.sample_actions(images, img_masks, lang_tokens, lang_masks)
+        pcc_e2e = _pcc(ref_actions, tt_actions)
+
+        # ---- 1. Vision PCC ----------------------------------------------------
+        pixel_values = torch.cat(images, dim=0)  # (N_CAMS, 3, H, W) — real cams only
+        torch.manual_seed(SEED)
+        ref_tower = TorchSigLIPVisionTower(cfg.siglip_config, weights["vlm_vision"])
+        ref_proj = TorchMMProjector(weights["vlm_projector"])
+        with torch.no_grad():
+            ref_vision = ref_proj.forward(ref_tower.forward(pixel_values))  # (N_CAMS, 256, 2048)
+
+        pipe._ensure_persistent_input_buffers(images, lang_tokens)
+        tt_vision_ttnn = pipe._run_vision_dp(pipe.pixel_values_buf)  # (N_CAMS, 256, 2048) replicated
+        # Replicated on 8 chips → ConcatMeshToTensor stacks 8 identical copies along dim 0; take first slice.
+        tt_vision_concat = ttnn.to_torch(tt_vision_ttnn, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        tt_vision = tt_vision_concat[:N_CAMS]
+        ttnn.deallocate(tt_vision_ttnn)
+        assert (
+            tt_vision.shape == ref_vision.shape
+        ), f"vision shape {tuple(tt_vision.shape)} vs ref {tuple(ref_vision.shape)}"
+        pcc_vision = _pcc(ref_vision, tt_vision)
+
+        # ---- 2. Prefill PCC ---------------------------------------------------
+        # Feed a random torch-side prefix to BOTH sides so prefill PCC is isolated
+        # from any upstream vision drift. seq_len matches the actual prefix the
+        # production pipeline produces for N_CAMS cams (N_CAMS·256 + 256_lang).
+        seq_len = N_CAMS * 256 + LANG_LEN
+        torch.manual_seed(SEED + 1)
+        prefix_torch = (torch.randn(1, seq_len, cfg.vlm_config.width) * 0.5).contiguous()
+
+        ref_backbone = TorchBackbone(cfg, weights)
+        with torch.no_grad():
+            ref_prefill_out, _ = ref_backbone.forward_vlm(
+                prefix_torch, attention_mask=None, position_ids=None, use_cache=False
+            )
+
+        prefix_ttnn = ttnn.from_torch(
+            prefix_torch,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        tt_prefill_out_ttnn, tt_kv = pipe.prefill.run(prefix_ttnn)
+        ttnn.deallocate(prefix_ttnn)
+        tt_prefill_out_concat = ttnn.to_torch(tt_prefill_out_ttnn, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0))
+        # Replicated — take chip-0 slice (first batch row).
+        tt_prefill_out = tt_prefill_out_concat[:1] if tt_prefill_out_concat.shape[0] == 8 else tt_prefill_out_concat
+        ttnn.deallocate(tt_prefill_out_ttnn)
+        for k, v in tt_kv:
+            ttnn.deallocate(k)
+            ttnn.deallocate(v)
+        assert (
+            tt_prefill_out.shape == ref_prefill_out.shape
+        ), f"prefill shape {tuple(tt_prefill_out.shape)} vs ref {tuple(ref_prefill_out.shape)}"
+        pcc_prefill = _pcc(ref_prefill_out, tt_prefill_out)
+
+        # ---- 3. Denoise-attributable PCC (estimated) -------------------------
+        # No isolated denoise test (would require injecting torch KV — per-layer
+        # shape/layout/dtype conversion is non-trivial; not done here).
+        # Estimate the denoise-only drift by treating stage PCCs as multiplicative:
+        #   denoise_attrib ≈ pcc_e2e / (pcc_vision * pcc_prefill)
+        # Rough proxy — PCC isn't strictly multiplicative, but for high-PCC stages
+        # it's a useful directional indicator of how much drift the denoise loop
+        # adds on top of upstream stages.
+        denoise_attrib = pcc_e2e / max(1e-6, (pcc_vision * pcc_prefill))
+
+        print("\n" + "=" * 72)
+        print(f"1×8 pi0.5 PCC report  (N_CAMS={N_CAMS}, steps={cfg.num_denoising_steps})")
+        print("=" * 72)
+        print(f"  vision   (N_CAMS,256,{cfg.vlm_config.width})       PCC = {pcc_vision:.6f}   (target ≥ 0.997)")
+        print(f"  prefill  (1,{seq_len},{cfg.vlm_config.width})      PCC = {pcc_prefill:.6f}   (target ≥ 0.99)")
+        print(f"  denoise  (e2e / (vision·prefill))         PCC ≈ {denoise_attrib:.6f}")
+        print(f"  e2e      (1,{cfg.action_horizon},{cfg.action_dim})           PCC = {pcc_e2e:.6f}   (target ≥ 0.95)")
+        print("=" * 72)
+        print(" Note: e2e uses seed-around-both pattern (seed before pipe.sample_actions")
+        print(" and before Pi0_5Model construction+call). Denoise PCC is estimated as")
+        print(" e2e / (vision · prefill) — no isolated denoise test (needs torch→TT KV).")
+        print("=" * 72)
+
+        assert pcc_vision >= 0.997, f"vision PCC {pcc_vision:.6f} < 0.997"
+        assert pcc_prefill >= 0.99, f"prefill PCC {pcc_prefill:.6f} < 0.99"
+        assert pcc_e2e >= 0.95, f"e2e PCC {pcc_e2e:.6f} < 0.95"
 
 
 @pytest.mark.skipif(

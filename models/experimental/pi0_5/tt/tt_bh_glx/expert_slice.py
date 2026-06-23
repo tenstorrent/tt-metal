@@ -86,16 +86,26 @@ class ExpertChunkSlice:
         position_ids: Optional["ttnn.Tensor"] = None,
         cos_override: Optional["ttnn.Tensor"] = None,
         sin_override: Optional["ttnn.Tensor"] = None,
+        precomputed_mods: Optional[List[Tuple["ttnn.Tensor", ...]]] = None,
     ) -> "ttnn.Tensor":
         """Run this chip's expert blocks. prefix_kv_for_chunk has one (K, V) per local layer.
 
         cos_override / sin_override: per-chip position-aware suffix RoPE tables
         for the upstream-openpi compat path (PI0_UPSTREAM_MASKS=1). When None,
         each block uses its own sequential cos_meta / sin_meta.
+
+        precomputed_mods (optional): list of (sa1, ta, ga, sf1, tf, gf) tuples,
+        one per local layer. When provided, each block bypasses its per-step
+        mod-Dense matmul + split — see AdaRMSGemmaBlockTTNN.forward's fast path.
+        Used by the 1×8 pipeline's TIER A precompute (pipeline_1x8.py); 28-chip
+        callers pass None and fall through to the on-device mod-Dense.
         """
         if len(prefix_kv_for_chunk) != len(self.blocks):
             raise RuntimeError(f"expected {len(self.blocks)} prefix KV tuples, got {len(prefix_kv_for_chunk)}")
-        for block, past_kv in zip(self.blocks, prefix_kv_for_chunk):
+        if precomputed_mods is not None and len(precomputed_mods) != len(self.blocks):
+            raise RuntimeError(f"expected {len(self.blocks)} precomputed mod tuples, got {len(precomputed_mods)}")
+        for idx, (block, past_kv) in enumerate(zip(self.blocks, prefix_kv_for_chunk)):
+            pm = precomputed_mods[idx] if precomputed_mods is not None else None
             hidden, _ = block.forward(
                 hidden,
                 cos_override,
@@ -105,5 +115,6 @@ class ExpertChunkSlice:
                 position_ids,
                 past_kv,
                 False,  # use_cache=False on expert path
+                precomputed_mod=pm,
             )
         return hidden
