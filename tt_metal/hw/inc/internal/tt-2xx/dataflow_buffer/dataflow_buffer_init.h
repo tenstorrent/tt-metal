@@ -811,6 +811,7 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         // Store scalar pack as three u32s from the already-unpacked header.
         dfb_write_dm_iface_scalars_from_hdr(iface, eh);
         iface.num_entries = eh.num_entries;
+        iface.is_producer = (eh.flags & DFB_HART_FLAG_IS_PRODUCER) ? 1 : 0;
 #endif
 
         WAYPOINT("L3");
