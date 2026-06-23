@@ -217,6 +217,12 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
     device_tensor_ = create_device_tensor(per_shard_spec, mesh_device_.get(), topology);
     per_shard_spec_ = device_tensor_.tensor_spec();
 
+    // isolated_claim: claim the service core ISOLATED so it is excluded from the per-op EnqueueMeshWorkload
+    // no-mixing routing (has_any_non_isolated_claims()) — concurrent model workloads keep the fast enqueue
+    // path with no per-op dispatch tax. The persistent receiver program is then launched via direct
+    // slow-dispatch below (like the realtime profiler) instead of EnqueueMeshWorkload.
+    const bool isolated = cfg_.isolated_claim;
+
     // Each device may resolve a different free service core; record it per coord.
     auto& svc = tt::tt_metal::internal::service_core_manager();
     const auto& coords = topology.mesh_coords();
@@ -225,7 +231,7 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         auto claimable = svc.get_claimable_cores(d);
         TT_FATAL(!claimable.empty(), "H2DStreamService: no claimable service core on device at coord {}", coord);
         const CoreCoord chosen = claimable.front();
-        svc.claim(d, {chosen});
+        svc.claim(d, {chosen}, /*isolated=*/isolated);
         service_cores_.emplace(coord, chosen);
     }
 
@@ -373,10 +379,26 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             device_tensor_.dtype(),
             worker_sync,
             metadata);
+        if (isolated) {
+            // Launch directly via slow-dispatch (like the realtime profiler). The isolated claim keeps
+            // EnqueueMeshWorkload on its fast path, so it will NOT service-route this program for us.
+            auto* ld = mesh_device_->get_device(core.device_coord);
+            tt::tt_metal::detail::LaunchProgram(
+                ld, program, /*wait_until_cores_done=*/false, /*force_slow_dispatch=*/true);
+        }
         workload_->add_program(distributed::MeshCoordinateRange(core.device_coord), std::move(program));
     }
 
-    EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    if (isolated) {
+        // The persistent receiver was already launched per-device via direct slow-dispatch above.
+        log_info(
+            tt::LogOp,
+            "[h2d] isolated_claim: persistent receiver launched via direct slow-dispatch; the service core "
+            "is excluded from per-op EnqueueMeshWorkload routing so concurrent model ops keep the fast "
+            "enqueue path");
+    } else {
+        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload_, /*blocking=*/false);
+    }
 }
 
 H2DStreamService::H2DStreamService(

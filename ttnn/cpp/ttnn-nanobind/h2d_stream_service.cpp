@@ -41,7 +41,8 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                tt::tt_metal::distributed::H2DMode socket_mode,
                std::optional<CoreRange> worker_cores,
-               uint32_t metadata_size_bytes) {
+               uint32_t metadata_size_bytes,
+               bool isolated_claim) {
                 tt::tt_metal::H2DStreamService::Config cfg{
                     .global_spec = global_spec,
                     .mapper = std::move(mapper),
@@ -51,6 +52,7 @@ void py_module_types(nb::module_& mod) {
                     .socket_mode = socket_mode,
                     .worker_cores = worker_cores,
                     .metadata_size_bytes = metadata_size_bytes,
+                    .isolated_claim = isolated_claim,
                 };
                 new (self) tt::tt_metal::H2DStreamService(mesh_device, std::move(cfg));
             },
@@ -63,6 +65,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("socket_mode") = tt::tt_metal::distributed::H2DMode::DEVICE_PULL,
             nb::arg("worker_cores").none() = nb::none(),
             nb::arg("metadata_size_bytes") = 0u,
+            nb::arg("isolated_claim") = false,
             R"doc(
                 Construct a persistent H2DStreamService on the given mesh.
 

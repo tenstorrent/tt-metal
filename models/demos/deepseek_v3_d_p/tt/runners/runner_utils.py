@@ -221,10 +221,15 @@ def build_h2d_service(
         mapper=mapper,
         worker_cores=worker_cores,
         metadata_size_bytes=metadata_size_bytes,
+        # Always claim the service core isolated: the resident receiver is launched via direct
+        # slow-dispatch and excluded from the per-op EnqueueMeshWorkload no-mixing routing, so it adds
+        # no per-op dispatch tax to the pipeline's concurrent model workloads. See H2D_DISPATCH_TAX.md.
+        isolated_claim=True,
     )
     logger.info(
         f"[h2d] H2DStreamService built: global_shape=({sp_factor},1,{isl_per_chip}) "
-        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}"
+        f"uint32 ROW_MAJOR DRAM, per_chip_bytes={per_chip_bytes}, worker_cores={worker_cores}, "
+        f"isolated_claim=True"
     )
     return service
 
