@@ -86,6 +86,13 @@ BH_110C_SC20_SUBTORUS_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-desc
 # Full 20-host non-subtorus SC20 galaxy (revAB, Aisle C). Same 20-host / 80-mesh scale as the subtorus
 # mock above but without the torus wrap-around links.
 BH_SC20_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revAB_aisleC/SC20_32x4_revAB_aisleC_mapping.yaml"
+# SC36 (revAB, Aisle C) cluster, SC20 sub-allocation mapping: 20-host / 80-mesh subset on the 120c
+# (bh-glx-120-*) galaxy. Same 80-mesh scale as BH_SC20 above but on the SC36 physical cluster; this is
+# the first SC36 sub-connection mapping (more SC36 allocations to follow).
+BH_SC36_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_aisleC/SC20_32x4_revAB_aisleC_mapping.yaml"
+# SC36 (revAB, Aisle C) single-pod (SC4) mapping: 4-rank column-1 subset (hosts bh-glx-120-c01u02/u08/u14/u20)
+# of the SC36 cluster, for the single-pod pipeline tests.
+BH_SC36_SINGLE_POD_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC36_32x4_revAB_aisleC/SC4_32x4_revAB_aisleC_mapping.yaml"
 # SC16 revC subtorus, Aisle C (16-host / 64-mesh subset of the SC20 revC subtorus Aisle C set).
 SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC16_32x4_revC_subtorus_aisleC_mapping.yaml"
 SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING="tt_metal/third_party/tt-cluster-descriptors/superclusters/blackhole/SC20_32x4_revC_subtorus_aisleC/SC4_32x4_revC_subtorus_aisleC_mapping.yaml"
@@ -515,6 +522,7 @@ for entry in \
     "SC16_revC_subtorus_aisleD:${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" \
     "SC20_revAB:${BH_SC20_CLUSTER_DESC_MAPPING}:16 48 64 80" \
+    "SC36_revAB:${BH_SC36_CLUSTER_DESC_MAPPING}:16 48 64 80" \
     "SC20_revC_subtorus:${BH_110C_SC20_SUBTORUS_CLUSTER_DESC_MAPPING}:16 48 64 80" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
   for stage in ${stages}; do
@@ -538,7 +546,7 @@ fi # bh-blitz-decode
 if run_group "bh-pod-pipeline"; then
 
 # Per-host-sliced pod MGDs (32–128 ASICs with host slices > 1 rank per slice)
-for mock in "${SP4_GLX_SINGLE_POD_CLUSTER_DESC_MAPPING}" "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" "${BH_110C_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
+for mock in "${SP4_GLX_SINGLE_POD_CLUSTER_DESC_MAPPING}" "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" "${BH_110C_SINGLE_POD_CLUSTER_DESC_MAPPING}" "${BH_SC36_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
   # Single-galaxy pod MGDs
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/single_bh_galaxy_1x1_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_CORNER_PINNINGS}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/single_bh_galaxy_1x2_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_CORNER_PINNINGS}"
@@ -561,7 +569,7 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # These only map onto a SINGLE pod (4-host mocks); on a full 16-host system mock the 40-host pod has no
 # valid mapping (the 16-host variants are commented out in the bh-sp4-glx and bh-blitz-decode groups).
 # Validated on rev A/B (sp4 single-pod), rev C (110C single-pod), and rev C subtorus (subtorus single-pod).
-for mock in "${SP4_GLX_SINGLE_POD_CLUSTER_DESC_MAPPING}" "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" "${BH_110C_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
+for mock in "${SP4_GLX_SINGLE_POD_CLUSTER_DESC_MAPPING}" "${SINGLE_POD_32X4_SUBTORUS_CLUSTER_DESC_MAPPING}" "${BH_110C_SINGLE_POD_CLUSTER_DESC_MAPPING}" "${BH_SC36_SINGLE_POD_CLUSTER_DESC_MAPPING}"; do
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_1x2_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_CORNER_PINNINGS}"
   run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD_CUSTOM}/llama_8b_2x1_pod_mesh_graph_descriptor.textproto" --mock-cluster-rank-binding "${mock}" --mpi-args "--allow-run-as-root --oversubscribe" "${TT_RUN_FLAGS[@]}" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="${GTEST_GALAXY_CORNER_PINNINGS}"
 done
