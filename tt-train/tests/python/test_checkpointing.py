@@ -227,20 +227,20 @@ def test_bf16_dtype_preserved_on_disk(tmp_path):
     ctx.reset_graph()
 
 
-def test_bad_file_raises(tmp_path):
+def test_bad_file_raises(tmp_path, expect_error):
     """A non-checkpoint, empty, or wrong-format file raises a clear ValueError (host-only — no device)."""
     not_pickle = tmp_path / "garbage.pkl"
     not_pickle.write_bytes(b"not a pickle at all")
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "could not read checkpoint header"):
         checkpointing.read_header(str(not_pickle))
 
     empty = tmp_path / "empty.pkl"
     empty.touch()
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "could not read checkpoint header"):
         checkpointing.read_header(str(empty))
 
     wrong_format = tmp_path / "wrong.pkl"
     with open(wrong_format, "wb") as f:
         pickle.dump({"not": "a checkpoint"}, f)
-    with pytest.raises(ValueError):
+    with expect_error(ValueError, "not a ttml checkpoint or unsupported format"):
         checkpointing.read_header(str(wrong_format))
