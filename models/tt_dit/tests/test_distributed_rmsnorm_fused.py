@@ -707,3 +707,63 @@ def test_corr_det(mesh_device, model, tp, topology, op_override, tp_axis, full_m
             flagged.append(cfg.cid)
             logger.warning(f"RMSCORR {cfg.cid:<22} CONFIG FAILED: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"RMSCORR [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "model", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_CORR_PARAMS, _CORR_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_traced_corr(mesh_device, model, tp, topology, op_override, tp_axis, full_mesh):
+    """Traced fused output must match the EAGER fused output (and torch ref).
+
+    The perf path captures the op into a trace and replays it many times with one
+    device sync. Trace replay does NOT re-run host-side semaphore init, so any
+    op-managed semaphore not reset in-kernel accumulates across replays and the AG
+    desyncs (fast-but-wrong or hang). This replays REPLAYS times before reading so
+    a missing reset shows up as a low traced-vs-eager PCC, not just a lucky first
+    replay. Eager correctness is covered by test_corr_det; this is the trace guard."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    links = _fused_links(op_override)
+    REPLAYS = int(_os.getenv("TRACED_CORR_REPLAYS", "20"))
+    flagged = []
+
+    for cfg in _select(_make_cfgs(model, tp), "CORR_ONLY"):
+        logger.info(f"=== [{model}] {cfg.cid} rows={cfg.rows} feat={cfg.feat_local} ===")
+        try:
+            ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
+            ag = ccl.get_ag_ping_pong_semaphore(tp_axis)
+            inp = _build(submesh, cfg, tp_axis)
+            ref = _torch_ref(cfg)
+            # Eager reference output (this path is what test_corr_det validates).
+            pob_e = _make_pob(inp, submesh, cfg, links, tp_axis)
+            out_eager = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob_e, op_override), tp_axis)
+            # Traced output: warmup/compile, capture, then replay REPLAYS times.
+            pob_t = _make_pob(inp, submesh, cfg, links, tp_axis)
+            _run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob_t, op_override)
+            ttnn.synchronize_device(submesh)
+            tid = ttnn.begin_trace_capture(submesh, cq_id=0)
+            out_dev = _run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob_t, op_override)
+            ttnn.end_trace_capture(submesh, tid, cq_id=0)
+            ttnn.synchronize_device(submesh)
+            for _ in range(REPLAYS):
+                ttnn.execute_trace(submesh, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(submesh)
+            out_traced = _gather(out_dev, tp_axis)
+            ttnn.release_trace(submesh, tid)
+
+            pcc_te = _pcc(out_traced, out_eager)  # traced vs eager — the trace guard
+            pcc_tr = _pcc(out_traced, ref)  # traced vs torch ref
+            maxdelta = (out_traced - out_eager).abs().max().item()
+            susp = (pcc_te < 0.9999) or (pcc_tr < 0.999)
+            if susp:
+                flagged.append(cfg.cid)
+            logger.info(
+                f"RMSTRACE {cfg.cid:<22} pcc(traced:eager)={pcc_te * 100:.4f}% "
+                f"pcc(traced:torch)={pcc_tr * 100:.4f}% maxdelta(traced-eager)={maxdelta:.5f} "
+                f"replays={REPLAYS}{'  <-- SUSPICIOUS' if susp else ''}"
+            )
+        except Exception as e:  # noqa: BLE001
+            flagged.append(cfg.cid)
+            logger.warning(f"RMSTRACE {cfg.cid:<22} CONFIG FAILED: {type(e).__name__}: {str(e)[:220]}")
+    logger.info(f"RMSTRACE [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
