@@ -15,7 +15,91 @@
 
 #include "pad.hpp"
 
+#include <tt-metalium/constants.hpp>
+
 namespace ttnn::operations::data_movement::detail {
+
+namespace {
+
+inline bool is_bw_sharded(const MemoryConfig& mc) {
+    const auto layout = mc.memory_layout();
+    return mc.is_sharded() &&
+           (layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED);
+}
+
+inline bool has_nontile_w(const ttnn::Shape& shape) {
+    return shape.rank() >= 1 && shape[-1] % tt::constants::TILE_WIDTH != 0;
+}
+
+// Route through sharded_to_interleaved only when native kernels are unsafe.
+// Regular RM B/W-sharded I/O is handled natively via noc_async_*_sharded in the
+// default RM program factory (mirrors slice.cpp composite predicates).
+inline bool needs_pad_composite_fallback(
+    const ttnn::Tensor& input_tensor,
+    const MemoryConfig& output_memory_config,
+    std::span<const uint32_t> input_tensor_start) {
+    (void)output_memory_config;
+    if (!input_tensor.is_sharded()) {
+        return false;
+    }
+    if (!input_tensor.memory_config().is_l1()) {
+        return true;
+    }
+    const auto input_layout = input_tensor.memory_config().memory_layout();
+    if (input_layout != TensorMemoryLayout::WIDTH_SHARDED && input_layout != TensorMemoryLayout::BLOCK_SHARDED) {
+        return false;
+    }
+    if (input_tensor.layout() == Layout::TILE) {
+        return true;
+    }
+    const bool width_front_pad = input_tensor_start.size() >= 4 && input_tensor_start[3] > 0;
+    return has_nontile_w(input_tensor.logical_shape()) || width_front_pad;
+}
+
+inline bool needs_pad_composite_output(
+    const ttnn::Tensor& input_tensor, const MemoryConfig& output_memory_config, const ttnn::Shape& output_shape) {
+    if (input_tensor.layout() != Layout::ROW_MAJOR || !is_bw_sharded(output_memory_config)) {
+        return false;
+    }
+    return has_nontile_w(output_shape);
+}
+
+ttnn::Tensor pad_via_interleaved_composite(
+    const ttnn::Tensor& input_tensor,
+    std::span<const uint32_t> output_padded_shape,
+    std::span<const uint32_t> input_tensor_start,
+    const float value,
+    const bool use_multicore,
+    const MemoryConfig& output_memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+    auto interleaved_input = ttnn::sharded_to_interleaved(input_tensor, interleaved_config, std::nullopt);
+
+    MemoryConfig working_output =
+        output_memory_config.is_sharded()
+            ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, output_memory_config.buffer_type()}
+            : output_memory_config;
+
+    ttnn::Shape out_shape{output_padded_shape};
+    ttnn::Shape start{input_tensor_start};
+    auto padded = ttnn::prim::pad(
+        interleaved_input,
+        out_shape,
+        out_shape,
+        start,
+        value,
+        working_output,
+        use_multicore,
+        std::nullopt,
+        sub_core_grids);
+
+    if (output_memory_config.is_sharded()) {
+        return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
+    }
+    return padded;
+}
+
+}  // namespace
 
 bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
@@ -68,42 +152,24 @@ ttnn::Tensor pad_impl(
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    // WIDTH_SHARDED and BLOCK_SHARDED inputs do not have specialised program
-    // factories for pad.  Route them through sharded_to_interleaved → pad →
-    // interleaved_to_sharded so the existing interleaved factories handle the
-    // actual data movement.  HEIGHT_SHARDED inputs keep the existing path
-    // which uses PadRmShardedHeightOnly / PadRmShardedWidthOnly factories.
-    const auto input_layout = input_tensor.memory_config().memory_layout();
-    if (input_tensor.is_sharded() &&
-        (input_layout == TensorMemoryLayout::WIDTH_SHARDED || input_layout == TensorMemoryLayout::BLOCK_SHARDED)) {
-        MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-        auto interleaved_input = ttnn::sharded_to_interleaved(input_tensor, interleaved_config, std::nullopt);
-
-        MemoryConfig working_output =
-            output_memory_config.is_sharded()
-                ? MemoryConfig{TensorMemoryLayout::INTERLEAVED, output_memory_config.buffer_type()}
-                : output_memory_config;
-
-        ttnn::Shape out_shape{output_padded_shape};
-        ttnn::Shape start{input_tensor_start};
-        auto padded = ttnn::prim::pad(
-            interleaved_input,
-            out_shape,
-            out_shape,
-            start,
+    ttnn::Shape output_shape_for_fallback{output_padded_shape};
+    const bool composite_in = needs_pad_composite_fallback(input_tensor, output_memory_config, input_tensor_start);
+    const bool composite_out =
+        needs_pad_composite_output(input_tensor, output_memory_config, output_shape_for_fallback);
+    if (composite_in || composite_out) {
+        return pad_via_interleaved_composite(
+            input_tensor,
+            output_padded_shape,
+            input_tensor_start,
             value,
-            working_output,
             use_multicore,
-            std::nullopt,
+            output_memory_config,
             sub_core_grids);
-
-        if (output_memory_config.is_sharded()) {
-            return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
-        }
-        return padded;
     }
 
-    if (input_tensor.is_sharded() && input_tensor.memory_config().memory_layout() != TensorMemoryLayout::ND_SHARDED &&
+    if (input_tensor.is_sharded() &&
+        input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
+        output_memory_config.memory_layout() != TensorMemoryLayout::ND_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::ND_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         auto total_height = [](const auto& shape) {
