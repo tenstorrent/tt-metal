@@ -8,6 +8,8 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "llk_memory_checks.h"
+#include "quasar_test_common.h"
 #include "sfpu_stub.h"
 #include "tensor_shape.h"
 
@@ -30,39 +32,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Setup data valid scheme
     set_up_dest_dvalid_per_thread<dest_dvalid_client::UNPACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    buffer_descriptor_u bd_val_A = {0};
-    buffer_descriptor_u bd_val_B = {0};
+    const auto tensor_shape_A = tensor_shape_from_params(params);
 
-    bd_val_A.f.l1_addr_16B = params.buffer_A[0] / 16;
-    bd_val_A.f.format      = static_cast<std::uint8_t>(formats.unpack_A_src);
-    bd_val_A.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val_A.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val_A.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
-
-    td_val_A.buf_desc        = bd_val_A;
-    td_val_A.buf_desc_id     = buf_desc_id_a;
-    td_val_A.reg_data_format = static_cast<std::uint8_t>(formats.unpack_A_dst);
-
-    bd_val_B.f.l1_addr_16B = params.buffer_B[0] / 16;
-    bd_val_B.f.format      = static_cast<std::uint8_t>(formats.unpack_B_src);
-    bd_val_B.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val_B.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val_B.f.z_dim       = (params.num_faces == 4) ? params.num_faces : 1;
-
-    td_val_B.buf_desc        = bd_val_B;
-    td_val_B.buf_desc_id     = buf_desc_id_b;
-    td_val_B.reg_data_format = static_cast<std::uint8_t>(formats.unpack_B_dst);
+    td_val_A = ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_A[0]), formats.unpack_A_src, buf_desc_id_a, formats.unpack_A_dst);
+    td_val_B = ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_B[0]), formats.unpack_B_src, buf_desc_id_b, formats.unpack_B_dst);
 
     _configure_buf_desc_table_(td_val_A.buf_desc_id, td_val_A.buf_desc);
     _configure_buf_desc_table_(td_val_B.buf_desc_id, td_val_B.buf_desc);
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(td_val_A, td_val_B);
-
-    ckernel::TensorShape tensor_shape_A = {
-        .face_r_dim      = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
-        .face_c_dim      = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM),
-        .num_faces_r_dim = static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        .num_faces_c_dim = static_cast<std::uint8_t>(params.num_faces_c_dim_A),
-    };
 
     _llk_unpack_reduce_init_<POOL_TYPE, REDUCE_DIM>(buf_desc_id_a, buf_desc_id_b, tensor_shape_A, 1 /*num_tiles_per_unpack*/);
 
@@ -124,39 +101,18 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_dest_dvalid_per_thread<dest_dvalid_client::PACK>({dest_dvalid_client::FPU, dest_dvalid_client::PACK});
 
-    buffer_descriptor_u bd_val = {0};
-    tdma_descriptor_t tdma_desc;
+    const auto tensor_shape_A = tensor_shape_from_params(params);
 
-    bd_val.f.l1_addr_16B = params.buffer_Res[0] / 16;
-    bd_val.f.format      = static_cast<std::uint8_t>(formats.pack_dst);
-    bd_val.f.x_dim       = params.TEST_FACE_C_DIM;
-    bd_val.f.y_dim       = params.TEST_FACE_R_DIM;
-    bd_val.f.z_dim       = (params.num_faces < 4) ? 1 : params.num_faces;
-
-    tdma_desc.buf_desc        = bd_val;
-    tdma_desc.buf_desc_id     = buf_desc_id;
-    tdma_desc.reg_data_format = static_cast<std::uint8_t>(formats.pack_src);
-
-    ckernel::TensorShape tensor_shape_A = {
-        .face_r_dim      = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
-        .face_c_dim      = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM),
-        .num_faces_r_dim = static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        .num_faces_c_dim = static_cast<std::uint8_t>(params.num_faces_c_dim_A),
-    };
-
-    ckernel::TileShape tile_shape_A = {
-        .num_faces   = params.num_faces,
-        .face_r_dim  = params.TEST_FACE_R_DIM,
-        .face_c_dim  = params.TEST_FACE_C_DIM,
-        .narrow_tile = ((params.num_faces_c_dim_A < params.num_faces_r_dim_A) || (params.num_faces == 1))};
+    tdma_descriptor_t tdma_desc =
+        ckernel::trisc::construct_tdma_desc(tensor_shape_A, L1_ADDRESS(params.buffer_Res[0]), formats.pack_dst, buf_desc_id, formats.pack_src);
 
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_<p_pacr::PACK0>(buf_desc_id, tile_shape_A, 1 /*num_tiles_per_pack*/);
+    _llk_pack_init_(buf_desc_id, tensor_shape_A, 1 /*num_tiles_per_pack*/);
     _llk_pack_reduce_mask_config_<REDUCE_DIM>(tensor_shape_A);
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_pack_<p_pacr::PACK0>(i, i, tile_shape_A);
+        _llk_pack_(i, i, tensor_shape_A);
     }
     _llk_pack_dest_dvalid_section_done_<dest_sync, is_fp32_dest_acc_en>();
     _llk_pack_reduce_mask_clear_();
