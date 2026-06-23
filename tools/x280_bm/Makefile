@@ -27,7 +27,7 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
@@ -51,6 +51,16 @@ $(BUILD)/poller.elf: $(BUILD)/entry.o $(BUILD)/poller.o $(LD_SCRIPT) | toolchain
 $(BUILD)/poller.bin: $(BUILD)/poller.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "poller.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/dma_probe.o: src/dma_probe.c include/dma_engine.h include/noc.h | $(BUILD) toolchain
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/dma_probe.elf: $(BUILD)/entry.o $(BUILD)/dma_probe.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/dma_probe.o
+
+$(BUILD)/dma_probe.bin: $(BUILD)/dma_probe.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "dma_probe.bin: $$(wc -c < $@) bytes"
 
 $(BUILD):
 	mkdir -p $@

@@ -17,6 +17,7 @@ CREATE_PGM_EXAMPLES_EXE("${PROFILER_EXAMPLES_SRCS}" "profiler")
 # headers, so it can't go through the public-API-only CREATE_PGM_EXAMPLES_EXE).
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_counter)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_poll_rate)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_dma_probe)
 
 add_custom_target(
     profiler_examples
@@ -24,4 +25,5 @@ add_custom_target(
         ${PROGRAMMING_EXAMPLES_TEST_TARGETS}
         test_x280_counter
         test_x280_poll_rate
+        test_x280_dma_probe
 )
