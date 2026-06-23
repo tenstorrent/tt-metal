@@ -48,3 +48,28 @@ def test_encoder_pad_targets_even_latent_and_crop_restores_true_grid():
     padded, h, w = pad_hw_replicate(img, 2 * 32, 4 * 32)
     assert padded.shape[3:] == (576, 1024)  # 576/32=18 (%2==0), 1024/32=32 (%4==0)
     assert (h // 32, w // 32) == (17, 30)  # latent crop restores the true grid
+
+
+def test_encode_image_pads_input_and_crops_latent():
+    # Locks the wiring (not just the math): encode_image must feed the encoder an evenly-shardable
+    # padded input and crop the latent back. Without this the encoder's uneven-dim halo deadlocks at 4x8.
+    from types import SimpleNamespace
+
+    from models.tt_dit.pipelines.ltx.pipeline_ltx import SPATIAL_COMPRESSION, LTXPipeline
+
+    seen = {}
+
+    def fake_encoder(x):
+        seen["in_hw"] = tuple(x.shape[-2:])
+        b, _, f, hh, ww = x.shape
+        return torch.zeros(b, 128, f, hh // SPATIAL_COMPRESSION, ww // SPATIAL_COMPRESSION)
+
+    fake_encoder.parallel_config = SimpleNamespace(
+        height_parallel=SimpleNamespace(factor=4), width_parallel=SimpleNamespace(factor=8)
+    )
+    fake = SimpleNamespace(vae_encoder=fake_encoder, _prepare_vae_encoder=lambda: None)
+
+    img = torch.randn(1, 3, 1, 544, 960)  # latent 17x30, uneven over 4x8
+    latent = LTXPipeline.encode_image(fake, img)
+    assert seen["in_hw"] == (640, 1024)  # 640/32=20 (%4==0), 1024/32=32 (%8==0)
+    assert latent.shape[-2:] == (17, 30)  # cropped back to the true grid

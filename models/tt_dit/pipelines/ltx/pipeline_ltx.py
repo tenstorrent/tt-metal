@@ -1000,7 +1000,16 @@ class LTXPipeline:
         """
         assert self.vae_encoder is not None, "VAE encoder not constructed (no encoder_blocks in checkpoint?)"
         self._prepare_vae_encoder()
-        device_latent = self.vae_encoder(image_BCFHW)
+        # Pad pixels so the /32 latent lands on even mesh shards. Otherwise the encoder's sharded
+        # convs hit the uneven-dim halo path (the same one that seams the upsampler at 2x4); at 4x8
+        # that path's neighbor-pad CCL deadlocks the device. Crop the latent margin back to the true
+        # grid afterward. Mirrors _upsample_latent; the encoder adapts to the padded runtime shape.
+        pc = self.vae_encoder.parallel_config
+        padded, H, W = pad_hw_replicate(
+            image_BCFHW, pc.height_parallel.factor * SPATIAL_COMPRESSION, pc.width_parallel.factor * SPATIAL_COMPRESSION
+        )
+        device_latent = self.vae_encoder(padded)
+        device_latent = device_latent[:, :, :, : H // SPATIAL_COMPRESSION, : W // SPATIAL_COMPRESSION]
         if os.environ.get("LTX_VAE_ENCODER_HOST", "0") != "1":
             return device_latent
         host_latent = self._host_encode_image(image_BCFHW)
