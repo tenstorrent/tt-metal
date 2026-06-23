@@ -137,6 +137,21 @@ If you prefer the low-level API, the same three steps are also exposed directly
 as `model.capture_trace(...)`, `model.execute_trace(...)`, and
 `model.release_trace()` — see `demo/demo_v2.py`.
 
+## Single-chip demo
+
+`demo/demo_single_chip.py` is a complete, runnable example of the trace API on a
+single device. It builds the model, encodes prompts, and runs one forward pass
+per batch size (1, 8, 16, 32) using `model.forward(**inputs, mode="trace")`, then
+reads the result back with the optimized `copy_device_to_torch` device→host path
+and prints the resulting embeddings.
+
+```bash
+TT_VISIBLE_DEVICES=0 python models/demos/wormhole/bge_m3/demo/demo_single_chip.py
+```
+
+Each batch size builds its own model and trace (a captured trace is fixed-shape).
+To run a single batch size, edit `BATCH_SIZES` at the top of the file.
+
 ## Performance benchmarks
 
 Two benchmark scripts live in `models/demos/wormhole/bge_m3/tests/perf/`.
