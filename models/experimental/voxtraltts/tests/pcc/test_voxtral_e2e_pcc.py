@@ -378,10 +378,7 @@ def test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc(device, reset_seeds, reque
     cpu_hidden = cpu_prefill.hidden_states[-1][:, -1, :]  # [1, dim]
     cpu_pkv = cpu_prefill.past_key_values
 
-    tt_embeds = pipe._build_voice_injected_embeds(prompt_ids, _DEMO_VOICE)
-    tt_hidden_tt = pipe.text.prefill_from_embeds(tt_embeds, start_pos=0)
-    tt_hidden = pipe.text.hidden_tt_to_torch(tt_hidden_tt)  # [dim]
-    ttnn.deallocate(tt_hidden_tt)
+    tt_hidden = pipe.text_prefill_hidden(prompt_ids, _DEMO_VOICE)
     current_pos = len(prompt_ids)
 
     # Teacher-forced AR loop: feed golden to both, each emits its own acoustic code.
@@ -401,8 +398,7 @@ def test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc(device, reset_seeds, reque
         # Advance both text models on the golden code, not their own output.
         golden_step = golden_model_codes[:, :, i].reshape(1, voxtral_num_codebooks())
         cpu_hidden, cpu_pkv = _cpu_text_decode_step(cpu, audio_codes_b37=golden_step, past_key_values=cpu_pkv)
-        mm_embed = pipe._audio_codes_to_mm_embed(golden_step)
-        tt_hidden = pipe.text.decode_step_from_embeds(mm_embed, current_pos)
+        tt_hidden = pipe.text_decode_hidden_from_audio_codes(golden_step, current_pos)
         current_pos += 1
     ttnn.synchronize_device(device)
 

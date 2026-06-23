@@ -48,6 +48,7 @@ from models.experimental.voxtraltts.utils.mesh import (
     voxtral_replicate_mesh_mapper,
     voxtral_to_torch_replicated,
     voxtral_tp_shard_dim3_mapper,
+    voxtral_tp_shard_last_dim_mapper,
 )
 from models.experimental.voxtraltts.utils.debug_trace import VoxtralTTSDebugTrace
 from models.experimental.voxtraltts.tt.acoustic_model import acoustic_fm_noise_seed
@@ -438,17 +439,18 @@ class VoxtralTTSPipeline:
         return emb.squeeze(0).to(dtype=torch.bfloat16)
 
     def _audio_codes_to_mm_embed_tt(self, audio_codes_1_37: torch.Tensor) -> ttnn.Tensor:
-        """``[1, 37]`` codes → device ``[1, 1, 1, dim]`` MM embedding for ``decode_step_from_embeds_tt``."""
+        """``[1, 37]`` codes → device ``[1, 1, 1, local_dim]`` MM embedding for text decode."""
         emb = self._audio_codes_to_mm_embed(audio_codes_1_37)
         dim = self.text.inner.args.dim
         x_4d = emb.reshape(1, 1, 1, dim).contiguous()
+        tp_mapper = voxtral_tp_shard_last_dim_mapper(self.mesh_device, self.text.inner.args.cluster_shape)
         return ttnn.from_torch(
             x_4d,
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=tp_mapper or voxtral_replicate_mesh_mapper(self.mesh_device),
         )
 
     def _audio_codes_to_mm_embed_device(self, audio_codes_1_37: torch.Tensor) -> ttnn.Tensor:
@@ -461,13 +463,14 @@ class VoxtralTTSPipeline:
         """
         emb = self._audio_codes_to_mm_embed(audio_codes_1_37)  # CPU F.embedding + sum → [dim]
         dim = self.text.inner.args.dim
+        tp_mapper = voxtral_tp_shard_last_dim_mapper(self.mesh_device, self.text.inner.args.cluster_shape)
         return ttnn.from_torch(
             emb.reshape(1, 1, 1, dim).to(dtype=torch.bfloat16).contiguous(),
             device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=tp_mapper or voxtral_replicate_mesh_mapper(self.mesh_device),
         )
 
     def _audio_codes_tt_to_mm_embed_device(self, audio_codes_b1_1_37_tt: ttnn.Tensor) -> ttnn.Tensor:
@@ -489,6 +492,31 @@ class VoxtralTTSPipeline:
                 ttnn.deallocate(emb_4d)
             return out
         return ttnn.to_memory_config(emb_4d, ttnn.DRAM_MEMORY_CONFIG)
+
+    def text_prefill_hidden(self, prompt_token_ids: list[int], voice: str) -> torch.Tensor:
+        """Prefill on prompt; return CPU last-token hidden ``[dim]`` as float32."""
+        if voxtral_is_multi_device_mesh(self.mesh_device):
+            _, embeds_tt = self._build_voice_injected_embeds_tt_qb2(prompt_token_ids, voice)
+            hidden_tt = self.text.prefill_from_embeds(embeds_tt, start_pos=0)
+        else:
+            embeds = self._build_voice_injected_embeds(prompt_token_ids, voice)
+            hidden_tt = self.text.prefill_from_embeds(embeds, start_pos=0)
+        try:
+            return self.text.hidden_tt_to_torch(hidden_tt).float()
+        finally:
+            if hidden_tt.is_allocated():
+                ttnn.deallocate(hidden_tt)
+
+    def text_decode_hidden_from_audio_codes(self, audio_codes_b37: torch.Tensor, current_pos: int) -> torch.Tensor:
+        """One text decode step from ``[1, 37]`` codes; CPU ``[dim]`` hidden as float32."""
+        if voxtral_is_multi_device_mesh(self.mesh_device):
+            mm_embed_tt = self._audio_codes_to_mm_embed_tt(audio_codes_b37)
+            hidden_tt = self.text._decode_single_token_to_tt(mm_embed_tt, current_pos)
+            if mm_embed_tt.is_allocated():
+                ttnn.deallocate(mm_embed_tt)
+            return self.text.hidden_tt_to_torch(hidden_tt).float()
+        mm_embed = self._audio_codes_to_mm_embed(audio_codes_b37)
+        return self.text.decode_step_from_embeds(mm_embed, current_pos).float()
 
     def _waveform_from_tt_chunks(self, wav_chunks: list[ttnn.Tensor], expected_samples: int) -> torch.Tensor:
         """Explicit host export boundary for TT waveform chunks."""
