@@ -9,7 +9,7 @@ on:
       timeout:
         required: false
         type: number
-        default: 15
+        default: 60
       build-artifact-name:
         required: true
         type: string
@@ -22,18 +22,36 @@ on:
 
 jobs:
   fabric-cpu-unit-tests:
-    name: ${{ inputs.arch }} fabric cpu unit tests
-    runs-on: tt-ubuntu-2204-large-stable
+    name: ${{ inputs.arch }} fabric cpu unit tests (${{ matrix.shard.name }})
+    runs-on: tt-ubuntu-2204-medium-stable
+    strategy:
+      fail-fast: false
+      matrix:
+        shard:
+          # Shard A (~6m20s): unit + phys-grouping + control-plane + t3k + wh-galaxy
+          - name: "unit-phys-ctrl-t3k-wh"
+            groups: "unit phys-grouping control-plane t3k wh-galaxy"
+          # BH galaxy, sharded by topology / cluster mock to keep each within the per-step timeout.
+          - name: "bh-slices"
+            groups: "bh-6u bh-single-galaxy bh-dual-galaxy bh-pod-pipeline bh-misc"
+          - name: "bh-sp4-glx"
+            groups: "bh-sp4-glx"
+          - name: "bh-subtorus"
+            groups: "bh-subtorus bh-subtorus-sc16"
+          - name: "bh-subtorus-sc20"
+            groups: "bh-subtorus-sc20"
+          - name: "bh-blitz-decode"
+            groups: "bh-blitz-decode"
     container:
-      image: harbor.ci.tenstorrent.net/${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      image: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
       env:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        TT_LOGGER_LEVEL: warn
         LD_LIBRARY_PATH: /work/build/lib
         PYTHONPATH: /work
         TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
-        TT_METAL_CLEAR_L1: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
     defaults:
@@ -43,6 +61,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -53,11 +72,13 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           hang-detection-timeout: 20.0
-      - name: Run fabric cpu-only unit tests
+      - name: Run fabric cpu-only unit tests (${{ matrix.shard.name }})
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           # Keep commands in tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh (also runnable locally).
-          ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh
+          for g in ${{ matrix.shard.groups }}; do
+            ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group "$g"
+          done
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
