@@ -235,17 +235,18 @@ sfpi_inline sfpi::vInt rr_round(sfpi::vFloat t)
 
 #if EXPALU_MODE == 1
 // ===== exp_hw_eval<DEG> (EXPONENT_ALU_EXP2) — Quasar port of the BH evaluator. =====
-// exp(x) = 2^(x*MULT). t = x*MULT + 127, clamped [0,255]; integer part i and
-// fraction f in [0,1); p = Horner(2^f); y = 2^(i-127) * p.
+// exp(x) = 2^(x*MULT). t = x*MULT + 127, clamped [0,255]; integer part ep (2^i)
+// and fraction f in [0,1); p = Horner(2^f); y = 2^(i-127) * p.
 //
-// SIM NOTE: the Blackhole evaluator does the float->int decompose with the
-// exponent-ALU exman(ImplicitOne)+shft(Logical) + a second exman for the
-// fraction. The PINNED craq-sim build (libttsim.so) does NOT implement SFPEXMAN
-// (it aborts MissingSpecification: tensix_execute_sfpexman), so this port does
-// the SAME decompose with the sim-supported floor/round path proven by the
-// rational quasar kernel (SFPSTOCHRND + setexp-based ldexp). The math is
-// identical: i = floor(t), f = t - i, 2^(i-127) = setexp(1.0, i). exexp / setexp
-// / SFPSTOCHRND all run on this sim; SFPEXMAN does not.
+// NATIVE EXMAN: this is the direct Quasar port of the Blackhole evaluator's
+// branch-free exponent-ALU decompose — exman(ImplicitOne)+shft(Logical) to shift
+// the mantissa into the integer-part exponent, then a second exman(FractionOnly)
+// for the fraction. SFPEXMAN (op 0x78) is now implemented in the craq-sim Quasar
+// build (src/tensix.cpp, per tt_llk_quasar/instructions/assembly.yaml:6652), so
+// we no longer need the SFPSTOCHRND+setexp floor/round workaround that re-derived
+// the same decompose. Both exman modes used here map to bit-0 of instr_mod1:
+// ImplicitOne (PAD8, mod1=0, include hidden bit) and FractionOnly (PAD9, mod1=1,
+// exclude hidden bit) — exactly what the sim now models.
 template <std::uint32_t DEG>
 sfpi_inline sfpi::vFloat exp_hw_eval(sfpi::vFloat x)
 {
@@ -259,23 +260,24 @@ sfpi_inline sfpi::vFloat exp_hw_eval(sfpi::vFloat x)
     sfpi::vec_min_max(thr_lo, t); // t = max(0, t)
     sfpi::vec_min_max(t, thr_hi); // t = min(t, 255)
 
-    // Integer part i = floor(t) (exp-biased), fraction f = t - i in [0,1).
-    sfpi::vInt i = rr_round(t);
-    v_if (int_to_float(i) > t) // correct round-to-nearest down to floor
-    {
-        i = i - sfpi::vInt(1);
-    }
-    v_endif;
-    const sfpi::vFloat fi = int_to_float(i);
-    // f = t - i via fused FMA (no SFPADDI): (-1)*fi + t
-    sfpi::vFloat f = __builtin_rvtt_sfpmad(sfpi::vFloat(-1.0f).get(), fi.get(), t.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
+    // Branch-free float->int decompose: shift the mantissa left by (exp - bias)
+    // bits so z carries the integer part in its exponent and the fraction in its
+    // mantissa (native exponent-ALU path, identical to the BH evaluator).
+    sfpi::vInt e   = sfpi::exexp(t);
+    sfpi::vInt m   = sfpi::exman(t, sfpi::MantissaMode::ImplicitOne);
+    m              = sfpi::shft(m, e, sfpi::ShiftMode::Logical);
+    sfpi::vFloat z = sfpi::as<sfpi::vFloat>(m);
+
+    sfpi::vInt ep  = sfpi::exexp(z, sfpi::ExponentMode::NoDebias); // biased exp = integer part i (+127)
+    sfpi::vMag fm  = sfpi::exman(z);                               // fraction * 2^23
+    sfpi::vFloat f = sfpi::convert<sfpi::vFloat>(fm, sfpi::RoundMode::Nearest) * sfpi::vFloat(0x1p-23f);
 
     sfpi::vFloat p = eval_horner<DEG>(f); // 2^f over natural [0,1) coeffs
 
-    // y = 2^(i-127) * p. setexp(1.0, i) writes biased exponent i onto 1.0,
-    // i.e. 2^(i-127) (i already carries the +127 bias from t = x*MULT + 127).
-    const sfpi::vFloat two_pow_i = sfpi::setexp(sfpi::vFloat(1.0f), i);
-    sfpi::vFloat y               = p * two_pow_i;
+    // y = 2^(i-127) * p. ep carries the biased integer exponent i; combine with
+    // p's own exponent so setexp writes 2^i * 2^f = base^x onto p's mantissa.
+    sfpi::vInt pe  = sfpi::exexp(p, sfpi::ExponentMode::NoDebias);
+    sfpi::vFloat y = sfpi::setexp(p, ep + pe - sfpi::vInt(127));
 
 #if EXPALU_COMPOSE == 1 // sigmoid: 1/(1+y)  (y == exp(-x))
     y = expalu_recip(y + sfpi::vFloat(1.0f));
