@@ -846,7 +846,42 @@ def test_ltx_transformer_block(
             video_padding_mask=v_pad_sp,
         )
 
-    tt_out = tt_block(**forward_kwargs)
+    tt_out = tt_block(**forward_kwargs)  # warmup (cold: one-time input/weight tilize+pad+cast)
+
+    # Profiling: isolate a WARM steady-state region with signposts so eager and traced
+    # share the same op set + execution order (the cold first forward's one-time tilize/
+    # pad/cast is excluded from both — "analyze only the second iteration"). Profile with
+    #   tt-perf-report --start-signpost performance --end-signpost perf_end
+    #   LTX_BLOCK_PROFILE=1 -> warm eager 2nd forward (collective ops show eager dispatch skew)
+    #   LTX_BLOCK_TRACE=1   -> traced lockstep replays (real device time for the in-kernel AGs)
+    if os.getenv("LTX_BLOCK_TRACE") == "1" or os.getenv("LTX_BLOCK_PROFILE") == "1":
+        try:
+            from tracy import signpost
+        except ImportError:
+            def signpost(*_):
+                return None
+
+        ttnn.synchronize_device(mesh_device)
+        signpost("caching")
+        if os.getenv("LTX_BLOCK_TRACE") == "1":
+            # 2 replays: warmup+capture+2 = 4 profiled forwards, under the profiler DRAM
+            # buffer (5 replays overflowed). No ReadDeviceProfiler — it flushes the
+            # host-side signpost markers the --start/--end-signpost range needs.
+            _tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            tt_out = tt_block(**forward_kwargs)
+            ttnn.end_trace_capture(mesh_device, _tid, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            signpost("performance")
+            ttnn.execute_trace(mesh_device, _tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            signpost("perf_end")
+            ttnn.release_trace(mesh_device, _tid)
+        else:
+            signpost("performance")
+            tt_out = tt_block(**forward_kwargs)
+            ttnn.synchronize_device(mesh_device)
+            signpost("perf_end")
+
     if has_audio:
         tt_v, tt_a = tt_out
     else:

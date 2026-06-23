@@ -535,7 +535,7 @@ def _print_table(rows: list[dict], title: str) -> None:
 
 def _write_csv(rows: list[dict], filename: str) -> None:
     fields = ["cid", "tp", "rows", "feat", "heads", "hd", "pattern", "baseline", "fused"]
-    path = Path.cwd() / filename
+    path = Path(_os.getenv("RMS_BENCH_CSV_DIR", str(Path.cwd()))) / filename
     with path.open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
