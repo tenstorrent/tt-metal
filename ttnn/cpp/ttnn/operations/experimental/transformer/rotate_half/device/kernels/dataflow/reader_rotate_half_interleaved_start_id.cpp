@@ -23,6 +23,7 @@ void kernel_main() {
     constexpr uint16_t scalar_value = get_compile_time_arg_val(3);
     constexpr auto src_args = TensorAccessorArgs<4>();
 
+    // in_no_mul, in_mul are from same tensor, so same sizes
     const uint32_t tile_bytes = get_tile_size(cb_id_in_no_mul);
 
     constexpr uint32_t onetile = 1;
@@ -32,6 +33,7 @@ void kernel_main() {
     CircularBuffer cb_in_mul(cb_id_in_mul);
     CircularBuffer cb_in_scalar(cb_id_in_scalar);
 
+    // Fill tile with zeros
     cb_in_scalar.reserve_back(onetile);
     uint32_t l1_zeros_addr_in_scalar = cb_in_scalar.get_write_ptr();
     volatile tt_l1_ptr uint16_t* scalar_buffer =
@@ -41,6 +43,7 @@ void kernel_main() {
 
     uint32_t in_no_mul_curr_id = start_id;
     uint32_t in_mul_curr_id = start_id + half_row_size;
+    // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = 0; i < num_rows; i++) {
         for (uint32_t j = 0; j < half_row_size; j++) {
             cb_in_no_mul.reserve_back(onetile);
