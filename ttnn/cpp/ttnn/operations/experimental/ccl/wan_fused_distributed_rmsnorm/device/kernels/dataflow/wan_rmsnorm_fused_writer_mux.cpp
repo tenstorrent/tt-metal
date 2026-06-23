@@ -363,22 +363,22 @@ void kernel_main() {
             // Cumulative wait: writer can start packing row 0 while compute is
             // still producing row 1+. Overlaps writer-pack with compute-pre for
             // chunks with >1 row.
+            // Compute already transposed the stat tile so the 32 per-token sums
+            // sit in ROW 0: face_00 row0 = tile bytes [0,64), face_01 row0 = tile
+            // bytes [1024,1088). Pack them into a contiguous 128 B page with two
+            // 64 B local NoC copies (vs the old 32 strided fp32 col-0 loads).
             const uint32_t stats_local_base = get_read_ptr(stats_local_cb);
             for (uint32_t r = 0; r < rows_in_chunk; r++) {
                 cb_wait_front(stats_local_cb, r + 1);
-                const volatile tt_l1_ptr uint32_t* tile_src =
-                    reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(stats_local_base + r * stats_tile_bytes);
-                uint32_t* packed_dst = reinterpret_cast<uint32_t*>(packed_local_addr + r * kRowBytesPerTile);
-                // Face_00 col 0 (rows 0..15): uint32 indices 0, 16, ..., 240.
-                for (uint32_t i = 0; i < 16; i++) {
-                    packed_dst[i] = tile_src[i * 16];
-                }
-                // Face_10 col 0 (rows 16..31): face_10 starts at byte 2048
-                // (uint32 idx 512), col 0 at indices 512, 528, ..., 752.
-                for (uint32_t i = 0; i < 16; i++) {
-                    packed_dst[16 + i] = tile_src[512 + i * 16];
-                }
+                const uint32_t tile_addr = stats_local_base + r * stats_tile_bytes;
+                const uint32_t packed_dst = packed_local_addr + r * kRowBytesPerTile;
+                noc_async_read(safe_get_noc_addr(my_x[0], my_y[0], tile_addr, 0), packed_dst, kTileFaceRowBytes);
+                noc_async_read(
+                    safe_get_noc_addr(my_x[0], my_y[0], tile_addr + kTileFace01ByteOffset, 0),
+                    packed_dst + kTileFaceRowBytes,
+                    kTileFaceRowBytes);
             }
+            noc_async_read_barrier();
             cb_pop_front(stats_local_cb, rows_in_chunk);
 
             // No L1 copy of my own page into stats_packed_gathered_cb. The
@@ -472,17 +472,11 @@ void kernel_main() {
             noc_async_read_barrier();
 #endif
 
-            // Scatter packed bytes directly into COL 0 of stats_gathered_cb tiles
-            // (32 strided fp32 stores per tile). The compute kernel then runs
-            // reduce<AVG,REDUCE_ROW> directly without any post-transpose — col 0
-            // is the natural "stat tile" position. Saves the compute post
-            // transpose pass entirely.
-            //
-            // Col 0 in tile-storage:
-            //   - Face_00 col 0 (rows 0..15): byte offsets 0, 64, 128, ..., 960
-            //     = uint32_t indices 0, 16, ..., 240.
-            //   - Face_10 col 0 (rows 16..31): face starts at byte 2048 (idx 512),
-            //     col 0 indices 512, 528, ..., 752.
+            // Scatter each device's 128 B packed page into ROW 0 of its
+            // stats_(transposed_)gathered_cb tile via two contiguous 64 B NoC
+            // copies (face_00 row0 = tile byte 0, face_01 row0 = tile byte 1024)
+            // — no 32-strided col-0 stores. Compute then FPU-adds the ring_size
+            // row-0 tiles and transposes the sum in DST (transpose_wh_dest).
             cb_reserve_back(stats_gathered_cb, chunk_stats_tiles);
             const uint32_t stats_gathered_base = get_write_ptr(stats_gathered_cb);
 #ifndef WAN_ABL_SKIP_GATHER_SCATTER
@@ -494,18 +488,14 @@ void kernel_main() {
                         (d == my_device_index) ? (packed_local_addr + r * kRowBytesPerTile)
                                                : (packed_gathered_base + d * page_size_bytes + r * kRowBytesPerTile);
                     const uint32_t tile_dst = stats_gathered_base + (r * ring_size + d) * stats_tile_bytes;
-                    volatile tt_l1_ptr uint32_t* dst = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile_dst);
-                    const uint32_t* src = reinterpret_cast<const uint32_t*>(packed_src);
-                    // Face_00 col 0 (rows 0..15): 16 strided stores at uint32 stride 16.
-                    for (uint32_t i = 0; i < 16; i++) {
-                        dst[i * 16] = src[i];
-                    }
-                    // Face_10 col 0 (rows 16..31): 16 strided stores starting at idx 512.
-                    for (uint32_t i = 0; i < 16; i++) {
-                        dst[512 + i * 16] = src[16 + i];
-                    }
+                    noc_async_read(safe_get_noc_addr(my_x[0], my_y[0], packed_src, 0), tile_dst, kTileFaceRowBytes);
+                    noc_async_read(
+                        safe_get_noc_addr(my_x[0], my_y[0], packed_src + kTileFaceRowBytes, 0),
+                        tile_dst + kTileFace01ByteOffset,
+                        kTileFaceRowBytes);
                 }
             }
+            noc_async_read_barrier();
 #endif  // WAN_ABL_SKIP_GATHER_SCATTER
             cb_push_back(stats_packed_gathered_cb, ring_size);
             cb_pop_front(stats_packed_gathered_cb, ring_size);
