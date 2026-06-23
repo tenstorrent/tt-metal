@@ -6,6 +6,7 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/kernel_common/worker_sync_utils.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_common/kernels/common.hpp"
 #include <cstdint>
 #include <utility>
 
@@ -183,20 +184,13 @@ void kernel_main() {
                 /**
                  * Interleave forward and backward ring reads
                  * forward handles even chunks, backward handles odd chunks (1 chunk = tile_granularity tiles)
-                 * after ring_size-1 steps, we've transferred all tiles
+                 * after ring_size-1 steps, we've transferred all tiles.
+                 *
+                 * Chunk forward/backward parity is fixed, independent of chunk count or distribution to workers
                  */
                 while (tiles_read < total_tiles_to_read) {
-                    // Batch-invariant chunking: a tile's even/odd (forward/backward) direction must
-                    // depend only on its GLOBAL position in the output channel, never on M or on how
-                    // the channel is split across links/workers. tiles_read is that global index, so
-                    // derive parity from its tile_granularity-block and clip each chunk to the block
-                    // boundary (parity is then uniform within a chunk). The old local toggle starting
-                    // at `true` from each worker's start_tiles_read flipped a tile's direction when
-                    // num_links*num_workers_per_direction > 1, reversing the per-element ring-reduction
-                    // order at different prefill batch sizes (tt-metal#47238).
-                    bool is_even_chunk = ((tiles_read / tile_granularity) % 2) == 0;
-                    uint32_t next_boundary = ((tiles_read / tile_granularity) + 1) * tile_granularity;
-                    uint32_t tiles_to_read = std::min(next_boundary, total_tiles_to_read) - tiles_read;
+                    const auto [is_even_chunk, tiles_to_read] =
+                        reduce_scatter_common::chunk_ring_parity<tile_granularity>(tiles_read, total_tiles_to_read);
 
                     if ((is_even_chunk && !even_chunks) || (!is_even_chunk && !odd_chunks) || tiles_to_read == 0) {
                         // Skip this chunk
