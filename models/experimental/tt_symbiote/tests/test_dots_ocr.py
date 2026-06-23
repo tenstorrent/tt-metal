@@ -510,8 +510,15 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device, tp_decode_scheme):
     # default (full_multicore unless explicitly overridden), so both shard the
     # stack input along hidden on a TP mesh and concat (dim=-1) for PCC.
     uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel")
+    tp_mesh_shape = list(mesh_device.shape) if hasattr(mesh_device, "shape") else None
     if uses_tp_shard:
-        input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+        # Shard hidden across the TP axis (last mesh dim) and replicate across
+        # the leading DP axis. ``ShardTensorToMesh(dim=-1)`` flattens all
+        # DP*TP devices and over-shards hidden (on a (2,4) DP2_TP4 mesh that is
+        # 1536/8 = 192, not 1536/4 = 384), so use the 2-D mapper to shard the
+        # TP axis only. DP replicate (batch=1) is bit-identical to a single TP
+        # stream.
+        input_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tp_mesh_shape)
     else:
         input_mapper = None
     hidden_state_kwargs = {"mesh_mapper": input_mapper} if input_mapper is not None else {}
@@ -583,10 +590,15 @@ def test_dots_ocr_decode_one_layer_l1_boundaries(mesh_device, tp_decode_scheme):
     )[0]
 
     if uses_tp_shard:
+        # Concat the TP shards (last mesh axis) back into full hidden; the
+        # leading DP axis replicates batch=1, so concat it along dim 0 and keep
+        # the first copy.
         ttnn_output_torch = ttnn.to_torch(
             output,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tp_mesh_shape),
         )
+        if tp_mesh_shape is not None and tp_mesh_shape[0] > 1:
+            ttnn_output_torch = ttnn_output_torch[:1]
     elif num_devices > 1:
         # Pure-DP meshes replicate the single-token decode stream on each device.
         # ``ConcatMeshToTensor(dim=0)`` stacks replicas along batch, after which
@@ -1247,8 +1259,15 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device, tp_decode_schem
     # shard the stack input along hidden on a TP mesh and concat (dim=-1) the
     # sharded output back for PCC.
     uses_tp_shard = is_tp_mesh and tp_decode_scheme in ("row", "col_parallel")
+    tp_mesh_shape = list(mesh_device.shape) if hasattr(mesh_device, "shape") else None
     if uses_tp_shard:
-        input_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
+        # Shard hidden across the TP axis (last mesh dim) and replicate across
+        # the leading DP axis. ``ShardTensorToMesh(dim=-1)`` flattens all
+        # DP*TP devices and over-shards hidden (on a (2,4) DP2_TP4 mesh that is
+        # 1536/8 = 192, not 1536/4 = 384), so use the 2-D mapper to shard the
+        # TP axis only. DP replicate (batch=1) is bit-identical to a single TP
+        # stream.
+        input_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(None, -1), mesh_shape=tp_mesh_shape)
     else:
         input_mapper = None
     hidden_state_kwargs = {"mesh_mapper": input_mapper} if input_mapper is not None else {}
@@ -1314,12 +1333,15 @@ def test_dots_ocr_decode_full_decoder_l1_boundaries(mesh_device, tp_decode_schem
     # ``preprocess_weights`` in-place mutations on the HF layers.
     if uses_tp_shard:
         # Both ``row`` and ``col_parallel`` TP keep the hidden dim sharded across
-        # TP all the way to the stack output; concat the per-device shards back
-        # into full hidden.
+        # TP all the way to the stack output; concat the TP shards (last mesh
+        # axis) back into full hidden. The leading DP axis replicates batch=1, so
+        # concat it along dim 0 and keep the first copy.
         ttnn_output_torch = ttnn.to_torch(
             output,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=tp_mesh_shape),
         )
+        if tp_mesh_shape is not None and tp_mesh_shape[0] > 1:
+            ttnn_output_torch = ttnn_output_torch[:1]
     elif num_devices > 1:
         # Multi-device mesh (T3K DP (8,1) or TP (1,8)/``col_parallel``):
         # DP-with-batch=1 and TP-after-all-reduce both produce identical data on
