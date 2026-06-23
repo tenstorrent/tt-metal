@@ -8,6 +8,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose_wh.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tools/profiler/kernel_profiler.hpp"
 
 void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_t N_block_tiles) {
@@ -15,6 +16,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
     reconfig_data_format_srca(in_cb);
     pack_reconfig_data_format(out_cb);
     constexpr uint32_t dst_id = 0;
+    CircularBuffer out_buf(out_cb);
 
     uint32_t tile_id = 0;
     for (uint32_t m = 0; m < M_block_tiles; m++) {
@@ -27,7 +29,7 @@ void copy_block(uint32_t in_cb, uint32_t out_cb, uint32_t M_block_tiles, uint32_
             tile_regs_release();
             tile_id++;
         }
-        cb_push_back(out_cb, N_block_tiles);
+        out_buf.push_back(N_block_tiles);
     }
 }
 
@@ -39,39 +41,41 @@ inline void transpose_in0_block_streamed(uint32_t src_cb, uint32_t dst_cb) {
 
     PACK((llk_pack_reconfig_l1_acc(0)));
 
+    CircularBuffer src_buf(src_cb);
+    CircularBuffer dst_buf(dst_cb);
     for (uint32_t b = 0; b < kFullChunks; ++b) {
-        cb_wait_front(src_cb, ChunkSize);
+        src_buf.wait_front(ChunkSize);
         tile_regs_acquire();
         for (uint32_t j = 0; j < ChunkSize; ++j) {
             transpose_wh_tile(src_cb, j, /*dst=*/j);
         }
         tile_regs_commit();
-        cb_pop_front(src_cb, ChunkSize);
+        src_buf.pop_front(ChunkSize);
 
-        cb_reserve_back(dst_cb, ChunkSize);
+        dst_buf.reserve_back(ChunkSize);
         tile_regs_wait();
         for (uint32_t j = 0; j < ChunkSize; ++j) {
             pack_tile(j, dst_cb);
         }
         tile_regs_release();
-        cb_push_back(dst_cb, ChunkSize);
+        dst_buf.push_back(ChunkSize);
     }
     if constexpr (kTail > 0) {
-        cb_wait_front(src_cb, kTail);
+        src_buf.wait_front(kTail);
         tile_regs_acquire();
         for (uint32_t j = 0; j < kTail; ++j) {
             transpose_wh_tile(src_cb, j, /*dst=*/j);
         }
         tile_regs_commit();
-        cb_pop_front(src_cb, kTail);
+        src_buf.pop_front(kTail);
 
-        cb_reserve_back(dst_cb, kTail);
+        dst_buf.reserve_back(kTail);
         tile_regs_wait();
         for (uint32_t j = 0; j < kTail; ++j) {
             pack_tile(j, dst_cb);
         }
         tile_regs_release();
-        cb_push_back(dst_cb, kTail);
+        dst_buf.push_back(kTail);
     }
 }
 
@@ -198,16 +202,16 @@ void kernel_main() {
     // The two modes are mutually exclusive (one per role), so exactly one payload is written
     // per invocation.
     {
-        constexpr uint32_t cb_ctrl_id = tt::CBIndex::c_8;
-        cb_wait_front(cb_ctrl_id, 1U);
+        CircularBuffer cb_ctrl(tt::CBIndex::c_8);
+        cb_ctrl.wait_front(1U);
 #ifdef OFFSET_ROW_MODE
-        M_start_tile = read_tile_value(cb_ctrl_id, 0U, 0U);
-        M_end_tile = read_tile_value(cb_ctrl_id, 0U, 1U);
-        M_blocks_per_core = read_tile_value(cb_ctrl_id, 0U, 2U);
+        M_start_tile = cb_ctrl.read_tile_value(0U, 0U);
+        M_end_tile = cb_ctrl.read_tile_value(0U, 1U);
+        M_blocks_per_core = cb_ctrl.read_tile_value(0U, 2U);
 #else
-        K_tiles = read_tile_value(cb_ctrl_id, 0U, 3U);
+        K_tiles = cb_ctrl.read_tile_value(0U, 3U);
 #endif
-        cb_pop_front(cb_ctrl_id, 1U);
+        cb_ctrl.pop_front(1U);
     }
     const uint32_t padded_K_tiles = ((K_tiles + K_block_tiles - 1U) / K_block_tiles) * K_block_tiles;
     const uint32_t K_num_blocks = padded_K_tiles / K_block_tiles;
@@ -222,6 +226,11 @@ void kernel_main() {
     // what the matmul actually consumes. `in0_cb_for_matmul` selects the right one.
     constexpr uint32_t in0_transposed_cb = tt::CBIndex::c_7;
     constexpr uint32_t in0_cb_for_matmul = transpose_a ? in0_transposed_cb : in0_cb;
+
+    CircularBuffer cb_in0_mm(in0_cb_for_matmul);
+    CircularBuffer cb_in1(in1_cb);
+    CircularBuffer cb_out(out_cb);
+    CircularBuffer cb_interm(intermediate_cb);
 
     mm_init(in0_cb_for_matmul, in1_cb, intermediate_cb);
 
@@ -263,7 +272,7 @@ void kernel_main() {
             // Disable L1 packer accumulator before k=0 pack so matmul packs cleanly over
             // intermediate_cb instead of adding onto any leftover state from a prior program.
             PACK((llk_pack_reconfig_l1_acc(0)));
-            cb_reserve_back(intermediate_cb, out_block_num_tiles);
+            cb_interm.reserve_back(out_block_num_tiles);
             if (K_num_blocks == 0U) {
                 // Empty K-axis offset (empty expert): K-loop skipped, intermediate_cb would
                 // hold uninitialized state. Zero the FULL M_block × N_block region (copy_block
@@ -307,8 +316,8 @@ void kernel_main() {
 
                 {
                     DeviceZoneScopedN("MATMUL-K-ITER");
-                    cb_wait_front(in0_cb_for_matmul, in0_block_num_tiles);
-                    cb_wait_front(in1_cb, in1_block_num_tiles);
+                    cb_in0_mm.wait_front(in0_block_num_tiles);
+                    cb_in1.wait_front(in1_block_num_tiles);
 
                     matmul_blocks(
                         in0_cb_for_matmul,
@@ -332,22 +341,22 @@ void kernel_main() {
                     }
                 }
                 if (!reuse_in0_block) {
-                    cb_pop_front(in0_cb_for_matmul, in0_block_num_tiles);
+                    cb_in0_mm.pop_front(in0_block_num_tiles);
                 }
-                cb_pop_front(in1_cb, in1_block_num_tiles);
+                cb_in1.pop_front(in1_block_num_tiles);
                 reuse_in0_block = false;
                 if (k_block == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
                 }
             }
 
-            cb_push_back(intermediate_cb, out_block_num_tiles);
+            cb_interm.push_back(out_block_num_tiles);
             PACK((llk_pack_reconfig_l1_acc(0)));
 
-            cb_reserve_back(out_cb, out_block_num_tiles);
-            cb_wait_front(intermediate_cb, out_block_num_tiles);
+            cb_out.reserve_back(out_block_num_tiles);
+            cb_interm.wait_front(out_block_num_tiles);
             copy_block(intermediate_cb, out_cb, M_block_tiles, N_block_tiles);
-            cb_pop_front(intermediate_cb, out_block_num_tiles);
+            cb_interm.pop_front(out_block_num_tiles);
         }
     }
 }
