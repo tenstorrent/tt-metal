@@ -507,12 +507,11 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # blitz ring descriptors (MGD_BLITZ_*). A ring shorter than the cluster's slot count is a
 # ring-embedded-into-a-larger-graph mapping -- the host-minimization SAT case guarded by the conflict
 # cap; on non-subtorus clusters the ring's closing hop has no direct link and is routed the long way.
-# Per-cluster stage lists below include only the combinations that map cleanly on this mock fleet:
-# SC16 revC (non-subtorus) keeps 16 only (48 times out / 64 fails); the 48-stage ring strands on
-# SC16 revC subtorus aisleC, so that one keeps 16/64.
+# Per-cluster stage lists below: SC16 revC (non-subtorus) runs 16 + 64 (48 omitted -- times out on this
+# mock); the 48-stage ring strands on SC16 revC subtorus aisleC, so that one keeps 16/64.
 for entry in \
     "SC16_revAB:${SP4_GLX_CLUSTER_DESC_MAPPING}:16 48 64" \
-    "SC16_revC:${BH_110C_CLUSTER_DESC_MAPPING}:16" \
+    "SC16_revC:${BH_110C_CLUSTER_DESC_MAPPING}:16 64" \
     "SC16_revC_subtorus_aisleD:${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
     "SC20_revAB:${BH_SC20_CLUSTER_DESC_MAPPING}:16 48 64 80" \
