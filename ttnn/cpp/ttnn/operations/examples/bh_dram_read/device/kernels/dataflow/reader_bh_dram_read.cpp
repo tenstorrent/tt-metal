@@ -16,7 +16,9 @@
 // this core), then with_state reads are fired back-to-back; a per-trid barrier
 // is taken only once the trid ring is full.
 
-#define NUM_TRIDS 8  // outstanding transactions; L1 scratch = NUM_TRIDS * PACKET (matches CB depth in factory)
+// Outstanding transactions (buffering depth). Set by the program factory; the
+// L1 scratch (CB) holds NUM_TRIDS packets. Valid trids are 1..15 on Blackhole.
+constexpr uint32_t NUM_TRIDS = get_compile_time_arg_val(0);
 #define ADVANCE_TRID(t)        \
     do {                       \
         (t)++;                 \

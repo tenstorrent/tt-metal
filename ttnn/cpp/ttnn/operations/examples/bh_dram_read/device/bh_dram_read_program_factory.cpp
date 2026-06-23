@@ -4,16 +4,32 @@
 
 #include "bh_dram_read_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
+#include <cstdlib>
 
 namespace ttnn::operations::examples {
 
 using namespace tt;
 using namespace tt::tt_metal;
 
-// Must match the kernel: NUM_TRIDS transactions of PACKET bytes are kept in
-// flight, so the L1 scratch (CB) holds NUM_TRIDS packet-sized slots.
+// NUM_TRIDS transactions of PACKET bytes are kept in flight, so the L1 scratch
+// (CB) holds NUM_TRIDS packet-sized slots. NUM_TRIDS is the buffering depth; it
+// can be overridden via the BH_DRAM_READ_NUM_TRIDS env var for tuning sweeps
+// (valid trids are 1..15 on Blackhole).
 static constexpr uint32_t PACKET_BYTES = 16384;  // NOC_MAX_BURST_SIZE on Blackhole
-static constexpr uint32_t NUM_TRIDS = 8;
+// A trid sweep showed bandwidth saturates at depth 2 (double-buffering fully
+// hides DRAM latency); 2..15 are byte-identical, only depth 1 is slower. So the
+// default is 2 -- same bandwidth as 8 at 4x less L1. See bh-dram-read-progress.md.
+static constexpr uint32_t DEFAULT_NUM_TRIDS = 2;
+
+static uint32_t get_num_trids() {
+    if (const char* e = std::getenv("BH_DRAM_READ_NUM_TRIDS")) {
+        int v = std::atoi(e);
+        if (v >= 1 && v <= 15) {
+            return static_cast<uint32_t>(v);
+        }
+    }
+    return DEFAULT_NUM_TRIDS;
+}
 
 ProgramDescriptor BhDramReadDeviceOperation::DramBankCore::create_descriptor(
     const operation_attributes_t& /*operation_attributes*/,
@@ -25,6 +41,8 @@ ProgramDescriptor BhDramReadDeviceOperation::DramBankCore::create_descriptor(
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
+
+    const uint32_t num_trids = get_num_trids();  // buffering depth (outstanding reads per core)
 
     uint32_t total_pages = input_tensor.physical_volume() / constants::TILE_HW;
     // For an interleaved DRAM buffer each bank stores its pages contiguously at
@@ -40,8 +58,20 @@ ProgramDescriptor BhDramReadDeviceOperation::DramBankCore::create_descriptor(
         num_banks,
         grid.x * grid.y);
 
-    CoreRangeSet all_cores = num_cores_to_corerangeset(num_banks, grid, /*row_wise=*/true);
-    std::vector<CoreCoord> cores = corerange_to_cores(all_cores, num_banks, /*row_wise=*/true);
+    // Place each bank's reader on the worker core that is optimal for NOC0 reads
+    // from that bank (bank-adjacent placement). Indexed by bank id.
+    std::vector<CoreCoord> cores = device->get_optimal_dram_bank_to_logical_worker_assignment(NOC::NOC_0);
+    TT_FATAL(
+        cores.size() >= num_banks,
+        "bh_dram_read: optimal assignment returned {} cores < {} banks",
+        cores.size(),
+        num_banks);
+    std::vector<CoreRange> core_ranges;
+    core_ranges.reserve(num_banks);
+    for (uint32_t b = 0; b < num_banks; ++b) {
+        core_ranges.emplace_back(cores[b]);
+    }
+    CoreRangeSet all_cores(core_ranges);
 
     // ---- Build the ProgramDescriptor ----
     ProgramDescriptor desc;
@@ -52,7 +82,7 @@ ProgramDescriptor BhDramReadDeviceOperation::DramBankCore::create_descriptor(
     // the buffer directly by packet slot.
     constexpr uint32_t src0_cb_index = CBIndex::c_0;
     desc.cbs.push_back(CBDescriptor{
-        .total_size = NUM_TRIDS * PACKET_BYTES,
+        .total_size = num_trids * PACKET_BYTES,
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = src0_cb_index,
@@ -68,6 +98,7 @@ ProgramDescriptor BhDramReadDeviceOperation::DramBankCore::create_descriptor(
         "ttnn/cpp/ttnn/operations/examples/bh_dram_read/device/kernels/dataflow/reader_bh_dram_read.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = {num_trids};
     reader_desc.config = ReaderConfigDescriptor{};
 
     // Per-core runtime args: each core reads the bytes that live in its bank.
