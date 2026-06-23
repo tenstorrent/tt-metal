@@ -62,6 +62,16 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"
 
+#ifdef SWIGLU_OAI
+// SwiGLU-OAI (gpt-oss / MiniMax-M3) activation: reuse the proven binary SFPU op.
+// Computes (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L)).
+// Default SwiGLUConfigGPTOSS (alpha=1.702, clamp_limit=7.0) matches M3's config.json.
+// TODO(maciek): swiglu_sfpu.h currently lives under the gpt-oss moe_gpt op. Decide
+// whether to (a) move it to a shared kernel include dir or (b) add that dir to this
+// op's kernel include paths in the program factory. Path below is a placeholder.
+#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#endif
+
 namespace {
 
 template <
@@ -344,6 +354,16 @@ FORCE_INLINE void matmul_phase_fused_gu(
     PACK((llk_pack_reconfig_l1_acc(0)));
 #endif
 
+#ifdef SWIGLU_OAI
+    // SwiGLU-OAI path: do NOT apply silu here and do NOT consume the partials.
+    // Both partials_gu and partials_up are left pushed (bf16, full precision) so
+    // swiglu_oai_activation_phase() in kernel_main can read raw gate AND raw up
+    // together and run the fused clamp/alpha-sigmoid/(up+1) binary SFPU op.
+    // (Keeping the activation off the bf8 gate_intermed avoids a precision loss
+    // before the activation.)
+    (void)gate_intermed_cb_id;
+    (void)up_intermed_cb_id;
+#else
     // Gate partials → gate_intermed (silu applied via MATH-thread SFPU on dst,
     // NOT packer-fused). Per subblock:
     //   * copy partials_gu → dst (UNPACK reads bf16, MATH stores in dst regs).
@@ -381,7 +401,59 @@ FORCE_INLINE void matmul_phase_fused_gu(
     // cb_gate_intermed (bf8 after silu+pack). Skipping the copy saves 48KB of
     // L1 and lets cb_in0_down_full stay double-buffered.
     (void)up_intermed_cb_id;
+#endif
 }
+
+#ifdef SWIGLU_OAI
+// SwiGLU-OAI activation pass (replaces gate-silu + multiply_phase for M3/gpt-oss).
+// Reads the raw bf16 gate & up matmul accumulators (both still resident in their
+// partials CBs) and writes the activated result into activated_cb:
+//   (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L))
+// via the reusable binary SFPU op (swiglu_sfpu.h, SwiGLUConfigGPTOSS = M3 config).
+//
+// UNVERIFIED — needs on-device validation. Open items:
+//   - dst budget: uses 2*out_subblock_num_tiles dst tiles (gate block + up block).
+//     If that exceeds DST (16 bf16 / 8 fp32), switch to tile-at-a-time (2 dst tiles).
+//   - SFPU thread: called on MATH here to match this kernel's structure; gpt-oss's
+//     moe_gpt compute.cpp invokes it under PACK(()). Confirm which is correct here.
+//   - copy src format: both partials are Float16_b, so a single copy-init suffices.
+template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
+FORCE_INLINE void swiglu_oai_activation_phase(
+    uint32_t gate_partials_cb_id, uint32_t up_partials_cb_id, uint32_t activated_cb_id) {
+    cb_wait_front(gate_partials_cb_id, out_block_num_tiles);
+    cb_wait_front(up_partials_cb_id, out_block_num_tiles);
+
+    PACK((pack_reconfig_data_format(activated_cb_id)));
+    // Both partials CBs are Float16_b; one copy-init covers reads from either.
+    copy_tile_to_dst_init_short_with_dt(up_partials_cb_id, gate_partials_cb_id);
+
+    constexpr uint32_t num_subblocks = out_block_num_tiles / out_subblock_num_tiles;
+    uint32_t base = 0;
+    for (uint32_t sb = 0; sb < num_subblocks; ++sb) {
+        tile_regs_acquire();
+        // gate -> dst[0..n), up -> dst[n..2n)
+        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+            copy_tile(gate_partials_cb_id, base + i, i);
+            copy_tile(up_partials_cb_id, base + i, out_subblock_num_tiles + i);
+        }
+        // Fused clamp + alpha-sigmoid + (up+1) multiply, result in place into dst[i].
+        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+            MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu<false>(i, out_subblock_num_tiles + i, i)));
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        cb_reserve_back(activated_cb_id, out_subblock_num_tiles);
+        for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
+            pack_tile(i, activated_cb_id);
+        }
+        cb_push_back(activated_cb_id, out_subblock_num_tiles);
+        tile_regs_release();
+        base += out_subblock_num_tiles;
+    }
+    cb_pop_front(gate_partials_cb_id, out_block_num_tiles);
+    cb_pop_front(up_partials_cb_id, out_block_num_tiles);
+}
+#endif
 
 template <uint32_t out_block_num_tiles, uint32_t out_subblock_num_tiles>
 FORCE_INLINE void multiply_phase(uint32_t gate_cb_id, uint32_t up_cb_id, uint32_t activated_cb_id) {
@@ -516,7 +588,12 @@ void kernel_main() {
     // gate-intermed write. silu_tile_init() configures the MATH-side SFPU
     // for silu; the pack then runs plain (no per-tile SFPU on the pack
     // thread). Same total compute, better pipelining.
+#ifdef SWIGLU_OAI
+    // SwiGLU-OAI uses the binary swiglu SFPU op (sigmoid/recip table init).
+    MATH((ckernel::llk_math_eltwise_binary_sfpu_swiglu_init()));
+#else
     silu_tile_init();
+#endif
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_in0_x, cb_in1_gate, cb_partials_gu);
 
@@ -554,6 +631,15 @@ void kernel_main() {
             gu_out_block_num_tiles>(
             cb_in0_x, cb_in1_gate, cb_in1_up, cb_partials_gu, cb_partials_up, cb_gate_intermed, cb_up_intermed);
 
+#ifdef SWIGLU_OAI
+        // Phase 3 (SwiGLU-OAI): fused clamp + alpha-sigmoid + (up+1) directly on
+        // the raw bf16 gate/up accumulators -> cb_activated. Replaces both the
+        // gate-silu pass (skipped above) and the plain multiply_phase.
+        swiglu_oai_activation_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
+            cb_partials_gu, cb_partials_up, cb_activated);
+        (void)cb_gate_intermed;
+        (void)cb_up_intermed;
+#else
         // Phase 3: elementwise multiply (cb_gate_intermed is silu(partials_gu)
         // in bf8; cb_partials_up is the up matmul accumulator in bf16). The
         // multiply does the format conversion via reconfig_data_format inside
@@ -562,6 +648,7 @@ void kernel_main() {
         multiply_phase<gu_out_block_num_tiles, gu_out_subblock_num_tiles>(
             cb_gate_intermed, cb_partials_up, cb_activated);
         (void)cb_up_intermed;
+#endif
 
         // Phase 4: down matmul, output to cb_out.
         // multiply_phase left the unpacker on (cb_gate_intermed, cb_partials_up);
