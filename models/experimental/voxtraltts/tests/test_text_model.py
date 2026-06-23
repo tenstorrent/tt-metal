@@ -6,7 +6,7 @@
 Full-stack load and config: ``demo/demo.py``, ``tests/perf/test_e2e_isl_sweep_perf.py``.
 
 Long ISL / tail cases use ``@pytest.mark.timeout(0)`` (no limit). CI skips rows above
-512-token prompt length via ``CI=true``.
+4096-token prompt length via ``CI=true``.
 """
 
 from __future__ import annotations
@@ -37,6 +37,9 @@ _DECODE_32STEP_TAIL_ISL = _MAX_SEQ_LEN - 32  # 65504 + 32 → full KV timeline
 _DECODE_256STEP_TAIL_ISL = _MAX_SEQ_LEN - 256  # 65280 + 256 → positions through 65535
 _PREFILL_LOGIT_PCC_THRESHOLD = 0.99
 _DECODE_LOGIT_PCC_THRESHOLD = 0.98
+
+
+_CI_MAX_PROMPT_ISL = 4096
 
 
 def _is_ci() -> bool:
@@ -159,8 +162,8 @@ def _decode_multistep_logit_pcc_cases():
 @pytest.mark.parametrize("seq_len", _PREFILL_LOGIT_PCC_ISLS, ids=[str(s) for s in _PREFILL_LOGIT_PCC_ISLS])
 def test_text_model_prefill_logit_pcc(device, reset_seeds, seq_len):
     """Last-token prefill logits PCC vs HF at increasing ISLs (paged KV, max_seq_len=65536)."""
-    if _is_ci() and seq_len > 512:
-        pytest.skip("CI runs prefill logit PCC up to 512 only")
+    if _is_ci() and seq_len > _CI_MAX_PROMPT_ISL:
+        pytest.skip(f"CI runs prefill logit PCC up to {_CI_MAX_PROMPT_ISL} only")
 
     model = _create_text_model_for_logit_pcc(device)
     _assert_prefill_last_logit_pcc(model, seq_len, pcc_threshold=_PREFILL_LOGIT_PCC_THRESHOLD)
@@ -174,8 +177,8 @@ def test_text_model_decode_multistep_logit_pcc(device, reset_seeds, seq_len, dec
 
     Set ``VOXTRAL_DECODE_256STEP=0`` to skip the long 65280+256 case locally.
     """
-    if _is_ci() and (decode_steps > 32 or seq_len > 512):
-        pytest.skip("CI runs 32-step decode logit PCC at prompt ISL ≤512 only")
+    if _is_ci() and (decode_steps > 32 or seq_len > _CI_MAX_PROMPT_ISL):
+        pytest.skip(f"CI runs 32-step decode logit PCC at prompt ISL ≤{_CI_MAX_PROMPT_ISL} only")
     if seq_len + decode_steps > _MAX_SEQ_LEN:
         pytest.skip(f"seq_len={seq_len} + decode_steps={decode_steps} exceeds max_seq_len={_MAX_SEQ_LEN}")
 

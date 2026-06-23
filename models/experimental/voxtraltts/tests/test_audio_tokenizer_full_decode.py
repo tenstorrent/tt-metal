@@ -16,8 +16,9 @@ from models.experimental.voxtraltts.utils.common import (
     create_voxtral_audio_tokenizer_or_skip,
     resolve_voxtral_model_name_or_skip,
 )
+from models.experimental.voxtraltts.utils.mesh import voxtral_to_torch_replicated
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
-    voxtral_audio_tokenizer_high_accuracy_optimizations,
+    voxtral_audio_tokenizer_default_optimizations,
 )
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
     _DECODE_CHUNK_T,
@@ -48,7 +49,7 @@ def test_audio_tokenizer_full_decode_pcc(device, reset_seeds):
             device,
             state_dict=sd,
             tokenizer_cfg=cfg,
-            optimizations=voxtral_audio_tokenizer_high_accuracy_optimizations(),
+            optimizations=voxtral_audio_tokenizer_default_optimizations(),
         )
     except Exception as exc:
         pytest.skip(str(exc))
@@ -78,7 +79,7 @@ def test_audio_tokenizer_full_decode_pcc(device, reset_seeds):
         ttnn.deallocate(latent_tt)
         wav_tt = tok.pretransform_decode_tt(mel_tt)
         ttnn.deallocate(mel_tt)
-        tt_wav = ttnn.to_torch(wav_tt).float()
+        tt_wav = voxtral_to_torch_replicated(wav_tt).float()
         ttnn.deallocate(wav_tt)
     except RuntimeError as exc:
         msg = str(exc)

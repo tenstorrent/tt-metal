@@ -131,6 +131,24 @@ class VoxtralTTTextModel:
             else _decode_replicated_embed_mem_cfg(inner_transformer.args)
         )
         self._lm_norm_cfg = inner_transformer.args.get_norm_config("lm_head", Mode.DECODE, inner_transformer.prefetcher)
+        self._paged_page_table_tt: ttnn.Tensor | None = None
+
+    def _resolve_page_table_tt(self, page_table: ttnn.Tensor | None = None) -> ttnn.Tensor | None:
+        """Return ``page_table`` or build the identity mapping for internal paged KV blocks."""
+        if page_table is not None:
+            return page_table
+        pac = getattr(self.inner.layers[0].attention, "paged_attention_config", None)
+        if pac is None:
+            return None
+        if self._paged_page_table_tt is None:
+            from models.experimental.voxtraltts.utils.common import build_voxtral_text_page_table_tt
+
+            self._paged_page_table_tt = build_voxtral_text_page_table_tt(
+                self.inner.mesh_device,
+                max_seq_len=int(self.inner.args.max_seq_len),
+                paged_block_size=int(pac.block_size),
+            )
+        return self._paged_page_table_tt
 
     @classmethod
     def create(
@@ -249,6 +267,8 @@ class VoxtralTTTextModel:
         """
         dim = self.inner.args.dim
         activation_dtype = _decode_activation_dtype(self.inner.args) or ttnn.bfloat16
+
+        page_table = self._resolve_page_table_tt(page_table)
 
         current_pos_t = torch.tensor([pos_idx], dtype=torch.int64)
         rot_mats_global = self.inner.rope_setup.get_rot_mats(current_pos_t)
@@ -391,6 +411,8 @@ class VoxtralTTTextModel:
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.inner.mesh_device),
             )
         # embeds_tt: [S, 1, 1, dim] ROW_MAJOR DRAM
+
+        page_table = self._resolve_page_table_tt(page_table)
 
         # ── TT-ONLY LOOP ─────────────────────────────────────────────────────
         last_hidden_tt: ttnn.Tensor | None = None

@@ -28,6 +28,7 @@ from models.experimental.voxtraltts.utils.common import (
     create_voxtral_audio_tokenizer_or_skip,
     resolve_voxtral_model_name_or_skip,
 )
+from models.experimental.voxtraltts.utils.mesh import voxtral_to_torch_replicated
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
     _DECODE_CHUNK_T,
     extract_audio_tokenizer_state_dict,
@@ -117,7 +118,7 @@ def decode_codes_to_wav(
     ttnn.deallocate(latent_tt)
     wav_tt = _stage("pretransform_decode_tt", lambda: tok.pretransform_decode_tt(mel_tt))
     ttnn.deallocate(mel_tt)
-    wav = _stage("to_torch", lambda: ttnn.to_torch(wav_tt).float())
+    wav = _stage("to_torch", lambda: voxtral_to_torch_replicated(wav_tt).float())
     ttnn.deallocate(wav_tt)
     ttnn.synchronize_device(mesh_device)
     return wav

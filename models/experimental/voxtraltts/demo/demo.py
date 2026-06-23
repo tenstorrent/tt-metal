@@ -264,48 +264,132 @@ def _open_device():
     return runtime
 
 
-def _check_seq_len_memory(text_max_seq_len: int) -> None:
-    """Warn early if text_max_seq_len will likely cause OOM.
+def _text_kv_cache_bytes_per_device(
+    seq_len: int,
+    *,
+    n_layers: int,
+    n_kv_heads: int,
+    head_dim: int,
+    num_devices: int,
+    paged_block_size: int,
+    kv_dtype_bytes: int = 2,
+) -> int:
+    """Per-device KV bytes for paged cache (matches ``Attention.init_kv_cache``)."""
+    max_num_blocks = math.ceil(seq_len / paged_block_size)
+    n_local_kv_heads = max(1, n_kv_heads // max(1, num_devices))
+    per_layer = 2 * max_num_blocks * n_local_kv_heads * paged_block_size * head_dim * kv_dtype_bytes
+    return n_layers * per_layer
 
-    KV cache is pre-allocated at model init regardless of actual input length.
-    Formula: seq_len × 32 layers × 8 KV heads × 128 head_dim × 2 (K+V) × 2 bytes (bf16).
+
+def _mesh_device_dram_gb(mesh_device: ttnn.Device) -> float:
+    dram_view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    return (dram_view.total_bytes_per_bank * dram_view.num_banks) / (1024**3)
+
+
+def _mesh_device_label(mesh_device: ttnn.Device) -> str:
+    from models.experimental.voxtraltts.utils.mesh import voxtral_mesh_device_compute_shape
+
+    mesh_env = os.environ.get("MESH_DEVICE", "").strip()
+    rows, cols = voxtral_mesh_device_compute_shape()
+    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+    name = mesh_env or ttnn.get_arch_name()
+    return f"{name} ({rows}×{cols}, {num_devices} device{'s' if num_devices != 1 else ''})"
+
+
+def _estimate_run_peak_seq_len(args: DemoArgs, items: list[dict]) -> int | None:
+    """Max ``prompt_seq_len + max_speech_tokens`` across text-mode passes; ``None`` otherwise."""
+    if args.data.mode != "text":
+        return None
+    spmw = _resolve_single_pass_max_words(args.data.single_pass_max_words)
+    peak = 0
+    for item in items:
+        text = item["text"]
+        voice = str(item.get("voice", args.data.default_voice))
+        for pass_text, pass_max_tokens in _text_generation_passes(
+            text,
+            args.data.max_speech_tokens,
+            args.tt.text_max_seq_len,
+            voice=voice,
+            model_name_or_path=args.model.model_name_or_path,
+            single_pass_max_words=spmw,
+        ):
+            prompt_len = _speech_prompt_seq_len(pass_text, voice, args.model.model_name_or_path)
+            peak = max(peak, prompt_len + pass_max_tokens)
+    return peak
+
+
+def _check_seq_len_memory(
+    mesh_device: ttnn.Device,
+    args: DemoArgs,
+    *,
+    peak_seq_len: int | None,
+) -> None:
+    """Log memory for this run and fail early when the pre-allocated KV budget cannot fit.
+
+    KV cache is pre-allocated at ``text_max_seq_len`` at pipeline init. Logs use the opened
+    mesh device DRAM and, for text mode, the peak context length of this demo run.
     """
-    kv_bytes = text_max_seq_len * 32 * 8 * 128 * 2 * 2
-    kv_gb = kv_bytes / (1024**3)
-    DEVICE_DRAM_GB = 32.0  # Blackhole P150 (A84) — 32 GB LPDDR5 DRAM
-    WEIGHTS_GB = 14.5  # Voxtral-4B-TTS: text+acoustic+tokenizer weights + driver/OS overhead
-    RUNTIME_HEADROOM_GB = 4.0
-    usable_gb = DEVICE_DRAM_GB * 0.85
-    estimated_total_gb = WEIGHTS_GB + kv_gb + RUNTIME_HEADROOM_GB
-    available_gb = usable_gb - WEIGHTS_GB - RUNTIME_HEADROOM_GB
-
-    logger.info(
-        f"[memory] text_max_seq_len={text_max_seq_len} → KV cache = {kv_gb:.2f} GB "
-        f"(Blackhole P150: {DEVICE_DRAM_GB:.0f} GB DRAM, estimated total footprint ~{estimated_total_gb:.2f} GB)"
+    cfg = load_voxtral_config(args.model.model_name_or_path)
+    num_devices = int(mesh_device.get_num_devices()) if hasattr(mesh_device, "get_num_devices") else 1
+    kv_kwargs = dict(
+        n_layers=cfg.n_layers,
+        n_kv_heads=cfg.n_kv_heads,
+        head_dim=cfg.head_dim,
+        num_devices=num_devices,
+        paged_block_size=args.tt.paged_block_size,
     )
+    budget_bytes = _text_kv_cache_bytes_per_device(args.tt.text_max_seq_len, **kv_kwargs)
+    budget_gb = budget_bytes / (1024**3)
+    peak_bytes = (
+        _text_kv_cache_bytes_per_device(peak_seq_len, **kv_kwargs) if peak_seq_len is not None else budget_bytes
+    )
+    peak_gb = peak_bytes / (1024**3)
+
+    device_dram_gb = _mesh_device_dram_gb(mesh_device)
+    device_label = _mesh_device_label(mesh_device)
+    WEIGHTS_GB = 14.5  # text + acoustic + tokenizer weights (approximate)
+    RUNTIME_HEADROOM_GB = 4.0
+    usable_gb = device_dram_gb * 0.85
+    estimated_total_gb = WEIGHTS_GB + budget_gb + RUNTIME_HEADROOM_GB
+
+    if peak_seq_len is not None and peak_seq_len < args.tt.text_max_seq_len:
+        logger.info(
+            f"[memory] device={device_label} DRAM={device_dram_gb:.1f} GB/device | "
+            f"this run peak_seq_len={peak_seq_len} → KV ~{peak_gb:.2f} GB"
+        )
+        logger.info(
+            f"[memory] pre-allocated KV budget: text_max_seq_len={args.tt.text_max_seq_len} → "
+            f"{budget_gb:.2f} GB (estimated total footprint ~{estimated_total_gb:.2f} GB)"
+        )
+    else:
+        logger.info(
+            f"[memory] text_max_seq_len={args.tt.text_max_seq_len} → KV cache = {budget_gb:.2f} GB "
+            f"({device_label}, {device_dram_gb:.1f} GB DRAM/device, "
+            f"estimated total footprint ~{estimated_total_gb:.2f} GB)"
+        )
+
     if estimated_total_gb > usable_gb:
         raise MemoryError(
             f"\n{'='*70}\n"
-            f"OOM RISK: text_max_seq_len={text_max_seq_len} requires {kv_gb:.2f} GB for the text KV cache.\n"
+            f"OOM RISK: text_max_seq_len={args.tt.text_max_seq_len} pre-allocates {budget_gb:.2f} GB "
+            f"for the text KV cache on each device.\n"
             f"Estimated total footprint is ~{estimated_total_gb:.2f} GB, above the safe {usable_gb:.2f} GB budget\n"
-            f"for a {DEVICE_DRAM_GB:.0f} GB Blackhole P150 after model weights and runtime headroom.\n\n"
+            f"for {device_label} ({device_dram_gb:.1f} GB DRAM/device) after model weights and runtime headroom.\n\n"
             f"This can reach 'Pipeline ready' and then be killed by the OS/runtime without a Python traceback.\n\n"
             f"Fix — reduce text_max_seq_len. Recommended values:\n"
-            f"  ≤650  words / ≤4 min  →  text_max_seq_len=4096   (KV={4096*32*8*128*4/1024**3:.2f} GB)\n"
-            f"  ≤1300 words / ≤8 min  →  text_max_seq_len=8192   (KV={8192*32*8*128*4/1024**3:.2f} GB)\n"
-            f"  ≤2600 words / ≤17 min →  text_max_seq_len=16384  (KV={16384*32*8*128*4/1024**3:.2f} GB)\n"
-            f"  ≤5200 words / ≤34 min →  text_max_seq_len=32768  (KV={32768*32*8*128*4/1024**3:.2f} GB)\n"
+            f"  ≤650  words / ≤4 min  →  text_max_seq_len=4096   "
+            f"(KV={_text_kv_cache_bytes_per_device(4096, **kv_kwargs) / 1024**3:.2f} GB)\n"
+            f"  ≤1300 words / ≤8 min  →  text_max_seq_len=8192   "
+            f"(KV={_text_kv_cache_bytes_per_device(8192, **kv_kwargs) / 1024**3:.2f} GB)\n"
+            f"  ≤2600 words / ≤17 min →  text_max_seq_len=16384  "
+            f"(KV={_text_kv_cache_bytes_per_device(16384, **kv_kwargs) / 1024**3:.2f} GB)\n"
+            f"  ≤5200 words / ≤34 min →  text_max_seq_len=32768  "
+            f"(KV={_text_kv_cache_bytes_per_device(32768, **kv_kwargs) / 1024**3:.2f} GB)\n"
             f"{'='*70}"
-        )
-    elif kv_gb > available_gb * 0.6:
-        logger.warning(
-            f"[memory] KV cache ({kv_gb:.2f} GB) uses {kv_gb/available_gb*100:.0f}% of available DRAM — "
-            f"consider reducing text_max_seq_len to avoid OOM."
         )
 
 
 def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
-    _check_seq_len_memory(args.tt.text_max_seq_len)
     from models.experimental.voxtraltts.utils.mesh import voxtral_mesh_device_compute_shape
 
     # QB2 (1×N): HF-aligned fp32 SDPA reduces text-hidden drift in the free-run AR loop so acoustic
@@ -1117,6 +1201,8 @@ def run_demo(args: DemoArgs) -> None:
     runtime = _open_device()
     pipe: VoxtralTTSPipeline | None = None
     try:
+        peak_seq_len = _estimate_run_peak_seq_len(args, items)
+        _check_seq_len_memory(runtime.compute_device, args, peak_seq_len=peak_seq_len)
         logger.info(f"Loading VoxtralTTSPipeline from {args.model.model_name_or_path!r} …")
         t0 = perf_counter()
         pipe = _load_pipeline(runtime.compute_device, args)

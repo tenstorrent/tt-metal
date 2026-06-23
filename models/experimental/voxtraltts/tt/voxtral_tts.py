@@ -98,22 +98,24 @@ class VoxtralTTSDeviceGenerateOutput:
         if self.waveform_tt is None and not self.waveform_chunks_tt:
             waveform = torch.zeros(1, 1, 0, dtype=torch.float32)
         elif self.waveform_chunks_tt:
-            parts = [ttnn.to_torch(chunk).float().reshape(-1) for chunk in self.waveform_chunks_tt]
+            parts = [voxtral_to_torch_replicated(chunk).float().reshape(-1) for chunk in self.waveform_chunks_tt]
             waveform = torch.cat(parts, dim=0)[: self.expected_samples].reshape(1, 1, -1)
         else:
-            wav = ttnn.to_torch(self.waveform_tt).float()
+            wav = voxtral_to_torch_replicated(self.waveform_tt).float()
             waveform = wav.reshape(-1)[: self.expected_samples].reshape(1, 1, -1)
 
         n_cb = voxtral_num_codebooks()
         if self.codes_b37t_tt is None:
             codes_b37t = torch.empty((1, n_cb, 0), dtype=torch.long)
         else:
-            codes_b37t = ttnn.to_torch(self.codes_b37t_tt).long().reshape(1, n_cb, self.n_frames)
+            codes_b37t = voxtral_to_torch_replicated(self.codes_b37t_tt).long().reshape(1, n_cb, self.n_frames)
 
         if self.shifted_codes_t37_tt is None:
             shifted_codes_t37 = torch.empty((0, n_cb), dtype=torch.long)
         else:
-            shifted_codes_t37 = ttnn.to_torch(self.shifted_codes_t37_tt).long().reshape(self.n_frames, n_cb)
+            shifted_codes_t37 = (
+                voxtral_to_torch_replicated(self.shifted_codes_t37_tt).long().reshape(self.n_frames, n_cb)
+            )
 
         return VoxtralTTSGenerateOutput(
             waveform=waveform,
@@ -490,7 +492,7 @@ class VoxtralTTSPipeline:
 
     def _waveform_from_tt_chunks(self, wav_chunks: list[ttnn.Tensor], expected_samples: int) -> torch.Tensor:
         """Explicit host export boundary for TT waveform chunks."""
-        parts = [ttnn.to_torch(chunk).float().reshape(-1) for chunk in wav_chunks]
+        parts = [voxtral_to_torch_replicated(chunk).float().reshape(-1) for chunk in wav_chunks]
         for chunk in wav_chunks:
             if chunk.is_allocated():
                 ttnn.deallocate(chunk)
@@ -1055,7 +1057,7 @@ class VoxtralTTSPipeline:
                 ttnn.deallocate(noise_tt)
                 _stash_frame_codes(codes_tt)
                 if debug is not None:
-                    ac_out = ttnn.to_torch(codes_tt).long().reshape(1, -1)
+                    ac_out = voxtral_to_torch_replicated(codes_tt).long().reshape(1, -1)
                     debug.set(f"step.{step_idx}.acoustic.codes", ac_out.squeeze(0))
             if _timing:
                 _t_ac = (time.perf_counter() - _t0) * 1000.0
@@ -1063,7 +1065,7 @@ class VoxtralTTSPipeline:
                 sem_tile = self._acoustic_hidden_tile_copy_qb2(last_hidden_tt)
                 sem_tt = self.acoustic.semantic_logits_tt(sem_tile)
                 ttnn.deallocate(sem_tile)
-                sem_host = ttnn.to_torch(sem_tt).float()
+                sem_host = voxtral_to_torch_replicated(sem_tt).float()
                 ttnn.deallocate(sem_tt)
                 while sem_host.dim() > 2:
                     sem_host = sem_host.squeeze(1)
@@ -1212,10 +1214,10 @@ class VoxtralTTSPipeline:
                 # so hand the tokenizer a disposable copy.
                 latent_tt = self.audio_tokenizer.latent_from_codes_tt(ttnn.clone(codes_b37t_tt))
                 if debug is not None:
-                    debug.set("tokenizer.latent", ttnn.to_torch(latent_tt).squeeze(1).float())
+                    debug.set("tokenizer.latent", voxtral_to_torch_replicated(latent_tt).squeeze(1).float())
                 mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
                 if debug is not None:
-                    debug.set("tokenizer.mel", ttnn.to_torch(mel_tt).squeeze(1).float())
+                    debug.set("tokenizer.mel", voxtral_to_torch_replicated(mel_tt).squeeze(1).float())
                 ttnn.deallocate(latent_tt)
                 wav_chunks = self.audio_tokenizer.pretransform_decode_tt(mel_tt, return_chunks=True)
                 ttnn.deallocate(mel_tt)
@@ -1327,10 +1329,10 @@ class VoxtralTTSPipeline:
 
             latent_tt = self.audio_tokenizer.latent_from_codes_tt(codes_b37t_tt)
             if debug is not None:
-                debug.set("tokenizer.latent", ttnn.to_torch(latent_tt).squeeze(1).float())
+                debug.set("tokenizer.latent", voxtral_to_torch_replicated(latent_tt).squeeze(1).float())
             mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
             if debug is not None:
-                debug.set("tokenizer.mel", ttnn.to_torch(mel_tt).squeeze(1).float())
+                debug.set("tokenizer.mel", voxtral_to_torch_replicated(mel_tt).squeeze(1).float())
             ttnn.deallocate(latent_tt)
             wav_chunks = self.audio_tokenizer.pretransform_decode_tt(mel_tt, return_chunks=True)
             ttnn.deallocate(mel_tt)
@@ -1616,7 +1618,7 @@ class VoxtralTTSPipeline:
                 sem_tile = self._acoustic_hidden_tile_copy(last_hidden_tt)
                 sem_tt = self.acoustic.semantic_logits_tt(sem_tile)
                 ttnn.deallocate(sem_tile)
-                sem_host = ttnn.to_torch(sem_tt).float()
+                sem_host = voxtral_to_torch_replicated(sem_tt).float()
                 ttnn.deallocate(sem_tt)
                 while sem_host.dim() > 2:
                     sem_host = sem_host.squeeze(1)
@@ -1765,10 +1767,10 @@ class VoxtralTTSPipeline:
                 # so hand the tokenizer a disposable copy.
                 latent_tt = self.audio_tokenizer.latent_from_codes_tt(ttnn.clone(codes_b37t_tt))
                 if debug is not None:
-                    debug.set("tokenizer.latent", ttnn.to_torch(latent_tt).squeeze(1).float())
+                    debug.set("tokenizer.latent", voxtral_to_torch_replicated(latent_tt).squeeze(1).float())
                 mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
                 if debug is not None:
-                    debug.set("tokenizer.mel", ttnn.to_torch(mel_tt).squeeze(1).float())
+                    debug.set("tokenizer.mel", voxtral_to_torch_replicated(mel_tt).squeeze(1).float())
                 ttnn.deallocate(latent_tt)
                 wav_chunks = self.audio_tokenizer.pretransform_decode_tt(mel_tt, return_chunks=True)
                 ttnn.deallocate(mel_tt)
@@ -1798,12 +1800,14 @@ class VoxtralTTSPipeline:
                     debug=debug,
                 )
 
-            shifted_audio_tokens = ttnn.to_torch(shifted_codes_t37_tt).long().reshape(n_frames, self.num_codebooks)
-            codes_b37t = ttnn.to_torch(codes_b37t_tt).long().reshape(1, self.num_codebooks, n_frames)
+            shifted_audio_tokens = (
+                voxtral_to_torch_replicated(shifted_codes_t37_tt).long().reshape(n_frames, self.num_codebooks)
+            )
+            codes_b37t = voxtral_to_torch_replicated(codes_b37t_tt).long().reshape(1, self.num_codebooks, n_frames)
             if wav_tt is None:
                 waveform = self._waveform_from_tt_chunks(wav_chunks, expected_samples)
             else:
-                wav = ttnn.to_torch(wav_tt).float()
+                wav = voxtral_to_torch_replicated(wav_tt).float()
                 waveform = wav.reshape(-1)[:expected_samples].reshape(1, 1, -1)
                 ttnn.deallocate(wav_tt)
             ttnn.deallocate(codes_b37t_tt)
@@ -1879,10 +1883,10 @@ class VoxtralTTSPipeline:
 
             latent_tt = self.audio_tokenizer.latent_from_codes_tt(codes_b37t_tt)
             if debug is not None:
-                debug.set("tokenizer.latent", ttnn.to_torch(latent_tt).squeeze(1).float())
+                debug.set("tokenizer.latent", voxtral_to_torch_replicated(latent_tt).squeeze(1).float())
             mel_tt = self.audio_tokenizer.decode_latent_to_mel_b1tc(latent_tt)
             if debug is not None:
-                debug.set("tokenizer.mel", ttnn.to_torch(mel_tt).squeeze(1).float())
+                debug.set("tokenizer.mel", voxtral_to_torch_replicated(mel_tt).squeeze(1).float())
             ttnn.deallocate(latent_tt)
             wav_chunks = self.audio_tokenizer.pretransform_decode_tt(mel_tt, return_chunks=True)
             ttnn.deallocate(mel_tt)
@@ -1918,7 +1922,7 @@ class VoxtralTTSPipeline:
             if wav_tt is None:
                 waveform = self._waveform_from_tt_chunks(wav_chunks, expected_samples)
             else:
-                wav = ttnn.to_torch(wav_tt).float()
+                wav = voxtral_to_torch_replicated(wav_tt).float()
                 waveform = wav.reshape(-1)[:expected_samples].reshape(1, 1, -1)
                 if wav_tt.is_allocated():
                     ttnn.deallocate(wav_tt)
@@ -2124,7 +2128,7 @@ class VoxtralTTSPipeline:
         codes_tt, _ = self.acoustic.forward(llm_tt, noise_tt, cfg_scalar)
         ttnn.deallocate(llm_tt)
         ttnn.deallocate(noise_tt)
-        codes = ttnn.to_torch(codes_tt).long().reshape(bsz, -1)
+        codes = voxtral_to_torch_replicated(codes_tt).long().reshape(bsz, -1)
         ttnn.deallocate(codes_tt)
         return codes
 
@@ -2158,7 +2162,7 @@ class VoxtralTTSPipeline:
         scaled_tt = self.acoustic.fm_pre_round_scaled_codes_tt(llm_tt, noise_tt, cfg_scalar)
         ttnn.deallocate(llm_tt)
         ttnn.deallocate(noise_tt)
-        scaled = ttnn.to_torch(scaled_tt).float().reshape(bsz, -1)
+        scaled = voxtral_to_torch_replicated(scaled_tt).float().reshape(bsz, -1)
         ttnn.deallocate(scaled_tt)
         return scaled
 

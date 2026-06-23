@@ -62,7 +62,8 @@ def _trace_device_params() -> dict[str, int]:
 @pytest.mark.parametrize("device_params", [_trace_device_params()], indirect=True)
 def test_ttnn_voxtral_tts_staged_pcc(device, reset_seeds, request):
     """Free-run E2E diagnostic: CPU reference rollout vs TT free-run (codes + waveform), logged not gated."""
-    generate_steps = 1
+    default_steps = "32" if os.environ.get("CI") == "true" else "1"
+    generate_steps = int(os.environ.get("VOXTRAL_E2E_FREE_RUN_STEPS", default_steps))
     name = resolve_voxtral_model_name_or_skip()
 
     try:
@@ -327,12 +328,11 @@ def _cpu_text_decode_step(cpu: VoxtralCPUReference, *, audio_codes_b37: torch.Te
 @torch.no_grad()
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize("device_params", [_trace_device_params()], indirect=True)
-def test_ttnn_voxtral_tts_golden_acoustic_pcc(device, reset_seeds, request):
-    """Full-pipeline teacher-forced PCC: ref vs TT, golden code fed to BOTH each step.
+def test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc(device, reset_seeds, request):
+    """Full-pipeline teacher-forced waveform PCC (text + acoustic + tokenizer): ref vs TT.
 
-    Both models run live (text + acoustic); each step the golden code is fed to both text models
-    (never their own output, so flips can't cascade), each produces its own hidden → its own code.
-    Compares ref waveform (ref codes → ref tokenizer) vs TT waveform (TT codes → TT tokenizer).
+    Golden codes are fed to both text models each step (not each side's own output).
+    Each side still runs live text decode → acoustic FM → codes; waveforms are compared.
     """
     name = resolve_voxtral_model_name_or_skip()
     fixture = _load_golden_fixture()

@@ -680,7 +680,9 @@
       timeout: 20
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
-- name: Voxtral TTS unit tests
+# ─── Voxtral TTS ────────────────────────────────────────────────────────────
+
+- name: Voxtral TTS component unit tests (P150)
   cmd: |
     set -e
     uv pip install -r models/experimental/voxtraltts/requirements.txt
@@ -688,18 +690,21 @@
     export HF_MODEL=mistralai/Voxtral-4B-TTS-2603
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
     export CI=true
-    pytest models/experimental/voxtraltts/tests/ \
-      --ignore=models/experimental/voxtraltts/tests/perf \
+    pytest models/experimental/voxtraltts/tests/test_text_model.py \
+      models/experimental/voxtraltts/tests/test_acoustic_model.py \
+      models/experimental/voxtraltts/tests/test_audio_tokenizer_decoder_stack.py \
+      models/experimental/voxtraltts/tests/test_audio_tokenizer_full_decode.py \
+      models/experimental/voxtraltts/tests/test_audio_tokenizer_opt.py \
       -q --timeout=3600
   model: voxtral-tts
   skus:
     bh_p150b_civ2:
-      timeout: 25
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-- name: Voxtral TTS demo (QB2)
+- name: Voxtral TTS component unit tests (QB2 P150x4)
   cmd: |
     set -e
     uv pip install -r models/experimental/voxtraltts/requirements.txt
@@ -708,7 +713,12 @@
     export TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/mistralai--Voxtral-4B-TTS-2603
     export CI=true
     export MESH_DEVICE=P150x4
-    python models/experimental/voxtraltts/demo/demo.py
+    pytest models/experimental/voxtraltts/tests/test_text_model.py \
+      models/experimental/voxtraltts/tests/test_acoustic_model.py \
+      models/experimental/voxtraltts/tests/test_audio_tokenizer_decoder_stack.py \
+      models/experimental/voxtraltts/tests/test_audio_tokenizer_full_decode.py \
+      models/experimental/voxtraltts/tests/test_audio_tokenizer_opt.py \
+      -q --timeout=3600
   model: voxtral-tts
   skus:
     bh_quietbox_2:
