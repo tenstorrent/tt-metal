@@ -124,6 +124,41 @@ def test_renoise_keeps_accepted_replaces_rejected():
     assert out2[0, 0] == 0 and out2[0, 2] == 2 and out2[0, 4] == 4
 
 
+def test_decision_dtype_red_lines_bf16_safe():
+    """#47468 acceptance red lines for the diffusion DECISIONS under dtype.
+
+    bf16 is the floor for the decision-critical ops: the entropy-budget accept mask
+    and the clean-argmax commit must barely move at bf16, while bfp8 is NOT safe for
+    them (entropy PCC ~0.74 measured on device -> accept flips; ttnn.argmax rejects
+    bfp8). These bars are the harness's value: a regression that pushes decisions
+    into bfp8, or otherwise perturbs them, trips here.
+    """
+
+    def bf16(x):
+        return x.to(torch.bfloat16).float()
+
+    # accept-mask flip rate at bf16 vs fp32, across budgets + varied entropy
+    acc_flips = acc_tot = 0
+    for seed in range(8):
+        logits = torch.randn(1, 256, 2048, generator=_gen(seed)) * torch.linspace(0.3, 5, 256).view(1, 256, 1)
+        for bound in [0.05, 0.1, 0.5]:
+            ref = S.entropy_budget_accept(S.token_entropy(logits), bound, min_accept=0)
+            got = S.entropy_budget_accept(S.token_entropy(bf16(logits)), bound, min_accept=0)
+            acc_flips += int((ref != got).sum())
+            acc_tot += ref.numel()
+    acc_rate = acc_flips / acc_tot
+    assert acc_rate <= 0.005, f"bf16 accept-mask flip rate {acc_rate:.4%} > 0.5% red line (measured ~0.13%)"
+
+    # clean-argmax commit flip rate at bf16 vs fp32 (near-max ties may flip; bound generously)
+    arg_flips = arg_tot = 0
+    for seed in range(8):
+        logits = torch.randn(1, 256, 2048, generator=_gen(100 + seed))
+        arg_flips += int((logits.argmax(-1) != bf16(logits).argmax(-1)).sum())
+        arg_tot += logits.shape[1]
+    arg_rate = arg_flips / arg_tot
+    assert arg_rate <= 0.03, f"bf16 commit-argmax flip rate {arg_rate:.4%} > 3% red line (measured ~1.3%)"
+
+
 def test_random_canvas_in_range():
     canvas = S.random_canvas((2, 256), 262144, generator=_gen(7))
     assert canvas.shape == (2, 256)
