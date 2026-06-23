@@ -440,7 +440,6 @@
 # covers N150 (1x1), T3K/llmbox (1x8), and Galaxy (4x8) without per-SKU -k filters.
 - name: GPT-OSS 20B unit tests
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
     pytest --timeout 600 models/demos/gpt_oss/tests/unit/
   model: gpt-oss-20b
@@ -461,7 +460,6 @@
 
 - name: GPT-OSS 120B unit tests
   cmd: |
-    uv pip install -r models/demos/gpt_oss/requirements.txt
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
