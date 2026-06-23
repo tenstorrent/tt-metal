@@ -1,57 +1,34 @@
-name: "(triage) CI Triage Dispatch"
+name: "(triage) Create CI Triage Issues"
 
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: "Which pipeline to run: 'notify' (ping BrAIn), 'lifecycle' (close resolved issues), or 'create-issues' (file new issues)"
-        type: string
-        required: false
-        default: "notify"
-
-      # ── Lifecycle inputs ─────────────────────────────────────────────────────
-      close-issues:
-        description: "[lifecycle] Actually close resolved issues (false = dry-run)"
-        type: boolean
-        default: false
-      check-passing-only:
-        description: "[lifecycle] Fast mode: close passing jobs without AI"
-        type: boolean
-        default: false
-      runs-to-evaluate:
-        description: "[lifecycle] How many recent runs to require consensus across"
-        type: string
-        default: "3"
-
-      # ── Create-issues inputs ─────────────────────────────────────────────────
       max-issues:
-        description: "[create-issues] Maximum issues to create (0 = unlimited)"
+        description: "Maximum issues to create (0 = unlimited)"
         type: number
         default: 0
       workflow-filter:
-        description: "[create-issues] Comma-separated workflow name substrings to restrict analysis. Empty = all."
+        description: "Comma-separated workflow name substrings to restrict analysis. Empty = all."
         type: string
         default: ""
       consecutive-failures-high-volume:
-        description: "[create-issues] Consecutive failures required for high-volume workflows"
+        description: "Consecutive failures required for high-volume workflows"
         type: number
         default: 4
       consecutive-failures-low-volume:
-        description: "[create-issues] Consecutive failures required for low-volume workflows"
+        description: "Consecutive failures required for low-volume workflows"
         type: number
         default: 2
       high-volume-runs-per-day:
-        description: "[create-issues] Threshold (>) for classifying a workflow as high-volume"
+        description: "Threshold (>) for classifying a workflow as high-volume"
         type: number
         default: 5
-
-      # ── Shared inputs ────────────────────────────────────────────────────────
       llm-backend:
         description: "LLM backend: 'copilot' or 'cursor'"
         type: string
         default: "copilot"
       issue-repo:
-        description: "Repository for issues (read by lifecycle, written to by create-issues)"
+        description: "Repository where new issues will be created"
         type: string
         default: "tenstorrent/tt-metal"
       target-repo:
@@ -65,64 +42,7 @@ permissions:
   issues: write
 
 jobs:
-  ping-brain:
-    if: ${{ inputs.mode == 'notify' || inputs.mode == '' }}
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          sparse-checkout: .github/scripts/triage
-          sparse-checkout-cone-mode: true
-
-      - name: Eastern calendar date
-        id: eastern-date
-        run: echo "date=$(TZ=America/New_York date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
-
-      - name: Check if lifecycle was already included today
-        id: lifecycle-sent-today
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: /tmp/ping-brain-lifecycle-sent
-          key: ping-brain-lifecycle-${{ steps.eastern-date.outputs.date }}
-          lookup-only: true
-
-      - name: Send triage instructions to BrAIn
-        id: send
-        env:
-          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
-          INCLUDE_LIFECYCLE: ${{ steps.lifecycle-sent-today.outputs.cache-hit != 'true' }}
-        run: python3 .github/scripts/triage/ping_brain_slack.py
-
-      - name: Record daily lifecycle instruction sent
-        if: steps.send.outputs.included_lifecycle == 'true'
-        run: mkdir -p /tmp/ping-brain-lifecycle-sent && touch /tmp/ping-brain-lifecycle-sent/sent
-
-      - name: Save daily lifecycle cache
-        if: steps.send.outputs.included_lifecycle == 'true'
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: /tmp/ping-brain-lifecycle-sent
-          key: ping-brain-lifecycle-${{ steps.eastern-date.outputs.date }}
-
-  lifecycle:
-    if: ${{ inputs.mode == 'lifecycle' }}
-    uses: tenstorrent/tt-auto-triage/.github/workflows/lifecycle-ci.yaml@ebanerjee/issue-lifecycle
-    with:
-      close-issues: ${{ inputs.close-issues }}
-      check-passing-only: ${{ inputs.check-passing-only || false }}
-      llm-backend: ${{ inputs.llm-backend || 'copilot' }}
-      issue-repo: ${{ inputs.issue-repo || 'tenstorrent/tt-metal' }}
-      target-repo: ${{ inputs.target-repo || 'tenstorrent/tt-metal' }}
-      runs-to-evaluate: ${{ inputs.runs-to-evaluate || '3' }}
-    secrets:
-      GITHUB_READ_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      ISSUE_WRITE_TOKEN: ${{ secrets.EVAN_PAT }}
-      CURSOR_API_KEY: ${{ secrets.EVAN_CURSOR_API_KEY }}
-      COPILOT_API_KEY: ${{ secrets.AUTO_TRIAGE_TOKEN }}
-
   create-issues:
-    if: ${{ inputs.mode == 'create-issues' }}
     uses: tenstorrent/tt-auto-triage/.github/workflows/triage-create-issues.yaml@ebanerjee/create-issues-copilot
     with:
       issue-repo: ${{ inputs.issue-repo }}
