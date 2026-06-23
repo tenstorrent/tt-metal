@@ -41,6 +41,9 @@
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
+// Writer always populates compute's reduce-scalar / epsilon / trans_mat CBs
+// (shared with the MUX writer) so the reader starts input reads ASAP.
+#include "wan_rmsnorm_scalar_setup.hpp"
 
 void kernel_main() {
     // ---------- compile-time args ----------
@@ -65,6 +68,19 @@ void kernel_main() {
     constexpr uint32_t total_num_tile_rows = get_compile_time_arg_val(12);
     constexpr auto output_args = TensorAccessorArgs<13>();
 
+    // Scalar/eps/trans_mat population args (appended after the output accessor).
+    // The writer always populates compute's reduce_scalar_* / epsilon /
+    // transformation_mat CBs so the reader can start the input read immediately.
+    constexpr uint32_t SCB_BASE = output_args.next_compile_time_args_offset();
+    constexpr uint32_t reduce_scalar_sum_cb = get_compile_time_arg_val(SCB_BASE + 0);
+    constexpr uint32_t reduce_scalar_avg_cb = get_compile_time_arg_val(SCB_BASE + 1);
+    constexpr uint32_t epsilon_cb = get_compile_time_arg_val(SCB_BASE + 2);
+    constexpr uint32_t transformation_mat_cb = get_compile_time_arg_val(SCB_BASE + 3);
+    constexpr uint32_t reduce_factor = get_compile_time_arg_val(SCB_BASE + 4);
+    constexpr uint32_t epsilon_bits = get_compile_time_arg_val(SCB_BASE + 5);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(SCB_BASE + 6);
+    constexpr auto transmat_args = TensorAccessorArgs<SCB_BASE + 7>();
+
     // ---------- runtime args ----------
     // size_t arg_idx (not uint32_t) so it can bind to FabricConnectionManager::build_from_args
     // which takes the index by reference and advances it past the fabric rt args.
@@ -72,10 +88,24 @@ void kernel_main() {
     const uint32_t output_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_end = get_arg_val<uint32_t>(arg_idx++);
+    // trans_mat base address for the writer-side scalar/trans_mat population
+    // (only read when fuse_rope). 0 when no RoPE.
+    const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
 
     const uint32_t output_tile_bytes = get_tile_size(output_cb);
     const auto output_accessor = TensorAccessor(output_args, output_addr);
     const uint32_t num_tile_rows = tile_row_end - tile_row_start;
+
+    // Populate compute's reduce-scalar / epsilon / trans_mat CBs before any AG
+    // or output work — compute blocks on these at its very top. Independent of
+    // fabric (uses this writer's own NoC), so it overlaps the fabric handshake.
+    wan_rmsnorm_generate_scalars_and_transmat<
+        reduce_scalar_sum_cb,
+        reduce_scalar_avg_cb,
+        epsilon_cb,
+        transformation_mat_cb,
+        reduce_factor,
+        static_cast<bool>(fuse_rope)>(epsilon_bits, TensorAccessor(transmat_args, transformation_mat_addr));
 
     // =================== TP>1: stats fabric AG ===================
     if constexpr (is_tp_1 == 0) {

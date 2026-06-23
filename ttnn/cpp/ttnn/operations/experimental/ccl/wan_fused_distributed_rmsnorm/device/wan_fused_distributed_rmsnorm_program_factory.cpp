@@ -988,16 +988,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     std::vector<uint32_t> reader_compile_args = {
         input_cb_id,
         weight_cb_id,
-        reduce_scalar_sum_cb_id,
-        reduce_scalar_avg_cb_id,
-        epsilon_cb_id,
-        transformation_mat_cb_id,
         rope_cos_cb_id,
         rope_sin_cb_id,
         num_tile_cols,
         block_size,
-        reduce_factor,
-        float_to_u32(args.epsilon),
         static_cast<uint32_t>(has_weight),
         static_cast<uint32_t>(fuse_rope),
         head_dim_tiles,
@@ -1009,10 +1003,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(per_token_weight),
         static_cast<uint32_t>(per_token_bias),
         static_cast<uint32_t>(streaming_low_l1),
-        // scalars_in_writer: on the MUX path the writer populates the reduce
-        // scalars / epsilon / trans_mat CBs, so the reader skips them and starts
-        // the input read immediately.
-        static_cast<uint32_t>(use_mux ? 1u : 0u),
         // Input-read push+barrier granularity (tiles): no-rope whole-row, RoPE
         // finer for deep workers (compute-overlap heuristic; see function).
         input_barrier_tiles(fuse_rope, num_tile_rows_per_worker, block_size, num_tile_cols),
@@ -1029,11 +1019,9 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);  // dummy
     }
     if (fuse_rope) {
-        TensorAccessorArgs(trans_mat.value().buffer()).append_to(reader_compile_args);
         TensorAccessorArgs(rope_cos.value().buffer()).append_to(reader_compile_args);
         TensorAccessorArgs(rope_sin.value().buffer()).append_to(reader_compile_args);
     } else {
-        TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
         TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     }
@@ -1089,6 +1077,21 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             num_tile_rows,
         };
         TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_args);
+        // Scalar/eps/trans_mat population args (the writer always populates these
+        // CBs so the reader starts the input read ASAP). Appended after the output
+        // accessor; the kernel reads them at output_args.next_compile_time_args_offset().
+        writer_compile_args.push_back(reduce_scalar_sum_cb_id);
+        writer_compile_args.push_back(reduce_scalar_avg_cb_id);
+        writer_compile_args.push_back(epsilon_cb_id);
+        writer_compile_args.push_back(transformation_mat_cb_id);
+        writer_compile_args.push_back(reduce_factor);
+        writer_compile_args.push_back(float_to_u32(args.epsilon));
+        writer_compile_args.push_back(static_cast<uint32_t>(fuse_rope));
+        if (fuse_rope) {
+            TensorAccessorArgs(trans_mat.value().buffer()).append_to(writer_compile_args);
+        } else {
+            TensorAccessorArgs(input_tensor.buffer()).append_to(writer_compile_args);  // dummy
+        }
 
         writer_kernel_id = CreateKernel(
             program,
@@ -1272,7 +1275,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     const uint32_t output_addr = output_tensor.buffer()->address();
     const uint32_t weight_addr = has_weight ? weight.value().buffer()->address() : 0;
     const uint32_t bias_addr = has_bias ? bias.value().buffer()->address() : 0;
-    const uint32_t trans_mat_addr = fuse_rope ? trans_mat.value().buffer()->address() : 0;
     const uint32_t rope_cos_addr = fuse_rope ? rope_cos.value().buffer()->address() : 0;
     const uint32_t rope_sin_addr = fuse_rope ? rope_sin.value().buffer()->address() : 0;
 
@@ -1365,7 +1367,6 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             input_addr,
             weight_addr,
             bias_addr,
-            trans_mat_addr,
             rope_cos_addr,
             rope_sin_addr,
             tile_row_start,
@@ -1420,21 +1421,32 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
                 program,
                 link_master_virtual[link],
                 writer_rt_args);
-        } else if (!is_tp_1) {
-            // TP>1 single-worker path: append out_ready_sem + direct fabric
-            // connection rt args (FabricConnectionManager layout).
-            writer_rt_args.push_back(out_ready_sem_bank_addr);
-            writer_rt_args.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
-            if (forward_fabric_node_id.has_value()) {
-                const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    local_node_id, forward_fabric_node_id.value(), /*link_idx=*/0, program, {core}, writer_rt_args);
-            }
-            writer_rt_args.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
-            if (backward_fabric_node_id.has_value()) {
-                const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
-                tt::tt_fabric::append_fabric_connection_rt_args(
-                    local_node_id, backward_fabric_node_id.value(), /*link_idx=*/0, program, {core}, writer_rt_args);
+        } else {
+            // Legacy writer (is_tp_1 OR TP>1 single-worker). trans_mat addr at rt
+            // index 3 for the writer-side scalar/trans_mat population (0 = no RoPE,
+            // never read); refreshed in override_runtime_arguments.
+            writer_rt_args.push_back(fuse_rope ? trans_mat.value().buffer()->address() : 0u);
+            if (!is_tp_1) {
+                // TP>1 single-worker path: append out_ready_sem + direct fabric
+                // connection rt args (FabricConnectionManager layout).
+                writer_rt_args.push_back(out_ready_sem_bank_addr);
+                writer_rt_args.push_back(forward_fabric_node_id.has_value() ? 1u : 0u);
+                if (forward_fabric_node_id.has_value()) {
+                    const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        local_node_id, forward_fabric_node_id.value(), /*link_idx=*/0, program, {core}, writer_rt_args);
+                }
+                writer_rt_args.push_back(backward_fabric_node_id.has_value() ? 1u : 0u);
+                if (backward_fabric_node_id.has_value()) {
+                    const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
+                    tt::tt_fabric::append_fabric_connection_rt_args(
+                        local_node_id,
+                        backward_fabric_node_id.value(),
+                        /*link_idx=*/0,
+                        program,
+                        {core},
+                        writer_rt_args);
+                }
             }
         }
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
@@ -1509,18 +1521,22 @@ void WanFusedDistributedRmsnormMeshWorkloadFactory::override_runtime_arguments(
             reader_args[0] = input_addr;
             reader_args[1] = weight_addr;
             reader_args[2] = bias_addr;
-            reader_args[3] = trans_mat_addr;
-            reader_args[4] = rope_cos_addr;
-            reader_args[5] = rope_sin_addr;
+            reader_args[3] = rope_cos_addr;
+            reader_args[4] = rope_sin_addr;
 
             auto& writer_args = writer_runtime_args_by_core.at(core.x).at(core.y);
             writer_args[0] = output_addr;
             if (shared.stats_dram_addr_writer_arg_idx.has_value()) {
+                // MUX writer: stats_dram + (worker_chunk_base) + trans_mat.
                 const size_t idx = shared.stats_dram_addr_writer_arg_idx.value();
                 writer_args[idx] = stats_dram_addr;
                 // trans_mat addr for the writer-side population sits at idx + 2
                 // (stats_dram, worker_chunk_base, trans_mat — see create_at).
                 writer_args[idx + 2] = trans_mat_addr;
+            } else {
+                // Legacy writer: trans_mat addr for the writer-side scalar/
+                // trans_mat population sits at rt index 3.
+                writer_args[3] = trans_mat_addr;
             }
         }
     }
