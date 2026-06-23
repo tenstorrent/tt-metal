@@ -51,7 +51,7 @@ def _best_core_grid(n_tiles, max_x, max_y):
 def _decode_linear_1d_config(m_tiles, k_tiles, n_tiles, grid_size, is_bh):
     """1D (N-parallel) matmul program config for a decode-mode Linear.
 
-    Decode has small M, so we use 1d splitting across N 
+    Decode has small M, so we use 1d splitting across N
 
     Constraints satisfied here:
       - in0_block_w divides k_tiles (K streamed in even chunks)
@@ -107,6 +107,17 @@ class SharedMLP:
         self.tp = tp
         tp_suffix = f"_tp{tp}" if tp > 1 else ""
 
+        # Per-device intermediate width, tile-aligned. With TP the raw per-device
+        # split (e.g. 2112/8 = 264) is not a multiple of TILE_SIZE, so the fused
+        # [gate | up] slab would have its split point land mid-tile — slicing it
+        # then mixes gate/up lanes within a tile and tanks PCC. We pad each
+        # per-device gate/up half (and, symmetrically, the down_proj input rows)
+        # up to a tile multiple so the split lands on a tile boundary and every
+        # matmul's N/K stays tile-aligned. Mirrors experts/weights.py.
+        split = self.intermediate_size // tp
+        self.padded_split = ((split + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE) * ttnn.TILE_SIZE
+        self._intermediate_pad = self.padded_split - split if tp > 1 else 0
+
         # Tag the cache filenames with the weight dtype so that flipping a
         # SharedMLP weight's dtype (e.g. bf16 → bfp8 for DRAM-pressure relief)
         # doesn't collide with a previously-cached file that holds the same
@@ -125,21 +136,36 @@ class SharedMLP:
         if state_dict:
             # Fuse gate_proj + up_proj into a single column-parallel weight so the
             # forward runs ONE matmul producing a [gate | up] slab (mirrors the wqkv
-            # fusion in attention/weights.py). 
+            # fusion in attention/weights.py).
             gate_w = state_dict["gate_proj.weight"]  # [intermediate_size, hidden_size]
             up_w = state_dict["up_proj.weight"]  # [intermediate_size, hidden_size]
+            pad = self._intermediate_pad
             if tp > 1:
                 fused_list = []
                 for i in range(tp):
-                    wg_chunk = torch.chunk(gate_w, tp, dim=0)[i].transpose(-2, -1)
-                    wu_chunk = torch.chunk(up_w, tp, dim=0)[i].transpose(-2, -1)
-                    fused_list.append(torch.cat([wg_chunk, wu_chunk], dim=-1))  # [hidden, 2*int/tp]
+                    wg_chunk = torch.chunk(gate_w, tp, dim=0)[i].transpose(-2, -1)  # [hidden, split]
+                    wu_chunk = torch.chunk(up_w, tp, dim=0)[i].transpose(-2, -1)  # [hidden, split]
+                    if pad:
+                        # Pad each half's N dim with zeros so the slab is
+                        # [gate(padded_split) | up(padded_split)] per device
+                        wg_chunk = torch.nn.functional.pad(wg_chunk, (0, pad))
+                        wu_chunk = torch.nn.functional.pad(wu_chunk, (0, pad))
+                    fused_list.append(torch.cat([wg_chunk, wu_chunk], dim=-1))  # [hidden, 2*padded_split]
                 gate_up_proj_weight = torch.cat(fused_list, dim=-1).unsqueeze(0).unsqueeze(0)
             else:
                 gate_up_proj_weight = (
                     torch.cat([gate_w.transpose(-2, -1), up_w.transpose(-2, -1)], dim=-1).unsqueeze(0).unsqueeze(0)
                 )
-            down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1).unsqueeze(0).unsqueeze(0)
+
+            # need to pad down_proj so it matches the padding for the gate+up proj
+            down_proj_weight = state_dict["down_proj.weight"].transpose(-2, -1)  # [intermediate, hidden]
+            if tp > 1 and pad:
+                down_chunks = torch.chunk(down_proj_weight, tp, dim=-2)  # each [split, hidden]
+                down_chunks = [
+                    torch.nn.functional.pad(c, (0, 0, 0, pad)) for c in down_chunks
+                ]  # [padded_split, hidden]
+                down_proj_weight = torch.cat(down_chunks, dim=-2)  # [tp*padded_split, hidden]
+            down_proj_weight = down_proj_weight.unsqueeze(0).unsqueeze(0)
         else:
             gate_up_proj_weight = None
             down_proj_weight = None
@@ -165,7 +191,7 @@ class SharedMLP:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def __call__(self, hidden_states, is_decode=False):
+    def __call__(self, hidden_states, is_decode=True):
         """
         GeGLU MLP forward with TP support.
 
@@ -188,18 +214,17 @@ class SharedMLP:
         # Fused gate+up projection: one matmul produces the [gate | up] slab.
         gate_up = ttnn.linear(hidden_states, self.gate_up_proj, program_config=gate_up_pc)
 
-        # Split the slab into gate / up halves (per-device width when column-parallel)
-        # and fuse GeGLU into the multiply: fast-approx GELU on the gate half
-        # (operand a) only, then elementwise * up. Replaces the separate ttnn.gelu +
-        # ttnn.mul, matching the original fast_and_approximate_mode=True semantics.
+        # Split the slab into gate / up halves and fuse GeGLU into the multiply:
+        # fast-approx GELU on the gate half (operand a) only, then elementwise * up.
+        # Matches the original fast_and_approximate_mode=True GeGLU semantics.
         #
-        # NOTE: when intermediate_size/tp is not a multiple of TILE_WIDTH (32) — e.g.
-        # 2112/8 = 264 on T3K — this split is not tile-aligned, so ttnn.slice falls
-        # back to a row-major composite path (correct, but a layout round-trip). Making
-        # it tile-aligned means padding each per-device half up to a tile multiple in
-        # the fused weight AND padding down_proj's per-device input dim to match;
-        # deferred to the down_proj mem-config / config-tuning work.
-        split = self.intermediate_size // self.tp
+        # The split uses the *tile-aligned* per-device width (padded_split): with TP
+        # the raw per-device width (e.g. 264) is mid-tile, so both halves were padded
+        # to padded_split (e.g. 288) at load time. Slicing there lands on a tile
+        # boundary, keeping gate/up lanes from mixing within a tile. The padded zero
+        # lanes pass through GeGLU as zeros and are dropped by the row-parallel
+        # down_proj, whose input rows were padded to match.
+        split = self.padded_split
         gate = gate_up[..., :split]
         up = gate_up[..., split:]
         hidden = ttnn.mul(gate, up, input_tensor_a_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU, True)])
