@@ -600,6 +600,7 @@ def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
     result["exception"] = "TEST TIMED OUT (CRASH / HANG)"
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
     result["e2e_perf"] = None
     result["peak_l1_memory_per_core"] = None
     result["peak_cb_per_core"] = None
@@ -665,6 +666,7 @@ def _execute_vector_with_retry(
                 p = None
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(result.get("message", "DEVICE HANG"))
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 reset_util.reset()
                 if child_mode:
                     p = Process(target=run, args=(module_name, input_queue, output_queue, config))
