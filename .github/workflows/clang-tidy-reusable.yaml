@@ -121,7 +121,6 @@ jobs:
             echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}"
             echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}"
             echo "AWS_ENDPOINT_URL=http://garage.garage.svc.cluster.local:3900"
-            echo "AWS_DEFAULT_REGION=us-east-1"
             echo "HTTP_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
             echo "HTTPS_PROXY=http://proxy.restricted-proxy.svc.cluster.local:3128"
           } >> "$GITHUB_ENV"
