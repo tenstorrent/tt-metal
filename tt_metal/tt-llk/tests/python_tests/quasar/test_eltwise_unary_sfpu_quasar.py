@@ -456,11 +456,11 @@ def prepare_comp_inputs_uint(
 # every reference-list pair), excluding two families: block-float (Bfp8_b / Bfp4_b),
 # which are a pure unpack/pack gasket datacopy — not an SFPU op — and UInt32, which
 # Quasar's DataFormat enum does not define. Each cast is one of:
-#   float<->float : widen (store) or SFP_STOCH_RND narrow to fp16 (round-nearest-even)
+#   float<->float : widen (store) or RNE narrow to fp16 (round-nearest-even)
 #   float<->int32 : SFPCAST
-#   float->narrow int : clamp negatives (unsigned) + SFP_STOCH_RND narrow
+#   float->narrow int : clamp negatives (unsigned) + RNE narrow
 #   int->float : SFPCAST (+ fp16 narrow if the dst is fp16)
-#   int<->int : store sfpmem mode (widen/equal) or SFP_STOCH_RND narrow to 8-bit
+#   int<->int : store sfpmem mode (widen/equal) or RNE narrow to 8-bit
 #
 # The functor `_calculate_typecast_<IN_FMT, OUT_FMT>` needs the format pair at
 # COMPILE time, but the unified dispatcher only carries `SfpuType` at compile time
@@ -484,6 +484,13 @@ _TYPECAST_PAIRS = (
     (DataFormat.Float32, DataFormat.UInt16),
     (DataFormat.UInt16, DataFormat.Int32),
     (DataFormat.UInt16, DataFormat.UInt8),
+    # Int16 (signed 16-bit) — not in the ttnn typecast matrix, but the kernel handles it on every
+    # path (float<->int16 via SFPCAST + 16-bit store-narrow, int16<->int via the int->int path), so
+    # it is swept here too. Mirrors the UInt16 set; Int16 has a native Quasar dest format.
+    (DataFormat.Float16_b, DataFormat.Int16),
+    (DataFormat.Float32, DataFormat.Int16),
+    (DataFormat.Int16, DataFormat.Int32),
+    (DataFormat.Int16, DataFormat.UInt8),
 )
 
 # Expand each unordered pair into both cast directions.
@@ -590,6 +597,44 @@ def formats_for_op(cfg: OpConfig) -> List[InputOutputFormat]:
     return SFPU_UNARY_FORMATS
 
 
+def quasar_unpack_to_dest(formats, dest_acc, is_typecast):
+    """Whether the input is written straight to Dest via UNPACR_DEST (vs the FPU SrcA→A2D datacopy).
+
+    Typecast routes every 32-bit-Dest case (EITHER endpoint 32-bit) through unpack-to-Dest, because a
+    narrow input cannot be FPU-datacopied into a 32-bit Dest (the int datacopy lands all-zeros). Other
+    unary ops only use unpack-to-Dest for a 32-bit input with dest_acc=Yes.
+    """
+    if is_typecast:
+        return formats.input_format.is_32_bit() or formats.output_format.is_32_bit()
+    return formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
+
+
+def _typecast_pack_src_format(
+    output_format: DataFormat, dest_acc: DestAccumulation
+) -> DataFormat:
+    """Format the packer must read Dest in for a typecast op.
+
+    The typecast SFPU op writes its OUTPUT format into Dest, so the packer must read Dest in the
+    output register format. Format inference derives pack_src from the input side (it assumes the
+    dest format equals the unpacked format), which is wrong for a format-converting op: e.g.
+    Int32->Float32 infers pack_src=Int32 and Float32->Int32 infers pack_src=Float32, both reading
+    the SFPU result in the wrong format. This returns the Dest register form of the output:
+     - 32-bit Dest (dest_acc=Yes, a 32-bit endpoint): Int32 for an integer output, Float32
+       otherwise; the pack gasket then narrows (e.g. Float32->Float16_b, Int32->UInt8).
+     - 16-bit Dest (dest_acc=No, both endpoints <=16-bit): the output sits in Dest in its own format.
+    """
+    if output_format.is_integer():
+        # Integer output: the packer reads the narrow int the SFPU stored, in its own format
+        # (NOT a 32-bit container, even in a 32-bit Dest). UInt16 has no Quasar packer encoding,
+        # so it is read as Int16 (non-negative values share the bit pattern -> golden matches).
+        return DataFormat.Int16 if output_format == DataFormat.UInt16 else output_format
+    if dest_acc == DestAccumulation.Yes:
+        # Float output in a 32-bit Dest: the value sits as Float32; the pack gasket narrows it
+        # to the final output (e.g. Float32 -> Float16_b).
+        return DataFormat.Float32
+    return output_format
+
+
 def generate_sfpu_unary_combinations():
     """
     Build the full unary-SFPU sweep across all ops: per op, a
@@ -622,7 +667,9 @@ def generate_sfpu_unary_combinations():
             )
             for dest_acc in dest_acc_modes:
                 # Skip invalid format combinations for Quasar
-                if is_invalid_quasar_sfpu_format_combination(fmt, dest_acc):
+                if is_invalid_quasar_sfpu_format_combination(
+                    fmt, dest_acc, quasar_unpack_to_dest(fmt, dest_acc, is_typecast)
+                ):
                     continue
 
                 for dest_sync in cfg.dest_sync_modes:
@@ -712,18 +759,7 @@ def test_eltwise_unary_sfpu_quasar(
         op_res = [ops[mathop](x) for x in src_A.flatten().tolist()]
         golden_tensor = torch.tensor(op_res, dtype=format_dict[formats.output_format])
 
-    if is_typecast:
-        # Typecast: route through unpack-to-Dest whenever the Dest is 32-bit (i.e. EITHER endpoint is
-        # 32-bit). A narrow input cannot be datacopied through the FPU into a 32-bit Dest -- the FPU
-        # int datacopy never lands (all-zeros) -- so UNPACR_DEST writes Dest directly and the SFPU /
-        # packer read it via explicit formats. The <=16-bit-Dest pairs still take the FPU path.
-        unpack_to_dest = (
-            formats.input_format.is_32_bit() or formats.output_format.is_32_bit()
-        )
-    else:
-        unpack_to_dest = (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        )
+    unpack_to_dest = quasar_unpack_to_dest(formats, dest_acc, is_typecast)
     configuration = TestConfig(
         "sources/quasar/eltwise_unary_sfpu_quasar_test.cpp",
         formats,
@@ -770,31 +806,7 @@ def test_eltwise_unary_sfpu_quasar(
     )
 
     if is_typecast:
-        # The typecast SFPU op writes its OUTPUT format into Dest, so the packer must read Dest
-        # in the output register format. Format inference derives pack_src from the input side
-        # (it assumes the dest format equals the unpacked format), which is wrong for a
-        # format-converting op: e.g. Int32->Float32 infers pack_src=Int32 and Float32->Int32
-        # infers pack_src=Float32, both reading the SFPU result in the wrong format. Override it
-        # to the Dest register form of the output:
-        #  - 32-bit Dest (dest_acc=Yes, a 32-bit endpoint): Int32 for an integer output, Float32
-        #    otherwise; the pack gasket then narrows (e.g. Float32->Float16_b, Int32->UInt8).
-        #  - 16-bit Dest (dest_acc=No, both endpoints <=16-bit): the output sits in Dest in its
-        #    own format.
-        if formats.output_format.is_integer():
-            # Integer output: the packer reads the narrow int the SFPU stored, in its own format
-            # (NOT a 32-bit container, even in a 32-bit Dest). UInt16 has no Quasar packer encoding,
-            # so it is read as Int16 (non-negative values share the bit pattern -> golden matches).
-            pack_src_for_output = (
-                DataFormat.Int16
-                if formats.output_format == DataFormat.UInt16
-                else formats.output_format
-            )
-        elif dest_acc == DestAccumulation.Yes:
-            # Float output in a 32-bit Dest: the value sits as Float32; the pack gasket narrows it
-            # to the final output (e.g. Float32 -> Float16_b).
-            pack_src_for_output = DataFormat.Float32
-        else:
-            pack_src_for_output = formats.output_format
+        pack_src_for_output = _typecast_pack_src_format(formats.output_format, dest_acc)
         for fc in configuration.formats_config:
             fc.pack_src = pack_src_for_output
             fc.pack_S_src = pack_src_for_output
