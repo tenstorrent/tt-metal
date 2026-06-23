@@ -29,6 +29,16 @@ The audit step can be done by either Claude Sonnet (max effort) or Opus. The aud
  - **METAL2_PORT_BRIEF.md** provides information required by the subsequent porting step. It's only produced if the audit was successful.
 
 
+## Resolving audit-flagged issues
+
+If the op audit is unsuccessful, you _must_ fix all of the flagged problems before you can port to Metal 2.0. You should check in any prereq changes as a separate branch and a separate PR, and fully test those changes before attempting a Metal 2.0 port.
+
+A Metal 2.0 port produces _no functional changes to the op_. It should be structurally impossible for a successful Metal 2.0 port to alter an op's behavior, change an op's L1 footprint, introduce a new hang, etc. The porting recipe explicitly (and repeately) forbids the porting AI from introducing functional changes.
+
+However, some of the pre-port audit fixups (related to illegal CB usage in particular) can introduce functional changes.
+
+**Make sure you don't entangle the Metal 2.0 port with the pre-port fixup steps!** Doing so makes any problems virtually impossible to debug.
+
 ## Porting step
 The porting step requires a capable AI model with **full context availability**. To ensure a good result, it is *essential* that you do the following:
  - Use **Claude Opus 1M** (with extra-high or max effort)
