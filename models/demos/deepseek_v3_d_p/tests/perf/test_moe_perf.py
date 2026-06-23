@@ -78,16 +78,19 @@ def test_deepseek_v3_moe_perf_galaxy():
 
 @pytest.mark.timeout(0)
 def test_deepseek_v3_moe_perf_galaxy_pad50():
-    """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
+    """8x4 galaxy ground truth with 50% right-padding + padding-aware routing (zigzag placement)."""
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    margin = adjust_margin_for_ddr_speed(0.03)
+
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4_pad50,
         expected_device_perf_ns_per_iteration=38_028_230,
         subdir="deepseek_v3_moe",
-        model_name="deepseek_v3_moe_glx_8x4",
+        model_name="deepseek_v3_moe_glx_8x4_pad50",
         num_iterations=1,
         batch_size=1,
-        margin=0.03,
+        margin=margin,
         comments="seq3200_glx_8x4_ground_truth_padded_50_percent_w_awareness",
     )
