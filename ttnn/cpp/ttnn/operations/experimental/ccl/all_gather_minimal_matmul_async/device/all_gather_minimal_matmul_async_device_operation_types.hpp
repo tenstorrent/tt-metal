@@ -91,12 +91,7 @@ struct AllGatherMinimalMatmulAsyncParams {
         using_persistent_weight_buffer(using_persistent_weight_buffer),
         fsdp_topology(fsdp_topology) {}
 
-    // Structural fields that affect program-cache key. Mirrors the set the former custom
-    // compute_program_hash hashed: runtime-only fields (GlobalSemaphores, persistent-buffer
-    // presence flags, dtype/activation only used for runtime args) are intentionally excluded.
-    // `config` covers the matmul block/subblock sizes; `output_mem_config` is the output memory
-    // layout. The tensor_args (input/weight/optional tensors) are hashed structurally by the
-    // default reflection path.
+    // Structural fields that affect program-cache key.
     static constexpr auto attribute_names = std::make_tuple(
         "num_links",
         "ring_size",
