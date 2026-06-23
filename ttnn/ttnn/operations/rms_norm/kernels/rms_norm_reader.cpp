@@ -111,6 +111,14 @@ void kernel_main() {
     const uint32_t start_unit = get_arg_val<uint32_t>(4);       // RM: start_block
     const uint32_t num_units = get_arg_val<uint32_t>(5);        // TILE: rows; RM: blocks
     const uint32_t total_sticks = get_arg_val<uint32_t>(6);     // RM only
+    // Internal-padding (TILE only): RT index 6 doubles as `real_tiles` — the number of
+    // tiles in this core's shard that lie within the REAL row width Wt_real (<= Wt, the
+    // padded shard size = CB size). The trailing (Wt - real_tiles) tiles are PAD: zeroed
+    // here (they add 0 to Σx²; inv_W in compute uses the true W) and skipped by the writer.
+    // For Regime A and for Wt_real % gx == 0 the descriptor sets real_tiles == Wt, so the
+    // pad loop is a no-op and this is byte-identical. The RM input path ignores this and
+    // keeps using `total_sticks` (its W-column clamping handles padding natively).
+    const uint32_t real_tiles = get_arg_val<uint32_t>(6);
 
     using dataflow_kernel_lib::McastRect;
     using dataflow_kernel_lib::PoolType;
@@ -160,14 +168,21 @@ void kernel_main() {
                 cb_push_back(cb_gamma_rm, reduce_block);
             }
         } else {
-            // TILE gamma (1,1,1,W) -> column tiles. Read Wt real tiles at gamma_page_base;
-            // zero (Wt_gamma_resident - Wt) synthetic padding tiles (RM padded shard).
+            // TILE gamma (1,1,1,W) -> column tiles. Read `gamma_real` real tiles at
+            // gamma_page_base; zero the remaining synthetic padding tiles. With internal
+            // padding a high-rank Regime-B shard's [gamma_page_base, +Wt_gamma_resident)
+            // window can extend past the real gamma tiles (ceil(W/32)); clamp the real-read
+            // count against the true gamma tile count so we never issue an out-of-range DRAM
+            // read. gamma_page_base is the shard's first tile (0 in Regime A → reads all real).
+            const uint32_t gamma_total_tiles = (W + (TILE_W - 1)) / TILE_W;
+            const uint32_t gamma_real =
+                (gamma_page_base < gamma_total_tiles) ? (gamma_total_tiles - gamma_page_base) : 0;
             const uint32_t gamma_tile_bytes = get_tile_size(cb_gamma);
             const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_tile_bytes);
             cb_reserve_back(cb_gamma, Wt_gamma_resident);
             uint32_t l1 = get_write_ptr(cb_gamma);
             for (uint32_t gt = 0; gt < Wt_gamma_resident; ++gt) {
-                if (gt < Wt) {
+                if (gt < gamma_real) {
                     noc_async_read_tile(gamma_page_base + gt, gamma_accessor, l1);
                 } else {
                     zero_l1(l1, gamma_tile_bytes);
@@ -189,6 +204,17 @@ void kernel_main() {
             // clamped against the GLOBAL W, so padding columns contribute 0 and inv_W in
             // compute carries the true full-row element count.
             const uint32_t shard_col0 = input_page_base;
+            // The shard owns exactly Wt (= Wt_s, CT idx 5) real tiles → columns
+            // [shard_col0, shard_col0 + Wt*TILE_W). Clamp valid columns against BOTH the
+            // global W AND this shard's own column limit. The latter matters whenever the
+            // resident shard is chunk-padded (Wt_padded = num_chunks*reduce_block > Wt_s,
+            // i.e. Wt_s % reduce_block != 0 — common once the split width is internally
+            // padded, and also for plain mult-of-gx widths like Wt=264→Wt_s=33): without it
+            // an INTERIOR shard's chunk-pad tail would read the NEXT shard's (col0 < W) real
+            // data into its own Σx², double-counting and mis-scaling the RMS. In Regime A
+            // shard_col0==0 and Wt covers the whole row, so this reduces to the W clamp.
+            const uint32_t shard_col_limit = shard_col0 + Wt * TILE_W;
+            const uint32_t col_limit = (shard_col_limit < W) ? shard_col_limit : W;
             const auto input_accessor = TensorAccessor(input_args, input_addr);
             for (uint32_t b = 0; b < num_units; ++b) {
                 const uint32_t global_block = start_unit + b;
@@ -199,7 +225,7 @@ void kernel_main() {
                 }
                 for (uint32_t c = 0; c < num_chunks; ++c) {
                     const uint32_t col0 = shard_col0 + c * chunk_cols;
-                    uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
+                    uint32_t valid_cols = (col0 < col_limit) ? (col_limit - col0) : 0;
                     if (valid_cols > chunk_cols) {
                         valid_cols = chunk_cols;
                     }
@@ -238,8 +264,16 @@ void kernel_main() {
                 uint32_t l1 = get_write_ptr(cb_input_resident);
                 {
                     DeviceZoneScopedN("RDR-noc");
+                    // Read the `real_tiles` tiles that fall within the real row; ZERO the
+                    // trailing (Wt - real_tiles) padding tiles of this padded shard so they
+                    // contribute 0 to Σx² (inv_W uses the true element count W). For Regime A
+                    // and Wt_real % gx == 0, real_tiles == Wt → no zeroing, byte-identical.
                     for (uint32_t wt = 0; wt < Wt; ++wt) {
-                        noc_async_read_tile(page_base + wt, input_accessor, l1);
+                        if (wt < real_tiles) {
+                            noc_async_read_tile(page_base + wt, input_accessor, l1);
+                        } else {
+                            zero_l1(l1, tile_bytes);
+                        }
                         l1 += tile_bytes;
                     }
                     noc_async_read_barrier();

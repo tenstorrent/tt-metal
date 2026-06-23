@@ -48,25 +48,36 @@ def _restore_force_hooks():
     desc._FORCE_REGIME, desc._FORCE_TRANSPORT, desc._FORCE_K = saved
 
 
-def test_root_relay_is_production_default(device, _restore_force_hooks):
-    """Regime B defaults to the root-relay transport and carries the PRODUCED semaphore."""
+def test_reduce_bcast_is_production_default(device, _restore_force_hooks):
+    """Regime B defaults to the reduce-then-broadcast transport and carries the PRODUCED semaphore."""
     # transport selection is a pure host decision — assert it directly.
-    assert desc._select_transport(16) == desc.TRANSPORT_ROOT_RELAY
+    # profile_logging.md: mode 2 (reduce-then-broadcast) replaced mode 1 (root-relay) as the
+    # default after measuring 1.05–1.12x on wide-W Regime-B shapes (combine stall ~8µs→0.5µs).
+    assert desc._select_transport(16) == desc.TRANSPORT_REDUCE_BCAST
     assert desc._FORCE_TRANSPORT is None  # not pinned in the committed module
 
     # A built Regime-B descriptor must allocate DATA_READY + CONSUMED + PRODUCED (3 sems).
     desc._FORCE_REGIME = "B"
     shape = (1, 1, 32, 8192)
-    ti = ttnn.from_torch(torch.zeros(shape, dtype=torch.bfloat16), dtype=ttnn.bfloat16,
-                         layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    out_t = ttnn.allocate_tensor_on_device(ttnn.Shape(list(shape)), ttnn.bfloat16,
-                                           ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    ti = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    out_t = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(list(shape)), ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+    )
     prog, _ = desc.create_program_descriptor(ti, out_t, None, 1e-6, None)
     assert len(prog.semaphores) == 3, f"Regime B should carry DATA_READY+CONSUMED+PRODUCED, got {len(prog.semaphores)}"
 
 
-@pytest.mark.parametrize("mode", [desc.TRANSPORT_MCAST_ALLGATHER, desc.TRANSPORT_ROOT_RELAY],
-                         ids=["mcast_allgather", "root_relay"])
+@pytest.mark.parametrize(
+    "mode",
+    [desc.TRANSPORT_MCAST_ALLGATHER, desc.TRANSPORT_ROOT_RELAY, desc.TRANSPORT_REDUCE_BCAST],
+    ids=["mcast_allgather", "root_relay", "reduce_bcast"],
+)
 @pytest.mark.parametrize("shape", _REGIME_B_SHAPES, ids=lambda s: "x".join(map(str, s)))
 @pytest.mark.parametrize("gamma_on", [False, True], ids=["no_gamma", "gamma"])
 def test_transport_correctness(device, _restore_force_hooks, mode, shape, gamma_on):
@@ -83,7 +94,7 @@ def test_transport_correctness(device, _restore_force_hooks, mode, shape, gamma_
     xo = torch.ones(*shape)
     to = ttnn.from_torch(xo.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     oo = ttnn.to_torch(rms_norm(to, gamma=g)).float()
-    expect_ones = (gt.float().expand_as(oo[..., :W]) if gamma_on else torch.ones_like(oo))
+    expect_ones = gt.float().expand_as(oo[..., :W]) if gamma_on else torch.ones_like(oo)
     assert (oo - expect_ones).abs().max().item() < 0.1, "all-ones not exact"
 
     # random vs torch
@@ -99,6 +110,7 @@ def test_transport_correctness(device, _restore_force_hooks, mode, shape, gamma_
 
 def test_k_retune_picks_measured_optima():
     """Part C: the re-tuned proxy picks the K measured fastest under root-relay."""
+
     class _Grid:
         x = 8
         y = 8
@@ -107,11 +119,11 @@ def test_k_retune_picks_measured_optima():
     total_cores = 64
     # (Wt, num_row_groups, expected_K) — every entry was device-measured optimal (changelog R9).
     cases = [
-        (64, 1, 16),    # 2048
-        (128, 1, 16),   # 4096
-        (256, 1, 32),   # 8192
-        (384, 2, 24),   # 12288 — K=24 (3 core-rows/group) beats K=16/K=32
-        (512, 1, 32),   # 16384
+        (64, 1, 16),  # 2048
+        (128, 1, 16),  # 4096
+        (256, 1, 32),  # 8192
+        (384, 2, 24),  # 12288 — K=24 (3 core-rows/group) beats K=16/K=32
+        (512, 1, 32),  # 16384
     ]
     for Wt, rg, expected in cases:
         K = desc._select_k(Wt, rg, grid, total_cores, False, ttnn.bfloat16, True, ttnn.bfloat16)

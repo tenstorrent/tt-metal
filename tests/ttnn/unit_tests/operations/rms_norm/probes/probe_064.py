@@ -68,46 +68,60 @@ def total_ns(device):
 # mode 2 (reduce-then-broadcast, broadcast 1 tile). Focus on the shapes where the
 # all-reduce is a meaningful fraction (single-row-group wide-W) + a couple saturated.
 SHAPES = [
-    (1, 1, 4096, 256, "A"),  # 2 rows/core
-    (1, 1, 8192, 256, "A"),  # 4 rows/core
-    (1, 1, 16384, 256, "A"),  # 8 rows/core
-    (1, 1, 16384, 512, "A"),  # 8 rows/core, Wt=16
+    (1, 1, 32, 4096, "B"),
+    (1, 1, 32, 8192, "B"),
+    (1, 1, 32, 16384, "B"),
+    (1, 1, 64, 8192, "B"),  # 2 row-groups
+    (1, 1, 256, 8192, "B"),  # grid-saturated
 ]
+# transport modes to A/B (Regime B only): 1 = root-relay (default), 2 = reduce-broadcast
 TRANSPORTS = [1, 2]
 
 device = ttnn.open_device(device_id=0)
 try:
     ttnn.synchronize_device(device)
     print("ZONE_PROFILE_BEGIN")
-    # A/B the double-buffer toggle for multi-row Regime A. Best-of-3 total to cut the
-    # large per-core noise on big shapes; report RDR-resv (the stall this targets).
+    order = [
+        "RDR-input",
+        "RDR-resv",
+        "RDR-noc",
+        "CMP-p1-square",
+        "CMP-p1-reduce",
+        "RDR-ar-wait",
+        "RDR-ar-xport",
+        "CMP-combine",
+        "CMP-finalize",
+        "CMP-pass2",
+        "WR-write",
+        "WR-wait",
+        "WR-noc",
+    ]
     for b, c, h, w, lbl in SHAPES:
         shape = (b, c, h, w) if b > 1 or c > 1 else (h, w)
         x = torch.randn(*shape, dtype=torch.float32)
         ti = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-        row = {}
-        for db in [False, True]:
-            desc._DOUBLE_BUFFER_A = db
-            rms_norm(ti)  # warmup / JIT (per-config kernel)
-            best = None
-            resv = None
-            for it in range(3):
-                ttnn.ReadDeviceProfiler(device)
-                clear_csv()
-                rms_norm(ti)
-                tot = total_ns(device)
-                if best is None or tot < best:
-                    best = tot
-                    zones, _ = parse_zones()
-                    resv = sum(zones.get("RDR-resv", [0])) / max(1, len(zones.get("RDR-resv", [1])))
-            row[db] = (best, resv)
-        desc._DOUBLE_BUFFER_A = True
-        (off, off_resv) = row[False]
-        (on, on_resv) = row[True]
-        spd = off / on if on else 0.0
-        print(f"\n=== shape {shape} Regime {lbl} ===")
-        print(f"  double_buffer OFF: total={off:8.0f} ns  RDR-resv(mean)={off_resv:7.0f} ns")
-        print(f"  double_buffer ON : total={on:8.0f} ns  RDR-resv(mean)={on_resv:7.0f} ns   speedup={spd:.3f}x")
+        modes = TRANSPORTS if lbl == "B" else [None]
+        for tmode in modes:
+            desc._FORCE_TRANSPORT = tmode
+            rms_norm(ti)  # warmup / JIT (per-mode kernel)
+            ttnn.ReadDeviceProfiler(device)  # flush warmup out of device buffer + CSV
+            clear_csv()
+
+            rms_norm(ti)  # measured
+            tot = total_ns(device)  # ReadDeviceProfiler -> dumps measured to CSV
+            zones, freq = parse_zones()
+
+            tlabel = f"transport={tmode}" if tmode is not None else "RegimeA"
+            print(f"\n=== shape {shape}  Regime {lbl}  {tlabel}  total_device_kernel_ns={tot:.0f} ===")
+            seen = set()
+            for z in order + sorted(zones):
+                if z in seen or z not in zones:
+                    continue
+                seen.add(z)
+                v = sorted(zones[z])
+                mean = sum(v) / len(v)
+                print(f"  {z:16s} ncores={len(v):3d}  min={min(v):8.0f}  mean={mean:8.0f}  max={max(v):8.0f} ns")
+        desc._FORCE_TRANSPORT = None
     print("\nZONE_PROFILE_END")
 finally:
     ttnn.close_device(device)

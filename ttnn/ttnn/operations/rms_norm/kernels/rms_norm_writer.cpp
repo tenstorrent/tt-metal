@@ -41,6 +41,13 @@ void kernel_main() {
 
         const uint32_t start_block = arg1;
         const uint32_t num_blocks = arg2;
+        // This shard owns columns [shard_col0, shard_col0 + Wt*TILE_W); clamp writes against
+        // BOTH the global W AND this shard's own limit (mirrors the reader). When the resident
+        // shard is chunk-padded (Wt_padded > Wt), the chunk-pad tail of an interior shard would
+        // otherwise write garbage (normalized next-shard data) over the next shard's real output
+        // columns. In Regime A shard_col0==0 and Wt spans the row → reduces to the W clamp.
+        const uint32_t shard_col_limit = shard_col0 + Wt * TILE_W;
+        const uint32_t col_limit = (shard_col_limit < W) ? shard_col_limit : W;
         // 2-arg TensorAccessor: page size from the tensor's encoded row-major stick size.
         const auto output_accessor = TensorAccessor(output_args, output_addr);
 
@@ -53,7 +60,7 @@ void kernel_main() {
             }
             for (uint32_t c = 0; c < num_chunks; ++c) {
                 const uint32_t col0 = shard_col0 + c * chunk_cols;
-                uint32_t valid_cols = (col0 < W) ? (W - col0) : 0;
+                uint32_t valid_cols = (col0 < col_limit) ? (col_limit - col0) : 0;
                 if (valid_cols > chunk_cols) {
                     valid_cols = chunk_cols;
                 }
@@ -74,7 +81,14 @@ void kernel_main() {
         }
     } else {
         const uint32_t page_base = arg1;
-        const uint32_t num_tiles = arg2;
+        const uint32_t num_tiles = arg2;  // DRAIN count = Wt_s (every tile compute produces)
+        // Internal-padding (Regime B): the compute produces Wt_s normalized tiles per row,
+        // but only the first `write_count` of them are REAL (within the true row width Wt_real).
+        // The trailing (Wt_s - write_count) are PAD and must NOT be written (they would land
+        // past the output tensor's real tiles). We still DRAIN (cb_pop_front) all num_tiles so
+        // cb_output never backs up and compute's pass-2 cannot hang. For Regime A and
+        // Wt_real % gx == 0, write_count == num_tiles → all written, byte-identical.
+        const uint32_t write_count = get_arg_val<uint32_t>(3);
         const uint32_t tile_bytes = get_tile_size(cb_output);
         const auto output_accessor = TensorAccessor(output_args, output_addr, tile_bytes);
         // Target 1 (profile_logging.md): drain a block of `reduce_block` tiles behind ONE
@@ -93,11 +107,18 @@ void kernel_main() {
             }
             uint32_t l1 = get_read_ptr(cb_output);
             {
-                DeviceZoneScopedN("WR-noc");
+                DeviceZoneScopedN("WR-issue");
                 for (uint32_t k = 0; k < b; ++k) {
-                    noc_async_write_tile(page_base + i + k, output_accessor, l1);
+                    // Skip pad tiles (global tile index >= write_count); still advance l1 and
+                    // pop them below so the drain count stays == num_tiles.
+                    if (i + k < write_count) {
+                        noc_async_write_tile(page_base + i + k, output_accessor, l1);
+                    }
                     l1 += tile_bytes;
                 }
+            }
+            {
+                DeviceZoneScopedN("WR-bar");
                 noc_async_write_barrier();
             }
             cb_pop_front(cb_output, b);

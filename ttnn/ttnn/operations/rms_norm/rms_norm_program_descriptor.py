@@ -159,6 +159,13 @@ TRANSPORT_MCAST_ALLGATHER = 0
 TRANSPORT_ROOT_RELAY = 1
 TRANSPORT_REDUCE_BCAST = 2
 _FORCE_TRANSPORT = None
+# Idea 0 (profile_logging.md): double-buffer cb_input_resident in multi-row Regime A so the
+# reader prefetches row N+1 during compute of row N. Measured net-NEGATIVE: it always collapses
+# the RDR-resv stall, but that stall is OFF the critical path (idle reader, not the bottleneck —
+# compute is serial across rows and the writer is the long pole), and the aggressive prefetch
+# adds read/write DRAM contention. Win only at exactly 2 rows/core (1.06x); 0.96–0.98x at 4–8.
+# Left implemented but DISABLED by default (mirrors R7's gated-off row-blocking). Toggle for A/B.
+_DOUBLE_BUFFER_A = False
 # Semaphore id for the mode-1 "produced" counter (peers -> root). Distinct from the
 # DATA_READY (0) / CONSUMED (1) pair used by the broadcast mcast pipe.
 PRODUCED_SEM = 2
@@ -172,10 +179,18 @@ def _select_transport(K):
     Regime-B shape — 1.10x (Wt=128, K=16) to 1.48x (Wt=1024, K=32) — because it collapses
     the baseline's O(K) serialized mcast rounds to O(1) transport phases (one parallel
     gather + one mcast). The win grows with K, so it is the production default for all K.
-    _FORCE_TRANSPORT (perf tests only) overrides for the bake-off measurement itself."""
+    _FORCE_TRANSPORT (perf tests only) overrides for the bake-off measurement itself.
+
+    Profiling follow-up (profile_logging.md): mode 2 (TRANSPORT_REDUCE_BCAST = reduce-then-
+    broadcast) beats mode 1 on every measured wide-W Regime-B shape — 1.05x (Wt=512, K=32) to
+    1.12x (Wt=256/W=8192, K=32), neutral when already grid-saturated/writer-bound. The root
+    reduces the K gathered partials and mcasts only the SINGLE global Σx² tile; peers skip the
+    combine reduce entirely (their reader pushes the received tile, finalize reads it). This
+    collapses the per-peer combine stall ~8µs→0.5µs (they no longer wait for the K-tile
+    broadcast). So mode 2 is the production default for all K."""
     if _FORCE_TRANSPORT is not None:
         return _FORCE_TRANSPORT
-    return TRANSPORT_ROOT_RELAY
+    return TRANSPORT_REDUCE_BCAST
 
 
 # ---- ROW_MAJOR (tilize-wrapped) regime CB indices ----
@@ -419,7 +434,13 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
         row_fits = _row_fits_l1(Wt_padded, input_tensor.dtype, fp32_acc, gamma, has_gamma)
 
         _gamma_dt = gamma.dtype if has_gamma else input_tensor.dtype
-        K = _select_k(Wt, num_blocks_total, grid, total_cores, has_gamma, input_tensor.dtype, fp32_acc, _gamma_dt)
+        # Internal padding (Regime-B RM): K-selection uses the SPLIT width padded to a
+        # multiple of grid.x so an awkward real Wt still gets a full-grid K. RM Regime B
+        # needs no extra zeroing — the reader/writer already clamp each shard's W-columns
+        # against the true W, so a high-rank all-pad shard reads/writes zero valid columns
+        # naturally. Regime A RM keeps the real Wt (padding is a Regime-B concept).
+        Wt_pad = ((Wt + grid.x - 1) // grid.x) * grid.x
+        K = _select_k(Wt_pad, num_blocks_total, grid, total_cores, has_gamma, input_tensor.dtype, fp32_acc, _gamma_dt)
         regime_a_cores = min(num_blocks_total, total_cores)
         adds_cores = K is not None and num_blocks_total * K > regime_a_cores
 
@@ -470,13 +491,36 @@ def create_program_descriptor(input_tensor, output_tensor, gamma, epsilon, compu
             input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, total_cores, inv_W_bits, eps_bits
         )
 
+    # Internal padding (Regime-B-only): pad the SPLIT width to a multiple of grid.x so
+    # K=gx (and larger full-width / sub-row K) always divides it, removing the old
+    # "K must evenly divide the real Wt" constraint (odd / 2·prime widths crashed or
+    # got starved). The real Wt drives DRAM addressing & the writer's real-write count;
+    # the pad tiles are zeroed by the reader (contribute 0 to Σx²; inv_W uses true W)
+    # and skipped by the writer. For Wt already a multiple of gx, Wt_pad == Wt → the
+    # descriptor is byte-identical to before. Regime A keeps the REAL Wt (padding is a
+    # Regime-B concept; _row_fits_l1 is unchanged).
+    gx = grid.x
+    Wt_pad = ((Wt + gx - 1) // gx) * gx
+
     def _make_b():
         return _regime_b_descriptor(
-            input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, grid, total_cores, inv_W_bits, eps_bits
+            input_tensor,
+            output_tensor,
+            gamma,
+            has_gamma,
+            cfg,
+            Wt_pad,
+            Wt,
+            Ht_total,
+            grid,
+            total_cores,
+            inv_W_bits,
+            eps_bits,
         )
 
     _gamma_dt = gamma.dtype if has_gamma else input_tensor.dtype
-    K = _select_k(Wt, Ht_total, grid, total_cores, has_gamma, input_tensor.dtype, fp32_acc, _gamma_dt)
+    # K-selection uses the PADDED split width so an awkward real Wt still gets a full-grid K.
+    K = _select_k(Wt_pad, Ht_total, grid, total_cores, has_gamma, input_tensor.dtype, fp32_acc, _gamma_dt)
     regime_a_cores = min(Ht_total, total_cores)
     adds_cores = K is not None and Ht_total * K > regime_a_cores
 
@@ -563,9 +607,19 @@ def _regime_a_descriptor(
     # per-row partial-Σx² / recip CBs hold bh tiles (one per row).
     bh = _regime_a_block_height(Ht_total, num_cores, has_gamma, gamma_is_rm, Wt, dt, fp32_acc, cfg)
     sumsq_pages = max(2, bh)
-    # Double-buffer the resident input when row-blocked so the reader prefetches the
-    # next bh-row block during compute (PASS-1 holds the whole block) [static-analyzer F3].
-    input_resident_pages = (2 * bh * Wt) if bh > 1 else Wt
+    # Idea 0 (profile_logging.md): double-buffer the resident input when a core owns MORE THAN
+    # ONE row, so the reader prefetches row N+1 while compute holds row N (PASS-1 square +
+    # PASS-2 normalize keep the row resident until pass-2 pops it). Single-buffered (Wt), the
+    # reader stalls in cb_reserve_back until compute frees the row — measured `RDR-resv` blew up
+    # to 15–69µs on 4–8 rows/core. Multi-row Regime A is narrow-W (small Wt), so 2*Wt is cheap
+    # in L1. 1 row/core keeps Wt (no second row to prefetch). bh>1 path unchanged (already 2*bh*Wt).
+    max_rows_per_core = max((c for _, c in splits), default=1)
+    if bh > 1:
+        input_resident_pages = 2 * bh * Wt
+    elif max_rows_per_core > 1 and _DOUBLE_BUFFER_A:
+        input_resident_pages = 2 * Wt
+    else:
+        input_resident_pages = Wt
     cbs = [
         cb(CB_INPUT_RESIDENT, dt, input_resident_pages),
         cb(CB_SCALER, inter, 1),
@@ -640,9 +694,11 @@ def _regime_a_descriptor(
             0,  # gamma_page_base (full gamma, no shard)
             start,  # start_unit (unused for TILE)
             count,  # num_units = owned rows
-            0,  # total_sticks (RM only)
+            Wt,  # RT idx 6: real_tiles == Wt (Regime A has no padding → no zero-pad loop)
         ]
-        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start * Wt, count * Wt, 0]
+        # writer: [output_addr, page_base, num_tiles(DRAIN), write_count]. Regime A writes the
+        # whole row per unit (real == padded), so write_count == num_tiles (byte-identical).
+        writer_rt[core.x][core.y] = [output_tensor.buffer_address(), start * Wt, count * Wt, count * Wt]
         # compute RT: [num_rows, is_root]. is_root = 0 in Regime A (mode-2 selector unused).
         compute_rt[core.x][core.y] = [count, 0]
 
@@ -711,9 +767,11 @@ def _regime_a_descriptor(
 
 def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_dtype, fp32_acc, gamma_dtype):
     """W-split factor K forming full-width rectangular bands: K divides Wt, K is a
-    multiple of grid.x (full-width bands), num_row_groups*K fits the grid, and the
-    per-core shard (Wt/K) fits the L1 resident byte budget. Returns None if none
-    qualifies.
+    a multiple of grid.x (full-width gh×gx bands) OR a divisor of grid.x (sub-row 1×K
+    teams, gx//K per grid row), num_row_groups*K fits the grid, and the per-core shard
+    (Wt/K) fits the L1 resident byte budget. Returns None if none qualifies. Sub-row teams
+    remove the old full-width requirement that forced oversubscribed shapes into slow
+    Regime A.
 
     Refinement 6 (K tuning, measured — this is NOT 'maximize K'): the all-gather cost
     grows ~O(K) (each of the K cores mcasts its partial and the combine sums K tiles),
@@ -740,7 +798,14 @@ def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_dtype, fp3
     inter = _intermediate_dtype(input_dtype, fp32_acc)
 
     def _qualifies(K):
-        if K % gx != 0 or Wt % K != 0 or num_row_groups * K > total_cores:
+        # K must form a rectangular team that tiles the grid: a full-width band
+        # (K a multiple of gx → gh×gx) OR a sub-row team (K a divisor of gx → 1×K,
+        # gx//K teams per grid row). Full-width is no longer REQUIRED — sub-row teams
+        # let oversubscribed shapes (num_row_groups·gx > grid, e.g. (512,8192)) use the
+        # distributed reduction instead of the slow single-core-per-row Regime A fallback.
+        if K < 2 or Wt % K != 0 or num_row_groups * K > total_cores:
+            return False
+        if (K % gx != 0) and (gx % K != 0):
             return False
         Wt_s = Wt // K
         return _regime_a_resident_bytes(Wt_s, input_dtype, inter, gamma_dtype, has_gamma) <= L1_RESIDENT_BUDGET_BYTES
@@ -748,13 +813,20 @@ def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_dtype, fp3
     if _FORCE_K is not None:
         return _FORCE_K if _qualifies(_FORCE_K) else None
 
+    # Candidate K: sub-row teams (divisors of gx, K≥2) + full-width bands (multiples of gx).
+    candidates = {K for K in range(2, gx + 1) if gx % K == 0}
+    candidates |= set(range(gx, total_cores + 1, gx))
+
     best = None
     best_cost = None
-    for K in range(gx, total_cores + 1, gx):
+    for K in sorted(candidates):
         if not _qualifies(K):
             continue
         # Re-tuned root-relay proxy (Refinement 9 Part C): 2.5*(per-core work) + (total grid
-        # cores used). Integer-scaled by 2 to avoid floats; ranking is preserved.
+        # cores used). Integer-scaled by 2 to avoid floats; ranking is preserved. For shapes
+        # where a full-width K is feasible the proxy still favours the larger full-width K
+        # (more cores, smaller shard), so existing shapes are unchanged; sub-row K only wins
+        # when every full-width K is disqualified by num_row_groups·K > grid.
         cost = 5 * (Wt // K) + 2 * num_row_groups * K
         # Strictly-less keeps the SMALLEST K on ties (loop ascends), favouring less
         # transport/contention at equal proxy cost.
@@ -764,8 +836,12 @@ def _select_k(Wt, num_row_groups, grid, total_cores, has_gamma, input_dtype, fp3
 
 
 def _regime_b_descriptor(
-    input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Ht_total, grid, total_cores, inv_W_bits, eps_bits
+    input_tensor, output_tensor, gamma, has_gamma, cfg, Wt, Wt_real, Ht_total, grid, total_cores, inv_W_bits, eps_bits
 ):
+    # `Wt` here is the PADDED split width (Wt_pad = ceil(Wt_real/gx)*gx); `Wt_real` is the
+    # true tile-width of the row. The split (K, Wt_s) and all CB sizing use the padded
+    # width so K cleanly divides it; DRAM addressing (input_page_base) and the real-tile /
+    # write counts use Wt_real. When Wt_real % gx == 0, Wt == Wt_real → byte-identical.
     num_row_groups = Ht_total  # Phase 0: bh = 1 tile-row per group
     gx = grid.x
     _fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
@@ -778,7 +854,12 @@ def _regime_b_descriptor(
         )
     transport_mode = _select_transport(K)  # Refinement 9 (Part A)
 
-    gh = K // gx  # band height (rows) per group
+    # Team geometry: full-width band (K multiple of gx) → gh×gx; else sub-row 1×K team
+    # (gx//K teams per grid row). Removes the old full-width-only requirement.
+    if K % gx == 0:
+        gh, gw, teams_per_row = K // gx, gx, 1
+    else:  # gx % K == 0 (guaranteed by _select_k)
+        gh, gw, teams_per_row = 1, K, gx // K
     Wt_s = Wt // K
     reduce_block = min(Wt_s, _dest_limit(cfg))
     dt = input_tensor.dtype
@@ -856,25 +937,35 @@ def _regime_b_descriptor(
     gamma_addr = gamma.buffer_address() if has_gamma else 0
 
     for g in range(num_row_groups):
-        # Group rectangle (logical): full grid width, rows [g*gh, g*gh+gh)
-        rx0, ry0 = 0, g * gh
-        rx1, ry1 = gx - 1, g * gh + gh - 1
+        # Group rectangle (logical): gh×gw block at (base_row, base_col). Full-width bands
+        # stack vertically (teams_per_row==1, base_col==0); sub-row teams tile left-to-right
+        # within a grid row then advance rows — matching the row_wise core enumeration.
+        base_row = (g // teams_per_row) * gh
+        base_col = (g % teams_per_row) * gw
+        rx0, ry0 = base_col, base_row
+        rx1, ry1 = base_col + gw - 1, base_row + gh - 1
         vrx0, vry0 = vcoord(rx0, ry0)
         vrx1, vry1 = vcoord(rx1, ry1)
         # Sender virtual coords for each rank j within this group.
         sender_coords = []
         for j in range(K):
-            jx, jy = j % gx, g * gh + j // gx
+            jx, jy = base_col + j % gw, base_row + j // gw
             vx, vy = vcoord(jx, jy)
             sender_coords.extend([vx, vy])
 
         for r in range(K):
-            lx, ly = r % gx, g * gh + r // gx
-            input_page_base = g * Wt + r * Wt_s
+            lx, ly = base_col + r % gw, base_row + r // gw
+            # DRAM row stride is the REAL Wt; this shard's first real tile is r*Wt_s.
+            input_page_base = g * Wt_real + r * Wt_s
             gamma_page_base = r * Wt_s
+            # Real tiles in this shard (some shards fully real, at most one partial, trailing
+            # shards all-pad with real_shard == 0). Threaded to BOTH reader (real-read count)
+            # and writer (real-write count); the pad tail is zeroed by the reader / skipped by
+            # the writer. Wt_real % gx == 0 → every shard fully real (real_shard == Wt_s).
+            real_shard = max(0, min(Wt_s, Wt_real - r * Wt_s))
 
             # unified reader RT: input_addr, gamma_addr, input_page_base, gamma_page_base,
-            # start_unit(0), num_units(1), total_sticks(0), my_rank, rect(4), sender_coords
+            # start_unit(0), num_units(1), real_tiles(=real_shard), my_rank, rect(4), sender_coords
             reader_rt[lx][ly] = [
                 input_tensor.buffer_address(),
                 gamma_addr,
@@ -882,14 +973,15 @@ def _regime_b_descriptor(
                 gamma_page_base,
                 0,  # start_unit (unused for TILE)
                 1,  # num_units = 1 row-group per core
-                0,  # total_sticks (RM only)
+                real_shard,  # RT idx 6: real tiles in this shard (TILE pad-zero count)
                 r,  # my_rank
                 vrx0,
                 vry0,
                 vrx1,
                 vry1,
             ] + sender_coords
-            writer_rt[lx][ly] = [output_tensor.buffer_address(), input_page_base, Wt_s, 0]
+            # writer: [output_addr, page_base, num_tiles(=Wt_s DRAIN), write_count(=real_shard)]
+            writer_rt[lx][ly] = [output_tensor.buffer_address(), input_page_base, Wt_s, real_shard]
             # compute RT: [num_rows, is_root]. is_root=1 only for rank 0 (the mode-2 root that
             # runs the combine reduce + mcasts the reduced tile); peers (r>0) skip the combine.
             compute_rt[lx][ly] = [1, 1 if r == 0 else 0]
@@ -1206,9 +1298,13 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
     Wt = (W + 31) // 32
     num_block_groups = (total_sticks + 31) // 32  # 32-stick blocks (analogue of Ht_total)
 
+    # Internal padding (Regime-B RM): split the PADDED width (multiple of gx) so K divides
+    # it cleanly; the real Wt only governs each shard's W-column clamping in the kernels.
+    Wt_pad = ((Wt + gx - 1) // gx) * gx
+
     _fp32_acc = bool(getattr(cfg, "fp32_dest_acc_en", True))
     _gamma_dt = gamma.dtype if has_gamma else input_tensor.dtype
-    K = _select_k(Wt, num_block_groups, grid, total_cores, has_gamma, input_tensor.dtype, _fp32_acc, _gamma_dt)
+    K = _select_k(Wt_pad, num_block_groups, grid, total_cores, has_gamma, input_tensor.dtype, _fp32_acc, _gamma_dt)
     if K is None:
         raise NotImplementedError(
             f"rms_norm (RM): no rectangular Regime B partition for Wt={Wt}, "
@@ -1216,8 +1312,17 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
         )
     transport_mode = _select_transport(K)  # Refinement 9 (Part A)
 
-    gh = K // gx  # band height (rows of cores) per block-group
-    Wt_s = Wt // K
+    # Team geometry (mirrors _regime_b_descriptor): full-width band (K multiple of gx) →
+    # gh×gx; else sub-row 1×K team (gx//K per grid row). Removes the full-width-only req.
+    if K % gx == 0:
+        gh, gw, teams_per_row = K // gx, gx, 1
+    else:  # gx % K == 0 (guaranteed by _select_k)
+        gh, gw, teams_per_row = 1, K, gx // K
+    # Shard width is the PADDED width / K (uniform, compile-time). Each shard's first real
+    # W-column is r*Wt_s*32; high-rank shards whose columns all lie past the true W read /
+    # write zero valid columns (the reader/writer clamp valid_cols against W) — RM needs no
+    # extra zeroing. For Wt % gx == 0, Wt_pad == Wt → byte-identical to before.
+    Wt_s = Wt_pad // K
     reduce_block = min(Wt_s, _dest_limit(cfg))
     num_chunks = (Wt_s + reduce_block - 1) // reduce_block
     Wt_padded = num_chunks * reduce_block
@@ -1289,18 +1394,20 @@ def _regime_rm_b_descriptor(input_tensor, output_tensor, gamma, has_gamma, cfg, 
     gamma_addr = gamma.buffer_address() if has_gamma else 0
 
     for g in range(num_block_groups):
-        rx0, ry0 = 0, g * gh
-        rx1, ry1 = gx - 1, g * gh + gh - 1
+        base_row = (g // teams_per_row) * gh
+        base_col = (g % teams_per_row) * gw
+        rx0, ry0 = base_col, base_row
+        rx1, ry1 = base_col + gw - 1, base_row + gh - 1
         vrx0, vry0 = vcoord(rx0, ry0)
         vrx1, vry1 = vcoord(rx1, ry1)
         sender_coords = []
         for j in range(K):
-            jx, jy = j % gx, g * gh + j // gx
+            jx, jy = base_col + j % gw, base_row + j // gw
             vx, vy = vcoord(jx, jy)
             sender_coords.extend([vx, vy])
 
         for r in range(K):
-            lx, ly = r % gx, g * gh + r // gx
+            lx, ly = base_col + r % gw, base_row + r // gw
             shard_col0 = r * Wt_s * 32  # this shard's first W-column
             gamma_page_base = r * Wt_s  # gamma shard (tile index / *32 for RM gamma)
 

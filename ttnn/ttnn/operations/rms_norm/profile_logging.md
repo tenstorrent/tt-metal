@@ -170,3 +170,225 @@ reduced) — a structural rewrite, not a local tweak.
 helper (Target 1 re-implements it inline; the reader does too); (2) consider allowing
 `TileOffset::Set` base 0 with `Cumulative` wait (Target 2 had to use `Unset`). Neither blocked the
 work — both optimizations were expressible — but they'd reduce per-op boilerplate.
+
+---
+
+## Round 2 — non-latency-bound shapes + a different all-reduce algorithm
+
+### Profiling non-latency-bound (multi-row / grid-saturated) shapes — findings
+The Round-1 shapes were all 1 tile-row/core (worst case for hiding latency). Re-profiled
+many-rows-per-core and grid-saturated shapes:
+
+- **Regime A, many rows/core:** `RDR-resv` (reader blocked on `cb_reserve_back`) blows up —
+  4.6µs @2 rows/core, 15.5µs @4, 69µs @8 (`(16384,512)`). The resident input CB is single-buffered
+  (`Wt`), so the reader cannot prefetch row N+1 until compute frees row N → rows serialize. **Idea 0
+  (double-buffer `cb_input_resident`) is validated as the real Regime-A lever** (untested-but-promising).
+- **At large sizes it becomes genuinely write-throughput-bound** (`(16384,512)`: `WR-noc` 113µs) —
+  so Target 1's write batching matters more there, not less.
+- **`(512,8192)` = 163µs pathology:** `nrg·K_min > grid` → falls into the slow single-core-per-row
+  Regime A fallback (no transport zones at all). The "oversubscribed Regime B coverage" gap the
+  changelog flagged, confirmed live.
+- **Regime B stays writer-bound even grid-saturated** — the all-reduce is only ~6-10% of total at
+  full grid; it's a meaningful fraction only on single/few-row-group wide-W (e.g. `(32,8192)`:
+  `ar-wait + ar-xport ≈ 7.5µs` of 21µs).
+
+### All-reduce algorithm: mode 2 = reduce-then-broadcast — **KEPT (new default)**
+
+**Change.** New Regime-B transport `TRANSPORT_REDUCE_BCAST = 2` (gated by the existing
+`transport_mode` CT arg; compute changes too). The root gathers the K partials (same as mode 1),
+**reduces them to the single global Σx²**, and mcasts **one tile** instead of K. Peers receive that
+tile and **skip the combine reduce entirely** (`run_combine = (transport_mode != 2) || is_root`).
+Reuses `cb_partial_sumsq`; plumbed `cb_partial_sumsq` to the reader + `is_root` to compute across
+all four descriptor functions. (Implemented by the ttnn-implementer; the expert-debugger fixed a
+real cross-thread bug — the reader and compute hold *per-RISC-local* CB pointers, so the reader had
+to manually re-sync its `cb_partial_sumsq` read pointer with the compute RISC's pop via
+`advance_local_rd_ptr` — captured in audit-trail commits.)
+
+**Measured (mode 1 → mode 2, total ns, bf16):**
+
+| shape | mode 1 | mode 2 | speedup | CMP-combine stall |
+|-------|--------|--------|---------|-------------------|
+| (32,4096)  | 14693 | 13807 | 1.06x | 4555 → 530 |
+| (32,8192)  | 21135 | 18808 | **1.12x** | 8307 → 503 |
+| (32,16384) | 28184 | 26753 | 1.05x | 8761 → 494 |
+| (64,8192)  | 26269 | 24184 | 1.09x | 5601 → 535 |
+| (256,8192) | 56986 | 56630 | 1.01x (grid-saturated → writer-bound) | 4100 → 570 |
+
+The per-peer `CMP-combine` stall collapses **~8µs → 0.5µs**: peers no longer wait for the K-tile
+broadcast nor run a reduce. The win is largest on single-row-group wide-W (where the all-reduce is
+on the critical path) and tapers to neutral once the shape is grid-saturated and writer-bound.
+
+**Correctness.** With mode 2 forced AND as the default: `test_rms_norm.py` 20/20,
+`test_rms_norm_regime_b.py` + `test_rms_norm_rm_regime_b.py` green (99 passed combined, `--dev`,
+no hang); `test_rms_norm_transport.py` exercises modes 0/1/2.
+
+**Helper note.** No new helper mode needed — but this exposed a real **dataflow-lib gap**: there is
+no safe primitive for a dataflow RISC to read a CB slot that the *compute* RISC produced/consumed,
+because CB pointers are per-RISC-local. The fix (`advance_local_rd_ptr`) is hand-rolled pointer
+arithmetic against `get_local_cb_interface`. A `dataflow_kernel_lib` helper to "peek a peer-RISC CB
+slot by absolute index" would make root-relay/reduce-broadcast transports far less error-prone.
+
+**Verdict: KEEP, made the production default** (`_select_transport → TRANSPORT_REDUCE_BCAST`).
+1.05–1.12x on wide-W Regime B, neutral elsewhere, no regression. Mode 0/1 retained behind the CT
+arg for the bake-off.
+
+### Idea 0 — double-buffer `cb_input_resident` (multi-row Regime A) — **REVERTED (disabled, net-negative)**
+
+**Change (tried).** Size `cb_input_resident` `Wt → 2*Wt` when a core owns >1 row, so the reader
+prefetches row N+1 while compute holds row N. No kernel change (the existing reader loop fills the
+spare slot). Behind `_DOUBLE_BUFFER_A` (default now False).
+
+**Measured (controlled A/B, best-of-3 same session, OFF → ON total):**
+
+| shape | rows/core | OFF | ON | speedup | RDR-resv OFF→ON |
+|-------|-----------|-----|-----|---------|-----------------|
+| (4096,256)  | 2 | 28561 | 26868 | **1.06x** | 4600 → 78 |
+| (8192,256)  | 4 | 49482 | 50676 | 0.98x | 14632 → 4051 |
+| (16384,256) | 8 | 95073 | 99557 | 0.96x | 37633 → 17717 |
+| (16384,512) | 8 | 193093 | 194092 | 1.00x | 84630 → 54000 |
+
+**The instructive part.** Double-buffering ALWAYS collapses `RDR-resv` (the stall it targets), but
+the total only improves at 2 rows/core — flat-to-*worse* at 4-8. So **`RDR-resv` was off the
+critical path**: an idle reader is slack, not the bottleneck. Compute is serial across rows and the
+writer is the long pole, so feeding the input faster can't help; the aggressive prefetch just adds
+read/write DRAM contention. This is the same trap as the writer-zone-spanning-total (Round 1) and
+Target 2 — a large-looking stall that isn't on the critical path. It also confirms the bandwidth
+finding: we're neither DRAM-bound nor reader-bound; the limiter is the serial per-row dependency
+chain + writer drain.
+
+**Verdict: DISABLE** (`_DOUBLE_BUFFER_A = False`), implemented + gated off like R7's row-blocking.
+The 2-rows/core win is too narrow and shape-specific to justify the 4-8/core regression.
+
+### Bandwidth reality check (settles "is it writer-bound?")
+Aggregate DRAM BW achieved (Regime A, bf16, read==write==rows·Wt·2KB):
+
+| shape | read+write | % of ~288 GB/s peak | per-core read vs ~32 GB/s NoC link |
+|-------|-----------|---------------------|------------------------------------|
+| (2048,256)  | 123 GB/s | 43% | 3.5 / 32 = 11% |
+| (8192,256)  | 171 GB/s | 59% | 3.3 / 32 = 10% |
+| (16384,512) | 160 GB/s | 55% | 3.5 / 32 = 11% |
+
+**NOT DRAM-bandwidth-bound** — sustained ~55-60% of peak with ~40% headroom; per-core transfers use
+only ~10% of the NoC link → transaction/latency-bound per core. The write *burst* (during the
+NoC-busy window) reaches ~200-260 GB/s (near peak), but the writer is only busy ~50% of the wall —
+the gap is the `WR-wait` stall (writer starved by the serial prefix). So "writer-bound" = writer is
+the longest-pole STAGE, but the true limiter is the **serial per-row dependency chain starving a
+~50%-duty-cycle writer + per-core transaction latency**, not DRAM bandwidth.
+
+## Deep wall-clock timeline profiling (driver `.eval/refinements/timeline_profile.py`)
+
+Reconstructed per-core absolute-timestamp timelines (all RISCs on one axis, critical core) to find
+the true critical path instead of inferring it from durations. Findings **correct earlier claims**:
+
+**Regime A, 1 row/core (2048,256), total ~18000ns — critical path:**
+| segment | time | nature |
+|---------|------|--------|
+| read (compute idles in square-wait) | ~4.8µs | DRAM **read latency** (NoC ~10% util) |
+| square + reduce | ~1.1µs | real compute (cheap) |
+| finalize (rsqrt SFPU) | ~2.4µs | fixed SFPU init+compute — on critical path |
+| pass2 | ~0.8µs | real compute (cheap) |
+| **first write block** | ~4–7µs | **ONE-TIME** first-write-burst stall (see below) |
+| second write block | ~0.7µs | steady-state write of 4 tiles |
+
+**CORRECTION (raw per-fire writer events, `.eval/refinements/raw_writer_events.py`).** An earlier
+draft called this "~7.6µs writer drain / DRAM-write-latency bound." That was WRONG. Splitting the
+writer zone into WR-issue (the `noc_async_write_tile` loop) vs WR-bar (the completion barrier), per
+block, across runs:
+- 1 row/core (2 blocks): block-0 WR-issue = **5218 / 3463 / 3790 ns** across 3 runs; block-1 WR-issue
+  = **264 / 264 / 262 ns**. The cost is in *issuing the first block's writes*, is a consistent
+  ONE-TIME stall, and the second identical block issues ~20x faster.
+- 4 rows/core (8 blocks): WR-issue = [724,1385,1465,758,265,965,294,264] — **no 5µs spike at all**.
+So the writer is NOT uniformly slow: there's a one-time first-write-burst latency (likely first-
+touch of the DRAM write path / NoC cmd-buffer fill after the writer's long idle) that dominates a
+tiny 2-block kernel and **amortizes away** with more blocks/work. "Writer-bound" was an artifact of
+measuring 1-row-per-core; in steady state the per-block write is ~1–2.5µs and the writer is balanced
+with compute (the 8192,256 timeline shows BRISC ≈ TRISC busy, both ~0 idle).
+
+- **Correction: the "5.9µs square" is ~90% a stall.** `CMP-p1-square` opens at t=0 but the read
+  finishes at 5526ns; the zone's first act is `cb_wait_front`, so it's BLOCKED for ~4.8µs and the
+  actual squaring is only ~0.66µs. The READ is the prefix cost, not the square.
+- **This downgrades Idea 1** (square+reduce fusion): square-compute ~0.66µs + reduce ~0.48µs, so the
+  `cb_squared` round-trip is ~0.5µs of L1 (SRAM) traffic — fusing saves little, not multi-µs.
+- The two DRAM-latency segments (read ~4.8 + write tail ~7.6) ≈ **69% of the kernel**. The op is
+  **DRAM-access-LATENCY bound** (small 2KB transfers, ~10% NoC link), not bandwidth, not compute.
+  finalize's 2.4µs SFPU is the only non-trivial compute.
+
+**Regime A, 4 rows/core (8192,256), total 48.7µs:** all RISCs ~0 idle (BRISC 48.1, TRISC 46.3,
+NCRISC 41.2µs). Genuine pipeline, **co-limited writer ≈ compute**; the writer's busy is ~half
+`WR-noc` / half `WR-wait` (blocked on compute) even when fully pipelined.
+
+**Regime B (32,8192, mode 2), total 18.6µs:** `CMP-combine` now tiny (0.36µs — mode 2 worked), but
+`finalize` spans 4837→13090 because the peer blocks on the reader's broadcast; **the transport
+(`RDR-ar-xport` ~6µs gather+broadcast) is still on the critical path**, bracketed by read (~3.2µs)
+and writer (~4.3µs).
+
+**Bottleneck verdict (revised after the raw-writer drill-down):**
+- **1 row/core** is dominated by per-op startup latency: a fixed DRAM **read** front (~4.8µs) + a
+  ONE-TIME first-**write**-burst stall (~4–7µs) + the fixed finalize SFPU (~2.4µs). These are
+  startup/latency costs that **amortize with more work** — not a throughput wall. NOT
+  bandwidth-bound (~55% of peak), NOT compute-bound (cheap except finalize), NOT uniformly
+  write-slow (steady-state per-block write ~1µs).
+- **Multi-row / steady state** is a genuine pipeline, writer ≈ compute co-limited (~0 idle on both).
+- Levers that were tried and explained as NON-levers by the timeline: compute fusion (Idea 1 —
+  square-compute is ~0.66µs), input prefetch (Idea 0 — RDR-resv is slack), finalize fusion
+  (Target 3 — loses pipelining). Target 1 (write batching) already addresses steady-state per-block
+  write overhead. The remaining real costs (read latency, the one-time first-write stall) are
+  largely fixed per-op latencies that the op amortizes by running more rows/cores.
+
+### Sub-row Regime B teams (remove full-width-band requirement) — **KEPT**
+
+**Change.** Regime B required `K % gx == 0` (full-width `gh×gx` bands), so the smallest W-split was
+K=gx=8. Shapes with `num_row_groups·8 > grid` (e.g. `(512,8192)`, nrg=16 → 128>64) got no valid K →
+fell back to slow single-core-per-row Regime A (16 cores, Wt=256 resident, 163µs). Relaxed
+`_select_k` to also accept K that **divides** gx (sub-row `1×K` teams, `gx//K` per grid row) and
+generalized the geometry in `_regime_b_descriptor` + `_regime_rm_b_descriptor`
+(`base_row`/`base_col`/`gw`/`gh`/`teams_per_row`). HOST-SIDE ONLY — kernels unchanged (the transport
+already takes a generic rect + K peer coords). `(512,8192)`: K=4, sixteen 1×4 teams tile the full
+64-core grid, one row-group per core.
+
+**Measured (bf16):** `(512,8192)` **163.8µs → 100.3µs (1.63x)**; `(1024,8192)` now runs in the fast
+path at 191.9µs. Only 1.63x (not 3–5x) because the fallback was single-core-*per-row* (16 active
+cores, 48 idle), so reaching all 64 cores via K=4 is ~1.6x — transport/overhead-limited. Existing
+full-width shapes UNCHANGED (K=32/16/8 — byte-identical geometry; the proxy still picks the larger
+full-width K when feasible).
+
+**Correctness (`--dev`, no hang):** `_select_k(512,8192)`→K=4 sub-row; all-ones maxerr ≤ 0.0005,
+PCC = 1.00000 on (512,8192)/(512,4096)/(1024,8192) × {bf16,fp32}; no regression on acceptance(20) +
+regime_b + rm_regime_b (99 total).
+
+### Internal padding — Regime B works for ANY Wt (remove "K divides Wt") — **KEPT**
+
+**Problem.** Every valid K is even (divisor/multiple of gx=8) and had to divide Wt exactly. So:
+(a) odd Wt above the single-core L1 budget had NO valid K → `NotImplementedError` CRASH (confirmed
+Wt=329, 331, 513); (b) even-but-awkward Wt (e.g. 2·prime=334) was stuck at K=2 (half the grid).
+
+**Fix (internal padding).** Regime B now splits `Wt_pad = ceil(Wt/gx)*gx` (rounded up to a multiple
+of gx, so K=8+ always divides it). Uniform shard `Wt_s = Wt_pad/K` (stays compile-time). The trailing
+tiles beyond the real Wt are PAD: the TILE reader zeros them (contribute 0 to Σx²; `inv_W` uses true
+W), and the writer DRAINS all `Wt_s` tiles (so cb_output never backs up → no hang) but WRITES only the
+real ones. Compute unchanged. Wt already a multiple of gx → `Wt_pad==Wt`, byte-identical.
+
+**Bonus latent bug fixed (RM Regime B).** The padding probe surfaced that RM Regime B was *already*
+silently wrong whenever a shard's `Wt_s % reduce_block != 0` (e.g. Wt=264: maxerr **0.20**): the
+reader/writer clamped columns only against global W, so an interior shard's chunk-pad tail (still
+< W) over-read the next shard's data into Σx² and over-wrote its output. Fixed by clamping against
+`col_limit = min(W, shard_col0 + Wt*TILE_W)` in the RM reader + writer. Wt=264 RM: 0.20 → 0.007.
+
+**Measured (bf16, previously CRASH / stuck):** Wt=334 (W=10688) 22.3µs (was K=2/half-grid);
+Wt=329 (W=10528) **34.7µs (was crash → K=24)**; Wt=513 (W=16416) **39.6µs (was crash → K=40)**.
+All in the normal Regime-B band (clean ref Wt=256 = 18.3µs), not the slow fallback. So "perf in all
+cases" along the width axis: any Wt now splits across (most of) the grid.
+
+**Correctness (`--dev`, no hang):** new widths {329,331,513,334} × {bf16,fp32} × {TILE,RM} × ±gamma,
+single+multi-row: all-ones maxerr ≤ 0.001, PCC ≥ 0.99999. No regression: acceptance(20) + regime_b(39)
++ rm_regime_b(40) + layout_matrix(120) green. Clean widths (Wt=256) byte-identical (Wt_pad==Wt).
+
+**Still open (width axis):** `_select_k`'s cost proxy was tuned for clean full-width K; for padded
+shapes it may not pick the optimal K (e.g. Wt=329→K=24 vs K=48). Minor — the shapes now work and are
+fast; K-tuning for padded widths is a future refinement.
+
+### Still open
+- **More-outstanding-transactions levers** (the timeline-indicated direction): batch all `Wt` output tiles behind one barrier (vs `reduce_block`), and/or coalesce reads. Untried; targets the latency-bound read/write directly.
+- **`num_row_groups > grid` oversubscription** — multiple row-groups PER core + per-row-group transport loop. The sub-row fix already covers `nrg ≤ grid`; this is the remaining (bigger, hang-prone) corner.
+- **Idea 1 — square+reduce fusion**: DOWNGRADED by the timeline (square-compute is ~0.66µs; fusion saves ~0.5µs of L1 traffic). Low priority.
+- Ring all-reduce not tried — 1-tile data ⇒ K-1 serial hops (latency-bound), expected to lose to the reduce-broadcast that won.
