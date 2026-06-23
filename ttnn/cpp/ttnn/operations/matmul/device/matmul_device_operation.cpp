@@ -915,10 +915,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     return false;
                 }
             }
-            if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
-                return false;
-            }
-            return true;
+            return !input_tensor_a.is_sharded() && !input_tensor_b.is_sharded();
         };
 
         for (auto i = 0; i < a_shape.rank() - 2; i++) {
