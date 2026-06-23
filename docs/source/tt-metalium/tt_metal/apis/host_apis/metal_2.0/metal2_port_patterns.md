@@ -24,7 +24,7 @@ Optional fields, used when the entry's substance requires them:
 ### Patterns
 
 - [Self-loop DFB binding (producer == consumer)](#pattern-self-loop-dfb-binding)
-- [Fake CB → self-loop DFB (interim workaround)](#pattern-fake-cb--self-loop-dfb-interim-workaround)
+- [Sync-free and single-ended CBs → self-loop DFB (interim workaround)](#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround)
 - [Conditional / optional DFB bindings](#pattern-conditional--optional-dfb-bindings)
 - [Aliased DFBs (legacy aliased CBs)](#pattern-aliased-dfbs-legacy-aliased-cbs)
 - [Same-FIFO aliasing (one DFB, multiple kernel-side names)](#pattern-same-fifo-aliasing-one-dfb-multiple-kernel-side-names)
@@ -73,23 +73,31 @@ The two-distinct-names form (`acc_w` for PRODUCER, `acc_r` for CONSUMER, yieldin
 
 ---
 
-## Pattern: Fake CB → self-loop DFB (interim workaround)
+## Pattern: Sync-free and single-ended CBs → self-loop DFB (interim workaround)
 
 **Category**: Pattern (interim workaround)
 
-**Recognition signal**: A **fake CB** — a CircularBuffer that is missing a *real* producer, a *real* consumer, or both, so it is not a genuine FIFO. The litmus is one question: **does the CB have a real producer AND a real consumer?** If either is absent, it's a fake CB. It shows up in two faces:
-- **Read-side (address-source).** The kernel uses the CB purely as an *address source* — a base-pointer grab via `get_read_ptr` / `get_pointer_to_cb_data`, then a direct memory read — with **neither** a producer nor a consumer: nothing produces into it as a FIFO, nothing waits on it. The legacy idiom borrows a CB onto a resident tensor's buffer because, pre–Metal 2.0, that was the most convenient way to hand a kernel a base pointer to resident memory.
-- **Write-side (producer-only output).** The mirror case: a kernel **produces** into a borrowed (output-tensor-backed) CB via the normal `reserve_back` / `push_back` FIFO path — the compute packer's standard output write, or a DM scatter-write — but **nothing consumes it**. The packed data lands in the output tensor's resident L1, so no drain/writer kernel pops it. Here the producer is *real*; only the consumer is absent. The litmus still fails (producer present, consumer missing), so it's the same pattern wearing the opposite face. **Examples:** conv2d / pool `OUT` (compute packer → output shard); pool `out_idx_cb` (a DM kernel writes the argmax-index output).
+**A word on legacy CBs — read this first.** Legacy gave kernel authors essentially *one* primitive for "a chunk of L1 the kernel touches": the CircularBuffer. So they used it for everything — genuine producer→consumer FIFOs, but also private scratch memory, base-pointer windows onto resident tensors, and output staging nothing ever drains. When all you have is a CircularBuffer, everything looks like one. Metal 2.0 splits these back apart (DFBs, plus the coming kernel-scratchpad and local-`TensorAccessor` features), so **you** now look at each legacy "CB" and decide what it actually is — along **two orthogonal axes that must not be fused**:
+- **Synchronized vs. sync-free** — does the kernel drive the FIFO machinery (`reserve_back`/`push_back`/`wait_front`/`pop_front`) for a genuine cross-kernel hand-off (**synchronized** → a real DFB), or just grab the base pointer and walk the bytes, ignoring sync (**sync-free** → really scratch memory or a tensor view, not a CB at all)?
+- **Endpoint multiplicity** — how many FIFO producers/consumers per node? The SPSC legality axis, checked separately ([DFB endpoint legality](port_op_to_metal2_audit.md#dfb-endpoint-legality-spsc)).
 
-The audit flags these as **FYI-P** (it does not gate — this workaround keeps the port unblocked). The port-time problem: a Metal 2.0 DFB requires **≥1 PRODUCER and ≥1 CONSUMER** binding, but a fake CB is missing at least one honest endpoint, so the spec validator rejects it.
+This entry handles the CBs the spec validator rejects because they can't present a **FIFO producer *and* a FIFO consumer on distinct kernels** — the self-loop is the bridge until the real Metal 2.0 construct lands.
 
-**Decision**: Bind the fake CB as a **self-loop DFB** — declare *both* a PRODUCER and a CONSUMER binding, both on the **same kernel** (the one that touches it: the reader on the read-side face, the producer on the write-side face). This borrows the [Self-loop DFB binding](#pattern-self-loop-dfb-binding) mechanism purely to satisfy the validator's producer-and-consumer rule. It is a deliberate white lie: the missing endpoint is fabricated, the binding is well-formed, and the kernel accesses the memory exactly as before (a base-pointer read on the read-side face; the unchanged `reserve_back` / `push_back` into resident output on the write-side face). (Contrast the self-loop pattern proper, where producer *and* consumer are both **real** — an accumulator. Here at least one endpoint is the white lie: both on the read-side face, the consumer alone on the producer-only output face.)
+**Recognition signal**: A CB that lacks a usable FIFO producer–consumer pair, so the validator (which requires **≥1 PRODUCER and ≥1 CONSUMER** binding) rejects it. Two shapes land here:
+- **Sync-free** — the kernel uses the CB purely as an *address source*: a base-pointer grab via `get_read_ptr` / `get_pointer_to_cb_data` (or `get_write_ptr`), then a direct memory access, with **no FIFO ops at all** — nothing `push_back`s, nothing `wait_front`s. The legacy idiom borrows a CB onto a resident tensor's buffer because, pre–Metal 2.0, that was the most convenient way to hand a kernel a base pointer to resident memory. (Sync-free CBs aren't really CBs — they're scratch memory or tensor views; see *Classify it*.)
+- **Single-ended** — the CB *does* use the FIFO machinery, but on **one** side only: a FIFO producer with no consumer (or vice versa). Canonical case: the compute packer produces tiles (`reserve_back` / `push_back`) straight into an output-tensor-backed CB that nothing drains — a **synchronized** CB (real `push_back`), just missing its consumer. **Examples:** conv2d / pool `OUT` (compute packer → output shard); pool `out_idx_cb` (a DM kernel writes the argmax-index output).
+
+The audit flags both as **FYI-P** — they do not gate; this workaround keeps the port unblocked.
+
+> **Don't fuse this with the sync axis.** "Single-ended" is a *count* property (one endpoint), orthogonal to synchronized/sync-free (a *sync* property). The packer (`OUT`, above) is **synchronized but single-ended**; a base-pointer read of a resident lookup table (`recip`, below) is **sync-free**. Both need the bridge for the same reason — no usable FIFO producer+consumer pair on distinct kernels — but they have different long-term homes (*Classify it*).
+
+**Decision**: Bind the CB as a **self-loop DFB** — declare *both* a PRODUCER and a CONSUMER binding, both on the **same kernel** (the one that touches it). This borrows the [Self-loop DFB binding](#pattern-self-loop-dfb-binding) mechanism purely to satisfy the validator's producer-and-consumer rule. It is a deliberate white lie: the missing endpoint(s) are fabricated, the binding is well-formed, and the kernel accesses the memory exactly as before (a base-pointer access for a sync-free CB; the unchanged `reserve_back` / `push_back` for a single-ended producer). (Contrast the self-loop pattern proper, where producer *and* consumer both do genuine work — an accumulator. Here at least one bound endpoint is the white lie.)
 
 **Correct port**:
 
 ```cpp
-// Fake CB the compute kernel reads only as an address source.
-// Self-loop it on the single reading kernel so the validator is satisfied:
+// Sync-free CB the compute kernel reads only as an address source.
+// Self-loop it on the single touching kernel so the validator is satisfied:
 KernelSpec compute{
     // ...
     .dfb_bindings = {
@@ -103,18 +111,21 @@ experimental::DataflowBuffer dfb_recip(dfb::recip);
 // ... read via base pointer as before ...
 ```
 
-(Shared `accessor_name` for both endpoints relies on the per-kernel accessor-name dedup relaxation noted under [Self-loop DFB binding](#pattern-self-loop-dfb-binding); the two-distinct-names form also works.)
+(Shared `accessor_name` for both endpoints relies on the per-kernel accessor-name dedup relaxation noted under [Self-loop DFB binding](#pattern-self-loop-dfb-binding); the two-distinct-names form also works. For a **single-ended** CB that already has one genuine endpoint — e.g. the packer's producer — bind that one for real and fabricate only the missing side; where a real-but-non-popping kernel exists (conv2d's `writer_tiled_out`), bind *it* as the consumer instead of self-looping.)
 
-**Document the hack prominently in the port report.** This is an *interim* workaround, not the intended end state. Record each fake-CB self-loop binding in the report's [Open items for downstream](port_op_to_metal2_recipe.md#capture-the-port-report), stating plainly that the self-loop is a validator-satisfying device and **not** a real FIFO — so the eventual migration can find and replace every one.
+**Document the hack prominently in the port report.** This is an *interim* workaround, not the intended end state. Record each self-loop binding in the report's [Open items for downstream](port_op_to_metal2_recipe.md#capture-the-port-report), stating plainly that the self-loop is a validator-satisfying device and **not** a genuine FIFO — so the eventual migration can find and replace every one.
 
-**Long-term direction** (why this is interim). Among the fake-CB cases here, the real fix is selected by the CB's **backing** first, then its access — and the load-bearing rule is that, *for a fake CB*, borrowed-from-a-tensor backing means a *tensor view*, never scratch. (Scope this to fake CBs: a borrowed-backed *real* DFB — e.g. a reader's fake-push feeding a waiting compute consumer — is a genuine FIFO, not a fake CB, and is not classified here.)
-- **Regular-backed scratch** — the kernel reads and writes **private** (non-borrowed) L1 as scratch → the forthcoming **Metal 2.0 kernel scratchpad resource**.
-- **Borrowed read-only tensor view** — the kernel only *reads* a resident tensor's L1 by base pointer → a forthcoming read-only **"local" `TensorAccessor`** variant (still being designed).
-- **Borrowed read-write tensor view** — the kernel reads *and* writes borrowed memory that **aliases a tensor** (e.g. an in-place accumulator on the output buffer) → the **read-write** form of that local `TensorAccessor` variant, delivered by the [compute-kernel `TensorBinding` fix](port_op_to_metal2_recipe.md#kernel-side-whitelist) (these are compute-kernel accesses, which cannot bind a `TensorAccessor` today). It's a *tensor view, not a scratchpad*, so it does **not** route to the kernel-scratchpad resource above. Example: conv2d `MATMUL_PARTIALS` under `partials_cb_uses_output` (TILE output).
+**Classify it** (which kind it is, and where it's eventually headed — record this in the port report). Selected by the CB's **backing** first, then its access. The load-bearing rule: *borrowed-from-a-tensor backing is a tensor view, never scratch.*
+- **Sync-free · regular-backed → kernel scratchpad.** The kernel reads and writes **private** (non-borrowed) L1 as scratch → the forthcoming **Metal 2.0 kernel scratchpad resource**.
+- **Sync-free · borrowed · read-only → local `TensorAccessor`.** The kernel only *reads* a resident tensor's L1 by base pointer → a forthcoming read-only **"local" `TensorAccessor`** variant (still being designed).
+- **Sync-free · borrowed · read-write → read-write local `TensorAccessor`.** The kernel reads *and* writes borrowed memory that **aliases a tensor** (e.g. an in-place accumulator on the output buffer) → the **read-write** form of that variant, delivered by the [compute-kernel `TensorBinding` fix](port_op_to_metal2_recipe.md#kernel-side-whitelist) (compute kernels can't bind a `TensorAccessor` today). A tensor view, *not* a scratchpad. Example: conv2d `MATMUL_PARTIALS` under `partials_cb_uses_output` (TILE output).
+- **Synchronized · single-ended → an ordinary DFB, once its missing endpoint is bound.** This one is *not* sync-free — it's a genuine FIFO producer into resident output, missing only a consumer. Its end state is a normal borrowed-memory DFB (consumer bound to a real drain kernel, or the degenerate consumer accepted); it does **not** migrate to scratchpad/tensor-view. Example: the packer `OUT` above.
 
-Until those land, the self-loop binding is the sanctioned way to keep a fake-CB op portable.
+Until those land, the self-loop binding is the sanctioned way to keep these ops portable.
 
-**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer are real).
+**Orthogonal — SPSC.** Endpoint *multiplicity* is a separate check. A CB here that *also* has **2+ FIFO endpoints of one kind on a node** is an SPSC violation, **not** a self-loop case — it cannot be self-looped, and it's an op-owner pre-port fix. See [DFB endpoint legality](port_op_to_metal2_audit.md#dfb-endpoint-legality-spsc).
+
+**See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [DFB endpoint legality](port_op_to_metal2_audit.md#dfb-endpoint-legality-spsc).
 
 ---
 
