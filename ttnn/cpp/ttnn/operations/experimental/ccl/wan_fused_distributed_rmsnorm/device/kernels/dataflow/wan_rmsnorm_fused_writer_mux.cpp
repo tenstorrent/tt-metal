@@ -43,10 +43,9 @@
 // destination addresses (handles the Wormhole DRAM-coord -> noc0 flip the
 // fabric EDM expects; plain get_noc_addr() does not).
 #include "tt_metal/fabric/hw/inc/linear/addrgen_api.h"
-// For populating compute's reduce-scalar / epsilon / trans_mat CBs here (moved
-// off the reader so the reader starts input reads ASAP).
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
+// Writer populates compute's reduce-scalar / epsilon / trans_mat CBs (shared
+// with the legacy writer) so the reader starts input reads ASAP.
+#include "wan_rmsnorm_scalar_setup.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
 using namespace tt::tt_fabric::linear::experimental;
@@ -243,24 +242,13 @@ void kernel_main() {
     // the reader so the reader can start the input read ASAP). Done before the
     // MUX handshake so the values are ready by the time compute starts; the
     // trans_mat NoC read uses this writer's own NoC (independent of fabric).
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+    wan_rmsnorm_generate_scalars_and_transmat<
         w_reduce_scalar_sum_cb,
-        ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW>();
-    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         w_reduce_scalar_avg_cb,
-        ckernel::PoolType::AVG,
-        ckernel::ReduceDim::REDUCE_ROW,
-        w_reduce_factor>();
-    generate_bcast_col_scalar(w_epsilon_cb, w_epsilon_bits);
-    if constexpr (w_fuse_rope) {
-        const auto transformation_mat_accessor = TensorAccessor(w_transmat_args, transformation_mat_addr);
-        cb_reserve_back(w_transformation_mat_cb, 1);
-        const uint32_t transformation_mat_wr_ptr = get_write_ptr(w_transformation_mat_cb);
-        noc_async_read_tile(0, transformation_mat_accessor, transformation_mat_wr_ptr);
-        noc_async_read_barrier();
-        cb_push_back(w_transformation_mat_cb, 1);
-    }
+        w_epsilon_cb,
+        w_transformation_mat_cb,
+        w_reduce_factor,
+        static_cast<bool>(w_fuse_rope)>(w_epsilon_bits, TensorAccessor(w_transmat_args, transformation_mat_addr));
 
     // ---------- Build MUX senders + start zero-init ----------
     auto fwd_mux_conn = build_mux_sender(fwd_mux_args);

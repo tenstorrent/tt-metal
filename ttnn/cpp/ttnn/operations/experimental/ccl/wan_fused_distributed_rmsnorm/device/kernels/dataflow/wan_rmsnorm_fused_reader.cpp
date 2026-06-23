@@ -22,66 +22,54 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-#include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include <tt-metalium/constants.hpp>
 #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
     constexpr uint32_t input_cb = get_compile_time_arg_val(0);
     constexpr uint32_t weight_cb = get_compile_time_arg_val(1);
-    constexpr uint32_t reduce_scalar_sum_cb = get_compile_time_arg_val(2);
-    constexpr uint32_t reduce_scalar_avg_cb = get_compile_time_arg_val(3);
-    constexpr uint32_t epsilon_cb = get_compile_time_arg_val(4);
-    constexpr uint32_t transformation_mat_cb = get_compile_time_arg_val(5);
-    constexpr uint32_t rope_cos_cb = get_compile_time_arg_val(6);
-    constexpr uint32_t rope_sin_cb = get_compile_time_arg_val(7);
-    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(8);
-    constexpr uint32_t block_size = get_compile_time_arg_val(9);
-    constexpr uint32_t reduce_factor = get_compile_time_arg_val(10);  // == stats_tiles_cols
-    constexpr uint32_t epsilon_value = get_compile_time_arg_val(11);
-    constexpr uint32_t has_weight = get_compile_time_arg_val(12);
-    constexpr uint32_t fuse_rope = get_compile_time_arg_val(13);
-    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(14);
-    constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(15);
-    constexpr uint32_t per_head_rope = get_compile_time_arg_val(16);
-    constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(17);
-    constexpr uint32_t bias_cb = get_compile_time_arg_val(18);
-    constexpr uint32_t has_bias = get_compile_time_arg_val(19);
+    constexpr uint32_t rope_cos_cb = get_compile_time_arg_val(2);
+    constexpr uint32_t rope_sin_cb = get_compile_time_arg_val(3);
+    constexpr uint32_t num_tile_cols = get_compile_time_arg_val(4);
+    constexpr uint32_t block_size = get_compile_time_arg_val(5);
+    constexpr uint32_t has_weight = get_compile_time_arg_val(6);
+    constexpr uint32_t fuse_rope = get_compile_time_arg_val(7);
+    constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t chunk_size_rows = get_compile_time_arg_val(9);
+    constexpr uint32_t per_head_rope = get_compile_time_arg_val(10);
+    constexpr uint32_t rope_seqlen_tiles = get_compile_time_arg_val(11);
+    constexpr uint32_t bias_cb = get_compile_time_arg_val(12);
+    constexpr uint32_t has_bias = get_compile_time_arg_val(13);
     // Per-token weight/bias: shape [N, H] (vs broadcast [1, H]). Read pattern
     // is per-row (after each row's input is pushed) using noc_async_read_tile
     // for full 4 KB/tile (vs face_row_bytes for the broadcast case). Compute
     // uses mul_tiles / add_tiles directly (no _bcast_rows).
-    constexpr uint32_t per_token_weight = get_compile_time_arg_val(20);
-    constexpr uint32_t per_token_bias = get_compile_time_arg_val(21);
+    constexpr uint32_t per_token_weight = get_compile_time_arg_val(14);
+    constexpr uint32_t per_token_bias = get_compile_time_arg_val(15);
     // Streaming low-L1: input_cb is block-sized, so the row is read in two
     // passes (PRE sum-of-squares, then a POST re-read for x*(1/rms)) in
     // block_size-tile pushes that compute pops as it consumes. The resident
     // fast path reads the whole row once. See program_factory.
-    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(22);
-    // When set (MUX path), the WRITER populates reduce_scalar_*/epsilon/
-    // transformation_mat CBs instead of the reader, so the reader's first NoC
-    // op is the input read (it starts streaming input ASAP).
-    constexpr uint32_t scalars_in_writer = get_compile_time_arg_val(23);
+    constexpr uint32_t streaming_low_l1 = get_compile_time_arg_val(16);
     // Barrier-read threshold: push+barrier the input read every this many tiles
     // (caps in-flight DRAM reads to limit NoC/DRAM contention; also sets PRE's
     // consumption granularity). Host heuristic = f(num readers, tile bytes), or
     // WAN_BARRIER_TILES override. Subsumes the old per-block (RoPE) / whole-row
     // (no-rope) input-read structure: threshold == block_size reproduces the
     // RoPE finer push; threshold == num_tile_cols reproduces the whole-row push.
-    constexpr uint32_t input_barrier_tiles = get_compile_time_arg_val(24);
-    constexpr auto input_args = TensorAccessorArgs<25>();
+    constexpr uint32_t input_barrier_tiles = get_compile_time_arg_val(17);
+    // The WRITER always populates the reduce_scalar_* / epsilon / trans_mat CBs,
+    // so the reader's first NoC op is the input read (starts streaming ASAP).
+    constexpr auto input_args = TensorAccessorArgs<18>();
     constexpr auto weight_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
-    constexpr auto transformation_mat_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
-    constexpr auto rope_cos_args = TensorAccessorArgs<transformation_mat_args.next_compile_time_args_offset()>();
+    constexpr auto rope_cos_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     constexpr auto rope_sin_args = TensorAccessorArgs<rope_cos_args.next_compile_time_args_offset()>();
 
     uint32_t arg_idx = 0;
     const uint32_t input_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t weight_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t bias_addr = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t transformation_mat_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rope_cos_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t rope_sin_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t tile_row_start = get_arg_val<uint32_t>(arg_idx++);
@@ -96,7 +84,6 @@ void kernel_main() {
     const auto input_accessor = TensorAccessor(input_args, input_addr);
     const auto weight_accessor = TensorAccessor(weight_args, weight_addr);
     const auto bias_accessor = TensorAccessor(bias_args, bias_addr);
-    const auto transformation_mat_accessor = TensorAccessor(transformation_mat_args, transformation_mat_addr);
     const auto rope_cos_accessor = TensorAccessor(rope_cos_args, rope_cos_addr);
     const auto rope_sin_accessor = TensorAccessor(rope_sin_args, rope_sin_addr);
 
@@ -107,30 +94,6 @@ void kernel_main() {
     constexpr uint32_t bf16_datum_size_bytes = 2;
     constexpr uint32_t face_row_bytes = tt::constants::FACE_WIDTH * bf16_datum_size_bytes;
     constexpr uint32_t face_bytes = tt::constants::FACE_HW * bf16_datum_size_bytes;
-
-    // Generate reduce scalars (SUM for pre uses 1.0, AVG for post uses 1/H_full)
-    // and the eps tile. Skipped when the writer populates them (MUX path) so the
-    // reader can start the input read immediately.
-    if constexpr (scalars_in_writer == 0) {
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            reduce_scalar_sum_cb,
-            ckernel::PoolType::SUM,
-            ckernel::ReduceDim::REDUCE_ROW>();
-        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-            reduce_scalar_avg_cb,
-            ckernel::PoolType::AVG,
-            ckernel::ReduceDim::REDUCE_ROW,
-            reduce_factor>();
-        generate_bcast_col_scalar(epsilon_cb, epsilon_value);
-
-        if constexpr (fuse_rope) {
-            cb_reserve_back(transformation_mat_cb, 1);
-            uint32_t transformation_mat_wr_ptr = get_write_ptr(transformation_mat_cb);
-            noc_async_read_tile(0, transformation_mat_accessor, transformation_mat_wr_ptr);
-            noc_async_read_barrier();
-            cb_push_back(transformation_mat_cb, 1);
-        }
-    }
 
     // Weight + bias are consumed in the POST phase (sub-phases 2 / 2.5) which
     // only start after chunk 0's AG completes. So both reads can be deferred
