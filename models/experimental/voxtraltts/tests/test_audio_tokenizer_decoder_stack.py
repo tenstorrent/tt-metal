@@ -13,6 +13,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.audio_tokenizer_ops import decoder_blocks_stack_reference
 from models.experimental.voxtraltts.reference.voxtral_config import audio_tokenizer_latent_dim, load_voxtral_config
 from models.experimental.voxtraltts.utils.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch, voxtral_to_torch_replicated
 from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
     _DECODE_CHUNK_T,
     VoxtralTTAudioTokenizer,
@@ -20,7 +21,7 @@ from models.experimental.voxtraltts.tt.audio_tokenizer.model import (
 )
 from models.experimental.voxtraltts.tt.voxtral_tt_args import _load_safetensors_state_dict
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
-    voxtral_audio_tokenizer_high_accuracy_optimizations,
+    voxtral_audio_tokenizer_default_optimizations,
 )
 
 _MODEL_CARD_DECODE_T = _DECODE_CHUNK_T
@@ -30,9 +31,9 @@ _STACK_PCC_TARGET = 0.98
 def _latent_ncl_to_tt_b1tc(device, latent_ncl_bf16: torch.Tensor) -> ttnn.Tensor:
     """``[B, C, T]`` host → ``[B, 1, T, C]`` tile on device."""
     x4 = latent_ncl_bf16.to(torch.bfloat16).permute(0, 2, 1).unsqueeze(1).contiguous()
-    return ttnn.from_torch(
+    return voxtral_from_torch(
         x4,
-        device=device,
+        device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -57,7 +58,7 @@ def test_audio_tokenizer_decode_full_forward_stack_pcc(device, reset_seeds):
             device,
             state_dict=sd,
             tokenizer_cfg=cfg,
-            optimizations=voxtral_audio_tokenizer_high_accuracy_optimizations(),
+            optimizations=voxtral_audio_tokenizer_default_optimizations(),
         )
     except Exception as exc:
         pytest.skip(f"Unable to build VoxtralTTAudioTokenizer: {exc}")
@@ -76,14 +77,14 @@ def test_audio_tokenizer_decode_full_forward_stack_pcc(device, reset_seeds):
         raise
     ttnn.deallocate(latent_tt)
 
-    tt_btd = ttnn.to_torch(y_tt).squeeze(1).float()
+    tt_btd = voxtral_to_torch_replicated(y_tt).squeeze(1).float()
     assert ref.shape == tt_btd.shape, f"shape mismatch ref={tuple(ref.shape)} tt={tuple(tt_btd.shape)}"
     passing, msg = comp_pcc(ref.float(), tt_btd, pcc=_STACK_PCC_TARGET)
     assert passing, f"decode_full_forward stack PCC failed (T={time_len}, required={_STACK_PCC_TARGET}): {msg}"
 
 
 @torch.no_grad()
-def test_decode_full_forward_raises_when_decoder_incomplete(device, reset_seeds):
+def test_decode_full_forward_raises_when_decoder_incomplete(device, reset_seeds, expect_error):
     """If a submodule is missing, ``decode_full_forward`` lists required blocks."""
     model_name = resolve_voxtral_model_name_or_skip()
     try:
@@ -105,7 +106,7 @@ def test_decode_full_forward_raises_when_decoder_incomplete(device, reset_seeds)
     latent_c = audio_tokenizer_latent_dim(cfg)
     latent_tt = _latent_ncl_to_tt_b1tc(device, torch.randn(1, latent_c, 8, dtype=torch.bfloat16))
     try:
-        with pytest.raises(RuntimeError, match="decoder_blocks.6"):
+        with expect_error(RuntimeError, "decoder_blocks.6"):
             tok.decode_full_forward(latent_tt)
     finally:
         tok.decoder_blocks_6_conv_transpose = saved

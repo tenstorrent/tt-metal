@@ -298,21 +298,21 @@ Or run individually:
 |------|-------------------|----------------|---------------------|
 | `test_ttnn_voxtral_tts_golden_codes_pcc` | Audio tokenizer only | PCC ≥ 0.99 | **0.9989** |
 | `test_ttnn_voxtral_tts_acoustic_pcc` | Acoustic FM only (isolated) | PCC ≥ 0.97 | **0.98** |
-| `test_ttnn_voxtral_tts_golden_acoustic_pcc` | Text + acoustic + tokenizer (teacher-forced) | PCC ≥ 0.97 | **0.979** |
+| `test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc` | Text + acoustic + tokenizer (teacher-forced) | PCC ≥ 0.97 | **0.979** |
 | `test_ttnn_voxtral_tts_staged_pcc` | Free-run diagnostic (full AR, no golden feedback) | informational | — |
 
 **`test_ttnn_voxtral_tts_golden_codes_pcc`** — Audio tokenizer in isolation. Same as a teacher-forced run, except the golden-truth acoustic codes are saved offline in `reference/reference_outputs/voxtral_golden_codes.refpt`. At test time those fixed `[1, 37, T]` codes are fed to both the CPU reference tokenizer and the TT audio tokenizer; the final waveforms are compared with PCC. No text model or acoustic model runs — this gates only the audio decoder path.
 
 **`test_ttnn_voxtral_tts_acoustic_pcc`** — Acoustic model in isolation. Precomputed golden text hidden states from the reference fixture are fed directly as input to both CPU and TT acoustic models each step, with the same FM noise seed and no text model or code feedback. Each side produces its own acoustic codes; both code streams are decoded through the **same reference tokenizer** (held constant so only the acoustic implementation differs). The resulting waveforms are compared with PCC.
 
-**`test_ttnn_voxtral_tts_golden_acoustic_pcc`** — Full pipeline teacher-forced. Validates the text model, acoustic model, and tokenizer together. CPU and TT are both prefilled on the same prompt and run live each step (text decode → acoustic FM → codes). To prevent autoregressive divergence from accumulating, **golden codes are fed back into both text models at every step** instead of each side's own output. Each side still produces its own acoustic codes from its own hidden states; CPU codes go through the reference tokenizer and TT codes through the TT tokenizer. The two waveforms are compared with PCC.
+**`test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc`** — Full pipeline teacher-forced. Validates the text model, acoustic model, and tokenizer together. CPU and TT are both prefilled on the same prompt and run live each step (text decode → acoustic FM → codes). To prevent autoregressive divergence from accumulating, **golden codes are fed back into both text models at every step** instead of each side's own output. Each side still produces its own acoustic codes from its own hidden states; CPU codes go through the reference tokenizer and TT codes through the TT tokenizer. The two waveforms are compared with PCC.
 
 **`test_ttnn_voxtral_tts_staged_pcc`** — Free-run diagnostic. TT runs the full autoregressive loop without golden feedback and is compared against CPU; results are logged only and not gated in CI.
 
 ```bash
 pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_golden_codes_pcc -sv --timeout=0
 pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_acoustic_pcc -sv --timeout=0
-pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_golden_acoustic_pcc -sv --timeout=0
+pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc -sv --timeout=0
 pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py::test_ttnn_voxtral_tts_staged_pcc -sv --timeout=0
 ```
 
@@ -324,7 +324,7 @@ E2E tests use the standard ~500-character prompt (`VOXTRAL_STANDARD_CHAR_TEXT` i
 |----------|---------|-------------|
 | `VOXTRAL_GOLDEN_CODES_PT` | `reference/reference_outputs/voxtral_golden_codes.refpt` | Path to golden codes + text hiddens fixture |
 | `VOXTRAL_ACOUSTIC_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_acoustic_pcc` |
-| `VOXTRAL_PIPELINE_TF_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_golden_acoustic_pcc` |
+| `VOXTRAL_PIPELINE_TF_PCC` | `0.97` | Minimum waveform PCC for `test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc` |
 | `VOXTRAL_DECODE_TRACE` | `1` | Enable traced text-decode replay (set `0` to disable) |
 | `VOXTRAL_DECODE_TRACE_2CQ` | — | Not read at runtime; use `--no-decode-trace-2cq` or `configure_decode_trace(decode_trace_2cq=False)` |
 | `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size (bytes) passed to device open |
@@ -533,7 +533,7 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 | Text decode (26 steps) | ≥ 0.98 | | ~1–2% BF16 drift accumulates at step 19+ |
 | `test_ttnn_voxtral_tts_golden_codes_pcc` (audio tokenizer) | ≥ 0.99 | **0.9989** | Fixed golden `[1,37,T]` codes → CPU ref vs TT tokenizer waveform |
 | `test_ttnn_voxtral_tts_acoustic_pcc` (acoustic FM isolation) | ≥ 0.97 | **0.98** | Same golden text hiddens + noise; ref tokenizer held constant |
-| `test_ttnn_voxtral_tts_golden_acoustic_pcc` (pipeline teacher-forced) | ≥ 0.97 | **0.979** | Live text + acoustic; golden codes fed to both text models each step |
+| `test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc` (pipeline teacher-forced) | ≥ 0.97 | **0.979** | Live text + acoustic; golden codes fed to both text models each step |
 | Pipeline component (prefill hidden) | ≥ 0.99 | | |
 | Pipeline component (decode step) | ≥ 0.99 | | |
 | E2E waveform (free-run) | ~0.957 | | North-star metric; logged only, not gated |
@@ -716,7 +716,7 @@ export VOXTRAL_AUDIO_TOKENIZER_MATMUL_PROGCFG_OFF=1   # disable Tier 1 configs
 
 Two methodologies are used to validate the autoregressive pipeline, and they answer different questions:
 
-- **Teacher-forced** (gated in CI) — at every decode step the same **golden** acoustic codes are fed into *both* the CPU reference and the TT model, instead of each side consuming its own previous output. Each side still produces its own codes/hidden states from its own compute, but because both are conditioned on the identical history, the two rollouts cannot drift apart. The resulting PCC therefore measures the **per-step numerical fidelity** of the TT implementation in isolation. It is deterministic, reproducible run-to-run, and the value is attributable to the kernels/dtypes — which is exactly what an accuracy gate needs. This is why all gated accuracy tests (`test_ttnn_voxtral_tts_golden_acoustic_pcc`, `_acoustic_pcc`, `_golden_codes_pcc`) are teacher-forced.
+- **Teacher-forced** (gated in CI) — at every decode step the same **golden** acoustic codes are fed into *both* the CPU reference and the TT model, instead of each side consuming its own previous output. Each side still produces its own codes/hidden states from its own compute, but because both are conditioned on the identical history, the two rollouts cannot drift apart. The resulting PCC therefore measures the **per-step numerical fidelity** of the TT implementation in isolation. It is deterministic, reproducible run-to-run, and the value is attributable to the kernels/dtypes — which is exactly what an accuracy gate needs. This is why all gated accuracy tests (`test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc`, `_acoustic_pcc`, `_golden_codes_pcc`) are teacher-forced.
 
 - **Free-run** (`test_ttnn_voxtral_tts_staged_pcc`, logged-only / not gated) — TT runs the full autoregressive loop and feeds **its own** predicted codes back to itself, the same as production inference. The CPU reference does its own independent rollout. This is the realistic end-to-end "north-star" metric, but it conflates implementation fidelity with *trajectory agreement* between two independent rollouts, so it is unstable and not suitable as a pass/fail gate (see below). It is kept as an informational signal alongside the quality metrics (WER, UTMOS, speaker similarity), which are the better measures of free-run output goodness because they don't require the TT and CPU token trajectories to match.
 

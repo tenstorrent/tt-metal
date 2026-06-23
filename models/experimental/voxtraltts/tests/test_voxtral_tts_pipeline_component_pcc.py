@@ -34,7 +34,10 @@ from models.experimental.voxtraltts.reference.functional import (
 )
 from models.experimental.voxtraltts.reference.voxtral_config import load_voxtral_config
 from models.experimental.voxtraltts.reference.voxtral_request import compose_speech_request
-from models.experimental.voxtraltts.utils.common import resolve_voxtral_model_name_or_skip
+from models.experimental.voxtraltts.utils.common import (
+    build_voxtral_text_page_table_tt,
+    resolve_voxtral_model_name_or_skip,
+)
 from models.experimental.voxtraltts.tt.voxtral_tt_args import (
     _load_safetensors_state_dict,
     voxtral_text_hf_aligned_optimizations,
@@ -43,6 +46,7 @@ from models.experimental.voxtraltts.tt.voxtral_tts import VoxtralTTSPipeline
 from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     voxtral_audio_tokenizer_high_accuracy_optimizations,
 )
+from models.experimental.voxtraltts.utils.mesh import voxtral_to_torch_replicated
 
 PREFILL_HIDDEN_PCC = 0.99
 TEXT_DECODE_STEP_PCC = 0.98
@@ -90,7 +94,7 @@ def _log_generated_code_tokenizer_diagnostics(pipe: VoxtralTTSPipeline, codes_b3
     )
     latent_tt = pipe.audio_tokenizer.latent_from_codes_tt(codes_tt)
     ttnn.deallocate(codes_tt)
-    tt_latent_btc = ttnn.to_torch(latent_tt).squeeze(1).float()
+    tt_latent_btc = voxtral_to_torch_replicated(latent_tt).squeeze(1).float()
     ref_latent_btc = ref_latent_ncl.permute(0, 2, 1).contiguous().float()
     _, msg = comp_pcc(ref_latent_btc, tt_latent_btc, pcc=0.99)
     _log_pcc("latent_from_codes", float(msg), 0.99)
@@ -98,7 +102,7 @@ def _log_generated_code_tokenizer_diagnostics(pipe: VoxtralTTSPipeline, codes_b3
     ref_hidden_btd = decoder_blocks_stack_reference(ref_latent_ncl, sd, cfg)
     hidden_tt = pipe.audio_tokenizer.decode_full_forward(latent_tt)
     ttnn.deallocate(latent_tt)
-    tt_hidden_btd = ttnn.to_torch(hidden_tt).squeeze(1).float()
+    tt_hidden_btd = voxtral_to_torch_replicated(hidden_tt).squeeze(1).float()
     _, msg = comp_pcc(ref_hidden_btd.float(), tt_hidden_btd, pcc=0.99)
     _log_pcc("decoder stack output", float(msg), 0.99)
 
@@ -106,14 +110,14 @@ def _log_generated_code_tokenizer_diagnostics(pipe: VoxtralTTSPipeline, codes_b3
     ref_mel_btc = ref_mel_ncl.permute(0, 2, 1).contiguous().float()
     mel_tt = pipe.audio_tokenizer.output_proj_forward(hidden_tt)
     ttnn.deallocate(hidden_tt)
-    tt_mel_btc = ttnn.to_torch(mel_tt).squeeze(1).contiguous().float()
+    tt_mel_btc = voxtral_to_torch_replicated(mel_tt).squeeze(1).contiguous().float()
     _, msg = comp_pcc(ref_mel_btc, tt_mel_btc, pcc=0.99)
     _log_pcc("output_proj mel", float(msg), 0.99)
 
     ref_wav = pretransform_decode(ref_mel_ncl, channels=cfg.channels).float()
     tt_wav_dev = pipe.audio_tokenizer.pretransform_decode_tt(mel_tt)
     ttnn.deallocate(mel_tt)
-    tt_wav = ttnn.to_torch(tt_wav_dev).float()
+    tt_wav = voxtral_to_torch_replicated(tt_wav_dev).float()
     ttnn.deallocate(tt_wav_dev)
     _, msg = comp_pcc(ref_wav.float(), tt_wav.float(), pcc=0.99)
     _log_pcc("pretransform waveform", float(msg), 0.99)
@@ -186,13 +190,23 @@ def _text_decode_multistep_compare_reference(
     prompt_len = int(prompt_tokens.shape[1])
     decode_steps = int(decode_tokens.shape[1])
 
-    tt_prompt_x, prompt_rot_global, prompt_rot_local, _, _, _ = model.prepare_inputs_prefill(prompt_tokens, start_pos=0)
-    _ = model.inner.ttnn_prefill_forward(
-        tt_prompt_x,
-        rot_mats_global=prompt_rot_global,
-        rot_mats_local=prompt_rot_local,
-        get_last_token=-1,
+    # Per-token KV fill — batched prefill_fill breaks internal paged KV (see test_text_model.py).
+    page_table_tt = build_voxtral_text_page_table_tt(
+        model.inner.mesh_device,
+        max_seq_len=int(model.inner.args.max_seq_len),
     )
+    for i in range(prompt_len):
+        tt_tokens, tt_current_pos, tt_rope_idxs, tt_page_table = model.prepare_inputs_decode(
+            prompt_tokens[:, i], torch.tensor([i], dtype=torch.int64)
+        )
+        page_table = tt_page_table if tt_page_table is not None else page_table_tt
+        model.inner.ttnn_decode_forward(
+            tt_tokens,
+            tt_current_pos,
+            rot_mat_idxs=tt_rope_idxs,
+            page_table=page_table,
+            kv_cache=None,
+        )
 
     for step in range(decode_steps):
         current_pos = prompt_len + step

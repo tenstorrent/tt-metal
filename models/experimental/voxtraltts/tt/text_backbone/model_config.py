@@ -2388,6 +2388,10 @@ class ModelArgs:
                 "medgemma-4b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "gemma-3-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
                 "medgemma-27b": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128, "P150x4": 128},
+                "Voxtral-4B": {
+                    "P150": 128,
+                    "P150x4": 128,
+                },
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -2444,6 +2448,10 @@ class ModelArgs:
             },
             "Llama-3.2-3B": {
                 "N150": [],
+            },
+            "Voxtral-4B": {
+                "P150": [128, 256, 512, 1024, 2048, 4096, 8192],
+                "P150x4": [128, 256, 512, 1024, 2048, 4096, 8192],
             },
         }
 
