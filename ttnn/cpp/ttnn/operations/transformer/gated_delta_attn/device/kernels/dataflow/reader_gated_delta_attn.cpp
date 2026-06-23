@@ -20,6 +20,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t Ct = get_compile_time_arg_val(0);
@@ -83,22 +86,33 @@ void kernel_main() {
     constexpr auto s0_args = TensorAccessorArgs<linv_args.next_compile_time_args_offset()>();
     const auto s0_gen = TensorAccessor(s0_args, s0_addr, f32_tile);
 
+    Noc noc;
+    CircularBuffer cb_L_unit_o(cb_L_unit);
+    CircularBuffer cb_v_beta_sc_o(cb_v_beta_sc);
+    CircularBuffer cb_k_bd_sc_o(cb_k_bd_sc);
+    CircularBuffer cb_intra_att_o(cb_intra_att);
+    CircularBuffer cb_q_decay_o(cb_q_decay);
+    CircularBuffer cb_k_dt_o(cb_k_dt);
+    CircularBuffer cb_dl_exp_o(cb_dl_exp);
+    CircularBuffer cb_S_o(cb_S);
+    CircularBuffer cb_L_inv_0_o(cb_L_inv_0);
+    CircularBuffer cb_L_inv_1_o(cb_L_inv_1);
+    CircularBuffer cb_L_inv_2_o(cb_L_inv_2);
+    CircularBuffer cb_L_inv_3_o(cb_L_inv_3);
+
     // === Load initial state S into CB8 ===
-    cb_reserve_back(cb_S, state_tiles);
+    cb_S_o.reserve_back(state_tiles);
     uint32_t s0_base_tile = head_idx * state_tiles;
     if (s0_addr != 0) {
         for (uint32_t t = 0; t < state_tiles; t++) {
-            uint64_t na = s0_gen.get_noc_addr(s0_base_tile + t);
-            noc_async_read(na, get_write_ptr(cb_S) + t * f32_tile, f32_tile);
+            noc.async_read(s0_gen, cb_S_o, f32_tile, {.page_id = s0_base_tile + t}, {.offset_bytes = t * f32_tile});
         }
-        noc_async_read_barrier();
+        noc.async_read_barrier();
     } else {
-        volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_S));
-        for (uint32_t w = 0; w < state_tiles * f32_tile / 4; w++) {
-            ptr[w] = 0;
-        }
+        noc.async_write_zeros(cb_S_o, state_tiles * f32_tile);
+        noc.write_zeros_l1_barrier();
     }
-    cb_push_back(cb_S, state_tiles);
+    cb_S_o.push_back(state_tiles);
 
     // Per-head tile offsets in the flat 4D tensors [BH, NC, *, *].
     const uint32_t h_off_lu = head_idx * NC * attn_tiles;
@@ -122,98 +136,87 @@ void kernel_main() {
         uint32_t linv_off = h_off_linv + c * Ct;
 
         // L_unit [C,C]
-        cb_reserve_back(cb_L_unit, attn_tiles);
+        cb_L_unit_o.reserve_back(attn_tiles);
         for (uint32_t t = 0; t < attn_tiles; t++) {
-            uint64_t na = lu_gen.get_noc_addr(lu_off + t);
-            noc_async_read(na, get_write_ptr(cb_L_unit) + t * f32_tile, f32_tile);
+            noc.async_read(lu_gen, cb_L_unit_o, f32_tile, {.page_id = lu_off + t}, {.offset_bytes = t * f32_tile});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_L_unit, attn_tiles);
+        noc.async_read_barrier();
+        cb_L_unit_o.push_back(attn_tiles);
 
         // v_beta_sc [C,Dv]
-        cb_reserve_back(cb_v_beta_sc, out_tiles);
+        cb_v_beta_sc_o.reserve_back(out_tiles);
         for (uint32_t t = 0; t < out_tiles; t++) {
-            uint64_t na = vbs_gen.get_noc_addr(vbs_off + t);
-            noc_async_read(na, get_write_ptr(cb_v_beta_sc) + t * f32_tile, f32_tile);
+            noc.async_read(vbs_gen, cb_v_beta_sc_o, f32_tile, {.page_id = vbs_off + t}, {.offset_bytes = t * f32_tile});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_v_beta_sc, out_tiles);
+        noc.async_read_barrier();
+        cb_v_beta_sc_o.push_back(out_tiles);
 
         // k_bd_sc [C,Dk]
-        cb_reserve_back(cb_k_bd_sc, in_kv_tiles);
+        cb_k_bd_sc_o.reserve_back(in_kv_tiles);
         for (uint32_t t = 0; t < in_kv_tiles; t++) {
-            uint64_t na = kbs_gen.get_noc_addr(kbs_off + t);
-            noc_async_read(na, get_write_ptr(cb_k_bd_sc) + t * f32_tile, f32_tile);
+            noc.async_read(kbs_gen, cb_k_bd_sc_o, f32_tile, {.page_id = kbs_off + t}, {.offset_bytes = t * f32_tile});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_k_bd_sc, in_kv_tiles);
+        noc.async_read_barrier();
+        cb_k_bd_sc_o.push_back(in_kv_tiles);
 
         // intra_attn [C,C]
-        cb_reserve_back(cb_intra_att, attn_tiles);
+        cb_intra_att_o.reserve_back(attn_tiles);
         for (uint32_t t = 0; t < attn_tiles; t++) {
-            uint64_t na = att_gen.get_noc_addr(att_off + t);
-            noc_async_read(na, get_write_ptr(cb_intra_att) + t * f32_tile, f32_tile);
+            noc.async_read(att_gen, cb_intra_att_o, f32_tile, {.page_id = att_off + t}, {.offset_bytes = t * f32_tile});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_intra_att, attn_tiles);
+        noc.async_read_barrier();
+        cb_intra_att_o.push_back(attn_tiles);
 
         // q_decay [C,Dk]
-        cb_reserve_back(cb_q_decay, in_kv_tiles);
+        cb_q_decay_o.reserve_back(in_kv_tiles);
         for (uint32_t t = 0; t < in_kv_tiles; t++) {
-            uint64_t na = qdec_gen.get_noc_addr(qdec_off + t);
-            noc_async_read(na, get_write_ptr(cb_q_decay) + t * f32_tile, f32_tile);
+            noc.async_read(qdec_gen, cb_q_decay_o, f32_tile, {.page_id = qdec_off + t}, {.offset_bytes = t * f32_tile});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_q_decay, in_kv_tiles);
+        noc.async_read_barrier();
+        cb_q_decay_o.push_back(in_kv_tiles);
 
         // k_decay_t [Dk,C]
-        cb_reserve_back(cb_k_dt, kdt_tiles);
+        cb_k_dt_o.reserve_back(kdt_tiles);
         for (uint32_t t = 0; t < kdt_tiles; t++) {
-            uint64_t na = kdt_gen.get_noc_addr(kdt_off + t);
-            noc_async_read(na, get_write_ptr(cb_k_dt) + t * f32_tile, f32_tile);
+            noc.async_read(kdt_gen, cb_k_dt_o, f32_tile, {.page_id = kdt_off + t}, {.offset_bytes = t * f32_tile});
         }
-        noc_async_read_barrier();
-        cb_push_back(cb_k_dt, kdt_tiles);
+        noc.async_read_barrier();
+        cb_k_dt_o.push_back(kdt_tiles);
 
         // dl_exp (fp32 scalar tile)
-        cb_reserve_back(cb_dl_exp, 1);
+        cb_dl_exp_o.reserve_back(1);
         {
-            uint64_t na = dle_gen.get_noc_addr(dle_off);
-            noc_async_read(na, get_write_ptr(cb_dl_exp), f32_tile);
-            noc_async_read_barrier();
+            noc.async_read(dle_gen, cb_dl_exp_o, f32_tile, {.page_id = dle_off}, {.offset_bytes = 0});
+            noc.async_read_barrier();
         }
-        cb_push_back(cb_dl_exp, 1);
+        cb_dl_exp_o.push_back(1);
 
         // L_inv diagonal block inverses: 4 tiles → CB14..17
         // L_inv shape: [BH, NC, C, 32] with Ct = C/32 tiles per chunk.
         // Tile i holds L^{-1}[i*32:(i+1)*32, 0:32] (the i-th diagonal block inverse).
         {
-            uint64_t na0 = linv_gen.get_noc_addr(linv_off + 0);
-            cb_reserve_back(cb_L_inv_0, 1);
-            noc_async_read(na0, get_write_ptr(cb_L_inv_0), f32_tile);
-            noc_async_read_barrier();
-            cb_push_back(cb_L_inv_0, 1);
+            cb_L_inv_0_o.reserve_back(1);
+            noc.async_read(linv_gen, cb_L_inv_0_o, f32_tile, {.page_id = linv_off + 0}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_L_inv_0_o.push_back(1);
         }
         {
-            uint64_t na1 = linv_gen.get_noc_addr(linv_off + 1);
-            cb_reserve_back(cb_L_inv_1, 1);
-            noc_async_read(na1, get_write_ptr(cb_L_inv_1), f32_tile);
-            noc_async_read_barrier();
-            cb_push_back(cb_L_inv_1, 1);
+            cb_L_inv_1_o.reserve_back(1);
+            noc.async_read(linv_gen, cb_L_inv_1_o, f32_tile, {.page_id = linv_off + 1}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_L_inv_1_o.push_back(1);
         }
         {
-            uint64_t na2 = linv_gen.get_noc_addr(linv_off + 2);
-            cb_reserve_back(cb_L_inv_2, 1);
-            noc_async_read(na2, get_write_ptr(cb_L_inv_2), f32_tile);
-            noc_async_read_barrier();
-            cb_push_back(cb_L_inv_2, 1);
+            cb_L_inv_2_o.reserve_back(1);
+            noc.async_read(linv_gen, cb_L_inv_2_o, f32_tile, {.page_id = linv_off + 2}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_L_inv_2_o.push_back(1);
         }
         {
-            uint64_t na3 = linv_gen.get_noc_addr(linv_off + 3);
-            cb_reserve_back(cb_L_inv_3, 1);
-            noc_async_read(na3, get_write_ptr(cb_L_inv_3), f32_tile);
-            noc_async_read_barrier();
-            cb_push_back(cb_L_inv_3, 1);
+            cb_L_inv_3_o.reserve_back(1);
+            noc.async_read(linv_gen, cb_L_inv_3_o, f32_tile, {.page_id = linv_off + 3}, {.offset_bytes = 0});
+            noc.async_read_barrier();
+            cb_L_inv_3_o.push_back(1);
         }
     }
 }
