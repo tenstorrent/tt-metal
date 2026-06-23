@@ -25,7 +25,16 @@ def reference_layernorm(x, gamma, beta, epsilon, is_rmsnorm):
         return torch.nn.functional.layer_norm(x, x.shape[-1:], gamma, beta, epsilon)
 
 
-def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_dtype, device, fp32_enabled=False):
+def run_layernorm_part_2(
+    inp_shape,
+    n_devices,
+    is_rmsnorm,
+    input_dtype,
+    output_dtype,
+    device,
+    fp32_enabled=False,
+    gamma_beta_dtype=ttnn.bfloat16,
+):
     kernel_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.HiFi4,  # Highest fidelity
@@ -78,14 +87,14 @@ def run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, input_dtype, output_d
         )
         tt_gamma = torch2tt_tensor(
             gamma_chunked[d].reshape(1, 1, -1, 32),
-            tt_dtype=ttnn.bfloat16,
+            tt_dtype=gamma_beta_dtype,
             tt_device=device,
             tt_layout=ttnn.ROW_MAJOR_LAYOUT,
             tt_memory_config=dram_memcfg,
         )
         tt_beta = torch2tt_tensor(
             beta_chunked[d].reshape(1, 1, -1, 32),
-            tt_dtype=ttnn.bfloat16,
+            tt_dtype=gamma_beta_dtype,
             tt_device=device,
             tt_layout=ttnn.ROW_MAJOR_LAYOUT,
             tt_memory_config=dram_memcfg,
@@ -183,10 +192,29 @@ def test_layernorm_part_2_with_program_cache(
 )
 @pytest.mark.parametrize("n_devices", [4, 8])
 @pytest.mark.parametrize("is_rmsnorm", [True, False], ids=["rmsnorm", "layernorm"])
-def test_layernorm_part_2_fp32(inp_shape, n_devices, is_rmsnorm, device):
+@pytest.mark.parametrize("gamma_beta_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16_gamma_beta", "fp32_gamma_beta"])
+@pytest.mark.parametrize(
+    "input_dtype, output_dtype",
+    [
+        (ttnn.float32, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat16),
+    ],
+    ids=["FLOAT32", "BFLOAT16"],
+)
+def test_layernorm_part_2_fp32(inp_shape, n_devices, is_rmsnorm, gamma_beta_dtype, input_dtype, output_dtype, device):
     """FP32 input + FP32 stats on the post-all-gather op (issue #44650). FP32 requires
-    fp32_dest_acc_en=True so the unpacker preserves the full mantissa into DEST."""
-    run_layernorm_part_2(inp_shape, n_devices, is_rmsnorm, ttnn.float32, ttnn.float32, device, fp32_enabled=True)
+    fp32_dest_acc_en=True so the unpacker preserves the full mantissa into DEST. Also covers
+    FP32 ROW_MAJOR gamma/beta (exercises the datum-aware stick reader)."""
+    run_layernorm_part_2(
+        inp_shape,
+        n_devices,
+        is_rmsnorm,
+        input_dtype,
+        output_dtype,
+        device,
+        fp32_enabled=True,
+        gamma_beta_dtype=gamma_beta_dtype,
+    )
 
 
 @pytest.mark.parametrize(
