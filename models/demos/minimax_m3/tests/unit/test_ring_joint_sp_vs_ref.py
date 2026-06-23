@@ -71,11 +71,9 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=qkv_dims),
         )
 
-    # ring_joint needs V per-query-head (NVH == NQH) — K may stay grouped (1 head/chip, broadcast).
-    # So expand V 4->64 (repeat_interleave x16): each chip ends up with 16 copies of its KV-V head,
-    # which is exactly the GQA V-broadcast made explicit. (K stays [1,4]; per chip -> 1 head.)
-    v_exp = v.repeat_interleave(NQ // NKV, dim=1)  # [1, NQ, S, HD]
-    tt_q, tt_k, tt_v = shard(q), shard(k), shard(v_exp)
+    # GQA: K and V both stay grouped (4 heads -> 1/chip). The patched ring_joint broadcasts V to the
+    # query heads internally (nv = nq / (NQH/NVH)), symmetric to the K broadcast — no V inflation.
+    tt_q, tt_k, tt_v = shard(q), shard(k), shard(v)
 
     # Persistent K/V buffers hold the gathered FULL sequence per chip: heads on cols, seq replicated.
     pbuf_dims = [None, None]
@@ -100,7 +98,7 @@ def test_ring_joint_sp_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         tt_q, tt_k, tt_v,
         None, None, None,
         persistent_output_buffer_k=pbuf(NKV),
-        persistent_output_buffer_v=pbuf(NQ),
+        persistent_output_buffer_v=pbuf(NKV),
         joint_strategy="rear",
         logical_n=seq_len,  # full sequence reconstructed across the ring
         program_config=prog,
