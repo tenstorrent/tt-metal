@@ -42,6 +42,10 @@ jobs:
     permissions:
       pull-requests: write
       contents: write # to allow posting inline PR review suggestions and auto-closing conversations
+    env:
+      CCACHE_S3_BUCKET: ccache
+      CCACHE_S3_PREFIX: tt-metal
+      CCACHE_S3_READONLY: "false"
     container:
       image: ${{ inputs.ci-build-docker-image }}
       env:
@@ -61,31 +65,28 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Check Redis credentials
+      - name: Configure S3 ccache storage
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+          if [ -z "${{ secrets.GARAGE_S3_ACCESS_KEY }}" ] || [ -z "${{ secrets.GARAGE_S3_SECRET_KEY }}" ]; then
+            echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks,
-          # otherwise it resolves an invalid URL and the job fails
-          REDIS_USER="${{ vars.REDIS_USER }}"
-          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          # ccache 4.13 bug: read-only is std::optional<bool>; the write gate checks
-          # `if (entry.config.read_only)` which is true whenever the optional HAS a value —
-          # including when that value is false.  Omit the property entirely unless we
-          # actually want read-only mode; ccache's default when absent is writable.
-          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
-          if [ "${{ vars.REDIS_IS_READONLY }}" = "true" ]; then
+          echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
+          echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
+          CCACHE_REMOTE_STORAGE="s3://${CCACHE_S3_BUCKET}|region=garage|prefix=${CCACHE_S3_PREFIX}|endpoint_url=http://garage.garage.svc.cluster.local:3900"
+          if [ "${CCACHE_S3_READONLY}" = "true" ]; then
             CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
           fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
+          if [ "${CCACHE_S3_DEBUG}" = "true" ]; then
+            echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
+          fi
+          echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
@@ -271,6 +272,20 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+          # Helper debug log — only written when CCACHE_S3_DEBUG=true enables CRSH_LOGFILE.
+          if [ -f /tmp/ccache-storage-s3.log ]; then
+            echo "=== ccache-storage-s3 log (first 30 lines) ==="
+            head -30 /tmp/ccache-storage-s3.log
+            echo "=== ccache-storage-s3 log (last 80 lines) ==="
+            tail -80 /tmp/ccache-storage-s3.log
+            echo '## CCache Storage Helper Log' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            head -30 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
+            echo '--- (last 200 lines) ---' >> $GITHUB_STEP_SUMMARY
+            tail -200 /tmp/ccache-storage-s3.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Publish ctcache summary
         if: ${{ always() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
