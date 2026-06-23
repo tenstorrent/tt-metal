@@ -121,7 +121,9 @@ def test_qwen_vl_end_to_end(
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         model_args = VisionModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_new_tokens)
-        model.model.visual = DropInVisionTransformer(model.visual, model_args, debug=True)  # show PCC
+        # transformers 5.x nests the vision tower under model.model.visual; 4.x exposed model.visual.
+        _orig_visual = model.visual if hasattr(model, "visual") else model.model.visual
+        model.model.visual = DropInVisionTransformer(_orig_visual, model_args, debug=True)  # show PCC
 
     # Run inference
     logger.info("Running model generation...")
