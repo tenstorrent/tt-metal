@@ -803,8 +803,13 @@ MinimalMatmulProgramFactory::shared_variables_t minimal_matmul_factory_helper_co
     // k's multicast, overlapping read latency with mcast transit on the single injector DM RISC. The
     // auto-gate (prefetch_gate) was computed earlier with the block sizes (it also clamps the
     // compile-time block). TT_MM_MCAST_PREFETCH forces the dataflow on regardless of the gate.
-    const bool mcast_prefetch = env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate;
-    const bool mcast_broadcast = env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch;
+    // Fused split-K (plan B) and the mcast prototypes are MUTUALLY EXCLUSIVE: the reduction reuses the
+    // unicast store-and-forward semaphore protocol, and running the mcast injector k-loop alongside the
+    // reduction handshake deadlocks (the two were never co-designed). The delivery-bound prefetch_gate
+    // fires on exactly the same skinny per-core shapes K-par engages on, so without this guard deep-K
+    // K-par shapes silently get both -> intermittent device hang. Keep K-par on the plain unicast path.
+    const bool mcast_prefetch = (env_flag_set("TT_MM_MCAST_PREFETCH") || prefetch_gate) && !num_k_fused;
+    const bool mcast_broadcast = (env_flag_set("TT_MM_MCAST_BROADCAST") || mcast_prefetch) && !num_k_fused;
     if (mcast_broadcast) {
         // Replace the store-and-forward chain with a single NoC multicast per block. The injector reads
         // DRAM once and mcasts the block to all cores along its broadcast axis (one hardware-replicated

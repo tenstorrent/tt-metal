@@ -49,13 +49,27 @@ def adsub(mb, nb):
     return sbh, sbw
 
 
+L1_MAX = 1499136  # WH per-core L1 (bytes); keep CB footprint under a margin of this
+
+
+def l1_fits(mb, nb, kb):
+    # CB footprint estimate (bytes): in0 (M*K, bf16, x2 buf) + in1 (K*N, bf16, x2) + out (M*N, bf16, x2)
+    # + intermediate (M*N, fp32) + reduce (M*N, bf16, K-par). Tiles: bf16=2048B, fp32=4096B.
+    est = 2 * 2048 * (mb * kb + kb * nb + mb * nb) + 4096 * mb * nb + 2048 * mb * nb
+    return est <= int(0.92 * L1_MAX)
+
+
 def blockings(Mpc, Npc, Ktb):
-    # compact per-(S,Pk) blocking grid: M whole; N in {full, half}; K in {8, per-band depth}
-    nbs = sorted({Npc, max(1, (Npc + 1) // 2)})
-    kbs = sorted({k for k in (8, Ktb) if 1 <= k <= Ktb})
+    # compact per-(S,Pk) blocking grid: M whole; N in {full, half, 1}; K small {4,8,16} (NOT the full
+    # per-band depth, which OOMs L1 for deep K). Skip any combo whose CB footprint exceeds L1 -- those
+    # would TT_THROW mid-build and dirty the device, hanging the next config.
+    nbs = sorted({Npc, max(1, (Npc + 1) // 2), 1})
+    kbs = sorted({k for k in (4, 8, 16) if k <= Ktb}) or [Ktb]
     out = []
     for nb in nbs:
         for kb in kbs:
+            if not l1_fits(Mpc, nb, kb):
+                continue
             sbh, sbw = adsub(Mpc, nb)
             out.append((Mpc, nb, kb, sbh, sbw))
     return out
@@ -75,6 +89,7 @@ def test_jointsweep(device):
 
     def run(a, b, ref, rec, config=None):
         device.clear_program_cache()
+        hang = False
         try:
             kw = {"compute_kernel_config": cc}
             if config is not None:
@@ -93,9 +108,20 @@ def test_jointsweep(device):
             ttnn.ReadDeviceProfiler(device)
             rec["ok"] = True
         except Exception as e:
-            rec["err"] = str(e).splitlines()[-1][:120]
+            msg = str(e)
+            # the real error (TT_THROW ...) is at the top; the tail is a C++ backtrace -> scan the whole
+            # message, and store the first informative line (not the last backtrace frame).
+            rec["err"] = msg.replace("\n", " ")[:160]
+            hang = any(k in msg for k in ("TIMEOUT:", "potential hang", "unrecoverable"))
         manifest.append(rec)
         json.dump(manifest, open(MANIFEST, "w"))
+        # A dispatch-layer timeout (TT_METAL_OPERATION_TIMEOUT_SECONDS) can leave the device
+        # unrecoverable -> every later config would fail-fast at ~the timeout each (observed: one hang
+        # -> 30 cascading failures). Abort the whole process NOW after recording this config; the
+        # orchestrator resets the device, salvages the completed prefix, and requeues the rest. The
+        # N-slicing dataflow race is intermittent, so the requeued shape usually passes on retry.
+        if hang:
+            raise RuntimeError(f"ABORT_ON_DISPATCH_TIMEOUT at {rec['M']}x{rec['K']}x{rec['N']} {rec['blk']}")
 
     for M, K, N in SHAPES:
         Mt, Kt, Nt = M // 32, K // 32, N // 32
