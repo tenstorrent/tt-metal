@@ -94,9 +94,13 @@ inline void mcast_recv(Noc noc, const McastDir& d) {
 
 /** Role-aware block read shared by the q-block, w-group and k-chunk readers. Reserve `ntiles` of cb_id;
  *  receiver waits the sender's mcast and returns; everyone else runs `read_into(addr)` (DRAM read loop),
- *  barriers, and (sender only) broadcasts `bytes`. read_q_rows has its own per-row variant. */
+ *  barriers, and (sender only) broadcasts `bytes`. read_q_rows has its own per-row variant.
+ *  `skip_payload` (padded-KV skip): omit the DRAM read but keep the reserve/push and the FULL mcast
+ *  handshake -- the sender still broadcasts (stale L1, which compute discards as -inf) and the CB ring
+ *  stays in lockstep, so a peer never hangs on a missing handshake. */
 template <uint32_t cb_id, uint32_t mcast_on, uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem, typename ReadFn>
-inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const McastDir& dir, ReadFn&& read_into) {
+inline void read_block_or_mcast(
+    Noc noc, uint32_t ntiles, uint32_t bytes, const McastDir& dir, ReadFn&& read_into, bool skip_payload = false) {
     CircularBuffer cb(cb_id);
     cb.reserve_back(ntiles);
     const uint32_t addr = cb.get_write_ptr();
@@ -107,8 +111,10 @@ inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const 
             return;
         }
     }
-    read_into(addr);
-    noc.async_read_barrier();
+    if (!skip_payload) {
+        read_into(addr);
+        noc.async_read_barrier();
+    }
     if constexpr (mcast_on) {
         if (dir.role == iscore::mcast_role_sender) {  // broadcast the block to the rest of the rect
             mcast_send<send_sem, recv_sem, valid_sem>(noc, dir, addr, bytes);
@@ -208,11 +214,22 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
  *  handshake to minimize startup rendezvous. */
 template <typename KAcc>
 inline void read_k_chunk(
-    Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, const McastDir& k_dir) {
+    Noc noc,
+    const KAcc& k_acc,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    const McastDir& k_dir,
+    bool skip_payload) {
     // Reserves/pushes the full k_chunk_tiles to keep the 2-chunk ring half-aligned, but reads only the
-    // k_tiles_in_unit valid columns (pad slots stay stale; compute masks them).
+    // k_tiles_in_unit valid columns (pad slots stay stale; compute masks them). For a fully-padded unit
+    // skip_payload is set: the read is dropped entirely (compute masks the whole strip to -inf) while the
+    // reserve/push and mcast handshake are preserved.
     read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
-        noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
+        noc,
+        k_chunk_tiles,
+        k_chunk_tiles * k_tile_bytes,
+        k_dir,
+        [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
                 for (uint32_t d = 0; d < head_dim_tiles; ++d) {
@@ -225,7 +242,8 @@ inline void read_k_chunk(
                     ptr += k_tile_bytes;
                 }
             }
-        });
+        },
+        skip_payload);
 }
 
 void kernel_main() {
@@ -236,6 +254,11 @@ void kernel_main() {
     const uint32_t flat_count = get_arg_val<uint32_t>(4);
     const McastDir k_dir = read_mcast_dir(5);   // K column mcast: args [5, 13)
     const McastDir q_dir = read_mcast_dir(13);  // Q/W row mcast: args [13, 21)
+    // Per-turn chunk-start offset (in tiles), appended after the two 8-arg mcast tuples. Derives the
+    // valid k-width so fully-padded units skip their K reads (padded-KV / multiturn). Runtime so distinct
+    // chunk_start values reuse one compiled program (hash-excluded; see the device op).
+    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(21);
+    const uint32_t valid_k_tiles = valid_k_tiles_rt(chunk_start_tiles);
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -258,8 +281,10 @@ void kernel_main() {
             read_w_group(noc, w_acc, span.q_tile_start(), q_dir);  // gates before the streamed q
         }
         // k FIRST: compute waits the whole k chunk before any row, so reading k ahead of q lets the
-        // split q-row0 push unblock the first matmul (else the k wait re-serializes it).
-        read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir);
+        // split q-row0 push unblock the first matmul (else the k wait re-serializes it). A fully-padded
+        // unit (resident path) skips the K payload but keeps the handshake; matches compute's skip gate.
+        const bool k_skip = !stream_heads && ws::unit_is_fully_padded(span.k_tile_start(), valid_k_tiles);
+        read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_skip);
         if (group_start && !stream_heads) {
             read_q_rows(noc, q_acc, span.q_tile_start(), q_dir);  // per-row: compute starts on row 0
         }

@@ -307,6 +307,13 @@ void kernel_main() {
     // One QC x KC unit per iteration. Every unit spans KC k-tiles; the dense schedule may leave a
     // partial last unit (valid < KC), masked in stamp_masked_suffix.
     //
+    // PADDED-KV note: a fully-padded unit (entirely in the -inf tail) still runs the matmul here -- on
+    // STALE k (the reader skips its K DMA, the bottleneck), which stamp_masked_suffix then OVERWRITES with
+    // -inf, exactly as main does for the pad columns of a partial last unit. The wasted matmul is L1-only.
+    // (An in-kernel matmul skip was tried: it corrupts the BH fast-untilize of a unit whose strip is
+    // produced by stamps alone -- no matmul/mul ran -- on cores whose every unit is padded. The
+    // matmul-then-overwrite path is the proven one; the K-read skip is where the real DMA saving is.)
+    //
     // No whole-block q/w wait here: resident q is waited PER ROW below (reader pushes a row at a time, so
     // row 0 runs while row 1 drains); w is waited in the mul phase. Only k is waited up front.
     for (uint32_t i = 0; i < flat_count; ++i) {

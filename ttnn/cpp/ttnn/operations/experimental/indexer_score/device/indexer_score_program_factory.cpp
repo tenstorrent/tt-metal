@@ -27,6 +27,8 @@ namespace rt_arg {
 constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;
 constexpr uint32_t reader_w_addr = 2;
+// reader: q,k,w addrs (0..2), flat (3), count (4), K mcast (5..12), Q/W mcast (13..20), then chunk_start.
+constexpr uint32_t reader_chunk_start_tiles = 21;  // after the two 8-arg mcast tuples; must match the reader
 constexpr uint32_t compute_chunk_start_tiles = 2;  // after flat (0), count (1); must match the compute kernel
 constexpr uint32_t writer_out_addr = 0;
 }  // namespace rt_arg
@@ -374,6 +376,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
                 reader_rt.push_back(0);
             }
         }
+        // chunk_start (tiles), appended after the mcast args at reader slot rt_arg::reader_chunk_start_tiles.
+        // The reader derives the valid k-width from it to skip fully-padded units' K reads (padded-KV).
+        reader_rt.push_back(chunk_t);
         tt::tt_metal::SetRuntimeArgs(program, reader_id, cores[i], reader_rt);
         tt::tt_metal::SetRuntimeArgs(program, compute_id, cores[i], {flat, count, chunk_t});
         tt::tt_metal::SetRuntimeArgs(program, writer_id, cores[i], {out.buffer()->address(), flat, count});
@@ -406,6 +411,7 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
         patch_arg(reader_rt, rt_arg::reader_k_addr, tensors.k.buffer()->address(), "reader.k_addr");
         patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
+        patch_arg(reader_rt, rt_arg::reader_chunk_start_tiles, chunk_t, "reader.chunk_start");
         patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
         patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
     }
