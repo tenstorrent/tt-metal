@@ -178,6 +178,18 @@ target_link_libraries(
         cxxopts::cxxopts
 )
 
+# Minimal UMD-level device bring-up probe (issue #47866 repro). Pure UMD: just Cluster + start_device.
+add_executable(umd_start_device_probe src/umd_start_device_probe.cpp)
+
+set_target_properties(
+    umd_start_device_probe
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${Metalium_BINARY_DIR}/tools/scaleout
+)
+
+target_link_libraries(umd_start_device_probe PRIVATE umd::tt-umd)
+
 # Generate MGD library
 add_library(generate_mgd_lib OBJECT generate_mgd/generate_mgd.cpp)
 
