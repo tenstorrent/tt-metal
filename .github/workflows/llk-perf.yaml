@@ -108,7 +108,7 @@ jobs:
           anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
           github_token: ${{ secrets.AI_GH_TOKEN }}
           show_full_output: true   # TEMP: diagnose whether /code-review found findings + tried to post
-          prompt: "/code-review low --comment"   # TEMP: lower effort = cheaper/faster while testing
+          prompt: "/code-review high --comment"   # TEMP: higher effort to surface ≥1 finding and exercise posting
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
           # anthropic/ prefix for the proxy).
           claude_args: |
