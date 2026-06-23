@@ -11,7 +11,7 @@ import numpy as np
 import torch
 from filelock import FileLock
 
-from .format_config import MX_FORMAT_BLOCK_SIZE, DataFormat, FormatConfig
+from .format_config import DataFormat, FormatConfig
 from .llk_params import format_dict
 from .logger import logger
 from .tile_constants import (
@@ -332,8 +332,7 @@ _MXINT_COMPARE_PARAMS = {
     DataFormat.MxInt2: (1, 1),  # S1.0: 3-level lattice, ULP == block scale
     DataFormat.MxInt4: (4, 2),  # S1.2: ULP == block scale / 4
     DataFormat.MxInt8: (64, 3),  # S1.6: ULP == block scale / 64 (finest); 3 ULP
-    #   covers the LoFi accumulation tail (measured worst 2.5 ULP, over3==0
-    #   across the sweep) and ~matches the historical isclose(rtol=0.05) bound.
+    #   covers the LoFi accumulation tail (measured worst 2.5 ULP, over3==0 across the sweep).
 }
 
 
@@ -363,7 +362,7 @@ def _mxint_block_aware_compare(
     two, so 2^floor(log2(amax)) == amax == max(|g|,|r|) and ULP == block scale,
     preserving the original MxInt2 behavior.
 
-    golden and result already arrive in HW block order: the result is read back
+    Golden and result already arrive in HW block order: the result is read back
     from L1 face-by-face (unpack_res_tiles never untilizes) and the golden is
     built in the same tile/face layout, so 32 contiguous elements ARE one HW MX
     block (a face row-pair). We therefore block over contiguous 32-element runs
@@ -460,12 +459,12 @@ def _mxfp_block_aware_compare(
     E5M2, MxFp8P E4M3) carry their own exponent on top of the block's E8M0
     scale, so the representable lattice is non-uniform. For a NORMAL element the
     local step at a value v is 2^(floor(log2|v|) - mantissa_bits). A position is
-    valid iff |g-r| is within `max_steps` such local steps. Sign flips and
+    valid if |g-r| is within `max_steps` such local steps. Sign flips and
     larger jumps still fail.
 
     Subnormal elements need the block scale: below the block's min-normal
     magnitude the representable step stops halving and is constant
-    (block_scale * 2^(exp_min_unbiased - mantissa_bits)). golden/result arrive
+    (block_scale * 2^(exp_min_unbiased - mantissa_bits)). Golden/result arrive
     in HW block order (32 contiguous elements = one face-row-pair MX block), so
     the shared block exponent is floor(log2(block_amax)); we clamp each
     element's exponent up to the subnormal floor
@@ -536,42 +535,6 @@ def _mxfp_block_aware_compare(
         g_blk == r_blk,
     )
     return (is_valid | both_nan).reshape(-1)[:n]
-
-
-def _log_mx_failure_diff(
-    golden_tensor,
-    res_tensor,
-    is_valid,
-    output_data_format: DataFormat,
-    max_rows: int = 64,
-) -> None:
-    """Log a compact, paste-friendly diff for a failing MX-format comparison.
-
-    The MX path in `passed_test` returns before the generic tile-diff printer,
-    so without this MX failures produce no diagnostic output. Lists every
-    mismatching element (capped at `max_rows`) as flat-index / golden / result /
-    |diff| plus a summary, so the table can be pasted back for analysis.
-    """
-    g = golden_tensor.float().flatten()
-    r = res_tensor.float().flatten()
-    bad = (~is_valid.flatten()).nonzero(as_tuple=True)[0]
-    total = g.numel()
-    n_bad = bad.numel()
-
-    block = MX_FORMAT_BLOCK_SIZE
-    lines = [
-        f"MX compare FAILED [{output_data_format.name}]: "
-        f"{n_bad}/{total} elements mismatch (block size {block})",
-        f"{'idx':>6} {'block':>6} {'golden':>16} {'result':>16} {'abs_diff':>14}",
-    ]
-    for idx in bad[:max_rows].tolist():
-        gi, ri = g[idx].item(), r[idx].item()
-        lines.append(
-            f"{idx:>6} {idx // block:>6} {gi:>16.8g} {ri:>16.8g} {abs(gi - ri):>14.6g}"
-        )
-    if n_bad > max_rows:
-        lines.append(f"... {n_bad - max_rows} more mismatching elements omitted")
-    logger.error("\n{}", "\n".join(lines))
 
 
 def passed_test(
@@ -666,10 +629,6 @@ def passed_test(
         # check is the principled correctness criterion here, so trust its
         # verdict rather than re-gating on PCC (sign flips and gross multi-step
         # jumps still fail the lattice-aware check).
-        if print_errors and not _RECORD_TEST_ORDER and not is_within_tolerance:
-            _log_mx_failure_diff(
-                golden_tensor, res_tensor, is_valid, output_data_format
-            )
         return bool(is_within_tolerance)
 
     if print_errors and not _RECORD_TEST_ORDER:
