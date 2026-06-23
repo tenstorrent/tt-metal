@@ -59,11 +59,11 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 @pytest.mark.parametrize(
     "sub_core_grids",
@@ -88,11 +88,10 @@ def test_all_gather_subcore_grid(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     sub_core_grids,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
 
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -105,7 +104,6 @@ def test_all_gather_subcore_grid(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -160,11 +158,11 @@ def test_all_gather_subcore_grid(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 def test_all_gather_2D_line(
     bh_2d_mesh_device,
@@ -177,10 +175,9 @@ def test_all_gather_2D_line(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
 
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -193,7 +190,6 @@ def test_all_gather_2D_line(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -239,11 +235,11 @@ def test_all_gather_2D_line(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_1d_linear"],
 )
 def test_all_gather_4D_line(
@@ -257,10 +253,9 @@ def test_all_gather_4D_line(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 0)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_all_gather_impl(
@@ -272,7 +267,6 @@ def test_all_gather_4D_line(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -318,11 +312,11 @@ def test_all_gather_4D_line(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 def test_all_gather_ring(
     bh_1d_mesh_device,
@@ -334,11 +328,10 @@ def test_all_gather_ring(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     num_devices = bh_1d_mesh_device.shape[0]
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
 
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
@@ -351,7 +344,6 @@ def test_all_gather_ring(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -396,11 +388,11 @@ def test_all_gather_ring(
     ids=["non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 def test_all_gather_8D_vertical(
     bh_2d_mesh_device,
@@ -413,10 +405,9 @@ def test_all_gather_8D_vertical(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, 1)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, 1)
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     cluster_axis = 1
     run_all_gather_impl(
@@ -428,7 +419,6 @@ def test_all_gather_8D_vertical(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -483,11 +473,11 @@ def test_all_gather_8D_vertical(
     ids=["non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 150000}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 150000},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_linear"],
 )
 def test_all_gather_failing_shapes(
@@ -501,10 +491,9 @@ def test_all_gather_failing_shapes(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     cluster_axis = 0
     run_all_gather_impl(
@@ -516,7 +505,6 @@ def test_all_gather_failing_shapes(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,

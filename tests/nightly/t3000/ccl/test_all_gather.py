@@ -15,7 +15,7 @@ from tracy import signpost
 
 
 def is_unsupported_case(
-    input_shape,
+    output_shape,
     dim,
     mem_config,
     num_devices,
@@ -27,10 +27,10 @@ def is_unsupported_case(
     mem_config_input=None,
 ):
     if layout == ttnn.ROW_MAJOR_LAYOUT and input_dtype == ttnn.bfloat8_b:
-        return True, "Invalid combination"
+        return True, "Row-major layout with bfloat8_b datatype is an invalid combination"
 
-    if input_shape[dim] % num_devices != 0:
-        return True, "Unsupported test case"
+    if output_shape[dim] % num_devices != 0:
+        return True, f"Output shape {output_shape} dim{dim} must be a multiple of num devices {num_devices}"
     if tile != (32, 32) and input_dtype != ttnn.bfloat16:
         return True, "Tiny tile only supports bfloat16"
 
@@ -42,14 +42,14 @@ def is_unsupported_case(
         ttnn.bfloat8_b: 1,
     }
     elem_size = elem_size_map.get(input_dtype, 4)
-    if layout == ttnn.ROW_MAJOR_LAYOUT and (input_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
+    if layout == ttnn.ROW_MAJOR_LAYOUT and (output_shape[dim] * elem_size) > fast_dispatch_page_size_limit:
         # Fast dispatch currently can't breakup readback of large pages into multiple smaller pages and is
         # limited to ~55K pages.
         return True, "Fast dispatch can't support reading back this page size in one shot"
 
     # Check that we can fit in L1 (if L1 config)
     tensor_size_bytes = elem_size
-    for i in input_shape:
+    for i in output_shape:
         tensor_size_bytes *= i
     L1_util = 0
     if mem_config.buffer_type == ttnn.BufferType.L1:
@@ -62,14 +62,14 @@ def is_unsupported_case(
         return True, "Test_Infrastructure_Skip L1 test requires more memory than the total available in the device"
 
     # Check that each chip has a non-zero amount of data available
-    if input_shape[dim] < num_devices:
+    if output_shape[dim] < num_devices:
         return (
             True,
-            f"Input shape {input_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
+            f"Output shape {output_shape} incompatible with {num_devices} on dim {dim} because some chips will have no tensor",
         )
 
     if (
-        input_shape == [8, 8, 256, 384]
+        output_shape == [8, 8, 256, 384]
         and dim == 1
         and layout == ttnn.TILE_LAYOUT
         and (input_dtype == ttnn.bfloat8_b or tile != (32, 32))
@@ -94,7 +94,7 @@ def run_all_gather_impl(
     layout,
     mem_config_input,
     mem_config_ag,
-    all_gather_topology,
+    all_gather_topology=None,
     num_iters=1,
     enable_trace=True,
     cluster_axis=None,
@@ -134,7 +134,7 @@ def run_all_gather_impl(
         mem_config_input,
     )
     if is_known_failure:
-        pytest.skip(f"Skipping unsupported case {message}.")
+        pytest.skip(f"{message}")
 
     if num_iters < 1:
         pytest.fail("num_iters must be >= 1")
@@ -528,37 +528,32 @@ def test_all_gather_async_broadcast(
     [
         ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
         ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check
-        ([1, 1, 17, 64], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf, composite
-        ([1, 1, 64, 8], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, composite
-        # Coalesced from former test_all_gather_async (gather-dim / padded-dim / bf8 coverage)
         ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, False, 1.0),  # check
-        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 1024, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
-        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
-        ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
-        ([1, 1, 1, 8], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, False, 1.0),  # perf, composite
-        ([1, 16, 32, 32], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, composite
         ([1, 1, 1024, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat8_b, False, 1, True, 0.9999),  # check, bf8
+        ([8, 1, 512, 512], 0, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, False, 1.0),  # check
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
+        ([1, 1, 1024, 1024], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check
+        ([1, 1, 48, 1024], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
+        ([1, 1, 1024, 1024], -2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf
+        ([1, 1, 48, 1024], -1, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, padded
+        ([1, 1, 32, 136], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16, True, 10, True, 1.0),  # perf, composite
+        ([1, 1, 48, 32], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, True, 1.0),  # check, composite
     ],
     ids=[
         "dit_shape-perf",
         "sd35_prompt-check",
-        "gather_dim_1-perf",
-        "gather_dim_2_padded_dim_3-check",
-        "composite_ag_test_one-perf",
-        "composite_ag_test_three-check",
         "sd35_spatial-perf",
-        "gather_dim_0-check",
-        "gather_dim_2-perf",
-        "gather_dim_negative_2-perf",
-        "gather_dim_3_padded_dim_2-check",
-        "gather_dim_negative_1_padded_dim_2-check",
-        "composite_ag_test_two-perf",
-        "composite_ag_test_four-check",
         "sd35_spatial-check-bfloat8_b",
+        "gather_dim_0-check",
+        "gather_dim_1-perf",
+        "gather_dim_2-perf",
+        "gather_dim_2_padded_dim_3-check",
+        "gather_dim_3_padded_dim_2-check",
+        "gather_dim_negative_2-perf",
+        "gather_dim_negative_1_padded_dim_2-check",
+        "composite_ag_test_one-perf",
+        "composite_ag_test_two-check",
     ],
 )
 @pytest.mark.parametrize(
@@ -571,15 +566,15 @@ def test_all_gather_async_broadcast(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_ttnn_all_gather(
+def test_all_gather(
     mesh_device,
     num_links,
     ag_output_shape,
@@ -592,7 +587,6 @@ def test_ttnn_all_gather(
     pcc_threshold,
     mem_config_input,
     mem_config_ag,
-    all_gather_topology,
 ):
     run_all_gather_impl(
         mesh_device,
@@ -603,7 +597,6 @@ def test_ttnn_all_gather(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_persistent_buffers=use_persistent_buffers,
@@ -651,12 +644,12 @@ def test_ttnn_all_gather(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_subgrid(
@@ -670,7 +663,6 @@ def test_all_gather_subgrid(
     num_iters,
     mem_config_input,
     mem_config_ag,
-    all_gather_topology,
     sub_core_grids,
 ):
     run_all_gather_impl(
@@ -682,7 +674,6 @@ def test_all_gather_subgrid(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         sub_core_grids=sub_core_grids,
@@ -741,12 +732,12 @@ def test_all_gather_subgrid(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_training_shapes(
@@ -760,7 +751,6 @@ def test_all_gather_training_shapes(
     num_iters,
     mem_config_input,
     mem_config_ag,
-    all_gather_topology,
 ):
     run_all_gather_impl(
         mesh_device,
@@ -771,7 +761,6 @@ def test_all_gather_training_shapes(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_persistent_buffers=False,
@@ -845,12 +834,12 @@ def test_all_gather_training_shapes(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_sharded_to_sharded(
@@ -869,7 +858,6 @@ def test_all_gather_sharded_to_sharded(
     buffer_type,
     enable_trace,
     num_iters,
-    all_gather_topology,
 ):
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
@@ -894,7 +882,6 @@ def test_all_gather_sharded_to_sharded(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
@@ -950,12 +937,12 @@ def test_all_gather_sharded_to_sharded(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_sharded_to_interleaved(
@@ -971,7 +958,6 @@ def test_all_gather_sharded_to_interleaved(
     buffer_type,
     enable_trace,
     num_iters,
-    all_gather_topology,
 ):
     input_shard_spec = ttnn.ShardSpec(
         input_shard_grid,
@@ -991,7 +977,6 @@ def test_all_gather_sharded_to_interleaved(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
@@ -1046,12 +1031,12 @@ def test_all_gather_sharded_to_interleaved(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_ring", "fabric_linear"],
 )
 def test_all_gather_interleaved_to_sharded(
@@ -1067,7 +1052,6 @@ def test_all_gather_interleaved_to_sharded(
     buffer_type,
     enable_trace,
     num_iters,
-    all_gather_topology,
 ):
     output_shard_spec = ttnn.ShardSpec(
         output_shard_grid,
@@ -1087,7 +1071,6 @@ def test_all_gather_interleaved_to_sharded(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
     )
@@ -1123,12 +1106,12 @@ def test_all_gather_interleaved_to_sharded(
     ids=["check"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_linear", "fabric2d_linear"],
 )
 def test_all_gather_2x4(
@@ -1141,7 +1124,6 @@ def test_all_gather_2x4(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, 4)))
@@ -1154,7 +1136,6 @@ def test_all_gather_2x4(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_persistent_buffers=False,

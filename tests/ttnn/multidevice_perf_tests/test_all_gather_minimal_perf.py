@@ -25,7 +25,7 @@ def test_all_gather_minimal_perf_t3000(warmup_iters, arch_type, perf_target_avg_
     file = "pytest tests/nightly/t3000/ccl/test_all_gather.py"
 
     # Target the coalesced production ttnn.all_gather DiT-shape perf case on T3K (ring fabric).
-    command = file + '::test_ttnn_all_gather -k "dit_shape and perf and fabric_ring"'
+    command = file + '::test_all_gather -k "dit_shape and perf and fabric_ring"'
 
     cols = ["DEVICE KERNEL"]
     # Production ttnn.all_gather emits the AllGather device op (not AllGatherAsync).

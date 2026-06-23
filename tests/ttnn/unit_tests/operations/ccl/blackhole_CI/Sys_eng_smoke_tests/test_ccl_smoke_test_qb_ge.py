@@ -15,9 +15,9 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @run_for_n_dev(4)
 @pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology",
+    "num_devices, ag_output_shape, dim, layout",
     [
-        (4, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (4, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -67,10 +67,9 @@ def test_ccl_ddr_smoke_test(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
     # Check all the rows and columns independently within the device
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
@@ -82,7 +81,6 @@ def test_ccl_ddr_smoke_test(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=0,
@@ -97,9 +95,9 @@ def test_ccl_ddr_smoke_test(
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology",
+    "num_devices, ag_output_shape, dim, layout",
     [
-        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring),
+        (4, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize(
@@ -163,10 +161,9 @@ def test_ccl_other_smoke_test(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_1d_mesh_device.shape, 0)
+    validate_test(num_devices, None, bh_1d_mesh_device.shape, 0)
     submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     run_all_gather_impl(
         submesh_device,
@@ -177,7 +174,6 @@ def test_ccl_other_smoke_test(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=0,

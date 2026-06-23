@@ -37,7 +37,6 @@ from conftest import is_6u
 
 def run_allgather_only_with_trace(
     mesh_device,
-    all_gather_topology,
     input_tensor_mesh,
     dim,
     num_links,
@@ -117,7 +116,6 @@ def run_all_gather_impl(
     function_level_defaults,
     input_shard_shape,
     input_shard_grid,
-    all_gather_topology,
     num_iters=1,
     trace_mode=False,
     output_shard_shape=None,
@@ -241,7 +239,6 @@ def run_all_gather_impl(
     if trace_mode:
         tt_out_tensor = run_allgather_only_with_trace(
             mesh_device,
-            all_gather_topology,
             input_tensor_mesh_list[0],
             dim,
             num_links,
@@ -390,7 +387,6 @@ def test_all_gather_only(
         function_level_defaults,
         input_shard_shape,
         input_shard_grid,
-        all_gather_topology=ttnn.Topology.Linear,
         num_iters=num_iters,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,
@@ -469,7 +465,6 @@ def test_bh_trace_ag(
         input_shard_shape,
         input_shard_grid,
         use_barrier=True,
-        all_gather_topology=ttnn.Topology.Ring,
         num_iters=num_iters,
         output_shard_shape=output_shard_shape,
         output_shard_grid=output_shard_grid,

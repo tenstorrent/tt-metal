@@ -76,7 +76,6 @@ GENERALITY_PARAMETERS = {
     "input_dtype": [ttnn.bfloat16],
     "buffer_type": [ttnn.BufferType.DRAM],
     "shard_specs": [None],
-    "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
     "num_iters": [1],
 }
 
@@ -106,7 +105,6 @@ parameters = {
         "input_dtype": [ttnn.bfloat16],
         "buffer_type": [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
         "shard_specs": [None] + LEAD_MODEL_SHARD_SPECS,
-        "topology": [ttnn.Topology.Linear, ttnn.Topology.Ring],
         "num_iters": [1],
     },
 }
@@ -135,11 +133,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 
     if dim >= len(input_shape):
         return True, "Dim greater than rank"
-    if (
-        test_vector["topology"] == ttnn.Topology.Ring
-        and test_vector["fabric_config"] != ttnn.FabricConfig.FABRIC_1D_RING
-    ):
-        return True, "Ring fabric config required for ring topology"
 
     return False, None
 
@@ -182,7 +175,6 @@ def run(
     buffer_type,
     shard_specs,
     num_iters,
-    topology,
     *,
     device,  # unused
 ) -> list:

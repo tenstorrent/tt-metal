@@ -28,11 +28,11 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 def test_all_gather_training_shapes(
     bh_2d_mesh_device,
@@ -44,7 +44,6 @@ def test_all_gather_training_shapes(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     num_devices = bh_2d_mesh_device.shape[0]
@@ -62,7 +61,6 @@ def test_all_gather_training_shapes(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,

@@ -29,11 +29,11 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @pytest.mark.parametrize("enable_trace", [False])
 @pytest.mark.parametrize("num_iters", [3])
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 def test_all_gather_2d_fabric_linear(
@@ -46,7 +46,6 @@ def test_all_gather_2d_fabric_linear(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     cluster_axis,
 ):
@@ -70,7 +69,6 @@ def test_all_gather_2d_fabric_linear(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,

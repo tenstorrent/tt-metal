@@ -14,9 +14,9 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis",
+    "num_devices, ag_output_shape, dim, layout, cluster_axis",
     [
-        (16, [1, 1, 12000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, 1),
+        (16, [1, 1, 12000, 32768], 3, ttnn.TILE_LAYOUT, 1),
     ],
     ids=[
         "1x16_row_test",
@@ -71,10 +71,9 @@ def test_ccl_ddr_smoke_test_1x16(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, mesh_device.shape, cluster_axis)
     submesh_device = mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
     run_all_gather_impl(
         submesh_device,
@@ -85,7 +84,6 @@ def test_ccl_ddr_smoke_test_1x16(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,

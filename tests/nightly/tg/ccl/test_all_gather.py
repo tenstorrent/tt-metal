@@ -321,18 +321,15 @@ def test_all_gather_async_broadcast_rejects_noncontiguous_width_gather(
     ids=["check"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "trace_region_size": 190112,
-            },
-            ttnn.Topology.Linear,
-        ),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "trace_region_size": 190112,
+        },
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_linear"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
@@ -350,7 +347,6 @@ def test_all_gather_big_mesh(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     chunks_per_sync,
     num_workers_per_link,
@@ -366,7 +362,6 @@ def test_all_gather_big_mesh(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=None,
@@ -404,18 +399,15 @@ def test_all_gather_big_mesh(
     ids=["check"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "trace_region_size": 190112,
-            },
-            ttnn.Topology.Ring,
-        ),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "trace_region_size": 190112,
+        },
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_ring"],
 )
 @pytest.mark.parametrize("mesh_device", [(8, 16)], indirect=True)
@@ -429,7 +421,6 @@ def test_all_gather_quad_host_mesh(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     cluster_axis = 1
@@ -444,7 +435,6 @@ def test_all_gather_quad_host_mesh(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -479,26 +469,20 @@ def test_all_gather_quad_host_mesh(
     ids=["check"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "trace_region_size": 190112,
-            },
-            ttnn.Topology.Linear,
-        ),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "trace_region_size": 190112,
-            },
-            ttnn.Topology.Linear,
-        ),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "trace_region_size": 190112,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "trace_region_size": 190112,
+        },
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_2d_linear", "fabric_linear"],
 )
 @pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
@@ -513,7 +497,6 @@ def test_all_gather_4x32_sanity(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     from loguru import logger
@@ -539,8 +522,6 @@ def test_all_gather_4x32_sanity(
         tt_input,
         dim=gather_dim,
         cluster_axis=cluster_axis,
-        topology=all_gather_topology,
-        num_links=num_links,
         memory_config=mem_config_ag,
     )
     logger.info(f"All-gather completed")
@@ -583,26 +564,20 @@ def test_all_gather_4x32_sanity(
     ids=["check"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "trace_region_size": 190112,
-            },
-            ttnn.Topology.Linear,
-        ),
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
-                "trace_region_size": 190112,
-            },
-            ttnn.Topology.Ring,
-        ),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "trace_region_size": 190112,
+        },
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+            "trace_region_size": 190112,
+        },
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_linear", "fabric_ring"],
 )
 @pytest.mark.parametrize("mesh_device", [(4, 32)], indirect=True)
@@ -617,7 +592,6 @@ def test_all_gather_async_wan_galaxy_4x32(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     torch.manual_seed(2005)
@@ -637,7 +611,7 @@ def test_all_gather_async_wan_galaxy_4x32(
     )
 
     logger.info(f"tt_input.shape = {tt_input.shape}")
-    tt_output = ttnn.all_gather(tt_input, dim=gather_dim, cluster_axis=cluster_axis, topology=all_gather_topology)
+    tt_output = ttnn.all_gather(tt_input, dim=gather_dim, cluster_axis=cluster_axis)
 
     torch_output = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     print("Warning: No PCC check for this test")
@@ -663,7 +637,7 @@ def test_all_gather_async_wan_galaxy_4x32(
     ],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology, max_payload_size",
+    "device_params, max_payload_size",
     [
         (
             {
@@ -671,7 +645,6 @@ def test_all_gather_async_wan_galaxy_4x32(
                 "fabric_router_config": create_fabric_router_config(size),
                 "trace_region_size": 1000000,
             },
-            ttnn.Topology.Ring,
             size,
         )
         for size in [2048]
@@ -698,7 +671,6 @@ def test_all_gather_wan(
     chunks_per_sync,
     num_workers_per_link,
     num_buffers_per_channel,
-    all_gather_topology,
     max_payload_size,
     num_iters,
     warmup_iters,
@@ -740,12 +712,7 @@ def test_all_gather_wan(
         tt_input,
         dim=dim,
         cluster_axis=cluster_axis,
-        topology=all_gather_topology,
-        num_links=num_links,
         memory_config=mem_config_ag,
-        chunks_per_sync=chunks_per_sync_val,
-        num_workers_per_link=num_workers_per_link,
-        num_buffers_per_channel=num_buffers_per_channel,
     )
     ttnn.synchronize_device(mesh_device)
 
@@ -769,12 +736,7 @@ def test_all_gather_wan(
                 tt_input,
                 dim=dim,
                 cluster_axis=cluster_axis,
-                topology=all_gather_topology,
-                num_links=num_links,
                 memory_config=mem_config_ag,
-                chunks_per_sync=chunks_per_sync_val,
-                num_workers_per_link=num_workers_per_link,
-                num_buffers_per_channel=num_buffers_per_channel,
             )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(mesh_device)

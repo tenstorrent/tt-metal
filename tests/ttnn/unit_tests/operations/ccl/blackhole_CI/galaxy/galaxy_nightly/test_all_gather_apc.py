@@ -58,11 +58,11 @@ from models.common.utility_functions import (
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 def test_all_gather_2D_line(
     bh_2d_mesh_device,
@@ -75,7 +75,6 @@ def test_all_gather_2D_line(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -89,7 +88,6 @@ def test_all_gather_2D_line(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -134,11 +132,11 @@ def test_all_gather_2D_line(
     ids=["non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_1d_linear"],
 )
 def test_all_gather_4D_line(
@@ -152,7 +150,6 @@ def test_all_gather_4D_line(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -166,7 +163,6 @@ def test_all_gather_4D_line(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -213,11 +209,11 @@ def test_all_gather_4D_line(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 def test_all_gather_everything_ring(
     bh_2d_mesh_device,
@@ -230,7 +226,6 @@ def test_all_gather_everything_ring(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     cluster_axis,
 ):
@@ -247,7 +242,6 @@ def test_all_gather_everything_ring(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,

@@ -66,11 +66,11 @@ def ti_cond_skip(condition, reason):
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 def test_all_gather_linear_2D_nightly(
@@ -84,7 +84,6 @@ def test_all_gather_linear_2D_nightly(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     cluster_axis,
 ):
@@ -101,7 +100,6 @@ def test_all_gather_linear_2D_nightly(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -154,11 +152,11 @@ def test_all_gather_linear_2D_nightly(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 @pytest.mark.parametrize("cluster_axis", [0])
 def test_all_gather_linear_4D_nightly(
@@ -172,7 +170,6 @@ def test_all_gather_linear_4D_nightly(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     cluster_axis,
 ):
@@ -189,7 +186,6 @@ def test_all_gather_linear_4D_nightly(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -241,11 +237,11 @@ def test_all_gather_linear_4D_nightly(
     ids=["trace", "non-trace"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112}, ttnn.Topology.Ring),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
 )
 @pytest.mark.parametrize("cluster_axis", [0, 1])
 def test_all_gather_ring_nightly(
@@ -258,7 +254,6 @@ def test_all_gather_ring_nightly(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     cluster_axis,
 ):
@@ -276,7 +271,6 @@ def test_all_gather_ring_nightly(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,

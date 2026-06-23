@@ -15,10 +15,10 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])  # Check over all four links
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis",
+    "num_devices, ag_output_shape, dim, layout, cluster_axis",
     [
-        (4, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 0),
-        (8, [1, 1, 20000, 32768], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1),
+        (4, [1, 1, 24000, 32768], 3, ttnn.TILE_LAYOUT, 0),
+        (8, [1, 1, 20000, 32768], 3, ttnn.TILE_LAYOUT, 1),
     ],
     ids=[
         "row_test",
@@ -73,10 +73,9 @@ def test_ccl_ddr_smoke_test(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
     # Check all the rows and columns independently within the device
     if cluster_axis == 0:
         submesh_device = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
@@ -91,7 +90,6 @@ def test_ccl_ddr_smoke_test(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,
@@ -106,11 +104,11 @@ def test_ccl_ddr_smoke_test(
 @skip_for_wormhole_b0()
 @pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
-    "num_devices, ag_output_shape, dim, layout, all_gather_topology, cluster_axis, ag_input_dtype",
+    "num_devices, ag_output_shape, dim, layout, cluster_axis, ag_input_dtype",
     [
-        (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 0, ttnn.bfloat16),
-        (8, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1, ttnn.uint32),
-        (8, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Ring, 1, ttnn.bfloat8_b),
+        (4, [1, 1, 6016, 8192], 3, ttnn.TILE_LAYOUT, 0, ttnn.bfloat16),
+        (8, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, 1, ttnn.uint32),
+        (8, [1, 1, 6016, 4096], 3, ttnn.TILE_LAYOUT, 1, ttnn.bfloat8_b),
     ],
     ids=["horizontal_test_bf16", "vertical_test_u32", "vertical_test_bf8"],
 )
@@ -163,10 +161,9 @@ def test_ccl_other_smoke_test(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
-    validate_test(num_devices, all_gather_topology, bh_2d_mesh_device.shape, cluster_axis)
+    validate_test(num_devices, None, bh_2d_mesh_device.shape, cluster_axis)
     for i in range(bh_2d_mesh_device.shape[(cluster_axis - 1) % 2]):
         if cluster_axis == 0:
             submesh_device = bh_2d_mesh_device.create_submesh(
@@ -185,7 +182,6 @@ def test_ccl_other_smoke_test(
             layout,
             mem_config_input,
             mem_config_ag,
-            all_gather_topology=all_gather_topology,
             enable_trace=enable_trace,
             num_iters=num_iters,
             cluster_axis=cluster_axis,

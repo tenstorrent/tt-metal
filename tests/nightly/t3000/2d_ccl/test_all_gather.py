@@ -63,11 +63,11 @@ from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
     ids=["perf"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        ({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "trace_region_size": 90112},
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_2d_linear"],
 )
 def test_all_gather_training_shapes(
@@ -80,7 +80,6 @@ def test_all_gather_training_shapes(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
 ):
     run_all_gather_impl(
@@ -92,7 +91,6 @@ def test_all_gather_training_shapes(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         use_persistent_buffers=False,

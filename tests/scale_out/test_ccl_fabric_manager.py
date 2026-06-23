@@ -16,7 +16,6 @@ from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.common.utility_functions import skip_for_blackhole
 
-
 # ===========================
 # All-to-All Combine Tests
 # ===========================
@@ -228,18 +227,15 @@ def test_all_to_all_dispatch_fabric_manager_8x4(
     ids=["DRAM_memconfig"],
 )
 @pytest.mark.parametrize(
-    "device_params, all_gather_topology",
+    "device_params",
     [
-        (
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_manager": ttnn.FabricManagerMode.ENABLED,
-                "trace_region_size": 90112,
-            },
-            ttnn.Topology.Linear,
-        ),
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+            "fabric_manager": ttnn.FabricManagerMode.ENABLED,
+            "trace_region_size": 90112,
+        },
     ],
-    indirect=["device_params"],
+    indirect=True,
     ids=["fabric_manager_enabled_linear"],
 )
 @pytest.mark.parametrize("chunks_per_sync", [20])
@@ -257,7 +253,6 @@ def test_all_gather_async_fabric_manager(
     mem_config_input,
     mem_config_ag,
     enable_trace,
-    all_gather_topology,
     num_iters,
     chunks_per_sync,
     num_workers_per_link,
@@ -280,7 +275,6 @@ def test_all_gather_async_fabric_manager(
         layout,
         mem_config_input,
         mem_config_ag,
-        all_gather_topology=all_gather_topology,
         enable_trace=enable_trace,
         num_iters=num_iters,
         cluster_axis=cluster_axis,

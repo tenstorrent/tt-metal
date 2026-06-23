@@ -81,7 +81,6 @@ def _run_all_gather_test(
     cluster_axis,
     buffer_type,
     dtype,
-    topology,
     enable_trace,
     num_links=None,
 ):
@@ -108,12 +107,10 @@ def _run_all_gather_test(
 FABRIC_TOPOLOGY_COMBOS = [
     pytest.param(
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
-        ttnn.Topology.Linear,
         id="fabric_1d-linear",
     ),
     pytest.param(
         {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 90112},
-        ttnn.Topology.Ring,
         id="fabric_1d_ring-ring",
     ),
 ]
@@ -126,11 +123,10 @@ FABRIC_TOPOLOGY_COMBOS = [
 
 @pytest.mark.requires_device(["DUAL_BH"])
 @pytest.mark.parametrize(
-    "device_params, topology",
+    "device_params",
     [
         pytest.param(
             {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112},
-            ttnn.Topology.Linear,
             id="fabric_1d-linear",
         ),
     ],
@@ -153,7 +149,6 @@ def test_all_gather_16x4(
     mesh_device,
     cluster_axis,
     dim,
-    topology,
     enable_trace,
     input_shape,
     dtype,
@@ -161,7 +156,7 @@ def test_all_gather_16x4(
     num_links,
 ):
     _run_all_gather_test(
-        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, topology, enable_trace, num_links=num_links
+        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace, num_links=num_links
     )
 
 
@@ -172,7 +167,7 @@ def test_all_gather_16x4(
 
 @pytest.mark.requires_device(["QUAD_BH"])
 @pytest.mark.parametrize(
-    "device_params, topology",
+    "device_params",
     FABRIC_TOPOLOGY_COMBOS,
     indirect=["device_params"],
 )
@@ -193,7 +188,6 @@ def test_all_gather_32x4(
     mesh_device,
     cluster_axis,
     dim,
-    topology,
     enable_trace,
     input_shape,
     dtype,
@@ -201,5 +195,5 @@ def test_all_gather_32x4(
     num_links,
 ):
     _run_all_gather_test(
-        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, topology, enable_trace, num_links=num_links
+        mesh_device, input_shape, dim, cluster_axis, buffer_type, dtype, enable_trace, num_links=num_links
     )
