@@ -138,6 +138,13 @@ bool resolve_hostname_uniqueness(
         hostnames.push_back(get_host_name());
         for (std::size_t rank = 0; rank < *(distributed_context->size()); rank++) {
             if (rank != controller_rank) {
+                log_info(
+                    tt::LogFabric,
+                    "[PSD-DEBUG] resolve_hostname_uniqueness: rank 0 host '{}' WAITING for hostname from rank {} (if "
+                    "this is the last line, rank {} is unreachable / never started) ...",
+                    get_host_name(),
+                    rank,
+                    rank);
                 std::size_t peer_hostname_size = 0;
                 distributed_context->recv(
                     tt::stl::Span<std::byte>(
@@ -480,11 +487,23 @@ void exchange_metadata(
         }
     }
 
+    // [PSD-DEBUG] which host/rank are we, and what role in this exchange.
+    const std::string dbg_host = get_host_name();
+    const char* dbg_phase = issue_gather ? "gather" : "scatter";
     if (sender_ranks.contains(my_rank)) {
         auto serialized_desc = serialize_physical_system_descriptor_to_bytes(psd);
         std::size_t desc_size = serialized_desc.size();
 
         for (auto rank : receiver_ranks) {
+            log_info(
+                tt::LogFabric,
+                "[PSD-DEBUG] exchange_metadata({}): rank {} host '{}' SENDING PSD ({} bytes, {} ASICs) to rank {} ...",
+                dbg_phase,
+                my_rank,
+                dbg_host,
+                desc_size,
+                psd.get_asic_descriptors().size(),
+                rank);
             distributed_context->send(
                 tt::stl::Span<std::byte>(reinterpret_cast<std::byte*>(&desc_size), sizeof(desc_size)),
                 Rank{static_cast<int>(rank)},
@@ -494,9 +513,25 @@ void exchange_metadata(
                 tt::stl::as_writable_bytes(tt::stl::Span<uint8_t>(serialized_desc.data(), serialized_desc.size())),
                 Rank{static_cast<int>(rank)},
                 Tag{0});
+            log_info(
+                tt::LogFabric,
+                "[PSD-DEBUG] exchange_metadata({}): rank {} host '{}' SENT to rank {}",
+                dbg_phase,
+                my_rank,
+                dbg_host,
+                rank);
         }
     } else {
         for (auto rank : sender_ranks) {
+            log_info(
+                tt::LogFabric,
+                "[PSD-DEBUG] exchange_metadata({}): rank {} host '{}' WAITING to recv PSD from rank {} (if this is the "
+                "last line, rank {} never finished its local hardware discovery) ...",
+                dbg_phase,
+                my_rank,
+                dbg_host,
+                rank,
+                rank);
             std::size_t peer_descriptor_size = 0;
             distributed_context->recv(
                 tt::stl::Span<std::byte>(
@@ -510,11 +545,26 @@ void exchange_metadata(
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
+            log_info(
+                tt::LogFabric,
+                "[PSD-DEBUG] exchange_metadata({}): rank {} host '{}' RECEIVED PSD ({} bytes, {} ASICs) from rank {}",
+                dbg_phase,
+                my_rank,
+                dbg_host,
+                peer_descriptor_size,
+                peer_desc.get_asic_descriptors().size(),
+                rank);
 
             // Check for empty asic_descriptors before accessing
             TT_FATAL(
                 !psd.get_asic_descriptors().empty() && !peer_desc.get_asic_descriptors().empty(),
-                "Cannot exchange metadata: empty ASIC descriptors");
+                "Cannot exchange metadata: empty ASIC descriptors (local rank {} host '{}' has {}, peer rank {} has "
+                "{})",
+                my_rank,
+                dbg_host,
+                psd.get_asic_descriptors().size(),
+                rank,
+                peer_desc.get_asic_descriptors().size());
 
             validate_eth_fw_versions(
                 psd,
@@ -524,6 +574,12 @@ void exchange_metadata(
             psd.merge(std::move(peer_desc));
         }
     }
+    log_info(
+        tt::LogFabric,
+        "[PSD-DEBUG] exchange_metadata({}): rank {} host '{}' reached post-exchange barrier",
+        dbg_phase,
+        my_rank,
+        dbg_host);
     distributed_context->barrier();
 }
 
@@ -674,11 +730,31 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     bool run_global_discovery,
     bool run_live_discovery) {
     // Barrier to ensure all MPI ranks are synchronized and ready to communicate.
+    const auto dbg_rank = *(distributed_context->rank());
+    const std::string dbg_host = get_host_name();
+    log_info(
+        tt::LogFabric,
+        "[PSD-DEBUG] rank {} host '{}': entering PSD discovery, waiting on entry barrier (all {} ranks must reach it) "
+        "...",
+        dbg_rank,
+        dbg_host,
+        *(distributed_context->size()));
     distributed_context->barrier();
+    log_info(
+        tt::LogFabric,
+        "[PSD-DEBUG] rank {} host '{}': passed entry barrier, resolving hostname uniqueness ...",
+        dbg_rank,
+        dbg_host);
 
     // Resolve hostname uniqueness before discovery so run_local_discovery can use the right key
     // (hostname when unique, hostname_rank when not), matching my_host_name() for lookups.
     bool all_hostnames_unique = resolve_hostname_uniqueness(distributed_context);
+    log_info(
+        tt::LogFabric,
+        "[PSD-DEBUG] rank {} host '{}': hostname uniqueness resolved (unique={})",
+        dbg_rank,
+        dbg_host,
+        all_hostnames_unique);
 
     static constexpr bool dispatch_local_discovery = false;
     static constexpr bool dispatch_live_discovery  = true;
@@ -687,10 +763,22 @@ PhysicalSystemDescriptor run_physical_system_discovery(
         (!run_live_discovery || (target_device_type != TargetDevice::Silicon)) ?
             dispatch_local_discovery : dispatch_live_discovery;
 
+    log_info(
+        tt::LogFabric,
+        "[PSD-DEBUG] rank {} host '{}': BEGIN local discovery (live={}) -- if this is the last line, this host's UMD "
+        "hardware probe (create_cluster_descriptor) is stuck (wedged/untrained ETH link or un-enumerated device) ...",
+        dbg_rank,
+        dbg_host,
+        dispatch_live);
     PhysicalSystemDescriptor psd = dispatch_live ?
         discovery_impl::run_local_discovery_live(distributed_context, target_device_type, all_hostnames_unique) :
         discovery_impl::run_local_discovery(cluster_desc, distributed_context, target_device_type, all_hostnames_unique);
-
+    log_info(
+        tt::LogFabric,
+        "[PSD-DEBUG] rank {} host '{}': END local discovery -- discovered {} ASIC(s) locally",
+        dbg_rank,
+        dbg_host,
+        psd.get_asic_descriptors().size());
 
     // Set local hostname and rank (friend access)
     auto my_rank = *(distributed_context->rank());
@@ -698,15 +786,26 @@ PhysicalSystemDescriptor run_physical_system_discovery(
     psd.set_discovery_data(hostname, my_rank, all_hostnames_unique);
 
     if (run_global_discovery) {
+        log_info(tt::LogFabric, "[PSD-DEBUG] rank {} host '{}': BEGIN metadata gather", dbg_rank, dbg_host);
         exchange_metadata(psd, distributed_context, true);
+        log_info(tt::LogFabric, "[PSD-DEBUG] rank {} host '{}': END metadata gather", dbg_rank, dbg_host);
         auto my_rank_val = *(distributed_context->rank());
         constexpr uint32_t controller_rank = 0;
         if (my_rank_val == controller_rank) {
+            log_info(
+                tt::LogFabric,
+                "[PSD-DEBUG] rank 0 host '{}': merging done; running cross-host connection generation + graph "
+                "validation ...",
+                dbg_host);
             remove_unresolved_nodes(psd);
             generate_cross_host_connections(psd);
             validate_graphs(psd);
+            log_info(
+                tt::LogFabric, "[PSD-DEBUG] rank 0 host '{}': cross-host connections + validation complete", dbg_host);
         }
+        log_info(tt::LogFabric, "[PSD-DEBUG] rank {} host '{}': BEGIN metadata scatter", dbg_rank, dbg_host);
         exchange_metadata(psd, distributed_context, false);
+        log_info(tt::LogFabric, "[PSD-DEBUG] rank {} host '{}': END metadata scatter", dbg_rank, dbg_host);
     }
 
     return psd;
