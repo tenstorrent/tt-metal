@@ -25,12 +25,14 @@ Override the trace dir with PREFILL_TRACE_DIR.
 import gc
 import json
 import os
+import time
 from pathlib import Path
 
 import pytest
 import torch
 from loguru import logger
 from safetensors import safe_open
+from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_blackhole, profiler
@@ -546,6 +548,220 @@ def run_chunked_transformer(
         logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
 
 
+def run_chunked_transformer_no_pcc(
+    variant,
+    config,
+    mesh_device,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    gate_fallback_mode,
+    num_links,
+    topology,
+    num_iters,
+    routing_use_l1_small_for_semaphores=False,
+):
+    """No-PCC perf/smoke variant of run_chunked_transformer: build the transformer ONCE, then drive
+    the full n_chunks-chunk prefill `num_iters` times with return_intermediates=False (no per-layer
+    host readback, no PCC)."""
+    if weight_cache_path is None:
+        pytest.skip(f"pretrained weights unavailable (set {variant.ttnn_cache_env} + {variant.env_var})")
+
+    profiler.clear()
+    profiler.start("total_test_time")
+
+    sp_axis, tp_axis = 0, 1
+    mesh_shape = list(mesh_device.shape)
+    sp = mesh_shape[sp_axis]
+    tp = mesh_shape[tp_axis]
+    assert (sp, tp) == (8, 4), f"this test targets mesh-8x4, got {mesh_shape}"
+
+    chunk_local = CHUNK // sp  # 640
+    total_len = n_chunks * CHUNK
+    assert total_len <= SEQ_CACHE, f"{n_chunks} chunks ({total_len}) exceed cache {SEQ_CACHE}"
+
+    kvpe_dim = config.qk_rope_head_dim + config.kv_lora_rank
+    config.max_seq_len = SEQ_CACHE
+
+    logger.info(
+        f"chunked transformer (no-PCC): num_layers={num_layers} mesh={mesh_shape} n_chunks={n_chunks} "
+        f"total_len={total_len} cache={SEQ_CACHE} chunk={CHUNK} num_iters={num_iters}"
+    )
+
+    # Token ids: prefer the real (longbook) ids from the golden trace (same source as the PCC test) but
+    # never compared here; fall back to a deterministic in-vocab pattern so this stays trace-optional.
+    vocab_size = config.vocab_size
+    trace_dir = _resolve_trace_dir(variant)
+    if trace_dir.exists():
+        trace_tokens = _load_metadata_token_ids(trace_dir, total_len)
+        if trace_tokens.numel() < total_len:
+            reps = (total_len + trace_tokens.numel() - 1) // trace_tokens.numel()
+            trace_tokens = trace_tokens.repeat(reps)[:total_len]
+        token_ids_full = trace_tokens % vocab_size
+        logger.info(f"no-PCC: loaded {token_ids_full.numel()} token ids from trace {trace_dir}")
+    else:
+        token_ids_full = torch.arange(total_len, dtype=torch.int64) % vocab_size
+        logger.info(f"no-PCC: trace not found ({trace_dir}); using synthetic token ids")
+
+    # --- Weights from the prebuilt TTNN cache (empty state_dict when complete). ---
+    effective_cache_path = weight_cache_path / f"{sp}x{tp}"
+    experts_per_chip = variant.model_config.NUM_ROUTED_EXPERTS // (sp * tp)
+    assert TtPrefillTransformer.check_cache_complete(
+        effective_cache_path,
+        num_layers,
+        experts_per_chip=experts_per_chip,
+        first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+    ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
+
+    profiler.start("tt_transformer_creation")
+    transformer = TtPrefillTransformer(
+        mesh_device=mesh_device,
+        config=config,
+        model_cfg=variant.model_config,
+        state_dict={},
+        num_layers=num_layers,
+        seq_len=CHUNK,  # per-chunk size -> MoE/FFN dispatch buffers
+        max_seq_len=SEQ_CACHE,  # KV ring buffer = full cache
+        dispatch_buffer_capacity_factor=8,
+        num_links=num_links,
+        topology=topology,
+        sp_axis=sp_axis,
+        tp_axis=tp_axis,
+        is_balanced=False,
+        gate_fallback_mode=gate_fallback_mode,
+        weight_cache_path=effective_cache_path,
+        lm_head_is_column_parallel=True,
+        is_chunked=True,
+        slot_num=1,
+        routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+    )
+    ttnn.synchronize_device(mesh_device)
+    gc.collect()
+    profiler.end("tt_transformer_creation")
+
+    tt_kvpe_cache = init_kvpe_cache(
+        kvpe_cache_head_dim=kvpe_dim,
+        mesh_device=mesh_device,
+        seq_len=SEQ_CACHE,
+        mesh_shape=mesh_shape,
+        sp_axis=sp_axis,
+        num_kvpe_cache_layers=num_layers,
+        num_users=1,
+    )
+
+    # Precompute per-chunk SP-sharded token tiles once (reused across iterations). Chunk-aligned offsets
+    # make the block-cyclic rotation degenerate to a plain per-chip reshape.
+    chunk_tok_host = []
+    for c in range(n_chunks):
+        kv_actual = c * CHUNK
+        positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+        flat = torch.tensor([positions[ch][r] for ch in range(sp) for r in range(chunk_local)], dtype=torch.long)
+        chunk_tok_host.append(token_ids_full[flat].reshape(sp, 1, chunk_local))
+
+    mesh_device.enable_program_cache()
+
+    # Optional profiling warmup: run chunk 0 once through all layers so every kernel is JIT-compiled and
+    # the program cache is populated BEFORE the measured region. Gated by TT_PREFILL_PROFILE_WARMUP so
+    # normal runs are unaffected. Used for the E2E phase (warm wall-clock, compile excluded). The
+    # DEVICE-PERF phase deliberately runs WITHOUT warmup: device kernel duration is on-device execution
+    # time (independent of host-side JIT), so the first compile+run chunk yields valid kernel times — and
+    # skipping the warm pass halves the ops tracy must buffer, avoiding the profiler DRAM overflow.
+    if os.environ.get("TT_PREFILL_PROFILE_WARMUP", "0") == "1":
+        signpost("PROFILE_WARMUP_START")
+        warm_tokens = ttnn.from_torch(
+            chunk_tok_host[0],
+            device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+        )
+        transformer.forward(
+            warm_tokens,
+            tt_kvpe_cache,
+            number_of_non_padded_tokens=CHUNK,
+            actual_start=0,
+            actual_end=CHUNK,
+            cache_user_id=0,
+            return_intermediates=False,
+        )
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(warm_tokens)
+        # Flush the on-device profiler DRAM buffer so the warmup chunk's ops don't co-reside with the
+        # measured chunk's (the warmup-only overflow that drops markers). Guarded to tracy runs — the
+        # device profiler is only enabled when TT_METAL_DEVICE_PROFILER=1 (set by `python -m tracy`).
+        if os.environ.get("TT_METAL_DEVICE_PROFILER") == "1":
+            ttnn.ReadDeviceProfiler(mesh_device)
+        logger.info("[profile] warmup chunk 0 complete (kernels JITted); measured region begins")
+
+    # Bracket the measured loop with PROFILE_MEASURE_START / PROFILE_MEASURE_END so the device-perf
+    # driver's between_signposts filter keeps only the forward ops (excluding one-time weight-load
+    # tilize/typecast at construction, and any warmup chunk). Emitted unconditionally — outside a tracy
+    # profiler these signposts are harmless no-ops (e.g. the plain e2e subprocess).
+    signpost("PROFILE_MEASURE_START")
+    per_iter_seconds = []
+    profiler.start("tt_forward")
+    for it in range(num_iters):
+        iter_start = time.time()
+        for c in range(n_chunks):
+            kv_actual = c * CHUNK
+            tt_tokens = ttnn.from_torch(
+                chunk_tok_host[c],
+                device=mesh_device,
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_shape), dims=(0, None)),
+            )
+            chunk_start = time.time()
+            # forward with return_intermediates=False: nothing is cloned to host, no PCC. Chunked
+            # prefill is full-chunk (all positions real) so actual_end is kv_actual + CHUNK; forward
+            # uses self.indexed_rope. The small (first_token) return is discarded.
+            transformer.forward(
+                tt_tokens,
+                tt_kvpe_cache,
+                number_of_non_padded_tokens=CHUNK,
+                actual_start=kv_actual,
+                actual_end=kv_actual + CHUNK,
+                cache_user_id=0,
+                return_intermediates=False,
+            )
+            ttnn.synchronize_device(mesh_device)
+            ttnn.deallocate(tt_tokens)
+            logger.info(f"  iter {it} chunk {c}: {time.time() - chunk_start:.3f} seconds")
+        iter_seconds = time.time() - iter_start
+        per_iter_seconds.append(iter_seconds)
+        logger.info(f"iter {it} done ({n_chunks} chunks) in {iter_seconds:.3f} seconds")
+    profiler.end("tt_forward")
+    signpost("PROFILE_MEASURE_END")  # closes the device-perf between_signposts region
+
+    # E2E wall-clock dump for the perf driver (run_e2e_wall_clock reads this path). Per-iter == per-chunk
+    # when n_chunks == 1.
+    perf_json = os.environ.get("TT_PREFILL_PERF_JSON")
+    if perf_json:
+        avg_iter = sum(per_iter_seconds) / len(per_iter_seconds) if per_iter_seconds else 0.0
+        with open(perf_json, "w") as f:
+            json.dump(
+                {
+                    "num_iters": num_iters,
+                    "n_chunks": n_chunks,
+                    "num_layers": num_layers,
+                    "per_iter_seconds": per_iter_seconds,
+                    "avg_iter_seconds": avg_iter,
+                    "avg_per_chunk_seconds": avg_iter / n_chunks if n_chunks else 0.0,
+                },
+                f,
+            )
+        logger.info(f"[perf] wrote e2e timings to {perf_json} (avg_iter={avg_iter * 1000:.2f} ms)")
+
+    profiler.end("total_test_time")
+    logger.success(
+        f"Chunked prefill no-PCC run done (num_layers={num_layers}, n_chunks={n_chunks}, " f"num_iters={num_iters})"
+    )
+    for key in profiler.times:
+        logger.info(f"  {key}: {profiler.get(key) * 1000:.2f} ms")
+
+
 @pytest.mark.parametrize("n_chunks", [11], ids=["chunks11"])
 @pytest.mark.parametrize("num_layers", [1, 10, 61], ids=["L1", "L10", "L61"])
 @pytest.mark.parametrize(
@@ -751,5 +967,59 @@ def test_kimi_prefill_transformer_chunked_padded(
         GateComputeMode.DEVICE_FP32,
         num_links,
         topology,
+        routing_use_l1_small_for_semaphores=True,
+    )
+
+
+# No-PCC perf/smoke variant: build once, loop the forward `num_iters` times (no host readback, no PCC).
+# Drives the device-perf + e2e-perf driver in tests/perf/test_prefill_chunked_perf.py.
+@pytest.mark.parametrize("num_iters", [1, 2, 10, 20], ids=["iters1", "two_iters", "ten_iters", "iters20"])
+@pytest.mark.parametrize("n_chunks", [1, 2, 11], ids=["chunks1", "chunks2", "chunks_eleven"])
+@pytest.mark.parametrize("num_layers", [1, 5, 10, 61], ids=["L1", "L5", "L10", "L61"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 4),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=KimiK26Config.FABRIC_PAYLOAD_SIZE),
+                # L1_SMALL region for the MoE routing all-gather's semaphores (see TtMoERoutingSetup).
+                "l1_small_size": 512,
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="mesh-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("variant", ["kimi_k2_6"], indirect=True, ids=["kimi"])
+@pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
+@pytest.mark.timeout(0)
+def test_kimi_prefill_transformer_chunked_no_pcc(
+    variant,
+    config_only,
+    mesh_device,
+    device_params,
+    weight_cache_path,
+    num_layers,
+    n_chunks,
+    num_iters,
+    num_links,
+    topology,
+):
+    run_chunked_transformer_no_pcc(
+        variant,
+        config_only,
+        mesh_device,
+        weight_cache_path,
+        num_layers,
+        n_chunks,
+        GateComputeMode.DEVICE_FP32,
+        num_links,
+        topology,
+        num_iters,
         routing_use_l1_small_for_semaphores=True,
     )
