@@ -178,32 +178,19 @@ set — confirms the pi05_production.env was sourced.
 | `PI05_E2E_PCC` | Enable `test_pcc_1x8_all_stages` (default off; runs CPU torch ref → slow). |
 | `PI05_NUM_DENOISE_STEPS` | Override the 5-step default schedule (10 matches upstream training spec). |
 
-## Reference numbers (final commit `7f11f571159`, 2026-06-23)
+## Reference numbers (commit `38ac051ee68`, 2026-06-23)
 
 ### Perf — per-stage TRACED breakdown (`test_perf_1x8_traced_staged`, PERF_ITERS=20)
 
 | Stage | 3-cam mean | 2-cam mean | Δ (3→2 cam) |
 |---|---:|---:|---:|
-| input_upload (host) | 13.70 ms | 13.86 ms | — |
-| **vision** (SigLIP DP, 8 chips) | **5.01 ms** | **5.01 ms** | 0 (DP pads to 8 cams regardless) |
-| **prefill** (TP=8) | **9.62 ms** | **8.27 ms** | −1.35 (1024→768 prefix) |
-| **denoise** (5 step, replicated) | **18.80 ms** | **17.69 ms** | −1.11 (shorter KV in cross-attn) |
-| output_readback | 1.27 ms | 1.30 ms | — |
-| **compute (v+p+d)** | **33.43 ms** | **30.98 ms** | −2.45 |
-| traced_total | 48.40 ms | 46.14 ms | — |
-
-### Perf — e2e single-trace replay (`test_perf_1x8_traced`, PERF_ITERS=20)
-
-| Bucket | 3-cam mean / min | 2-cam mean / min |
-|---|---:|---:|
-| input_upload | 14.68 / 13.66 ms | 7.10 / 6.23 ms |
-| **trace_exec (pure compute)** | **33.36 / 33.33 ms** | **30.85 / 30.84 ms** |
-| output_readback | 1.28 / 1.10 ms | 1.07 / 0.86 ms |
-| traced_total | 49.32 / 48.12 ms | 39.02 / 38.10 ms |
-
-`trace_exec` matches the staged sum to within 0.1 ms — sub-trace decomposition
-is faithful. `input_upload` is noisy host-side (host load); `trace_exec` is
-the canonical device-compute metric.
+| input_upload (host) | 14.25 ms | 6.49 ms | — |
+| **vision** (SigLIP DP, 8 chips) | **5.01 ms** | **5.00 ms** | 0 (DP pads to 8 cams regardless) |
+| **prefill** (TP=8) | **9.62 ms** | **8.26 ms** | −1.36 (1024→768 prefix) |
+| **denoise** (5 step, replicated) | **19.37 ms** | **18.51 ms** | −0.86 (shorter KV in cross-attn) |
+| output_readback | 1.24 ms | 1.12 ms | — |
+| **compute (v+p+d)** | **34.01 ms** | **31.78 ms** | −2.23 |
+| traced_total | 49.49 ms | 39.39 ms | — |
 
 ### PCC (`test_pcc_1x8_all_stages`, PI05_E2E_PCC=1)
 
@@ -211,12 +198,13 @@ the canonical device-compute metric.
 |---|---:|---:|---:|
 | vision | 0.999684 ✓ | 0.999685 ✓ | ≥ 0.997 |
 | prefill | 0.994639 ✓ | 0.994757 ✓ | ≥ 0.99 |
-| denoise (est) | 0.997504 | 0.906915 | — |
-| **e2e** | **0.991842 ✓** | **0.901876 ✗** | ≥ 0.95 |
+| denoise (est) | 1.001883 | 1.001869 | — |
+| **e2e** | **0.996197 ✓** | **0.996302 ✓** | ≥ 0.95 |
 
-**3-cam (production)** all stages pass. **2-cam e2e fails the 0.95 target** —
-vision and prefill PCCs are essentially identical to 3-cam, so the drift comes
-from the denoise loop interacting with a shorter prefix. Investigation pending.
+Both cam counts now pass; e2e PCC is essentially identical (~0.996) — both
+close to the 28-chip baseline of 0.9988. The fix in commit `38ac051ee68` was
+adding position-aware suffix RoPE + expert attention mask to match how torch
+ref builds them in `_denoise_forward`.
 
 ## Notes
 
