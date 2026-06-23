@@ -45,7 +45,32 @@ NOCDebugState::LockedBufferInfo::LockType get_lock_type(NocDebuggingEventMetadat
         return NOCDebugState::LockedBufferInfo::LockType::MEM;
     }
 
+    if (event_type == NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK ||
+        event_type == NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK) {
+        return NOCDebugState::LockedBufferInfo::LockType::DFB;
+    }
+
     TT_THROW("Invalid lock type: {}", enchantum::to_string(event_type));
+}
+
+NOCDebugIssueBaseType locked_buffer_issue_base_type(NOCDebugState::LockedBufferInfo::LockType lock_type) {
+    switch (lock_type) {
+        case NOCDebugState::LockedBufferInfo::LockType::MEM:
+            return NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM;
+        case NOCDebugState::LockedBufferInfo::LockType::CB: return NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB;
+        case NOCDebugState::LockedBufferInfo::LockType::DFB: return NOCDebugIssueBaseType::WRITE_TO_LOCKED_DFB;
+    }
+    TT_THROW("Invalid lock type");
+}
+
+// May be called for non-write issue types, so the default case returns nullptr.
+const char* locked_buffer_type_name(NOCDebugIssueBaseType base_type) {
+    switch (base_type) {
+        case NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM: return "core local mem";
+        case NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB: return "circular buffer";
+        case NOCDebugIssueBaseType::WRITE_TO_LOCKED_DFB: return "dataflow buffer";
+        default: return nullptr;
+    }
 }
 
 }  // namespace detail
@@ -98,11 +123,7 @@ void NOCDebugState::handle_write_event(tt_cxy_pair core, int processor_id, uint6
         CoreDebugState& dst_state = get_state(dst_core);
         if (const auto* locked_buf = dst_state.get_noc_write_to_lock_buffer(event); locked_buf != nullptr) {
             NOCDebugIssueType issue_type;
-            if (locked_buf->lock_type == NOCDebugState::LockedBufferInfo::LockType::MEM) {
-                issue_type.base_type = NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM;
-            } else {
-                issue_type.base_type = NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB;
-            }
+            issue_type.base_type = detail::locked_buffer_issue_base_type(locked_buf->lock_type);
             issue_type.issue_address = event.dst_addr;
             issue_type.issue_size = event.num_bytes;
             issue_type.src_x = event.src_x;
@@ -254,10 +275,7 @@ std::string NOCDebugState::get_issue_description(const NOCDebugIssueType& issue_
         return "read";
     }
 
-    if (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM ||
-        issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) {
-        const char* locked_type =
-            (issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) ? "circular buffer" : "core local mem";
+    if (const char* locked_type = detail::locked_buffer_type_name(issue_type.base_type)) {
         return fmt::format(
             "from ({},{}) to ({},{}) addr 0x{:08X} size {} locked {}",
             static_cast<int>(issue_type.src_x),
@@ -313,9 +331,7 @@ void NOCDebugState::print_aggregated_errors() const {
                     core_issues.has_read_barrier = true;
                 } else if (issue_type.base_type == NOCDebugIssueBaseType::UNFLUSHED_WRITE_AT_END) {
                     core_issues.unflushed_write_issues.push_back(get_issue_description(issue_type));
-                } else if (
-                    issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM ||
-                    issue_type.base_type == NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) {
+                } else if (detail::locked_buffer_type_name(issue_type.base_type) != nullptr) {
                     core_issues.locked_buffer_issues.push_back(get_issue_description(issue_type));
                 }
             }

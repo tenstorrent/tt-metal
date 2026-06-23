@@ -182,6 +182,19 @@ inline bool DataflowBuffer::pages_available_at_front(int32_t num_pages) const {
 
 inline void DataflowBuffer::write_barrier_impl(const Noc& noc) const { noc.async_write_barrier(); }
 
+// WH/BH: same behavior as CircularBuffer::scoped_lock: lock the entire ring and ignore num_entries
+inline void DataflowBuffer::lock_acquire_impl(uint16_t /*num_entries*/) {
+    const uint32_t num_bytes = local_dfb_interface_.fifo_size;
+    const uint32_t base = local_dfb_interface_.fifo_limit - num_bytes;
+    RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, base, num_bytes);
+}
+
+inline void DataflowBuffer::lock_release_impl(uint16_t /*num_entries*/) {
+    const uint32_t num_bytes = local_dfb_interface_.fifo_size;
+    const uint32_t base = local_dfb_interface_.fifo_limit - num_bytes;
+    RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, base, num_bytes);
+}
+
 #endif
 
 #endif  // !ARCH_QUASAR

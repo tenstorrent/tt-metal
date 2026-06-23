@@ -419,6 +419,48 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
 }
 
 
+// Lock the `n` held entries. The locked region starts at the write pointer (producer) or read pointer
+// (consumer), with entries spaced by stride_size: for the ALL access pattern stride_size == entry_size, so
+// the locked entries are contiguous; for STRIDED stride_size > entry_size, so they are non-contiguous.
+// For each held entry, do two things:
+//     - cache op: invalidate the L2 range on acquire (both producer and consumer); flush on release
+//       (producer only)
+//     - record the scoped-lock event
+inline void DataflowBuffer::lock_acquire_impl(uint16_t num_entries) {
+    const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+    const uint32_t stride = local_dfb_interface_.stride_size;
+    const uint32_t entry = local_dfb_interface_.entry_size;
+    uint32_t addr = local_dfb_interface_.is_producer ? s.wr_ptr : s.rd_ptr;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_LOCK, addr, entry);
+        // TODO: with concurrent ALL consumers, this invalidates the same shared cache line once per
+        // consumer; the redundant invalidations could be deduplicated (e.g. first-locker-per-round).
+        invalidate_l2_cache_range(addr, entry);
+        addr += stride;
+        if (addr >= s.limit) {
+            addr = s.base_addr;
+        }
+    }
+}
+
+inline void DataflowBuffer::lock_release_impl(uint16_t num_entries) {
+    const auto& s = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx];
+    const uint32_t stride = local_dfb_interface_.stride_size;
+    const uint32_t entry = local_dfb_interface_.entry_size;
+    const bool is_producer = local_dfb_interface_.is_producer;
+    uint32_t addr = is_producer ? s.wr_ptr : s.rd_ptr;
+    for (uint16_t k = 0; k < num_entries; ++k) {
+        if (is_producer) {
+            flush_l2_cache_range(addr, entry);
+        }
+        RECORD_SCOPED_LOCK_EVENT(NocDebuggingEventMetadata::NocDebugEventType::DFB_UNLOCK, addr, entry);
+        addr += stride;
+        if (addr >= s.limit) {
+            addr = s.base_addr;
+        }
+    }
+}
+
 // Consumer barrier: waits outbound write from DFB writes to arrive at their destination
 // Falls back to a full barrier when no txn_ids are assigned
 inline void DataflowBuffer::write_barrier_impl(const Noc &noc) const {
