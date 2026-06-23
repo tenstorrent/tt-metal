@@ -8,7 +8,7 @@ Assembly mirrors the HF golden exactly:
 
 plus the LM head (HF keeps that in Qwen3_5ForCausalLM) so the model produces logits and can run
 tokens->tokens end to end via generate(). Each decoder layer is either a full (softmax) attention
-or a Gated DeltaNet block, chosen per index by args.is_full_attention_layer — the per-layer wiring
+or a Gated DeltaNet block, chosen per index by args.is_full_attention_layer(layer_num) — the per-layer wiring
 lives in tt/layer.py and the token mixers / MLP / norms each have their own unit tests; this file is
 only the embedding + layer-stack + norm + head glue and the prefill/decode/generate drivers.
 

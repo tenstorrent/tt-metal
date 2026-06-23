@@ -33,7 +33,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 
 ### Test Parameters & Fixtures ─────────────────────────────────────────────────────────
-os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
+os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
 
 # Truncate to the first 4 layer_types (["linear","linear","linear","full"]), so the tiny model still
 # exercises both block kinds while keeping the random-weight ForCausalLM cheap to build.
@@ -60,9 +60,10 @@ def _remap_hf_state_dict(state_dict):
 
     The per-module weight loaders (attention/gdn/mlp/weights.py) all read the RAW transformers
     submodule names (q_proj/in_proj_qkv/conv1d/gate_proj/...), exactly as test_attention/test_gdn/
-    test_layer feed them — so layer keys pass through with only the `model.` prefix stripped. Only the
-    three top-level weights are renamed to what the framework Embedding / final RMSNorm / LM head
-    look up: embed_tokens->tok_embeddings, model.norm->norm, lm_head->output."""
+    test_layer feed them — so layer keys pass through with only the `model.` prefix stripped. Only
+    TWO top-level weights are renamed to what the framework Embedding / LM head look up:
+    embed_tokens->tok_embeddings, lm_head->output. The final RMSNorm needs no rename — stripping the
+    `model.` prefix already yields `norm.weight` (prefix-strip only, exactly like the layer keys)."""
     out = {}
     for key, tensor in state_dict.items():
         if "visual" in key or key.startswith("mtp"):

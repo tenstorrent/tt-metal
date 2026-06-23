@@ -276,7 +276,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
 
         # Split the padded sequence axis into (num_chunks, chunk_size): rank-4
         # [B, H, L, D] -> rank-5 [B, H, num_chunks, chunk_size, D]. The last two dims
-        # (chunk_size=64, D=128) stay tile-aligned, so this is a metadata-only reshape;
+        # (chunk_size=128, D=128) stay tile-aligned, so this is a metadata-only reshape;
         # every op downstream (matmul/cumsum/tril/exp) batches over the leading dims.
         batch_size, num_heads, _, k_head_dim = key.shape
         v_head_dim = value.shape[-1]
@@ -418,7 +418,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
         core_attn_out = ttnn.concat(core_attn_out_chunks, dim=2)
         core_attn_out = ttnn.reshape(core_attn_out, [batch_size, num_heads, total_sequence_length, v_head_dim])
 
-        # Drop the padding rows (torch line 311) and undo the line-45 transpose, then cast
+        # Drop the padding rows (torch line 311) and undo the heads-before-seq transpose from line 227, then cast
         # back to the input dtype (torch line 312). The seq slice is on a non-tile-aligned
         # boundary while seq is a tile dim, so it must be re-tilized (causal_conv1d_silu
         # caveat) BEFORE the transpose — leaving the dirty tile padding in place corrupts
@@ -580,7 +580,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
             kernel_size=self.conv_kernel_size,
             mesh_device=self.mesh_device,
             pad=self.conv_pad,  # persistent zero pad so the conv stays trace-capturable
-        )  # [B, 1, seq_len, conv_dim, dim]
+        )  # [B, 1, seq_len, conv_dim]
 
         query, key, value = ttnn.split(mixed_qkv, [self.key_dim, self.key_dim, self.value_dim], dim=-1)
 

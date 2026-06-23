@@ -27,7 +27,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 ### Test Parameters & Fixtures ─────────────────────────────────────────────────────────
-os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
+os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
 
 BATCHES = [1, 32]
 SEQ_LENS = [32, 512]
@@ -52,7 +52,7 @@ def _build_tt_mlp(mesh_device, state_dict, args):
 
 
 def _to_device(x, mesh_device):
-    """Activation as the MLP input layout: [1, 1, M, dim] replicated to every device, bf16 DRAM."""
+    """Activation as the MLP input layout: [B, 1, seq, dim] replicated to every device, bf16 DRAM."""
     return ttnn.from_torch(
         x.to(torch.bfloat16),
         device=mesh_device,
@@ -64,7 +64,7 @@ def _to_device(x, mesh_device):
 
 
 def _from_device(out, mesh_device):
-    """forward reduce-scatters its [1, 1, M, dim] output along the hidden dim on TP, so concat
+    """forward reduce-scatters its [B, 1, seq, dim] output along the hidden dim on TP, so concat
     dim=3 reassembles it; on a single device the output already holds the full dim (dim=0 no-op)."""
     nd = mesh_device.get_num_devices()
     composer = ttnn.ConcatMeshToTensor(mesh_device, dim=3 if nd > 1 else 0)

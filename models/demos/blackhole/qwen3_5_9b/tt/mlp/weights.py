@@ -26,7 +26,26 @@ class MLPWeights:
 
 
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None) -> MLPWeights:
-    """state_dict is the per-layer mlp submodule state dict: keys 'gate_proj.weight', 'down_proj.weight', 'up_proj.weight'."""
+    """Load and shard the SwiGLU MLP weights across the device mesh.
+
+    Args:
+        mesh_device: ttnn mesh device the shards are placed on. On a unit mesh
+            each shard is the full weight, so this serves single-device runs too.
+        state_dict: per-layer mlp submodule state dict with keys
+            'gate_proj.weight', 'up_proj.weight', 'down_proj.weight' (each a
+            torch [out, in] tensor; transposed to [in, out] on load).
+        tensor_cache_path: optional Path to a directory for caching the converted
+            tensors. If given, the directory is created (exist_ok) and each weight
+            is cached as 'mlp.<name>.weight.tp' (e.g. mlp.gate_proj.weight.tp).
+            If None, no caching is done.
+
+    Returns:
+        MLPWeights with each weight sharded across the mesh in DRAM
+        (interleaved, TILE_LAYOUT):
+            w1 (gate_proj): column-parallel (dim=-1), bfloat4_b
+            w3 (up_proj):   column-parallel (dim=-1), bfloat4_b
+            w2 (down_proj): row-parallel (dim=0),     bfloat8_b
+    """
 
     if tensor_cache_path is not None:
         os.makedirs(tensor_cache_path, exist_ok=True)

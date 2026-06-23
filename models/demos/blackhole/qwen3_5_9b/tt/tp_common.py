@@ -76,9 +76,10 @@ def shard_small(torch_tensor, mesh, cache_path, dim=-1, dtype=ttnn.bfloat16):
 
 # ── Weight-prep helpers (reorder HF weights for per-device sharding) ─────────
 def prepare_gdn_qkv(qkv_w, key_dim, value_dim, nk, dk, nv, dv, tp):
-    """Interleave GDN Q/K/V heads so ShardTensorToMesh(dim=0) on the transposed
-    weight gives each device a contiguous block of (nk/tp) Q heads, (nk/tp) K
-    heads and (nv/tp) V heads.
+    """Interleave GDN Q/K/V heads so ``shard_w(dim=-1)`` (column-parallel, which
+    shards the output dim into ``tp`` equal contiguous chunks after the transpose)
+    gives each device a contiguous block of (nk/tp) Q heads, (nk/tp) K heads and
+    (nv/tp) V heads.
 
     qkv_w: [key_dim + key_dim + value_dim, hidden] (fused in_proj_qkv).
     """

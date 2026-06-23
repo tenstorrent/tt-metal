@@ -4,7 +4,8 @@
 """
 KV cache initialization for Qwen3.5 attention with TP support.
 
-Per-device cache uses local KV head count (num_kv_heads // tp).
+Per-device cache uses local KV head count (num_kv_heads // tp, clamped to a minimum
+of 1 for GQA when num_kv_heads < TP).
 Follows gpt-oss kv_cache.py pattern.
 """
 
@@ -26,7 +27,8 @@ def init_kv_cache(
     """
     Initialize KV cache for a single attention layer.
 
-    For TP > 1, each device gets num_kv_heads // tp heads (column-parallel sharding).
+    For TP > 1, each device gets num_kv_heads // tp heads, clamped to a minimum of 1
+    for GQA when num_kv_heads < TP (column-parallel sharding).
     The cache tensor is replicated to each device with the local head count.
 
     Args:
@@ -41,7 +43,7 @@ def init_kv_cache(
     Returns:
         [k_cache, v_cache] list of TT tensors
     """
-    # Determine TP from mesh shape (column axis)
+    # Determine TP from the total number of devices in the mesh
     tp = mesh_device.get_num_devices()
 
     # Per-device local KV head count (args clamps to 1 when n_kv_heads < TP — GQA-assigned).

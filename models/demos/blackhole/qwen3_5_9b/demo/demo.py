@@ -7,7 +7,7 @@ generate, detokenize — for any Qwen3.5-family checkpoint (the model code is co
 27B 3.6 multimodal checkpoint's TEXT backbone runs through the exact same path as the 9B). Defaults
 target Qwen/Qwen3.6-27B on a (1,4) tensor-parallel mesh, the bring-up configuration.
 
-Two execution modes, selectable with --mode:
+Three execution modes, selectable with --mode:
   * eager  — every prefill/decode step dispatches op-by-op from host (the validated reference path).
   * trace  — prefill and the per-token decode step are each captured ONCE as a ttnn trace and then
              replayed with a single device dispatch, the path a real server uses to hide host
@@ -31,7 +31,7 @@ import ttnn
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 
 # A trace bakes in op dispatch + buffer ADDRESSES, so the captured 64-layer prefill and decode graphs
-# need a sizeable per-device trace region. 300 MB clears both graphs at 64 layers on the (1,4) mesh;
+# need a sizeable per-device trace region. ~900 MB (300 MB x 3) clears both graphs at 64 layers on the (1,4) mesh;
 # if it is ever too small ttnn raises an error naming the exact size needed, which --trace-region-size
 # can then set. (Eager mode allocates none of this, but opening one mesh for both modes keeps it simple.)
 DEFAULT_TRACE_REGION_SIZE = 300_000_000 * 3

@@ -40,7 +40,7 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import PagedAttentionConfig
 
 ### Test Parameters & Fixtures ─────────────────────────────────────────────────────────
-os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
+os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
 
 BATCHES = [1, 32]
 PREFILL_SEQLEN = [512]  # prefill prompt length (a PAGE_BLOCK_SIZE multiple, so paged fill is block-aligned)

@@ -5,7 +5,8 @@
 A ttnn trace records a graph's op dispatch and the BUFFER ADDRESSES it reads/writes, then replays the
 whole graph with a single host->device handoff. That hides per-op host dispatch latency, which is what
 bounds decode (each token is one tiny step through 64 layers). Because a trace pins addresses, not
-contents, replaying correctly takes two disciplines, both proven by tests/unit/test_*_trace.py and
+contents, replaying correctly takes two disciplines, both proven by the per-block trace tests in
+tests/unit/ (test_attention.py / test_gdn.py / test_layer.py / test_mlp.py) and
 reproduced here for the whole model:
 
   1. Persistent input buffers. The captured graph reads fixed device tensors, so every replayed step

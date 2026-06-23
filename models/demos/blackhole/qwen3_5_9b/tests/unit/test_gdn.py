@@ -20,7 +20,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 ### Test Parameters & Fixtures ─────────────────────────────────────────────────────────
-os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
+os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
 
 BATCHES = [1, 32]
 PREFILL_SEQLEN = [512]
@@ -30,9 +30,9 @@ TRACE_REGION_SIZE = 268435456
 
 
 @pytest.fixture
-def setup(mesh_device, layer_idx=0) -> tuple[Qwen3_5GatedDeltaNet, dict, Qwen35ModelArgs]:
+def setup(mesh_device, layer_idx=0) -> tuple[Qwen3_5GatedDeltaNet, dict, Qwen35ModelArgs, DynamicCache]:
     """
-    Returns HF Reference GDN, its state_dict, and Qwen35ModelArgs.
+    Returns HF Reference GDN, its state_dict, Qwen35ModelArgs, and a fresh HF DynamicCache.
     """
     args = Qwen35ModelArgs(mesh_device, max_seq_len=max(PREFILL_SEQLEN))
     cfg = args.hf_config.get_text_config()

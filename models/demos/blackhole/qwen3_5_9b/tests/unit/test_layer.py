@@ -40,7 +40,7 @@ from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
 from models.tt_transformers.tt.ccl import TT_CCL
 
 ### Test Parameters & Fixtures ─────────────────────────────────────────────────────────
-os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.5-9B")
+os.environ.setdefault("HF_MODEL", "Qwen/Qwen3.6-27B")
 
 # Batches mirror the real caller, which differs by phase: the model prefills ONE user at a time
 # (per-user KV fill / GDN's per-user state), and decodes the whole batch together. These are also the

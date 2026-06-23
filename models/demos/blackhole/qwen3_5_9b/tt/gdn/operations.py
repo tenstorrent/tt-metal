@@ -63,11 +63,12 @@ def causal_conv1d_silu(x, weight_taps, kernel_size, mesh_device, *, pad, memory_
     TT-NN. Transpose at the call site if your tensor is channels-first.
 
     * ``x``           — ttnn activation ``[B, 1, T, D]`` (TILE_LAYOUT).
-    * ``weight_taps`` — the ``K`` tensors returned by :func:`conv1d_weight_taps`.
+    * ``weight_taps`` — the ``K`` tensors produced by ``tp_common.prepare_conv_taps``
+                        (via ``tp_common.shard_small``), surfaced as ``Qwen35GDNWeights.w_taps``.
     * ``pad``         — optional persistent ``[B, 1, K-1, D]`` zero buffer to prepend.
                         Pass one (built once in ``__init__``) to keep this function
                         trace-capturable; omit it and we allocate a fresh one.
-    * returns         — ttnn ``[B, T, D]`` (TILE_LAYOUT).
+    * returns         — ttnn ``[B, 1, T, D]`` (TILE_LAYOUT).
     """
     B, T, D = x.shape[0], x.shape[2], x.shape[3]
 
@@ -122,7 +123,8 @@ def causal_conv1d_silu_update(x, conv_state, weight_taps, kernel_size, *, memory
 
     * ``x``           — ttnn ``[B, 1, T, D]`` (TILE_LAYOUT); the new decode token(s).
     * ``conv_state``  — ttnn ``[B, 1, state_len, D]`` (TILE_LAYOUT); the carried window.
-    * ``weight_taps`` — the ``K`` tensors from :func:`conv1d_weight_taps`.
+    * ``weight_taps`` — the ``K`` tensors produced by ``tp_common.prepare_conv_taps``
+                        (via ``tp_common.shard_small``), surfaced as ``Qwen35GDNWeights.w_taps``.
     * returns         — ``(out, new_state)``: ``out`` ``[B, 1, T, D]`` post-SiLU and
                         ``new_state`` ``[B, 1, state_len, D]`` (x's dtype) to copy
                         back into the persistent conv-state buffer.

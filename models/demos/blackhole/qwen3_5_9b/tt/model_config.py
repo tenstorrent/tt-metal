@@ -12,7 +12,7 @@ tokenizer are loaded with ``trust_remote_code=True``. The base class resolves th
 checkpoint from ``HF_MODEL`` (``self.CKPT_DIR``) and parses the HF config via
 ``AutoConfig``. No JSON config override and no ``checkpoint_dir`` constructor param remain.
 
-Everything Qwen3.5-specific (hybrid Gated DeltaNet + Gated Full Attention layers,
+Everything Qwen3.5-specific (hybrid Gated DeltaNet + full (softmax) attention layers,
 DeltaNet key/value heads + conv kernel, partial rotary factor) is read from the
 parsed HF text config and set on top of the base params after ``super().__init__()``.
 

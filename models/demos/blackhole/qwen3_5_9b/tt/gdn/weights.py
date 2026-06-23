@@ -3,7 +3,7 @@
 """Weight loading + per-head sharding for the Qwen3.5 Gated DeltaNet block.
 
 The delta-rule recurrence is per-value-head, so everything here shards BY HEAD with no
-cross-device comms inside the layer — only the row-parallel out_proj needs the all-reduce
+cross-device comms inside the layer — only the row-parallel out_proj needs the reduce-scatter
 the forward runs afterward. Projections are kept SEPARATE (wqkv / wz / wa / wb) to match
 the GDN forward rather than fusing them. Consumed by tt/gdn/gdn.py.
 """
@@ -48,7 +48,7 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
     (z, a, b, A_log, dt_bias, out_proj rows) shard with a plain column/row split — no
     reorder needed. The recurrence is per-value-head, so this shards everything BY HEAD
     with no cross-device comms inside the layer; only the row-parallel out_proj needs
-    an all-reduce, which the forward runs afterward. Projections are kept SEPARATE
+    a reduce-scatter, which the forward runs afterward. Projections are kept SEPARATE
     (wqkv / wz / wa / wb) to match the my_gdn forward instead of fusing them, mirroring
     the proven gdn/tp.py loader.
 

@@ -5,10 +5,10 @@
 Ported from models/demos/qwen35_27b/tt/attention.py forward_decode.
 
 Long-context (64k+) correctness choices, validated at 64k on Qwen3.5-27B-FP8 and Qwen3.6-27B:
-  - HYBRID q/k-norm scaling: PREFILL uses the HF-correct (1+weight) scale (sharp attention,
-    required for retrieval — without it long-context attention is uniform and retrieval is zero);
-    DECODE uses the raw weights (flat attention, robust to the small per-step decode noise that
-    sharp attention amplifies into loops). See load_attention_weights_tp / forward_decode.
+  - q/k-norm scaling: both forward_prefill and forward_decode apply the identical HF-correct
+    (1+weight)-scaled q/k RMSNorm (sharp attention, required for retrieval — without it
+    long-context attention is uniform and retrieval is zero). See load_attention_weights /
+    forward_prefill / forward_decode.
   - Q stays bf16 into the chunked SDPA (forward_prefill), NOT bf8. Casting Q to bf8 was
     the real long-context degeneration cause (bf16-Q → coherent 64k/256k summary; bf8-Q →
     loops/gibberish), matching the 9B's deliberately-bf16 path (ttnn_gated_attention.py:277).
@@ -99,7 +99,7 @@ class Qwen35Attention(LightweightModule):
         """Bind an externally-allocated paged KV cache into the single cache slot.
 
         Overwrites self.kv_cache (the [k_cache, v_cache] list) — the same slot forward_decode
-        and forward_prefill_paged read. The internal contiguous cache and the external paged
+        and forward_prefill read. The internal contiguous cache and the external paged
         cache are mutually exclusive per deployment, so one slot serves both; the op variant
         is selected by page_table at call time, not by which cache is bound (mirrors gemma4).
         One call after allocate_kv_caches.

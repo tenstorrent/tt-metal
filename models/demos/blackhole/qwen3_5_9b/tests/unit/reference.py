@@ -6,7 +6,7 @@ The installed transformers ships native Qwen3.5 modeling code, so these tests
 compare TT modules against the real HF layer (the gemma4 test_attention.py
 pattern) instead of a hand-written torch reference:
 * model_path()/text_config() resolve the checkpoint (HF_MODEL or DEFAULT_CKPT)
-* hf_attention()/hf_mlp() load one layer's weights into the HF module
+* hf_rope() builds the HF rotary embedding for the RoPE comparison
 * causal_mask() builds the explicit mask the eager attention path needs
 Single-layer loads keep host RAM in the low-GB range (loading the full model OOMs).
 """

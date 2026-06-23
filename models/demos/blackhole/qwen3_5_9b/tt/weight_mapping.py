@@ -42,7 +42,9 @@ def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
         state_dict: Raw HuggingFace state dict (model. or model.language_model. prefixed).
 
     Returns:
-        Remapped state dict: tok_embeddings / norm / output renamed, layer weights raw.
+        Remapped state dict: ``embed_tokens``→``tok_embeddings`` and ``lm_head``→``output``
+        are explicitly renamed; ``norm`` and every ``layers.N.*`` weight pass through RAW with
+        only the ``model.`` (or ``model.language_model.``) prefix stripped.
     """
 
     def strip_prefix(key: str) -> str:
@@ -59,7 +61,9 @@ def remap_qwen35_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, to
 
         new_key = strip_prefix(key)
 
-        # The three top-level weights the framework modules look up by a fixed name.
+        # Two top-level weights the framework modules look up by a fixed name are
+        # explicitly renamed here; the final norm is NOT renamed — it passes through
+        # below as ``norm.weight`` once strip_prefix has removed the ``model.`` prefix.
         if new_key == "embed_tokens.weight":
             remapped["tok_embeddings.weight"] = tensor
         elif key == "lm_head.weight" or new_key == "lm_head.weight":
