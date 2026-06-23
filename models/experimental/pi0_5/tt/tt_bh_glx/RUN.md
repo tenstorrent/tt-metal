@@ -151,24 +151,45 @@ tt-smi -glx_reset   # always start clean
 | `test_perf_1x8_traced_2cq` | 2 command queues: H2D input upload on CQ1 overlapped with compute on CQ0 via `ttnn.record_event` / `wait_for_event`. Closes wall-clock toward the `trace_exec` floor. | Always on |
 | `test_pcc_1x8_all_stages` | Vision + Prefill (isolated, same random prefix on both sides) + e2e (matched-seed noise) + estimated denoise = e2e / (vision · prefill). | `PI05_E2E_PCC=1` |
 
-### Run all tests
+### Run all tests — exact commands to reproduce the reference numbers
+
+The `[env]` block printed at startup lists which production flags are set —
+confirms `pi05_production.env` was sourced.
 
 ```bash
-# Perf — e2e single-trace breakdown (host overhead split)
+# (1) Perf — e2e single-trace replay (single CQ)
+#     Reports: input_upload / trace_exec / output_readback / traced_total
+#     The "trace_exec" number is the pure-compute floor (33.97 ms 3-cam).
 python_env/bin/pytest -sq $P::test_perf_1x8_traced
 
-# Perf — per-stage traced breakdown via 3 sub-traces
+# (2) Perf — per-stage breakdown via 3 sub-traces (single CQ)
+#     Reports: per-stage (vision / prefill / denoise) ms.
+#     compute(v+p+d) ≈ trace_exec from (1) within 0.1 ms.
 python_env/bin/pytest -sq $P::test_perf_1x8_traced_staged
 
-# PCC — vision + prefill + e2e + estimated denoise
+# (3) Perf — e2e single-trace + 2CQ (the "fast" path)
+#     Reports: wall-clock with H2D hidden behind compute on CQ1.
+python_env/bin/pytest -sq $P::test_perf_1x8_traced_2cq
+
+# (4) PCC — vision + prefill + estimated denoise + e2e
+#     Opt-in (slow; runs CPU torch ref).
 PI05_E2E_PCC=1 python_env/bin/pytest -sq $P::test_pcc_1x8_all_stages
 
-# 2-cam variant: rerun with PI0_NUM_CAMERAS=2
-PI0_NUM_CAMERAS=2 python_env/bin/pytest -sq $P::test_perf_1x8_traced_staged
+# 2-cam variant of any of the above:
+PI0_NUM_CAMERAS=2 python_env/bin/pytest -sq $P::<test_name>
+
+# Reset the mesh between runs (especially between cam-count switches):
+tt-smi -glx_reset
 ```
 
-Each test prints a startup `[env]` block listing which production flags are
-set — confirms the pi05_production.env was sourced.
+| Reference table below | Reproduced by |
+|---|---|
+| 2CQ replay table | `(3) test_perf_1x8_traced_2cq` |
+| e2e single-trace breakdown table | `(1) test_perf_1x8_traced` |
+| per-stage breakdown table | `(2) test_perf_1x8_traced_staged` |
+| PCC table | `(4) PI05_E2E_PCC=1 test_pcc_1x8_all_stages` |
+| CCL contribution table | tracy on `(2)`, then v4 annotator — see "Profiling (tracy + annotator)" section below |
+| Per-iter kernel breakdown (24.75 ms, ÷4) | aggregated from the same tracy CSV using the awk recipe in the Profiling section |
 
 ### Knobs (1×8 pipeline)
 
@@ -349,46 +370,139 @@ Expected CCL summary per iter on a sane device (3-cam, commit `38ac051ee68`):
 ~73 CCL ops totaling ~3.0-3.3 ms of kernel time (AllGather inside vision,
 ReduceScatter × 18 in prefill MLPs, plus per-step reductions in denoise).
 
-### 5. Wall-clock vs kernel-time gap
+### 5. Wall-clock vs kernel-time gap (corrected)
 
-For commit `38ac051ee68`, 3-cam, PERF_ITERS=20:
+For commit `5898b4f3bf5`, 3-cam, PERF_ITERS=20:
 
 | Source | Value |
 |---|---:|
-| `trace_exec` wall-clock (`test_perf_1x8_traced`) | 33.97 ms |
-| Sum of `DEVICE KERNEL DURATION` (canonical iter, annotator) | 28.32 ms |
-| Gap | ~5.65 ms |
+| `trace_exec` wall-clock (`test_perf_1x8_traced` — e2e single trace, single CQ) | 33.97 ms |
+| Per-iter kernel sum on device 1 (÷4 of all device-1 ops, **includes CCL**) | 24.75 ms |
+| Wall-clock gap | ~9.2 ms |
 
-The gap is **NOT** unaccounted CCL — CCL kernel time on each chip
-(~3.0-3.3 ms/iter from `AllGather` + `ReduceScatter`) already includes
-cross-chip fabric wait. The gap is **trace-dispatcher overhead** (~1-2 µs/op
-× ~1500 ops/iter ≈ 2-3 ms) + per-op firmware setup/teardown + L1↔DRAM DMA
-between consecutive ops — work that happens between kernel runs and isn't
-captured in any single op's `DEVICE KERNEL DURATION`.
+Important: the annotator's "canonical inference total = 28.32 ms" is **NOT**
+the right number to compare against `trace_exec`. The canonical row range is
+the last 1518 rows of CSV by host time, which is the **tail of the inference
+on devices 0+1** — and CCLs happen at stage transitions in the **middle** of
+an inference, not the tail. **The canonical range has zero CCL ops** (we
+verified this directly). So 28.32 = non-CCL ops only.
 
-## Reference numbers (commit `38ac051ee68`, 2026-06-23)
+The true per-iter kernel sum on a single chip = 24.75 ms (device 1, ÷4
+over 4 inferences detected), breaking down as 3.30 ms CCL + 21.45 ms non-CCL.
 
-### Perf — 2CQ replay (`test_perf_1x8_traced_2cq`, PERF_ITERS=20)
+The ~9.2 ms gap between wall-clock (33.97) and kernel sum (24.75) is **NOT**
+extra CCL — CCL kernel time already includes cross-chip fabric wait
+(every chip's CCL kernel only completes after the fabric handshake). The
+gap is **trace-dispatcher overhead** (~1-2 µs/op × ~1500 ops/iter ≈ 2-3 ms)
++ per-op firmware setup/teardown + L1↔DRAM DMA between consecutive ops +
+trace finalize/launch barriers.
 
-| Config | mean ms | min ms | vs single-CQ traced_total | gap to trace_exec floor |
+## Reference numbers (commit `5898b4f3bf5`, 2026-06-23, PERF_ITERS=20)
+
+### Which test reports which number
+
+| Test | Trace structure | CQs | Key metric reported |
+|---|---|---|---|
+| `test_perf_1x8_traced` | **1 e2e trace** | 1 | `trace_exec` (pure compute time, no host I/O): 33.97 ms (3-cam) / 31.72 ms (2-cam) |
+| `test_perf_1x8_traced_staged` | **3 sub-traces** | 1 | per-stage breakdown: vision 5.02 + prefill 9.63 + denoise 19.42 = compute 34.06 ms (3-cam) |
+| `test_perf_1x8_traced_2cq` | **1 e2e trace** (same body) | 2 | wall-clock with H2D-overlap-compute: 35.59 ms (3-cam) / 33.34 ms (2-cam) |
+
+The 33-34 ms "compute" floor appears across all three tests because the
+trace body is the same; only the host-side accounting differs.
+
+### Perf — 2CQ replay (`test_perf_1x8_traced_2cq`)
+
+E2E single trace replayed on CQ0 with H2D for the next iter on CQ1
+overlapped with current iter's compute.
+
+| Config | mean ms | min ms | vs single-CQ `traced_total` | gap to compute floor |
 |---|---:|---:|---:|---:|
-| 3-cam | **35.30** | 34.94 | −14 ms (−28%) | +2 ms |
-| 2-cam | **33.12** | 32.76 | −6 ms (−15%) | +2 ms |
+| 3-cam | **35.59** | 35.15 | −15.3 ms (−30%) | +1.6 ms |
+| 2-cam | **33.34** | 32.91 | −15.5 ms (−32%) | +1.6 ms |
 
-H2D input upload runs on CQ1 overlapped with CQ0 compute; sync barrier +
-output readback at end of each iter is the ~2 ms residual that can't hide.
+The ~1.6 ms residual above the compute floor is the per-iter
+`synchronize_device + to_torch` sync barrier + D2H readback that runs serial
+at the end of each iter.
 
-### Perf — per-stage TRACED breakdown (`test_perf_1x8_traced_staged`, PERF_ITERS=20)
+### Perf — e2e single-trace (`test_perf_1x8_traced`, single CQ)
+
+| Bucket | 3-cam mean / min | 2-cam mean / min |
+|---|---:|---:|
+| input_upload (host, serial) | 15.18 / 14.81 ms | 16.02 / 15.49 ms |
+| **`trace_exec` (pure compute)** | **33.97 / 33.94 ms** | **31.72 / 31.67 ms** |
+| output_readback | 1.40 / 1.07 ms | 1.30 / 0.96 ms |
+| `traced_total` | 50.55 / 49.97 ms | 49.04 / 48.50 ms |
+
+### Perf — per-stage TRACED breakdown (`test_perf_1x8_traced_staged`)
+
+Per-stage decomposition via 3 sub-traces on the same mesh. The `compute (v+p+d)`
+sum here matches `trace_exec` from the e2e test within 0.1 ms — sub-trace
+decomposition is faithful.
 
 | Stage | 3-cam mean | 2-cam mean | Δ (3→2 cam) |
 |---|---:|---:|---:|
-| input_upload (host) | 14.25 ms | 6.49 ms | — |
-| **vision** (SigLIP DP, 8 chips) | **5.01 ms** | **5.00 ms** | 0 (DP pads to 8 cams regardless) |
-| **prefill** (TP=8) | **9.62 ms** | **8.26 ms** | −1.36 (1024→768 prefix) |
-| **denoise** (5 step, replicated) | **19.37 ms** | **18.51 ms** | −0.86 (shorter KV in cross-attn) |
-| output_readback | 1.24 ms | 1.12 ms | — |
-| **compute (v+p+d)** | **34.01 ms** | **31.78 ms** | −2.23 |
-| traced_total | 49.49 ms | 39.39 ms | — |
+| input_upload (host) | 15.35 ms | 15.59 ms | +0.2 |
+| **vision** (SigLIP DP, 8 chips) | **5.02 ms** | **5.02 ms** | 0 (DP pads to 8 cams regardless) |
+| **prefill** (TP=8) | **9.63 ms** | **8.27 ms** | −1.36 (1024→768 prefix) |
+| **denoise** (5 step, replicated) | **19.42 ms** | **18.56 ms** | −0.86 (shorter KV in cross-attn) |
+| output_readback | 1.44 ms | 1.35 ms | −0.09 |
+| **compute (v+p+d)** | **34.06 ms** | **31.85 ms** | −2.21 |
+| `traced_total` | 50.85 ms | 48.79 ms | — |
+
+### CCL contribution per stage (tracy + annotator, device 1, ÷4 over 4 inferences)
+
+The CCL ÷ non-CCL split per stage. **Caveat**: the high CCL % in `denoise_step_1`/
+`denoise_step_2` is *boundary leakage* — those are actually prefill's per-layer
+all_reduces (RS + AG) whose post-SDPA ops land in the next stage's annotator
+window. See architectural attribution below the table.
+
+#### 3-cam
+
+| STAGE | CCL ms | non-CCL ms | total ms | CCL % |
+|---|---:|---:|---:|---:|
+| prefix_setup | 0.000 | 0.068 | 0.068 | 0.0% |
+| siglip | 0.264 | 4.258 | 4.522 | 5.8% |
+| vlm_prefill | 0.131 | 4.267 | 4.398 | 3.0% |
+| denoise_step_1 | 1.195 | 3.115 | 4.310 | 27.7% |
+| denoise_step_2 | 1.090 | 2.267 | 3.356 | 32.5% |
+| denoise_step_3 | 0.329 | 1.939 | 2.268 | 14.5% |
+| denoise_step_4 | 0.148 | 2.803 | 2.951 | 5.0% |
+| denoise_step_5 | 0.149 | 2.729 | 2.878 | 5.2% |
+| **TOTAL** | **3.305** | **21.446** | **24.751** | **13.4%** |
+
+#### 2-cam
+
+| STAGE | CCL ms | non-CCL ms | total ms | CCL % |
+|---|---:|---:|---:|---:|
+| prefix_setup | 0.000 | 0.068 | 0.068 | 0.0% |
+| siglip | 0.211 | 4.036 | 4.247 | 5.0% |
+| vlm_prefill | 0.107 | 4.124 | 4.231 | 2.5% |
+| denoise_step_1 | 1.041 | 2.853 | 3.893 | 26.7% |
+| denoise_step_2 | 0.942 | 2.001 | 2.943 | 32.0% |
+| denoise_step_3 | 0.274 | 1.820 | 2.094 | 13.1% |
+| denoise_step_4 | 0.106 | 2.656 | 2.762 | 3.8% |
+| denoise_step_5 | 0.105 | 2.585 | 2.690 | 3.9% |
+| **TOTAL** | **2.785** | **20.144** | **22.928** | **12.1%** |
+
+**Architecturally true CCL attribution** (correcting for the annotator's
+boundary leakage):
+
+| Stage | Real CCL contribution (3-cam) | Origin |
+|---|---:|---|
+| SigLIP | ~0.26 ms | 1× AllGather over (8, 256, 2048) at end of vision DP |
+| VLM Prefill | ~2.5 ms | 18× all_reduce (RS+AG) per MLP layer; some leaks into "denoise_step_1/2" labels |
+| Denoise | ~0.5 ms | ~18× small AllGathers from head-parallel attn across 5 steps × 18 layers |
+| **TOTAL** | **~3.3 ms** | matches the bottom-line table CCL total |
+
+### Per-iter kernel breakdown (device 1 ÷ 4 inferences, includes CCL)
+
+| | 3-cam | 2-cam |
+|---|---:|---:|
+| Per-iter kernel total | 24.75 ms | 22.93 ms |
+| of which: **CCL** | 3.30 ms (13.4%) | 2.79 ms (12.1%) |
+| of which: non-CCL | 21.45 ms (86.6%) | 20.14 ms (87.9%) |
+| Wall-clock `trace_exec` | 33.97 ms | 31.72 ms |
+| **Wall-clock gap** (dispatcher + sync barriers) | **~9.2 ms** | **~8.8 ms** |
 
 ### PCC (`test_pcc_1x8_all_stages`, PI05_E2E_PCC=1)
 
