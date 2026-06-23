@@ -668,7 +668,7 @@ def test_demo(
         # VERY_LARGE_INTEGER sentinel (1e30), which does not fit a usize -> "OverflowError: int
         # too big to convert". Cap it to the model's real 512 on the tokenizer bert-score builds
         # internally (patch target is bert_score.score.get_tokenizer, where score() resolves it).
-        # TODO(#42151): Qwen2.5-VL-32B produces gibberish output on wh_llmbox_perf; once that
+        # TODO(#47822): Qwen2.5-VL-32B produces gibberish output on wh_llmbox_perf; once that
         # accuracy bug is fixed the BERTScore F1 assertion below should pass. Investigate separately.
         _orig_get_tokenizer = _bs_score.get_tokenizer
 
