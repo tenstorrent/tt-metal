@@ -167,6 +167,11 @@ jobs:
           if [ "${{ matrix.test-group.slow_dispatch }}" = "true" ]; then
             export TT_METAL_SLOW_DISPATCH_MODE=1
           fi
+          # merge_device_perf_results.py calls into gitpython (repo.head.object.hexsha).
+          # Mark both /work and the runner workspace as safe because the container
+          # exposes the repo at both paths; otherwise git reports dubious ownership.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory /work
           python3 tools/tt-power-sidecar/tt_power_sidecar.py \
             --backend sysfs \
             --out /work/power_report.json \
@@ -195,6 +200,9 @@ jobs:
         env:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
+          # See note in the test step: gitpython needs both paths marked safe.
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git config --global --add safe.directory /work
           export DEVICE_PERF_REPORT_FILENAME=Ops_Perf.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
 
