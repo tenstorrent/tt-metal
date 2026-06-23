@@ -193,15 +193,24 @@ def _parse_rr_meta(meta, activation=None):
             if c is not None:
                 rr[f"rr_scale{i}"] = c
     elif method == "newton_root":
-        # STANDALONE seed+Newton evaluator: magic seed (hex) + Newton/Householder
-        # coefficients/iterations, all from the CSV METADATA. The kernel bypasses the
-        # segment cascade entirely (method 9), so only these nr_* params matter.
-        rr["nr_magic"] = int(str(meta["newton_root_magic"]).strip(), 0)  # 0x... hex -> int
+        # STANDALONE seed+Newton evaluator. Fully DATA-DRIVEN: the method params come from
+        # the CSV METADATA — NO per-activation hardcoding. `newton_root_reciprocal`
+        # distinguishes sqrt (double-Newton) from rsqrt (inverse-sqrt Newton); it is a
+        # genuine method parameter, not a universal constant. The magic seed follows the
+        # reciprocal flag (a per-variant method constant, not an activation key).
+        # If the CSV omits these (e.g. a JSON-driven regen that dropped them), we CANNOT
+        # evaluate without hardcoding the activation, so mark unsupported -> out-of-scope
+        # and flag it; the fitter must re-emit newton_root_* in the CSV.
+        nr_keys = ("newton_root_reciprocal", "newton_root_n", "newton_root_magic")
+        if not any(k in meta for k in nr_keys):
+            return {"rr_method": 0, "_nr_params_missing": True}, False, "newton_root", None
+        rr["nr_reciprocal"] = 1 if str(meta.get("newton_root_reciprocal", "False")).lower() == "true" else 0
+        rr["nr_n"] = int(float(meta.get("newton_root_n", 2)))
+        mm = str(meta.get("newton_root_magic", "")).strip()
+        rr["nr_magic"] = int(mm, 0) if mm else (0x5F3759DF if rr["nr_reciprocal"] else 0x5F1110A0)
         rr["nr_c1"] = mf("newton_root_c1", 0.0)
         rr["nr_c2"] = mf("newton_root_c2", 0.0)
         rr["nr_iters"] = int(float(meta.get("newton_root_iters", 2)))
-        rr["nr_n"] = int(float(meta.get("newton_root_n", 2)))
-        rr["nr_reciprocal"] = 1 if str(meta.get("newton_root_reciprocal", "False")).lower() == "true" else 0
     # trig / tan carry no kernel-tunable params (pi / Cody-Waite constants are hardcoded).
 
     orig = None
