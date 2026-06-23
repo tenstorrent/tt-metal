@@ -123,7 +123,6 @@ class VisionReference(torch.nn.Module):
     def __init__(self, args):
         super().__init__()
         sd = load_vision_state_dict(args.snapshot_dir)
-        self._sd = sd
         eps = args.layer_norm_eps
         # patch embed as a Linear (1176 -> 1280, no bias)
         self.patch_embed = _linear(sd, "vision_tower.embeddings.proj", bias=("vision_tower.embeddings.proj.bias" in sd))
