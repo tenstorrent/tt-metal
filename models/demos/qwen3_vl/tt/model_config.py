@@ -105,6 +105,7 @@ class VisionModelArgs(ModelArgs):
 
     def reference_vision_model(self, depth=None):
         # Workaround until Qwen2.5-VL is fully integrated into a HF release
+        import torch
         from transformers.models.qwen3_vl.modeling_qwen3_vl import (
             Qwen3VLForConditionalGeneration as AutoModelForCausalLM,
         )
@@ -112,8 +113,12 @@ class VisionModelArgs(ModelArgs):
         print("Loading Qwen3-VL model: ", AutoModelForCausalLM)
         config = AutoModelForCausalLM.config_class.from_pretrained(self.CKPT_DIR)
         config.vision_config.depth = depth if depth is not None else config.vision_config.depth
-        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config)
-        return model.visual
+        # transformers 5.x loads in the config dtype (bf16) by default; force float32 so the reference
+        # and its sub-modules match the float32 test inputs (4.x defaulted to float32).
+        model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR, config=config, torch_dtype=torch.float32)
+        # transformers 5.x nests the vision tower under model.model.visual (Qwen3VLModel); 4.x exposed
+        # it at the top level as model.visual.
+        return model.visual if hasattr(model, "visual") else model.model.visual
 
     def reference_vision_block(self, layer_num=0):
         return self.reference_vision_model().blocks[layer_num]

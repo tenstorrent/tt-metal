@@ -303,6 +303,19 @@
   owner_id: U07RY6B5FLJ # Gongyu Wang
   team: models
 
+- name: Qwen3-VL-32B e2e tests
+  cmd: |
+    uv pip install -r models/demos/qwen3_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen3-VL-32B-Instruct MESH_DEVICE=T3K
+    pytest models/demos/qwen3_vl/demo/demo.py --timeout 600
+  model: qwen3-vl-32b
+  skus:
+    wh_llmbox_perf:
+      timeout: 10
+      tier: 2
+  owner_id: U08H31YMN4Q # Sanjay Sanjay
+  team: models
+
 # TODO Top-1/Top-5 test failing with segfaulting.
 # pytest --timeout 600 models/tt_transformers/demo/simple_text_demo.py -k "performance-ci-token-matching"
 - name: QwQ-32B e2e tests

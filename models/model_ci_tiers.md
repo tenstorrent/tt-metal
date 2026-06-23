@@ -60,6 +60,7 @@ The initial release of the 3-tier model CI includes models owned by the models-t
 | Qwen2.5-32B | WH LLMBox, BH QuietBox 2 |
 | Qwen2.5-Coder-32B | WH LLMBox |
 | Qwen2.5-72B-VL | WH LLMBox, BH QuietBox 2 |
+| Qwen3-VL-32B | WH LLMBox |
 | Llama90B-VL | WH LLMBox |
 | Shallow-UNet | WH N150, WH LLMBox |
 | Mistral-7B | WH N150 |
