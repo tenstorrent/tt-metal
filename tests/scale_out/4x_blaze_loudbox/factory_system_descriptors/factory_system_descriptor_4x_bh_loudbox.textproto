@@ -1,17 +1,9 @@
 hosts {
-  hostname: "bh-lb-40"
+  hostname: "bh-lb-37"
   hall: "Default"
   aisle: "A"
   rack: 1
-  shelf_u: 10
-  motherboard: "H13DSG-O-CPU"
-}
-hosts {
-  hostname: "bh-lb-38"
-  hall: "Default"
-  aisle: "A"
-  rack: 1
-  shelf_u: 30
+  shelf_u: 40
   motherboard: "H13DSG-O-CPU"
 }
 hosts {
@@ -23,11 +15,19 @@ hosts {
   motherboard: "H13DSG-O-CPU"
 }
 hosts {
-  hostname: "bh-lb-37"
+  hostname: "bh-lb-38"
   hall: "Default"
   aisle: "A"
   rack: 1
-  shelf_u: 40
+  shelf_u: 30
+  motherboard: "H13DSG-O-CPU"
+}
+hosts {
+  hostname: "bh-lb-40"
+  hall: "Default"
+  aisle: "A"
+  rack: 1
+  shelf_u: 10
   motherboard: "H13DSG-O-CPU"
 }
 board_types {
