@@ -103,7 +103,8 @@ jobs:
           # precedence, so no x-api-key is sent to the proxy).
           anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
           github_token: ${{ secrets.AI_GH_TOKEN }}
-          prompt: "/code-review max --comment"
+          show_full_output: true   # TEMP: diagnose whether /code-review found findings + tried to post
+          prompt: "/code-review low --comment"   # TEMP: lower effort = cheaper/faster while testing
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
           # anthropic/ prefix for the proxy).
           claude_args: |
