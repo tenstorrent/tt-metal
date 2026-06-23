@@ -1,11 +1,4 @@
-# Test matrix for the L2 nightly pipeline — non-ttnn-team residual entries.
-#
-# After the ttnn-team reorg, the 22 ttnn ops entries that used to live here
-# moved to ops_unit_tests.yaml / ops_integration_tests.yaml /
-# ttnn_integration_tests.yaml / tt_cnn_unit_tests.yaml. The ttsim
-# compute-fused entry moved to ttsim_unit_tests.yaml. This file retains the
-# models (sdxl) entries that still need an l2-budgeted home
-# until those teams reorg their own buckets.
+# Test matrix for the shiel — non-ttnn-team residual entries.
 #
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
@@ -36,8 +29,8 @@
       timeout: 90
     wh_n300_civ2:
       timeout: 90
-  owner_id: U0837MYG788 # Marko Radosavljevic
-  team: models
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
   category: sdxl
 
 - name: ttnn nightly sdxl tests (blackhole P150b)
@@ -47,8 +40,8 @@
   skus:
     bh_p150b_civ2:
       timeout: 70
-  owner_id: U0837MYG788 # Marko Radosavljevic
-  team: models
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
   category: sdxl
 
 - name: ttnn nightly sdxl demo cfg parallel test (N300)
@@ -56,6 +49,6 @@
   skus:
     wh_n300_civ2:
       timeout: 25
-  owner_id: U0837MYG788 # Marko Radosavljevic
-  team: models
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
   category: sdxl
