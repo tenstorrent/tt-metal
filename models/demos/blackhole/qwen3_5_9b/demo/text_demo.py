@@ -29,11 +29,11 @@ from models.common.utility_functions import run_for_blackhole
 from models.demos.blackhole.qwen3_5_9b.tt.model import Qwen35Model
 from models.tt_transformers.tt.generator import Generator
 
-# Multi-device (TP) is selected via MESH_DEVICE. The 9B runs on a single P150 (1,1)
-# and the 27B on a P150x4 (1,4) Blackhole mesh; on a single device the model runs its
-# validated single-device path, on a multi-device mesh it needs FABRIC_1D for the TP
-# collectives (see tp_common notes).
-_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 1))
+# Multi-device (TP) is selected via MESH_DEVICE. The 27B (default) runs on a P150x4
+# (1,4) Blackhole mesh; the 9B can run on a single P150 (1,1) via MESH_DEVICE=P150.
+# On a single device the model runs its validated single-device path, on a multi-device
+# mesh it needs FABRIC_1D for the TP collectives (see tp_common notes).
+_MESH_SHAPE = {"P150": (1, 1), "P150x4": (1, 4)}.get(os.environ.get("MESH_DEVICE"), (1, 4))
 _MULTI = _MESH_SHAPE != (1, 1)
 # Multi-device (TP) long-context prefill replays a captured per-chunk trace, so the mesh
 # needs a trace region (ttnn's DEFAULT_TRACE_REGION_SIZE is 0). 256 MiB matches the validated
@@ -329,7 +329,7 @@ def test_demo_text(
             actual_len >= 0.95 * seqlen
         ), f"prompt clipped to {actual_len} tokens, expected ~{seqlen} (corpus too short for seqlen={seqlen})"
     logger.info(
-        f"Prompt: {actual_len} tokens (block budget: {num_blocks} blocks × {BLOCK_SIZE} = {max_seq_len} tokens)"
+        f"Prompt: {actual_len} tokens (block budget: {num_blocks} blocks x {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
 
     # Multi-device (TP): route through the chunk-outer prefill + paged decode path.
@@ -343,6 +343,15 @@ def test_demo_text(
         logger.info(f"[TP] GENERATED: {text!r}")
         assert len(generated) == max_generated_tokens, f"{len(generated)} != {max_generated_tokens}"
         assert len(set(generated)) > 1, f"degenerate generation: {generated}"
+        targets = PERF_TARGETS.get(actual_len)
+        if targets:
+            assert (
+                perf["ttft_s"] < targets["max_ttft_s"]
+            ), f"[TP] TTFT {perf['ttft_s']:.1f}s exceeds target {targets['max_ttft_s']}s at seqlen={actual_len}"
+            assert perf["decode_tok_s"] >= targets["min_decode_tok_s"], (
+                f"[TP] Decode {perf['decode_tok_s']:.1f} tok/s below target"
+                f" {targets['min_decode_tok_s']} tok/s at seqlen={actual_len}"
+            )
         return
 
     # Warmup: compile programs (not counted in TTFT). A short traced prompt takes the masked
