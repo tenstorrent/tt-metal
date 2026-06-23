@@ -17,7 +17,7 @@
 - **Metal 2.0** is the new **host API** — what the program factory uses to declare kernels, buffers, semaphores, and bindings. It also introduces **DFB** (Dataflow Buffer) at the spec layer, replacing the legacy **CB** (CircularBuffer); the two are essentially synonyms on Gen1, but DFB's semantics diverge meaningfully on Gen2.
 - **Device 2.0** is a *separate, earlier* overhaul of the **kernel-side** data-movement APIs (safer, more object-oriented wrappers — `experimental::Noc`, kernel-side `CircularBuffer` wrappers, etc.). The [Prerequisites step](#prerequisites) gates on Device 2.0 migration — for the op's own kernels *and* any donor kernels it calls — as a hard prerequisite to Metal 2.0, but Device 2.0 is *not* part of Metal 2.0 itself.
 - **`ProgramDescriptor` API** is a TTNN-side framework that ops must migrate to before a Metal 2.0 port becomes possible. The [Prerequisites step](#prerequisites) gates on it.
-- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric).
+- **Common acronyms you'll see throughout:** `CB` = CircularBuffer; `DFB` = DataflowBuffer (see above); `RTA` = runtime args; `CTA` = compile-time args; `CRTA` = common runtime args (values broadcast to all nodes); `TA` = TensorAccessor; `LLK` = Low-Level Kernel (the framework-provided kernel-side primitives); `NoC` = Network-on-Chip (the on-die fabric); `SPSC` = single-producer / single-consumer (per CB instance, per node).
 
 For the conceptual map of how Metal 2.0 abstractions fit together — `ProgramSpec`, `KernelSpec`, `TensorParameter` / `TensorBinding`, `DataflowBufferSpec`, the spec/run-args split — see [`metal2_migration_guide.md`](metal2_migration_guide.md).
 
@@ -67,7 +67,7 @@ You do not skip the audit. You do not pre-load the recipe document. The audit is
 
 ## Feasibility audit
 
-For the op in scope, work through the audit in seven subjects, in order: **[Prerequisites](#prerequisites)** (ProgramDescriptor + Device 2.0), **[Feature compatibility](#feature-compatibility)**, **[TensorAccessor handling](#tensoraccessor-handling)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[Custom program hash](#custom-program-hash)**, **[Other signals](#other-signals)**, and **[TTNN factory concept analysis](#ttnn-factory-concept-analysis)** (run last, since it draws on the others' findings). Each subject's checks have three possible outcomes:
+For the op in scope, work through the audit in eight subjects, in order: **[Prerequisites](#prerequisites)** (ProgramDescriptor + Device 2.0), **[Feature compatibility](#feature-compatibility)**, **[TensorAccessor handling](#tensoraccessor-handling)**, **[DFB endpoint legality](#dfb-endpoint-legality-spsc)**, **[Out-of-directory coupling](#out-of-directory-coupling)**, **[Custom program hash](#custom-program-hash)**, **[Other signals](#other-signals)**, and **[TTNN factory concept analysis](#ttnn-factory-concept-analysis)** (run last, since it draws on the others' findings). Each subject's checks have three possible outcomes:
 
 - **Green** — proceed past this check.
 - **Yellow** — requires user judgment (ambiguous signal, or a supported-but-trade-off construct). Ask the user; respect the answer.
@@ -92,7 +92,9 @@ For the op in scope, work through the audit in seven subjects, in order: **[Prer
 | Per-binding TensorAccessor handling — Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge) | **PORT WORK** | brief (Construct) + team |
 | Delete custom `compute_program_hash` (→ default) | **PORT WORK** | brief (Construct) + team |
 | Notable constructs — aliased CB / borrowed-mem DFB / dynamic TA (confusing); non-zero sem init (deprecated-but-fine) | **FYI-P** | brief (Watch-for) + team |
-| Fake CB (address-only; no producer + consumer) — port applies the workaround | **FYI-P** | brief (Watch-for) + team |
+| Sync-free CB (address-only; no FIFO producer + consumer) — port applies the self-loop workaround | **FYI-P** | brief (Watch-for) + team |
+| DFB endpoint legality — SPSC violation (hidden 2nd writer / multi-reader tensor-view on a node) | **GATE** (config-scoped) | brief: blocked / clean subset · team: detail + pre-port fix → op owner |
+| DFB endpoint legality — dead CB (zero endpoints) | **FYI-P** | brief (Watch-for) + team |
 | Cross-op / shared-kernel flags | **FYI-P** | brief (Watch-for) + team |
 | RTA varargs | **FYI-P** | brief (Watch-for) + team |
 | Out-of-directory coupling & donor shape analysis | **FYI-U** | team only |
@@ -100,7 +102,7 @@ For the op in scope, work through the audit in seven subjects, in order: **[Prer
 | Incidental code anomalies — dead RTAs, dead-but-hashed attributes, suspicious constants | **FYI-U** | team only |
 
 **The four roles:**
-- **GATE** — blocks the port (an unmet prereq or an UNSUPPORTED feature). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
+- **GATE** — blocks the port (an unmet prereq, an UNSUPPORTED feature, or an SPSC endpoint-legality violation needing an op-owner pre-port fix). On PASS, the porter brief carries a one-line "cleared"; on FAIL, *no brief is issued* (there is no port) and the detail routes to the owning team. (A *config-scoped* GATE — e.g. GlobalCircularBuffer or an SPSC violation confined to one factory/path — still issues a brief for the clean subset; see [Code-path scope](#output-the-two-documents).) Always complete every check even after a GATE fails — the report captures everything the port will eventually need.
 - **PORT WORK** — the porter must *act* on it during the port.
 - **FYI-P** — informational, surfaced *to the porter* (and recorded for the team).
 - **FYI-U** — informational, *team-only* (feeds other workstreams; never reaches the porter).
@@ -168,7 +170,7 @@ This resolves **at port time** — it waits for no framework feature, with one e
 
 **Causal-link gate (run this first, per binding).** Before classifying any binding, check whether the kernel's access is a **borrowed-memory DFB read**: it reads tensor data through `cb_*.wait_front` / `cb_*.get_read_ptr` from a CB that is itself a borrowed-memory CB (see the [Dynamic CircularBuffer entry](#dynamic-circularbuffer-cb-built-on-borrowed-buffer-memory--landed) under Feature compatibility). There the lack of `TensorAccessor` is *intended* — the borrowed-memory DFB **is** the tensor access — and the port handles it via `DataflowBufferSpec::borrowed_from`. Mark such a binding **clean**; do not force it into Case 1 or Case 2. Mis-classifying it as "convert to TensorAccessor" would be a regression.
 
-**But "clean" requires a real producer *and* consumer.** A borrowed-memory CB is only a genuine DFB if something produces into it and something consumes it — a sharded reader's fake-push satisfying a waiting compute consumer is the canonical legit case. **Litmus: does the CB have a producer *and* a consumer?** (The same core may be both.) If nothing produces into the CB and it is merely read by base pointer — no FIFO anyone waits on — it is a **fake CB**, *not* a clean borrowed-memory DFB. A fake CB cannot be expressed as a Metal 2.0 DFB (the spec validator requires ≥1 producer and ≥1 consumer), so the port resolves it with the sanctioned **fake-CB workaround** (see the porting recipe). This does **not** gate — the workaround keeps the port unblocked — but **report it as a heads-up (FYI-P)** at the **(CB, endpoint)** edge (the same CB can be a real LLK operand on one binding and address-only on another). The recip-LUT shape (resident input, read by raw pointer, no producer) is the trap this catches. If a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan the Dynamic CircularBuffer rule for the same code path before finalizing.
+**But "clean" requires the CB to be *synchronized*.** A borrowed-memory CB is a genuine DFB only if the kernels actually drive its FIFO machinery — something `push_back`s into it and something `wait_front`s on it (a sharded reader presenting already-resident data via `push_back`, satisfying a waiting compute consumer, is the canonical legit case). **Litmus: does any kernel drive the sync machinery on this CB — a FIFO producer *and* a FIFO consumer — or is it pointer-only?** (The same core may be both endpoints.) If nothing produces into the CB and it is merely read by base pointer — no FIFO anyone waits on — it is a **sync-free CB**, *not* a clean borrowed-memory DFB. A sync-free CB cannot be expressed as a Metal 2.0 DFB (the spec validator requires ≥1 producer and ≥1 consumer), so the port resolves it with the sanctioned **self-loop workaround** (see [the porting recipe](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround)). This does **not** gate — the workaround keeps the port unblocked — but **report it as a heads-up (FYI-P)** at the **(CB, endpoint)** edge (the same CB can be a synchronized LLK operand on one binding and pointer-only on another). A resident input read by raw pointer, with no producer — e.g. a reciprocal lookup table — is the trap this catches. If a kernel involves sharded code paths or reads from a CB rather than via `TensorAccessor`, scan the Dynamic CircularBuffer rule for the same code path before finalizing. This is only the *floor* (≥1 of each); a CB that passes it can still fail the *ceiling* — see [DFB endpoint legality](#dfb-endpoint-legality-spsc) for the SPSC (≤1 per node) and dead-CB (zero-endpoint) checks, including the **hidden second writer** — invisible to a FIFO-sync trace, so it slips this floor as "clean," yet a real SPSC violation best caught here pre-port (otherwise a cryptic late port-validation rejection).
 
 **The two cases.** For each `TensorParameter` the op declares (or would declare in the port), classify by **what the kernel does with the tensor's base pointer**. In *both* cases the legacy host smuggles `buffer()->address()` in through an RTA/CRTA — the distinction is purely what the kernel does with that raw pointer on the device side, not whether one exists. A mechanical observation, not a judgment call:
 
@@ -205,6 +207,61 @@ For each `TensorParameter`, cross-check: does the same buffer also appear in an 
 **Granularity — per binding, not per op.** An op may have multiple tensor bindings, some clean and some needing work. Report per binding — a single Case-1 or Case-2 binding fires this subject even when the op's primary I/O is via `TensorAccessor`. **Classification can also vary per factory within one bundled op** — the *same* `TensorParameter` may be clean (borrowed-memory DFB) in one factory and Case 1 in another (e.g. a sharded vs. an interleaved factory). When that happens, record the per-factory split via the report's Per-DeviceOperation attribution rather than forcing one flat verdict for the binding.
 
 **Op-level roll-up:** `✓ clean` (every binding clean) / `⚠ port work` (one or more Case-1 / Case-2 bindings), with the per-binding inventory in the report.
+
+### DFB endpoint legality (SPSC)
+
+**Precondition — Device 2.0 clean.** This subject's recognition signals assume **Device-2.0 kernel idioms** (`get_write_ptr` methods, `get_local_cb_interface`, `Semaphore` objects). Run it only when the [Device 2.0 gate](#prerequisites) is clean (GREEN, or YELLOW on isolated holdovers). On a **Device-2.0-RED** op, *defer* it — mark it `(deferred — re-evaluate after Device 2.0 migration)` — because the kernel rewrite changes the idioms the scan keys on, and a best-effort pass over legacy idioms can **false-negative the hidden writer** (worse than deferring: it would report "clean"). (A ProgramDescriptor-RED op already defers it via the [RED short-circuit](#red-short-circuit-the-programdescriptor-prerequisite-fires).)
+
+**This subject checks the *count* of producers and consumers — the ceiling the [floor check in TensorAccessor handling](#tensoraccessor-handling) never reaches.** That check asks whether a CB has *at least* one producer and one consumer (the floor): too few → it's sync-free or single-ended → the port self-loops it. This subject asks the complement — *at most* one of each **per node** (the ceiling) — and flags the two ways a CB lands outside the legal `(1 producer, 1 consumer)` window: **zero endpoints** (a dead CB) and **excess endpoints on a node** (an SPSC violation).
+
+**Why the ceiling matters — and why to catch it pre-port.** Metal 2.0 enforces **single-producer / single-consumer per node** (SPSC) as a spec-validator legality rule — fundamental on Gen2, whose per-node dataflow hardware assumes it. The host **cannot waive SPSC selectively**: at spec-construction it cannot tell a sync-free multi-endpoint CB from a synchronized one, so relaxing the check for one would unsafely relax it for all. Two consequences: an SPSC violation is **not port-fixable** — the op owner must resolve it *before* the port, as a functional change (out of port scope). And although the spec validator **will** reject it at port time — once the offending access is bound, the second endpoint surfaces and the SPSC check fires — that is a *cryptic, late* failure: a 2-producer (or 2-consumer) rejection whose root cause isn't obvious, on a violation the porter can't fix anyway. So catch it **pre-port**: name the cause and route the op-owner rewrite before any conversion effort is sunk. One face — the hidden second writer — is moreover invisible to a FIFO-sync trace (its raw co-fill uses no FIFO ops), so you must actively hunt for it; miss it and the auditor hands the porter a clean bill that detonates mid-port. Run this subject for every op, even when the floor check passed.
+
+**The endpoint census.** SPSC binds a **CB *instance*** — the device-side per-node materialization — not the host `CBDescriptor` / `CreateCircularBuffer` (one descriptor over a core range makes **one instance per node**). So count **per CB, per node**: on each node's instance, tally the endpoints. An endpoint is any kernel that touches the CB — FIFO-produces (`reserve_back`/`push_back`), FIFO-consumes (`wait_front`/`pop_front`), **or** accesses the memory by **raw pointer** (`get_write_ptr` / `get_read_ptr` / `get_local_cb_interface(<cb>).fifo_*_ptr`). *Any* access counts: in Metal 2.0 a kernel structurally cannot touch a DFB it hasn't bound — there is no back-door base-pointer grab — so every access is a binding, hence an endpoint (the hidden raw writers below included).
+
+> **Count and sync are orthogonal — don't fuse them.** The census counts endpoints by *access* (FIFO or raw pointer — all count); the [synchronized/sync-free axis](#tensoraccessor-handling) separately judges whether those accesses drive the FIFO machinery (**synchronized**) or just walk the memory (**sync-free**). A lone pointer reader is **one** endpoint *and* sync-free (→ self-loop); two pointer readers on a node are **two** endpoints (→ SPSC violation) whatever their sync. Count first, judge sync second.
+
+Classify by the pair:
+
+| (producers, consumers) on a node | Verdict | Handled |
+|---|---|---|
+| (0, 0) | **Dead CB** — allocated, never referenced | here (drop pre-port) |
+| (1, 0) / (0, 1) | **Single-ended CB** — one endpoint | [self-loop bridge](metal2_port_patterns.md#pattern-sync-free-and-single-ended-cbs--self-loop-dfb-interim-workaround) (port fabricates the missing side) |
+| (1, 1) | **Legal** — one producer + one consumer | — |
+| (≥2, ·) / (·, ≥2) | **SPSC violation** — excess on a node | here (op-owner pre-port fix) |
+
+#### Dead CB (0, 0) — FYI-P, pre-port drop
+
+**Recognition.** A CB whose `buffer_index` is referenced by **no** kernel — no `reserve_back`/`push_back`, no `wait_front`/`pop_front`, no `get_read_ptr`/`get_write_ptr`, no raw access. Grep the bound kernels for the index and any named CTA carrying it; zero hits.
+
+**Why it matters.** Left in place, the port mechanically builds a `DataflowBufferSpec` for it that the validator then rejects — a DFB needs ≥1 producer + ≥1 consumer, and a zero-endpoint DFB has neither. Pre-flagging spares the porter a dead end.
+
+**Action.** **FYI-P.** Flag for the op owner to drop the allocation (and any dead CTA carrying its index) as a **pre-port cleanup** — a functional change, out of port scope. Surface it to the porter as a heads-up so an unreferenced CB index doesn't read as a missed binding. Record `file:line`.
+
+**Examples in the wild:** conv2d `L1_ARRAY` — a 1-page "L1 scratchpad CB" whose index is threaded to the reader as a (dead) CTA, yet no kernel ever accesses it.
+
+#### SPSC violation (≥2 of one kind on a node) — GATE (config-scoped), route to the op owner
+
+**Why it can't be self-looped.** The self-loop workaround puts both endpoints on the *one* kernel that touches the CB; it cannot absorb a *second* kernel that also touches the CB on the same node — that is the very two-endpoint shape SPSC rejects. So an SPSC violation has **no port-time workaround**; it is an op-owner pre-port functional change. Two faces:
+
+**(a) Hidden second writer — the hidden face.** A CB presents as single-producer to a FIFO trace (one kernel does `reserve_back`/`push_back`), but a *second* kernel co-fills it via a **raw write** — `<cb>.get_write_ptr()` / `get_local_cb_interface(<cb>).fifo_wr_ptr` + offset, **with no** `reserve_back`/`push_back` — coordinated by **dedicated semaphores** (e.g. `reserve_done` / `write_done`) rather than CB FIFO sync. It is invisible to the floor check (the CB has a FIFO producer + consumer → "clean") and to an **auditor's FIFO-sync trace** (the raw co-fill uses no FIFO ops). The port-time validator *does* catch it — the `dfb::` handle the co-fill writes through doesn't exist unless the host binds it, and binding it makes the CB a two-PRODUCER node → SPSC fires — but only as a cryptic late rejection, on a violation the porter can't fix. So **hunt for it pre-port:** for each CB, scan *every* kernel that touches it for a `get_write_ptr()` / `fifo_wr_ptr` write by a kernel that is **not** the CB's FIFO producer, gated by a semaphore wait/post pair. It is a genuine two-producers-on-a-node, hidden behind side-channel sync.
+
+> *Resolution (op owner, pre-port):* typically a Gen2-conditional that has **one** DM fill the whole CB instead of the split co-fill — output-preserving, with the split-reader L1 saving demoted to a deferred optimization.
+>
+> *Example:* conv2d `ACT` under `split_reader_cb_shared` — the writer co-fills `cb_act_second_obj.get_write_ptr()+offset` gated by `reserve_done`/`write_done` (CTAs 32/33) while the reader is the FIFO producer.
+
+**(b) Multiple readers — the visible face.** A borrowed-memory, **sync-free** tensor-view CB (read by base pointer) whose read sites span **2+ co-resident kernels**: a split-reader's two DM readers, or a reader plus a writer acting as a second reader. A single-reader version routes to the self-loop bridge; with 2+ readers the self-loop cannot express it (it would put two consumer endpoints on the node → SPSC rejection).
+
+> *Resolution (op owner, pre-port):* convert the borrowed CB to **per-reader `TensorAccessor`s** — each reader reads the resident tensor through its own accessor (no DFB, no SPSC endpoint). A functional change.
+>
+> *Recognition:* a borrowed-memory, sync-free tensor-view CB whose base-pointer read sites span 2+ co-resident kernels.
+>
+> *Examples:* pool `raw_in` / `in_reader_indices` / `config_cb` (split-reader, two DM readers); conv2d `ACT_SHARDED` / `READER_INDICES` in split-reader / mcast configs (reader + writer-as-2nd-reader); halo `src_cb` ROW_MAJOR (1P + 2C).
+
+**Config-dependence (both faces).** The *same* CB is typically single-endpoint under one config (→ legal, or a port-handled sync-free/single-ended CB) and multi-endpoint under another (split-reader / mcast → SPSC violation). Classify **per instantiation**, and apply [Code-path scope](#output-the-two-documents): RED the violating config-path and name the clean configs as a portable subset (`RED at op level; subset <X> is clear`). The clean subset still gets a brief.
+
+**Finding role.** **GATE** at config-path granularity — the port is blocked on the violating path until the op owner's pre-port fix lands; route the detail (and the recommended fix) to the **op owner**, and offer the clean subset. Unlike the prereq / feature GATEs, the resolution is an op-owner *functional change*, never framework work and never folded into the port.
+
+**Op-level roll-up:** `✓ legal` (every CB in the legal window or a port-handled sync-free/single-ended CB) / `⚠ dead CB(s)` / `⛔ SPSC violation(s) — pre-port op-owner fix`, with the per-`(CB, config)` inventory in the report.
 
 ### Out-of-directory coupling
 
@@ -368,9 +425,9 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 | *TTNN Readiness* — Other risky pybind | None / `<description + site>` |
 | *TTNN Readiness* — Custom hash | No / Yes → delete (see Custom program hash) |
 | *TTNN Readiness* — Custom override-RTA | No / Yes: `<factory + site>` |
-| *TTNN Readiness* — Fake CBs (address-only) | None / present: `<(CB, endpoint) sites>` (workaround) |
+| *Ops readiness* — Sync-free CBs (address-only) | None / present: `<(CB, endpoint) sites>` (self-loop workaround) |
 
-**Fake CBs** = CBs used purely as an address source. **Litmus: does the CB have a producer *and* a consumer?** (Same core may be both.) No producer–consumer pair → fake: a Metal 2.0 DFB needs ≥1 of each, so a fake CB can't be expressed as a DFB — the port resolves it with the sanctioned fake-CB workaround (see the porting recipe), so it's an **FYI-P heads-up, not a gate**. Granularity is the **(CB, endpoint) edge** — the same CB can be a real LLK operand on one binding and address-only on another; record each address-only edge.
+**Sync-free CBs** = CBs used purely as an address source (the kernel grabs the base pointer and walks the memory, no FIFO ops). **Litmus: does any kernel drive the FIFO machinery — a FIFO producer *and* consumer — or is it pointer-only?** (Same core may be both endpoints.) No FIFO producer–consumer pair → sync-free: a Metal 2.0 DFB needs ≥1 of each, so it can't be expressed as a DFB — the port resolves it with the sanctioned self-loop workaround (see the porting recipe), so it's an **FYI-P heads-up, not a gate**. Granularity is the **(CB, endpoint) edge** — the same CB can be a synchronized LLK operand on one binding and pointer-only on another; record each pointer-only edge.
 
 ## Result
 
@@ -399,6 +456,8 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
   | `UpdateCircularBuffer*` | GREEN / RED / N/A | |
   | Variable-count compile-time arguments (CTA varargs) | GREEN / RED / N/A | |
 
+- **DFB endpoint legality (SPSC):** <GREEN — every CB in the legal (1 producer, 1 consumer) window or a port-handled sync-free/single-ended CB — or — RED (config-scoped): each SPSC violation as `(CB, config)` @ `file:line`, its face (hidden 2nd writer / multi-reader), and the op-owner pre-port fix, plus the clean subset to port. List any dead CBs for pre-port drop. **Deferred** (re-evaluate post–Device 2.0) if the Device 2.0 gate is RED.>
+
 ## Port-work summary  *(mirrors the brief)*
 
 - **Tensor bindings** (per binding): `<name>` Case 1 (`TensorAccessor`) / Case 2 (raw pointer → bridge; **blocked in a compute kernel**) / clean (borrowed-DFB).
@@ -407,7 +466,8 @@ Opens with a **status summary that mirrors the cross-team readiness spreadsheet 
 ## Heads-ups  *(mirrors the brief)*
 
 - **Notable LANDED constructs:** aliased CB / borrowed-mem DFB / dynamic TA / non-zero sem init — with `file:line` and the construct the port uses.
-- **Fake CBs (address-only):** each CB used purely as an address source — no producer + consumer pair — at the `(CB, endpoint)` edge with `file:line`. The port resolves it with the fake-CB workaround (see the porting recipe); it does **not** gate.
+- **Sync-free CBs (address-only):** each CB used purely as an address source — no FIFO producer + consumer pair — at the `(CB, endpoint)` edge with `file:line`. The port resolves it with the self-loop workaround (see the porting recipe); it does **not** gate.
+- **Dead CBs (zero endpoints):** each allocated-but-unreferenced CB @ `file:line` — the op owner drops the allocation (and any dead CTA carrying its index) pre-port; a functional change, not port work.
 - **Cross-op / shared kernels:** borrowed kernel files + shared-kernel coupling.
 - **RTA varargs:** kernel + recognition site.
 - **TTNN factory analysis (porter-relevant):** pybind `create_descriptor` to delete · other migration-risky pybind · custom `override_runtime_arguments` — each with `file:line`.
@@ -475,6 +535,7 @@ These facts feed the port's TTNN ProgramFactory wiring (→ `port_op_to_metal2_t
 - **Notable constructs:** <aliased CB @ loc → [pattern] · borrowed-mem DFB → [recipe] · dynamic TA → [pointer] · non-zero sem init → deprecated, expected | none>
 - **Cross-op / shared kernels:** <path → caution per [pattern] | none>
 - **RTA varargs:** <kernel → prefer named RTAs | none>
+- **Dead CBs:** <each allocated-but-unreferenced CB → op owner drops it pre-port; don't bind it if still present | none>
 ````
 
 #### N/A vs. GREEN
