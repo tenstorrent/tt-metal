@@ -221,12 +221,17 @@ def test_wan_transformer_block(
 # ---------------------------------------------------------------------------
 SWEEP_SEQ_LENS = [4096, 8192, 12288, 16384, 24576, 32768, 49152, 65536, 98304]
 
+# Tracing reserves a DRAM region to hold the recorded trace. This test captures 100 chained
+# transformer-block invocations, so the region must be generously sized (the Wan pipeline reserves
+# 120 MB for ~40-80 blocks in a single trace). Tune up if trace capture reports an insufficient region.
+sweep_ring_params = {**ring_params, "trace_region_size": 300000000}
+
 
 @pytest.mark.parametrize(
     ("mesh_device", "mesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
         # BH Galaxy (ring) on 4x8, 2 links
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, sweep_ring_params, ttnn.Topology.Ring, False, id="bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -347,7 +352,8 @@ def test_sweep_wan_seqs(
     for step in range(NUM_TRACE_STEPS):
         ttnn.synchronize_device(mesh_device)
         start = time.perf_counter()
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=True)
+        # Non-blocking dispatch; the synchronize below ensures the work has completed before timing.
+        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(mesh_device)
         elapsed = time.perf_counter() - start
         step_times.append(elapsed)
