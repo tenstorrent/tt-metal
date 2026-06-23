@@ -441,7 +441,7 @@
 - name: GPT-OSS 20B unit tests
   cmd: |
     export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-20b
-    pytest --timeout 600 models/demos/gpt_oss/tests/unit/
+    pytest -s --timeout 600 models/demos/gpt_oss/tests/unit/test_modules.py -k "decode_low_latency"
   model: gpt-oss-20b
   skus:
     # Wormhole

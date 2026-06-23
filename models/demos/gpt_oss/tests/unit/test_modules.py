@@ -207,6 +207,18 @@ def run_topk_router_component(
     tt_router_indices_torch = ttnn.to_torch(tt_router_indices, mesh_composer=mesh_composer)[:batch, :4]
     tt_router_weights_torch = ttnn.to_torch(tt_router_weights, mesh_composer=mesh_composer)[:batch, :4]
 
+    # ===== ROUTER_DBG (temporary instrumentation) =====
+    logger.info(f"ROUTER_DBG use_throughput_experts={decoder_layer.mlp.use_throughput_experts} batch={batch} seq_len={seq_len}")
+    logger.info(f"ROUTER_DBG tt_weights shape={tuple(tt_router_weights_torch.shape)} sum={tt_router_weights_torch.float().abs().sum().item():.6f} row0={tt_router_weights_torch.float().flatten()[:8].tolist()}")
+    logger.info(f"ROUTER_DBG ref_scores shape={tuple(router_scores.shape)} sum={router_scores.float().abs().sum().item():.6f} row0={router_scores.float().flatten()[:8].tolist()}")
+    logger.info(f"ROUTER_DBG tt_indices shape={tuple(tt_router_indices_torch.shape)} row0={tt_router_indices_torch.flatten()[:8].tolist()}")
+    logger.info(f"ROUTER_DBG ref_indices shape={tuple(router_indices.shape)} row0={router_indices.flatten()[:8].tolist()}")
+    _dbg_tt = tt_router_weights_torch.squeeze()[torch.sort(tt_router_indices_torch, dim=-1)[1]]
+    _dbg_ref = router_scores.squeeze()[torch.sort(router_indices, dim=-1)[1]]
+    logger.info(f"ROUTER_DBG reordered_tt shape={tuple(_dbg_tt.shape)} sum={_dbg_tt.float().abs().sum().item():.6f}")
+    logger.info(f"ROUTER_DBG reordered_ref shape={tuple(_dbg_ref.shape)} sum={_dbg_ref.float().abs().sum().item():.6f}")
+    # ===== end ROUTER_DBG =====
+
     # Compare outputs
     # We will sort the indices here as the order of the indices is not guaranteed to be the same in the reference and TT implementation.
     sorted_tt_indices, sorted_tt_indices_order = torch.sort(tt_router_indices_torch, dim=-1)
