@@ -260,3 +260,40 @@ Results (PCC/ULP per activation × mode × precision, threshold PCC≥0.99) → 
 | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_parity_quasar_test.cpp`                  | parity x²-Horner + adaptive degree (ported) |
 | `tt_metal/tt-llk/tests/python_tests/quasar/test_generic_lut_*_quasar.py`                   | per-method python goldens (fitter ground_truth, PCC/ULP) |
 | `tt_metal/tt-llk/tests/python_tests/quasar/quasar_sweep.sh`                                 | deployment validator: runs the fitter's deployed pick (best.csv) per activation; `--approximation both` for opt-in poly/rational comparison |
+
+## Dataflow Buffer (DFB) status — why slow-dispatch / tt-llk, and the path to DFB
+
+**Why this flow uses the tt-llk standalone path (not the tt-metal host dispatch):**
+Quasar replaces circular buffers with **Dataflow Buffers (DFBs)** — the Metal-2.0 mechanism
+(`tt_metal/api/.../experimental/metal2_host_api/dataflow_buffer_spec.hpp`; cf.
+`circular_buffer_constants.h`: *"TEMPORARY ... will be replaced by Dataflow Buffers (DFBs)"*).
+Quasar **drops legacy CB support**: a host program using the CB-based `DataMovementKernel`
+is rejected — *"DataMovementKernel is not supported on Quasar. Use `QuasarDataMovementKernel`"*
+(`kernel.hpp:340`). The `generic_lut_activation` host program is CB-based, so the full
+tt-metal host-dispatch path is a dead end on Quasar without a Metal-2.0 rewrite.
+
+The **tt-llk flow has no host-dispatch layer at all** — `compile_llk_quasar.sh` compiles the
+3 TRISC kernels directly with SFPI and the emulation runner executes them on the sim
+(slow-dispatch). It never touches CBs *or* DFBs, so it sidesteps the CB→DFB transition and
+**works today**. That is why all validation here runs `TT_METAL_SLOW_DISPATCH_MODE=1`.
+
+**The DFB attempt that exists (and its blocker):**
+A Metal-2.0 ProgramSpec/DFB eltwise path *was* prototyped — `git 71c9425e14f`
+*"Milestone 1: Quasar eltwise binary ADD proof"* on branch **`origin/dchen/binary_quasar`**
+(uses `experimental::quasar::QuasarDataMovementKernel` + the DFB/ProgramSpec API). Per its
+commit message it **compiles, links, and runs end-to-end on the craq-sim Quasar — but the
+output reads back as zero** (a functional bug in the single-tile Quasar DFB add path). It was
+later **cleaned up on that branch and never merged to `origin/main`**.
+
+So it is **not** "DFB doesn't run on craq-sim" — the sim *does* have DFB emulation
+(`tt_metal/impl/emulation/emulated_program_runner.cpp` handles `QuasarDataMovementKernel`,
+one thread per DM processor 0..7). The blocker is the **zero-output functional bug** in the
+single-tile DFB path. (Root-cause investigation in progress; this note will be updated.)
+
+**Path to a DFB-backed flow:**
+1. Root-cause + fix the single-tile DFB zero-output bug (trace QuasarDataMovementKernel → DFB
+   alloc/bind → compute → readback).
+2. Port the eltwise-LUT host driver onto the Metal-2.0 DFB API (`program_spec` +
+   `dataflow_buffer_spec` + `QuasarDataMovementKernel`).
+3. Re-run the same `quasar_sweep.sh --activations all` on the DFB path and confirm parity
+   with the tt-llk slow-dispatch numbers (60/60).
