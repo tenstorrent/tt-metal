@@ -137,7 +137,7 @@ Tensor accumulation_invoke(
         // TODO(#37807):
         // This is a temporary fix, the op needs to be refactored to apply the output directly to optional_out,
         // or pass in optional_out as a reference.
-        optional_out->tensor_attributes->get_storage() = wip_tensor.tensor_attributes->get_storage();
+        optional_out->device_storage() = wip_tensor.device_storage();
     }
     return wip_tensor;
 }
