@@ -113,9 +113,15 @@ std::vector<ttnn::CoreCoord> get_moe_combine_cores(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set) {
+    const CoreRangeSet& mux_core_range_set,
+    const uint32_t bh_ring_size) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
-        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        bh_ring_size);
     return selection.combine_cores;
 }
 
@@ -124,9 +130,15 @@ ttnn::CoreCoord get_moe_tilize_drain_core(
     const uint32_t combine_token_parallel_cores,
     const uint32_t combine_data_parallel_cores,
     const uint32_t hidden_size,
-    const CoreRangeSet& mux_core_range_set) {
+    const CoreRangeSet& mux_core_range_set,
+    const uint32_t bh_ring_size) {
     const auto selection = ttnn::operations::ccl::common::select_moe_compute_cores(
-        mesh_device, combine_token_parallel_cores, combine_data_parallel_cores, hidden_size, mux_core_range_set);
+        mesh_device,
+        combine_token_parallel_cores,
+        combine_data_parallel_cores,
+        hidden_size,
+        mux_core_range_set,
+        bh_ring_size);
     TT_FATAL(!selection.tilize_cores.empty(), "moe_compute tilize drain core selection returned no tilize cores");
     return selection.tilize_cores.at(0);
 }
