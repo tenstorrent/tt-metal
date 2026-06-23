@@ -42,7 +42,7 @@ void kernel_main() {
 
     binary_dest_reuse_tiles_init<EltwiseBinaryType::ELWADD, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(cb_s2c_in2_id);
 
-    cb_s2c_out_cb.reserve_back(num_iters);
+    cb_s2c_out.reserve_back(num_iters);
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
         cb_s2c_in2.wait_front(num_cores);
