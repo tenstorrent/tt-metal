@@ -75,8 +75,8 @@ Generate cluster descriptors using a rankfile and rank bindings for environment 
 ```bash
 ./scripts/scaleout/generate_cluster_descriptors.sh \
   --rankfile my_rankfile \
-  --mapping-file tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/my_mapping.yaml \
-  --output-dir tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/my_cluster_desc \
+  --mapping-file tt_metal/third_party/tt-cluster-descriptors/my_mapping.yaml \
+  --output-dir tt_metal/third_party/tt-cluster-descriptors/my_cluster_desc \
   --rank-bindings-file tests/tt_metal/distributed/config/my_rank_bindings.yaml \
   --base-name my_cluster_desc
 ```
@@ -118,8 +118,8 @@ Generate cluster descriptors for a BH 2x4 Split topology:
 ```bash
 ./scripts/scaleout/generate_cluster_descriptors.sh \
   --rankfile bh_2x4_split_rankfile \
-  --mapping-file tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_2x4_split_mapping.yaml \
-  --output-dir tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/bh_2x4_split_cluster_desc \
+  --mapping-file tt_metal/third_party/tt-cluster-descriptors/bh_2x4_split_mapping.yaml \
+  --output-dir tt_metal/third_party/tt-cluster-descriptors/bh_2x4_split_cluster_desc \
   --rank-bindings-file tests/tt_metal/distributed/config/bh_2x4_split_rank_bindings.yaml \
   --base-name bh_2x4_split_cluster_desc
 ```
@@ -131,8 +131,8 @@ Generate cluster descriptors for a 32x4 Quad Galaxy topology:
 ```bash
 ./scripts/scaleout/generate_cluster_descriptors.sh \
   --rankfile 32x4_quad_galaxy_rankfile \
-  --mapping-file tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/32x4_quad_galaxy_cluster_desc_mapping.yaml \
-  --output-dir tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/32x4_quad_galaxy_cluster_desc \
+  --mapping-file tt_metal/third_party/tt-cluster-descriptors/32x4_quad_galaxy_cluster_desc_mapping.yaml \
+  --output-dir tt_metal/third_party/tt-cluster-descriptors/32x4_quad_galaxy_cluster_desc \
   --rank-bindings-file tests/tt_metal/distributed/config/32x4_quad_galaxy_rank_bindings.yaml \
   --base-name 32x4_quad_galaxy_cluster_desc
 ```

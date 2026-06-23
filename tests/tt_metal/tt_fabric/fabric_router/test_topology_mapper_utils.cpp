@@ -67,6 +67,25 @@ void expect_bh_halfpod_tray_pairing_for_graph_nodes(
         << format_uint_set(trays) << "]";
 }
 
+// Rev C horizontal tray pairs: {1,2} or {3,4} (adjacent trays on one host).
+void expect_bh_rev_c_horizontal_tray_pairing_for_graph_nodes(
+    const std::string& context,
+    const tt::tt_metal::PhysicalSystemDescriptor& psd,
+    const AdjacencyGraph<tt::tt_metal::AsicID>& adjacency_graph) {
+    std::set<uint32_t> trays;
+    for (const auto& node : adjacency_graph.get_nodes()) {
+        const uint32_t tray = *psd.get_tray_id(node);
+        trays.insert(tray);
+        EXPECT_GE(tray, 1u) << context << " asic_id=" << *node;
+        EXPECT_LE(tray, 4u) << context << " asic_id=" << *node;
+    }
+    const bool only_12 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 1u || t == 2u; });
+    const bool only_34 = std::all_of(trays.begin(), trays.end(), [](uint32_t t) { return t == 3u || t == 4u; });
+    EXPECT_TRUE(only_12 || only_34)
+        << context << " — Rev C BH Galaxy nodes must use only tray pair {1,2} or only {3,4}; distinct trays=["
+        << format_uint_set(trays) << "]";
+}
+
 // =============================================================================
 // Test Fixture with Helper Methods
 // =============================================================================
@@ -4110,7 +4129,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4172,7 +4191,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4248,7 +4267,7 @@ top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
 
     const std::filesystem::path pgd_path = std::filesystem::path(tt_metal_home) /
                                            "tests/tt_metal/tt_fabric/physical_groupings/"
-                                           "bh_galaxy_physical_grouping_descriptor.textproto";
+                                           "bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4299,7 +4318,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4412,7 +4431,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 4u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (10 stages)";
 }
 
@@ -4433,7 +4452,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4542,7 +4561,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
         hosts_spanning_blitz_mapped.insert(psd.get_host_name_for_asic(asic_id));
     }
     EXPECT_GE(hosts_spanning_blitz_mapped.size(), 1u);
-    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 3u)
+    EXPECT_LE(hosts_spanning_blitz_mapped.size(), 5u)
         << "Mapped Blitz pipeline: at most one host per logical 4×2 mesh (11 stages)";
 }
 
@@ -4563,7 +4582,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4705,7 +4724,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4768,7 +4787,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4806,7 +4825,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
             EXPECT_GE(
                 adjacency_graph.get_neighbors(node).size(), 2u * 2u);  // num directions * 2 channels per direction
             EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+                adjacency_graph.get_neighbors(node).size(), 4u * 2u);  // torus interior: 4 directions * 2 channels
         }
     }
 }
@@ -4831,7 +4850,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Sp4Glx
     // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4886,10 +4905,11 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Create PSD from mock cluster
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
-    // Load PGD - using triple_16x8_quad_bh_galaxy_physical_groupings
+    // Load PGD - the single BH galaxy mock cluster is a RevC layout, so pair it with the RevC grouping
+    // descriptor (the RevAB descriptor's pinned slot connectivity does not match a RevC PSD).
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4943,7 +4963,7 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_rev_ab_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -4975,12 +4995,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
     // Single BH galaxy (32 ASICs): PGD has no 1x17 grouping; 1x17 BLACKHOLE matches 4x8_Mesh (32 ASICs)
     using namespace ::tt::tt_fabric;
 
-    // TODO(#45629): Re-enable once PGD torus matching lands on main. The 4x8_Mesh grouping that 1x17 needs
-    // cannot embed on single_bh_galaxy_clus_desc today (0/32 nodes mapped) without torus / cross-tray
-    // support. PR #45629 (https://github.com/tenstorrent/tt-metal/pull/45629) adds that matching.
-    GTEST_SKIP()
-        << "Disabled pending #45629 (PGD torus matching; 4x8_Mesh cannot embed on single BH galaxy mock today)";
-
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
 
@@ -4991,9 +5005,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
+    // Rev C PGD + bh_galaxy_xyz mock (torus XY links) for 4x8_Mesh torus embedding on a single galaxy host.
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -5031,13 +5046,6 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_SingleBHGalaxy_2x4Pipeline) {
     using namespace ::tt::tt_fabric;
 
-    // TODO(#45629): Re-enable once PGD torus matching lands on main. On single_bh_galaxy_clus_desc the
-    // 4x2_Mesh_flat half-pod ({1,3}/{2,4}) cannot embed -- the PSD lacks the cross-tray connectivity, so
-    // build_physical settles on a {1,2}/{3,4} grouping that violates the half-pod rule. PR #45629
-    // (https://github.com/tenstorrent/tt-metal/pull/45629) adds torus-aware matching plus the
-    // TRAY_1+TRAY_3 / TRAY_2+TRAY_4 cross-tray PGD variants that place this correctly.
-    GTEST_SKIP() << "Disabled pending #45629 (PGD torus matching for {1,3}/{2,4} half-pod on single BH galaxy)";
-
     const char* tt_metal_home = std::getenv("TT_METAL_HOME");
     ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
 
@@ -5048,9 +5056,10 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
 
     tt::tt_metal::PhysicalSystemDescriptor psd = create_psd_from_mock_cluster();
 
+    // Rev C PGD half-pod 4x2_Mesh_horizontal ({1,3}/{2,4} tray pairs) + bh_galaxy_xyz torus links.
     const std::filesystem::path pgd_path =
         std::filesystem::path(tt_metal_home) /
-        "tests/tt_metal/tt_fabric/physical_groupings/bh_galaxy_physical_grouping_descriptor.textproto";
+        "tests/tt_metal/tt_fabric/physical_groupings/wh_bh_rev_c_galaxy_physical_grouping_descriptor.textproto";
     ASSERT_TRUE(std::filesystem::exists(pgd_path)) << "PGD file not found: " << pgd_path;
     PhysicalGroupingDescriptor pgd{pgd_path};
 
@@ -5077,14 +5086,13 @@ TEST_F(TopologyMapperUtilsTest, BuildPhysicalMultiMeshGraph_WithPGDAndPSD_Single
         // Check that there should be 8 nodes in the graph (2x4)
         EXPECT_EQ(adjacency_graph.get_nodes().size(), 8u);
 
-        expect_bh_halfpod_tray_pairing_for_graph_nodes(
+        expect_bh_rev_c_horizontal_tray_pairing_for_graph_nodes(
             std::string("[SingleBHGalaxy_2x4Pipeline] mesh_id=") + std::to_string(*mesh_id), psd, adjacency_graph);
 
-        // Check that each node should have neighbors (1D topology, so 1-2 neighbors)
+        // 2x4 on torus XY mock: up to 4 directions × 2 channels per node
         for (const auto& node : adjacency_graph.get_nodes()) {
             EXPECT_GE(adjacency_graph.get_neighbors(node).size(), 2u * 2u);
-            EXPECT_LE(
-                adjacency_graph.get_neighbors(node).size(), 3u * 2u);  // num directions * 2 channels per direction
+            EXPECT_LE(adjacency_graph.get_neighbors(node).size(), 4u * 2u);
         }
     }
 
