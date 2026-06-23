@@ -88,12 +88,8 @@ Tensor::Tensor(MeshTensor tensor) : Tensor::Tensor(DeviceStorage(std::move(tenso
 
 Tensor::Tensor(DeviceStorage storage) :
     tensor_id(Tensor::next_tensor_id()), tensor_attributes(std::make_shared<TensorAttributes>(std::move(storage))) {
-    // Workaround for https://github.com/tenstorrent/tt-metal/issues/40716:
-    // Use get_device_bypass_deallocate_check() to preserve mesh_device_ even when the
-    // buffer is deallocated. This prevents nullptr device propagation when operations
-    // like reshape create new tensors from existing DeviceStorage.
-    if (auto* device = device_storage().get_device_bypass_deallocate_check()) {
-        mesh_device_ = device;
+    if (device_storage().is_allocated()) {
+        mesh_device_ = &device_storage().get_mesh_tensor().mutable_device();
     }
 }
 

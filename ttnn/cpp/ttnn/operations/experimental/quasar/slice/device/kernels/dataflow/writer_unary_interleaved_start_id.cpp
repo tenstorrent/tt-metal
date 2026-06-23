@@ -1,39 +1,31 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent USA, Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
-
-// Slice-specific writer using named compile-time args for CB index.
-// Based on eltwise/unary writer but uses get_named_compile_time_arg_val("cb_out")
-// so the CB index can be remapped by the fusion infrastructure.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    const uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    const uint32_t num_pages = get_arg_val<uint32_t>(1);
-    const uint32_t start_id = get_arg_val<uint32_t>(2);
+    const uint32_t num_pages = get_arg(args::num_pages);
+    const uint32_t start_id = get_arg(args::start_id);
 
-    constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
-    constexpr auto dst_args = TensorAccessorArgs<0>();
-
-    // Create objects for Device 2.0 API
-    CircularBuffer cb_out(cb_id_out);
-
-    // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
-    const uint32_t page_bytes = cb_out.get_tile_size();
     Noc noc;
+    DataflowBuffer cb(dfb::cb_out);
+
+    // Get page size from DFB interface (works for both TILE and ROW_MAJOR layouts)
+    const uint32_t page_bytes = cb.get_entry_size();
 
 #ifdef OUT_SHARDED
-    cb_out.wait_front(num_pages);
+    cb.wait_front(num_pages);
 #else
 
     // single-page ublocks (works for both TILE and ROW_MAJOR layouts)
     constexpr uint32_t onepage = 1;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::out);
 
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
@@ -42,10 +34,10 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_out.wait_front(onepage);
-        noc.async_write(cb_out, s, page_bytes, {.offset_bytes = 0}, {.page_id = i});
+        cb.wait_front(onepage);
+        noc.async_write(cb, s, page_bytes, {}, {.page_id = i});
         noc.async_writes_flushed();
-        cb_out.pop_front(onepage);
+        cb.pop_front(onepage);
     }
     noc.async_write_barrier();
 #endif

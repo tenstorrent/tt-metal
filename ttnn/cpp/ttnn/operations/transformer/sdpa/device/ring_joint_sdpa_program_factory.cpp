@@ -118,7 +118,9 @@ constexpr uint32_t kComputeKernelIndex = 2;
 // The helper appends 4 kernels after the 3 SDPA kernels above, in order: reader_forward (3),
 // writer_forward (4), reader_backward (5), writer_backward (6) (helper desc.kernels.push_back order).
 constexpr uint32_t kAllGatherReaderForwardKernelIndex = 3;
+constexpr uint32_t kAllGatherWriterForwardKernelIndex = 4;
 constexpr uint32_t kAllGatherReaderBackwardKernelIndex = 5;
+constexpr uint32_t kAllGatherWriterBackwardKernelIndex = 6;
 
 // Compute runtime args 0/1 are global_q_start/global_q_end (see ring_joint_sdpa.cpp kernel_main).
 // A core with global_q_start == global_q_end got no Q chunks at emplace time and is idle.
@@ -447,6 +449,23 @@ void write_runtime_arg(RuntimeArgsData& args, uint32_t index, uint32_t value, co
     args[index] = value;
 }
 
+// Tile-rows of the latent KV the fused all-gather must move for this chunk: the first
+// ceil(logical_n / chunk_global) block-cyclic slabs (a contiguous per-device page prefix), so an
+// oversized (growing) KV cache only moves kv_actual-sized data. Returns nullopt when KV-pad rotation
+// is off (gather the full input). Shared by the descriptor-create path (so the first / cache-miss
+// dispatch is bounded) and the cache-hit override path.
+std::optional<uint32_t> compute_gather_valid_Ht(
+    const ttnn::prim::RingJointSDPAParams& args, const ttnn::prim::RingJointSDPAInputs& tensor_args) {
+    if (!args.has_kv_pad_rotation()) {
+        return std::nullopt;
+    }
+    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
+    const uint32_t n_local_q = tensor_args.input_q.padded_shape()[2];  // per-device Q slab (chunk_local)
+    const uint32_t chunk_global = n_local_q * ring_size;
+    const uint32_t valid_slabs = (static_cast<uint32_t>(args.logical_n) + chunk_global - 1) / chunk_global;
+    return valid_slabs * (n_local_q / tt::constants::TILE_HEIGHT);
+}
+
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
@@ -465,15 +484,17 @@ void apply_ring_joint_scalar_runtime_args(
     const uint32_t num_cores = layout.grid_size.x * layout.grid_size.y;
     const uint32_t kv_cache_batch_idx = args.kv_cache_batch_idx.value_or(0);
 
+    // Gather inputs (K, plus V when it isn't the latent-V alias of K). Shared by the indexed-slot
+    // and valid-pages patches below.
+    const Tensor& input_k = tensor_args.input_k;
+    const uint32_t num_ag_inputs = tensor_args.has_latent_v() ? 1u : (tensor_args.input_v.has_value() ? 2u : 1u);
+    const std::array<const Tensor*, 2> ag_inputs = {
+        &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
+
     // Re-patch the fused all-gather readers to gather the single cache slot `kv_cache_batch_idx`.
     // input_batch_base is uniform across all gather cores/links, so patch every core that runs the
     // reader. Mirrors the helper's create-time arithmetic so miss and hit paths agree.
     if (patch_indexed_kv_cache) {
-        const Tensor& input_k = tensor_args.input_k;
-        const bool v_shares_k = tensor_args.has_latent_v();
-        const uint32_t num_ag_inputs = v_shares_k ? 1u : (tensor_args.input_v.has_value() ? 2u : 1u);
-        const std::array<const Tensor*, 2> ag_inputs = {
-            &input_k, tensor_args.input_v.has_value() ? &tensor_args.input_v.value() : &input_k};
         const auto patch_all_gather_reader = [&](uint32_t kernel_id) {
             auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
             for (auto& col_args : grid_args) {
@@ -497,6 +518,40 @@ void apply_ring_joint_scalar_runtime_args(
         };
         patch_all_gather_reader(kAllGatherReaderForwardKernelIndex);
         patch_all_gather_reader(kAllGatherReaderBackwardKernelIndex);
+    }
+
+    // Bound the fused all-gather to the logical_n-valid slab prefix so an oversized (growing) KV
+    // cache only moves kv_actual-sized data instead of the whole physical buffer. The cache is
+    // block-cyclic / slab-major per device, so the valid tokens are the first
+    // ceil(logical_n / chunk_global) slabs == a contiguous page prefix. valid_pages is uniform
+    // across cores/links/devices, so producer/consumer page counts and the ring slice protocol stay
+    // matched (the AG kernels clamp input_tile_id_end to it). Patch readers AND writers — both key
+    // their loops off input_tile_id_end — at their respective header offsets (3 vs 5).
+    const std::optional<uint32_t> gather_valid_Ht = compute_gather_valid_Ht(args, tensor_args);
+    if (gather_valid_Ht.has_value()) {
+        const auto patch_all_gather_valid_pages = [&](uint32_t kernel_id, uint32_t header_count) {
+            auto& grid_args = GetRuntimeArgs(program, kernel_id);  // [x][y] per-core args
+            for (auto& col_args : grid_args) {
+                for (auto& core_args : col_args) {
+                    for (uint32_t in = 0; in < num_ag_inputs; ++in) {
+                        const auto& shape = ag_inputs[in]->padded_shape();
+                        const uint32_t Ht = shape[2] / tt::constants::TILE_HEIGHT;
+                        const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
+                        const uint32_t valid_Ht = std::min(*gather_valid_Ht, Ht);
+                        const uint32_t valid_pages = valid_Ht * Wt;
+                        const uint32_t idx =
+                            header_count + in * ag_rt::kTensorDescriptorFieldCount + ag_rt::kValidPagesFieldOffset;
+                        if (core_args.size() > idx) {  // skip cores that don't run this kernel
+                            write_runtime_arg(core_args, idx, valid_pages, "all_gather.valid_pages");
+                        }
+                    }
+                }
+            }
+        };
+        patch_all_gather_valid_pages(kAllGatherReaderForwardKernelIndex, ag_rt::kReaderRuntimeArgHeaderCount);
+        patch_all_gather_valid_pages(kAllGatherReaderBackwardKernelIndex, ag_rt::kReaderRuntimeArgHeaderCount);
+        patch_all_gather_valid_pages(kAllGatherWriterForwardKernelIndex, ag_rt::kWriterRuntimeArgHeaderCount);
+        patch_all_gather_valid_pages(kAllGatherWriterBackwardKernelIndex, ag_rt::kWriterRuntimeArgHeaderCount);
     }
 
     for (uint32_t i = 0; i < num_cores; ++i) {
@@ -2181,7 +2236,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         all_gather_fused_op_signaler,
         args.ccl_core_grid_offset,
         args.all_gather_operation_attributes.core_allocation_strategy,
-        args.kv_cache_batch_idx);
+        args.kv_cache_batch_idx,
+        // Bound the gather to the logical_n-valid prefix at create time so the first (cache-miss)
+        // dispatch moves only kv_actual-sized data, not the whole oversized cache. Re-patched per
+        // dispatch on cache hits in apply_ring_joint_scalar_runtime_args.
+        compute_gather_valid_Ht(args, tensor_args));
 
     return desc;
 }
