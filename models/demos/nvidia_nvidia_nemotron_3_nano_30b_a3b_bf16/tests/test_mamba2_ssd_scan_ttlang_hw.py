@@ -138,12 +138,16 @@ def _build_all_heads_hw_tensors(device, x_dt_raw, B_in_raw, C_in_raw, x_raw, log
     all_y_out = []
     all_h_out = []
 
-    for h_idx in range(NUM_HEADS):
-        g_idx = h_idx * G // NUM_HEADS
+    # Build B/C in group format [G*n_chunks*C, N] (8x less DRAM than head-expanded)
+    for g_idx in range(G):
+        B_g = B_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
+        C_g = C_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
+        all_B.append(B_g.reshape(n_chunks * C, N))
+        all_C_mat.append(C_g.reshape(n_chunks * C, N))
 
+    # Build per-head tensors (log_L, x_dt, x, log_gamma, log_delta, log_gscalar, h_in, D_skip, outputs)
+    for h_idx in range(NUM_HEADS):
         xdt_h = x_dt_raw[:S, h_idx, :].reshape(n_chunks, C, D).to(torch.bfloat16)
-        B_h = B_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
-        C_h = C_in_raw[:S, g_idx, :].reshape(n_chunks, C, N).to(torch.bfloat16)
         x_h = x_raw[:S, h_idx, :].reshape(n_chunks, C, D).to(torch.bfloat16)
         logd_h = log_decay_raw[:S, h_idx].reshape(n_chunks, C).float()
         A_cumsum = torch.cumsum(logd_h, dim=1)
@@ -171,8 +175,6 @@ def _build_all_heads_hw_tensors(device, x_dt_raw, B_in_raw, C_in_raw, x_raw, log
 
         all_log_L.append(log_L_h)
         all_xdt.append(xdt_h.reshape(n_chunks * C, D))
-        all_B.append(B_h.reshape(n_chunks * C, N))
-        all_C_mat.append(C_h.reshape(n_chunks * C, N))
         all_x.append(x_h.reshape(n_chunks * C, D))
         all_lg.append(log_gamma_h)
         all_ld.append(log_delta_h)
@@ -245,7 +247,7 @@ def test_mamba2_ssd_scan_ttlang_hw_pcc():
             n_chunks,
         )
 
-        kernel = make_mamba2_ssd_scan_kernel(n_chunks, num_heads=NUM_HEADS)
+        kernel = make_mamba2_ssd_scan_kernel(n_chunks, num_heads=NUM_HEADS, n_groups=G)
         kernel(
             t["log_L"],
             t["x_dt"],
