@@ -199,6 +199,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/matmul/matmul_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/binary/binary_nanobind.cpp
+    cpp/ttnn/operations/experimental/quasar/unary_lut/unary_lut_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/fold/fold_nanobind.cpp
     cpp/ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
