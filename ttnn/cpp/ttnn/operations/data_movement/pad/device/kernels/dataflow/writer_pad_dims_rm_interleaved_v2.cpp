@@ -6,6 +6,7 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -17,11 +18,10 @@ void kernel_main() {
     constexpr uint32_t stick_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
     constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(3);
-    constexpr uint32_t output_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t size_of_valid_data_in_last_output_page_in_row = get_compile_time_arg_val(5);
-    constexpr auto dst_args = TensorAccessorArgs<6>();
+    constexpr uint32_t accessor_page_size = get_compile_time_arg_val(6);
+    constexpr auto dst_args = TensorAccessorArgs<7>();
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(dst_args, dst_addr, accessor_page_size);
     Noc noc;
     CircularBuffer cb_out0_exp(cb_out0);
 
@@ -32,22 +32,14 @@ void kernel_main() {
         uint32_t l1_read_offset = 0;
 
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            uint32_t tmp_offset = l1_read_offset;
-            for (uint32_t p = 0; p < num_output_pages_in_row - 1; p++) {
-                noc.async_write(
-                    cb_out0_exp,
-                    s,
-                    output_page_size,
-                    {.offset_bytes = tmp_offset},
-                    {.page_id = i_page + p, .offset_bytes = 0});
-                tmp_offset += output_page_size;
-            }
-            noc.async_write(
-                cb_out0_exp,
+            const uint32_t stick_id = i_page / num_output_pages_in_row;
+            tt::data_movement::common::noc_async_write_sharded(
+                noc,
+                cb_out0_exp.get_read_ptr() + l1_read_offset,
                 s,
-                size_of_valid_data_in_last_output_page_in_row,
-                {.offset_bytes = tmp_offset},
-                {.page_id = i_page + num_output_pages_in_row - 1, .offset_bytes = 0});
+                stick_id,
+                /*offset=*/0,
+                /*size=*/stick_size_bytes);
             l1_read_offset += stick_size_padded_aligned;
             i_page += num_output_pages_in_row;
         }
