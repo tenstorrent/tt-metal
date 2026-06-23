@@ -54,7 +54,7 @@
 // UBB Galaxy where world_size == number of meshes in the mesh-graph descriptor.
 //
 // Launch (no CI yet):
-//   tt-run --rank-binding <rank_binding.yaml> --mpi-args "--allow-run-as-root --tag-output" \
+//   tt-run --rank-binding <rank_binding.yaml> --mpi-args "--allow-run-as-root --tag-output"
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
 #include <cstdint>
