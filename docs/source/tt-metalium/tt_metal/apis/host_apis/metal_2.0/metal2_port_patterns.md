@@ -123,6 +123,8 @@ experimental::DataflowBuffer dfb_recip(dfb::recip);
 
 Until those land, the self-loop binding is the sanctioned way to keep these ops portable.
 
+**The sync verdict can flip per config — classify per instantiation, not per CB.** Whether a CB lands here (sync-free / single-ended) or is a genuine producer→consumer FIFO is *not* a fixed property of the CB; it can change across an op's configs. The same `buffer_index` can be a sync-free **scratchpad** (compute tilizes in place → self-loop) under one sharding and a **real FIFO** (a DM reader produces, compute consumes → ordinary DFB) under another. Re-run the litmus per code-path — one verdict applied across all configs mis-classifies the rest, and it flips on the **real/fake axis** (the Quasar-breakage predictor), so a miss here is the costly kind. **Canonical confuser:** conv2d `ACT_TILIZED` — height-sharded → sync-free scratchpad (self-loop); block/width-sharded → real FIFO.
+
 **Orthogonal — SPSC.** Endpoint *multiplicity* is a separate check. A CB here that *also* has **2+ FIFO endpoints of one kind on a node** is an SPSC violation, **not** a self-loop case — it cannot be self-looped, and it's an op-owner pre-port fix. See [DFB endpoint legality](port_op_to_metal2_audit.md#dfb-endpoint-legality-spsc).
 
 **See also**: [Self-loop DFB binding](#pattern-self-loop-dfb-binding) (the legitimate accumulator case whose mechanism this borrows — there the producer/consumer do genuine work); [DFB endpoint legality](port_op_to_metal2_audit.md#dfb-endpoint-legality-spsc).
