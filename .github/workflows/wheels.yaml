@@ -142,7 +142,13 @@ jobs:
             CIBW_BUILD_TYPE="${{ inputs.build-type }}"
             CIBW_ENABLE_LTO="${{ inputs.enable-lto && 'ON' || 'OFF' }}"
           CIBW_BEFORE_BUILD: "mkdir -p /tmp/ccache && ccache -z && ccache -p"
-          CIBW_AFTER_BUILD: "ccache -sv > /host/tmp/ccache-wheel-stats.txt 2>&1 && cat /host/tmp/ccache-wheel-stats.txt"
+          # cibuildwheel has no after_build hook; CIBW_AFTER_BUILD was silently ignored.
+          # repair-wheel-command is the only real container-side hook that runs after the
+          # compile on this build (tests are skipped for ASan), so dump ccache stats there.
+          # Keep the default auditwheel repair, then write the stats to the host-mounted
+          # /host/tmp (== host /tmp) so the host "ccache stats summary" step can read them.
+          # The stats dump is best-effort (|| true) so it can never fail the wheel build.
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: "auditwheel repair -w {dest_dir} {wheel} && (ccache -sv > /host/tmp/ccache-wheel-stats.txt 2>&1 && cat /host/tmp/ccache-wheel-stats.txt || true)"
           CIBW_TEST_COMMAND: 'python -c "import ttnn"'
           CIBW_TEST_SKIP: ${{ inputs.build-type == 'ASan' && '*' || '' }}
           CIBW_MANYLINUX_X86_64_IMAGE: ${{ inputs.docker-image || 'docker-image-unresolved!' }}
