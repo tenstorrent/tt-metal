@@ -189,11 +189,6 @@ class TtPrefillRuntime:
         over the D2D socket)."""
         if self.config.is_first_rank:
             return prepare_prefill_input_tensor(
-                token_ids,
-                self.mesh_device,
-                self.config.sp_factor,
-                False,  # chunked prefill is block-cyclic (non-balanced)
-                self.config.mesh_shape,
                 self.config.sp_axis,
             )
         return self.make_placeholder_activation()
