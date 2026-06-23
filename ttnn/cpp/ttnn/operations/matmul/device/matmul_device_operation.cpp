@@ -487,11 +487,11 @@ void validate_matmul_bias(
     std::visit(
         [&config_supports_bias](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
-            // MatmulMultiCoreProgramConfig and MatmulMultiCoreReuseProgramConfig have no
-            // bias kernel path. Other configs support bias; gather_in0 on 1D multicast
-            // rejects bias separately in its dedicated check below.
+            // MatmulMultiCoreReuseProgramConfig has no bias kernel path and the wrapper
+            // does not post-process bias for it. All other configs either support bias in
+            // the kernel or have it handled by get_post_process_bias() in matmul.cpp.
+            // gather_in0 on 1D multicast rejects bias separately in its dedicated check.
             config_supports_bias =
-                !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreProgramConfig> &&
                 !std::is_same_v<ProgramConfigType, operations::matmul::MatmulMultiCoreReuseProgramConfig>;
         },
         chosen_program_config);

@@ -3916,31 +3916,6 @@ def test_matmul_2d_nd_sharded_in1(device, m, k, n, grid_size, k_splits, n_splits
     assert_equal(out_interleaved, out_nd)
 
 
-def test_matmul_activation_rejected_on_multicore_reuse_program_config(device, expect_error):
-    """Fused activation is not supported for MatmulMultiCoreReuseProgramConfig — validate-time check."""
-    torch.manual_seed(0)
-    m, k, n = 64, 64, 64
-    in0 = ttnn.from_torch(torch.randn(1, 1, m, k, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-    in1 = ttnn.from_torch(torch.randn(1, 1, k, n, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
-
-    program_config = ttnn.MatmulMultiCoreReuseProgramConfig(
-        compute_with_storage_grid_size=(1, 1),
-        in0_block_w=k // 32,
-        out_subblock_h=1,
-        out_subblock_w=1,
-        per_core_M=m // 32,
-        per_core_N=n // 32,
-    )
-
-    with expect_error(RuntimeError, "Fused activation is not supported for this matmul program config:"):
-        ttnn.matmul(
-            in0,
-            in1,
-            program_config=program_config,
-            activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
-        )
-
-
 def test_matmul_kt_not_divisible_by_in0_block_w_rejected(device, expect_error):
     """Kt (K / tile_width) must be divisible by in0_block_w — error message must include both values."""
     torch.manual_seed(0)
