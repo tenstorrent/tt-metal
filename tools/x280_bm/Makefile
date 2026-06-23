@@ -19,13 +19,15 @@ NM      := $(CROSS)nm
 
 ARCH_FLAGS := -march=rv64gc -mabi=lp64d
 BARE_FLAGS := -nostdlib -nostartfiles -ffreestanding -mcmodel=medany
-CFLAGS     := $(ARCH_FLAGS) $(BARE_FLAGS) -O2 -g -Wall
+# -fno-tree-loop-distribute-patterns: stop GCC turning init loops into
+# memset/memcpy calls (we have no libc under -nostdlib).
+CFLAGS     := $(ARCH_FLAGS) $(BARE_FLAGS) -O2 -g -Wall -Iinclude -fno-tree-loop-distribute-patterns
 
 BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
@@ -39,6 +41,16 @@ $(BUILD)/counter.elf: $(BUILD)/entry.o $(BUILD)/counter.o $(LD_SCRIPT) | toolcha
 $(BUILD)/counter.bin: $(BUILD)/counter.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "counter.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/poller.o: src/poller.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/poller.elf: $(BUILD)/entry.o $(BUILD)/poller.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/poller.o
+
+$(BUILD)/poller.bin: $(BUILD)/poller.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "poller.bin: $$(wc -c < $@) bytes"
 
 $(BUILD):
 	mkdir -p $@
