@@ -151,23 +151,42 @@ def completion_spread_us(done_d: dict, freq_mhz: float, min_prog: int):
     return [(max(v) - min(v)) / freq_mhz for v in by_prog.values() if len(v) > 1]
 
 
-def global_bubbles_us(pack: dict, unp0: dict, freq_mhz: float, min_prog: int):
-    """True inter-op math-to-math: last core to finish pack(k) -> first core to start
-    unpack(k+1). The window where NO core does math. Excludes intra-op cross-core skew
-    (that is execution time of the gating core, not inter-op latency). Consecutive progs
-    only (skips the trace capture->replay boundary)."""
+def m2m_brackets(pack: dict, unp0: dict, freq_mhz: float, min_prog: int):
+    """Decompose the math-to-math interval per consecutive op pair (k -> k+1).
+
+    Four cross-core fenceposts: F=pack_finish(k) (last-math), S=unpack0(k+1) (first-math).
+      F_min/F_max = first/last core to FINISH op k     S_min/S_max = first/last core to START op k+1
+    Returns per-pair lists (us):
+      bubble     = S_min - F_max   global idle window: NO core doing math (raw, may be <0 if ops overlap)
+      skew_env   = S_max - F_min   first core to finish -> last core to start (full cross-core envelope)
+      finish_skew= F_max - F_min   spread of op-k completion across cores
+      start_skew = S_max - S_min   spread of op-(k+1) start across cores
+    Identity: skew_env = finish_skew + bubble + start_skew.
+    Plus within-core gap (same core's unpack0(k+1) - pack_finish(k)) across all core/pair samples.
+    Consecutive progs only (skips the trace capture->replay boundary)."""
     progs = sorted({k[3] for k in pack if k[3] >= min_prog})
-    out = []
+    bubble, skew_env, finish_skew, start_skew, within = [], [], [], [], []
     for a, b in zip(progs, progs[1:]):
         if b != a + 1:
             continue
-        pk = [v for k, v in pack.items() if k[3] == a]
-        un = [v for k, v in unp0.items() if k[3] == b]
-        if pk and un:
-            bub = (min(un) - max(pk)) / freq_mhz
-            if bub > 0:
-                out.append(bub)
-    return out
+        fin = {k[:3]: v for k, v in pack.items() if k[3] == a}
+        sta = {k[:3]: v for k, v in unp0.items() if k[3] == b}
+        if not fin or not sta:
+            continue
+        F, S = list(fin.values()), list(sta.values())
+        bubble.append((min(S) - max(F)) / freq_mhz)
+        skew_env.append((max(S) - min(F)) / freq_mhz)
+        finish_skew.append((max(F) - min(F)) / freq_mhz)
+        start_skew.append((max(S) - min(S)) / freq_mhz)
+        for c in fin.keys() & sta.keys():
+            within.append((sta[c] - fin[c]) / freq_mhz)
+    return {
+        "bubble": bubble,
+        "skew_env": skew_env,
+        "finish_skew": finish_skew,
+        "start_skew": start_skew,
+        "within": within,
+    }
 
 
 def main() -> int:
@@ -232,9 +251,9 @@ def main() -> int:
                 fh.write(f"{cx},{cy},{g:.3f},{(g / pc_max if pc_max else float('nan')):.3f}\n")
         print(f"wrote per-core BW-vs-position to {args.per_core_csv} ({len(rows)} cores)")
 
-    # math-to-math = global inter-op bubble (true latency); NOT the per-core gap (which
-    # counts fast cores idling at done/go = op execution skew, reported separately).
-    m2m = global_bubbles_us(pack_finish, unpack0, freq, args.min_prog_id)
+    # math-to-math brackets: global bubble + cross-core skew envelope + within-core gap.
+    # See m2m_brackets(): skew_env = finish_skew + bubble + start_skew.
+    mb = m2m_brackets(pack_finish, unpack0, freq, args.min_prog_id)
     # read-fill head: first read issued (READ_BEFORE_BARRIER) -> compute gets tile 0
     # (TILE_IDX[0]). This is the first per-trid BATCH (N=trid_in_flight reads) landing +
     # barrier + push, i.e. the reader latency that defers math start (grows with N, not CB depth).
@@ -265,8 +284,13 @@ def main() -> int:
         "starvation_ratio": round(starv, 3),
         "op_to_op_us": round(o2o_med, 4),
         "op_to_op_last_us": round(o2o_last, 4),
-        "math_to_math_us": round(median(m2m), 4),
-        "math_to_math_max_us": round(vmax(m2m), 4),
+        # math-to-math, three brackets (all per-pair medians):
+        "m2m_bubble_us": round(median(mb["bubble"]), 4),  # global idle window (== old math_to_math_us)
+        "m2m_skew_env_us": round(median(mb["skew_env"]), 4),  # first-finish -> last-start (cross-core)
+        "m2m_within_med_us": round(median(mb["within"]), 4),  # same-core gap, typical
+        "m2m_within_max_us": round(vmax(mb["within"]), 4),  # same-core gap, worst core
+        "finish_skew_us": round(median(mb["finish_skew"]), 4),  # op-k completion spread
+        "start_skew_us": round(median(mb["start_skew"]), 4),  # op-(k+1) start spread
         "read_fill_head_us": round(median(read_fill), 4),
         "reader_to_writer_us": round(median(r2w), 4),
         "reader_to_writer_max_us": round(vmax(r2w), 4),

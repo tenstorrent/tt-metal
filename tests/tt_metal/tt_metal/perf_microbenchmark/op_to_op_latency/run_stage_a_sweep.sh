@@ -29,7 +29,12 @@ LAYOUTS="${LAYOUTS:-row col}"
 INPUT_DEPTHS="${INPUT_DEPTHS:-16 32 64}"     # input CB depth candidates (>= 2*trid_in_flight)
 OUTPUT_DEPTHS="${OUTPUT_DEPTHS:-2 4 8 16 32}"  # output CB candidates (tuned in balanced regime)
 OUT_CB_BASE="${OUT_CB_BASE:-4}"              # output CB used during the input-depth tune
-N="${N:-8}"                                  # trid_in_flight, locked
+N="${N:-4}"                                  # trid_in_flight (4 saturates BW at all core counts)
+# Final run is repeated per end-barrier mode so the writer-drain/barrier term of math-to-math
+# can be attributed: 0=noc_async_write_barrier (full ack), 1=writes_flushed, 2=none (relaxed).
+# writer-CB/barrier contribution = m2m(mode 0) - m2m(mode 2). Tuning runs at TUNE_BARRIER.
+BARRIER_MODES="${BARRIER_MODES:-0 1 2}"
+TUNE_BARRIER="${TUNE_BARRIER:-0}"
 PAGES="${PAGES:-1024}"                       # tiles/core
 TUNE_PROGS="${TUNE_PROGS:-2}"
 FINAL_PROGS="${FINAL_PROGS:-4}"
@@ -39,12 +44,12 @@ BW_TOL="${BW_TOL:-0.98}"                     # smallest depth within this frac o
 NOP_SWEEP="${NOP_SWEEP:-0 32 64 128 256 512 1024 1536}"
 KNEE_TOL="${KNEE_TOL:-0.95}"
 
-run_test() { # layout_flag cores in_cb out_cb nops nprogs
-  local lf="$1" cores="$2" in_cb="$3" out_cb="$4" nops="$5" nprogs="$6"
+run_test() { # layout_flag cores in_cb out_cb nops nprogs [barrier_mode=0]
+  local lf="$1" cores="$2" in_cb="$3" out_cb="$4" nops="$5" nprogs="$6" barrier="${7:-0}"
   rm -f "${DEV_CSV}"
   "${BIN}" --reader-dbuf-trid --reader-trid-in-flight "${N}" --reader-push-tiles 2 \
     --input-cb-depth-tiles "${in_cb}" --output-cb-depth-tiles "${out_cb}" \
-    --writer-end-barrier-mode 0 --lean-compute --skip-output-validation ${lf} \
+    --writer-end-barrier-mode "${barrier}" --lean-compute --skip-output-validation ${lf} \
     --num-pages-per-core "${PAGES}" --num-programs "${nprogs}" \
     --use-trace --trace-warmup-replays 1 --compute-nops "${nops}" \
     --num-active-cores "${cores}" --use-device-profiler >/tmp/stage_a_run.log 2>&1
@@ -60,8 +65,11 @@ for layout in ${LAYOUTS}; do
   lf=""; [ "${layout}" = "col" ] && lf="--core-layout-col"
   OUT="${OUTDIR}/stage_a_${layout}.csv"
   for C in ${CORES}; do
-    if [ -f "${OUT}" ] && grep -q "^${layout},${C}," "${OUT}"; then
-      echo "[skip] ${layout} cores=${C} (already in ${OUT})"; continue
+    # Skip this (layout,cores) only if every barrier-mode row is already present.
+    if [ -f "${OUT}" ]; then
+      have_all=1
+      for m in ${BARRIER_MODES}; do grep -q "^${layout},${C},${m}," "${OUT}" || have_all=0; done
+      if [ "${have_all}" = "1" ]; then echo "[skip] ${layout} cores=${C} (all modes present)"; continue; fi
     fi
     # --- Stage 1: tune input CB depth at nops=0 (read-bound), max agg_read ---
     echo "==== ${layout} cores=${C}: tuning input CB depth (nops=0) ===="
@@ -124,15 +132,18 @@ for layout in ${LAYOUTS}; do
     fi
     echo "  -> out_cb=${best_out} (agg_total peak=${best_tot})"
 
-    echo "==== ${layout} cores=${C}: final balanced run (in=${best_in} out=${best_out} nops=${nops}) ===="
-    if run_test "${lf}" "${C}" "${best_in}" "${best_out}" "${nops}" "${FINAL_PROGS}"; then
-      "${PY}" "${DEC}" --pages-per-core "${PAGES}" --num-cores "${C}" --csv-out "${OUT}" \
-        --label "layout=${layout};cores=${C};in_cb=${best_in};out_cb=${best_out};nops=${nops};peak_read_gbps=${peak_read}" \
-        2>/dev/null | grep -E "agg_total_gbps|agg_read_gbps|math_to_math_us|starvation_ratio|writer_done_spread"
-      echo "  appended ${layout} cores=${C} -> ${OUT}"
-    else
-      echo "  FINAL FAILED for ${layout} cores=${C}: $(grep -oE 'TT_FATAL: .*' /tmp/stage_a_run.log | head -1)"
-    fi
+    echo "==== ${layout} cores=${C}: final balanced runs (in=${best_in} out=${best_out} nops=${nops}) barriers=[${BARRIER_MODES}] ===="
+    for m in ${BARRIER_MODES}; do
+      if [ -f "${OUT}" ] && grep -q "^${layout},${C},${m}," "${OUT}"; then echo "  [skip] barrier=${m}"; continue; fi
+      if run_test "${lf}" "${C}" "${best_in}" "${best_out}" "${nops}" "${FINAL_PROGS}" "${m}"; then
+        "${PY}" "${DEC}" --pages-per-core "${PAGES}" --num-cores "${C}" --csv-out "${OUT}" \
+          --label "layout=${layout};cores=${C};barrier=${m};in_cb=${best_in};out_cb=${best_out};nops=${nops};peak_read_gbps=${peak_read}" \
+          2>/dev/null | grep -E "agg_total_gbps|m2m_bubble_us|m2m_skew_env_us|finish_skew_us|start_skew_us|read_fill_head_us"
+        echo "  appended ${layout} cores=${C} barrier=${m} -> ${OUT}"
+      else
+        echo "  FINAL FAILED ${layout} cores=${C} barrier=${m}: $(grep -oE 'TT_FATAL: .*' /tmp/stage_a_run.log | head -1)"
+      fi
+    done
     unset BW_AT PCMED_AT TOT_AT
   done
   echo; echo "==== ${layout} done: ${OUT} ===="; column -t -s, "${OUT}" 2>/dev/null || cat "${OUT}"
