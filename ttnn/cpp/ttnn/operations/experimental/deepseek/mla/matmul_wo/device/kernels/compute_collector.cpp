@@ -22,8 +22,8 @@ void kernel_main() {
     constexpr auto cb_s2c_in2_id = tt::CBIndex::c_3;
     constexpr auto cb_s2c_out_id = tt::CBIndex::c_4;
 
-    CircularBuffer cb_s2c_in2(cb_s2c_in2);
-    CircularBuffer cb_s2c_out(cb_s2c_out);
+    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
+    CircularBuffer cb_s2c_out(cb_s2c_out_id);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
