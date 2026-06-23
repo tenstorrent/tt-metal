@@ -29,14 +29,13 @@ void kernel_main() {
     // begins at index 9; its leading has_forward flag also encodes the route direction.
     size_t conn_arg_idx = 9;
     const bool sender_is_forward = get_arg_val<uint32_t>(conn_arg_idx);
-    FabricStreamSender<> ack(conn_arg_idx, sender_is_forward, alignment);
+    FabricStreamSender<> ack_sender(conn_arg_idx, sender_is_forward, alignment);
 
     // Signal the sender we are "ready" to receive (atomic-inc over fabric), then tear down.
-    ack.open();
-    ack.set_route_unicast(sender_num_hops);
-    ack.arm_inc(1);
+    auto ack = ack_sender.open();
+    auto ready = ack.arm_inc(unicast_route(sender_num_hops), 1);
     const uint64_t sender_sem_noc_addr = get_noc_addr(sender_semaphore_addr);
-    ack.inc(sender_sem_noc_addr);
+    ready.inc(sender_sem_noc_addr);
     ack.close();
 
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on

@@ -32,7 +32,7 @@ void kernel_main() {
     // begins at index 9; its leading has_forward flag also encodes the send direction.
     size_t conn_arg_idx = 9;
     const bool dst_is_forward = get_arg_val<uint32_t>(conn_arg_idx);
-    FabricStreamSender<> tx(conn_arg_idx, dst_is_forward, alignment);
+    FabricStreamSender<> sender(conn_arg_idx, dst_is_forward, alignment);
 
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.
@@ -53,10 +53,12 @@ void kernel_main() {
     noc_semaphore_wait_min(local_semaphore_ptr, 1);
     noc_semaphore_set(local_semaphore_ptr, 0);
 
-    tx.open();
-    tx.set_route_unicast(dst_num_hops);
-    tx.arm_unicast_write(payload_size_bytes);  // invariant payload size for every page write
-    tx.arm_inc(1);                             // invariant inc value for the "done" signal
+    // open() yields the opened stream; arm_* yield the only objects that can issue. The route is
+    // a mandatory arm argument, so an unrouted send cannot be written.
+    auto stream = sender.open();
+    const auto route = unicast_route(dst_num_hops);
+    auto writer = stream.arm_unicast_write(route, payload_size_bytes);  // invariant payload size per page write
+    auto done = stream.arm_inc(route, 1);                               // invariant inc value for the "done" signal
 
     for (uint32_t page_idx = page_idx_start, packet_page_idx = 0; page_idx < page_idx_end; ++page_idx) {
         cb_wait_front(sender_cb_id, 1);
@@ -72,7 +74,7 @@ void kernel_main() {
             ++packet_page_idx;
             if (packet_page_idx >= curr_pages_per_packet) {
                 // op owns the coalescing (page->packet, packet_idx); the helper owns the fabric write.
-                tx.write_page(packet_base_addr, packet_idx, dst_buffer);
+                writer.write_page(packet_base_addr, packet_idx, dst_buffer);
 
                 // reset counters
                 packet_page_idx = 0;
@@ -86,7 +88,7 @@ void kernel_main() {
 
     // signal the receiver "done"
     const uint64_t receive_sem_noc_addr = get_noc_addr(receive_semaphore_addr);
-    tx.inc(receive_sem_noc_addr);
+    done.inc(receive_sem_noc_addr);
 
-    tx.close();
+    stream.close();  // explicit so teardown order is fixed here; the dtor would also close (idempotent)
 }

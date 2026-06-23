@@ -6,74 +6,84 @@
 
 /**
  * @file ccl_helpers_dataflow.hpp
- * @brief Multi-device CCL (fabric) dataflow-kernel helpers.
+ * @brief Multi-device CCL (fabric) dataflow-kernel helpers — a safety-by-construction API.
  *
  * The multi-device analog of the single-device dataflow-helper library (#45698,
- * @c reduce/dfb/tilize_helpers_dataflow). It gives op authors an intent-level surface
- * for the footgun-heavy fabric egress plumbing — connection lifecycle + direction,
- * packet-header allocation, 1-D unicast route programming, the stateful
- * set_state/with_state @c UpdateMask dance, flow-controlled fabric writes, and
- * cross-device atomic-inc — so they express "arm a write channel, send these pages from
- * A to B" / "signal that peer" instead of re-deriving connection build modes, header
- * framing, routing, mask selection, and the send/flush handshake.
+ * @c reduce/dfb/tilize_helpers_dataflow). It gives op authors an intent-level surface for the
+ * footgun-heavy fabric egress plumbing — connection lifecycle + direction, packet-header
+ * allocation, 1-D route programming, the stateful set_state/with_state @c UpdateMask dance,
+ * flow-controlled fabric writes, and cross-device atomic-inc.
  *
- * This is PURE DATA MOVEMENT. No compute/unpack/math/pack appears here. Reduction
- * collectives (all_reduce, reduce_scatter) are out of scope.
+ * This is PURE DATA MOVEMENT. No compute/unpack/math/pack appears here. Reduction collectives
+ * (all_reduce, reduce_scatter) are out of scope.
+ *
+ * @par Safety by construction — the call order IS the type progression.
+ *   The legal fabric-egress sequence is open -> route -> arm -> issue -> close. Rather than
+ *   document that order and trust callers, this API makes each stage a distinct type that
+ *   exposes ONLY the operations legal at that stage, so a mis-ordered sequence fails to compile:
+ *
+ *     FabricStreamSender<ConnT>      // UNOPENED: the only method is open().
+ *          | open()  -> open_finish() + bind the forward/backward direction
+ *          v
+ *     FabricStream<ConnT>            // OPENED: arm_*(route, ...), drain(), close().
+ *          | arm_unicast_write(route, page_size)      -> UnicastWriteChannel
+ *          | arm_scatter_write(route, chunk, n)       -> ScatterWriteChannel
+ *          | arm_inc(route, val)                      -> AtomicIncChannel
+ *          | arm_multicast_inc(mcast_route, val)      -> MulticastIncChannel
+ *          v
+ *     <channel handle>               // ARMED: the issue methods, and nothing else.
+ *          write()/write_page() | write_scatter() | inc() | multicast_inc()
+ *
+ *   What this rules out at compile time:
+ *     1. arm or issue before open() — arm_* live only on FabricStream, which only open() yields.
+ *     2. arm without a route — the route is a MANDATORY argument of every arm_* (there is no
+ *        separate set_route_* to forget). A wrong/absent route silently corrupts the packet, so
+ *        making it un-omittable is the central footgun this API removes.
+ *     3. issue before arm — write()/inc()/etc. exist only on the handle arm_* returns; you
+ *        cannot name an issue without first holding an armed channel.
+ *     4. forgot close() — close() is idempotent and the FabricStream destructor closes if you
+ *        did not. close() stays callable explicitly, so teardown ordering (e.g. all_gather's
+ *        drain() -> close() -> trailing barrier) is unchanged.
  *
  * @par The armed-channel model — "arm once -> issue many".
- *   A fabric egress is a stateful packet header: you program its INVARIANT fields once
- *   (route + payload size, or route + inc value), then issue many packets that update
- *   only the VARIABLE field (the destination NOC address). This mirrors the underlying
- *   fabric @c *_set_state / @c *_with_state API and is the all_gather throughput path.
- *   FabricStreamSender exposes it as typed @c arm_* + issue pairs and OWNS the
- *   @c UpdateMask selection for each phase — the op never names an @c UpdateMask. A wrong
- *   mask silently corrupts the packet, so hiding it is the central footgun the helper
- *   removes. Call @c set_route_unicast before @c arm_*; @c arm_* before its issues.
+ *   A fabric egress is a stateful packet header: arm_* programs its INVARIANT fields once
+ *   (route + payload size, or route + inc value) via set_state and OWNS the @c UpdateMask; the
+ *   returned channel issues many packets that update only the VARIABLE field (the destination
+ *   NOC address) via with_state. The op never names an @c UpdateMask.
  *
- * @par SCOPE & EXTENSION — read this first.
- *   The shipped, verified surface is the 1-D UNICAST pattern exercised end-to-end by
- *   point_to_point (the only migrated pure-DM CCL op): open a one-direction fabric
- *   egress, program a line-unicast route by hop distance, arm a unicast-write channel
- *   (fixed payload size) and a unicast atomic-inc channel (fixed value), issue page
- *   writes + the handshake/completion inc, close. It is built on the LINEAR (1-D) fabric
- *   API (@c tt_metal/fabric/hw/inc/linear/api.h), which the TT-Fabric spec guarantees
- *   builds and runs UNCHANGED on a 2-D (mesh) fabric — so a 1-D-API CCL kernel is
- *   forward-compatible to mesh hardware.
+ * @par SCOPE & EXTENSION.
+ *   Shipped + verified: the 1-D UNICAST pattern (point_to_point) and the line-MULTICAST barrier
+ *   + 4-chunk SCATTER + final drain layered on the same channels (all_gather_async, PCC-verified
+ *   on a Wormhole multi-chip simulator). Built on the LINEAR (1-D) fabric API
+ *   (@c tt_metal/fabric/hw/inc/linear/api.h), which the TT-Fabric spec guarantees runs UNCHANGED
+ *   on a 2-D (mesh) fabric. Worker-mux is wrapped via the ConnT policy (MuxConn<N>); see below.
  *
- *   Richer collectives (e.g. all_gather) layer line-MULTICAST routes, real 4-chunk
- *   SCATTER writes, a multicast atomic-inc barrier, and a final fabric drain on top of
- *   this SAME armed-channel substrate, behind the same FabricStreamSender call sites:
- *   @c set_route_multicast, @c arm_scatter_write/@c write_scatter,
- *   @c arm_multicast_inc/@c multicast_inc, and @c drain. These ARE shipped and are
- *   exercised + PCC-verified by the migrated @c all_gather_async writer on a Wormhole
- *   multi-chip simulator (bit-identical to the pre-migration kernel). The local barrier
- *   wait/reset and the counting-semaphore threshold stay op-owned (see below). Worker-mux
- *   is the one fabric path NOT yet wrapped — a ConnPolicy{Direct,Mux} follow-on; the
- *   migrated writer keeps its mux path raw behind @c \#ifdef USE_WORKER_MUX.
- *
- * @par Recv-side coordination is op-owned (intentionally NOT wrapped).
- *   The receive INGRESS is a local NoC read the op already owns. Cross-device
- *   synchronization is a remote atomic-inc (@c FabricStreamSender::inc) paired with a
- *   local @c noc_semaphore_wait_min(sem, threshold) — a plain threshold, no ring
- *   vocabulary: 1 = 2-party handshake, ring_size-1 = N-party barrier, sem_target =
- *   incremental counting. These are stock dataflow-API calls, so the op calls them
- *   directly rather than through a renamed wrapper.
- *   @warning CACHE-REUSE FOOTGUN: programs are cached and GlobalSemaphores reused, so
- *     each side must @c noc_semaphore_set(sem, 0) to re-arm for the next run — a SENDER
- *     resets BEFORE its own outgoing inc; a RECEIVER resets after its wait. Missing
- *     reset = first run green, second hangs or corrupts.
+ * @par Cross-device coordination is split (intentionally).
+ *   The SENDING half of a cross-device sync — a remote atomic-inc — is owned here
+ *   (AtomicIncChannel::inc / MulticastIncChannel::multicast_inc). The WAITING half is a plain
+ *   local @c noc_semaphore_wait_min(sem, threshold) the op calls directly (1 = handshake,
+ *   ring_size-1 = N-party barrier, sem_target = counting) — a stock dataflow call, not renamed.
+ *   The receive INGRESS is likewise a local NoC read the op owns; there is no FabricStreamReceiver.
+ *   @warning CACHE-REUSE FOOTGUN: programs are cached and GlobalSemaphores reused, so each side
+ *     must @c noc_semaphore_set(sem, 0) to re-arm — a SENDER resets BEFORE its outgoing inc, a
+ *     RECEIVER after its wait. Missing reset = first run green, second hangs or corrupts.
+ *   @warning SHARED SEM HEADER: arm_inc and arm_multicast_inc reuse ONE pooled header (the pool
+ *     hangs on exhaustion; all_gather intentionally reuses it for barrier then counting). They
+ *     therefore cannot both be live at once. This is the one ordering the type system can't
+ *     express; CONTAIN it by block-scoping the MulticastIncChannel to the barrier phase so it is
+ *     destroyed before arm_inc re-arms the header for the counting phase.
  *
  * It WRAPS, and does not reinvent, the existing fragmented fabric layer:
  *   - @c FabricConnectionManager (connection + per-direction @c WorkerToFabricEdmSender)
  *   - @c PacketHeaderPool (the idiomatic fabric-L1 packet-header allocator)
- *   - @c ccl_routing_utils (line-unicast route programming)
+ *   - @c ccl_routing_utils (line-unicast / line-multicast route programming)
  *   - the @c tt::tt_fabric::linear::experimental stateful set_state/with_state fabric API
  *
  * @par What the helper does NOT own (the op composes it):
- *   ring slice-walk (chip_id +/- k mod ring_size), store-and-forward relay,
- *   page<->packet coalescing/segmentation, concat-by-gather_dim output addressing,
- *   split-forwarding, address generation (TensorAccessor/ShardedAddrGen is consumed,
- *   never re-wrapped), and the all_gather fuse_op/OpSignaler matmul-fusion hooks.
+ *   ring slice-walk (chip_id +/- k mod ring_size), store-and-forward relay, page<->packet
+ *   coalescing/segmentation, concat-by-gather_dim output addressing, split-forwarding, address
+ *   generation (TensorAccessor/ShardedAddrGen is consumed, never re-wrapped), the local barrier
+ *   wait/reset, and the all_gather fuse_op/OpSignaler matmul-fusion hooks.
  */
 
 #include "api/dataflow/dataflow_api.h"
@@ -91,10 +101,9 @@ namespace dataflow_kernel_lib::ccl {
 
 /**
  * @brief Direct fabric-connection policy (default). Wraps one FabricConnectionManager and
- *        binds a single forward/backward direction. FabricStreamSender's arm/send methods
- *        are agnostic to the policy — they call conn_.sender(); a Mux policy (MuxConn<N>,
- *        for worker-mux link sharing) slots in behind the same open()/close()/sender()
- *        interface without touching those methods.
+ *        binds a single forward/backward direction. The arm/send methods are agnostic to the
+ *        policy — they call conn_.sender(); a Mux policy (MuxConn<N>, for worker-mux link
+ *        sharing) slots in behind the same open()/close()/sender() interface.
  */
 class DirectConn {
 public:
@@ -121,8 +130,8 @@ private:
 /**
  * @brief Worker-mux fabric-connection policy. Many workers share one fabric link through a
  *        WorkerToFabricMuxSender<NumBuffers>, instead of DirectConn's 1:1 link<->worker bind.
- *        Slots in behind the same open()/close()/sender() interface as DirectConn, so
- *        FabricStreamSender's arm/send methods are unchanged.
+ *        Slots in behind the same open()/close()/sender() interface as DirectConn, so the
+ *        FabricStream's arm/send methods are unchanged.
  *
  * The ctor reads the mux runtime-arg block (advancing arg_idx), builds the connection, and
  * waits for the mux endpoint to be ready. A worker with no link in its direction has
@@ -231,193 +240,207 @@ private:
     uint32_t num_mux_clients_ = 0;
 };
 
-/**
- * @brief A single open fabric egress endpoint in one direction, exposing armed channels.
- *
- * Owns connection build + deferred open + close, direction selection, packet-header
- * allocation (lazy, per armed channel, from @c PacketHeaderPool), 1-D unicast route
- * programming, the stateful @c UpdateMask selection, flow-controlled unicast payload
- * writes, and cross-device atomic-inc.
- *
- * @par Lifecycle (deferred-open mirrors point_to_point):
- *   1. construct  -> builds the connection (BUILD_AND_OPEN_CONNECTION_START_ONLY)
- *   2. [optional] noc_semaphore_wait_min(...) on a pre-open semaphore
- *   3. open()                       -> open_finish() + bind the forward/backward direction
- *   4. set_route_unicast(num_hops)
- *   5. arm_unicast_write(page_size) / arm_inc(val)  -- program invariant header state once
- *   6. write()/write_page() / inc()                 -- issue many, varying only the dst addr
- *   7. close()
- *
- * Each armed channel lazily allocates its own header from @c PacketHeaderPool on the arm
- * call: the payload header on @c arm_unicast_write, the semaphore header on @c arm_inc. A
- * sender that only signals (e.g. the receiver's "ready" inc) therefore arms one channel
- * and allocates exactly one header, matching the hand-written kernel's header count.
- *
- * @note There is intentionally no symmetric "FabricStreamReceiver": the receive
- *   INGRESS is a local NoC read the op owns; a receiver's only fabric activity is a
- *   brief egress (its ack/ready inc) plus a local semaphore wait — the egress is this
- *   class, the wait is a stock @c noc_semaphore_wait_min (see the file banner).
- *
- * @par Example (point_to_point sender, abbreviated):
- * @code
- * using namespace dataflow_kernel_lib::ccl;
- * size_t conn_arg_idx = NUM_OP_RT_ARGS;                  // start of the fabric arg block
- * bool is_forward = get_arg_val<uint32_t>(conn_arg_idx); // peek has_forward (== direction here)
- * FabricStreamSender tx(conn_arg_idx, is_forward, alignment);
- *
- * noc_semaphore_wait_min(recv_sem, 1);   // wait for the receiver's "ready"
- * noc_semaphore_set(recv_sem, 0);        // reset BEFORE our own inc (cache-reuse safe)
- * tx.open();
- * tx.set_route_unicast(num_hops);
- * tx.arm_unicast_write(payload_size);    // invariant: payload size + route, once
- * tx.arm_inc(1);                         // invariant: inc value + route, once
- * for (...) tx.write_page(packet_l1_addr, packet_idx, dst);  // op owns coalescing; varies dst addr
- * tx.inc(get_noc_addr(recv_sem));        // "done"
- * tx.close();
- * @endcode
- */
+// Forward declarations: FabricStream constructs the channel handles (their ctors are private,
+// FabricStream is their friend); FabricStreamSender constructs FabricStream.
+template <typename ConnT>
+class FabricStream;
+template <typename ConnT>
+class FabricStreamSender;
+
+/// Build a 1-D unicast route info from a hop distance — the point_to_point convenience form.
+/// (all_gather reads its route info from compile-time args and passes it directly.) 1-D linear
+/// routing is intra-mesh and hop-distance based; dst_mesh_id is unused on the LowLatency path.
+FORCE_INLINE ccl_routing_utils::line_unicast_route_info_t unicast_route(uint32_t num_hops) {
+    ccl_routing_utils::line_unicast_route_info_t info{};
+    info.dst_mesh_id = 0;
+    info.distance_in_hops = static_cast<uint16_t>(num_hops);
+    return info;
+}
+
+// ============================================================================================
+// Armed channel handles — each is produced by a FabricStream::arm_* call and exposes ONLY the
+// issues for its send type. Holding one is the compile-time proof that arm (and therefore open
+// + route) happened. Each borrows the connection (owned by the FabricStreamSender) and the
+// pooled header (owned by the FabricStream); both outlive every channel by construction.
+// ============================================================================================
+
+/// Armed unicast-write channel: issue armed-size payload writes, varying only the dst address.
+template <typename ConnT>
+class UnicastWriteChannel {
+public:
+    /// Issue one armed unicast write of the armed payload size from local L1 @c src_l1_addr to
+    /// @c dst_noc_addr (with_state — varies only the dst address).
+    FORCE_INLINE void write(uint64_t dst_noc_addr, uint32_t src_l1_addr);
+    /// Convenience over write(): compute the dst NOC address for page @c page_idx of @c dst (a
+    /// consumed TensorAccessor/ShardedAddrGen) and issue an armed unicast write.
+    template <class AddrGen>
+    FORCE_INLINE void write_page(uint32_t src_l1_addr, uint32_t page_idx, const AddrGen& dst);
+
+private:
+    friend class FabricStream<ConnT>;
+    FORCE_INLINE UnicastWriteChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) : conn_(conn), hdr_(hdr) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_;
+};
+
+/// Armed scatter-write channel: issue <=4-destination packets (the NocUnicastScatter limit).
+template <typename ConnT>
+class ScatterWriteChannel {
+public:
+    /// Issue one armed scatter write: pack up to 4 destination NOC addresses into one packet from
+    /// local L1 @c src_l1_addr (with_state — DstAddrs|ChunkSizes|PayloadSize, since the last packet
+    /// of a run may carry fewer chunks than the armed maximum). @c num_chunks must be <= the arm.
+    FORCE_INLINE void write_scatter(const uint64_t* dst_noc_addrs, uint32_t num_chunks, uint32_t src_l1_addr);
+
+private:
+    friend class FabricStream<ConnT>;
+    FORCE_INLINE ScatterWriteChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr, uint32_t chunk_size_bytes) :
+        conn_(conn), hdr_(hdr), chunk_size_bytes_(chunk_size_bytes) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_;
+    uint32_t chunk_size_bytes_;
+};
+
+/// Armed unicast atomic-inc channel: increment a remote semaphore by the armed value over fabric.
+template <typename ConnT>
+class AtomicIncChannel {
+public:
+    /// Atomic-increment a remote semaphore over the fabric by the armed value (ready / done /
+    /// counting), varying only the semaphore address (with_state).
+    FORCE_INLINE void inc(uint64_t remote_sem_noc_addr);
+
+private:
+    friend class FabricStream<ConnT>;
+    FORCE_INLINE AtomicIncChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) : conn_(conn), hdr_(hdr) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_;
+};
+
+/// Armed multicast atomic-inc channel (the N-party barrier): increment a semaphore on all peers
+/// on the armed multicast route by the armed value. The matching local barrier wait/reset
+/// (noc_semaphore_wait_min(sem, ring_size-1) + set 0) stays op-owned. SHARES the sem header with
+/// AtomicIncChannel — see the file banner's SHARED SEM HEADER warning; block-scope this handle.
+template <typename ConnT>
+class MulticastIncChannel {
+public:
+    /// Multicast atomic-increment @c remote_sem_noc_addr to all peers on the armed route by the
+    /// armed value (with_state — varies only the dst address).
+    FORCE_INLINE void multicast_inc(uint64_t remote_sem_noc_addr);
+
+private:
+    friend class FabricStream<ConnT>;
+    FORCE_INLINE MulticastIncChannel(ConnT* conn, volatile PACKET_HEADER_TYPE* hdr) : conn_(conn), hdr_(hdr) {}
+    ConnT* conn_;
+    volatile PACKET_HEADER_TYPE* hdr_;
+};
+
+// ============================================================================================
+// FabricStream — the OPENED egress. Owns the (lazy) pooled headers and the alignment; hands out
+// armed channels. Borrows the connection from the FabricStreamSender that produced it (so the
+// sender must outlive the stream — declare the sender first). RAII-closes on destruction.
+// ============================================================================================
+template <typename ConnT = DirectConn>
+class FabricStream {
+public:
+    FabricStream(const FabricStream&) = delete;
+    FabricStream& operator=(const FabricStream&) = delete;
+    /// Move ctor: open() returns a FabricStream by value. C++17 guaranteed copy elision usually
+    /// constructs it in place, but provide a move that transfers `closed_` so the moved-from
+    /// stream never double-closes the (now transferred) connection.
+    FORCE_INLINE FabricStream(FabricStream&& o) :
+        conn_(o.conn_),
+        alignment_(o.alignment_),
+        payload_hdr_(o.payload_hdr_),
+        scatter_hdr_(o.scatter_hdr_),
+        sem_hdr_(o.sem_hdr_),
+        closed_(o.closed_) {
+        o.closed_ = true;
+    }
+    FabricStream& operator=(FabricStream&&) = delete;
+    FORCE_INLINE ~FabricStream() { close(); }  // RAII backstop; idempotent with explicit close()
+
+    // --- Armed unicast-write channel -------------------------------------------------
+    /// Arm the unicast-write channel: program route + on-wire payload size onto a pooled header
+    /// once (set_state). Helper owns the @c UpdateMask. Returns the channel to issue write()s.
+    FORCE_INLINE UnicastWriteChannel<ConnT> arm_unicast_write(
+        const ccl_routing_utils::line_unicast_route_info_t& route, uint32_t page_size_bytes);
+
+    // --- Armed scatter-write channel (<=4 chunks/packet) ----------------------------
+    /// Arm the scatter-write channel: program route + per-chunk sizes + chunk count + payload
+    /// size onto a pooled header once (set_state, ChunkSizes|PayloadSize). Returns the channel.
+    /// @param chunk_size_bytes  Per-chunk (per-tile) payload size.
+    /// @param num_chunks        Chunks per packet (2..4).
+    FORCE_INLINE ScatterWriteChannel<ConnT> arm_scatter_write(
+        const ccl_routing_utils::line_unicast_route_info_t& route, uint32_t chunk_size_bytes, uint32_t num_chunks);
+
+    // --- Armed unicast atomic-inc channel --------------------------------------------
+    /// Arm the unicast atomic-inc channel: program route + increment value (+ flush) onto the
+    /// shared sem header once (set_state, Val|Flush). Returns the channel to issue inc()s.
+    FORCE_INLINE AtomicIncChannel<ConnT> arm_inc(
+        const ccl_routing_utils::line_unicast_route_info_t& route, uint32_t val = 1);
+
+    // --- Armed multicast atomic-inc channel (the N-party barrier) --------------------
+    /// Arm the multicast atomic-inc channel: program a MULTICAST route + increment value (+ flush)
+    /// onto the shared sem header once (set_state, Val|Flush). Returns the channel.
+    /// @warning Reuses the SAME pooled header as arm_inc (see the file banner). Block-scope the
+    ///   returned handle so it is destroyed before any later arm_inc re-arms the header.
+    FORCE_INLINE MulticastIncChannel<ConnT> arm_multicast_inc(
+        const ccl_routing_utils::line_multicast_route_info_t& route, uint32_t val = 1);
+
+    // --- Lifecycle -------------------------------------------------------------------
+    /// Drain outstanding local NoC writes + fabric atomic-incs (noc_async_write_barrier +
+    /// noc_async_atomic_barrier). all_gather ends with this; p2p's close() drains its trailing inc.
+    FORCE_INLINE void drain();
+    /// Close the connection. Idempotent — safe to call explicitly and again from the destructor.
+    FORCE_INLINE void close();
+
+private:
+    friend class FabricStreamSender<ConnT>;
+    FORCE_INLINE FabricStream(ConnT* conn, uint32_t alignment) : conn_(conn), alignment_(alignment) {}
+
+    ConnT* conn_;                                         // borrowed from the FabricStreamSender
+    uint32_t alignment_;                                  // L1 alignment for on-wire payload sizing
+    volatile PACKET_HEADER_TYPE* payload_hdr_ = nullptr;  // lazily allocated by arm_unicast_write
+    volatile PACKET_HEADER_TYPE* scatter_hdr_ = nullptr;  // lazily allocated by arm_scatter_write
+    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;      // lazily allocated by arm_inc / arm_multicast_inc (shared)
+    bool closed_ = false;
+};
+
+// ============================================================================================
+// FabricStreamSender — the UNOPENED egress. Owns the connection policy. Its only operation is
+// open(), which finishes the connection and yields the FabricStream. Construct it, optionally
+// do a pre-open noc_semaphore_wait_min, then open().
+// ============================================================================================
 template <typename ConnT = DirectConn>
 class FabricStreamSender {
 public:
     /**
-     * @brief Convenience ctor for the default DirectConn policy: build the connection
-     *        (deferred open) from runtime args. Advances conn_arg_idx past the fabric block.
+     * @brief Convenience ctor for the default DirectConn policy: build the connection (deferred
+     *        open) from runtime args. Advances conn_arg_idx past the fabric block.
      * @param conn_arg_idx  Index of the fabric arg block produced by
      *        ttnn::ccl::dataflow::append_ccl_fabric_rt_args; ADVANCED past the block.
      * @param is_forward    Send on the forward (true) or backward (false) connection.
      * @param alignment     L1 alignment used to size the on-wire payload (bytes).
      */
-    FORCE_INLINE FabricStreamSender(size_t& conn_arg_idx, bool is_forward, uint32_t alignment);
+    FORCE_INLINE FabricStreamSender(size_t& conn_arg_idx, bool is_forward, uint32_t alignment) :
+        conn_(conn_arg_idx, is_forward), alignment_(alignment) {}
 
-    /**
-     * @brief Construct from a pre-built connection policy (e.g. MuxConn<N>) + alignment.
-     *        The policy already read its own args; open()/close()/sender() route through it.
-     */
-    FORCE_INLINE FabricStreamSender(ConnT conn, uint32_t alignment);
+    /// Construct from a pre-built connection policy (e.g. MuxConn<N>, which read its own args).
+    FORCE_INLINE FabricStreamSender(ConnT conn, uint32_t alignment) : conn_(conn), alignment_(alignment) {}
 
-    /// Finish opening the connection and bind the forward/backward direction.
-    FORCE_INLINE void open();
+    FabricStreamSender(const FabricStreamSender&) = delete;
+    FabricStreamSender& operator=(const FabricStreamSender&) = delete;
 
-    /// Close the connection.
-    FORCE_INLINE void close();
-
-    /**
-     * @brief Program a 1-D unicast route (distance in hops) — point_to_point.
-     * Stored and applied to each subsequent armed channel's header via
-     * ccl_routing_utils::fabric_set_line_unicast_route. Call BEFORE arm_*.
-     */
-    FORCE_INLINE void set_route_unicast(uint32_t num_hops);
-
-    /**
-     * @brief Program a 1-D unicast route from a precomputed route info — the form
-     * all_gather uses (it reads the route from compile-time args). Equivalent to the
-     * num_hops overload. Call BEFORE arm_*.
-     */
-    FORCE_INLINE void set_route_unicast(const ccl_routing_utils::line_unicast_route_info_t& info);
-
-    // --- Armed unicast-write channel -------------------------------------------------
-    /**
-     * @brief Arm the unicast-write channel: program the invariant route + on-wire payload
-     *        size onto a dedicated packet header once (set_state). Helper owns the
-     *        @c UpdateMask. Call after set_route_unicast, then issue write()/write_page().
-     */
-    FORCE_INLINE void arm_unicast_write(uint32_t page_size_bytes);
-
-    /**
-     * @brief Issue one armed unicast write of the armed payload size from local L1
-     *        @c src_l1_addr to @c dst_noc_addr (with_state, varying only the dst addr).
-     *        Requires a prior arm_unicast_write + open.
-     */
-    FORCE_INLINE void write(uint64_t dst_noc_addr, uint32_t src_l1_addr);
-
-    /**
-     * @brief Convenience over write(): compute the destination NOC address for page
-     *        @c page_idx of @c dst (a consumed TensorAccessor/ShardedAddrGen) and issue
-     *        an armed unicast write. Keeps the addrgen-friendly entry point.
-     * @tparam AddrGen  TensorAccessor / ShardedAddrGen (consumed, not re-wrapped).
-     */
-    template <class AddrGen>
-    FORCE_INLINE void write_page(uint32_t src_l1_addr, uint32_t page_idx, const AddrGen& dst);
-
-    // --- Armed unicast atomic-inc channel --------------------------------------------
-    /**
-     * @brief Arm the atomic-inc channel: program the invariant route + increment value
-     *        (+ flush) onto a dedicated header once (set_state). Helper owns the
-     *        @c UpdateMask. Call after set_route_unicast, then issue inc().
-     */
-    FORCE_INLINE void arm_inc(uint32_t val = 1);
-
-    /**
-     * @brief Atomic-increment a remote semaphore over the fabric by the armed value
-     *        (ready / done / counting), varying only the semaphore address (with_state).
-     *        Requires a prior arm_inc + open.
-     */
-    FORCE_INLINE void inc(uint64_t remote_sem_noc_addr);
-
-    // --- Multicast route (for the N-party barrier; e.g. all_gather) -----------------
-    /**
-     * @brief Program a 1-D line-MULTICAST route (start distance + range, in hops).
-     * Stored and applied to the multicast atomic-inc channel by arm_multicast_inc. Route
-     * info comes from the host (ttnn::ccl::get_forward_backward_line_mcast_*). Call before
-     * arm_multicast_inc.
-     */
-    FORCE_INLINE void set_route_multicast(const ccl_routing_utils::line_multicast_route_info_t& info);
-
-    // --- Armed scatter-write channel (<=4 chunks/packet) ----------------------------
-    /**
-     * @brief Arm the scatter-write channel: program the invariant per-chunk sizes + chunk
-     *        count + on-wire payload size onto a dedicated header once (set_state). Helper
-     *        owns the ChunkSizes|PayloadSize mask. Call after set_route_unicast; then issue
-     *        write_scatter().
-     * @param chunk_size_bytes  Per-chunk (per-tile) payload size.
-     * @param num_chunks        Chunks per packet (2..4; the NocUnicastScatterCommandHeader limit).
-     */
-    FORCE_INLINE void arm_scatter_write(uint32_t chunk_size_bytes, uint32_t num_chunks);
-
-    /**
-     * @brief Issue one armed scatter write: pack up to 4 destination NOC addresses into one
-     *        packet from local L1 @c src_l1_addr (with_state, DstAddrs|ChunkSizes|PayloadSize).
-     *        @c num_chunks must match the arm. Requires a prior arm_scatter_write + open.
-     */
-    FORCE_INLINE void write_scatter(const uint64_t* dst_noc_addrs, uint32_t num_chunks, uint32_t src_l1_addr);
-
-    // --- Armed multicast atomic-inc channel (the N-party barrier) --------------------
-    /**
-     * @brief Arm the multicast atomic-inc channel: program the invariant increment value
-     *        (+ flush) + the multicast route onto the inc header once (set_state, Val|Flush).
-     *        Call after set_route_multicast; then issue multicast_inc().
-     * @note Reuses the SAME Pool header as arm_inc — matching all_gather, which reuses one
-     *       sem-inc header for the barrier-multicast phase then re-arms it for the per-chunk
-     *       unicast incs. Arm/issue the barrier (multicast) phase fully before re-arming
-     *       with arm_inc for the unicast counting phase.
-     */
-    FORCE_INLINE void arm_multicast_inc(uint32_t val = 1);
-
-    /**
-     * @brief Multicast atomic-increment @c remote_sem_noc_addr to all peers on the armed
-     *        multicast route by the armed value (with_state, DstAddr). The matching local
-     *        barrier wait/reset (noc_semaphore_wait_min(sem, ring_size-1) + set 0) stays
-     *        op-owned — see the file banner. Requires a prior arm_multicast_inc + open.
-     */
-    FORCE_INLINE void multicast_inc(uint64_t remote_sem_noc_addr);
-
-    // --- Final fabric drain ----------------------------------------------------------
-    /**
-     * @brief Drain outstanding local NoC writes + fabric atomic-incs before close
-     *        (noc_async_write_barrier + noc_async_atomic_barrier). all_gather ends with this;
-     *        p2p doesn't need it (close() drains its single trailing inc).
-     */
-    FORCE_INLINE void drain();
+    /// Finish opening the connection + bind the direction, and yield the opened FabricStream.
+    /// The returned stream borrows this sender's connection, so this sender must outlive it.
+    FORCE_INLINE FabricStream<ConnT> open() {
+        conn_.open();
+        return FabricStream<ConnT>(&conn_, alignment_);
+    }
 
 private:
-    ConnT conn_;                                          // connection policy (Direct/Mux); owns open/close/sender()
-    volatile PACKET_HEADER_TYPE* payload_hdr_ = nullptr;  // armed by arm_unicast_write
-    volatile PACKET_HEADER_TYPE* scatter_hdr_ = nullptr;  // armed by arm_scatter_write
-    volatile PACKET_HEADER_TYPE* sem_hdr_ = nullptr;      // armed by arm_inc / arm_multicast_inc (shared)
-    uint32_t alignment_ = 0;
-    uint32_t scatter_chunk_size_ = 0;  // per-chunk size armed by arm_scatter_write
-    ccl_routing_utils::line_unicast_route_info_t unicast_info_{};
-    ccl_routing_utils::line_multicast_route_info_t multicast_info_{};
+    ConnT conn_;
+    uint32_t alignment_;
 };
 
 }  // namespace dataflow_kernel_lib::ccl

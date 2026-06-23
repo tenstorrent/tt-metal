@@ -160,13 +160,13 @@ void kernel_main() {
 
 #ifdef USE_WORKER_MUX
     // Wrap the worker-mux egress built above; arm/send/teardown match the Direct case below.
-    FabricStreamSender<MuxConn<fabric_mux_num_buffers_per_channel>> tx(mux_conn, /*alignment=*/1);
+    FabricStreamSender<MuxConn<fabric_mux_num_buffers_per_channel>> sender(mux_conn, /*alignment=*/1);
 #else
     // Direct egress: build through the helper from the fabric runtime-arg block. The helper
     // takes a size_t& cursor, so bridge the writer's uint32_t arg_idx and sync it back; the
-    // open is deferred to tx.open() below.
+    // open is deferred to sender.open() below.
     size_t conn_arg_idx = arg_idx;
-    FabricStreamSender<> tx(conn_arg_idx, /*is_forward=*/direction == 0, /*alignment=*/1);
+    FabricStreamSender<> sender(conn_arg_idx, /*is_forward=*/direction == 0, /*alignment=*/1);
     arg_idx = conn_arg_idx;
 #endif
     /* Args for overlapped all gather */
@@ -179,19 +179,21 @@ void kernel_main() {
         op_signaler_sender = OpSignaler(arg_idx);
     }
 
-    // Open the egress (Direct: open_finish + bind direction; mux: connect to the endpoint).
-    // Packet headers are owned by tx and allocated lazily on each arm_* below, for both policies.
-    tx.open();
+    // Open the egress (Direct: open_finish + bind direction; mux: connect to the endpoint), yielding
+    // the opened stream. Packet headers are owned by `stream` and allocated lazily on each arm_*.
+    auto stream = sender.open();
 
-    // Egress goes uniformly through the helper (tx) for both the Direct and worker-mux policies;
+    // Egress goes uniformly through the helper (stream) for both the Direct and worker-mux policies;
     // the per-send #ifdef + the raw connection-templated calls and pre-allocated headers are gone.
 
     if (use_barrier_sem) {
         if (detail::valid_targets(direction)) {
             // only initialize if we're actually going to send something over fabric
 
-            tx.set_route_multicast(barrier_multicast_route_info);
-            tx.arm_multicast_inc(1);
+            // The multicast-inc channel shares the sem header with the unicast counting channel
+            // armed below, so `barrier` is block-scoped here — it is destroyed before arm_inc
+            // re-arms that header (see the helper's SHARED SEM HEADER warning).
+            auto barrier = stream.arm_multicast_inc(barrier_multicast_route_info, 1);
 
             if constexpr (topology == Topology::Linear) {
                 // multicast to both the forward and backward worker on all devices that you write to.
@@ -201,18 +203,18 @@ void kernel_main() {
                 // device going in the same direction
                 uint64_t same_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                tx.multicast_inc(same_direction_barrier_sem_noc_addr_in_pkt);
+                barrier.multicast_inc(same_direction_barrier_sem_noc_addr_in_pkt);
 
                 // device going in the opposite direction
                 uint64_t opposite_direction_barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(opposite_core_sem_noc0_x, opposite_core_sem_noc0_y, barrier_sem, 0);
-                tx.multicast_inc(opposite_direction_barrier_sem_noc_addr_in_pkt);
+                barrier.multicast_inc(opposite_direction_barrier_sem_noc_addr_in_pkt);
 
             } else if constexpr (topology == Topology::Ring) {
                 // multicast to entire ring of workers going in the same direction
                 uint64_t barrier_sem_noc_addr_in_pkt =
                     safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, barrier_sem, 0);
-                tx.multicast_inc(barrier_sem_noc_addr_in_pkt);
+                barrier.multicast_inc(barrier_sem_noc_addr_in_pkt);
             } else {
                 ASSERT(false);
             }
@@ -253,16 +255,15 @@ void kernel_main() {
         tile_id_start = position * input_batch_head_count * input_tensor_Ht * input_tensor_Wt;
     }
 
-    // only initialize if we're actually going to send something over fabric
-    if (detail::valid_targets(direction)) {
-        static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
-        // Arm the unicast write + scatter + counting-inc channels (re-arms sem_hdr_ from the
-        // barrier's multicast route back to unicast). Helper owns every UpdateMask.
-        tx.set_route_unicast(unicast_route_info);
-        tx.arm_scatter_write(page_size, num_tiles_to_write_per_packet);
-        tx.arm_unicast_write(page_size);
-        tx.arm_inc(1);
-    }
+    static_assert(num_tiles_to_write_per_packet <= 4, "tiles per packet > 4 is unsupported");
+    // Arm the unicast write + scatter + counting-inc channels at function scope — their issues
+    // happen in the loops below, so the handles must outlive the gated blocks. The barrier's
+    // multicast handle was destroyed at the end of its block, so arm_inc safely re-arms the shared
+    // sem header for the counting phase. Arming is a local header program (no fabric I/O), so it is
+    // unconditional; only the issues are gated on valid_targets / num_targets, exactly as before.
+    auto scatter = stream.arm_scatter_write(unicast_route_info, page_size, num_tiles_to_write_per_packet);
+    auto writer = stream.arm_unicast_write(unicast_route_info, page_size);
+    auto counter = stream.arm_inc(unicast_route_info, 1);
 
     uint64_t out_ready_sem_noc_addr_in_pkt =
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem, 0);
@@ -296,9 +297,9 @@ void kernel_main() {
             if (direction == 1) {
                 if constexpr (num_targets_backward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        tx.write_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
+                        scatter.write_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
                     } else {
-                        tx.write(noc_addrs[0], l1_read_addr);
+                        writer.write(noc_addrs[0], l1_read_addr);
                     }
                 }
 
@@ -309,9 +310,9 @@ void kernel_main() {
             } else {
                 if constexpr (num_targets_forward_direction) {
                     if (tiles_to_put_in_current_packet > 1) {
-                        tx.write_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
+                        scatter.write_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
                     } else {
-                        tx.write(noc_addrs[0], l1_read_addr);
+                        writer.write(noc_addrs[0], l1_read_addr);
                     }
                 }
             }
@@ -325,7 +326,7 @@ void kernel_main() {
             if (chunk_count % chunks_per_sync == 0) {
                 // 2. unicast output ready semaphore
                 if (detail::valid_targets(direction)) {
-                    tx.inc(out_ready_sem_noc_addr_in_pkt);
+                    counter.inc(out_ready_sem_noc_addr_in_pkt);
                 }
             }
             noc_async_writes_flushed();
@@ -334,7 +335,7 @@ void kernel_main() {
         if (chunk_count % chunks_per_sync != 0) {
             // Write the unicast packet
             if (detail::valid_targets(direction)) {
-                tx.inc(out_ready_sem_noc_addr_in_pkt);
+                counter.inc(out_ready_sem_noc_addr_in_pkt);
             }
         }
 
@@ -478,9 +479,9 @@ void kernel_main() {
                     noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
                 }
                 if (tiles_to_put_in_current_packet > 1) {
-                    tx.write_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
+                    scatter.write_scatter(noc_addrs, tiles_to_put_in_current_packet, l1_read_addr);
                 } else {
-                    tx.write(noc_addrs[0], l1_read_addr);
+                    writer.write(noc_addrs[0], l1_read_addr);
                 }
 
                 tiles_read += tiles_to_put_in_current_packet;
@@ -492,14 +493,14 @@ void kernel_main() {
                 chunk_count++;
                 if (chunk_count % chunks_per_sync == 0) {
                     // 2. unicast output ready semaphore
-                    tx.inc(out_ready_sem_noc_addr_in_pkt);
+                    counter.inc(out_ready_sem_noc_addr_in_pkt);
                 }
                 noc_async_writes_flushed();
             }
 
             if (chunk_count % chunks_per_sync != 0) {
                 // 2. unicast output ready semaphore
-                tx.inc(out_ready_sem_noc_addr_in_pkt);
+                counter.inc(out_ready_sem_noc_addr_in_pkt);
             }
 
             num_channels_processed_in_current_batch++;
@@ -545,7 +546,8 @@ void kernel_main() {
 
     // Drain (write + atomic barriers) then close: Direct closes the connection; mux disconnects
     // and runs the termination-master handshake — both behind the uniform helper teardown.
-    tx.drain();
-    tx.close();
+    // close() is explicit so the trailing barrier stays after it; the stream dtor then no-ops.
+    stream.drain();
+    stream.close();
     noc_async_write_barrier();
 }
