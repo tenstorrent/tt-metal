@@ -442,7 +442,7 @@ jobs:
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
           echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
           # AWS SDK Go v2 skips CRC32 checksums for streaming PUTs when set to when_required.
-          echo "AWS_REQUEST_CHECKSUM_CALCULATION=when_required" >> $GITHUB_ENV
+          # echo "AWS_REQUEST_CHECKSUM_CALCULATION=when_required" >> $GITHUB_ENV
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
       - name: Verify S3 connectivity (write / read-back / delete)
