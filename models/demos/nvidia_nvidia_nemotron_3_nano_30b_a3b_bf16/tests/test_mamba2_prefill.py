@@ -535,3 +535,103 @@ def test_ttlang_ssd_integration(mesh_device):
 
     assert y_score >= 0.95, f"y PCC {y_score:.6f} < 0.95"
     assert h_score >= 0.90, f"h PCC {h_score:.6f} < 0.90"
+
+
+@pytest.mark.parametrize("S", [64, 128, 256, 512, 1024, 2048, 4096, 8192])
+def test_ttlang_ssd_isl_sweep(mesh_device, S):
+    """ISL sweep: tt-lang SSD path PCC and timing vs vanilla TTNN across multiple ISLs.
+
+    All S values are exact multiples of CHUNK_SIZE=64 (power-of-2), so pad_S=0
+    and the SSM correction loop is never triggered.
+
+    Prints a summary table row for each ISL:
+      ISL  n_chunks  vanilla_ms  ttlang_ms  y_PCC  h_PCC
+
+    Requires: TT_LANG_PYTHON_PATH set.
+    """
+    import os
+    import time
+
+    if not os.environ.get("TT_LANG_PYTHON_PATH"):
+        pytest.skip("TT_LANG_PYTHON_PATH not set — tt-lang kernel unavailable")
+
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt import mamba2_prefill as _pf
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_prefill import mamba2_prefill_layer_forward
+    from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import clear_device_weight_cache
+
+    CHUNK_SIZE = 64
+    assert S % CHUNK_SIZE == 0, f"S={S} is not a multiple of CHUNK_SIZE={CHUNK_SIZE}"
+    n_chunks = S // CHUNK_SIZE
+
+    clear_device_weight_cache()
+    W = _random_weights(seed=77)
+    B = 1
+
+    x_cpu = torch.randn(B, S, 2688, dtype=torch.bfloat16) * 0.1
+    x_tt = ttnn.from_torch(
+        x_cpu,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # ── Vanilla TTNN path ─────────────────────────────────────────────────
+    _pf._USE_TTLANG_SSD = False
+    t0 = time.perf_counter()
+    out_v, state_v, _ = mamba2_prefill_layer_forward(
+        mesh_device,
+        x_tt,
+        W["norm_w"],
+        W["in_proj_w"],
+        W["conv_w"],
+        W["conv_b"],
+        W["dt_bias"],
+        W["A_log"],
+        W["norm_mixer_w"],
+        W["D"],
+        W["out_proj_w"],
+    )
+    ttnn.synchronize_device(mesh_device)
+    vanilla_ms = (time.perf_counter() - t0) * 1000.0
+
+    out_v_cpu = _to_cpu(out_v, mesh_device, B)
+    state_v_cpu = ttnn.to_torch(ttnn.get_device_tensors(state_v)[0]).float()
+
+    # ── tt-lang path ──────────────────────────────────────────────────────
+    clear_device_weight_cache()
+    _pf._USE_TTLANG_SSD = True
+    try:
+        t0 = time.perf_counter()
+        out_tl, state_tl, _ = mamba2_prefill_layer_forward(
+            mesh_device,
+            x_tt,
+            W["norm_w"],
+            W["in_proj_w"],
+            W["conv_w"],
+            W["conv_b"],
+            W["dt_bias"],
+            W["A_log"],
+            W["norm_mixer_w"],
+            W["D"],
+            W["out_proj_w"],
+        )
+        ttnn.synchronize_device(mesh_device)
+        ttlang_ms = (time.perf_counter() - t0) * 1000.0
+    finally:
+        _pf._USE_TTLANG_SSD = False
+
+    out_tl_cpu = _to_cpu(out_tl, mesh_device, B)
+    state_tl_cpu = ttnn.to_torch(ttnn.get_device_tensors(state_tl)[0]).float()
+
+    y_score = pcc(out_tl_cpu, out_v_cpu)
+    h_score = pcc(state_tl_cpu, state_v_cpu)
+
+    print(
+        f"\nISL={S:>6}  n_chunks={n_chunks:>4}  "
+        f"vanilla={vanilla_ms:>8.1f}ms  ttlang={ttlang_ms:>8.1f}ms  "
+        f"y_PCC={y_score:.6f}  h_PCC={h_score:.6f}"
+    )
+
+    assert y_score >= 0.90, f"S={S} y PCC {y_score:.6f} < 0.90"
+    assert h_score >= 0.85, f"S={S} h PCC {h_score:.6f} < 0.85"
