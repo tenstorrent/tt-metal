@@ -431,30 +431,18 @@ jobs:
             echo "Garage S3 credentials are missing. Did you forget 'secrets: inherit'?"
             exit 1
           fi
-          # The ccache-storage-s3 helper reads credentials from the standard AWS
-          # credential chain, so export them to the job environment.
           echo "AWS_ACCESS_KEY_ID=${{ secrets.GARAGE_S3_ACCESS_KEY }}" >> $GITHUB_ENV
           echo "AWS_SECRET_ACCESS_KEY=${{ secrets.GARAGE_S3_SECRET_KEY }}" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=garage" >> $GITHUB_ENV
-          # The s3:// scheme makes ccache auto-spawn and manage the helper itself:
-          # it derives the binary name (ccache-storage-s3) from the scheme and looks
-          # it up in libexec, forking it on demand and respawning across build steps.
-          # Garage's s3_region is configured as "garage" — must match exactly or signing fails.
           CCACHE_REMOTE_STORAGE="s3://${CCACHE_S3_BUCKET}|region=garage|prefix=${CCACHE_S3_PREFIX}|endpoint_url=http://garage.garage.svc.cluster.local:3900"
           if [ "${CCACHE_S3_READONLY}" = "true" ]; then
             CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
           fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
-          # Enable debug logging from the ccache-storage-s3 helper binary.
           echo "CRSH_LOGFILE=/tmp/ccache-storage-s3.log" >> $GITHUB_ENV
-          # AWS SDK Go v2 (≥1.32) computes CRC32 checksums on every PutObject by default.
-          # Garage uses plain HTTP and ccache's payload arrives as an unseekable stream, so
-          # the SDK can't compute the checksum upfront and fails. "when_required" tells the
-          # SDK to skip checksum computation for regular PUTs.
+          # AWS SDK Go v2 skips CRC32 checksums for streaming PUTs when set to when_required.
           echo "AWS_REQUEST_CHECKSUM_CALCULATION=when_required" >> $GITHUB_ENV
-          # Explicit Garage endpoint as an AWS SDK env var fallback. The helper reads this
-          # if ccache does not forward |endpoint_url=... as CRSH_ATTR_* (defensive belt-and-suspenders).
           echo "AWS_ENDPOINT_URL_S3=http://garage.garage.svc.cluster.local:3900" >> $GITHUB_ENV
 
       - name: Verify S3 connectivity (write / read-back / delete)
