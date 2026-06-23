@@ -8,16 +8,23 @@ Run:
         /home/ttuser/ssinghal/tt-metal/models/demos/nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16/tests/test_mamba2_ssd_scan_ttlang.py \
         -v -s
 """
-import sys
+import os as _os
+import sys as _sys
 
-sys.path.insert(0, "/home/ttuser/ssinghal/tt-lang/python")
+_tt_lang_path = _os.environ.get("TT_LANG_PYTHON_PATH", "/home/ttuser/ssinghal/tt-lang/python")
+if _tt_lang_path and _tt_lang_path not in _sys.path:
+    _sys.path.insert(0, _tt_lang_path)
 
-import pytest  # noqa: F401
+import pytest
 import torch
 import torch.nn.functional as F
-from sim import ttl, ttnn  # noqa: F401
+
+sim_mod = pytest.importorskip("sim", reason="tt-lang sim not available (set TT_LANG_PYTHON_PATH)")
+ttl = sim_mod.ttl
+ttnn = sim_mod.ttnn
+
 from sim.ttnnsim import TILE_LAYOUT
-from sim.ttnnsim import Tensor as SimTensor
+from sim.ttnnsim import Tensor as SimTensor  # noqa: E402
 
 from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_ssd_scan_ttlang import (
     make_mamba2_ssd_scan_kernel,

@@ -16,9 +16,12 @@ Algorithm per chunk c, per head h
   h_prev     = broadcast(exp(log_gscalar),[D,N]) * h_prev
                + transpose(x_dt_sc) @ B              [D,N]
 """
-import sys
+import os as _os
+import sys as _sys
 
-sys.path.insert(0, "/home/ttuser/ssinghal/tt-lang/python")
+_tt_lang_path = _os.environ.get("TT_LANG_PYTHON_PATH", "")
+if _tt_lang_path and _tt_lang_path not in _sys.path:
+    _sys.path.insert(0, _tt_lang_path)
 
 from sim import ttl, ttnn
 
