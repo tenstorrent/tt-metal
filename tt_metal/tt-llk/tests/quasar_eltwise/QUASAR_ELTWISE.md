@@ -217,17 +217,33 @@ sfpi and are used verbatim.
   Override with `VENV_PY=<interpreter>` if needed. The sim path defaults to the
   pinned craq-sim Quasar build (override `TT_METAL_SIMULATOR` per machine).
 
-## Full corpus sweep
+## Full corpus sweep (deployment validator)
 
-Run all 60 fitter activations (polynomial + rational fits) on the pinned sim — no env setup beyond the venv above:
+`quasar_sweep.sh` is a **deployment validator**: by default (`--approximation best`) it
+reads the fitter's TRUE deployed pick per activation from `best.csv`
+(`best_<metric>_{fitting,degree,num_segments}`, metric=ulp) and runs the ONE shipping
+config — rational if the deployed fitting is rational (or degree is `n/m`), else polynomial.
+This is exactly what ships; no per-category guessing, no degeneracy/oversized guards.
+The coeff CSV is found by a **tolerant glob** (the fitter's recorded config does not always
+have an exactly-named CSV — e.g. `log` records `p8_s1` but only `log_p8_s2_*` exists, so we
+match same-degree, fewest-segments-first). No env setup beyond the venv above:
 
 ```bash
 cd tt_metal/tt-llk/tests/python_tests/quasar
-./quasar_sweep.sh --activations all --approximation both        # 60 activations, poly + rational, bf16 + fp32
-./quasar_sweep.sh --activations gelu,exp,tanh --approximation polynomial   # subset
+./quasar_sweep.sh --activations all                 # DEFAULT = deployment sweep (best.csv), 60 activations
+./quasar_sweep.sh --activations gelu,exp,tanh       # subset, one deployed config each
 ```
 
-Results (PCC/ULP per activation × approximation × precision, threshold PCC≥0.99) → `/tmp/quasar_sweep_results.txt`. The specialized eval-methods (newton_root, expalu, parity) are validated per-op via `run_quasar.sh -m <method>` (the sweep covers the poly/rational fits that exist for every activation).
+`--approximation polynomial|rational|both` is an **opt-in comparison** mode: it reads the
+per-CATEGORY pick from `best_polynomial.csv` / `best_rational.csv` (same tolerant glob, no
+guards) and reports each category's real PCC — honest, not patched. Use it to compare a
+forced poly vs. rational fit for an activation against its deployed `best` pick.
+
+```bash
+./quasar_sweep.sh --activations all --approximation both   # opt-in: poly + rational per-category comparison
+```
+
+Results (PCC/ULP per activation × mode × precision, threshold PCC≥0.99) → `/tmp/quasar_sweep_results.txt`. The specialized eval-methods (newton_root, expalu, parity) are validated per-op via `run_quasar.sh -m <method>` (the sweep covers the poly/rational fits that exist for every activation).
 
 ## File map
 
@@ -243,4 +259,4 @@ Results (PCC/ULP per activation × approximation × precision, threshold PCC≥0
 | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_newton_root_quasar_test.cpp`             | Newton-root magic-seed (ported) |
 | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_parity_quasar_test.cpp`                  | parity x²-Horner + adaptive degree (ported) |
 | `tt_metal/tt-llk/tests/python_tests/quasar/test_generic_lut_*_quasar.py`                   | per-method python goldens (fitter ground_truth, PCC/ULP) |
-| `tt_metal/tt-llk/tests/python_tests/quasar/quasar_sweep.sh`                                 | multi-activation sweep across fitter best configs |
+| `tt_metal/tt-llk/tests/python_tests/quasar/quasar_sweep.sh`                                 | deployment validator: runs the fitter's deployed pick (best.csv) per activation; `--approximation both` for opt-in poly/rational comparison |
