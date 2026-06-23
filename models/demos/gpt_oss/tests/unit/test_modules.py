@@ -215,11 +215,13 @@ def run_topk_router_component(
     indices_passing, indices_output = compare_tensors(
         sorted_tt_indices, sorted_ref_indices, mesh_device, pcc_threshold=pcc_threshold
     )
+    # Reorder each token's weights into ascending-expert-id order so the two sides line up even when
+    # TT (bf16) and the reference (fp32) emit the same top-k experts in a different (value-sorted) order.
+    # gather along the top_k axis is the correct reorder; `weights.squeeze()[order]` indexes dim 0 and
+    # mangles the comparison for batch > 1.
     weights_passing, weights_output = compare_tensors(
-        tt_router_weights_torch.squeeze()[
-            sorted_tt_indices_order
-        ],  # we have to squeeze here because it breaks the indexing otherwise
-        router_scores.squeeze()[sorted_ref_indices_order],
+        torch.gather(tt_router_weights_torch, -1, sorted_tt_indices_order),
+        torch.gather(router_scores, -1, sorted_ref_indices_order),
         mesh_device,
         pcc_threshold=pcc_threshold,
     )
