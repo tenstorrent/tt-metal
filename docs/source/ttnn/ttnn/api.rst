@@ -482,6 +482,7 @@ Transformer
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
    ttnn.transformer.sparse_sdpa
+   ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads
    ttnn.transformer.windowed_scaled_dot_product_attention
    ttnn.experimental.indexer_score
