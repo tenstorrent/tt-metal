@@ -8,14 +8,18 @@
 #include <cstdint>
 #include <utility>
 
+#include <memory>
+
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <umd/device/types/arch.hpp>
 #include <ttnn/api/ttnn/distributed/distributed_configs.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
 namespace ttnn::distributed::test {
@@ -100,6 +104,18 @@ inline tt::tt_metal::TensorSpec make_spec(
             tt::tt_metal::PageConfig(layout),
             tt::tt_metal::MemoryConfig{
                 tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM, std::nullopt}));
+}
+
+// Read/WriteShard need a shared_ptr<MeshBuffer>, but a device Tensor only exposes
+// its buffer as a `const MeshBuffer&` (DeviceStorage retains sole ownership since
+// the removal of get_mesh_buffer_leak_ownership in #47291). Build a non-owning
+// MeshBuffer "view" over the tensor's existing device allocation: same address, no
+// new allocation, and no const_cast. The view must not outlive the tensor whose
+// memory it points at.
+inline std::shared_ptr<tt::tt_metal::distributed::MeshBuffer> mesh_buffer_view(const tt::tt_metal::Tensor& tensor) {
+    const auto& backing = tensor.device_storage().get_mesh_buffer();
+    return tt::tt_metal::distributed::MeshBuffer::create(
+        backing.global_config(), backing.device_local_config(), backing.device(), backing.address());
 }
 
 }  // namespace ttnn::distributed::test

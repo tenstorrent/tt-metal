@@ -246,10 +246,10 @@ void verify_transfer(
     std::vector<uint32_t> iota(num_u32);
     std::iota(iota.begin(), iota.end(), 1u);
 
-    // WriteShard/ReadShard need a shared_ptr<MeshBuffer>; the Tensor only exposes
-    // it through the device storage.
-    auto sender_mesh_buffer = sender->get_backing_tensor().device_storage().get_mesh_buffer_leak_ownership();
-    auto receiver_mesh_buffer = receiver->get_backing_tensor().device_storage().get_mesh_buffer_leak_ownership();
+    // WriteShard/ReadShard need a shared_ptr<MeshBuffer>; the Tensor only exposes a
+    // `const MeshBuffer&`, so wrap it in a non-owning view (see mesh_buffer_view).
+    auto sender_mesh_buffer = mesh_buffer_view(sender->get_backing_tensor());
+    auto receiver_mesh_buffer = mesh_buffer_view(receiver->get_backing_tensor());
 
     // Load the sender backing tensor on every participating coord and make sure
     // the writes land before we trigger the sender.
@@ -452,7 +452,7 @@ std::vector<uint32_t> make_iota_u32(size_t n, uint32_t base) {
 // Assert the receiver backing tensor holds the iota (base + i) on every coord.
 void expect_receiver_backing_iota(
     D2DStreamServiceReceiver* receiver, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
-    auto mesh_buffer = receiver->get_backing_tensor().device_storage().get_mesh_buffer_leak_ownership();
+    auto mesh_buffer = mesh_buffer_view(receiver->get_backing_tensor());
     const size_t num_u32 = receiver->get_backing_tensor().buffer()->size() / sizeof(uint32_t);
     const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
     std::vector<uint32_t> readback;
@@ -805,7 +805,7 @@ MeshWorkload make_receiver_consumer_workload(
 // Assert `output_tensor` holds the iota (base + i) on every coord.
 void expect_output_tensor_iota(
     const tt::tt_metal::Tensor& output_tensor, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
-    auto mesh_buffer = output_tensor.device_storage().get_mesh_buffer_leak_ownership();
+    auto mesh_buffer = mesh_buffer_view(output_tensor);
     const size_t num_u32 = output_tensor.buffer()->size() / sizeof(uint32_t);
     const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
     std::vector<uint32_t> readback;

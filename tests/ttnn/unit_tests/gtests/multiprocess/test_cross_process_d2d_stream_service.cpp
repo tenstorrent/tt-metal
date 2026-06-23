@@ -131,6 +131,7 @@ using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
 using ::tt::tt_metal::distributed::EnqueueMeshWorkload;
 using ::tt::tt_metal::distributed::Finish;
+using ::tt::tt_metal::distributed::MeshBuffer;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshDevice;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
@@ -688,7 +689,13 @@ MeshWorkload make_stress_fabric_workload(
 
 // Assert `output` holds the iota (base + i) on every coord.
 void expect_output_tensor_iota(const Tensor& output, const std::shared_ptr<MeshDevice>& mesh, uint32_t base) {
-    auto mesh_buffer = output.device_storage().get_mesh_buffer_leak_ownership();
+    // ReadShard needs a shared_ptr<MeshBuffer>, but the Tensor only exposes a
+    // `const MeshBuffer&`. Build a non-owning view over the existing device
+    // allocation (same address, no new allocation, no const_cast). The view must
+    // not outlive `output`.
+    const auto& backing = output.device_storage().get_mesh_buffer();
+    auto mesh_buffer =
+        MeshBuffer::create(backing.global_config(), backing.device_local_config(), backing.device(), backing.address());
     const size_t num_u32 = output.buffer()->size() / sizeof(uint32_t);
     const std::vector<uint32_t> expected = make_iota_u32(num_u32, base);
     std::vector<uint32_t> readback;
