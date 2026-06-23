@@ -165,3 +165,14 @@
   owner_id: U088VJ79WDB # Jonathan Su
   team: models
   model-name: z-image-turbo
+
+# ─── Qwen3-TTS ───────────────────────────────────────────────────────────────
+
+- name: qwen3-tts demo
+  cmd: pytest models/demos/qwen3_tts/demo/demo_full_ttnn_tts.py::test_demo --timeout=600
+  skus:
+    bh_p150:
+      timeout: 15
+  owner_id: U087HGJ455E # ssinghal@tenstorrent.com
+  team: models
+  model-name: qwen3-tts

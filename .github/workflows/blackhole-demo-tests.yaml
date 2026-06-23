@@ -17,8 +17,11 @@ on:
           - all
           - stable_diffusion_xl
           - mistral-small-3.1-24b
-          - mochi
+          - llama3.3-70b
+          - qwen3-32b
+          - qwen3-tts
           - flux.1-dev
+          - mochi
           - wan2.2-t2v-a14b
           - z-image-turbo
       system-type:
