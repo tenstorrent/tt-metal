@@ -1,12 +1,12 @@
-# LayerNorm sharded compute kernel — models the non-allgather portion of
-# ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp
+# Sharded layernorm compute kernel.
+# Reference: ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_sharded.cpp
 #
-# Covers: partial row-reduce (AVG), sub_bcast_cols, self-multiply, add+rsqrt SFPU,
-# mul_bcast_cols, mul_bcast_rows, add_bcast_rows.
+# Pipeline: E[x] partial reduce → x-E[x] → (x-E[x])² → Var partial reduce →
+#           Var+eps → rsqrt → normalize → gamma scale → beta bias.
 #
-# Omitted: allgather global reduce (runtime-variable streaming CB loop),
-# conditional control flow (is_allgather_worker, two_stage_reduce).
-# The global reduce result is modeled as a pre-reduced single-row operand.
+# Reduce stages use reduce_to_tile to accumulate all tiles into a single
+# dest tile per block, matching the metal kernel's cross tile reduce behavior.
+# The global allgather reduce is not modeled; ex_global is a pre reduced constant.
 
 operands:
   # x: input tensor
