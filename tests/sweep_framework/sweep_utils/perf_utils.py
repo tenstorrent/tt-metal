@@ -48,12 +48,18 @@ def clear_disk_kernel_cache() -> None:
 
 
 def _resolve_perf_device(device, test_module):
-    # Some model_traced ops (e.g. paged SDPA) open their own mesh device inside
-    # run() (the fixture yields None); fall back to the module's _CUR_DEVICE so
-    # the profiler read targets the real device.
+    # Some model_traced ops (add/sdpa/paged_sdpa, conv2d) open their own mesh
+    # device inside run() (the fixture yields None) and cache it in a persistent
+    # module global that stays open across vectors. The global's name varies by
+    # module -- _CUR_DEVICE (add, sdpa, paged_sdpa) or _CONV_DEV (conv2d) -- so
+    # fall back through the known names to find the live device for the read.
     if device is not None:
         return device
-    return getattr(test_module, "_CUR_DEVICE", None)
+    for _name in ("_CUR_DEVICE", "_CONV_DEV"):
+        d = getattr(test_module, _name, None)
+        if d is not None:
+            return d
+    return None
 
 
 def gather_single_test_perf(device, test_passed):
