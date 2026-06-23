@@ -7,8 +7,8 @@ directory. Updated as work lands so progress is trackable per commit.
 
 This box is **`bh-qbge-06` — a QB2 (4× Blackhole `p300c`, `/dev/tenstorrent/0..3`)**, so **device work is NOT blocked on hardware**. The remaining gates are software + data:
 
-- **Dedicated env created (2026-06-19):** `/home/zni/venvs/tt-diffusion-gemma` (Python 3.12, **transformers 5.10.2**, torch 2.11+cpu, ttnn editable from the repo) — isolated from the default `python_env`, which stays at 4.53.0 for LTX. Verified: `transformers.models.gemma4` imports, **`ttnn` sees 4 QB2 devices**, `uv pip check` clean, 40 reference tests pass. Use: `source /home/zni/venvs/tt-diffusion-gemma/bin/activate && export PYTHONPATH=/home/zni/tt-metal TT_METAL_HOME=/home/zni/tt-metal`.
-- **`diffusion_gemma` is NOT in transformers 5.10.2**, BUT the full canonical source IS on **transformers `main`** (`src/transformers/models/diffusion_gemma/`: `configuration_/modeling_/generation_/modular_/convert_*.py`). Pulled to `/home/zni/dg_ref_src/` (2026-06-22) and used to **reconcile the entire `reference/` layer 1:1** (see "Session 2026-06-22" below). The real `DiffusionGemmaForBlockDiffusion` load needs a transformers-main env (the pinned 5.10.2 stays for gemma4); the reconciled `reference/` + `reference/_upstream.py` parity guard make the env-independent torch oracle faithful TODAY.
+- **Dedicated env:** `/home/zni/venvs/tt-diffusion-gemma` (Python 3.12, **transformers 5.12.1** — bumped from 5.10.2 on 2026-06-23, torch 2.11+cpu, ttnn editable from the repo) — isolated from the default `python_env` (4.53.0 for LTX). Verified at 5.12.1: `transformers.models.gemma4` imports, `transformers.models.diffusion_gemma` imports, **`ttnn` sees 4 QB2 devices**, **64 reference tests pass**. Use: `source /home/zni/venvs/tt-diffusion-gemma/bin/activate && export PYTHONPATH=/home/zni/tt-metal TT_METAL_HOME=/home/zni/tt-metal`.
+- **`diffusion_gemma` SHIPS since transformers 5.12** (absent in 5.10.2): at **5.12.1 the working env can load the real `DiffusionGemmaForBlockDiffusion` directly** — no separate transformers-main env needed (the `dg-tf-main` 5.13.0.dev0 venv remains as a cross-check). `from_pretrained` takes `dtype=` (primary since 5.12; `torch_dtype` kept for BC). The canonical source is also vendored at `/home/zni/dg_ref_src/` and used to reconcile the `reference/` layer 1:1; `reference/_upstream.py` is the bit-for-bit parity guard.
 - **Checkpoints NOW downloaded (2026-06-22, ungated — `gated=False` on HF):**
   - `google/gemma-4-26B-A4B-it` — 51.6 GB, the causal backbone oracle for #47461 (runs via transformers `gemma4`). Verified complete + openable.
   - `google/diffusiongemma-26B-A4B-it` — 51.7 GB, the target ckpt (stage-2 weight mapping + self-cond weight values).
@@ -17,7 +17,7 @@ This box is **`bh-qbge-06` — a QB2 (4× Blackhole `p300c`, `/dev/tenstorrent/0
 
 So work proceeds **env-independent-first**: pure-torch reference logic + config
 + tests that run on CPU, with checkpoint/transformers-gated pieces scaffolded
-and marked `TODO(env)`. **HW + env are no longer blockers — QB2 is local and the dedicated transformers-5.10.2 env is built.** The only remaining gate for gemma4-backbone device bring-up is the **gated checkpoint download** (needs `hf auth login` + Gemma license acceptance).
+and marked `TODO(env)`. **HW + env are no longer blockers — QB2 is local and the dedicated transformers-5.12.1 env is built.** The only remaining gate for gemma4-backbone device bring-up is the **gated checkpoint download** (needs `hf auth login` + Gemma license acceptance).
 
 ## Status by workstream
 

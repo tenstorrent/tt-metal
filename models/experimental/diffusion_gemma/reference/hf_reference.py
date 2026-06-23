@@ -53,8 +53,9 @@ def load_hf_reference(model_id_or_path: str, *, dtype=None, device: str = "cpu",
 
     ``DiffusionGemmaForBlockDiffusion`` is **not** an AutoModelForCausalLM —
     ``DiffusionGemmaConfig`` is not registered there because block-diffusion is a
-    distinct generation paradigm. Load the class directly. Verified on
-    transformers 5.13.0.dev0 (main).
+    distinct generation paradigm. Load the class directly. Verified on transformers
+    **5.12.1** (the pinned working env — `diffusion_gemma` ships since 5.12; 5.10.2
+    lacked it) and 5.13.0.dev0 (main).
 
     Raises a clear ImportError when ``transformers`` lacks ``diffusion_gemma`` —
     do not silently fall back, since the PCC oracle must be the real reference.
@@ -70,7 +71,7 @@ def load_hf_reference(model_id_or_path: str, *, dtype=None, device: str = "cpu",
 
     kwargs = {"low_cpu_mem_usage": low_cpu_mem_usage}
     if dtype is not None:
-        kwargs["dtype"] = dtype  # transformers >=5.13: `torch_dtype` deprecated -> `dtype`
+        kwargs["dtype"] = dtype  # transformers >=5.12: `dtype` is primary (`torch_dtype` kept for BC)
     model = DiffusionGemmaForBlockDiffusion.from_pretrained(model_id_or_path, **kwargs)
     return model.to(device).eval()
 
