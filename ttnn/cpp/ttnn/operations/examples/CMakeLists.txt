@@ -17,6 +17,7 @@ file(
     GLOB_RECURSE kernels
     example/device/kernels/*
     example_multiple_return/device/kernels/*
+    bh_dram_read/device/kernels/*
 )
 
 target_sources(
