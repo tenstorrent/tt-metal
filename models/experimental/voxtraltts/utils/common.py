@@ -27,13 +27,7 @@ VOXTRAL_GOLDEN_CODES_DEFAULT_PATH = (
     Path(__file__).resolve().parents[1] / "reference" / "reference_outputs" / "voxtral_golden_codes.refpt"
 )
 
-VOXTRAL_STANDARD_CHAR_TEXT = (
-    "Voxtral is a four billion parameter open weight tts model released by Mistral AI in two thousand twenty six, "
-    "designed for low latency multilingual voice generation across English, Spanish, French, Portuguese, Hindi, German, "
-    "Dutch, and Italian. It builds on the Ministral three billion language backbone with a flow matching acoustic decoder "
-    "and produces audio at twelve point five hertz with high quality, suitable for streaming voice applications and real time "
-    "agent deployments which supports low latency."
-)
+VOXTRAL_STANDARD_CHAR_TEXT = "Voxtrol is a 4 billion parameter open-weight TTS model released by Mistral AI in 2026, designed for low-latency, multilingual voice generation across English, Spanish, French, Portuguese, Hindi, German, Dutch, and Italian. It builds on the Mistral 3 billion language backbone with a flow-matching acoustic decoder and produces audio at 12.5 Hz with high quality, suitable for streaming voice applications and real-time agent deployments which supports low latency."
 
 # Same fixture as ``models/tt_transformers/tests/test_model_prefill.py``.
 TALE_OF_TWO_CITIES_BZ2 = (

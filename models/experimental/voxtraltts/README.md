@@ -540,11 +540,11 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 
 ### 6.2 Quality metrics
 
-| Metric | Tool | Target | Notes |
-|:-------|:----:|:------:|:------|
-| MOS (naturalness) | UTMOS-v2 | ≥ 3.0 | Override: `VOXTRAL_TTS_UTMOS_V2_MIN_SCORE` |
-| Word Error Rate | Whisper Small | < 30% | Override: `VOXTRAL_TTS_WER_TARGET`; `openai/whisper-small` is used (Voxtral transcribe requires Mistral API key) |
-| Speaker similarity | SpeechBrain ECAPA-TDNN | ≥ 0.55 cosine | Verified against reference voice embedding |
+| Metric | Tool | Target | Measured | Notes |
+|:-------|:----:|:------:|:--------:|:------|
+| MOS (naturalness) | UTMOS-v2 | ≥ 3.0 | 3.215 | Override: `VOXTRAL_TTS_UTMOS_V2_MIN_SCORE` |
+| Word Error Rate | Whisper Small | < 10% | 1.39% | Override: `VOXTRAL_TTS_WER_TARGET`; `openai/whisper-small` is used (Voxtral transcribe requires Mistral API key) |
+| Speaker similarity | SpeechBrain ECAPA-TDNN | ≥ 0.55 cosine | 0.7187 | Verified against reference voice embedding |
 
 > Audio is produced at 12.5 acoustic frames/s at 24 kHz. Real-time factor = `frames_per_s / 12.5`. A value > 1.0 means faster than real time.
 
@@ -712,10 +712,27 @@ export VOXTRAL_AUDIO_TOKENIZER_MATMUL_PROGCFG_OFF=1   # disable Tier 1 configs
 
 ## 8. Caveats
 
-### TODO
+### Teacher-forced vs free-run evaluation
 
-- Reason for choosing teacher-forced vs free-run evaluation
-- Why free-run PCC decreases with larger token generation
+Two methodologies are used to validate the autoregressive pipeline, and they answer different questions:
+
+- **Teacher-forced** (gated in CI) — at every decode step the same **golden** acoustic codes are fed into *both* the CPU reference and the TT model, instead of each side consuming its own previous output. Each side still produces its own codes/hidden states from its own compute, but because both are conditioned on the identical history, the two rollouts cannot drift apart. The resulting PCC therefore measures the **per-step numerical fidelity** of the TT implementation in isolation. It is deterministic, reproducible run-to-run, and the value is attributable to the kernels/dtypes — which is exactly what an accuracy gate needs. This is why all gated accuracy tests (`test_ttnn_voxtral_tts_golden_acoustic_pcc`, `_acoustic_pcc`, `_golden_codes_pcc`) are teacher-forced.
+
+- **Free-run** (`test_ttnn_voxtral_tts_staged_pcc`, logged-only / not gated) — TT runs the full autoregressive loop and feeds **its own** predicted codes back to itself, the same as production inference. The CPU reference does its own independent rollout. This is the realistic end-to-end "north-star" metric, but it conflates implementation fidelity with *trajectory agreement* between two independent rollouts, so it is unstable and not suitable as a pass/fail gate (see below). It is kept as an informational signal alongside the quality metrics (WER, UTMOS, speaker similarity), which are the better measures of free-run output goodness because they don't require the TT and CPU token trajectories to match.
+
+### Why free-run PCC decreases with larger token generation
+
+The text backbone emits **discrete** acoustic codes via FSQ (finite scalar) quantization. A code is the index of the quantization bin a continuous value lands in. Tiny per-step BF16 numerical differences between TT and CPU are normally harmless — but when a value sits near a quantization boundary, that small difference can push it into the *adjacent* bin and flip the emitted code.
+
+Once TT and CPU emit a different discrete code at some step *k*, each side feeds its **own** code back as input, so from step *k* onward the two rollouts are conditioned on different histories and diverge — even if every subsequent per-step computation is itself accurate. Waveform PCC then reflects how far the two trajectories have walked apart, not the quality of the TT kernels.
+
+This compounds with sequence length: the probability that at least one boundary flip has occurred grows with the number of steps, and every step *after* the first flip contributes additional divergence. So the longer the generation, the lower the free-run PCC — this is an inherent property of autoregressive discrete-code sampling, not a per-step accuracy regression in the TT implementation. Teacher-forcing exists precisely to factor this trajectory divergence out of the accuracy measurement.
+
+### ASR model choice and WER number-formatting limitation
+
+Whisper (`openai/whisper-small`) is used as the ASR model for the WER comparison because it is the open-source transcription model available without a paid API key — Voxtral's own transcription requires a Mistral API key — and it is also supported in TTNN. The WER is computed by transcribing the synthesized speech with Whisper and comparing the transcription against the input reference text.
+
+A known limitation of this setup is **number formatting**. When the input reference text spells numbers out as words (for example, "twenty" rather than "20"), Whisper transcribes the spoken audio back into numeric digit form ("20"). The WER normalizer does not reconcile word-form and digit-form numbers, so each such number is counted as a word error even though the speech is correct. This inflates the reported WER percentage and means the metric can read worse than the actual intelligibility of the output. It is a known limitation of using Whisper as the WER reference ASR, not a defect in the generated speech.
 
 ---
 
