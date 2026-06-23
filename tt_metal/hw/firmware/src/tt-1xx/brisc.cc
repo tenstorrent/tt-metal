@@ -587,46 +587,9 @@ int main() {
                 // message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
 
-                for (int i = 0; i < 1000000; i++) {
-                    asm volatile("nop");
-                }
-
-                WATCHER_RING_BUFFER_PUSH(900);
-                uint32_t status_reg_val = NOC_STATUS_READ_REG(0, NIU_MST_POSTED_WR_REQ_SENT);
-                uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(0);
-                uint32_t other_risc_acked =
-                    get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(0);
-                WATCHER_RING_BUFFER_PUSH(status_reg_val);
-                WATCHER_RING_BUFFER_PUSH(self_risc_acked);
-                WATCHER_RING_BUFFER_PUSH(other_risc_acked);
-                status_reg_val = NOC_STATUS_READ_REG(1, NIU_MST_POSTED_WR_REQ_SENT);
-                self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(1);
-                other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(1);
-                WATCHER_RING_BUFFER_PUSH(status_reg_val);
-                WATCHER_RING_BUFFER_PUSH(self_risc_acked);
-                WATCHER_RING_BUFFER_PUSH(other_risc_acked);
-
                 notify_dispatch_core_done(dispatch_addr, noc_index, noc_mode);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
-
-            for (int i = 0; i < 1000000; i++) {
-                asm volatile("nop");
-            }
-
-            WATCHER_RING_BUFFER_PUSH(900);
-            uint32_t status_reg_val = NOC_STATUS_READ_REG(0, NIU_MST_POSTED_WR_REQ_SENT);
-            uint32_t self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(0);
-            uint32_t other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(0);
-            WATCHER_RING_BUFFER_PUSH(status_reg_val);
-            WATCHER_RING_BUFFER_PUSH(self_risc_acked);
-            WATCHER_RING_BUFFER_PUSH(other_risc_acked);
-            status_reg_val = NOC_STATUS_READ_REG(1, NIU_MST_POSTED_WR_REQ_SENT);
-            self_risc_acked = get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(1);
-            other_risc_acked = get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(1);
-            WATCHER_RING_BUFFER_PUSH(status_reg_val);
-            WATCHER_RING_BUFFER_PUSH(self_risc_acked);
-            WATCHER_RING_BUFFER_PUSH(other_risc_acked);
         }
     }
 
