@@ -31,6 +31,28 @@ def convert2ref(state_dict):
     return out
 
 
+def to_fused_experts(ref_state_dict, num_experts):
+    """Convert per-expert w1/w2/w3 weights to the transformers 5.x fused MixtralExperts format.
+
+    transformers 5.x replaced the per-expert MixtralBlockSparseTop2MLP modules with a single
+    fused ``MixtralExperts`` module whose weights are applied via ``F.linear`` (same orientation
+    as the old per-expert ``nn.Linear`` weights):
+      * ``experts.gate_up_proj``: (num_experts, 2*intermediate, hidden) = cat([w1, w3], dim=0) per
+        expert (gate first, up second; split via ``chunk(2, dim=-1)`` in the forward).
+      * ``experts.down_proj``:    (num_experts, hidden, intermediate)   = w2 per expert.
+    Non-expert keys (e.g. ``gate.weight``, the router) are passed through unchanged.
+    """
+    out = {k: v for k, v in ref_state_dict.items() if not k.startswith("experts.")}
+    gate_up = [
+        torch.cat([ref_state_dict[f"experts.{e}.w1.weight"], ref_state_dict[f"experts.{e}.w3.weight"]], dim=0)
+        for e in range(num_experts)
+    ]
+    down = [ref_state_dict[f"experts.{e}.w2.weight"] for e in range(num_experts)]
+    out["experts.gate_up_proj"] = torch.stack(gate_up, dim=0)
+    out["experts.down_proj"] = torch.stack(down, dim=0)
+    return out
+
+
 @pytest.mark.parametrize("mode", [Mode.PREFILL, Mode.DECODE])
 @pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
@@ -55,7 +77,7 @@ def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
     partial_state_dict_ref = {k[22:]: v for k, v in partial_state_dict.items()}
 
     reference_model = MixtralSparseMoeBlock(hf_config)
-    reference_model.load_state_dict(convert2ref(partial_state_dict_ref))
+    reference_model.load_state_dict(to_fused_experts(convert2ref(partial_state_dict_ref), hf_config.num_local_experts))
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtMoeLayer(
         mesh_device=mesh_device,
