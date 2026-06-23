@@ -99,6 +99,7 @@ def open_prefill_tp4_mesh(
     l1_small_size: Optional[int] = None,
     trace_region_size: Optional[int] = None,
     enable_fabric: bool = True,
+    num_command_queues: int = 1,
 ):
     """Open a 1×tp mesh for TP=4 VLM prefill on an 8-chip (or larger) device.
 
@@ -120,6 +121,8 @@ def open_prefill_tp4_mesh(
         open_kwargs["l1_small_size"] = l1_small_size
     if trace_region_size is not None:
         open_kwargs["trace_region_size"] = trace_region_size
+    if num_command_queues != 1:
+        open_kwargs["num_command_queues"] = num_command_queues
 
     mesh = ttnn.open_mesh_device(**open_kwargs)
     try:

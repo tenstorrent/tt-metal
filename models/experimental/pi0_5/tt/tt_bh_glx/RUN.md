@@ -148,6 +148,7 @@ tt-smi -glx_reset   # always start clean
 | `test_perf_1x8_eager` | One eager `sample_actions`; asserts shape + finite. | Always on |
 | `test_perf_1x8_traced` | Captures e2e trace; reports `input_upload / trace_exec / output_readback` over `PERF_ITERS=20` replays + eager per-stage proportions. | Always on |
 | `test_perf_1x8_traced_staged` | Captures 3 sub-traces (vision / prefill / denoise) on the same mesh, replays each separately, reports true per-stage traced ms. Trace region bumped to 256 MiB. | Always on |
+| `test_perf_1x8_traced_2cq` | 2 command queues: H2D input upload on CQ1 overlapped with compute on CQ0 via `ttnn.record_event` / `wait_for_event`. Closes wall-clock toward the `trace_exec` floor. | Always on |
 | `test_pcc_1x8_all_stages` | Vision + Prefill (isolated, same random prefix on both sides) + e2e (matched-seed noise) + estimated denoise = e2e / (vision · prefill). | `PI05_E2E_PCC=1` |
 
 ### Run all tests
@@ -179,6 +180,16 @@ set — confirms the pi05_production.env was sourced.
 | `PI05_NUM_DENOISE_STEPS` | Override the 5-step default schedule (10 matches upstream training spec). |
 
 ## Reference numbers (commit `38ac051ee68`, 2026-06-23)
+
+### Perf — 2CQ replay (`test_perf_1x8_traced_2cq`, PERF_ITERS=20)
+
+| Config | mean ms | min ms | vs single-CQ traced_total | gap to trace_exec floor |
+|---|---:|---:|---:|---:|
+| 3-cam | **35.30** | 34.94 | −14 ms (−28%) | +2 ms |
+| 2-cam | **33.12** | 32.76 | −6 ms (−15%) | +2 ms |
+
+H2D input upload runs on CQ1 overlapped with CQ0 compute; sync barrier +
+output readback at end of each iter is the ~2 ms residual that can't hide.
 
 ### Perf — per-stage TRACED breakdown (`test_perf_1x8_traced_staged`, PERF_ITERS=20)
 

@@ -47,7 +47,7 @@ SEED = 42
 N_CAMS = int(os.environ["PI0_NUM_CAMERAS"])
 LANG_LEN = 256
 PERF_ITERS = int(os.environ.get("PERF_ITERS", "20"))
-WARMUP_ITERS = 3
+WARMUP_ITERS = int(os.environ.get("WARMUP_ITERS", "3"))
 
 # Production env flags worth asserting present (set by _bench_runs/pi05_production.env).
 # Logged at test start so the run-log shows which optimizations were active.
@@ -255,6 +255,59 @@ def test_perf_1x8_traced():
         print(f"   traced compute    : {tr_mean['trace_exec_ms']:7.2f} ms")
         print(f"   dispatch savings  : {trace_dispatch_savings:7.2f} ms  (eager compute − traced compute)")
         print(f"   28-chip baseline  : ≈43 ms (single-mesh 1×8 expected substantially faster, no socket hops)")
+        print("=" * 72)
+
+
+def test_perf_1x8_traced_2cq():
+    """2CQ trace replay: H2D input upload on CQ1 overlapped with compute on CQ0.
+
+    Opens the 1×8 mesh with num_command_queues=2, captures the e2e trace on
+    CQ0, then does iters=PERF_ITERS replays in a CQ0/CQ1 ping-pong pattern.
+    The host-overhead of input_upload should mostly hide behind compute,
+    closing toward the trace_exec floor.
+    """
+    from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+
+    _print_prod_env_status()
+
+    with open_prefill_tp4_mesh(
+        tp=8,
+        l1_small_size=24576,
+        trace_region_size=128 * 1024 * 1024,
+        num_command_queues=2,
+    ) as mesh:
+        pipe, cfg = _make_pipeline(mesh)
+        images, lang_tokens = _build_test_inputs(cfg.siglip_config)
+
+        pipe.capture_trace(images, lang_tokens)
+
+        ah = cfg.action_horizon
+        ad = cfg.action_dim
+
+        # Warmup: do a few normal replays first (kernel caches, address stability).
+        for _ in range(WARMUP_ITERS):
+            _ = pipe.sample_actions_traced(images, lang_tokens)
+
+        last_actions, times = pipe.sample_actions_traced_2cq_loop(images, lang_tokens, PERF_ITERS)
+        assert last_actions.shape == (1, ah, ad), f"shape mismatch: {tuple(last_actions.shape)}"
+        assert torch.isfinite(last_actions).all(), "non-finite values in actions output"
+
+        mean = _mean(times)
+        mn = min(times)
+        mx = max(times)
+        # Drop the first iter (warmup-effect of the first CQ1 wait), report excluded.
+        if len(times) > 1:
+            mean_excl0 = _mean(times[1:])
+        else:
+            mean_excl0 = mean
+        print("\n" + "=" * 72)
+        print(f"1×8 pi0.5 TRACED 2CQ replay  (PERF_ITERS={PERF_ITERS}, N_CAMS={N_CAMS})")
+        print("=" * 72)
+        print(f"  mean (incl iter 0)     : {mean:.2f} ms")
+        print(f"  mean (excl iter 0)     : {mean_excl0:.2f} ms")
+        print(f"  min                    : {mn:.2f} ms")
+        print(f"  max                    : {mx:.2f} ms")
+        print(f"  per-iter (first 5)     : {[f'{t:.2f}' for t in times[:5]]}")
         print("=" * 72)
 
 

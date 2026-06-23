@@ -889,6 +889,99 @@ class Pi0_5GLX1x8Pipeline:
         )
         return actions, timings
 
+    # ──────────── 2CQ trace replay (host-to-device on CQ1) ────────────
+
+    def sample_actions_traced_2cq_loop(
+        self,
+        images: List[torch.Tensor],
+        lang_tokens: torch.Tensor,
+        iters: int,
+    ) -> Tuple[torch.Tensor, List[float]]:
+        """Run `iters` iterations of trace replay with H2D input upload on CQ1
+        overlapped with compute on CQ0. Mirrors the pattern in
+        test_perf_ttnn_full_e2e_trace_2cq.py.
+
+        Requires the mesh to have been opened with num_command_queues=2.
+        Returns (last_actions, per_iter_wall_clock_ms).
+
+        Per-iter loop:
+          1. wait_for_event(0, write_event) — CQ0 waits for CQ1's pre-stage
+          2. execute_trace on CQ0 (non-blocking)
+          3. record_event on CQ0 → op_event
+          4. for next iter: wait_for_event(1, op_event); copy next inputs on
+             CQ1; record write_event — CQ1 stages next chunk overlapped with
+             CQ0 compute.
+          5. synchronize_device + to_torch readback
+        """
+        if self._trace_id is None:
+            raise RuntimeError("capture_trace() must be called first")
+        if self.pixel_values_buf is None or self.lang_tokens_buf is None:
+            raise RuntimeError("input buffers must be allocated via capture_trace first")
+        mesh = self.mesh
+        ah = self.action_horizon
+        ah_padded = self._action_horizon_padded
+
+        # Pre-stage host-side input tensors for iters+1 chunks (the +1 is the
+        # initial pre-stage; the final chunk after the last execute doesn't
+        # get re-uploaded). All allocations done up-front so no host overhead
+        # leaks into the timed loop.
+        host_chunks: List[Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]] = []
+        for _ in range(iters + 1):
+            pixel_host = self._stack_and_fold_pixels(images)
+            h_pix = ttnn.from_torch(
+                pixel_host,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensorToMesh(mesh, dim=0),
+            )
+            h_lang = ttnn.from_torch(
+                lang_tokens.to(torch.uint32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            noise_pad = torch.zeros(1, ah_padded, self.action_dim, dtype=torch.float32)
+            noise_pad[:, :ah, :] = torch.randn(1, ah, self.action_dim)
+            h_noise = ttnn.from_torch(noise_pad, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+            host_chunks.append((h_pix, h_lang, h_noise))
+
+        # Pre-stage chunk 0 inputs on CQ1.
+        h0_pix, h0_lang, h0_noise = host_chunks[0]
+        ttnn.copy_host_to_device_tensor(h0_pix, self.pixel_values_buf, cq_id=1)
+        ttnn.copy_host_to_device_tensor(h0_lang, self.lang_tokens_buf, cq_id=1)
+        ttnn.copy_host_to_device_tensor(h0_noise, self.x_t_fp32, cq_id=1)
+        write_event = ttnn.record_event(mesh, 1)
+
+        times_ms: List[float] = []
+        last_actions = None
+        for i in range(iters):
+            t0 = time.perf_counter()
+            # CQ0 waits until CQ1 finished staging this iter's inputs.
+            ttnn.wait_for_event(0, write_event)
+            ttnn.execute_trace(mesh, self._trace_id, cq_id=0, blocking=False)
+            op_event = ttnn.record_event(mesh, 0)
+
+            # Stage next iter's inputs on CQ1, overlapped with CQ0 compute.
+            # CQ1 waits for op_event so it doesn't overwrite the input buffers
+            # before the trace has consumed them.
+            if i + 1 < iters:
+                hn_pix, hn_lang, hn_noise = host_chunks[i + 1]
+                ttnn.wait_for_event(1, op_event)
+                ttnn.copy_host_to_device_tensor(hn_pix, self.pixel_values_buf, cq_id=1)
+                ttnn.copy_host_to_device_tensor(hn_lang, self.lang_tokens_buf, cq_id=1)
+                ttnn.copy_host_to_device_tensor(hn_noise, self.x_t_fp32, cq_id=1)
+                write_event = ttnn.record_event(mesh, 1)
+
+            ttnn.synchronize_device(mesh)
+            last_actions = ttnn.to_torch(
+                self._captured_actions,
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0),
+            )
+            times_ms.append((time.perf_counter() - t0) * 1000.0)
+
+        if last_actions is None:
+            raise RuntimeError("iters must be >= 1")
+        return last_actions[:1, :ah, :], times_ms
+
     def sample_actions_traced_timed(
         self,
         images: List[torch.Tensor],
