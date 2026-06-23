@@ -360,7 +360,7 @@ void wait_until_cores_done(
                 .count();
     }
     while (!not_done_phys_cores.empty()) {
-        // In tests, when rt_options.get_test_mode_enabled() is true, watcher
+        // In tests, when rtoptions.get_test_mode_enabled() is true, watcher
         // will stop but will not kill the program. This section detects watcher
         // stopping and reports a fatal error so Finish() can return and the test process can tear down.
         if (rtoptions.get_watcher_enabled() && rtoptions.get_test_mode_enabled()) {
