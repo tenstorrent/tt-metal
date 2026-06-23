@@ -10,6 +10,7 @@
 #include "api/dataflow/circular_buffer.h"
 
 ALWI void MUL_TILES(uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t out_cb_id, uint32_t num_tiles) {
+    // Multiply input by cos or sin
     CircularBuffer in0_cb(in0_cb_id);
     CircularBuffer in1_cb(in1_cb_id);
     CircularBuffer out_cb(out_cb_id);
@@ -63,6 +64,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (uint32_t j = 0; j < Wt; ++j) {
             if (j < half_Wt) {
+                // Multiply half of the rotated input by scalar (-1)
                 reconfig_data_format(rotated_in_cb_id, scalar_cb_id);
                 pack_reconfig_data_format(rotated_in_interm_cb_id);
                 rotated_in_cb.wait_front(onetile);
@@ -78,15 +80,19 @@ void kernel_main() {
                 rotated_in_cb.pop_front(onetile);
                 reconfig_data_format_srcb(scalar_cb_id, sin_cb_id);
                 pack_reconfig_data_format(rotated_in_interm_cb_id, sin_interm_cb_id);
+                // Multiply rotated input by sin
                 MUL_TILES(rotated_in_interm_cb_id, sin_cb_id, sin_interm_cb_id, onetile);
             } else {
                 reconfig_data_format(rotated_in_cb_id, sin_cb_id);
                 pack_reconfig_data_format(out_cb_id, sin_interm_cb_id);
+                // Multiply rotated input by sin
                 MUL_TILES(rotated_in_cb_id, sin_cb_id, sin_interm_cb_id, onetile);
             }
 
+            // Multiply input by cos
             MUL_TILES(in_cb_id, cos_cb_id, cos_interm_cb_id, onetile);
 
+            // Add applied sin/cos tensors
             cos_interm_cb.wait_front(onetile);
             sin_interm_cb.wait_front(onetile);
             out_cb.reserve_back(onetile);
