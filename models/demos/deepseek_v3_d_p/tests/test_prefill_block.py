@@ -51,6 +51,24 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 _PROMPT_PATHS = {"abc_1k": ABC_1K_PATH, "prompt_5k": PROMPT_5K_PATH, "prompt_25k": PROMPT_25K_PATH}
 from tests.ttnn.utils_for_testing import comp_pcc
 
+@pytest.fixture
+def model_path(variant):
+    """Block-test-scoped override of the shared ``model_path`` fixture.
+    Uses a local pretrained checkpoint if one is already present (env var / default / shared
+    location), but never triggers a multi-GB HuggingFace download. When no local checkpoint is
+    found it returns a path without weights, so ``weight_cache_path`` resolves to None and
+    ``run_model`` falls back to random weights (see the ``use_pretrained`` gate).
+    """
+    env_path = os.getenv(variant.env_var)
+    if env_path and (Path(env_path) / "model.safetensors.index.json").exists():
+        # Keep the env path un-resolved: resolve() would follow a dot-free symlink back to a
+        # dotted real dir, which trust_remote_code cannot import. Matches get_or_download_model.
+        return Path(env_path).absolute()
+    for candidate in (variant.default_local_path, variant.shared_path):
+        if candidate is not None and (candidate / "model.safetensors.index.json").exists():
+            return candidate.resolve()
+    return (variant.default_local_path or Path(f"/nonexistent/{variant.name}")).absolute()
+
 
 @dataclass(frozen=True)
 class PrefillBlockThresholds:
