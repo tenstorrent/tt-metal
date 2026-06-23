@@ -43,7 +43,7 @@ void kernel_main() {
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
         cb_in0.reserve_back(num_read_per_barrier);
-        uint32_t src_buffer_l1_addr = cb_in0.get_write_ptr();
+        uint32_t src_buffer_l1_addr = cb_in0.get_read_ptr();
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;

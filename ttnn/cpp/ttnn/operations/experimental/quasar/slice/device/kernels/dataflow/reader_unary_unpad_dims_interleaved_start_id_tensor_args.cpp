@@ -57,7 +57,7 @@ void kernel_main() {
 
     // Read start tensor data using separate circular buffer
     cb_tensor.reserve_back(1);
-    uint32_t start_buffer_l1_addr = cb_tensor.get_write_ptr();
+    uint32_t start_buffer_l1_addr = cb_tensor.get_read_ptr();
     noc.async_read(start_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 
@@ -70,7 +70,7 @@ void kernel_main() {
 
     // Read end tensor data using separate circular buffer
     cb_tensor.reserve_back(1);
-    uint32_t end_buffer_l1_addr = cb_tensor.get_write_ptr();
+    uint32_t end_buffer_l1_addr = cb_tensor.get_read_ptr();
     noc.async_read(end_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
 

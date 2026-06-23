@@ -38,7 +38,7 @@ void kernel_main() {
         bool has_rows = (num_rows) > 0;
 
         cb_out0.wait_front(onetile * has_rows);
-        uint32_t l1_read_addr = cb_out0.get_write_ptr();
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
 
         for (uint32_t k = 0; k < num_rows; k++) {
             uint32_t total_size = mul * size_per_row_per_block + start_id + width_size;
