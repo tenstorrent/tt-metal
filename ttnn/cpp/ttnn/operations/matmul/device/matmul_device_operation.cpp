@@ -482,7 +482,8 @@ void validate_matmul_work_distribution_and_gather_ring_topology(
 void validate_matmul_fused_operations(
     const std::optional<const Tensor>& optional_bias,
     const std::optional<ttnn::operations::unary::UnaryWithParam>& fused_activation,
-    const operations::matmul::MatmulProgramConfig& chosen_program_config) {
+    const operations::matmul::MatmulProgramConfig& chosen_program_config,
+    const std::optional<CoreCoord>& user_core_coord) {
     // Determine which fused operations the chosen program config supports.
     bool config_supports_fused_ops = false;
     std::visit(
@@ -497,13 +498,15 @@ void validate_matmul_fused_operations(
         },
         chosen_program_config);
 
-    // Reject bias or activation if the selected config does not support them.
+    // Bias has no fallback path regardless of how the config was chosen.
     TT_FATAL(
         !optional_bias.has_value() || config_supports_fused_ops,
         "Bias is not supported for this matmul program config: {}",
         ttsl::get_active_type_name_in_variant(chosen_program_config));
+    // When user_core_coord is not set, the matmul wrapper applies activation separately
+    // via unary_chain after prim::matmul — the kernel does not need to fuse it here.
     TT_FATAL(
-        !fused_activation.has_value() || config_supports_fused_ops,
+        !fused_activation.has_value() || config_supports_fused_ops || !user_core_coord.has_value(),
         "Fused activation is not supported for this matmul program config: {}",
         ttsl::get_active_type_name_in_variant(chosen_program_config));
 }
@@ -906,7 +909,8 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     validate_matmul_tile_constraints(input_tensor_a, input_tensor_b, in0_tile, in1_tile, chosen_program_config);
     validate_matmul_compute_grid_and_per_core_dims(input_tensor_a, chosen_program_config);
     validate_matmul_block_and_subblock_configuration(attributes, a_shape_padded, in0_tile, chosen_program_config);
-    validate_matmul_fused_operations(optional_bias, attributes.user_fused_activation, chosen_program_config);
+    validate_matmul_fused_operations(
+        optional_bias, attributes.user_fused_activation, chosen_program_config, attributes.user_core_coord);
     validate_matmul_sharded_operand_grids_within_program_compute_grid(
         input_tensor_a, input_tensor_b, chosen_program_config);
     validate_matmul_reuse_sharded_output_block_divisibility(
