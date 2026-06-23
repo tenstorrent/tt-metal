@@ -37,6 +37,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -220,14 +221,24 @@ int main(int argc, char** argv) {
     const CoreCoord producer_logical{0, 0};
     const CoreCoord noc0 = dev->worker_core_from_logical_core(producer_logical);
 
-    // ---- STEP 4: continuous-profiler ZONES -- DeviceZoneScopedN-style scopes
-    // whose ctor/dtor stream START/END markers into the SPSC ring (8 markers per
-    // 64B flit). `zoneverify` decodes the markers from the host; `zones` runs
-    // forever for the X280 consumer to drain.
-    if (mode == "zones" || mode == "zoneverify") {
-        const uint32_t work_cycles = (mode == "zones" && argc > 3) ? static_cast<uint32_t>(std::stoul(argv[3])) : 100u;
-        const uint32_t markers_to_drain =
-            (mode == "zoneverify") ? (argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : 32000u) : 0u;
+    // ---- STEP 5: FULL PIPELINE -- Tensix L1 ring -> X280 pull -> D2H push ->
+    // host pinned FIFO. Host creates a D2H socket (host pinned FIFO + config in
+    // (0,0) L1), launches the zone producer, then read()s decoded markers from
+    // the FIFO. The X280 `x280_pipe` relays flits from the ring into the FIFO.
+    if (mode == "zonepipe") {
+        const uint32_t n_iters = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : 1000u;
+        const uint32_t work_cycles = argc > 4 ? static_cast<uint32_t>(std::stoul(argv[4])) : 100u;
+        const uint32_t n_flits = n_iters / 2;      // 8 markers/flit, 4 markers/iter
+        constexpr uint32_t fifo_size = 64 * 1024;  // 1024 x 64B pages in host pinned mem
+        constexpr uint32_t page_size = 64;         // one 64B flit per page
+
+        // D2H socket bound to (0,0); its config buffer lives in (0,0) L1 so the
+        // X280 can read the host FIFO target over the NoC.
+        distributed::MeshCoreCoord sender_core{distributed::MeshCoordinate(0, 0), CoreCoord(0, 0)};
+        distributed::D2HSocket socket(mesh_device, sender_core, fifo_size);
+        socket.set_page_size(page_size);
+        const uint32_t cfg_addr = socket.get_config_buffer_address();
+
         CreateKernel(
             program,
             OVERRIDE_KERNEL_PREFIX "x280_spsc/kernels/zone_demo.cpp",
@@ -241,11 +252,120 @@ int main(int argc, char** argv) {
                     {"CP_W_ADDR", fmt::format("{:#x}", kWAddr)},
                     {"CP_R_ADDR", fmt::format("{:#x}", kRAddr)},
                     {"CP_BLOCK_ADDR", fmt::format("{:#x}", kBlockAddr)},
+                    {"N_ITERS", std::to_string(n_iters)},
+                    {"WORK_CYCLES", std::to_string(work_cycles)},
+                }});
+
+        fmt::print("\n==================== PIPELINE TARGET (for X280 x280_pipe) ====================\n");
+        fmt::print(
+            "Tensix NOC0 ({},{}) | ring {:#x} W={:#x} R={:#x} | socket config_addr={:#x}\n",
+            noc0.x,
+            noc0.y,
+            kRingBase,
+            kWAddr,
+            kRAddr,
+            cfg_addr);
+        fmt::print(
+            "host FIFO {} B, page {} B; producing {} iters -> {} flits -> {} markers\n",
+            fifo_size,
+            page_size,
+            n_iters,
+            n_flits,
+            n_flits * 8);
+        // The hardcoded ring (kRingBase..kBlockAddr+4) must not overlap the
+        // allocator-placed socket config buffer.
+        if (cfg_addr + distributed::D2HSocket::required_config_buffer_size() > kRingBase &&
+            cfg_addr < kBlockAddr + 64) {
+            fmt::print(
+                "WARNING: socket config_addr {:#x} overlaps ring region {:#x}..{:#x}!\n",
+                cfg_addr,
+                kRingBase,
+                kBlockAddr + 64);
+        }
+        fmt::print("run:  ./x280_pipe {} {} {:#x}\n", noc0.x, noc0.y, cfg_addr);
+        fmt::print("=============================================================================\n");
+
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        fmt::print("zone producer launched; reading {} markers from host pinned FIFO...\n", n_flits * 8);
+        std::fflush(stdout);
+
+        // Drain the host FIFO page-by-page and decode markers (8 per 64B page).
+        std::vector<uint32_t> page(page_size / sizeof(uint32_t));
+        uint64_t markers = 0, starts = 0, ends = 0, invalid = 0, ts_backwards = 0, last_ts = 0;
+        bool have_last = false;
+        const auto t0 = std::chrono::steady_clock::now();
+        for (uint32_t p = 0; p < n_flits; p++) {
+            socket.read(page.data(), 1, /*notify_sender=*/true);
+            for (uint32_t m = 0; m < 8; m++) {
+                const uint32_t w0 = page[m * 2], w1 = page[m * 2 + 1];
+                if ((w0 & 0x80000000u) == 0) {
+                    invalid++;
+                }
+                const uint32_t type = ((w0 >> 12) >> 16) & 0x7;
+                const uint64_t ts = (static_cast<uint64_t>(w0 & 0xFFF) << 32) | w1;
+                if (type == 0) {
+                    starts++;
+                } else if (type == 1) {
+                    ends++;
+                }
+                if (have_last && ts < last_ts) {
+                    ts_backwards++;
+                }
+                last_ts = ts;
+                have_last = true;
+                markers++;
+            }
+        }
+        const auto dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+        fmt::print("\n==================== PIPELINE RESULT (host pinned memory) ====================\n");
+        fmt::print(
+            "received {} markers ({} flits) in {:.2f} s ({:.0f} markers/s) via L1->X280->D2H->host\n",
+            markers,
+            n_flits,
+            dt,
+            markers / dt);
+        fmt::print("  ZONE_START {} | ZONE_END {} (diff {})\n", starts, ends, static_cast<int64_t>(starts - ends));
+        fmt::print("  invalid: {} | timestamp-went-backwards: {}\n", invalid, ts_backwards);
+        const bool ok = invalid == 0 && ts_backwards == 0 && starts == ends && markers == n_flits * 8;
+        fmt::print("{}\n", ok ? "PASS: full pipeline delivered all markers losslessly to host memory" : "FAIL");
+        return 0;
+    }
+
+    // ---- STEP 4: continuous-profiler ZONES -- DeviceZoneScopedN-style scopes
+    // whose ctor/dtor stream START/END markers into the SPSC ring (8 markers per
+    // 64B flit). `zoneverify` decodes the markers from the host; `zones` runs
+    // forever for the X280 consumer to drain.
+    if (mode == "zones" || mode == "zoneverify") {
+        const uint32_t n_iters = argc > 3 ? static_cast<uint32_t>(std::stoul(argv[3])) : 1000u;
+        const uint32_t work_cycles = argc > 4 ? static_cast<uint32_t>(std::stoul(argv[4])) : 100u;
+        // 4 markers/iter, 8 markers/flit -> (n_iters/2) full flits are published.
+        const uint32_t markers_to_drain = (n_iters / 2) * 8;
+        CreateKernel(
+            program,
+            OVERRIDE_KERNEL_PREFIX "x280_spsc/kernels/zone_demo.cpp",
+            producer_logical,
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0,
+                .noc = NOC::RISCV_0_default,
+                .defines = {
+                    {"CP_RING_BASE", fmt::format("{:#x}", kRingBase)},
+                    {"CP_RING_CELLS", std::to_string(kRingCells)},
+                    {"CP_W_ADDR", fmt::format("{:#x}", kWAddr)},
+                    {"CP_R_ADDR", fmt::format("{:#x}", kRAddr)},
+                    {"CP_BLOCK_ADDR", fmt::format("{:#x}", kBlockAddr)},
+                    {"N_ITERS", std::to_string(n_iters)},
                     {"WORK_CYCLES", std::to_string(work_cycles)},
                 }});
         fmt::print("\n==================== ZONES TARGET (for X280) ====================\n");
         fmt::print(
-            "device {}: continuous-profiler kernel on BRISC of (0,0) = NOC0 ({},{})\n", device_id, noc0.x, noc0.y);
+            "device {}: continuous-profiler kernel on BRISC of (0,0) = NOC0 ({},{}); {} iters -> {} flits\n",
+            device_id,
+            noc0.x,
+            noc0.y,
+            n_iters,
+            n_iters / 2);
         fmt::print(
             "ring {:#x} ({} flits x 64B), W={:#x} R={:#x} BLK={:#x}; 8 markers (8B) per flit\n",
             kRingBase,
