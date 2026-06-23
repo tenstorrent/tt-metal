@@ -8,12 +8,12 @@ Unlike :class:`LlamaGRPOCompleter` (which drives the C++ Llama binding), this
 completer runs the pure-Python ttml Qwen3 model (``ttml.models.qwen3.Qwen3``)
 and shards it across the ``"fsdp"`` mesh axis with :func:`ttml.fsdp.fully_shard`.
 
-Generation uses a fixed-horizon full-recompute decode (no KV cache): every
-step re-runs the forward over a fixed-length, right-padded window and samples
-at each row's current position. This keeps tensor shapes constant (no kernel
-recompiles) and avoids the per-row KV-cache mask bookkeeping, at the cost of
-recomputing the prefix each step. It is intentionally simple; the priority
-here is validating the Qwen3 + FSDP + GRPO pipeline.
+Generation uses a KV-cache decode: the (tile-aligned, right-padded) prompt
+window is prefilled once with a plain broadcast causal mask, then one token is
+decoded per step against the shared KV cache, sampling at each row's current
+position. The fixed cache length keeps tensor shapes constant across steps (no
+kernel recompiles). It is intentionally simple; the priority here is validating
+the Qwen3 + FSDP + GRPO pipeline.
 """
 
 from __future__ import annotations
