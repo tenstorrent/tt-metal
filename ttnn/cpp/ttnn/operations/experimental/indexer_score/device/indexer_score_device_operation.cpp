@@ -10,11 +10,74 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
+#include "ttnn/operations/ccl/ccl_common.hpp"  // get_linearized_index_from_physical_coord
+
 namespace ttnn::operations::experimental::indexer_score {
+
+namespace {
+// Largest per-device chunk_start across the mesh = base + max_rank*Sq, where max_rank is the largest
+// linearized index along cluster_axis (0 on a single device). Shared by the worst-case window check.
+uint32_t max_chunk_start(const operation_attributes_t& attrs, const Tensor& q, uint32_t Sq) {
+    uint32_t max_rank = 0;
+    if (q.device_storage().get_coords().size() > 1) {
+        for (const auto& coord : q.device_storage().get_coords()) {
+            max_rank =
+                std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, attrs.cluster_axis));
+        }
+    }
+    return attrs.chunk_start_idx + max_rank * Sq;
+}
+
+// chunk_start is hash-excluded (runtime), so this runs on BOTH cache miss and hit. Checks the base and
+// the worst (fullest) device's window against T -- so no device can run off the end of K. The per-rank
+// stride is Sq (tile-aligned by the shape check), so only the base needs an alignment check.
+void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    const uint32_t Sq = tensor_args.q.logical_shape()[2];
+    const uint32_t T = tensor_args.k.logical_shape()[2];
+    TT_FATAL(
+        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
+        "chunk_start_idx {} must be tile-aligned",
+        attrs.chunk_start_idx);
+    const uint32_t max_cs = max_chunk_start(attrs, tensor_args.q, Sq);
+    TT_FATAL(
+        max_cs + Sq <= T,
+        "fullest-device chunk window [{}, {}+{}) exceeds T={} (base={}, per-rank stride Sq={})",
+        max_cs,
+        max_cs,
+        Sq,
+        T,
+        attrs.chunk_start_idx,
+        Sq);
+}
+}  // namespace
 
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return program::IndexerScoreProgramFactory{};
+}
+
+ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Everything that shapes the compiled program -- but NOT chunk_start_idx / chunk_start_stride (runtime,
+    // per-device). cluster_axis IS hashed: it fixes each device's stored linearized index in the cached
+    // workload. q/k/w specs cover dtype (bfp8 vs bf16 changes formats) and shape (Sqt/Tt/Dt CT args).
+    auto hash = tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
+        attrs.program_config.q_chunk_size,
+        attrs.program_config.k_chunk_size,
+        attrs.program_config.head_group_size,
+        attrs.compute_kernel_config,
+        attrs.cluster_axis.has_value(),
+        attrs.cluster_axis.value_or(0u));
+    for (const auto& t : {std::cref(tensor_args.q), std::cref(tensor_args.k), std::cref(tensor_args.weights)}) {
+        hash = ttsl::hash::hash_objects(
+            hash, t.get().padded_shape(), t.get().layout(), t.get().dtype(), t.get().memory_config());
+    }
+    return hash;
+}
+
+void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    validate_chunk_start(attrs, tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
@@ -90,17 +153,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         Sq,
         T,
         D);
-    TT_FATAL(
-        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
-        "chunk_start_idx {} must be tile-aligned",
-        attrs.chunk_start_idx);
-    TT_FATAL(
-        attrs.chunk_start_idx + Sq <= T,
-        "chunk window [{}, {}+{}) exceeds T={}",
-        attrs.chunk_start_idx,
-        attrs.chunk_start_idx,
-        Sq,
-        T);
+    validate_chunk_start(attrs, tensor_args);  // base/stride alignment + worst-device window (also runs on cache hit)
 
     // Work-unit knobs (elements, tile-aligned); see IndexerScoreProgramConfig.
     const auto& cfg = attrs.program_config;
@@ -206,10 +259,12 @@ IndexerScoreDeviceOperation::invoke(
     const Tensor& weights,
     uint32_t chunk_start_idx,
     const IndexerScoreProgramConfig& program_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<uint32_t> cluster_axis) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
+            .cluster_axis = cluster_axis,
             .program_config = program_config,
             .compute_kernel_config = compute_kernel_config},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
@@ -223,10 +278,31 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
-    uint32_t chunk_start_idx,
+    std::optional<uint32_t> chunk_start_idx,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<uint32_t> cluster_axis) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
+
+    // Resolve the device-0 base. Multichip: omit chunk_start_idx -> deduce from the chunked-prefill
+    // invariant (K = history + the SP-gathered chunk of num_devices*Sq queries), so base = T - num_devices*Sq.
+    // Single chip (device count != SP ring size, e.g. simulating one rank): the caller passes it.
+    uint32_t base = 0;
+    if (chunk_start_idx.has_value()) {
+        base = *chunk_start_idx;
+    } else {
+        const uint32_t Sq = q.logical_shape()[2];
+        const uint32_t T = k.logical_shape()[2];
+        const uint32_t num_devices = static_cast<uint32_t>(q.device_storage().get_coords().size());
+        TT_FATAL(
+            T >= num_devices * Sq,
+            "indexer_score: cannot deduce chunk_start_idx -- T={} < num_devices({})*Sq({}). Pass chunk_start_idx "
+            "explicitly if K does not equal history + the SP-gathered chunk.",
+            T,
+            num_devices,
+            Sq);
+        base = T - num_devices * Sq;
+    }
     // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi for the 2x peak, else
     // HiFi2 to keep the bf16 mantissa); a caller-supplied config overrides per field. fp32-dest acc and
     // full-sync default off -- the only modes this op's custom LLK is validated for (see validate).
@@ -241,7 +317,7 @@ ttnn::Tensor indexer_score(
         /*default_dst_full_sync_en=*/false);
     // Reuse invoke() so attribute/tensor packing lives in one place.
     auto [operation_attributes, tensor_args] =
-        OperationType::invoke(q, k, weights, chunk_start_idx, program_config, resolved);
+        OperationType::invoke(q, k, weights, base, program_config, resolved, cluster_axis);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -27,7 +28,14 @@ inline uint32_t resolve_head_group(const IndexerScoreProgramConfig& cfg, uint32_
 }
 
 struct operation_attributes_t {
-    uint32_t chunk_start_idx{0};
+    // chunk_start for device r is chunk_start_idx + r * Sq, where Sq is the per-device query count
+    // (q seq len) and r is the device's linearized mesh index along cluster_axis (or plain device order
+    // if unset; 0 on a single device). The per-rank stride is exactly Sq -- each SP rank owns Sq
+    // consecutive queries -- so it is derived, not passed. The per-device value is computed host-side
+    // from the coordinate and passed to compute as a RUNTIME arg, excluded from the program hash so
+    // distinct chunk_start values reuse one compiled program; see compute_program_hash.
+    uint32_t chunk_start_idx{0};             // base: device-0 chunk_start (elements, tile-aligned)
+    std::optional<uint32_t> cluster_axis{};  // mesh axis that is the SP ring; unset = linear device order
     IndexerScoreProgramConfig program_config{};
     // Resolved (not optional) so it is part of the reflected program-cache key; the public callable
     // fills it from the user's optional config, defaulting math_fidelity to the dtype-derived choice.

@@ -13,22 +13,41 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
 #include "kernels/indexer_score_cb.hpp"          // shared host/device CB-index argument layout (CbArg)
 #include "kernels/indexer_score_work_split.hpp"  // shared host/device causal work-split formula
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
-// Runtime-arg slots, shared by create()/override_runtime_arguments() and matched positionally
-// by the kernels. Reader: q,k,w addrs; writer: out addr.
+// Runtime-arg slots, shared by create_at()/override_runtime_arguments() and matched positionally
+// by the kernels. Reader: q,k,w addrs; compute: flat,count,chunk_start_tiles; writer: out addr.
 namespace rt_arg {
 constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;
 constexpr uint32_t reader_w_addr = 2;
+constexpr uint32_t compute_chunk_start_tiles = 2;  // after flat (0), count (1); must match the compute kernel
 constexpr uint32_t writer_out_addr = 0;
 }  // namespace rt_arg
+
+// Per-device chunk_start (in tiles): base + rank*Sq, /TILE_WIDTH (the per-rank stride is exactly the
+// per-device query count Sq). Shared by create_at (derives device_index from the coordinate) and
+// override (reuses the stored device_index).
+inline uint32_t chunk_start_tiles_for(const operation_attributes_t& args, uint32_t device_index, uint32_t Sq) {
+    return (args.chunk_start_idx + device_index * Sq) / tt::constants::TILE_WIDTH;
+}
+
+// This device's linearized SP-ring index; 0 on a single device (no coordinate lookup needed).
+inline uint32_t device_index_for(
+    const operation_attributes_t& args, const ttnn::MeshCoordinate& coord, const Tensor& q) {
+    if (q.device_storage().get_coords().size() <= 1) {
+        return 0;
+    }
+    return ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.cluster_axis);
+}
 
 // Patch one runtime-arg slot on a program-cache hit, asserting the slot exists.
 inline void patch_arg(tt::tt_metal::RuntimeArgsData& args, uint32_t index, uint32_t value, const char* name) {
@@ -102,8 +121,11 @@ inline McastPlan compute_mcast_plan(
 // k-tiles, dealt evenly across cores row-major (kernels invert the flat index). Heads stream in
 // HB-head groups; fully-future tiles get the full -inf mask, row tails -inf-filled by the writer
 // (zeros unsafe: gates can be negative).
-IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
-    const operation_attributes_t& args, const tensor_args_t& tensors, tensor_return_value_t& out) {
+IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create_at(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinate& coord,
+    const tensor_args_t& tensors,
+    tensor_return_value_t& out) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& q = tensors.q;
@@ -117,10 +139,14 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     const uint32_t D = q.logical_shape()[3];
     const uint32_t T = k.logical_shape()[2];
 
+    // This device's SP-ring index and chunk_start (tiles), derived from the mesh coordinate (stride = Sq).
+    // chunk_t is a compute RUNTIME arg (not compile-time), so the binary is identical across coords and steps.
+    const uint32_t device_index = device_index_for(args, coord, q);
+    const uint32_t chunk_t = chunk_start_tiles_for(args, device_index, Sq);
+
     const uint32_t Sqt = Sq / tt::constants::TILE_HEIGHT;
     const uint32_t Tt = T / tt::constants::TILE_WIDTH;
     const uint32_t Dt = D / tt::constants::TILE_WIDTH;
-    const uint32_t chunk_t = args.chunk_start_idx / tt::constants::TILE_WIDTH;
 
     // Work-unit knobs, converted from elements to tiles / heads.
     const auto& cfg = args.program_config;
@@ -268,8 +294,9 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // No up-front L1-fit guard: an oversized QC/KC/head_group config fails at CB allocation. The caller
     // owns the knob trade-off (see glx_config() in the test).
 
-    // Common args: 8 dims then the CB indices in CbArg order (kernels read both from this shared base).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB};
+    // Common args: 7 dims then the CB indices in CbArg order (kernels read both from this shared base).
+    // chunk_t is NOT here -- it is a per-device compute runtime arg (derived from the coordinate above).
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     std::vector<uint32_t> reader_ct = common_ct;
@@ -372,7 +399,7 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
             }
         }
         tt::tt_metal::SetRuntimeArgs(program, reader_id, cores[i], reader_rt);
-        tt::tt_metal::SetRuntimeArgs(program, compute_id, cores[i], {flat, count});
+        tt::tt_metal::SetRuntimeArgs(program, compute_id, cores[i], {flat, count, chunk_t});
         tt::tt_metal::SetRuntimeArgs(program, writer_id, cores[i], {out.buffer()->address(), flat, count});
         flat += count;
     }
@@ -383,20 +410,53 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
             .reader_kernel = reader_id,
             .compute_kernel = compute_id,
             .writer_kernel = writer_id,
-            .worker_cores = cores}};
+            .worker_cores = cores,
+            .device_index = device_index}};
+}
+
+IndexerScoreProgramFactory::cached_mesh_workload_t IndexerScoreProgramFactory::create_mesh_workload(
+    const operation_attributes_t& args,
+    const ttnn::MeshCoordinateRangeSet& tensor_coords,
+    const tensor_args_t& tensors,
+    tensor_return_value_t& out) {
+    tt::tt_metal::distributed::MeshWorkload mesh_workload;
+    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    // One program per coordinate: each device derives its own chunk_start from its coordinate. A single
+    // device is a 1x1 mesh, so this loops once with index 0 (the single-chip / scalar path).
+    for (const auto& range : tensor_coords.ranges()) {
+        for (const auto& coord : range) {
+            const ttnn::MeshCoordinateRange single{coord, coord};
+            auto cached = create_at(args, coord, tensors, out);
+            shared_variables[single] = cached.shared_variables;
+            mesh_workload.add_program(single, std::move(cached.program));
+        }
+    }
+    return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
 }
 
 void IndexerScoreProgramFactory::override_runtime_arguments(
-    cached_program_t& cached, const operation_attributes_t&, const tensor_args_t& tensors, tensor_return_value_t& out) {
-    auto& shared = cached.shared_variables;
-    auto& reader_args = tt::tt_metal::GetRuntimeArgs(cached.program, shared.reader_kernel);
-    auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached.program, shared.writer_kernel);
-    for (const auto& core : shared.worker_cores) {
-        auto& reader_rt = reader_args[core.x][core.y];
-        patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
-        patch_arg(reader_rt, rt_arg::reader_k_addr, tensors.k.buffer()->address(), "reader.k_addr");
-        patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
-        patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
+    cached_mesh_workload_t& cached,
+    const operation_attributes_t& args,
+    const tensor_args_t& tensors,
+    tensor_return_value_t& out) {
+    // Buffer addresses are uniform across devices (one mesh buffer); chunk_start differs per coordinate
+    // and is recomputed here from the stored device_index, so a cache hit with a new base/stride patches
+    // each device's compute chunk_start without recompiling.
+    const uint32_t Sq = tensors.q.logical_shape()[2];
+    for (auto& [range, shared] : cached.shared_variables) {
+        auto& program = cached.workload.get_programs().at(range);
+        auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, shared.reader_kernel);
+        auto& compute_args = tt::tt_metal::GetRuntimeArgs(program, shared.compute_kernel);
+        auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, shared.writer_kernel);
+        const uint32_t chunk_t = chunk_start_tiles_for(args, shared.device_index, Sq);
+        for (const auto& core : shared.worker_cores) {
+            auto& reader_rt = reader_args[core.x][core.y];
+            patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
+            patch_arg(reader_rt, rt_arg::reader_k_addr, tensors.k.buffer()->address(), "reader.k_addr");
+            patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
+            patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
+            patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
+        }
     }
 }
 
