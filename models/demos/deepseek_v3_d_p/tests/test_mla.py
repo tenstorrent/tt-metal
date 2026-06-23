@@ -700,13 +700,17 @@ def _run_chunked_prefill(
     #      iter sequence is repeated num_iters times (MLA_NUM_ITERS, default 1) so perf/power runs get a
     #      longer-running workload without changing what is computed: each repeat re-runs the same
     #      forward passes, rewriting the same cache region with the same input (idempotent), so the
-    #      references still hold. The per-iter / final PCC checks run only on the last repeat to avoid
-    #      redundant host work and log spam across the repeats. ----
+    #      references still hold. To keep the repeats as pure device compute (max utilization for the
+    #      perf/power use case) the host<->device traffic is hoisted out of the repeat loop: the device
+    #      input is uploaded once per (i,u) and reused (only when repeating), and the output readback +
+    #      finite check + PCC run ONLY on the last repeat. For num_iters==1 (every cpu/trace reference
+    #      run) this is byte-for-byte the original behavior: no input cache, readback every iter. ----
     n_iters = max(len(u["group"]) for u in users)
     logger.info(
         f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)"
         + (f", repeated {num_iters}x (MLA_NUM_ITERS)" if num_iters > 1 else "")
     )
+    input_cache = {}  # (i,u) -> device input tensor, reused across repeats (only populated when repeating)
     for rep in range(num_iters):
         last_rep = rep == num_iters - 1
         for i in range(n_iters):
@@ -721,20 +725,27 @@ def _run_chunked_prefill(
 
                 positions = rotated_chip_positions(kv_actual, sp, chunk_local)
                 flat = [positions[c][r] for c in range(sp) for r in range(chunk_local)]
-                gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
-                chunk_in = users[u]["hidden"][gather_idx].clone()
-                chunk_in[torch.tensor([gp >= valid_end for gp in flat])] = 0.0
 
-                tt_h = ttnn.from_torch(
-                    chunk_in.reshape(1, 1, chunk_size_global, hidden_size),
-                    device=mesh_device,
-                    dtype=ttnn.bfloat16,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
-                    ),
-                )
+                # Build the device input once; reuse it on later repeats (the input is identical across
+                # repeats). When not repeating we don't cache, so the tensor is freed each iter as before.
+                tt_h = input_cache.get((i, u)) if num_iters > 1 else None
+                if tt_h is None:
+                    gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
+                    chunk_in = users[u]["hidden"][gather_idx].clone()
+                    chunk_in[torch.tensor([gp >= valid_end for gp in flat])] = 0.0
+                    tt_h = ttnn.from_torch(
+                        chunk_in.reshape(1, 1, chunk_size_global, hidden_size),
+                        device=mesh_device,
+                        dtype=ttnn.bfloat16,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        layout=ttnn.TILE_LAYOUT,
+                        mesh_mapper=ttnn.ShardTensor2dMesh(
+                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
+                        ),
+                    )
+                    if num_iters > 1:
+                        input_cache[(i, u)] = tt_h
+
                 tt_out = mla_tt.forward(
                     hidden_states=tt_h,
                     rope_tensors=indexed_rope,
@@ -743,6 +754,15 @@ def _run_chunked_prefill(
                     actual_end=valid_end,
                     cache_user_id=u,
                 )
+
+                # Intermediate repeats are pure device compute: skip the device->host readback (which
+                # forces a sync and stalls utilization) and just free the output. Read back + check only
+                # on the last repeat -- a non-finite output still surfaces there, and out_accum is only
+                # consumed by the reference PCC (skipped entirely on the func path).
+                if not last_rep:
+                    ttnn.deallocate(tt_out)
+                    continue
+
                 out_flat = ttnn.to_torch(
                     tt_out,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -750,13 +770,13 @@ def _run_chunked_prefill(
                     ),
                 ).to(torch.bfloat16)[0, 0]
 
-                assert torch.isfinite(out_flat).all(), f"user {u} rep {rep} iter {i}: non-finite output"
+                assert torch.isfinite(out_flat).all(), f"user {u} iter {i}: non-finite output"
                 valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
                 src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
                 dst = torch.tensor([gp for _, gp in valid_pairs], dtype=torch.long)
                 out_accum[u][0, 0, dst, :] = out_flat[src, :]
 
-                if last_rep and users[u]["ref_out"] is not None:
+                if users[u]["ref_out"] is not None:
                     _, msg = assert_with_pcc(
                         users[u]["ref_out"][kv_actual:valid_end].reshape(1, 1, isl, hidden_size),
                         out_accum[u][:, :, kv_actual:valid_end, :],
