@@ -62,6 +62,96 @@ def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
     return [MathOperation.ReduceColumn]
 
 
+def use_int32_twos_complement(
+    formats: InputOutputFormat, reduce_pool: ReducePool
+) -> bool:
+    """Whether Int32 stimuli/results must use two's-complement (not sign-magnitude) L1 encoding.
+
+    The Int32 MAX/MIN *column* reduce kernel loads DEST with SFPLOAD mode ``INT32_2S_COMP``
+    (``MOD0_FMT_INT32_SM``), which applies ``SignMagToTwosComp`` on load, while the MAX/MIN
+    comparator ``SFPSWAP(VEC_MIN_MAX)`` orders its operands as *sign-magnitude* (tt-isa
+    ``SFPLOAD.md`` / ``SFPSWAP.md``). The two only agree when DEST already holds
+    two's-complement: the load conversion then undoes itself into sign-magnitude for the
+    comparator. This is exactly how the ttnn op feeds the path, so the test must encode
+    Int32 MAX/MIN operands as two's-complement to match the shipped (ttnn-green) kernel.
+
+    SUM/AVG keep sign-magnitude: there mode ``INT32_2S_COMP`` feeds genuine two's-complement
+    into ``SFPIADD`` (which needs it), so the standard sign-magnitude L1 contract is correct.
+    """
+    return formats.input_format == DataFormat.Int32 and reduce_pool in (
+        ReducePool.Max,
+        ReducePool.Min,
+    )
+
+
+def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
+    """Identity fill for the padded (non-data) rows of a sub-tile column reduce.
+
+    Mirrors ttnn's ``get_pad_value``: the padding must never win the reduction, so the
+    device result over the full 32-row tile equals the golden over just the real rows.
+    For Int32 MAX/MIN the operands are two's-complement (see ``use_int32_twos_complement``),
+    so the sentinels are the ordinary two's-complement reduction identities.
+    """
+    if reduce_pool == ReducePool.Max:
+        if input_format == DataFormat.Int32:
+            return (
+                -2147483647
+            )  # INT32_MIN + 1 (ttnn get_pad_value); avoids INT32_MIN (#44750)
+        if input_format.is_integer():
+            return 0  # unsigned formats: 0 is the smallest representable value
+        return -3.0e30  # float "-inf"-ish, finite so PCC stays well-defined
+    if reduce_pool == ReducePool.Min:
+        if input_format == DataFormat.Int32:
+            return 2147483647  # 0x7FFFFFFF == INT32_MAX
+        if input_format == DataFormat.UInt32:
+            # The device MAX/MIN comparator (SFPSWAP) is a *sign-magnitude* comparator (tt-isa
+            # SFPSWAP.md), so it can only order unsigned values whose bit 31 is clear, i.e. [0, 2^31).
+            # The natural unsigned-MIN identity 0xFFFFFFFF (UINT32_MAX) has bit 31 set and is read as
+            # the most-negative sign-magnitude value, so it would wrongly win the MIN. The largest
+            # value the comparator ranks as maximal is 0x7FFFFFFF; with stimuli in [0, 1000] this is a
+            # valid (never-winning) MIN identity. UInt32 reduce is therefore only correct for [0, 2^31).
+            return 2147483647  # 0x7FFFFFFF (largest sign-magnitude-orderable value)
+        if input_format == DataFormat.UInt16:
+            return 65535  # 0xFFFF (UInt16 fits in the 31-bit sign-magnitude positive range)
+        if input_format.is_integer():
+            return 2147483647
+        return 3.0e30  # float "+inf"-ish
+    # Sum (Average is excluded from the sub-tile sweep): additive identity.
+    return 0
+
+
+def get_reduce_extents(
+    mathop: MathOperation,
+    reduce_pool: ReducePool,
+    formats: InputOutputFormat,
+    dimension_combinations: list[int],
+) -> list[int]:
+    """Number of real (unpadded) rows on the column-reduce axis.
+
+    ``TILE_DIM`` (32) is the original full-tile behavior. Smaller values keep only the
+    first N rows as real data and pad the rest with the reduction identity, exercising
+    the padded column-reduce path that ttnn takes for ``dim=0``/``dim=1`` and that the
+    #47647 regression breaks. The sub-tile sweep is restricted to:
+      * ``ReduceColumn`` (only the column reduce has a paddable 32-row axis),
+      * a single tile column ``[32, 32]`` (padding is independent of the column-tile
+        count, so sweeping every dimension combo would only add redundant cases), and
+      * Max/Min/Sum (identity padding is exact; Average's divisor would not match a
+        golden reduced over only the real rows).
+    The fail bands reported in the issue (small extents) are covered for Int32; the
+    other formats get a thin sanity slice so the padding path itself stays guarded.
+    """
+    full = [TILE_DIM]
+    if (
+        mathop != MathOperation.ReduceColumn
+        or dimension_combinations != [TILE_DIM, TILE_DIM]
+        or reduce_pool == ReducePool.Average
+    ):
+        return full
+    if formats.input_format == DataFormat.Int32:
+        return [1, 13, 15, 16, 17, 30, 31, TILE_DIM]
+    return [15, TILE_DIM]  # thin sanity slice for non-Int32 formats
+
+
 # Base data formats exercised by the reduce suite.
 REDUCE_BASE_FORMATS = [
     DataFormat.Float32,
@@ -169,6 +259,7 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
         for dim in dimension_combinations
         if is_valid_reduce_dimension(mathop, dest_acc, formats, dim)
     ],
+    reduced_extent=get_reduce_extents,
 )
 def test_sfpu_reduce(
     formats,
@@ -177,6 +268,7 @@ def test_sfpu_reduce(
     reduce_pool,
     input_bounds,
     dimension_combinations,
+    reduced_extent,
 ):
 
     if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
@@ -232,6 +324,17 @@ def test_sfpu_reduce(
         )
     src_B = torch.zeros_like(src_A)
 
+    # Sub-tile column reduce: keep only the first `reduced_extent` rows of the 32-row
+    # reduce axis as real data and fill the remaining rows with the reduction identity
+    # (mirrors the padding ttnn injects when folding dim=0/dim=1 onto H). A correct
+    # kernel must let the real data win so the result matches a golden reduced over
+    # only the real rows; the #47647 regression lets the padded sentinel win instead.
+    if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
+        pad_value = get_reduce_pad_value(reduce_pool, formats.input_format)
+        src_A = src_A.view(TILE_DIM, tile_cnt * TILE_DIM)
+        src_A[reduced_extent:, :] = pad_value
+        src_A = src_A.flatten()
+
     # Max Reduction can do block and single tile reduction whereas Sum/Avg only do single tile reduction, convert Sum/Avg golden to do block reduction by retilizing input to src_A
     # Dimensions for Max reduction work column wise, for Sum/Avg processing tiles independently is same as column reduction on dst block dimension [32, num_tiles * 32] where num rows is 32 i.e RT_DIM=1 (same as a single tile)
     dst_dim = (
@@ -247,9 +350,14 @@ def test_sfpu_reduce(
         src_A, formats.input_format, dst_dim
     )  # Passed into golden since PyTorch library has no concept of tilization
 
+    # Reduce only over the real rows; the padded rows must not contribute to the golden.
+    golden_input = src_A_untilized
+    if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
+        golden_input = src_A_untilized[:reduced_extent]
+
     golden_tensor = get_golden_generator(UnarySFPUGolden)(
         mathop,
-        src_A_untilized,
+        golden_input,
         formats.output_format,
         dest_acc,
         formats.input_format,
@@ -279,6 +387,7 @@ def test_sfpu_reduce(
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
+            twos_complement=use_int32_twos_complement(formats, reduce_pool),
         ),
         dest_acc=dest_acc,
         unpack_to_dest=True,
