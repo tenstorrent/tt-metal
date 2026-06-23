@@ -1,0 +1,94 @@
+# Sweep budget definitions for ttnn-run-sweeps and ttnn-model-trace-sweep-validation.
+#
+# These entries define the per-SKU time budgets that verify_time_budget.py
+# enforces. The sweep workflow generates its own matrix (via compute_sweep_matrix.py)
+# rather than using prepare_test_matrix.py, so the cmd fields here are placeholders —
+# the budgets are the load-bearing part.
+#
+# For max allowed timeout refer to .github/time_budget.yaml.
+
+# --- Sweep (nightly/comprehensive/lead_models/model_traced) ---
+# Budget planning: ~30 jobs × 30 min per job = 900 min per SKU.
+
+- name: ttnn sweeps N150
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ALL --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  skus:
+    wh_n150:
+      timeout: 900
+  owner_id: U09BX3N0N95 # Mateusz Nowak
+  team: ttnn
+  category: sweep
+
+- name: ttnn sweeps N300
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ALL --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  skus:
+    wh_n300:
+      timeout: 900
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep
+
+- name: ttnn sweeps P150b
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ALL --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  skus:
+    bh_p150b_civ2:
+      timeout: 900
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep
+
+- name: ttnn sweeps Galaxy
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ALL --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  skus:
+    wh_galaxy:
+      timeout: 900
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep
+
+- name: ttnn sweeps Loudbox
+  cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ALL --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
+  skus:
+    bh_loudbox:
+      timeout: 300
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep
+
+# --- Sweep Validation ---
+
+- name: ttnn sweep validation N150
+  cmd: 'python3 tests/sweep_framework/validate_sweep_trace.py'
+  skus:
+    wh_n150:
+      timeout: 120
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep_validation
+
+- name: ttnn sweep validation N300
+  cmd: 'python3 tests/sweep_framework/validate_sweep_trace.py'
+  skus:
+    wh_n300:
+      timeout: 120
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep_validation
+
+- name: ttnn sweep validation P150b
+  cmd: 'python3 tests/sweep_framework/validate_sweep_trace.py'
+  skus:
+    bh_p150b_civ2:
+      timeout: 120
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep_validation
+
+- name: ttnn sweep validation Galaxy
+  cmd: 'python3 tests/sweep_framework/validate_sweep_trace.py'
+  skus:
+    wh_galaxy:
+      timeout: 120
+  owner_id: U09BX3N0N95
+  team: ttnn
+  category: sweep_validation

@@ -985,31 +985,10 @@ jobs:
         shell: bash
         run: |
           pip3 install PyYAML > /dev/null 2>&1
-          # Count jobs per HW group from the per-hardware matrix outputs.
-          # compute_sweep_matrix.py writes per-HW matrices as "${hw}-matrix=..."
-          # lines to stdout (captured in sweep_matrix.outputs.txt), NOT into the
-          # pretty JSON file (which only has module/batches/include).
-          for hw in n150 n300 p150b t3k galaxy; do
-            matrix_line=$(grep "^${hw}-matrix=" /tmp/sweep_matrix.outputs.txt 2>/dev/null || true)
-            if [[ -n "$matrix_line" ]]; then
-              matrix_json="${matrix_line#*=}"
-              job_count=$(echo "$matrix_json" | jq '.include | length' 2>/dev/null || echo 0)
-              if [[ "$job_count" -gt 0 ]]; then
-                # Map hw group to budget SKU name
-                case "$hw" in
-                  n150)   sku="wh_n150" ;;
-                  n300)   sku="wh_n300" ;;
-                  p150b)  sku="bh_p150b" ;;
-                  galaxy) sku="wh_galaxy" ;;
-                  t3k)    sku="wh_galaxy" ;;
-                  *)      sku="$hw" ;;
-                esac
-                python3 .github/scripts/utils/verify_sweep_budget.py \
-                  .github/time_budget.yaml sweep \
-                  --sku "$sku" --job-count "$job_count" --timeout-minutes 30
-              fi
-            fi
-          done
+          python3 .github/scripts/utils/verify_time_budget.py \
+            tests/pipeline_reorg/ttnn_sweep_tests.yaml \
+            .github/time_budget.yaml \
+            sweep
 
   ttnn-run-single-sweep:
     name: Run single sweep
