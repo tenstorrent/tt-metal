@@ -185,16 +185,11 @@ class LogProbsCalculator:
                 tp_axis = 0 if self.cluster_shape[0] >= self.cluster_shape[1] else 1
             elif self.cluster_shape[0] > 1:
                 tp_axis = 0
-            elif self.cluster_shape[1] > 1:
+            else:
+                # num_devices > 1 implies at least one dim > 1; here dim0 == 1 → 1×N (T3K)
                 tp_axis = 1
-            else:
-                tp_axis = None
-            if tp_axis is not None:
-                num_devices_for_sharding = self.cluster_shape[tp_axis]
-                self._all_gather_cluster_axis = tp_axis
-            else:
-                num_devices_for_sharding = num_devices
-                self._all_gather_cluster_axis = None
+            num_devices_for_sharding = self.cluster_shape[tp_axis]
+            self._all_gather_cluster_axis = tp_axis
         else:
             num_devices_for_sharding = num_devices
             self._all_gather_cluster_axis = None
