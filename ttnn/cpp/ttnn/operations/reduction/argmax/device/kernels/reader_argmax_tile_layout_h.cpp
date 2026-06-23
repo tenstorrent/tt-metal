@@ -99,7 +99,7 @@ void kernel_main() {
             }
 
             for (uint32_t h_tile = 0; h_tile < input_height; h_tile++) {
-                const int src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
+                const uint32_t src_tile_id = outer_index * inner_size + h_tile * input_width + w_tile;
 
                 noc.async_read(s_src, src_cb, src_page_size, {.page_id = src_tile_id}, {.offset_bytes = 0});
                 noc.async_read_barrier();
