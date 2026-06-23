@@ -50,6 +50,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -113,7 +114,7 @@ constexpr const char* kReceiverKernel =
 // bisected by shrinking the loop without a rebuild.
 constexpr uint32_t kWarmupItersDefault = 5;
 constexpr uint32_t kLatencyItersDefault = 50;
-constexpr uint32_t kThroughputItersDefault = 20;
+constexpr uint32_t kThroughputItersDefault = 500;
 constexpr uint32_t kMetadataTripleBytes = 3u * static_cast<uint32_t>(sizeof(uint32_t));
 
 // Read an unsigned env override, falling back to `fallback` if unset/unparseable.
@@ -590,10 +591,11 @@ MeshWorkload build_receiver_workload(D2DStreamServiceReceiver& receiver, MeshDev
 struct ThroughputResult {
     double tensor_bytes = 0.0;
     double gbps = 0.0;
-    int data_ok = -1;  // -1 = unchecked, 0 = FAIL, 1 = PASS (D2D_BENCH_CHECK_DATA=1)
+    double transfer_ms = 0.0;  // chrono-measured time of the timed transfer region (all n_iters)
+    int data_ok = -1;          // -1 = unchecked, 0 = FAIL, 1 = PASS (D2D_BENCH_CHECK_DATA=1)
 };
 
-// Returns {tensor_bytes_per_transfer, sustained_GBps, data_ok}.
+// Returns {tensor_bytes_per_transfer, sustained_GBps, transfer_ms, data_ok}.
 ThroughputResult run_throughput(
     MeshDevice& parent, const ttnn::Shape& shape, uint32_t metadata_size_bytes, bool lease) {
     const uint32_t n_warmup = warmup_iters();
@@ -757,47 +759,71 @@ ThroughputResult run_throughput(
         const double secs = std::chrono::duration<double>(t1 - t0).count();
         const double gbps = (static_cast<double>(n_iters) * tensor_bytes) / (secs * 1e9);
         const int data_ok = verify_data();
-        return {tensor_bytes, gbps, data_ok};
+        return {tensor_bytes, gbps, secs * 1e3, data_ok};
     }
 
-    // OWN mode: the kernels loop num_iters autonomously; time one measured block.
-    auto run_block = [&](uint32_t iters) {
-        auto recv_wl = build_receiver_workload(*receiver, *stages[1], iters);
-        auto send_wl = build_signal_sender_workload(*sender, *stages[0], iters, metadata_size_bytes);
+    // OWN mode: the kernels loop num_iters autonomously, so a single enqueue per side drives
+    // the whole measured block. To keep host dispatch (workload build + enqueue) OUT of the
+    // timed region, capture each side's enqueue into a mesh trace ONCE, then time only the
+    // replay (mirrors test_pgm_dispatch.cpp's BeginTraceCapture / replay_mesh_trace). The
+    // worker enqueues target two different submeshes (sender=stages[0], receiver=stages[1]),
+    // so we capture and replay one trace PER submesh.
+    //
+    // D2D_BENCH_STEP no longer applies here: OWN+trace is a single replay, not a host loop,
+    // so there is nothing to step transfer-by-transfer.
+    if (step) {
+        BENCH_LOG("own: D2D_BENCH_STEP is inert in trace-replay mode (single replay drives all iters)");
+    }
+    // Build the worker workloads ONCE (num_iters=n_iters baked in) and keep them alive for the
+    // lifetime of the captured traces.
+    auto recv_wl = build_receiver_workload(*receiver, *stages[1], n_iters);
+    auto send_wl = build_signal_sender_workload(*sender, *stages[0], n_iters, metadata_size_bytes);
+
+    // Warm up with normal enqueues so kernels are compiled / binaries cached before capture.
+    BENCH_LOG("own warmup start (normal enqueue)");
+    for (uint32_t w = 0; w < n_warmup; ++w) {
         EnqueueMeshWorkload(recv_cq(), recv_wl, /*blocking=*/false);
         EnqueueMeshWorkload(sender_cq(), send_wl, /*blocking=*/false);
         Finish(sender_cq());
         Finish(recv_cq());
-    };
-    // run_block(iters) loops on-device, so a hang inside it is invisible to the host. In
-    // stepped (verbose) mode, issue single-iteration blocks in a host loop instead so we
-    // can log progress transfer-by-transfer.
-    auto run_loop = [&](uint32_t iters, const char* tag) {
-        if (!step) {
-            run_block(iters);
-            return;
-        }
-        for (uint32_t i = 0; i < iters; ++i) {
-            BENCH_LOG("own %s iter %u/%u start", tag, i + 1, iters);
-            run_block(1);
-        }
-    };
-    BENCH_LOG("own warmup start");
-    run_loop(n_warmup, "warmup");
-    BENCH_LOG("own warmup done; starting measured block");
+    }
+
+    // Capture each side's enqueue into its submesh's trace (outside the timed region).
+    BENCH_LOG("own warmup done; capturing traces");
+    MeshTraceId send_tid = BeginTraceCapture(stages[0].get(), /*cq_id=*/0);
+    EnqueueMeshWorkload(sender_cq(), send_wl, /*blocking=*/false);
+    stages[0]->end_mesh_trace(/*cq_id=*/0, send_tid);
+    MeshTraceId recv_tid = BeginTraceCapture(stages[1].get(), /*cq_id=*/0);
+    EnqueueMeshWorkload(recv_cq(), recv_wl, /*blocking=*/false);
+    stages[1]->end_mesh_trace(/*cq_id=*/0, recv_tid);
+    Finish(sender_cq());
+    Finish(recv_cq());
+
+    // Timed region: replay only (one replay = the full n_iters on-device loop per side).
+    BENCH_LOG("traces captured; starting measured replay");
     auto t0 = std::chrono::high_resolution_clock::now();
-    run_loop(n_iters, "measured");
+    stages[1]->replay_mesh_trace(/*cq_id=*/0, recv_tid, /*blocking=*/false);
+    stages[0]->replay_mesh_trace(/*cq_id=*/0, send_tid, /*blocking=*/false);
+    Finish(sender_cq());
+    Finish(recv_cq());
     auto t1 = std::chrono::high_resolution_clock::now();
-    BENCH_LOG("own measured block done");
+    BENCH_LOG("own measured replay done");
+
     const double secs = std::chrono::duration<double>(t1 - t0).count();
     const double gbps = (static_cast<double>(n_iters) * tensor_bytes) / (secs * 1e9);
     const int data_ok = verify_data();
+
+    // Free the per-cycle traces (submeshes are persistent across rows, so leaking traces
+    // would accumulate trace buffers).
+    stages[0]->release_mesh_trace(send_tid);
+    stages[1]->release_mesh_trace(recv_tid);
+
     BENCH_LOG(
         "run_throughput RETURN gbps=%.4f data_ok=%d; tearing down service%s",
         gbps,
         data_ok,
         reuse_submesh ? " (submesh reused)" : " + submeshes");
-    return {tensor_bytes, gbps, data_ok};
+    return {tensor_bytes, gbps, secs * 1e3, data_ok};
 }
 
 // ===========================================================================
@@ -818,6 +844,7 @@ void init_throughput_counters(benchmark::State& state) {
     state.counters["metadata_bytes"] = 0;
     state.counters["lease"] = 0;
     state.counters["throughput_gbps"] = 0;
+    state.counters["transfer_ms"] = 0;  // chrono-measured timed transfer region (all n_iters)
 }
 
 void BM_D2DStreamLatency(benchmark::State& state) {
@@ -886,6 +913,7 @@ void BM_D2DStreamThroughput(benchmark::State& state) {
         state.counters["metadata_bytes"] = metadata_bytes;
         state.counters["lease"] = lease ? 1 : 0;
         state.counters["throughput_gbps"] = r.gbps;
+        state.counters["transfer_ms"] = r.transfer_ms;  // chrono timed transfer region (all n_iters)
         state.counters["data_ok"] = r.data_ok;  // -1 unchecked, 0 FAIL, 1 PASS
         state.SetLabel(
             std::to_string(static_cast<uint64_t>(r.tensor_bytes)) + "B md=" + std::to_string(metadata_bytes) +

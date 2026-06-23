@@ -74,6 +74,14 @@ $BIN --benchmark_filter='BM_D2DStreamThroughput' \
 `metadata_bytes` is the inline-metadata blob size in **bytes** (0 = disabled, 12 = default);
 `lease` is the fabric-link mode (0 = OWN, 1 = LEASE).
 
+> **OWN-mode throughput is timed with mesh trace capture/replay.** The sender/receiver worker
+> workloads are built and enqueued **once** outside the timer and captured into a per-submesh
+> mesh trace (`BeginTraceCapture` / `end_mesh_trace`); the timed region then only does
+> `replay_mesh_trace` + `Finish`. This keeps host workload-build + dispatch overhead out of the
+> measured `throughput_gbps`, so the number reflects fabric transfer. LEASE mode still enqueues
+> per iteration — its per-transfer fabric-link handshake (`wait`/`release_fabric_links`) is not a
+> pure CQ command and can't be captured cleanly.
+
 ### Sweep runner (per-config, robust)
 
 `run_sweep.sh` runs each config in its own process, retries flaky init, resets the board
@@ -90,13 +98,34 @@ MODE=latency    bash microbench/d2d_stream_service/run_sweep.sh
 Outputs `d2d_sweep_results/summary_throughput.csv` + `summary_latency.csv` (+ per-config
 JSON/logs). Env overrides: `MODE BIN OUTDIR TIMEOUT WARMUP ITERS CHECK_DATA SIZES STAGES MDS LEASES RESET_CMD`.
 
+### Formatting CSV output
+
+`format_d2d_csv.py` post-processes a raw Google Benchmark CSV (from `--benchmark_out_format=csv`)
+into a more readable table: it prepends a **`shape` column** (mapped from `size_index`) as the
+first column, sorts rows from **largest payload to smallest**, and drops noisy columns —
+`real_time` / `cpu_time` (whole-call times, not the transfer; use `transfer_ms` /
+`throughput_gbps`), the correctness/status columns (`data_ok`, `error_occurred`,
+`error_message`), and the always-empty `bytes_per_second` / `items_per_second`. It is
+non-destructive — the benchmark binary and `run_sweep.sh` are untouched.
+
+```bash
+$BIN --benchmark_filter='BM_D2DStreamThroughput' \
+     --benchmark_out=d2d_bandwidth.csv --benchmark_out_format=csv
+python3 microbench/d2d_stream_service/format_d2d_csv.py d2d_bandwidth.csv             # to stdout
+python3 microbench/d2d_stream_service/format_d2d_csv.py d2d_bandwidth.csv sorted.csv  # to a file
+```
+
+The `size_index → shape` map in the script must stay in sync with `kThroughputShapes` in
+`benchmark_d2d_stream_service.cpp` (a comment flags this in both files).
+
 ## Reading the output
 
 Ignore Google Benchmark's `Time`/`CPU` columns — they include service construction. Use the
 custom counters:
 
-- **Throughput:** `throughput_gbps`, `payload_bytes`, `data_ok` (1 = receiver data verified
-  correct, 0 = FAIL, -1 = unchecked).
+- **Throughput:** `throughput_gbps`, `payload_bytes`, `transfer_ms` (chrono-measured wall time
+  of the timed transfer region — all `n_iters` transfers, excluding service build / warmup /
+  capture), `data_ok` (1 = receiver data verified correct, 0 = FAIL, -1 = unchecked).
 - **Latency:** `total_avg_us`, `total_p50_us`, `total_p99_us`, and
   `per_hop_simple_us` = `total_avg / (num_stages - 1)`. Sweep `num_stages` and take the
   slope across N to cancel fixed H2D/dispatch overhead and isolate marginal hop latency.
@@ -111,7 +140,7 @@ custom counters:
 | `D2D_BENCH_TPUT_ITERS` | 20 | Throughput measured iterations. |
 | `D2D_BENCH_LAT_ITERS` | 50 | Latency measured iterations. |
 | `D2D_BENCH_VERBOSE` | off | Flushed `[d2d-bench]` stderr phase tracing (localizes a hang). |
-| `D2D_BENCH_STEP` | 0 | Drive OWN-mode transfers one-at-a-time (debug; GB/s not representative). |
+| `D2D_BENCH_STEP` | 0 | (Legacy) one-at-a-time OWN transfers. **Inert** now that OWN throughput uses trace replay (a single replay drives all iters); setting it only logs a notice. |
 | `D2D_BENCH_SINGLE_CORE` | 0 | Use a 1×1 worker grid instead of the full compute grid. |
 | `D2D_BENCH_MD_OVERRIDE` | 0 | Override the metadata blob size (bytes) on metadata rows. |
 | `D2D_SVC_TRACE` | off | Service-side trace of `create_pair`/teardown (in `d2d_stream_service.cpp`). |
