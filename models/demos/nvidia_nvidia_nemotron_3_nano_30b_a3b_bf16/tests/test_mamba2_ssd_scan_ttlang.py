@@ -200,21 +200,19 @@ def _build_per_head_sim_tensors(h_idx, x_dt_raw, B_in_raw, C_in_raw, x_raw, log_
 # ── Test ─────────────────────────────────────────────────────────────────────
 
 
-def test_mamba2_ssd_scan_ttlang_sim_n2():
-    """n_chunks=2 (ISL=128): tt-lang sim output matches PyTorch reference."""
-    n_chunks = 2
+@pytest.mark.parametrize("n_chunks", [2, 64, 128, 256])
+def test_mamba2_ssd_scan_ttlang_sim(n_chunks):
+    """ISL = n_chunks × 64; tt-lang sim output matches PyTorch reference."""
     S = n_chunks * C
     torch.manual_seed(0)
 
-    # Raw inputs (float32 for reference, converted to bf16 in helper)
     x_dt_raw = torch.randn(1, S, NUM_HEADS, D) * 0.01
     B_in_raw = torch.randn(1, S, G, N) * 0.1
     C_in_raw = torch.randn(1, S, G, N) * 0.1
     x_raw_in = torch.randn(1, S, NUM_HEADS, D)
-    logd_raw = torch.randn(1, S, NUM_HEADS) * 0.01 - 0.5  # negative log-decay
+    logd_raw = torch.randn(1, S, NUM_HEADS) * 0.01 - 0.5
     D_skip_raw = torch.ones(NUM_HEADS)
 
-    # Reference (float32)
     y_ref, h_ref = _ssd_scan_ref(
         x_dt=x_dt_raw.float(),
         B_in=B_in_raw.float(),
@@ -223,10 +221,8 @@ def test_mamba2_ssd_scan_ttlang_sim_n2():
         log_decay=logd_raw.float(),
         D_skip=D_skip_raw.float(),
     )
-    # y_ref: [1, S_pad, H, D]  h_ref: [1, H, D, N]
 
     kernel = make_mamba2_ssd_scan_kernel(n_chunks)
-
     y_ttlang = torch.zeros(S, NUM_HEADS, D, dtype=torch.bfloat16)
     h_ttlang = torch.zeros(NUM_HEADS, D, N, dtype=torch.bfloat16)
 
@@ -255,16 +251,15 @@ def test_mamba2_ssd_scan_ttlang_sim_n2():
             t["y_out"],
             t["h_out"],
         )
-        # Extract output from SimTensor underlying torch tensor
         y_ttlang[:, h_idx, :] = t["y_out"]._tensor[:S, :D]
         h_ttlang[h_idx, :, :] = t["h_out"]._tensor[:D, :N]
 
-    y_ref_s = y_ref[0, :S].float()  # [S, H, D]
-    h_ref_s = h_ref[0].float()  # [H, D, N]
+    y_ref_s = y_ref[0, :S].float()
+    h_ref_s = h_ref[0].float()
 
     assert torch.allclose(
         y_ttlang.float(), y_ref_s, atol=1e-2, rtol=1e-2
-    ), f"y mismatch: max_diff={( y_ttlang.float()-y_ref_s).abs().max():.4f}"
+    ), f"n_chunks={n_chunks}: y max_diff={(y_ttlang.float()-y_ref_s).abs().max():.4f}"
     assert torch.allclose(
         h_ttlang.float(), h_ref_s, atol=1e-2, rtol=1e-2
-    ), f"h mismatch: max_diff={(h_ttlang.float()-h_ref_s).abs().max():.4f}"
+    ), f"n_chunks={n_chunks}: h max_diff={(h_ttlang.float()-h_ref_s).abs().max():.4f}"
