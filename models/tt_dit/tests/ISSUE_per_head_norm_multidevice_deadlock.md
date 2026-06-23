@@ -35,8 +35,8 @@ locally per head — fully self-contained, no AG, matching the drain-only writer
 
 ## Validation (WH 4×8 galaxy)
 
-`WAN_FLUX_PHN=1` `test_corr_det[flux_tp4_ring]` + `[flux_tp8_ring]`:
-all 8 `per_head_norm=True` configs **det=OK**, no hang:
+`test_corr_det[flux_tp4_ring]` + `[flux_tp8_ring]` (per_head_norm=True now runs by
+default): all 8 `per_head_norm=True` configs **det=OK**, no hang:
 
 | config | pcc(F:torch) |
 |---|---|

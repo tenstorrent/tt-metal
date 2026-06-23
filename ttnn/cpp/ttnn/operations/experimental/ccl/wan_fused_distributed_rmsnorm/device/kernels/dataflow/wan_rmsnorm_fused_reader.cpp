@@ -144,11 +144,11 @@ void kernel_main() {
                 }
             }
         } else {
-            // Resident input read: push + barrier every block_size tiles. A
-            // galaxy A/B (WAN_BARRIER_TILES sweep over rope/no-rope, small/large
-            // num_tile_cols incl. Wan 40-tile rows) showed block_size granularity
-            // is perf-neutral-to-faster vs the old f(rope, rows, num_tile_cols)
-            // heuristic and the whole-row deep read — so the heuristic was dropped.
+            // Resident input read: push + barrier every block_size tiles. A galaxy
+            // A/B (rope/no-rope, small/large num_tile_cols incl. Wan 40-tile rows)
+            // showed block_size granularity is perf-neutral-to-faster vs the old
+            // f(rope, rows, num_tile_cols) heuristic and the whole-row deep read —
+            // so the heuristic was dropped.
             DeviceZoneScopedN("R_INPUT");
             for (uint32_t col_tile = 0; col_tile < num_tile_cols; col_tile += block_size) {
                 const uint32_t grp =

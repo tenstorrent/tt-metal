@@ -105,7 +105,7 @@ slight regression at 0.89×, a dispatch-bound shape with little to fold).
 
 > **`per_head_norm=True` (FLUX.2 QK-norm) on `ring_size>1` — FIXED (2026-06-23).**
 > All 8 FLUX TP=4/TP=8 ring `per_head_norm=True` configs now run deterministically
-> (det=OK, PCC 99.81–100.00% vs fp32 torch). Enable with `WAN_FLUX_PHN=1`.
+> (det=OK, PCC 99.81–100.00% vs fp32 torch), and run by default.
 >
 > *Real root cause:* NOT the matmul-reduce → pack wedge the "reduce fan-out" theory
 > assumed (every LLK-level workaround failed because the LLK was never the problem).
