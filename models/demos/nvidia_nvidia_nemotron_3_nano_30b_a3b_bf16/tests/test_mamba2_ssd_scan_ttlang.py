@@ -12,8 +12,10 @@ import sys
 
 sys.path.insert(0, "/home/ttuser/ssinghal/tt-lang/python")
 
+import pytest  # noqa: F401
 import torch
 import torch.nn.functional as F
+from sim import ttl, ttnn  # noqa: F401
 from sim.ttnnsim import TILE_LAYOUT
 from sim.ttnnsim import Tensor as SimTensor
 
