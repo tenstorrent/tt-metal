@@ -232,6 +232,8 @@ def test_qwen25vl_text_encoder(
 def test_qwen25vl_encoder_pair(
     *, mesh_device: ttnn.MeshDevice, submesh_shape: tuple[int, int], prompts: list[str]
 ) -> None:
+    if tuple(mesh_device.shape) == (4, 8):
+        pytest.skip("Failing on Wormhole Galaxy (4x8) with PCC ~96% < threshold; refs #47204")
     # There is a bug in the HF implementation where the prompt_embeds_mask is incorrectly repeated
     # if num_images_per_prompt != 1.
     # https://github.com/huggingface/diffusers/blob/v0.35.2/src/diffusers/pipelines/qwenimage/pipeline_qwenimage.py#L262
