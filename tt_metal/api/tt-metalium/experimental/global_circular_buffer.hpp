@@ -85,5 +85,14 @@ DeviceAddr sender_state_drisc_l1_base(const GlobalCircularBuffer& gcb);
 // runtime args. Empty for worker-sender GCBs.
 const std::vector<std::vector<CoreCoord>>& receiver_coords_per_sender(const GlobalCircularBuffer& gcb);
 
+// Per-sender matmul ring indices (g_r) for the strided receiver-contiguous topology: entry
+// [s][r] is the ring position of sender s's local receiver r (= bank + (recv_index_base + r) *
+// num_dram_banks), in sender_receiver_core_mapping() order. This is the single source of truth
+// for the ring map the streaming Tensor prefetcher uses to slice a host-supplied per-receiver
+// rotation table; the GCB owns the topology, so the prefetcher reads it here rather than
+// re-deriving it. TT_FATALs unless the GCB's DRAM bank ids are dense (0..num_dram_banks-1), the
+// assumption the ring-index stride relies on. DRAM-sender GCBs only.
+std::vector<std::vector<uint32_t>> sender_ring_indices(const GlobalCircularBuffer& gcb);
+
 }  // namespace experimental
 }  // namespace tt::tt_metal

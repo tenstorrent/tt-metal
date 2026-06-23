@@ -407,8 +407,11 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
     tt_weight, gcb, num_iters_total, push_page_size, ring_size = _setup_weight_and_gcb_recv_contig(
         device, K, N, dtype, recv_per_bank, num_layers, dual_senders=dual_senders
     )
-    # Identity rotation (rotation[r] = r) reproduces the natural topology ring order; empty == batched.
-    rotation = list(range(ring_size)) if streaming else []
+    # Non-identity rotation (cyclic shift by 1): receiver at ring position g leads at block
+    # (g + 1) % ring_size, not g. Unlike identity (rotation[g] == g), this only validates if the
+    # prefetcher actually slices by the supplied rotation values rather than the bare ring index.
+    # Empty == batched. The same rotation is handed to the validator so it expects the matching order.
+    rotation = [(g + 1) % ring_size for g in range(ring_size)] if streaming else []
     with tensor_prefetcher_session(device, dual_senders_per_bank=dual_senders):
         ttnn.experimental.queue_tensor_prefetcher_request(
             device, [(tt_weight, ring_size, rotation)] * num_layers, global_cb=gcb
@@ -420,6 +423,7 @@ def test_validator_dram_sender_recv_contig(device, K, N, dtype, recv_per_bank, n
             print_stride=max(1, ring_size // 4),
             global_cb=gcb,
             streaming=streaming,
+            rotation=rotation,
         )
 
 

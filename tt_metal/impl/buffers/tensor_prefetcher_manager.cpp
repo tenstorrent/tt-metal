@@ -596,50 +596,57 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
     constexpr uint32_t kEntryBytes = sizeof(TensorPrefetcherEntry);
     constexpr uint32_t kLayoutBytes = sizeof(TensorPrefetcherTensorLayout);
 
-    // ---- Per-socket global ring-index map (single source of truth) ----
-    // Under the strided receiver-contiguous topology, sender s's local receiver r is the matmul
-    // ring position g_r = bank + (recv_index_base + r) * num_dram_banks (bank == sender_logical.x;
-    // recv_index_base accumulates within a bank for dual senders). The host uses this to slice a
-    // caller-supplied global rotation array (indexed by ring position) into each sender's page.
-    // The GCB no longer stamps g_r into the state block, so this is the only place that computes
-    // it. ring_idx_by_socket is indexed by socket (sender_logical_cores_) order; max_receivers
-    // sizes the uniform rotation slot so every sender's page packs identically (dedup/fit
-    // decisions are sender-independent below) and is recovered kernel-side from max_num_receivers.
-    uint32_t num_dram_banks = 0;
-    for (const auto& [sender_logical, _r] : mapping) {
-        num_dram_banks = std::max(num_dram_banks, static_cast<uint32_t>(sender_logical.x) + 1u);
+    // max_receivers sizes the uniform rotation slot so every sender's page packs identically
+    // (dedup/fit decisions below are sender-independent); the kernel recovers it from the GCB's
+    // max_num_receivers. It is just the largest receiver count over the GCB's senders.
+    uint32_t max_receivers = 0;
+    for (const auto& [_sender, receivers] : mapping) {
+        max_receivers = std::max(max_receivers, receivers.num_cores());
+    }
+    const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
+
+    // Per-socket global ring-index map, needed only when a tensor streams. The GCB owns the
+    // strided recv-contig topology, so the ring indices (g_r) come from its experimental accessor
+    // (single source of truth) rather than being re-derived here; the accessor TT_FATALs on a
+    // non-dense bank set. Reindex from GCB-mapping order to socket (sender_logical_cores_) order.
+    bool any_streaming = false;
+    for (const auto& input : data_tensors) {
+        if (!input.rotation.empty()) {
+            any_streaming = true;
+            break;
+        }
     }
     std::vector<std::vector<uint32_t>> ring_idx_by_socket(num_senders_);
-    uint32_t max_receivers = 0;
-    {
-        uint32_t recv_index_base = 0;
-        uint32_t prev_bank = 0;
-        bool have_prev = false;
-        for (const auto& [sender_logical, receivers] : mapping) {
-            const uint32_t bank = static_cast<uint32_t>(sender_logical.x);
-            recv_index_base = (have_prev && bank == prev_bank) ? recv_index_base : 0u;
-            have_prev = true;
-            prev_bank = bank;
-            const uint32_t n = receivers.num_cores();
-            std::vector<uint32_t> ring(n);
-            for (uint32_t r = 0; r < n; ++r) {
-                // g_r is meaningful only for the uniform strided recv-contig topology that
-                // streaming uses; it is garbage-but-unused for batched / K-row-major GCBs, so it
-                // is not range-checked here (only when a streaming tensor indexes the rotation).
-                ring[r] = bank + (recv_index_base + r) * num_dram_banks;
-            }
-            recv_index_base += n;
-            max_receivers = std::max(max_receivers, n);
-            // Place this sender's ring at its socket (sender_logical_cores_) index.
-            for (uint32_t s = 0; s < num_senders_; ++s) {
-                if (sender_logical_cores_[s] == sender_logical) {
-                    ring_idx_by_socket[s] = std::move(ring);
+    if (any_streaming) {
+        const std::vector<std::vector<uint32_t>> ring_by_sender = experimental::sender_ring_indices(gcb);
+        for (uint32_t s = 0; s < num_senders_; ++s) {
+            for (size_t m = 0; m < mapping.size(); ++m) {
+                if (mapping[m].first == sender_logical_cores_[s]) {
+                    ring_idx_by_socket[s] = ring_by_sender[m];
                     break;
                 }
             }
+            // Validate the ring indices once here (a topology property) so the per-sender
+            // rotation fill below is a plain rot[r] = rotation[ring[r]] with no inner-loop guard.
+            // Streaming tensors are validated to have rotation.size() == total_receivers.
+            TT_FATAL(
+                !ring_idx_by_socket[s].empty(),
+                "Tensor prefetcher: streaming request but sender core ({}, {}) is not in the GCB's sender "
+                "mapping, so it has no ring indices to slice the rotation by.",
+                sender_logical_cores_[s].x,
+                sender_logical_cores_[s].y);
+            for (uint32_t v : ring_idx_by_socket[s]) {
+                TT_FATAL(
+                    v < total_receivers,
+                    "Tensor prefetcher: ring index {} for sender core ({}, {}) is out of range for a rotation "
+                    "table of total_receivers ({}); streaming requires the uniform strided recv-contig topology.",
+                    v,
+                    sender_logical_cores_[s].x,
+                    sender_logical_cores_[s].y,
+                    total_receivers);
+            }
         }
     }
-    const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
     TT_FATAL(
         kHeaderBytes + layout_stride + kEntryBytes <= kRequestPageBytes,
         "Tensor prefetcher: request page ({} B) too small for one tensor: header({}) + layout slot ({} = "
@@ -782,44 +789,41 @@ std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serializ
                 break;
             }
         }
+        // Build the sender-independent template once (header + entries + each slot's geometry,
+        // rotation regions left zero); each sender's page is a copy with only its rotation slices
+        // overwritten. Avoids re-stamping the identical header/entry/geometry bytes per sender.
+        std::vector<uint8_t> templ(aligned_page_bytes, 0);
+        auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(templ.data());
+        header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
+        header->prefetch.num_entries = static_cast<uint16_t>(plan.entries.size());
+        header->prefetch.num_layouts = static_cast<uint32_t>(plan.slots.size());
+        header->prefetch.gcb_state_addr = gcb_state_addr;
+        for (uint32_t k = 0; k < plan.entries.size(); ++k) {
+            TensorPrefetcherEntry entry;
+            entry.bank_local_base = plan.entries[k].bank_local_base;
+            entry.layout_index = plan.entries[k].layout_index;
+            std::memcpy(templ.data() + (kHeaderBytes + k * kEntryBytes), &entry, kEntryBytes);
+        }
+        for (uint32_t i = 0; i < plan.slots.size(); ++i) {
+            const uint32_t slot_start = kRequestPageBytes - (i + 1) * layout_stride;
+            std::memcpy(templ.data() + slot_start, &plan.slots[i].geom, kLayoutBytes);
+        }
+
         const uint32_t num_variants = page_has_rotation ? num_senders_ : 1u;
         std::vector<std::vector<uint8_t>> per_sender(num_variants);
         for (uint32_t s = 0; s < num_variants; ++s) {
-            std::vector<uint8_t> page(aligned_page_bytes, 0);
-            auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
-            header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
-            header->prefetch.num_entries = static_cast<uint16_t>(plan.entries.size());
-            header->prefetch.num_layouts = static_cast<uint32_t>(plan.slots.size());
-            header->prefetch.gcb_state_addr = gcb_state_addr;
-            for (uint32_t k = 0; k < plan.entries.size(); ++k) {
-                TensorPrefetcherEntry entry;
-                entry.bank_local_base = plan.entries[k].bank_local_base;
-                entry.layout_index = plan.entries[k].layout_index;
-                std::memcpy(page.data() + (kHeaderBytes + k * kEntryBytes), &entry, kEntryBytes);
-            }
+            std::vector<uint8_t> page = templ;
             const auto& ring = ring_idx_by_socket[s];
-            for (uint32_t i = 0; i < plan.slots.size(); ++i) {
-                const uint32_t slot_start = kRequestPageBytes - (i + 1) * layout_stride;
-                std::memcpy(page.data() + slot_start, &plan.slots[i].geom, kLayoutBytes);
-                if (!plan.slots[i].rotation.empty()) {
-                    TT_FATAL(
-                        !ring.empty(),
-                        "Tensor prefetcher: streaming request targets sender core ({}, {}) that is not in the GCB's "
-                        "sender mapping, so it has no ring indices to slice the rotation by.",
-                        sender_logical_cores_[s].x,
-                        sender_logical_cores_[s].y);
+            if (page_has_rotation) {
+                for (uint32_t i = 0; i < plan.slots.size(); ++i) {
+                    if (plan.slots[i].rotation.empty()) {
+                        continue;
+                    }
+                    const uint32_t slot_start = kRequestPageBytes - (i + 1) * layout_stride;
+                    // ring indices were range-checked once when ring_idx_by_socket was built, so
+                    // this is a plain gather of this sender's slice of the global rotation table.
                     auto* rot = reinterpret_cast<uint32_t*>(page.data() + slot_start + kLayoutBytes);
                     for (uint32_t r = 0; r < ring.size(); ++r) {
-                        TT_FATAL(
-                            ring[r] < plan.slots[i].rotation.size(),
-                            "Tensor prefetcher: streaming ring index {} (sender core ({}, {}) local receiver {}) is "
-                            "out of range for the rotation table of size {}; streaming requires the uniform strided "
-                            "receiver-contiguous topology.",
-                            ring[r],
-                            sender_logical_cores_[s].x,
-                            sender_logical_cores_[s].y,
-                            r,
-                            plan.slots[i].rotation.size());
                         rot[r] = plan.slots[i].rotation[ring[r]];
                     }
                 }

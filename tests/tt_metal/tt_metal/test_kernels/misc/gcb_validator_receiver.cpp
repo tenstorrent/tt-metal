@@ -59,6 +59,7 @@ void kernel_main() {
     const uint32_t total_n_tiles = get_arg_val<uint32_t>(rt_idx++);  // N / TILE_WIDTH (full tensor)
     const uint32_t n_per_recv_tiles = get_arg_val<uint32_t>(rt_idx++);
     const uint32_t n_col_start = get_arg_val<uint32_t>(rt_idx++);  // ring_pos * n_per_recv_tiles
+    const uint32_t lead_block = get_arg_val<uint32_t>(rt_idx++);   // streaming: physical block at FIFO position 0
     (void)num_senders;                                             // total_n_tiles now comes directly from the host
 
     const auto accessor = TensorAccessor(tensor_args, bank_base_addr);
@@ -67,10 +68,6 @@ void kernel_main() {
     const uint32_t page_bytes = k_block_w_tiles * slice_bytes;
 
     const uint32_t scratch_addr = get_write_ptr(scratch_cb_id);
-
-    // ring_pos is recoverable from n_col_start (= ring_pos * n_per_recv_tiles); only used to
-    // rotate the expected physical block in streaming mode.
-    const uint32_t ring_pos = n_per_recv_tiles > 0 ? (n_col_start / n_per_recv_tiles) : 0;
 
     DPRINT(
         "VALIDATOR_START bank={} recv_idx={} num_layers={} num_blocks={} page={} tile={}\n",
@@ -91,7 +88,7 @@ void kernel_main() {
             // Read expected tiles via TensorAccessor. Per tt_metal/impl/buffers/prefetcher_matmul_design.md §3,
             // page row h = tiles (blk*kw + h, n_col_start + n) for n in [0, n_per_recv). One
             // accessor call per tile keeps bank-routing logic out of this kernel.
-            const uint32_t phys_blk = streaming ? ((ring_pos + blk) % num_blocks) : blk;
+            const uint32_t phys_blk = streaming ? ((lead_block + blk) % num_blocks) : blk;
             uint32_t scratch_cursor = scratch_addr;
             for (uint32_t h = 0; h < k_block_w_tiles; ++h) {
                 const uint32_t k_row = phys_blk * k_block_w_tiles + h;

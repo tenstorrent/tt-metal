@@ -525,9 +525,9 @@ void py_module(nb::module_& mod) {
             Stream in1 weights from the GCB in ring-rotated FIFO order (gather_in0 + DRAM-sender
             GCB only). When true, each weight block is consumed as it arrives instead of waiting
             for the whole tensor, so the GCB can be sized to a small live window. The weight MUST
-            be queued with streaming enabled (the ``(weight, block_count, True)`` form of
-            ``queue_tensor_prefetcher_request``) to match, else the matmul deadlocks. Defaults
-            to false.
+            be queued for streaming (the ``(weight, block_count, rotation)`` form of
+            ``queue_tensor_prefetcher_request``, passing the per-receiver ring-rotation list) to
+            match, else the matmul deadlocks. Defaults to false.
         )doc")
         .def("__repr__", [](const MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
             return fmt::format(

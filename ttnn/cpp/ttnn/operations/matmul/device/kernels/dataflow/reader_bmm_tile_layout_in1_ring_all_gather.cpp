@@ -157,22 +157,20 @@ void kernel_main() {
         // the GCB to hold >= 2 blocks/receiver (enforced host-side) and cb_sync sized for 2
         // outstanding credits.
         // remote_cb_wait_front(n) is cumulative from the remote rd_ptr, which only advances on
-        // remote_cb_pop_front. So to stage block `pushed` while `acked` blocks have been popped,
-        // wait for (pushed - acked + 1) pages to be present, not 1. The lock-step version got away
-        // with wait_front(1) only because it popped between every wait. With lookahead 1, two
-        // blocks are in flight (pushed - acked peaks at 2), so the GCB must hold >= 2 (host-checked).
-        uint32_t acked = 0;
+        // remote_cb_pop_front. With lookahead 1 the ack trails the push by exactly one block, so
+        // the rd_ptr sits one block behind `pushed`: wait for 1 page on the first block and 2
+        // thereafter (the one being staged plus the one still in flight). Two blocks in flight
+        // means the GCB must hold >= 2 (host-checked, see kStreamingInFlightBlocks in the factory).
         for (uint32_t pushed = 0; pushed < num_blocks; ++pushed) {
             // Stage block `pushed` to compute (it may still be working on block `pushed - 1`).
             cb_in1.reserve_back(in1_block_num_tiles);
-            experimental::remote_cb_wait_front(remote_cb_id, pushed - acked + 1);
+            experimental::remote_cb_wait_front(remote_cb_id, pushed == 0 ? 1u : 2u);
             cb_in1.push_back(in1_block_num_tiles);
             // Retire block `pushed - 1` once compute has consumed it, freeing its GCB slot.
             if (pushed >= 1) {
                 cb_sync.wait_front(1);
                 experimental::remote_cb_pop_front(remote_cb_id, 1);
                 cb_sync.pop_front(1);
-                ++acked;
             }
         }
         if (num_blocks > 0) {
@@ -180,7 +178,6 @@ void kernel_main() {
             cb_sync.wait_front(1);
             experimental::remote_cb_pop_front(remote_cb_id, 1);
             cb_sync.pop_front(1);
-            ++acked;
         }
         if constexpr (needs_signaler) {
             if (b == 0) {

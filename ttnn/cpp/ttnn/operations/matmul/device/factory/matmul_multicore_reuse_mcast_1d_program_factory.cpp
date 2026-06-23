@@ -2144,12 +2144,17 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             .set_tile_dims(src2_cb_index, in0_tile);
     tt_metal::CreateCircularBuffer(program, all_cores, src2_cb_config);
 
+    // Streaming pipelines one block ahead (lookahead 1), so up to this many blocks are in flight
+    // at once: cb_sync must hold this many compute-done credits, the GCB must hold this many
+    // blocks/receiver (checked below), and the reader's cumulative remote_cb_wait_front peaks at
+    // this count. One symbol ties the three together; bumping it would also require generalizing
+    // the reader's one-behind ack loop.
+    constexpr uint32_t kStreamingInFlightBlocks = 2;
+
     uint32_t sync_cb_index = base_cb_index + 3;
-    // One 16 B page per credit. Streaming pipelines one block ahead (lookahead 1), so up to two
-    // compute-done credits can be outstanding at once; size cb_sync for 2 pages in that case.
-    // Batched signals once per layer and needs only 1.
+    // One 16 B page per credit. Batched signals once per layer and needs only 1 credit.
     constexpr uint32_t sync_cb_page_bytes = 16;
-    uint32_t sync_cb_size_bytes = (stream_in1 ? 2u : 1u) * sync_cb_page_bytes;
+    uint32_t sync_cb_size_bytes = (stream_in1 ? kStreamingInFlightBlocks : 1u) * sync_cb_page_bytes;
     tt_metal::CircularBufferConfig sync_cb_config =
         tt_metal::CircularBufferConfig(sync_cb_size_bytes, {{sync_cb_index, DataFormat::UInt16}})
             .set_page_size(sync_cb_index, sync_cb_page_bytes);
@@ -2318,9 +2323,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
             // block whose slot only frees after a later ack.
             const uint32_t resident_blocks = global_cb->size() / (in1_block_num_tiles * in1_single_tile_size);
             TT_FATAL(
-                resident_blocks >= 2,
-                "stream_in1 requires the global circular buffer to hold at least 2 in1 blocks per receiver "
-                "(it holds {}); increase the GCB window.",
+                resident_blocks >= kStreamingInFlightBlocks,
+                "stream_in1 pipelines {} in1 blocks per receiver in flight, so the global circular buffer must "
+                "hold at least that many blocks/receiver, but it holds only {}; increase the GCB window.",
+                kStreamingInFlightBlocks,
                 resident_blocks);
             mm_in1_kernel_defines["STREAMING_IN1"] = "1";
             mm_kernel_defines["STREAMING_IN1"] = "1";
