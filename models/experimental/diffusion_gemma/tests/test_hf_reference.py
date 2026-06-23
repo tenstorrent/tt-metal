@@ -55,13 +55,30 @@ def test_guard_reports_unavailable_and_loader_raises():
 
 
 def test_adapter_drives_trajectory_and_is_deterministic():
+    """Two runs are token-for-token equal across EVERY decision class (sampled ids
+    and renoised canvas included) only with **noise injection** — the R5 recipe
+    the issue calls out (on-device RNG won't reproduce torch's RNG bit-exactly,
+    and entropy-budget accept/renoise is noise-sensitive)."""
     batch, length, vocab = 1, 8, 32
     model = _MockCanvasModel(batch, length, vocab, seed=1)
     init = S.random_canvas((batch, length), vocab, generator=_gen(2))
-    a = run_reference_trajectory(model, init.clone(), _cfg(), vocab)
-    b = run_reference_trajectory(model, init.clone(), _cfg(), vocab)
+
+    def gumbel_fn(step):
+        return S.sample_gumbel_noise((batch, length, vocab), generator=_gen(1000 + step))
+
+    def noise_tokens_fn(step):
+        return torch.randint(0, vocab, (batch, length), generator=_gen(2000 + step))
+
+    a = run_reference_trajectory(
+        model, init.clone(), _cfg(), vocab, gumbel_noise_fn=gumbel_fn, noise_tokens_fn=noise_tokens_fn
+    )
+    b = run_reference_trajectory(
+        model, init.clone(), _cfg(), vocab, gumbel_noise_fn=gumbel_fn, noise_tokens_fn=noise_tokens_fn
+    )
     assert torch.equal(a.committed, b.committed)
-    assert compare_trajectories(a, b).passed  # faithful candidate matches oracle
+    # Faithful candidate must match the oracle on EVERY decision class — argmax,
+    # sampled ids, accept mask, renoised canvas, per-token entropy.
+    assert compare_trajectories(a, b).passed
 
 
 def test_harness_rejects_drifted_candidate():

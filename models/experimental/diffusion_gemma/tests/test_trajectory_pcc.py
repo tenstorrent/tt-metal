@@ -50,6 +50,26 @@ def test_self_comparison_passes():
     assert cmp.min_argmax_agreement == 1.0
     assert cmp.committed_match == 1.0
     assert cmp.entropy_trajectory_pcc == pytest.approx(1.0)
+    # Decision-level fields (#47468): every per-step diff is perfect on self-compare.
+    assert cmp.min_sampled_agreement == 1.0  # Gumbel-sampled ids
+    assert cmp.min_accept_iou == 1.0  # accept-mask IoU
+    assert cmp.min_canvas_agreement == 1.0  # renoised canvas
+    assert cmp.min_entropy_pcc == pytest.approx(1.0)  # per-token entropy PCC
+
+
+def test_decision_level_fields_distinguish_drifted_trajectories():
+    """Distinct trajectories must fail on EVERY decision class — sampled, accept,
+    canvas, per-token entropy — not just the clean argmax."""
+    ref = _random_traj(seed=11)
+    cand = _random_traj(seed=42)  # different logits AND different RNG -> different decisions
+    cmp = compare_trajectories(ref, cand)
+    assert not cmp.passed
+    assert cmp.min_sampled_agreement < 1.0
+    assert cmp.min_accept_iou < 1.0
+    assert cmp.min_canvas_agreement < 1.0
+    # entropy is a real-valued vector → some PCC is plausible by chance, but it should be far from 1.0
+    # for genuinely independent random logits. Don't assert a hard bound on it here — the harness's
+    # min_per_step_entropy_pcc threshold (0.99) catches drift in real use.
 
 
 def test_run_to_cap_self_comparison_passes():

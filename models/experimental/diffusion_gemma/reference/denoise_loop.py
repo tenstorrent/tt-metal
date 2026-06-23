@@ -33,11 +33,24 @@ NoiseFn = Callable[[int], torch.Tensor]
 
 
 class StepRecord(NamedTuple):
+    """Per-step decision record for the harness — decisions, not just logits (#47468).
+
+    The harness validates the diffusion *decisions* a candidate trajectory makes;
+    keep every per-step tensor a candidate must reproduce: the clean argmax
+    (commit value), per-token entropy values, Gumbel-sampled ids, the accept
+    mask (entropy-budget acceptance scatter-back), and the renoised canvas
+    that carries into the next step.
+    """
+
     step: int
     temperature: float
     entropy_mean: float
     num_accepted: int
-    argmax: torch.Tensor  # [B, L] clean argmax this step
+    argmax: torch.Tensor  # [B, L] clean argmax (the commit value if this is the last step)
+    entropy: torch.Tensor  # [B, L] per-token entropy of the temperature-scaled logits
+    sampled: torch.Tensor  # [B, L] Gumbel-max sampled token ids
+    accept_mask: torch.Tensor  # [B, L] bool — entropy-budget accept decisions (scatter-back)
+    canvas: torch.Tensor  # [B, L] renoised canvas after this step (input to the next step)
 
 
 class DenoiseTrajectory(NamedTuple):
@@ -90,7 +103,19 @@ def denoise_block(
         )
 
         entropy_mean = res.entropy.mean().item()
-        records.append(StepRecord(step, temperature, entropy_mean, int(res.accept_mask.sum()), res.argmax))
+        records.append(
+            StepRecord(
+                step=step,
+                temperature=temperature,
+                entropy_mean=entropy_mean,
+                num_accepted=int(res.accept_mask.sum()),
+                argmax=res.argmax,
+                entropy=res.entropy,
+                sampled=res.sampled,
+                accept_mask=res.accept_mask,
+                canvas=res.canvas,
+            )
+        )
 
         committed = res.argmax  # commit = clean argmax (never the noisy sample)
         # stable: current argmax equals each of the last N argmaxes (HF compares the
