@@ -14,12 +14,13 @@
 #include "autograd/tensor.hpp"
 #include "models/base_transformer.hpp"
 #include "models/common/transformer_common.hpp"
-#include "models/distributed/gpt2.hpp"
-#include "models/distributed/llama.hpp"
-#include "models/distributed/pipeline_parallel_llama.hpp"
-#include "models/gpt2.hpp"
+// SDPA prior-art nuked — attention/model consumers disabled (see nuke-sdpa branch)
+// #include "models/distributed/gpt2.hpp"
+// #include "models/distributed/llama.hpp"
+// #include "models/distributed/pipeline_parallel_llama.hpp"
+// #include "models/gpt2.hpp"
 #include "models/linear_regression.hpp"
-#include "models/llama.hpp"
+// #include "models/llama.hpp"
 #include "models/mlp.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
@@ -102,6 +103,7 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
     nb::class_<models::BaseTransformer, ttml::modules::ModuleBase>(m, "BaseTransformer");
 
+#if 0  // SDPA prior-art nuked — gpt2/llama/distributed attention-model bindings disabled
     {
         auto py_gpt2_module = m.def_submodule("gpt2");
         ttml::nanobind::util::export_enum<models::gpt2::PositionalEmbeddingType>(py_gpt2_module);
@@ -109,6 +111,7 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         nb::class_<models::gpt2::TransformerConfig>(py_gpt2_module, "GPT2TransformerConfig");
         nb::class_<models::gpt2::Transformer, models::BaseTransformer>(py_gpt2_module, "GPT2Transformer");
     }
+#endif
 
     {
         auto py_linear_regression_module = m.def_submodule("linear_regression");
@@ -117,6 +120,7 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
 
     // Distributed models: register classes so return types can be wrapped
     m.def_submodule("distributed");
+#if 0  // SDPA prior-art nuked — distributed gpt2/llama bindings disabled
     {
         auto m_distributed = static_cast<nb::module_>(m.attr("distributed"));
         auto m_distributed_gpt2 = m_distributed.def_submodule("gpt2");
@@ -134,7 +138,9 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
         nb::class_<ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig>(
             m_distributed_pp_llama, "PipelineParallelConfig");
     }
+#endif
 
+#if 0  // SDPA prior-art nuked — llama bindings disabled
     {
         auto py_llama_module = m.def_submodule("llama");
         nb::class_<models::llama::LlamaConfig>(py_llama_module, "CppLlamaConfig");
@@ -143,6 +149,7 @@ void py_module_types(nb::module_& m, nb::module_& m_modules) {
             return models::llama::create(config);
         });
     }
+#endif
 
     {
         auto py_mlp_module = m.def_submodule("mlp");
@@ -188,6 +195,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         py_base_transformer.def("load_from_safetensors", &models::BaseTransformer::load_from_safetensors);
     }
 
+#if 0  // SDPA prior-art nuked — gpt2 bindings disabled
     {
         auto py_gpt2_module = static_cast<nb::module_>(m.attr("gpt2"));
         py_gpt2_module.def(
@@ -245,6 +253,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             nb::arg("mask"),
             "Model forward pass with causal mask.");
     }
+#endif
 
     {
         auto py_linear_regression_module = static_cast<nb::module_>(m.attr("linear_regression"));
@@ -252,6 +261,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             "create_linear_regression_model", &models::linear_regression::create, "Create linear regression model");
     }
 
+#if 0  // SDPA prior-art nuked — distributed creators disabled
     {
         // Distributed creators
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));
@@ -296,7 +306,9 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             &ttml::models::distributed::pipeline_parallel_llama::PipelineParallelConfig::blocks_per_rank,
             "Blocks per rank");
     }
+#endif
 
+#if 0  // SDPA prior-art nuked — llama bindings disabled
     {
         auto py_llama_module = static_cast<nb::module_>(m.attr("llama"));
 
@@ -356,6 +368,7 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
             &models::llama::Llama::get_original_vocab_size,
             "Get the original vocabulary size");
     }
+#endif
 
     {
         auto py_mlp_module = static_cast<nb::module_>(m.attr("mlp"));

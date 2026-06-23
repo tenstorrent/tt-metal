@@ -54,7 +54,8 @@ set(SOURCES
     ops/layernorm_composite_test.cpp
     ops/distributed/comm_ops_test.cpp
     ops/distributed/ring_shift_test.cpp
-    ops/distributed/ring_sdpa_test.cpp
+    # --- Disabled: ring_sdpa prior-art nuked ---
+    # ops/distributed/ring_sdpa_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
@@ -67,8 +68,9 @@ set(SOURCES
     ops/softmax_test.cpp
     ops/softmax_backward_op_test.cpp
     ops/silu_op_test.cpp
-    ops/sdpa_fw_op_test.cpp
-    ops/sdpa_bw_op_test.cpp
+    # --- Disabled: sdpa_fw/bw prior-art nuked ---
+    # ops/sdpa_fw_op_test.cpp
+    # ops/sdpa_bw_op_test.cpp
     ops/layernorm_bw_fused_op_test.cpp
     ops/layernorm_fw_fused_op_test.cpp
     ops/swiglu_op_test.cpp
@@ -78,7 +80,8 @@ set(SOURCES
     ops/moe_profile_sweep_test.cpp
     ops/binary_ops_fw_test.cpp
     ops/binary_ops_bw_test.cpp
-    utils/memory_utils_test.cpp
+    # --- Disabled: memory_utils_test uses nuked scaled_dot_product_attention as a fixture ---
+    # utils/memory_utils_test.cpp
 )
 
 add_executable(ttml_tests ${SOURCES})

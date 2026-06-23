@@ -14,7 +14,7 @@
 
 #include "autograd/autocast_tensor.hpp"
 #include "autograd/tensor.hpp"
-#include "modules/grouped_query_attention.hpp"
+// SDPA prior-art nuked — grouped_query_attention include removed (was unused)
 #include "modules/module_base.hpp"
 #include "serialization/serializable.hpp"
 

@@ -22,39 +22,41 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/init/cpu_initializers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/init/tensor_initializers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/common/transformer_common.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
+    # --- Disabled: SDPA prior-art nuked; these attention/model consumers cannot compile ---
+    # ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/gpt2.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/llama.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/models/distributed/pipeline_parallel_llama.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/models/gpt2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/linear_regression.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/models/llama.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/models/mlp.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/gpt_block.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/grouped_query_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/linear.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/llama_block.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/distributed/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/dropout_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/embedding_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/gpt_block.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/grouped_query_attention.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/gpt_block.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/grouped_query_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/layer_norm_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/positional_embeddings.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rms_norm_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/comm_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/losses.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/pipeline_parallel_comm_ops.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
+    # --- Disabled: ring_attention_sdpa depends on nuked ring_sdpa_fw/bw ---
+    # ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.cpp
+    # ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
@@ -70,7 +72,8 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
+    # --- Disabled: scaled_dot_product_attention wrapper (calls nuked sdpa_fw/bw) ---
+    # ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/moe_ffn_swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
@@ -175,26 +178,8 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp
-    # SDPA Forward
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/sdpa_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_fw/device/sdpa_fw_program_factory.cpp
-    # Ring SDPA Forward (for ring attention / context parallelism)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/ring_sdpa_fw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_fw/device/ring_sdpa_fw_program_factory.cpp
-    # Ring SDPA Backward (for ring attention / context parallelism)
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/ring_sdpa_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_q_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/ring_sdpa_bw/device/ring_sdpa_bw_kv_program_factory.cpp
-    # SDPA Backward
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/sdpa_bw.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_kv_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/sdpa_bw/device/sdpa_bw_q_program_factory.cpp
+    # SDPA Forward/Backward (sdpa_fw, sdpa_bw, ring_sdpa_fw, ring_sdpa_bw) — REMOVED
+    # (SDPA prior-art nuked for agentic re-implementation; see nuke-sdpa branch)
     # SGD Optimizer
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/sgd.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/optimizers/sgd/device/sgd_device_operation.cpp
