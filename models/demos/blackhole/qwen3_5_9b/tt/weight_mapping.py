@@ -1,7 +1,5 @@
-# SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-
 """Remap a HuggingFace Qwen3.5 state dict to the internal key scheme model_config.load_state_dict feeds the TT model.
 
 The internal scheme is deliberately MINIMAL: only the three top-level weights the

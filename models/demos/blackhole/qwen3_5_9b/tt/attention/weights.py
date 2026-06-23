@@ -1,3 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Weight loading + tensor-parallel sharding for the Qwen3.5 full-attention block.
+
+Loads one attention layer's projections from the raw HF submodule state dict and
+shards them across the mesh (column-parallel Q/K/V/gate, row-parallel out_proj),
+returning the immutable Qwen35AttentionWeights bundle attention.py consumes. At
+tp=1 each "shard" is the full weight, so the same loader serves single-device runs.
+"""
 import os
 from dataclasses import dataclass
 
@@ -23,20 +32,26 @@ class Qwen35AttentionWeights:
 
 
 def load_attention_weights(mesh_device, state_dict, args, tensor_cache_path=None) -> Qwen35AttentionWeights:
+    """Load + shard one attention layer's weights into a Qwen35AttentionWeights bundle.
+
+    state_dict is the raw HF ``self_attn`` submodule dict (q_proj/k_proj/v_proj/o_proj/
+    q_norm/k_norm). The query and gate projections, fused in the checkpoint, are split
+    here; Q/K/V are then re-fused in the per-device [Q|K|V] order nlp_create_qkv_heads
+    expects and column-parallel sharded, while o_proj is row-parallel sharded and the
+    q/k norms are replicated. tensor_cache_path, if given, caches the converted shards.
+    """
     if tensor_cache_path is not None:
         os.makedirs(tensor_cache_path, exist_ok=True)
 
     def split_q_and_gate(w):
-        """
-        HF checkpoint / state_dict ships query and gate projections fused into a single tensor.
-        This function splits them into two separate weight tensors wq and wg, each with shape [hidden_size, num_heads * head_dim], that the TPAttention expects.
-            w: [hidden_size, 2 * num_heads * head_dim]
+        """Split the fused query+gate projection into separate wq and wg weights.
 
-        Returns:
-            wq: [hidden_size, num_heads * head_dim]
-            wg: [hidden_size, num_heads * head_dim]
-        """
+        The HF checkpoint ships query and gate interleaved per head as
+        ``[2 * num_heads * head_dim, hidden]``; this de-interleaves them into
 
+            wq: [num_heads * head_dim, hidden]
+            wg: [num_heads * head_dim, hidden]
+        """
         NH, HD = args.n_heads, args.head_dim
         w_q_and_gate = w.reshape(NH, 2 * HD, -1)
         wq = w_q_and_gate[:, :HD, :].reshape(NH * HD, -1)

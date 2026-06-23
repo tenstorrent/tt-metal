@@ -1,4 +1,5 @@
-# models/demos/blackhole/qwen3_5_9b/tt/model_config.py
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
 """Qwen3.5-9B model configuration for Blackhole P150.
 
 Subclasses ``tt_transformers.ModelArgs`` (the framework convention). ``HF_MODEL`` is

@@ -1,3 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Weight loading + per-head sharding for the Qwen3.5 Gated DeltaNet block.
+
+The delta-rule recurrence is per-value-head, so everything here shards BY HEAD with no
+cross-device comms inside the layer — only the row-parallel out_proj needs the all-reduce
+the forward runs afterward. Projections are kept SEPARATE (wqkv / wz / wa / wb) to match
+the GDN forward rather than fusing them. Consumed by tt/gdn/gdn.py.
+"""
 import os
 from dataclasses import dataclass
 
@@ -10,15 +19,17 @@ from models.demos.blackhole.qwen3_5_9b.utils.general_utils import get_cache_file
 
 @dataclass(frozen=True)
 class Qwen35GDNWeights:
-    dt_bias: ttnn.Tensor
-    neg_A_log_exp: ttnn.Tensor
-    w_taps: list[ttnn.Tensor]
-    w_norm: ttnn.Tensor
-    wo: ttnn.Tensor
-    wqkv: ttnn.Tensor
-    wz: ttnn.Tensor
-    wb: ttnn.Tensor
-    wa: ttnn.Tensor
+    """Per-device weight shards for one Gated DeltaNet layer (see load_gdn_weights)."""
+
+    dt_bias: ttnn.Tensor  # softplus bias for the gate decay, per value head
+    neg_A_log_exp: ttnn.Tensor  # -exp(A_log) decay rates, kept TRUE fp32 (see loader)
+    w_taps: list[ttnn.Tensor]  # depthwise conv1d, one broadcastable tensor per kernel tap
+    w_norm: ttnn.Tensor  # gated-RMSNorm weight, replicated (per-head_v_dim feature)
+    wo: ttnn.Tensor  # out_proj, row-parallel
+    wqkv: ttnn.Tensor  # fused Q|K|V in_proj, column-parallel (per-device head grouping)
+    wz: ttnn.Tensor  # gate (z) in_proj, column-parallel
+    wb: ttnn.Tensor  # beta in_proj, column-parallel
+    wa: ttnn.Tensor  # decay (a) in_proj, column-parallel
 
 
 def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_cache_path=None) -> Qwen35GDNWeights:

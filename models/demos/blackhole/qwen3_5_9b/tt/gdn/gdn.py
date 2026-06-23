@@ -1,3 +1,25 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Qwen3.5 Gated DeltaNet (linear-attention) token mixer — ttnn port of transformers'
+Qwen3_5GatedDeltaNet.
+
+The block has two forward paths, each a faithful transcription of the matching torch
+reference in modeling_qwen3_5.py:
+
+  * forward_prefill → chunk_gated_delta_rule: the chunked parallel form, used to ingest
+    the whole prompt and seed the recurrent + conv state.
+  * forward_decode  → recurrent_gated_delta_rule: the single-token recurrent scan that
+    reads + advances that state one step at a time.
+
+Unlike full attention there is no KV cache and no RoPE; the layer carries its own
+recurrent (delta-rule) state and a small depthwise-conv shift buffer internally. The math
+is numerically sensitive (the cross-chunk scan and the lower-triangular inverse compound
+error), so the chunk/step math runs in fp32 with HiFi2 matmuls. Heavy ops live in
+operations.py; weight loading + per-head sharding in weights.py.
+
+See Qwen3_5GatedDeltaNet / torch_chunk_gated_delta_rule / torch_recurrent_gated_delta_rule
+in transformers.models.qwen3_5.modeling_qwen3_5.
+"""
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.qwen3_5_9b.tt.model_config import Qwen35ModelArgs
@@ -15,6 +37,13 @@ from .weights import load_gdn_weights
 
 
 class Qwen35RMSNormGated(LightweightModule):
+    """Gated RMSNorm — ttnn port of transformers' Qwen3_5RMSNormGated.
+
+    A plain RMSNorm whose output is optionally gated by ``silu(gate)`` (the GDN ``z``
+    projection). The norm runs in fp32 then casts back to the input dtype, matching the
+    reference. ``gate=None`` reduces it to an ungated RMSNorm.
+    """
+
     def __init__(self, weight: ttnn.Tensor, eps=1e-6):
         self.weight = weight
         self.variance_epsilon = eps
@@ -33,6 +62,15 @@ class Qwen35RMSNormGated(LightweightModule):
 
 
 class Qwen35GatedDeltaNet(LightweightModule):
+    """Gated DeltaNet token mixer (linear attention) for one Qwen3.5 decoder layer.
+
+    Owns the layer's projections, depthwise conv, gated norm, and the two pieces of
+    persistent state — the recurrent (delta-rule) KV state and the conv shift buffer —
+    plus the per-shape constants the chunk math reuses. forward_prefill seeds that state
+    from the whole prompt; forward_decode advances it one token per call. reset_*_state
+    must be called before a new sequence (model.reset_state does this).
+    """
+
     def __init__(
         self,
         args: Qwen35ModelArgs,
@@ -77,6 +115,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
         self.initialize_params_gated_delta_rule()
 
     def reset_conv_state(self):
+        """Zero the depthwise-conv shift buffer (the last K-1 inputs) before a new sequence."""
         self.conv_state = ttnn.zeros(
             [self.batch_size, 1, self.conv_kernel_size, self.conv_dim],
             # bf16, matching the bf16 mixed_qkv it caches: the state is a verbatim
@@ -89,6 +128,13 @@ class Qwen35GatedDeltaNet(LightweightModule):
         )
 
     def reset_recurrent_state(self):
+        """Zero the recurrent (delta-rule) KV state and return it.
+
+        Allocates the persistent buffer (and a reusable all-zeros template) on first call;
+        afterwards it copies the template back in place so the captured trace addresses are
+        preserved. Returns the live state buffer for callers that start a scan from zero.
+        """
+
         def _zeroes():
             return ttnn.zeros(
                 [self.batch_size, self.num_v_heads, self.head_k_dim, self.head_v_dim],
@@ -106,6 +152,13 @@ class Qwen35GatedDeltaNet(LightweightModule):
         return self.last_recurrent_state
 
     def initialize_params_gated_delta_rule(self):
+        """Build the per-shape constants the chunk math reuses, once at construction.
+
+        The chunk identity, the host-built triangular masks, and the persistent zero pads
+        are all minted here rather than inside the forward: allocating a constant buffer
+        (ttnn.zeros / a fill value) mid-forward is a host-side write that ttnn trace capture
+        rejects, whereas concatenating against a pre-built buffer is pure device work.
+        """
         self.eye = chunk_identity(self.chunk_size, self.mesh_device)
         self.triangular_masks = chunk_triangular_masks(self.chunk_size, self.mesh_device)
 
@@ -150,6 +203,18 @@ class Qwen35GatedDeltaNet(LightweightModule):
     def chunk_gated_delta_rule(
         self, query, key, value, g, beta, chunk_size, initial_state=None, use_qk_l2norm_in_kernel=False
     ):
+        """Chunked parallel gated-delta-rule scan (prefill) — torch_chunk_gated_delta_rule.
+
+        Processes the sequence in chunk_size blocks: the within-chunk attention is computed
+        in parallel, while the recurrent state is carried across chunks by a short Python
+        loop (TT-NN has no in-place scatter). Returns (core_attn_out, last_recurrent_state).
+        The inline comments map each step to its line in the torch reference; the math runs
+        in fp32 because the lower-triangular inverse and cross-chunk scan are error-sensitive.
+
+        query/key/value arrive [B, seq, num_v_heads, head_dim] and beta/g [B, seq, num_v_heads]
+        (head-last) from forward_prefill. initial_state is unused in prefill (the scan always
+        starts from zero); use_qk_l2norm_in_kernel l2-normalizes q/k first, as the kernel does.
+        """
         initial_dtype = query.dtype
         if use_qk_l2norm_in_kernel:
             query = l2norm(query, dim=-1, eps=1e-6)
@@ -464,10 +529,17 @@ class Qwen35GatedDeltaNet(LightweightModule):
         return core_attn_out, last_recurrent_state
 
     def forward_prefill(self, hidden_states, attention_mask=None):
+        """Ingest the whole prompt and seed the conv + recurrent state.
+
+        hidden_states: [B=1, 1, seq_len, hidden_size]. Projects q/k/v/z/a/b, runs the
+        depthwise causal conv, then the chunked delta-rule scan, gates + norms the result,
+        and out-projects (with a reduce-scatter on TP). The conv and recurrent state are
+        copied into the persistent buffers so forward_decode can continue from them.
+
+        attention_mask is accepted for interface parity but unused: prefill is single-stream
+        B=1 with no padding mask (right-padding is handled one level up; see model.generate).
         """
-        hidden_states: [B=1, 1, seq_len, hidden_size]
-        """
-        # TODO attention masking needs to be added
+        # TODO: honor attention_mask once batched / padded prefill is supported.
 
         weights = self.weights
         batch_size, seq_len = hidden_states.shape[0], hidden_states.shape[2]
@@ -481,16 +553,16 @@ class Qwen35GatedDeltaNet(LightweightModule):
         z = ttnn.linear(hidden_states, weights.wz)
         z = ttnn.reshape(z, (batch_size, seq_len, self.num_v_heads, self.head_v_dim))
 
-        # a: [B=1, 1, seq_len, num_v_heads]
-        # b: [B=11, 1, seq_len, num_v_heads]
+        # a, b: [B=1, 1, seq_len, num_v_heads] — the decay (a) and beta (b) gate logits.
+        # a is projected in fp32 because softplus(a + dt_bias) feeds the decay term.
         b = ttnn.linear(hidden_states, weights.wb)
         a = ttnn.linear(hidden_states, weights.wa, dtype=ttnn.float32)
 
-        # Prefill path does not use precomputed states
-        # we need to initialize the conv state
-        # in transformers, you might have to pad mixed_qkv if it is smaller than the conv kernel
-        # but, you can also reshape down if the seq_len > conv kernel
-        # in prefill, we will just slice down, but we might need to pad up...
+        # Seed the conv shift buffer from the prompt's tail. Prefill starts from no prior
+        # state, so the conv state is just the last conv_kernel_size inputs of this prompt
+        # (the left context the first decode step's conv will need). seq_len >= kernel here
+        # — the prompt is padded to a tile multiple upstream — so a slice suffices; a prompt
+        # shorter than the kernel would need a left-pad instead.
         conv_state = mixed_qkv[..., :, -self.conv_kernel_size :, :]
         # The seq slice lands off a tile boundary (seq is a tile dim), which can drop
         # tile layout; re-tilize before the copy so the persistent conv-state buffer
@@ -532,7 +604,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
             initial_state=None,
             use_qk_l2norm_in_kernel=True,
         )
-        ## update the recurrent state
+        # Persist the post-prefill recurrent state so decode continues from it.
         ttnn.copy(last_recurrent_state, self.last_recurrent_state)
 
         core_attn_out = ttnn.reshape(core_attn_out, (-1, self.head_v_dim))
@@ -553,11 +625,18 @@ class Qwen35GatedDeltaNet(LightweightModule):
         )
 
     def forward_decode(self, hidden_states, attention_mask=None):
-        # hidden_states [1, 1, B, hidden_size]
+        """Advance one decode step, reading + updating the conv and recurrent state.
+
+        hidden_states: [1, 1, B, hidden_size] (framework decode layout — batch on dim 2).
+        Mirrors forward_prefill but runs the single-token conv-update and the recurrent
+        (rather than chunked) delta scan, then writes both updated states back. Returns the
+        out-projected hidden state ([1, 1, B, hidden_size], reduce-scattered on TP).
+
+        attention_mask is accepted for interface parity but unused (causal, single step).
+        """
         weights = self.weights
         batch_size, seq_len = hidden_states.shape[2], 1
 
-        # TODO attention masking given mask
         conv_state = self.conv_state
         recurrent_state = self.last_recurrent_state
 
@@ -607,7 +686,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
             initial_state=recurrent_state,
             use_qk_l2norm_in_kernel=True,
         )
-        ## update the recurrent state
+        # Persist the advanced recurrent state for the next decode step.
         ttnn.copy(last_recurrent_state, self.last_recurrent_state)
 
         core_attn_out = ttnn.reshape(core_attn_out, (-1, self.head_v_dim))

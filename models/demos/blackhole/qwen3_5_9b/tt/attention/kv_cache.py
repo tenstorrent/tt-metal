@@ -31,7 +31,7 @@ def init_kv_cache(
 
     Args:
         mesh_device: TT device or mesh device
-        config: Qwen35ModelArgs for this layer
+        args: Qwen35ModelArgs for this layer
         max_batch_size: Maximum batch size
         max_seq_len: Maximum sequence length
         paged_attention_config: Optional paged attention config
@@ -44,7 +44,7 @@ def init_kv_cache(
     # Determine TP from mesh shape (column axis)
     tp = mesh_device.get_num_devices()
 
-    # When KV heads < TP, each device gets 1 KV head (GQA-assigned, not all heads)
+    # Per-device local KV head count (args clamps to 1 when n_kv_heads < TP — GQA-assigned).
     num_local_kv_heads = args.n_local_kv_heads
     head_dim = args.head_dim
 

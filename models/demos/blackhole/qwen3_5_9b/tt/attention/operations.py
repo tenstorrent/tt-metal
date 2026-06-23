@@ -1,3 +1,12 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Projection + head-split ops for the Qwen3.5 full-attention path.
+
+The Q/K/V projection is fused into one column-parallel matmul so the head split can
+use ttnn.experimental.nlp_create_qkv_heads (prefill) / ..._decode rather than a manual
+reshape+transpose; the Qwen3.5 gate is a separate projection the 3-way head op can't
+emit. Consumed by tt/attention/attention.py.
+"""
 import ttnn
 
 from .weights import Qwen35AttentionWeights

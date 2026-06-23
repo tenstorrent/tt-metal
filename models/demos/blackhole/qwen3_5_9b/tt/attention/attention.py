@@ -35,6 +35,11 @@ from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
 def get_sdpa_program_config(config, mesh_device):
+    """Pick the SDPA core grid + chunk sizes for this layer's head_dim.
+
+    Large head_dim (>=512) needs more L1 per core, so it runs on a smaller fixed grid;
+    otherwise SDPA uses the full device compute grid.
+    """
     if config.head_dim >= 512:
         # Global layers: smaller grid — head_dim=512 needs more L1 per core.
         sdpa_grid = ttnn.CoreCoord(8, 4)
@@ -109,9 +114,12 @@ class Qwen35Attention(LightweightModule):
         page_table=None,
         user_id=0,
     ):
-        """
-        hidden_states: [B, 1, S, dim]
-        cos_tt, sin_tt: [max_seq_len, rope_dim] RoPE tensors
+        """Prefill: project Q/K/V/gate, norm + partial-RoPE q/k, fill the KV cache, run causal
+        SDPA, gate, and out-project (reduce-scattered on TP).
+
+        hidden_states: [B, 1, S, dim]; cos_tt, sin_tt: [max_seq_len, rope_dim] RoPE tensors.
+        page_table=None fills the contiguous cache (demo/eager); a non-None page_table fills
+        the paged cache (vLLM). user_id selects the per-user cache slot.
         """
         weights = self.weights
         NH, NKV, HD = self.NH, self.NKV, self.HD
@@ -171,10 +179,12 @@ class Qwen35Attention(LightweightModule):
         )
 
     def forward_decode(self, hidden_states, cur_pos_tt, cos_tt, sin_tt, page_table=None):
-        """
-        hidden_states: [1, 1, B, dim] (framework layout for decode)
-        cur_pos_tt: [1] scalar tensor with the current decode position (0-based)
-        cos_tt, sin_tt: [max_seq_len, rope_dim] RoPE tensors
+        """Decode one step: project Q/K/V/gate, norm + RoPE q/k, update the KV cache at
+        cur_pos, run SDPA-decode against the cache, gate, and out-project (reduce-scattered on TP).
+
+        hidden_states: [1, 1, B, dim] (framework decode layout); cur_pos_tt: [1] int tensor
+        with the current 0-based decode position; cos_tt, sin_tt: [max_seq_len, rope_dim] RoPE
+        tensors. page_table=None uses the contiguous cache; a non-None page_table uses the paged cache.
         """
         assert self.kv_cache is not None, "forward_decode requires allocated KV caches"
         k_cache, v_cache = self.kv_cache
