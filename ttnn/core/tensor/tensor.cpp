@@ -478,10 +478,10 @@ const MeshTensor& Tensor::mesh_tensor() const& {
 }
 
 distributed::MeshDevice* Tensor::device() const {
-    if (storage_type() != StorageType::DEVICE) {
+    if (storage_type() != StorageType::DEVICE || !is_allocated()) {
         return nullptr;
     }
-    return device_storage().get_device_bypass_deallocate_check();
+    return device_storage().get_mesh_buffer().device();
 }
 
 const distributed::MeshBuffer& Tensor::mesh_buffer() const { return device_storage().get_mesh_buffer(); }
