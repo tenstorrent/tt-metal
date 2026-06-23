@@ -1069,7 +1069,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
             "ttnn/cpp/ttnn/operations/experimental/ccl/wan_fused_distributed_rmsnorm/device/kernels/dataflow/"
             "wan_rmsnorm_fused_writer.cpp",
             worker_core_set,
-            WriterDataMovementConfig(writer_compile_args));
+            WriterDataMovementConfig(writer_compile_args, ablation_defines()));
     } else {
         // MUX writer for TP>1 (Phase 9 packed-page AG): first 13 CT args,
         // then 5 MUX CT args, then TensorAccessorArgs for output and stats
