@@ -689,11 +689,5 @@
     bh_galaxy:
       timeout: 60
       tier: 1
-    bh_quietbox_2:
-      timeout: 140
-      tier: 1
-    wh_galaxy:
-      timeout: 60
-      tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
