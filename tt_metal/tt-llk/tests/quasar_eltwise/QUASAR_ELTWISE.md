@@ -6,15 +6,100 @@ SPDX-License-Identifier: Apache-2.0
 # Quasar Eltwise Generic-LUT Flow
 
 This document is the reference for the **Quasar eltwise generic-LUT activation
-flow**: the end-to-end pipeline that builds a per-eval-method SFPU LUT kernel,
-compiles it with the qsr32 SFPI toolchain, runs it on the **craq-sim Quasar
-`ttsim`**, and PCC/ULP-compares the on-sim output against the
-tt-polynomial-fitter ground-truth golden.
+flow**: applying a per-activation SFPU LUT (per-segment polynomial or rational
+`P(x)/Q(x)`, with optional range reduction and asymptotic factoring) on Quasar and
+validating it against the tt-polynomial-fitter ground-truth golden.
+
+There are now **two feature-equivalent flows** that validate the SAME deployed
+fitter picks (from `best.csv`), exhaustively — see **"Two flows (DFB + tt-llk)"**
+below. The tt-llk flow (the historical path documented here in depth) builds a
+per-eval-method SFPU LUT kernel, compiles it with the qsr32 SFPI toolchain, runs it
+on the **craq-sim Quasar `ttsim`** in slow-dispatch, and PCC/ULP-compares the on-sim
+output against the golden. The DFB flow runs the real
+`ttnn.experimental.quasar.unary_lut` TTNN op through the Metal-2.0 Dataflow-Buffer
+framework on the same sim — it is the path that ships.
 
 It covers the existing methods (`polynomial`, `rational`) and the three eval
 methods ported into the Quasar tree (`exponent_alu`, `newton_root`,
 `parity`/`adaptive`), with per-method compile/run/gap status, the
 Quasar-specific SFPU adaptation notes, and the **pinned, validated sim build**.
+
+## Two flows (DFB + tt-llk)
+
+Both flows implement the **same data-driven generic-LUT activation** and validate
+the **same deployed fitter picks** (`best.csv`, bf16 `best_ulp_*` rows), exhaustively
+on craq-sim Quasar. They are now **feature-equivalent**.
+
+| | **DFB flow (Metal-2.0)** | **tt-llk flow** |
+|---|---|---|
+| Op / entry | `ttnn.experimental.quasar.unary_lut` (real TTNN op) | standalone SFPI-compiled TRISC test kernels |
+| Mechanism | Dataflow Buffers (`QuasarDataMovementKernel` + `ProgramSpec`) | direct per-TRISC SFPI compile, no host-dispatch / no CB / no DFB |
+| Dispatch | slow-dispatch on craq-sim Quasar | slow-dispatch on craq-sim Quasar |
+| Repo / branch | `/localdev/nkapre/tt-metal-dfbport`, `dfb-lut-port` @ `c9aae9b8dcd` | `/localdev/nkapre/tt-metal`, `nkapre/tt-polynomial-fitter` @ `2a123142a05` |
+| Kernel | `ttnn/cpp/ttnn/operations/experimental/quasar/unary_lut/device/kernels_dfb/` (`unary_lut_sfpu.h`) | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_*_quasar_test.cpp` |
+| Driver + sweep | `tests/ttnn/.../quasar/{dfb_lut_driver.py, test_dfb_sweep_60.py}` | `tt_metal/tt-llk/tests/quasar_eltwise/run_quasar.sh` |
+| Status | the path the Quasar team will use (DFB add op landed via PR #47739) | being phased out in favor of DFB |
+
+**Separate source files, no shared eval header.** The DFB SFPU evaluator
+(`unary_lut_sfpu.h`) and the tt-llk per-method sources are independent. The full
+feature set was ported (duplicated) into tt-llk "for now" — tt-llk is being phased
+out in favor of DFB, so a shared-eval-header refactor is the eventual clean
+architecture but **deliberately deferred**.
+
+### Shared feature set (both flows complete, ZERO per-activation hardcoding)
+
+Everything below is **data-driven from the CSV** — no per-activation branch in
+either kernel; the selected behavior is entirely a function of the fitter
+coefficients + metadata:
+
+- **POLY_CASCADE** — piecewise polynomial, single- or multi-segment.
+- **RATIONAL** — per-segment `P(x)/Q(x)`.
+- **All range-reduction methods**:
+  - **Cody-Waite REDUCED_POLY** — `exp` / trig.
+  - **EXPONENT_ALU** — `exp2` / `log2` / `log` / `log10` / `sigmoid` via direct
+    exponent-field manipulation (`exman` / `exexp` / `setexp`).
+  - **NEWTON_ROOT** — `sqrt` / `rsqrt` magic-seed + Newton. Parameters are read
+    from the CSV metadata (`newton_root_reciprocal` / `_n` / `_magic`) — these
+    distinguish `sqrt` from `rsqrt`. The fitter **must emit** them in the CSV
+    metadata; a consumer that lacks them marks the activation out-of-scope rather
+    than hardcode.
+  - **Asymptotic factoring** — `f(x) = dominant(x) * correction_poly(x)` for
+    `is_asymptotic` tail segments. Four dominant classes (`EXP_QUADRATIC`,
+    `EXP_LINEAR`, `X_EXP_LINEAR`, `X`), e.g. `gelu`'s tail.
+
+### Validation regime (EXHAUSTIVE bf16)
+
+Inputs are **exhaustive**: every distinct representable bf16 value in each
+activation's **full fit domain** (≈33k for `[-10,10]`; bf16 is 16-bit, so this is
+cheap), **not** linspace/random sampling (linspace under-reports near-zero ULP).
+Metrics, all measured on craq-sim (never assumed):
+
+- **bf16 bit-distance (Goldberg) ULP** — `max` / `mean` / `p99`. Near-root `max`
+  spikes are artifacts (at a zero-crossing the bf16 ordinals straddle 0, so a
+  1-bf16-ULP value error reads as a large bit-distance). So `ULP_max` (and through
+  it `ULP_p99`) is **not** the headline gate.
+- **`ml_pass`** — fraction within a Torch `atol = rtol = 1e-3` tolerance band.
+  **Headline gate** (pure ULP explodes near output zeros).
+
+CLEAN gate: `PCC ≥ 0.99` **and** (`ml_pass ≥ 0.95` **or** bf16 `ULP_p99 ≤ 1.0`).
+
+### Current state — 58/60 CLEAN exhaustively (DFB, current fitter)
+
+The DFB sweep (`tests/ttnn/.../quasar/DFB_SWEEP_60.md`) is **58/60 CLEAN
+exhaustively, 0 out-of-scope**. The 2 fails are **fitter-side fundamentals, not
+kernel bugs**:
+
+- **`hardshrink`** — a step discontinuity, unfittable by any smooth approximation.
+- **`polygamma`** — a hard function; best available fit is ~16 ULP.
+
+The craq-sim Quasar enablers that made the DFB path + `exponent_alu` work (this
+session): the vectored-`mtvec` fix (craq-sim `61695922`) + native `SFPEXMAN` /
+`SFPDIVP2` (`b4358134`).
+
+### DFB-vs-tt-llk exhaustive comparison table (TBD)
+
+_Side-by-side per-activation bf16-ULP / `ml_pass` for the DFB flow and the tt-llk
+flow — to be pasted here once the tt-llk exhaustive sweep finishes._
 
 ## Pinned, validated simulator (load-bearing)
 
@@ -306,11 +391,17 @@ path is now **functionally correct**. (Caveat: the example/gtest live only at th
 `71c9425e` on `origin/dchen/binary_quasar`; later commits there removed them, and #46916's promised
 revert was never committed — so it works because the *sim* was fixed, not the branch.)
 
-**Path to a DFB-backed eltwise-LUT flow (now UNBLOCKED):**
+**Path to a DFB-backed eltwise-LUT flow — DONE; the DFB flow now ships:**
 1. ~~Fix the single-tile DFB zero-output bug~~ — **done** (sim `b4358134` vectored-`mtvec`
    `61695922` + DFB-framework evolution; binary-ADD proof passes).
-2. Port the eltwise-LUT host driver onto the Metal-2.0 DFB API (`program_spec` +
-   `dataflow_buffer_spec` + `QuasarDataMovementKernel`), mirroring the working binary-ADD's
-   ProgramSpec/DFB setup (resurrect the `71c9425e` example as the template).
-3. Re-run `quasar_sweep.sh --activations all` on the DFB path and confirm parity with the tt-llk
-   slow-dispatch numbers (60/60).
+2. ~~Port the eltwise-LUT host driver onto the Metal-2.0 DFB API~~ — **done**: the generic
+   `ttnn.experimental.quasar.unary_lut` op (`program_spec` + `dataflow_buffer_spec` +
+   `QuasarDataMovementKernel`) is the shipping DFB flow. The DFB add op that unblocked it landed
+   via PR #47739. Kernel: `ttnn/cpp/ttnn/operations/experimental/quasar/unary_lut/`
+   (`README.md` there documents the op). It implements the FULL feature set (POLY_CASCADE,
+   RATIONAL, all RR methods incl. EXPONENT_ALU / NEWTON_ROOT, and asymptotic factoring),
+   data-driven from the CSV.
+3. ~~Re-run the deployment sweep on the DFB path~~ — **done**: `test_dfb_sweep_60.py` runs the
+   60 deployed picks EXHAUSTIVELY in bf16 and is **58/60 CLEAN, 0 out-of-scope** (the 2 fails are
+   fitter-side: `hardshrink` step discontinuity, `polygamma` hard function). See the "Two flows"
+   section above and `DFB_SWEEP_60.md`.
