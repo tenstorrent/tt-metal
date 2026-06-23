@@ -81,64 +81,14 @@
 // We use the real type directly here.
 using __emule_cb_state = tt_emule::CBSyncState;
 
-// Point into this core's L1 at kernel_config_base + rta_offset[proc_idx],
-// where WriteRuntimeArgsToDevice already wrote the bytes. nullptr = sentinel
-// (kernel declared no rt-args for this RISC).
-thread_local uint32_t* __rt_args = nullptr;
-thread_local uint32_t* __common_rt_args = nullptr;
-
-thread_local tt_emule::Core* __core = nullptr;
-
-// Memory bridge pointers — now non-static for -rdynamic export.
-thread_local uint8_t* __emule_bridge_l1 = nullptr;
-thread_local uint8_t* __emule_bridge_dram = nullptr;
-
-// Per-core CB state array, shared between threads on the same core.
-thread_local __emule_cb_state* __emule_cbs = nullptr;
-
-// Per-thread DFB interface array (one entry per DFB on the core).
-thread_local tt_emule::EmuleDFBInterface* __emule_dfbs = nullptr;
-
-// Per-core tile counter array, shared between threads on the same core.
-thread_local tt_emule::TileCounterArray* __emule_tc_array = nullptr;
-
-// Quasar-specific per-thread identity, written by the runner at thread start
-// (see launch_cores below) and read inside the JIT'd kernel .so. Each variable
-// stands in for a different hardware signal; they are NOT interchangeable.
-//
-// __processor_id  — RISC-V mhartid analogue. DM threads: DM index 0..7.
-//                   Compute threads: Neo engine index 0..3. Consumed by the
-//                   JIT regex that rewrites `asm volatile("csrr %0, mhartid" ...)`
-//                   into `VAR = __processor_id;` (x86 can't execute the CSR).
-//
-// __emule_neo_id  — Quasar NEO_ID CSR (0xBC2). Which of the 4 compute engines
-//                   in a Neo is executing. Set to processor_id for compute
-//                   threads, 0 for DM. Read by ckernel::csr_read<CSR::NEO_ID>().
-//
-// __emule_trisc_id — Quasar TRISC_ID CSR (0xBC3). Which TRISC sub-engine
-//                    (0=UNPACK, 1=MATH, 2=PACK, 3=ISOLATE_SFPU) is running.
-//                    Starts at 0; for Quasar compute kernels the launcher
-//                    iterates it 0..3 across ki.variants (see the variant
-//                    loop in launch_cores). Read by
-//                    ckernel::csr_read<CSR::TRISC_ID>().
-//
-// __emule_num_threads  — backs get_num_threads(). Total threads this kernel
-//                        runs on (DM count for DM kernels, active-engine count
-//                        for compute).
-//
-// __emule_my_thread_id — backs get_my_thread_id(). Index of this processor within
-//                        the kernel's processor list (0-based), matching the Quasar
-//                        firmware's my_thread_id semantics. NOT the same as
-//                        __processor_id: e.g. a consumer on RISCV_1 has
-//                        __processor_id=1 but __emule_my_thread_id=0 (first consumer).
-thread_local uint8_t __processor_id = 0;
-thread_local uint8_t __emule_neo_id = 0;
-thread_local uint8_t __emule_trisc_id = 0;
-thread_local uint32_t __emule_num_threads = 1;
-thread_local uint32_t __emule_my_thread_id = 0;
-
-// Core map for cross-core NOC address resolution (shared across all threads).
-thread_local std::unordered_map<uint64_t, tt_emule::Core*>* __emule_core_map = nullptr;
+// The per-RISC identity / handles — rt_args, common_rt_args, core_obj, device,
+// bridge_l1/dram, cbs, dfbs, tc_array, processor_id, neo_id, trisc_id,
+// num_threads, my_thread_id, core_map — are now fields of the per-thread
+// ThreadCommonCtx, reached via __emule_self (defined just below; see
+// emule_thread_ctx.h). The runner sets them in the launch lambda; the JIT kernel
+// and the extern-C resolvers above read them through __emule_self->X. (The
+// mhartid regex now emits `__emule_self->processor_id`; CSR/get_num_threads/
+// get_arg shims read the corresponding ctx fields.)
 
 // Per-thread execution context — the single source of truth for an emulated
 // RISC's thread-local state, specialized by RISC type (see emule_thread_ctx.h).
@@ -180,19 +130,21 @@ static constexpr uint64_t NOC_LOCAL_MASK = (1ULL << NOC_LOCAL_BITS) - 1;
 static constexpr uint32_t NOC_NODE_MASK = (1 << NOC_NODE_ID_BITS) - 1;
 
 // C-linkage bridge functions for JIT kernels.
+// These run on the kernel thread (called synchronously by the JIT kernel), so
+// __emule_self is set; the null guards preserve the old "unset → nullptr" behavior.
 extern "C" uint8_t* __emule_dram_ptr(uint64_t offset) {
-    return __emule_bridge_dram ? __emule_bridge_dram + offset : nullptr;
+    return (__emule_self && __emule_self->bridge_dram) ? __emule_self->bridge_dram + offset : nullptr;
 }
 
 extern "C" uint8_t* __emule_local_l1_ptr(uint32_t offset) {
-    return __emule_bridge_l1 ? __emule_bridge_l1 + offset : nullptr;
+    return (__emule_self && __emule_self->bridge_l1) ? __emule_self->bridge_l1 + offset : nullptr;
 }
 
 extern "C" uint8_t* __emule_noc_resolve(uint32_t x, uint32_t y, uint64_t addr) {
-    if (__emule_core_map) {
+    if (__emule_self && __emule_self->core_map) {
         uint64_t key = (uint64_t(x) << 32) | y;
-        auto it = __emule_core_map->find(key);
-        if (it != __emule_core_map->end()) {
+        auto it = __emule_self->core_map->find(key);
+        if (it != __emule_self->core_map->end()) {
             return it->second->l1_ptr(static_cast<uint32_t>(addr));
         }
     }
@@ -220,10 +172,10 @@ extern "C" uint8_t* __emule_resolve_noc_addr(uint64_t noc_addr) {
     static constexpr uint32_t L1_SLOT_SIZE = 2u * 1024 * 1024;  // 2 MB per worker L1 slot
     static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
 
-    if (__emule_core_map) {
+    if (__emule_self && __emule_self->core_map) {
         uint64_t key = (uint64_t(noc_x) << 32) | noc_y;
-        auto it = __emule_core_map->find(key);
-        if (it != __emule_core_map->end()) {
+        auto it = __emule_self->core_map->find(key);
+        if (it != __emule_self->core_map->end()) {
             uint32_t offset = (it->second->role() == tt_emule::CoreRole::WORKER)
                                   ? (static_cast<uint32_t>(local_addr) & L1_SLOT_MASK)
                                   : static_cast<uint32_t>(local_addr);
@@ -260,7 +212,7 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
     static constexpr uint32_t L1_SLOT_MASK = L1_SLOT_SIZE - 1;  // 0x1FFFFF
     l1_offset &= L1_SLOT_MASK;
 
-    if (!__emule_core_map) {
+    if (!__emule_self || !__emule_self->core_map) {
         return;
     }
 
@@ -276,8 +228,8 @@ extern "C" void __emule_multicast_write(uint64_t mcast_addr, const uint8_t* src,
                 continue;
             }
             uint64_t key = (uint64_t(x) << 32) | y;
-            auto it = __emule_core_map->find(key);
-            if (it != __emule_core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
+            auto it = __emule_self->core_map->find(key);
+            if (it != __emule_self->core_map->end() && it->second->role() == tt_emule::CoreRole::WORKER) {
                 uint8_t* dst = it->second->l1_ptr(static_cast<uint32_t>(l1_offset));
                 if (size == sizeof(uint32_t)) {
                     TT_FATAL(
@@ -566,7 +518,7 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 static void apply_x86_rewrites(std::string& src) {
     static const std::regex mhartid_re(
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
-    src = std::regex_replace(src, mhartid_re, "$1 = __processor_id;");
+    src = std::regex_replace(src, mhartid_re, "$1 = __emule_self->processor_id;");
 
     static const std::regex fence_re(R"(asm\s+volatile\s*\(\s*"fence"\s*(:::\s*"memory"\s*)?\)\s*;)");
     src = std::regex_replace(src, fence_re, "__sync_synchronize();");
@@ -2212,43 +2164,45 @@ static void launch_cores(
                                               &kep = kernel_exceptions[kidx]]() {
                             (void)kidx;
                             auto& ki = *ki_ptr;
-                            __rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
-                                      ki.kernel_config_base + ki.rta_offset_in_kc))
-                                : nullptr;
-                            __common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
-                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
-                                      ki.kernel_config_base + ki.crta_offset_in_kc))
-                                : nullptr;
-                            __emule_bridge_l1 = l1_data;
-                            __emule_bridge_dram = dram_data;
-                            __emule_cbs = cb_array;
-                            __emule_dfbs = dfb_array;
-                            __emule_tc_array = tc_array;
-                            __processor_id = ki.processor_id;
-                            __core = core;
-                            __emule_core_map = core_map_ptr;
-                            __emule_neo_id = ki.is_tensix ? ki.processor_id : 0;
-                            __emule_trisc_id = 0;
-                            __emule_num_threads = ki.num_threads;
-                            __emule_my_thread_id = ki.thread_idx;
-
-                            // Per-thread execution context — single source of truth
-                            // for thread-local state (emule_thread_ctx.h), specialized
-                            // by RISC type; freed at lambda scope exit.
+                            // Per-thread execution context — the single source of truth
+                            // for this RISC's thread-local state (emule_thread_ctx.h),
+                            // specialized by RISC type; freed at lambda scope exit. Set
+                            // FIRST so the identity writes below land in the ctx.
                             std::unique_ptr<ThreadCommonCtx> emule_ctx =
                                 ki.is_tensix
                                     ? std::unique_ptr<ThreadCommonCtx>(new ComputeThreadCtx())
                                     : std::unique_ptr<ThreadCommonCtx>(new DatamovementThreadCtx());
                             __emule_self = emule_ctx.get();
-                            // my_x/my_y stay runner-set globals (silicon-named; read
-                            // by unmodified upstream). The logical coords move into
-                            // the per-core CoreState the thread ctx points at.
+
+                            __emule_self->rt_args = (ki.rta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
+                                      ki.kernel_config_base + ki.rta_offset_in_kc))
+                                : nullptr;
+                            __emule_self->common_rt_args = (ki.crta_offset_in_kc != kRtaCrtaNoArgsSentinel)
+                                ? reinterpret_cast<uint32_t*>(core->l1_ptr(
+                                      ki.kernel_config_base + ki.crta_offset_in_kc))
+                                : nullptr;
+                            __emule_self->bridge_l1 = l1_data;
+                            __emule_self->bridge_dram = dram_data;
+                            __emule_self->cbs = cb_array;
+                            __emule_self->dfbs = dfb_array;
+                            __emule_self->tc_array = tc_array;
+                            __emule_self->processor_id = ki.processor_id;
+                            __emule_self->core_obj = core;
+                            __emule_self->device = nullptr;
+                            __emule_self->core_map = core_map_ptr;
+                            __emule_self->neo_id = ki.is_tensix ? ki.processor_id : 0;
+                            __emule_self->trisc_id = 0;
+                            __emule_self->num_threads = ki.num_threads;
+                            __emule_self->my_thread_id = ki.thread_idx;
+
+                            // my_x/my_y stay runner-set globals (silicon-named; read by
+                            // unmodified upstream). Logical coords go in per-core CoreState.
                             my_x[0] = px; my_x[1] = px;
                             my_y[0] = py; my_y[1] = py;
                             auto& cstate = core->core_state();
                             cstate.logical_x = lx; cstate.logical_y = ly;
-                            emule_ctx->core = &cstate;
+                            __emule_self->core = &cstate;
 
                             // Startup barrier (declared in launch_cores): all
                             // kernel threads start together.
@@ -2265,7 +2219,7 @@ static void launch_cores(
                             try {
                                 for (size_t t = 0; t < ki.variants.size(); ++t) {
                                     if (ki.run_all_variants) {
-                                        __emule_trisc_id = static_cast<uint8_t>(t);
+                                        __emule_self->trisc_id = static_cast<uint8_t>(t);
                                     }
                                     ki.variants[t]();
                                 }
@@ -2273,16 +2227,7 @@ static void launch_cores(
                                 kep = std::current_exception();
                             }
 
-                            __core = nullptr;
-                            __rt_args = nullptr;
-                            __common_rt_args = nullptr;
-                            __emule_bridge_l1 = nullptr;
-                            __emule_bridge_dram = nullptr;
-                            __emule_cbs = nullptr;
-                            __emule_dfbs = nullptr;
-                            __emule_tc_array = nullptr;
-                            __emule_core_map = nullptr;
-                            __emule_self = nullptr;
+                            __emule_self = nullptr;  // ctx auto-freed at lambda scope exit
                         });
                     }
 
