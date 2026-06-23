@@ -204,25 +204,34 @@ def assert_grouped_match(out, ref, num_groups, sq, t):
     assert pcc >= 0.999, f"PCC {pcc} < 0.999"
 
 
-def block_max_pool_ref(scores, block_size):
+def block_max_pool_ref(scores, block_size, chunk_start):
     """Reference block-max-pool: max over each block_size-key block of the (already causal-masked) per-group
     scores [b, g, sq, t] -> [b, g, sq, t//block_size] (MiniMax M3 MSA block scores). A fully-future block is
     all -inf -> -inf; a causal-straddling block keeps only its visible tokens (the mask is applied before
-    the max, as in the M3 reference)."""
+    the max, as in the M3 reference). Then forced-local (M3 sparse_local_block=1): each query's own block is
+    always selected, so its block score is set to +inf -- query s (global key position chunk_start + s) owns
+    block (chunk_start + s) // block_size."""
     b, g, sq, t = scores.shape
     nb = t // block_size
-    return scores.reshape(b, g, sq, nb, block_size).amax(dim=-1)
+    pooled = scores.reshape(b, g, sq, nb, block_size).amax(dim=-1)
+    local = (chunk_start + torch.arange(sq)) // block_size  # each query's own block column [sq]
+    pooled[:, :, torch.arange(sq), local] = float("inf")
+    return pooled
 
 
 def assert_pooled_match(out, ref, num_groups, sq, nblocks, pcc_floor=0.999):
-    """Pooled [1,G,Sq,nblocks] check: exact -inf map (a fully-masked block stays -inf) + PCC on the visible
-    block maxes. The -inf map (checked first) pins the block->column mapping and causal masking exactly;
-    block-max amplifies the bf16 per-token error (the max is biased toward the most positively-rounded
-    token), so the visible-value PCC floor is relaxed for the large-T raw-dot deployment shape."""
+    """Pooled [1,G,Sq,nblocks] check: exact -inf map (a fully-masked block stays -inf) + exact +inf map
+    (each query's forced-local block) + PCC on the remaining visible block maxes. The -inf/+inf maps
+    (checked first) pin the block->column mapping, causal masking, and forced-local exactly; block-max
+    amplifies the bf16 per-token error (the max is biased toward the most positively-rounded token), so the
+    visible-value PCC floor is relaxed for the large-T raw-dot deployment shape."""
     assert out.shape == (1, num_groups, sq, nblocks), f"{out.shape} != {(1, num_groups, sq, nblocks)}"
     masked = ref == float("-inf")
     assert torch.equal(out <= torch.finfo(torch.bfloat16).min, masked)
-    a, b = out[~masked].flatten().float(), ref[~masked].flatten().float()
+    forced = ref == float("inf")  # forced-local block (sparse_local_block=1)
+    assert torch.equal(out == float("inf"), forced), "forced-local +inf block mismatch"
+    keep = ~masked & ~forced
+    a, b = out[keep].flatten().float(), ref[keep].flatten().float()
     pcc = torch.corrcoef(torch.stack([a, b]))[0, 1].item()
     assert pcc >= pcc_floor, f"PCC {pcc} < {pcc_floor}"
 
@@ -810,7 +819,7 @@ def test_indexer_score_block_pool(device, k_dtype, num_groups):
     )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
     ref = block_max_pool_ref(
-        indexer_score_grouped_ref(q, k, w_scale, chunk_start, num_groups, apply_relu=False), BLOCK_POOL_BS
+        indexer_score_grouped_ref(q, k, w_scale, chunk_start, num_groups, apply_relu=False), BLOCK_POOL_BS, chunk_start
     )
     assert_pooled_match(out, ref, num_groups, sq, t // BLOCK_POOL_BS, pcc_floor=0.995)
 
@@ -839,7 +848,7 @@ def test_indexer_score_block_pool_m3(device, k_dtype, sp_rank):
     )
     w_scale = torch.full((1, heads, sq, 1), scale, dtype=torch.bfloat16)
     ref = block_max_pool_ref(
-        indexer_score_grouped_ref(q, k, w_scale, chunk_start, heads, apply_relu=False), BLOCK_POOL_BS
+        indexer_score_grouped_ref(q, k, w_scale, chunk_start, heads, apply_relu=False), BLOCK_POOL_BS, chunk_start
     )
     # 0.995 floor: block-max amplifies the bf16 per-token matmul error over the full 56320-key raw-dot
     # reduction (no ReLU clamp). The exact pool logic is pinned by the -inf map here and, free of matmul
@@ -860,10 +869,12 @@ def test_indexer_score_block_pool_exact_vs_unpooled(device):
     cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0)
     unpooled = run_msa(q, k, chunk_start, device, num_groups=heads, program_config=cfg)
     pooled = run_msa(q, k, chunk_start, device, num_groups=heads, block_size=BLOCK_POOL_BS, program_config=cfg)
-    ref = block_max_pool_ref(unpooled.float(), BLOCK_POOL_BS)  # torch max over the op's own [1,G,Sq,T] scores
+    # torch max over the op's own [1,G,Sq,T] scores, with the same forced-local (+inf) the pooled path applies.
+    ref = block_max_pool_ref(unpooled.float(), BLOCK_POOL_BS, chunk_start)
     masked = ref == float("-inf")
     assert torch.equal(pooled <= torch.finfo(torch.bfloat16).min, masked)
-    # bf16 max is exact selection of identical values -> the visible block maxes must match bit-for-bit.
+    # bf16 max is exact selection of identical values -> the visible block maxes must match bit-for-bit
+    # (forced-local blocks are +inf on both sides: inf == inf under torch.equal).
     assert torch.equal(pooled[~masked].float(), ref[~masked])
 
 

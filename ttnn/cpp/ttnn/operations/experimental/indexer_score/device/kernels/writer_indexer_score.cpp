@@ -7,7 +7,8 @@
 // Outer loop over num_out_groups output planes (page offset g*Sq) for the per-GQA-group M3 path.
 //   block_size==0: pop untilized bf16 strips and scatter each strip's 32 rows (DeepSeek/GLM, M3-token).
 //   block_size>0 : pop the block-max-pooled tiles, extract per-query block maxes from tile column 0 into a
-//                  single-tile scratch, and scatter each query row's blocks_per_unit-wide slice (M3 blocks).
+//                  single-tile scratch, force each query's own (local) block to +inf, and scatter each
+//                  query row's blocks_per_unit-wide slice (M3 blocks + sparse_local_block=1).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -60,13 +61,28 @@ constexpr uint32_t POOL_FACES_PER_ROW = tt::constants::TILE_WIDTH / POOL_FACE_W;
 constexpr uint32_t POOL_FACE_ROW_STRIDE = POOL_FACES_PER_ROW * (POOL_FACE_H * POOL_FACE_W);  // 512 (uint16)
 constexpr uint32_t POOL_TILE_HW = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;    // 1024 (uint16/tile)
 
+// MiniMax M3 forced-local block (sparse_local_block=1): a query's own block is always selected, so its
+// block score is forced to +inf (downstream top-k then always keeps it). +inf > every real/-inf score, so
+// stamping it after the pool is correct regardless of the block's visible max. block_size in keys and the
+// global key position of q-row 0 (chunk_start) are needed to map a query to its own block column.
+constexpr uint16_t POOL_POS_INF_BF16 = 0x7F80;                                                  // +inf in bf16
+constexpr uint32_t POOL_BLOCK_KEYS = block_pool ? block_tiles * tt::constants::TILE_WIDTH : 1;  // 1: avoid /0 codegen
+constexpr uint32_t POOL_CHUNK_START_KEYS = chunk_start_tiles * tt::constants::TILE_WIDTH;
+
 /** Scatter one q-tile-row's pooled blocks into the row-major output. Extract column 0 of each of the
  *  blocks_per_unit tiles (one bf16 value per query row) into a query-major [TILE_HEIGHT][valid_blocks]
- *  scratch, then write each query row's valid_blocks-wide run once (16 B-aligned: validate guarantees
- *  blocks_per_unit % 8 == 0 and no partial unit, so valid_blocks == blocks_per_unit). */
+ *  scratch, force each query's own (local) block to +inf, then write each query row's valid_blocks-wide
+ *  run once (16 B-aligned: validate guarantees blocks_per_unit % 8 == 0 and no partial unit, so
+ *  valid_blocks == blocks_per_unit). `q_seq_row0` is the sequence-local index of this tile-row's query 0
+ *  (within Sq, plane offset excluded), used to find each query's own block. */
 template <typename OutAcc>
 inline void write_pooled_strip(
-    Noc noc, const OutAcc& out_acc, uint32_t page_row_start, uint32_t col_off_blocks, uint32_t valid_blocks) {
+    Noc noc,
+    const OutAcc& out_acc,
+    uint32_t page_row_start,
+    uint32_t q_seq_row0,
+    uint32_t col_off_blocks,
+    uint32_t valid_blocks) {
     CircularBuffer cb(cb_out_strip);
     cb.wait_front(blocks_per_unit);
     volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_read_ptr());
@@ -84,6 +100,18 @@ inline void write_pooled_strip(
                 scratch[qrow * valid_blocks + b] = tile[face_base + rr * POOL_FACE_W];  // tile col 0, logical row qrow
                 ++qrow;
             }
+        }
+    }
+
+    // Forced-local block: query (q_seq_row0 + rr) sits at global key position POOL_CHUNK_START_KEYS +
+    // q_seq_row0 + rr, so its own block is that / POOL_BLOCK_KEYS. The 32 queries of a tile-row can straddle
+    // a block boundary, so this is per-query, not per-tile-row. Only this unit owns block columns
+    // [col_off_blocks, +valid_blocks); the query's local block lands in exactly one unit, so stamp only when
+    // it falls in this slice (other units skip it).
+    for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+        const uint32_t local_block = (POOL_CHUNK_START_KEYS + q_seq_row0 + rr) / POOL_BLOCK_KEYS;
+        if (local_block >= col_off_blocks && local_block < col_off_blocks + valid_blocks) {
+            scratch[rr * valid_blocks + (local_block - col_off_blocks)] = POOL_POS_INF_BF16;
         }
     }
 
@@ -129,9 +157,10 @@ void kernel_main() {
         for (uint32_t g = 0; g < num_out_groups; ++g) {
             const uint32_t plane_row0 = g * sq_rows;
             for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                const uint32_t page_row_start = plane_row0 + (span.q_tile_start() + r) * tt::constants::TILE_HEIGHT;
+                const uint32_t q_seq_row0 = (span.q_tile_start() + r) * tt::constants::TILE_HEIGHT;  // within Sq
+                const uint32_t page_row_start = plane_row0 + q_seq_row0;
                 if constexpr (block_pool) {
-                    write_pooled_strip(noc, out_acc, page_row_start, col_off_blocks, valid_blocks);
+                    write_pooled_strip(noc, out_acc, page_row_start, q_seq_row0, col_off_blocks, valid_blocks);
                 } else {
                     write_strip(noc, out_acc, page_row_start, k_tile0, valid_w);
                 }
