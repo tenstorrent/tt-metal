@@ -1,0 +1,28 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "tensor_shape_coverage.h"
+
+// TensorShape coverage hooks for pack LLKs. Pack probes are not currently
+// defined, so the validation helper returns false until pack TensorShape
+// coverage tables are added.
+//
+// Match tensor_shape_coverage.h's gate so production kernel builds do not see this table.
+#if defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)
+
+namespace ckernel::coverage
+{
+
+// No pack TensorShape coverage probes are currently defined.
+
+constexpr bool is_pack_tensor_shape_covered(const TensorShapeFunctionCoverage, const TensorShape&)
+{
+    return false;
+}
+
+} // namespace ckernel::coverage
+
+#endif // defined(ENABLE_LLK_ASSERT) || defined(DEBUG_PRINT_ENABLED)

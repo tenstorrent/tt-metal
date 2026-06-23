@@ -77,14 +77,35 @@ static_assert(sizeof(TensorShape) == 4, "TensorShape must be 4 bytes");
 
 constexpr TensorShape DEFAULT_TENSOR_SHAPE = {MAX_FACE_R_DIM, MAX_FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
 
+/// Build a TensorShape from explicit face dimensions and face-grid counts.
+constexpr TensorShape make_tensor_shape(
+    const std::uint8_t face_r_dim, const std::uint8_t face_c_dim, const std::uint8_t num_faces_r_dim, const std::uint8_t num_faces_c_dim)
+{
+    return TensorShape {face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim};
+}
+
 /**
- * @brief Validates tensor shape for operations that depend on face positioning within a tile.
- * Will start relaxing this constraint once we test larger tensor shapes.
+ * @brief Construct a TensorShape from the legacy (face_r_dim, num_faces) pair.
  *
- * @param tensor_shape: Tensor shape to validate
- * @return true if tensor shape is valid, false otherwise
+ * Maps the historical scalar parameters used across LLK call sites:
+ * - num_faces == 1: 1x1 face grid (face_r_dim × 16)
+ * - num_faces == 2: 1x2 face grid (face_r_dim × 32)
+ * - num_faces == 4: 2x2 face grid (face_r_dim*2 × 32; 32x32 when face_r_dim == 16)
+ *
+ * @note Caller must pass num_faces in {1, 2, 4}.
+ */
+inline TensorShape make_tensor_shape_from_legacy(const std::uint8_t face_r_dim, const std::uint8_t num_faces)
+{
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be one of the valid values: 1, 2, or 4");
+    return TensorShape {face_r_dim, MAX_FACE_C_DIM, static_cast<std::uint8_t>(num_faces == 4 ? 2 : 1), static_cast<std::uint8_t>(num_faces == 1 ? 1 : 2)};
+}
+
+/**
+ * @brief Validates shapes for ops that depend on face positioning within a tile.
+ *
+ * Keep this conservative until larger TensorShape variants have coverage.
  **/
-__attribute__((noinline)) bool validate_tensor_shape_tile_dependent_ops_(const TensorShape &tensor_shape)
+__attribute__((noinline)) inline bool validate_tensor_shape_tile_dependent_ops_(const TensorShape& tensor_shape)
 {
     const std::uint8_t num_faces  = tensor_shape.total_num_faces();
     const std::uint8_t face_r_dim = tensor_shape.face_r_dim;
