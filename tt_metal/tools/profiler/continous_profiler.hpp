@@ -51,6 +51,17 @@ constexpr uint32_t get_const_id(uint32_t zone_id, uint32_t type) {
     return (zone_id & 0xFFFF) | ((type << 16) & 0x7FFFF);
 }
 
+// Same compile-time name hash kernel_profiler uses (FNV-1a, folded to 16 bits),
+// so our zone ids match the main profiler's id<->name table.
+constexpr uint32_t Hash32_CT(const char* str, size_t n, uint32_t basis = UINT32_C(2166136261)) {
+    return n == 0 ? basis : Hash32_CT(str + 1, n - 1, (basis ^ str[0]) * UINT32_C(16777619));
+}
+template <size_t N>
+constexpr uint32_t Hash16_CT(const char (&s)[N]) {
+    auto res = Hash32_CT(s, N - 1);
+    return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
+}
+
 // Blackhole wall-clock debug registers (RISCV_DEBUG_REG_WALL_CLOCK_L / _H).
 // Reading the low half latches the high half (matches kernel_profiler).
 static constexpr uint32_t kWallLo = 0xFFB121F0u;
@@ -120,8 +131,8 @@ struct ZoneScoped {
 
 #define CP_CONCAT2(a, b) a##b
 #define CP_CONCAT(a, b) CP_CONCAT2(a, b)
-// Mirror of DeviceZoneScopedN(name): a unique compile-time zone id per call site
-// from __COUNTER__. The `name` string is accepted for API parity; building the
-// host-side id<->name table is out of scope for this prototype.
+// Mirror of DeviceZoneScopedN(name): the zone id is the profiler's 16-bit name
+// hash, so the host can map ids back to names (and the main profiler's name
+// table applies). Same shape as kernel_profiler's DeviceZoneScopedN.
 #define ContinuousZoneScopedN(name) \
-    continuous_profiler::ZoneScoped<__COUNTER__> CP_CONCAT(cp_zone_, __LINE__) {}
+    continuous_profiler::ZoneScoped<continuous_profiler::Hash16_CT(name)> CP_CONCAT(cp_zone_, __LINE__) {}

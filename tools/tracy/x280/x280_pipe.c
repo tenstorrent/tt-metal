@@ -12,9 +12,17 @@
 // One 64B flit == one D2H page. WRITE-ONLY through the PCIe tile (no PCIe-tile
 // reads -> no hart hang); PCIe coord = pcie_xy_enc verbatim, winsel 0, no bit-60.
 //
+// PERSISTENT (daemon) mode: pass loop=1 to keep running across many host runs.
+// The relay sits on the (allocator-deterministic) config_addr and detects each
+// new host run by the kernel resetting the ring write index (w drops below the
+// last drained index); it then re-reads the fresh socket config, reprograms the
+// host window, and relays that run. Leave it running once; just invoke the host
+// `zonepipe` repeatedly.
+//
 // usage (root): ./x280_pipe <tx> <ty> <config_addr> \
-//                 [ring_base=0x80000] [cells=32] [w=0x80800] [r=0x80840] [max_secs=30]
-// config_addr / Tensix coord are printed by the host `zonepipe` mode.
+//                 [ring_base=0x80000] [cells=32] [w=0x80800] [r=0x80840] [max_secs=30] [loop=0]
+//   loop=0: one-shot (relay one run, then exit). loop=1: persistent daemon.
+// config_addr / Tensix coord are printed by the host `zonepipe` mode (0x17ffc0 on bh-8).
 
 #define _GNU_SOURCE
 #include <fcntl.h>
@@ -61,7 +69,7 @@ static double now_s(void) {
 
 int main(int argc, char** argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: %s <tx> <ty> <config_addr> [ring_base] [cells] [w] [r] [max_secs]\n", argv[0]);
+        fprintf(stderr, "usage: %s <tx> <ty> <config_addr> [ring_base] [cells] [w] [r] [max_secs] [loop]\n", argv[0]);
         return 1;
     }
     unsigned tx = atoi(argv[1]), ty = atoi(argv[2]);
@@ -71,6 +79,7 @@ int main(int argc, char** argv) {
     uint64_t w_addr = argc > 6 ? strtoull(argv[6], 0, 0) : 0x80800UL;
     uint64_t r_addr = argc > 7 ? strtoull(argv[7], 0, 0) : 0x80840UL;
     double max_secs = argc > 8 ? atof(argv[8]) : 30.0;
+    int loop = argc > 9 ? atoi(argv[9]) : 0;
     const uint32_t mask = cells - 1;
 
     int fd = open("/dev/mem", O_RDWR | O_SYNC);
@@ -80,8 +89,7 @@ int main(int argc, char** argv) {
     }
     g_cfg = mmap(0, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, TLB_2M_CONFIG_BASE);
 
-    // window 0: Tensix (tx,ty) L1 from offset 0 (covers ring + socket config +
-    // bytes_acked). RW: we read ring/config and WRITE r back to free the producer.
+    // window 0: Tensix (tx,ty) L1 from offset 0 (covers ring + socket config + bytes_acked).
     program_window(0, 0, (tx & 0x3f) | ((ty & 0x3f) << 6));
     volatile uint8_t* w0 = mmap(0, WINDOW_2M_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, WINDOW_2M_BASE);
     if (w0 == MAP_FAILED) {
@@ -94,71 +102,111 @@ int main(int argc, char** argv) {
     volatile uint32_t* cfg = (volatile uint32_t*)(w0 + (cfg_addr & WINDOW_2M_MASK));
     volatile uint32_t* ack_p = (volatile uint32_t*)(w0 + ((cfg_addr + ACK_OFF) & WINDOW_2M_MASK));
 
-    uint32_t c[16];
-    for (int i = 0; i < 16; i++) {
-        c[i] = cfg[i];
-    }
-    uint64_t host_data = ((uint64_t)c[W_DATA_HI] << 32) | c[W_FIFO_LO];
-    uint64_t host_bsent = ((uint64_t)c[W_BSENT_HI] << 32) | c[W_BSENT_LO];
-    uint32_t pcie_enc = c[W_PCIE_ENC], fifo = c[W_FIFO_SZ], is_d2h = c[W_IS_D2H];
-    printf(
-        "pipe: Tensix (%u,%u) ring=0x%lx cfg=0x%lx | host_data=0x%lx host_bsent=0x%lx pcie=0x%x fifo=%u d2h=%u\n",
-        tx,
-        ty,
-        ring_base,
-        cfg_addr,
-        host_data,
-        host_bsent,
-        pcie_enc,
-        fifo,
-        is_d2h);
-    if (!is_d2h || host_data == 0) {
-        fprintf(stderr, "no live D2H socket (run host `zonepipe`)\n");
-        return 2;
-    }
-    if (PAGE > fifo || (fifo % PAGE) || ((host_data + fifo) >> WINDOW_2M_SHIFT) != (host_data >> WINDOW_2M_SHIFT) ||
-        (host_bsent >> WINDOW_2M_SHIFT) != (host_data >> WINDOW_2M_SHIFT)) {
-        fprintf(stderr, "fifo/page/window geometry bad (fifo=%u page=%u)\n", fifo, PAGE);
-        return 2;
-    }
-
-    // window 1: host FIFO + bytes_sent through the PCIe tile (write path).
-    program_window(1, host_data, pcie_enc);
+    // window 1: host FIFO + bytes_sent through the PCIe tile (reprogrammed per run).
     volatile uint8_t* w1 =
         mmap(0, WINDOW_2M_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, WINDOW_2M_BASE + WINDOW_2M_SIZE);
     if (w1 == MAP_FAILED) {
         perror("mmap w1");
         return 1;
     }
-    volatile uint8_t* fifo_base = w1 + (host_data & WINDOW_2M_MASK);
-    volatile uint32_t* bsp = (volatile uint32_t*)(w1 + (host_bsent & WINDOW_2M_MASK));
 
-    uint32_t ring_r = *rptr;  // oldest unread (producer blocks-when-full => [r,w) valid)
-    uint32_t write_ptr = 0;
-    uint64_t bytes_sent = 0, acked = 0, flits = 0, spins = 0;
-    double t0 = now_s(), t_end = t0 + max_secs;
+    printf(
+        "x280_pipe %s: Tensix (%u,%u) ring=0x%lx cfg=0x%lx %s\n",
+        loop ? "DAEMON" : "one-shot",
+        tx,
+        ty,
+        ring_base,
+        cfg_addr,
+        loop ? "(waiting for host runs; Ctrl-C to stop)" : "");
+    fflush(stdout);
+
+    uint32_t ring_r = *wptr;  // skip whatever's stale at startup (don't re-drain old data)
+    int armed = 0;
+    volatile uint8_t* fifo_base = 0;
+    volatile uint32_t* bsp = 0;
+    uint32_t fifo = 0, write_ptr = 0;
+    uint64_t bytes_sent = 0, acked = 0, run_flits = 0, total_runs = 0;
+    double idle_start = now_s();
 
     for (;;) {
-        const uint32_t w = *wptr;  // pull: read producer's write index
-        if ((int32_t)(w - ring_r) <= 0) {
-            if (now_s() > t_end) {
-                break;  // ring drained + producer done (or timeout)
+        const uint32_t w = *wptr;
+
+        // New-run detection: kernel init() reset w to 0 (it dropped below what we drained).
+        if (w < ring_r) {
+            armed = 0;
+        }
+
+        if (!armed) {
+            // Try to arm on a live, fresh socket config.
+            uint32_t c[16];
+            for (int i = 0; i < 16; i++) {
+                c[i] = cfg[i];
             }
+            uint64_t host_data = ((uint64_t)c[W_DATA_HI] << 32) | c[W_FIFO_LO];
+            uint64_t host_bsent = ((uint64_t)c[W_BSENT_HI] << 32) | c[W_BSENT_LO];
+            uint32_t pcie_enc = c[W_PCIE_ENC];
+            fifo = c[W_FIFO_SZ];
+            uint32_t is_d2h = c[W_IS_D2H];
+            int geom_ok = is_d2h && host_data && !(PAGE > fifo || (fifo % PAGE)) &&
+                          ((host_data + fifo) >> WINDOW_2M_SHIFT) == (host_data >> WINDOW_2M_SHIFT) &&
+                          (host_bsent >> WINDOW_2M_SHIFT) == (host_data >> WINDOW_2M_SHIFT);
+            // Only arm on a FRESH run: the producer blocks at a full ring until we
+            // drain, so w sits <= ring depth at run start. This rejects stale w/config
+            // left in L1 by a previous run (which would otherwise replay garbage).
+            if (geom_ok && w <= cells) {
+                program_window(1, host_data, pcie_enc);
+                fifo_base = w1 + (host_data & WINDOW_2M_MASK);
+                bsp = (volatile uint32_t*)(w1 + (host_bsent & WINDOW_2M_MASK));
+                ring_r = 0;  // fresh run starts at index 0 (kernel reset r/w)
+                write_ptr = 0;
+                bytes_sent = 0;
+                acked = 0;
+                run_flits = 0;
+                armed = 1;
+                idle_start = now_s();
+                printf("[run %lu] armed: host_data=0x%lx pcie=0x%x fifo=%u\n", total_runs, host_data, pcie_enc, fifo);
+                fflush(stdout);
+            } else {
+                if (!loop && now_s() - idle_start > max_secs) {
+                    break;  // one-shot: no socket within max_secs
+                }
+                usleep(2000);
+                continue;
+            }
+        }
+
+        if (w == ring_r) {
+            // Caught up. End the run after an idle gap; in daemon mode go wait for the next.
+            if (now_s() - idle_start > (loop ? 1.0 : max_secs)) {
+                if (run_flits > 0) {
+                    printf(
+                        "[run %lu] relayed %lu flits (%lu B)%s\n",
+                        total_runs,
+                        run_flits,
+                        bytes_sent,
+                        loop ? "; waiting for next run" : "");
+                    fflush(stdout);
+                    total_runs++;
+                }
+                armed = 0;
+                if (!loop) {
+                    break;
+                }
+            }
+            usleep(200);
             continue;
         }
+        idle_start = now_s();
+
         // push flow control: keep one page of FIFO headroom vs host bytes_acked
         while (bytes_sent - acked > (uint64_t)(fifo - PAGE)) {
-            acked = ack_p[0];  // safe Tensix L1 read of host-written bytes_acked
-            if (now_s() > t_end) {
-                goto done;
-            }
-            spins++;
+            acked = ack_p[0];
+            usleep(0);
         }
-        // pull one flit (8x u64) from the ring into registers
+        // pull one flit (8x u64) from the ring, push it as one page to the host FIFO
         volatile uint64_t* src = (volatile uint64_t*)(ring + (ring_r & mask) * 16u);
         uint64_t f0 = src[0], f1 = src[1], f2 = src[2], f3 = src[3];
         uint64_t f4 = src[4], f5 = src[5], f6 = src[6], f7 = src[7];
-        // push the flit as one page to host FIFO[write_ptr] (posted PCIe writes)
         volatile uint64_t* dp = (volatile uint64_t*)(fifo_base + write_ptr);
         dp[0] = f0;
         dp[1] = f1;
@@ -174,23 +222,12 @@ int main(int argc, char** argv) {
             write_ptr = 0;
         }
         bytes_sent += PAGE;
-        *bsp = (uint32_t)bytes_sent;  // notify host (cumulative bytes_sent)
+        *bsp = (uint32_t)bytes_sent;  // notify host
         __sync_synchronize();
         ring_r++;
         *rptr = ring_r;  // free the Tensix producer
-        flits++;
+        run_flits++;
     }
-done:;
-    double dt = now_s() - t0;
-    printf(
-        "PIPE relayed %lu flits (%lu B) in %.3fs -> %.1f MB/s (spins=%lu, last acked=%lu, w=%u r=%u)\n",
-        flits,
-        bytes_sent,
-        dt,
-        bytes_sent / 1e6 / dt,
-        spins,
-        acked,
-        *wptr,
-        ring_r);
+    printf("x280_pipe exiting (%lu run(s) relayed)\n", total_runs);
     return 0;
 }

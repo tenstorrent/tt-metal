@@ -30,6 +30,8 @@
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <fstream>
+#include <map>
 #include <string>
 #include <thread>
 #include <vector>
@@ -38,6 +40,12 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
+
+#if defined(TRACY_ENABLE)
+#include <tracy/Tracy.hpp>
+#include <tracy/TracyTTDevice.hpp>
+#include <common/TracyTTDeviceData.hpp>
+#endif
 
 using namespace tt::tt_metal;
 #ifndef OVERRIDE_KERNEL_PREFIX
@@ -60,6 +68,84 @@ static uint32_t read_u32(IDevice* dev, const CoreCoord& core, uint32_t addr) {
 static void write_u32(IDevice* dev, const CoreCoord& core, uint32_t addr, uint32_t val) {
     std::vector<uint32_t> v{val};
     detail::WriteToDeviceL1(dev, core, addr, v, tt::CoreType::WORKER);
+}
+
+// ---- decoded zone marker (device ticks + name-hash + START/END) ----
+struct ZoneMarker {
+    uint64_t ts;       // device wall-clock ticks (AICLK)
+    uint32_t zone_id;  // 16-bit name hash
+    uint32_t type;     // 0 = START, 1 = END
+};
+
+// Same FNV-1a/16 the kernel uses, so we can map zone ids back to demo names.
+static uint32_t cp_hash16(const std::string& s) {
+    uint32_t b = 2166136261u;
+    for (unsigned char c : s) {
+        b = (b ^ c) * 16777619u;
+    }
+    return ((b & 0xFFFF) ^ ((b >> 16) & 0xFFFF)) & 0xFFFF;
+}
+
+// ---- Native Tracy emission (same TracyTT* API as RealtimeProfilerTracyHandler) ----
+// Streams the decoded device zones to a connected Tracy capture (tracy-capture or
+// the GUI): create a TT device context, populate it with the device frequency,
+// then push ZONE_START/ZONE_END TTDeviceMarkers. Markers only flow while a Tracy
+// client is connected, so we wait for the capture to attach first.
+static void emit_tracy(const std::vector<ZoneMarker>& mks, const CoreCoord& noc0, double freq_ghz) {
+#if defined(TRACY_ENABLE)
+    if (mks.empty()) {
+        return;
+    }
+    const std::map<uint32_t, std::string> names = {{cp_hash16("outer"), "outer"}, {cp_hash16("inner"), "inner"}};
+
+    fmt::print("waiting up to 30s for a Tracy capture to connect (run tracy-capture -o out.tracy)...\n");
+    std::fflush(stdout);
+    for (int i = 0; i < 300 && !tracy::GetProfiler().IsConnected(); i++) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    if (!tracy::GetProfiler().IsConnected()) {
+        fmt::print("no Tracy capture connected; skipping emit (re-run with tracy-capture attached)\n");
+        return;
+    }
+
+    TracyTTCtx ctx = TracyTTContext();
+    // tgpu = first device tick (anchor); tcpu = 0 -> Tracy uses ctx-creation host time.
+    TracyTTContextPopulate(ctx, 0, static_cast<double>(mks.front().ts), freq_ghz);
+    const std::string ctxname = fmt::format("X280 pull (Tensix {},{})", noc0.x, noc0.y);
+    TracyTTContextName(ctx, ctxname.c_str(), ctxname.size());
+
+    uint64_t pushed = 0;
+    for (const auto& m : mks) {
+        tracy::TTDeviceMarker marker;
+        marker.chip_id = 0;
+        marker.core_x = noc0.x;
+        marker.core_y = noc0.y;
+        marker.risc = tracy::RiscType::BRISC;
+        marker.timestamp = m.ts;
+        marker.runtime_host_id = 0;
+        auto it = names.find(m.zone_id);
+        marker.marker_name = (it != names.end()) ? it->second : fmt::format("zone_0x{:x}", m.zone_id);
+        marker.file = "continous_profiler";
+        marker.line = 0;
+        if (m.type == 0) {
+            marker.marker_type = tracy::TTDeviceMarkerType::ZONE_START;
+            TracyTTPushStartMarker(ctx, marker);
+        } else {
+            marker.marker_type = tracy::TTDeviceMarkerType::ZONE_END;
+            TracyTTPushEndMarker(ctx, marker);
+        }
+        pushed++;
+    }
+    fmt::print("emitted {} Tracy device markers; flushing to capture...\n", pushed);
+    std::fflush(stdout);
+    std::this_thread::sleep_for(std::chrono::seconds(2));  // let Tracy flush the serial queue
+    TracyTTDestroy(ctx);
+#else
+    (void)mks;
+    (void)noc0;
+    (void)freq_ghz;
+    fmt::print("built without TRACY_ENABLE; cannot emit to Tracy\n");
+#endif
 }
 
 // ---- STEP 1 fixed-slot verify ----
@@ -157,13 +243,15 @@ static void verify_ring(IDevice* dev, const CoreCoord& core, uint32_t cells_to_d
 // ---- STEP 4 host-side marker decoder (continuous profiler) ----
 // Drains the SPSC ring and decodes 8B markers (8 per flit), validating the
 // kernel_profiler-format fields the X280 consumer would otherwise process.
-static void verify_zones(IDevice* dev, const CoreCoord& core, uint32_t markers_to_drain) {
+static void verify_zones(IDevice* dev, const CoreCoord& core, const CoreCoord& noc0, uint32_t markers_to_drain) {
     fmt::print("\n==================== VERIFY (continuous profiler zones) ====================\n");
     fmt::print("host draining + decoding {} markers (8B each, 8 per flit) in order...\n", markers_to_drain);
     uint32_t r = 0;  // next flit index to consume
     uint64_t markers = 0, starts = 0, ends = 0, invalid = 0, ts_backwards = 0;
     uint64_t last_ts = 0;
     bool have_last = false;
+    std::vector<ZoneMarker> trace;
+    trace.reserve(markers_to_drain);
     const auto t0 = std::chrono::steady_clock::now();
     while (markers < markers_to_drain) {
         const uint32_t w = read_u32(dev, core, kWAddr);
@@ -180,6 +268,7 @@ static void verify_zones(IDevice* dev, const CoreCoord& core, uint32_t markers_t
                     invalid++;
                 }
                 const uint32_t timer_id = (w0 >> 12) & 0x7FFFF;
+                const uint32_t zone_id = timer_id & 0xFFFF;
                 const uint32_t type = (timer_id >> 16) & 0x7;
                 const uint64_t ts = (static_cast<uint64_t>(w0 & 0xFFF) << 32) | w1;
                 if (type == 0) {
@@ -193,6 +282,7 @@ static void verify_zones(IDevice* dev, const CoreCoord& core, uint32_t markers_t
                 last_ts = ts;
                 have_last = true;
                 markers++;
+                trace.push_back({ts, zone_id, type});
             }
         }
         write_u32(dev, core, kRAddr, r);
@@ -208,6 +298,7 @@ static void verify_zones(IDevice* dev, const CoreCoord& core, uint32_t markers_t
         "{}\n",
         ok ? "PASS: well-formed markers, monotonic timestamps, START/END balanced (lossless stream)"
            : "FAIL: malformed markers / non-monotonic timestamps");
+    emit_tracy(trace, noc0, 1.349987);
 }
 
 int main(int argc, char** argv) {
@@ -293,6 +384,8 @@ int main(int argc, char** argv) {
 
         // Drain the host FIFO page-by-page and decode markers (8 per 64B page).
         std::vector<uint32_t> page(page_size / sizeof(uint32_t));
+        std::vector<ZoneMarker> trace;
+        trace.reserve(n_flits * 8);
         uint64_t markers = 0, starts = 0, ends = 0, invalid = 0, ts_backwards = 0, last_ts = 0;
         bool have_last = false;
         const auto t0 = std::chrono::steady_clock::now();
@@ -303,7 +396,9 @@ int main(int argc, char** argv) {
                 if ((w0 & 0x80000000u) == 0) {
                     invalid++;
                 }
-                const uint32_t type = ((w0 >> 12) >> 16) & 0x7;
+                const uint32_t timer_id = (w0 >> 12) & 0x7FFFF;
+                const uint32_t zone_id = timer_id & 0xFFFF;
+                const uint32_t type = (timer_id >> 16) & 0x7;
                 const uint64_t ts = (static_cast<uint64_t>(w0 & 0xFFF) << 32) | w1;
                 if (type == 0) {
                     starts++;
@@ -316,6 +411,7 @@ int main(int argc, char** argv) {
                 last_ts = ts;
                 have_last = true;
                 markers++;
+                trace.push_back({ts, zone_id, type});
             }
         }
         const auto dt = std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
@@ -330,6 +426,7 @@ int main(int argc, char** argv) {
         fmt::print("  invalid: {} | timestamp-went-backwards: {}\n", invalid, ts_backwards);
         const bool ok = invalid == 0 && ts_backwards == 0 && starts == ends && markers == n_flits * 8;
         fmt::print("{}\n", ok ? "PASS: full pipeline delivered all markers losslessly to host memory" : "FAIL");
+        emit_tracy(trace, noc0, 1.349987);
         return 0;
     }
 
@@ -382,7 +479,7 @@ int main(int argc, char** argv) {
         std::fflush(stdout);
         if (mode == "zoneverify") {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
-            verify_zones(dev, producer_logical, markers_to_drain);
+            verify_zones(dev, producer_logical, noc0, markers_to_drain);
             return 0;
         }
         fmt::print("host sleeping (Ctrl-C to stop); attach the X280 consumer now\n");
