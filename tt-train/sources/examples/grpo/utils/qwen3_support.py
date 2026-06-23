@@ -247,10 +247,10 @@ def load_weights_from_hf(
         for name in ttml_params:
             placements = _placements_of(ttml_params[name])
             # Only treat as sharded when there is a real Shard placement AND the
-            # placement list covers every mesh axis. A replicated param (e.g. the
-            # root params when GRPO_QWEN_FSDP_WRAP_ROOT=0, or any param fully_shard
-            # skipped) reports a single [Replicate], which does not match the mesh
-            # dims and must use the replicate mapper (global == local shape).
+            # placement list covers every mesh axis. A replicated param (any param
+            # fully_shard leaves un-sharded) reports a single [Replicate], which does
+            # not match the mesh dims and must use the replicate mapper (global ==
+            # local shape).
             has_shard = bool(placements) and any(isinstance(p, ttnn.PlacementShard) for p in placements)
             if has_shard and len(placements) == n_mesh_dims:
                 global_shape = ttml_shapes[name]

@@ -163,22 +163,6 @@ class Qwen3GRPOCompleter(GRPOCompleter):
         # without FSDP there is nothing to shard and the eager path is simpler.
         lazy_fsdp = self._fsdp_enabled and bool(device_config.lazy_parameter_init)
 
-        if self._fsdp_enabled:
-            # reshard_after_forward keeps peak memory low by resharding weights
-            # between forward and backward and re-gathering them in the backward
-            # pre-hook. This is required to fit large models (e.g. 32B). It is
-            # validated for Qwen3 GRPO (the RMSNorm backward was fixed to
-            # re-read the weight via get_value() instead of snapshotting the
-            # gathered forward value; see models/qwen3/autograd_ops.py). Set
-            # GRPO_QWEN_FSDP_RESHARD=0 to keep weights gathered between
-            # forward/backward (more memory, fewer CCL ops).
-            reshard = os.environ.get("GRPO_QWEN_FSDP_RESHARD", "1") == "1"
-            # Whether to also wrap the root model (shards tok_emb / lm_head /
-            # final norm). Set GRPO_QWEN_FSDP_WRAP_ROOT=0 to shard only the
-            # transformer blocks (the bulk of params) and leave the embeddings /
-            # lm_head / final norm replicated.
-            wrap_root = os.environ.get("GRPO_QWEN_FSDP_WRAP_ROOT", "1") == "1"
-
         if lazy_fsdp:
             # Lazy-init FSDP path (required for large models like 32B): build the
             # module tree without allocating any weights, let fully_shard rewrite
@@ -189,18 +173,14 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             # (load weights) -> create_optimizer (the optimizer is created later
             # in GRPOTrainer.train()).
             logging.info(
-                "Applying lazy-init FSDP fully_shard across the 'fsdp' axis "
-                "(size=%d, reshard_after_forward=%s, wrap_root=%s)",
+                "Applying lazy-init FSDP fully_shard across the 'fsdp' axis " "(size=%d, reshard_after_forward=True)",
                 self._mesh.axis_size("fsdp"),
-                reshard,
-                wrap_root,
             )
             with ttml.lazy_init():
                 tt_model = Qwen3(qwen_config)
             for block in tt_model.blocks:
-                ttml.fsdp.fully_shard(block, reshard_after_forward=reshard)
-            if wrap_root:
-                ttml.fsdp.fully_shard(tt_model, reshard_after_forward=reshard)
+                ttml.fsdp.fully_shard(block, reshard_after_forward=True)
+            ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
             ttml.materialize_module(tt_model)
 
             # Weights are uploaded already-sharded to match each materialized
@@ -218,16 +198,12 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
             if self._fsdp_enabled:
                 logging.info(
-                    "Applying FSDP fully_shard across the 'fsdp' axis "
-                    "(size=%d, reshard_after_forward=%s, wrap_root=%s)",
+                    "Applying FSDP fully_shard across the 'fsdp' axis " "(size=%d, reshard_after_forward=True)",
                     self._mesh.axis_size("fsdp"),
-                    reshard,
-                    wrap_root,
                 )
                 for block in tt_model.blocks:
-                    ttml.fsdp.fully_shard(block, reshard_after_forward=reshard)
-                if wrap_root:
-                    ttml.fsdp.fully_shard(tt_model, reshard_after_forward=reshard)
+                    ttml.fsdp.fully_shard(block, reshard_after_forward=True)
+                ttml.fsdp.fully_shard(tt_model, reshard_after_forward=True)
 
         ctx._tokenizer = tokenizer
         if ctx._pad_token is None:
@@ -342,19 +318,17 @@ class Qwen3GRPOCompleter(GRPOCompleter):
 
         stop_ids = self._get_stop_ids()
 
-        _dbg = os.environ.get("GRPO_QWEN_DEBUG")
-        if _dbg:
-            print(
-                f"[qwen3] generate B={B} prompts={len(prompts)} Np={Np} " f"tokens_to_complete={tokens_to_complete}",
-                flush=True,
-            )
-            # Decode prompt[0] to confirm the chat-templated input is sane (not
-            # itself garbage) -- rules the prompt in/out as a gibberish source.
-            try:
-                preview = self._ctx._tokenizer.decode(rows[0], skip_special_tokens=False)
-                print(f"[qwen3] prompt[0] ({len(rows[0])} toks) = {preview[:300]!r}", flush=True)
-            except Exception:  # noqa: BLE001
-                pass
+        print(
+            f"[qwen3] generate B={B} prompts={len(prompts)} Np={Np} tokens_to_complete={tokens_to_complete}",
+            flush=True,
+        )
+        # Decode prompt[0] to confirm the chat-templated input is sane (not itself
+        # garbage) -- rules the prompt in/out as a gibberish source.
+        try:
+            preview = self._ctx._tokenizer.decode(rows[0], skip_special_tokens=False)
+            print(f"[qwen3] prompt[0] ({len(rows[0])} toks) = {preview[:300]!r}", flush=True)
+        except Exception:  # noqa: BLE001
+            pass
 
         if tokens_to_complete <= 0:
             return [[] for _ in range(B)]
@@ -455,16 +429,15 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                         pending_hosts, pending_event = _async_read_to_host(chunk_columns, mesh_device)
                         chunk_columns = []
 
-                        if _dbg:
-                            n_done = i + 1
-                            elapsed = time.perf_counter() - decode_t0
-                            rate = n_done / elapsed if elapsed > 0 else 0.0
-                            print(
-                                f"[qwen3] decode {n_done}/{tokens_to_complete - 1} "
-                                f"cache_pos={kv.get_seq_length()} done={int(done.sum())}/{B} "
-                                f"{rate:.1f} tok/s ({elapsed:.0f}s)",
-                                flush=True,
-                            )
+                        n_done = i + 1
+                        elapsed = time.perf_counter() - decode_t0
+                        rate = n_done / elapsed if elapsed > 0 else 0.0
+                        print(
+                            f"[qwen3] decode {n_done}/{tokens_to_complete - 1} "
+                            f"cache_pos={kv.get_seq_length()} done={int(done.sum())}/{B} "
+                            f"{rate:.1f} tok/s ({elapsed:.0f}s)",
+                            flush=True,
+                        )
 
                 decode_np = _columns_to_np(generated_columns)
         finally:
@@ -527,23 +500,15 @@ class Qwen3GRPOCompleter(GRPOCompleter):
                 if start < end:
                     loss_mask_np[i, start:end] = 1.0
 
-        _dbg = os.environ.get("GRPO_QWEN_DEBUG")
-        if _dbg:
-            print(f"[qwen3] compute_nlog_probs B={B} B_local={B_local} T={T} Tp={Tp} -> forward", flush=True)
-
         input_tensor = self._tokens_to_tensor(inputs_np, B)
         mask = self._causal_mask(Tp)
         logits = self._model(input_tensor, mask)
-        if _dbg:
-            print(f"[qwen3] compute_nlog_probs forward done, logits shape={logits.shape()}", flush=True)
 
         targets_tt = ttml.autograd.Tensor.from_numpy(
             targets_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.UINT32, self._dp_mapper
         )
         nlog = ttml.ops.loss.cross_entropy_loss(logits, targets_tt, ttml.ops.ReduceType.NONE)
         nlog = ttml.ops.reshape.reshape(nlog, [B_local, Tp])
-        if _dbg:
-            print(f"[qwen3] compute_nlog_probs cross_entropy done", flush=True)
 
         loss_mask_tt = ttml.autograd.Tensor.from_numpy(
             loss_mask_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, self._dp_mapper

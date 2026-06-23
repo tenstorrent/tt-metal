@@ -23,51 +23,6 @@ from safetensors.numpy import save_file
 from ttml.common.utils import create_optimizer, no_grad
 
 
-def _debug_grad_stats(model: Any, composer: Any = None) -> str:
-    """Cheap gradient-flow sanity probe (for GRPO_QWEN_DEBUG).
-
-    Reports how many parameters carry an initialized grad and the aggregate L2
-    norm of the (replicated) norm-weight grads as a liveness/finiteness check.
-    Norm weights aren't FSDP-sharded, so reading them with the mesh composer is
-    safe. A count of 0, or an L2 of 0.0 / nan, indicates the backward isn't
-    producing usable gradients.
-
-    ``composer`` must be the mesh->tensor composer used elsewhere in the trainer;
-    without it, ``to_numpy`` cannot collapse a multi-device tensor and throws.
-    """
-    n_grad = 0
-    n_total = 0
-    n_sampled = 0
-    total_sq = 0.0
-    try:
-        params = model.parameters().items()
-    except Exception:  # noqa: BLE001
-        return "grad stats unavailable"
-    for name, p in params:
-        t = getattr(p, "tensor", p)
-        n_total += 1
-        try:
-            if not t.is_grad_initialized():
-                continue
-        except Exception:  # noqa: BLE001
-            continue
-        n_grad += 1
-        # Only sample replicated norm/ln weights -- they aren't FSDP-sharded, so
-        # the dim-0 concat composer reconstructs them cleanly (as 32 stacked
-        # copies, which is fine for a zero/nan/healthy check).
-        if "norm" in name or "ln" in name:
-            try:
-                grad_tensor = t.get_grad_tensor()
-                if grad_tensor is not None:
-                    arr = grad_tensor.to_numpy(ttnn.DataType.FLOAT32, composer).astype(np.float64)
-                    total_sq += float(np.sum(arr * arr))
-                    n_sampled += 1
-            except Exception:  # noqa: BLE001
-                pass
-    l2 = float(np.sqrt(total_sq))
-    return f"{n_grad}/{n_total} params have grads; {n_sampled} norm-weight grads sampled, aggregate L2={l2:.4e}"
-
-
 class GRPOCompleter(ABC):
     """Abstract base for model-specific completion engines used in GRPO training.
 
@@ -159,6 +114,37 @@ class GRPOConfig:
     batch_size: Optional[int] = None
 
     def __post_init__(self) -> None:
+        # num_generations is the GRPO group size: each prompt must produce at least
+        # one completion to form a group (advantages are computed within a group,
+        # and the loss normalizes by the completion count). A value <= 0 yields
+        # empty batches and divide-by-zero downstream, so fail fast here.
+        if self.num_generations <= 0:
+            raise ValueError(
+                f"grpo_config: 'num_generations' must be > 0 (got {self.num_generations}); "
+                "GRPO needs at least one completion per prompt."
+            )
+
+        # Other count fields that must be strictly positive: a value <= 0 produces
+        # empty batches / divide-by-zero in batch sizing, loss normalization, or
+        # the dataset loop. Fail fast at config-construction time.
+        for _name, _val in (
+            ("per_device_train_batch_size", self.per_device_train_batch_size),
+            ("gradient_accumulation_steps", self.gradient_accumulation_steps),
+            ("prompts_to_train", self.prompts_to_train),
+        ):
+            if _val <= 0:
+                raise ValueError(f"grpo_config: '{_name}' must be > 0 (got {_val}).")
+
+        # checkpoint_interval is only consulted when checkpointing is enabled, where
+        # it drives ``num_steps % checkpoint_interval`` -- a value <= 0 would be a
+        # modulo-by-zero. (When checkpointing is off the value is unused, so don't
+        # constrain it.)
+        if self.checkpointing and self.checkpoint_interval <= 0:
+            raise ValueError(
+                f"grpo_config: 'checkpoint_interval' must be > 0 when checkpointing is enabled "
+                f"(got {self.checkpoint_interval})."
+            )
+
         # Warn (once per construction) when a deprecated field is explicitly set.
         # TODO: remove this field and warning once all configs have migrated.
         if self.batch_size is not None:
@@ -564,20 +550,14 @@ class GRPOTrainer:
             advantages_np = compute_advantages_host(rewards_np, grpo_cfg.num_generations)
             completion_lens = [len(c) for c in completions_batch]
 
-            _dbg = os.environ.get("GRPO_QWEN_DEBUG")
-
             # Reference (old) log-probs for every micro-batch in the generation
             # batch, computed once and reused across mini-epochs.
             probs_old_list = []
             tt_model.eval()
-            if _dbg:
-                print(f"[grpo] batch {num_batches}: old-prob (no_grad) pass", flush=True)
             with no_grad():
                 for oi, (p, c) in enumerate(
                     iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch)
                 ):
-                    if _dbg:
-                        print(f"[grpo] old-prob micro-batch {oi}", flush=True)
                     nlog_old, mask = completer.compute_nlog_probs(p, c)
                     nlog_old.set_requires_grad(False)
                     mask.set_requires_grad(False)
@@ -605,8 +585,6 @@ class GRPOTrainer:
                 for i, (p, c) in enumerate(
                     iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch),
                 ):
-                    if _dbg:
-                        print(f"[grpo] train micro-batch {i}: new-prob forward", flush=True)
                     B = len(c)
                     # The advantages and the micro-batch token tensors are both
                     # sharded along axis 0 over the identical host-order slice
@@ -634,12 +612,8 @@ class GRPOTrainer:
                         ddp_world_size=num_devices if ddp_enabled else 1,
                     )
 
-                    if _dbg:
-                        print(f"[grpo] train micro-batch {i}: backward", flush=True)
                     loss.backward(retain_graph=False)
                     ttml.autograd.AutoContext.get_instance().reset_graph()
-                    if _dbg:
-                        print(f"[grpo] train micro-batch {i}: backward done", flush=True)
 
                     _deallocate_tensors([nlog_probs_new, mask_new, adv_ttml, loss])
 
@@ -650,12 +624,6 @@ class GRPOTrainer:
                     ttml.sync_gradients(tt_model.parameters(), axis_names=fsdp_sync_axes)
                 elif ddp_enabled:
                     ttml.core.distributed.synchronize_gradients(tt_model.parameters())
-
-                if _dbg:
-                    print(
-                        f"[grpo] step {num_steps + 1} grad check: {_debug_grad_stats(tt_model, dp_composer)}",
-                        flush=True,
-                    )
 
                 for cb in self.callbacks:
                     cb.on_before_optimizer_step(self)
