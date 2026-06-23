@@ -4,17 +4,38 @@
 import yaml
 import sys
 import os
+import argparse
+
+
+def _load_allocation_mgd(allocation, repo_root):
+    if "mgd" in allocation:
+        return allocation["mgd"]
+    if "mgd_file" in allocation:
+        mgd_path = os.path.join(repo_root, allocation["mgd_file"])
+        if not os.path.exists(mgd_path):
+            print(f"::error::allocation.mgd_file not found at {mgd_path}", file=sys.stderr)
+            sys.exit(1)
+        with open(mgd_path, "r", encoding="utf-8") as f:
+            return f.read()
+    return ""
 
 
 def main():
-    if len(sys.argv) != 2:
-        print(
-            "Usage: extract_allocation_from_sku.py <sku_name>",
-            file=sys.stderr,
-        )
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Extract allocation configuration from SKU config file.")
+    parser.add_argument("sku_name", help="Name of the SKU to extract")
+    parser.add_argument(
+        "--mgd-only",
+        action="store_true",
+        help="Extract only MGD content (without YAML wrapper)",
+    )
+    parser.add_argument(
+        "--type-only",
+        action="store_true",
+        help="Extract only allocation type",
+    )
+    args = parser.parse_args()
 
-    sku_name = sys.argv[1]
+    sku_name = args.sku_name
 
     # Hardcoded path to SKU config file
     # Script is in .github/scripts/utils/
@@ -24,9 +45,7 @@ def main():
 
     # Verify the file exists
     if not os.path.exists(sku_config_path):
-        print(
-            f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr
-        )
+        print(f"::error::SKU config file not found at {sku_config_path}", file=sys.stderr)
         sys.exit(1)
 
     # Open and parse the YAML file
@@ -41,15 +60,26 @@ def main():
         sys.exit(1)
 
     if not isinstance(config, dict):
-        print(
-            f"::error::SKU config file must contain a YAML dictionary", file=sys.stderr
-        )
+        print(f"::error::SKU config file must contain a YAML dictionary", file=sys.stderr)
         sys.exit(1)
 
     skus = config.get("skus", {})
     if sku_name not in skus:
         print(f"::error::SKU '{sku_name}' not found in config file", file=sys.stderr)
         sys.exit(1)
+
+    # If --type-only flag is set, extract and print only allocation type
+    if args.type_only:
+        allocation = skus[sku_name].get("allocation", {})
+        allocation_type = allocation.get("type", "").lower()
+        print(allocation_type)
+        sys.exit(0)
+
+    # If --mgd-only flag is set, extract and print only MGD content
+    if args.mgd_only:
+        allocation = skus[sku_name].get("allocation", {})
+        print(_load_allocation_mgd(allocation, repo_root), end="")
+        sys.exit(0)
 
     if "allocation" not in skus[sku_name]:
         print(f"::error::SKU '{sku_name}' has no 'allocation' field", file=sys.stderr)
@@ -73,16 +103,15 @@ def main():
             else:
                 lines.append(f"  {key}: {value}")
 
-    if "topology_keys" in allocation:
+    if "topologyKeys" in allocation:
         lines.append("topologyKeys:")
-        for key in allocation["topology_keys"]:
+        for key in allocation["topologyKeys"]:
             lines.append(f"  - {key}")
 
     # Add MGD section if present
-    if "mgd" in skus[sku_name]:
+    mgd_content = _load_allocation_mgd(allocation, repo_root)
+    if mgd_content:
         lines.append("mgd: |")
-        mgd_content = skus[sku_name]["mgd"]
-        # Add 2-space indentation to each line of MGD content
         for line in mgd_content.splitlines():
             lines.append(f"  {line}")
 
