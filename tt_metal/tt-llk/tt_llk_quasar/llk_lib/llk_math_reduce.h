@@ -448,7 +448,7 @@ inline void _llk_math_reduce_(const std::uint32_t num_rows_per_tile, const std::
 {
     // For face_r_dim >= 8, dest is dense with tiles. For face_r_dim < 8, dest is sparse with tiles and tiles are placed every 8 rows.
     // If num_rows_per_tile is less than that of face_r_dim = 8, replace it to ensure face_r_dim = 8 sparse layout.
-    _set_dst_write_addr_by_rows_(std::max(num_rows_per_tile, NUM_ROWS_PER_TILE_FRD_8), tile_idx);
+    _set_dst_write_addr_by_rows_(find_max(FACE_R_DIM, num_rows_per_tile), tile_idx);
 
     // Run MOP
     ckernel::ckernel_template::run_bank0_sw_cntl(instrn_buffer);

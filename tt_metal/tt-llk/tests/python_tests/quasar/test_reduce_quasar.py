@@ -25,7 +25,7 @@ from helpers.llk_params import (
 )
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
-from helpers.stimuli_generator import generate_stimuli_w_tile_dimensions
+from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     DEST_SYNC,
@@ -39,7 +39,7 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
     UNPACKER_ENGINE_SEL,
 )
-from helpers.tile_constants import SUPPORTED_TILE_SIZES
+from helpers.tile_constants import SUPPORTED_TILE_SIZES, is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
 from helpers.utils import passed_test
 
@@ -86,7 +86,13 @@ def generate_pool_type_and_math_fidelity_combinations():
             DataFormat.MxInt2,
         ],
     ),
-    tile_dimensions=SUPPORTED_TILE_SIZES,
+    tile_dimensions=lambda formats: [
+        td
+        for td in SUPPORTED_TILE_SIZES
+        if not is_mx_unsupported_tile_dims(
+            formats.input_format, formats.output_format, td
+        )
+    ],
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     reduce_dim=[ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar],
     pool_type_and_math_fidelity=generate_pool_type_and_math_fidelity_combinations(),
@@ -132,7 +138,7 @@ def test_reduce_quasar(
 
     input_dimensions = [tile_dimensions[0] * 2, tile_dimensions[1] * 2]
 
-    src_A, tile_cnt, _, _ = generate_stimuli_w_tile_dimensions(
+    src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
@@ -294,6 +300,7 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     dest_sync_mode,
 ):
     input_dimensions = [64, 64]
+    tile_shape = construct_tile_shape((32, 32))
 
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -305,9 +312,9 @@ def test_reduce_quasar_mxfp4_2x_gapool(
     # SrcB scale: Sum uses 1.0 per element; Average uses 1/32 so the row/col reduce gives
     # the mean across the 32-element pool dimension.
     if pool_type == ReducePool.Sum:
-        src_B = torch.full((1024,), 1)
+        src_B = torch.full((tile_shape.total_tile_size(),), 1)
     else:  # Average
-        src_B = torch.full((1024,), 1 / 32)
+        src_B = torch.full((tile_shape.total_tile_size(),), 1 / 32)
 
     generate_golden = get_golden_generator(ReduceGapoolGolden)
     golden_tensor = generate_golden(
@@ -335,8 +342,10 @@ def test_reduce_quasar_mxfp4_2x_gapool(
         ],
         runtimes=[
             TILE_COUNT(tile_cnt),
-            TEST_FACE_DIMS(),
-            NUM_FACES(),
+            TEST_FACE_DIMS(tile_shape.face_r_dim, tile_shape.face_c_dim),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            NUM_FACES(tile_shape.total_num_faces()),
         ],
         variant_stimuli=StimuliConfig(
             src_A,
@@ -347,6 +356,10 @@ def test_reduce_quasar_mxfp4_2x_gapool(
             tile_count_A=tile_cnt,
             tile_count_B=1,
             tile_count_res=tile_cnt,
+            num_faces=tile_shape.total_num_faces(),
+            face_r_dim=tile_shape.face_r_dim,
+            tile_dimensions=(32, 32),
+            use_dense_tile_dimensions=True,
         ),
         unpack_to_dest=False,
         dest_acc=dest_acc,
