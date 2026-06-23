@@ -32,7 +32,7 @@ void kernel_main() {
     // [x0..x_{num_x-1}, y0..y_{num_y-1}]: get_common_vararg(x) for x-coords, get_common_vararg(num_x + y) for y-coords.
 
     // Input shard base address, recovered from the typed tensor binding (Case 2 bridge).
-    const auto input = TensorAccessor(ta::input);
+    const auto input = TensorAccessor(tensor::input);
     const uint32_t q_start_addr = input.get_bank_base_address();
 
     DataflowBuffer cb_q_out(dfb::q_out);

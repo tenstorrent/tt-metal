@@ -33,7 +33,7 @@ void kernel_main() {
     // for y.
 
     // Input shard base address, recovered from the typed tensor binding (Case 2 bridge).
-    const auto input = TensorAccessor(ta::input);
+    const auto input = TensorAccessor(tensor::input);
     const uint32_t q_start_addr = input.get_bank_base_address();
 
     DataflowBuffer cb_q_out(dfb::q_out);
