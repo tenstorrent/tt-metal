@@ -17,6 +17,7 @@
 #include "ttnn/operations/experimental/quasar/conv2d/conv2d_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/binary/binary_nanobind.hpp"
+#include "ttnn/operations/experimental/quasar/unary_lut/unary_lut_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/fold/fold_nanobind.hpp"
 #include "ttnn/operations/experimental/quasar/to_memory_config/to_memory_config_nanobind.hpp"
 
@@ -46,6 +47,9 @@ void bind_quasar(nb::module_& mod) {
 
     // binary front-end (add/subtract/multiply/... -> quasar binary_ng device op).
     binary::py_module(m_quasar);
+
+    // unary_lut (UNARY piecewise-LUT activation -> quasar unary_lut DFB device op).
+    detail::bind_unary_lut(m_quasar);
 
     // fold (compositional data-movement op).
     detail::bind_fold_operation(m_quasar);

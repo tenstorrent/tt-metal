@@ -22,6 +22,7 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_API_HEADERS
     binary_ng/types.hpp
     binary/binary.hpp
     binary/binary_composite.hpp
+    unary_lut/unary_lut.hpp
     fold/fold.hpp
     interleaved_to_sharded/interleaved_to_sharded.hpp
     sharded_to_interleaved/sharded_to_interleaved.hpp
@@ -111,6 +112,10 @@ set(TTNN_OP_EXPERIMENTAL_QUASAR_SRCS
     binary/binary.cpp
     binary/common/binary_op_utils.cpp
     binary/device/binary_composite_op.cpp
+    # unary_lut (UNARY piecewise-LUT activation, DFB / metal 2.0 path only)
+    unary_lut/unary_lut.cpp
+    unary_lut/device/unary_lut_device_operation.cpp
+    unary_lut/device/unary_lut_metal_v2_factory.cpp
     # fold (compositional: own device op + internal pad/transpose/slice/reshard -> quasar)
     fold/fold.cpp
     fold/device/fold_device_op.cpp
