@@ -93,13 +93,7 @@ struct RingJointSDPAParams {
         "has_kv_cache_batch_idx",
         "kv_pad_rotation_enabled",
         "latent_v_head_dim",
-        "all_gather_dim",
-        "all_gather_num_links",
-        "all_gather_ring_size",
-        "all_gather_output_mem_config",
-        "all_gather_topology",
-        "all_gather_sub_device_id",
-        "all_gather_cluster_axis",
+        "all_gather_operation_attributes",
         "all_gather_tensor_args");
     auto attribute_values() const {
         return std::make_tuple(
@@ -116,13 +110,7 @@ struct RingJointSDPAParams {
             kv_cache_batch_idx.has_value(),
             has_kv_pad_rotation(),
             std::cref(latent_v_head_dim),
-            std::cref(all_gather_operation_attributes.dim),
-            std::cref(all_gather_operation_attributes.num_links),
-            std::cref(all_gather_operation_attributes.ring_size),
-            std::cref(all_gather_operation_attributes.output_mem_config),
-            std::cref(all_gather_operation_attributes.topology),
-            std::cref(all_gather_operation_attributes.sub_device_id),
-            std::cref(all_gather_operation_attributes.cluster_axis),
+            std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args));
     }
 };
