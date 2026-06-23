@@ -99,34 +99,34 @@ void kernel_main() {
     const auto raw_scores_semaphore = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
-    constexpr auto cb_w2c_in2 = tt::CBIndex::c_3;
-    constexpr auto cb_s2c_out = tt::CBIndex::c_4;
-    constexpr auto cb_w2c_in3 = tt::CBIndex::c_5;
-    constexpr auto cb_w2c_in4 = tt::CBIndex::c_6;
-    constexpr auto cb_w2c_in5 = tt::CBIndex::c_7;
-    constexpr auto cb_w2c_in6 = tt::CBIndex::c_8;
-    constexpr auto cb_w2c_in7 = tt::CBIndex::c_9;
+    constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_rdy_id = tt::CBIndex::c_2;
+    constexpr auto cb_w2c_in2_id = tt::CBIndex::c_3;
+    constexpr auto cb_s2c_out_id = tt::CBIndex::c_4;
+    constexpr auto cb_w2c_in3_id = tt::CBIndex::c_5;
+    constexpr auto cb_w2c_in4_id = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_in5_id = tt::CBIndex::c_7;
+    constexpr auto cb_w2c_in6_id = tt::CBIndex::c_8;
+    constexpr auto cb_w2c_in7_id = tt::CBIndex::c_9;
 
     // Aliases
-    constexpr auto cb_w2c_in8 = tt::CBIndex::c_6;
+    constexpr auto cb_w2c_in8_id = tt::CBIndex::c_6;
 
-    CircularBuffer cb_c2w_rdy_cb(cb_c2w_rdy);
-    CircularBuffer cb_w2c_in2_cb(cb_w2c_in2);
-    CircularBuffer cb_s2c_out_cb(cb_s2c_out);
-    CircularBuffer cb_w2c_in3_cb(cb_w2c_in3);
-    CircularBuffer cb_w2c_in4_cb(cb_w2c_in4);
-    CircularBuffer cb_w2c_in5_cb(cb_w2c_in5);
-    CircularBuffer cb_w2c_in6_cb(cb_w2c_in6);
-    CircularBuffer cb_w2c_in7_cb(cb_w2c_in7);
-    CircularBuffer cb_w2c_in8_cb(cb_w2c_in8);
+    CircularBuffer cb_c2w_rdy(cb_c2w_rdy_id);
+    CircularBuffer cb_w2c_in2(cb_w2c_in2_id);
+    CircularBuffer cb_s2c_out(cb_s2c_out_id);
+    CircularBuffer cb_w2c_in3(cb_w2c_in3_id);
+    CircularBuffer cb_w2c_in4(cb_w2c_in4_id);
+    CircularBuffer cb_w2c_in5(cb_w2c_in5_id);
+    CircularBuffer cb_w2c_in6(cb_w2c_in6_id);
+    CircularBuffer cb_w2c_in7(cb_w2c_in7_id);
+    CircularBuffer cb_w2c_in8(cb_w2c_in8_id);
 
     // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_s2c_out);
+    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
+    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w_id);
+    constexpr uint32_t out_tile_size = get_tile_size(cb_s2c_out_id);
 
     // NOC Packet size
     constexpr uint32_t noc_packet_size = 8192;
@@ -147,8 +147,8 @@ void kernel_main() {
     const uint64_t partial_semaphore_noc_addr2 =
         get_noc_addr(neighbor2_physical_x, neighbor2_physical_y, semaphore_addr);
 
-    const uint32_t local_src_addr = cb_s2c_out_cb.get_write_ptr();
-    const uint32_t local_dst_addr = cb_w2c_in2_cb.get_write_ptr();
+    const uint32_t local_src_addr = cb_s2c_out.get_write_ptr();
+    const uint32_t local_dst_addr = cb_w2c_in2.get_write_ptr();
     const uint64_t neighbor_dst_addr1 = get_noc_addr(neighbor1_physical_x, neighbor1_physical_y, local_dst_addr);
     const uint64_t neighbor_dst_addr2 = get_noc_addr(neighbor2_physical_x, neighbor2_physical_y, local_dst_addr);
 
@@ -160,7 +160,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t COLLECTOR_CORE_ID = 7;
 
-    const uint32_t local_collector_addr = 1024 + cb_w2c_in4_cb.get_write_ptr();
+    const uint32_t local_collector_addr = 1024 + cb_w2c_in4.get_write_ptr();
     const uint64_t collector_dst_base_addr =
         get_noc_addr(collector_physical_x, collector_physical_y, local_collector_addr);
     const uint32_t collector_offset = core_id * out_tile_size;
@@ -174,7 +174,7 @@ void kernel_main() {
     // Group scores: data exists in 1st and 4th row of the first face of the bfloat16 tile
     constexpr uint32_t group_score_offset1 = 0;
     constexpr uint32_t group_score_offset2 = 4 * group_score_size;
-    const uint32_t local_group_score_base_addr = cb_c2w_rdy_cb.get_write_ptr();
+    const uint32_t local_group_score_base_addr = cb_c2w_rdy.get_write_ptr();
     const uint32_t local_group_score_src_addr1 = local_group_score_base_addr + group_score_offset1;
     const uint32_t local_group_score_src_addr2 = local_group_score_base_addr + group_score_offset2;
 
@@ -187,7 +187,7 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Group masks (1 collector core -> 7 cores)
     //-------------------------------------------------------------------------
-    const uint32_t local_group_masks_addr = cb_w2c_in5_cb.get_write_ptr();
+    const uint32_t local_group_masks_addr = cb_w2c_in5.get_write_ptr();
     const uint64_t group_masks_noc_addr = get_noc_multicast_addr(
         first_physical_x, first_physical_y, collector_physical_x, collector_physical_y, local_group_masks_addr);
     const uint64_t group_semaphore_noc_addr = get_noc_multicast_addr(
@@ -199,9 +199,9 @@ void kernel_main() {
     constexpr uint32_t partials_size = 2 * tt::constants::FACE_HW * sizeof(uint16_t);  // values and indices
 
     // Top8 partials: data exists in first 16 rows
-    const uint32_t local_top8_partials_src_addr = cb_w2c_in8_cb.get_write_ptr();
+    const uint32_t local_top8_partials_src_addr = cb_w2c_in8.get_write_ptr();
 
-    const uint32_t local_top8_dst_base_addr = cb_w2c_in6_cb.get_write_ptr();
+    const uint32_t local_top8_dst_base_addr = cb_w2c_in6.get_write_ptr();
     const uint32_t local_top8_dst_addr = local_top8_dst_base_addr + core_id * partials_size;
 
     //-------------------------------------------------------------------------
@@ -215,10 +215,10 @@ void kernel_main() {
     *my_raw_scores_semaphore_ptr = 0;
 
     // Top8 partials: after gathering, data is in the 16-31 rows
-    const uint32_t local_raw_scores_src_addr = cb_w2c_in3_cb.get_write_ptr();
+    const uint32_t local_raw_scores_src_addr = cb_w2c_in3.get_write_ptr();
     const uint32_t local_gathered_scores_src_addr = local_raw_scores_src_addr + raw_scores_size;
 
-    const uint32_t local_raw_scores_dst_base_addr = cb_w2c_in7_cb.get_write_ptr();
+    const uint32_t local_raw_scores_dst_base_addr = cb_w2c_in7.get_write_ptr();
     const uint32_t local_raw_scores_dst_addr = local_raw_scores_dst_base_addr + core_id * raw_scores_size;
 
     const uint64_t raw_scores_semaphore_noc_addr =
@@ -235,7 +235,7 @@ void kernel_main() {
         noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_dst_addr2, out_tile_size, /*noc=*/1, vchannel);
 
         // Wait for the data1 to be ready
-        cb_c2w_rdy_cb.wait_front(1);
+        cb_c2w_rdy.wait_front(1);
 
         // Send the data to the neighbor1
         noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr2);
@@ -253,12 +253,12 @@ void kernel_main() {
         // Ensure write and semaphore have left the core before continuing
         noc_async_posted_writes_flushed();
 
-        cb_c2w_rdy_cb.pop_front(1);
+        cb_c2w_rdy.pop_front(1);
 
         noc_async_write_one_packet_set_state</*posted=*/true>(neighbor_dst_addr1, out_tile_size, /*noc=*/1, vchannel);
 
         // Wait for the data2 to be ready
-        cb_c2w_rdy_cb.wait_front(1);
+        cb_c2w_rdy.wait_front(1);
 
         // Send the data to the neighbor1
         noc_async_write_one_packet_with_state</*posted=*/true>(local_src_addr, neighbor_dst_addr1);
@@ -276,7 +276,7 @@ void kernel_main() {
         // Ensure write and semaphore have left the core before continuing
         noc_async_posted_writes_flushed();
 
-        cb_c2w_rdy_cb.pop_front(1);
+        cb_c2w_rdy.pop_front(1);
 
         return;
     }
@@ -284,15 +284,15 @@ void kernel_main() {
     // -------------------------------------------------------------------------
     // Rest of the 8 cores do more
     // -------------------------------------------------------------------------
-    cb_w2c_in2_cb.reserve_back(1);
+    cb_w2c_in2.reserve_back(1);
 
     // Wait for the data from sender cores to be ready
     noc_semaphore_wait_min(my_semaphore_ptr, 1);
     *my_semaphore_ptr = 0;
-    cb_w2c_in2_cb.push_back(1);
+    cb_w2c_in2.push_back(1);
 
     // Wait for group scores to be ready from compute
-    cb_c2w_rdy_cb.wait_front(1);
+    cb_c2w_rdy.wait_front(1);
 
     //-------------------------------------------------------------------------
     // Cores sending data to the collector core
@@ -314,19 +314,19 @@ void kernel_main() {
         noc_async_write_set_trid(0, /*noc=*/1);
 
         // We are done with the group scores
-        cb_c2w_rdy_cb.pop_front(1);
+        cb_c2w_rdy.pop_front(1);
 
-        cb_w2c_in5_cb.reserve_back(1);
+        cb_w2c_in5.reserve_back(1);
 
         // Wait for the group mask to be ready in the collector core
         noc_semaphore_wait_min(my_semaphore_ptr, 1);
         *my_semaphore_ptr = 0;
 
         // Let compute know we got the group masks
-        cb_w2c_in5_cb.push_back(1);
+        cb_w2c_in5.push_back(1);
 
         // Wait for compute to send the top-8 values and indices
-        cb_w2c_in8_cb.wait_front(1);
+        cb_w2c_in8.wait_front(1);
 
         noc_async_write_one_packet_set_state</*posted=*/true>(
             collector_dst_base_addr, partials_size, /*noc=*/1, vchannel);
@@ -340,7 +340,7 @@ void kernel_main() {
         noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
         noc_async_write_set_trid(0, /*noc=*/1);
 
-        cb_w2c_in8_cb.pop_front(1);
+        cb_w2c_in8.pop_front(1);
     }
 
     //-------------------------------------------------------------------------
@@ -362,21 +362,21 @@ void kernel_main() {
         }
 
         // We are done with the group scores
-        cb_c2w_rdy_cb.pop_front(1);
+        cb_c2w_rdy.pop_front(1);
 
-        cb_w2c_in4_cb.reserve_back(1);
+        cb_w2c_in4.reserve_back(1);
 
         // I am collecting, let us wait for everyone else to finish sending their data to me
         noc_semaphore_wait_min(my_semaphore_ptr, 7);
         *my_semaphore_ptr = 0;
 
         // Let compute know that we got the group scores
-        cb_w2c_in4_cb.push_back(1);
+        cb_w2c_in4.push_back(1);
 
         //-----------------------------------------------------------------
         // Get the group masks
         //-----------------------------------------------------------------
-        cb_w2c_in5_cb.wait_front(1);
+        cb_w2c_in5.wait_front(1);
         // Multicast this data to all the cores
         noc_async_write_multicast_one_packet(
             local_group_masks_addr, group_masks_noc_addr, /*size=*/2048, /*num_dests=*/7);
@@ -386,18 +386,18 @@ void kernel_main() {
         noc_semaphore_set_multicast(
             semaphore_addr, group_semaphore_noc_addr, /*num_dests=*/7, /*linked=*/false, /*noc=*/1);
 
-        cb_w2c_in5_cb.pop_front(1);
+        cb_w2c_in5.pop_front(1);
 
-        cb_w2c_in6_cb.reserve_back(4);
+        cb_w2c_in6.reserve_back(4);
 
         // Wait for the top8 partials to arrive
         noc_semaphore_wait_min(my_semaphore_ptr, 1 + 7);
 
         // Let compute know that we got the top8 partials
-        cb_w2c_in6_cb.push_back(4);
+        cb_w2c_in6.push_back(4);
 
         // Wait for final top8 to be ready from compute
-        cb_c2w_rdy_cb.wait_front(1);
-        cb_c2w_rdy_cb.pop_front(1);
+        cb_c2w_rdy.wait_front(1);
+        cb_c2w_rdy.pop_front(1);
     }
 }

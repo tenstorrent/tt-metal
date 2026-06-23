@@ -50,13 +50,13 @@ void kernel_main() {
     const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_id_weight = tt::CBIndex::c_0;
-    constexpr auto cb_id_input = tt::CBIndex::c_1;
-    constexpr auto cb_id_bias = tt::CBIndex::c_4;
+    constexpr auto cb_weight_id = tt::CBIndex::c_0;
+    constexpr auto cb_input_id = tt::CBIndex::c_1;
+    constexpr auto cb_bias_id = tt::CBIndex::c_4;
 
-    CircularBuffer cb_weight(cb_id_weight);
-    CircularBuffer cb_input(cb_id_input);
-    CircularBuffer cb_bias(cb_id_bias);
+    CircularBuffer cb_weight(cb_weight_id);
+    CircularBuffer cb_input(cb_input_id);
+    CircularBuffer cb_bias(cb_bias_id);
 
     const auto input_addrgen = TensorAccessor(input_accessor_args, input_addr);
     const auto weight_addrgen = TensorAccessor(weight_accessor_args, weight_addr);

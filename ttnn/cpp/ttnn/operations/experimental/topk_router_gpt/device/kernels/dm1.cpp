@@ -105,27 +105,27 @@ void kernel_main() {
     const auto aligned_page_size = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_id_partial_recv = tt::CBIndex::c_2;
-    constexpr auto cb_id_local_out = tt::CBIndex::c_3;
-    constexpr auto cb_id_index = tt::CBIndex::c_5;
-    constexpr auto cb_id_topk_val = tt::CBIndex::c_6;
-    constexpr auto cb_id_gathered_val = tt::CBIndex::c_8;
-    constexpr auto cb_id_gathered_ind = tt::CBIndex::c_9;
-    constexpr auto cb_id_softmax_mask = tt::CBIndex::c_12;
-    constexpr auto cb_id_bcast_scaler = tt::CBIndex::c_15;
-    constexpr auto cb_id_final_out = tt::CBIndex::c_16;
-    constexpr auto cb_id_dispatch = tt::CBIndex::c_19;
+    constexpr auto cb_partial_recv_id = tt::CBIndex::c_2;
+    constexpr auto cb_local_out_id = tt::CBIndex::c_3;
+    constexpr auto cb_index_id = tt::CBIndex::c_5;
+    constexpr auto cb_topk_val_id = tt::CBIndex::c_6;
+    constexpr auto cb_gathered_val_id = tt::CBIndex::c_8;
+    constexpr auto cb_gathered_ind_id = tt::CBIndex::c_9;
+    constexpr auto cb_softmax_mask_id = tt::CBIndex::c_12;
+    constexpr auto cb_bcast_scaler_id = tt::CBIndex::c_15;
+    constexpr auto cb_final_out_id = tt::CBIndex::c_16;
+    constexpr auto cb_dispatch_id = tt::CBIndex::c_19;
 
-    CircularBuffer cb_partial_recv(cb_id_partial_recv);
-    CircularBuffer cb_local_out(cb_id_local_out);
-    CircularBuffer cb_index(cb_id_index);
-    CircularBuffer cb_topk_val(cb_id_topk_val);
-    CircularBuffer cb_gathered_val(cb_id_gathered_val);
-    CircularBuffer cb_gathered_ind(cb_id_gathered_ind);
-    CircularBuffer cb_softmax_mask(cb_id_softmax_mask);
-    CircularBuffer cb_bcast_scaler(cb_id_bcast_scaler);
-    CircularBuffer cb_final_out(cb_id_final_out);
-    CircularBuffer cb_dispatch(cb_id_dispatch);
+    CircularBuffer cb_partial_recv(cb_partial_recv_id);
+    CircularBuffer cb_local_out(cb_local_out_id);
+    CircularBuffer cb_index(cb_index_id);
+    CircularBuffer cb_topk_val(cb_topk_val_id);
+    CircularBuffer cb_gathered_val(cb_gathered_val_id);
+    CircularBuffer cb_gathered_ind(cb_gathered_ind_id);
+    CircularBuffer cb_softmax_mask(cb_softmax_mask_id);
+    CircularBuffer cb_bcast_scaler(cb_bcast_scaler_id);
+    CircularBuffer cb_final_out(cb_final_out_id);
+    CircularBuffer cb_dispatch(cb_dispatch_id);
 
     constexpr uint32_t tile_u32 = tile_size / sizeof(uint32_t);
 

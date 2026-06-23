@@ -14,7 +14,7 @@
 void kernel_main() {
     Noc noc;
 
-    constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
+    constexpr uint32_t cb_tilize_input_id = get_named_compile_time_arg_val("tilize_input_cb_id");
     constexpr uint32_t bytes_to_read_per_row = get_named_compile_time_arg_val("bytes_to_read_per_row");
 
     uint32_t rt_args_idx = 0;
@@ -27,7 +27,7 @@ void kernel_main() {
 
     constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-    CircularBuffer cb_tilize_input(tilize_input_cb_id);
+    CircularBuffer cb_tilize_input(cb_tilize_input_id);
 
     cb_tilize_input.reserve_back(tile_height);
     uint32_t l1_write_addr = cb_tilize_input.get_write_ptr();
