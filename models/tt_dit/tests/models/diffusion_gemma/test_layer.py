@@ -21,7 +21,7 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
-from ....utils.test import line_params
+from ....utils.test import line_params, ring_params
 
 # Layer-level threshold (composition of attention + MoE + dense MLP + 7 norms).
 PCC_THRESHOLD = 0.99
@@ -60,8 +60,11 @@ def _moe_substate(layer_state: dict) -> dict:
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "tp_axis", "num_links", "device_params"),
-    [pytest.param((2, 4), 0, 1, line_params, id="bh_qb2_tp2")],
+    ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
+    [
+        pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2_tp2"),
+        pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_tp2"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(
@@ -76,6 +79,7 @@ def test_encoder_layer(
     mesh_device: ttnn.MeshDevice,
     tp_axis: int,
     num_links: int,
+    topology: ttnn.Topology,
     layer_type: str,
     layer_idx_in_config: int,
     seq_len: int,
@@ -126,7 +130,7 @@ def test_encoder_layer(
     tt_cos = ttnn.from_torch(cos_half, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_sin = ttnn.from_torch(sin_half, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
         sequence_parallel=ParallelFactor(mesh_axis=1 - tp_axis, factor=tuple(mesh_device.shape)[1 - tp_axis]),
@@ -154,7 +158,7 @@ def test_encoder_layer(
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
     tt_layer.load_state_dict(layer_state)
 

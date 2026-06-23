@@ -18,7 +18,7 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
-from ....utils.test import line_params
+from ....utils.test import line_params, ring_params
 
 PCC_THRESHOLD = 0.9995
 ALLCLOSE_ATOL = 2e-2
@@ -26,14 +26,15 @@ ALLCLOSE_RTOL = 2e-2
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "tp_axis", "num_links", "device_params"),
+    ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
     [
-        pytest.param((2, 4), 0, 1, line_params, id="bh_qb2_tp2"),
-        pytest.param((4, 8), 0, 2, line_params, id="bh_galaxy_tp4"),
+        pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2_tp2"),
+        pytest.param((4, 8), 0, 2, line_params, ttnn.Topology.Linear, id="bh_galaxy_tp4"),
+        pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_tp2"),
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_self_conditioning(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int) -> None:
+def test_self_conditioning(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, topology: ttnn.Topology) -> None:
     """TT vs HF DiffusionGemmaSelfConditioning."""
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
         DiffusionGemmaSelfConditioning as HFSelfConditioning,
@@ -67,7 +68,7 @@ def test_self_conditioning(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links
     with torch.no_grad():
         torch_out = torch_model(inputs_embeds, sc_signal)
 
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
         sequence_parallel=ParallelFactor(mesh_axis=1 - tp_axis, factor=tuple(mesh_device.shape)[1 - tp_axis]),

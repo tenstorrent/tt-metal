@@ -22,7 +22,7 @@ from ....models.transformers.diffusion_gemma.moe import DiffusionGemmaMoE
 from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
-from ....utils.test import line_params
+from ....utils.test import line_params, ring_params
 
 # Looser thresholds for MoE — sparse_matmul + topk paths add rounding vs HF's per-expert loop.
 PCC_THRESHOLD = 0.99
@@ -31,12 +31,17 @@ ALLCLOSE_RTOL = 5e-2
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "tp_axis", "num_links", "device_params"),
-    [pytest.param((2, 4), 0, 1, line_params, id="bh_qb2_tp2")],
+    ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
+    [
+        pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2_tp2"),
+        pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_tp2"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len", [64])
-def test_diffusion_gemma_moe(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, seq_len: int) -> None:
+def test_diffusion_gemma_moe(
+    mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, topology: ttnn.Topology, seq_len: int
+) -> None:
     """TT MoE vs HF Gemma4TextRouter + Gemma4TextExperts (tiny config)."""
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import DiffusionGemmaTextConfig
     from transformers.models.gemma4.modeling_gemma4 import Gemma4TextExperts, Gemma4TextRouter
@@ -113,7 +118,7 @@ def test_diffusion_gemma_moe(mesh_device: ttnn.MeshDevice, tp_axis: int, num_lin
         mesh_device=mesh_device,
         parallel_config=parallel_config,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
         expert_dtype=ttnn.bfloat16,
         router_dtype=ttnn.bfloat16,
     )

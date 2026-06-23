@@ -18,7 +18,7 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.tensor import bf16_tensor, local_device_to_torch
-from ....utils.test import line_params
+from ....utils.test import line_params, ring_params
 
 PCC_THRESHOLD = 0.99
 ALLCLOSE_ATOL = 5e-2
@@ -26,12 +26,17 @@ ALLCLOSE_RTOL = 5e-2
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "tp_axis", "num_links", "device_params"),
-    [pytest.param((2, 4), 0, 1, line_params, id="bh_qb2_tp2")],
+    ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
+    [
+        pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2_tp2"),
+        pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_tp2"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("num_patches", [64])
-def test_vision_layer(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, num_patches: int) -> None:
+def test_vision_layer(
+    mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, topology: ttnn.Topology, num_patches: int
+) -> None:
     """TT vision encoder layer vs HF Gemma4VisionEncoderLayer."""
     from transformers.models.gemma4.configuration_gemma4 import Gemma4VisionConfig
     from transformers.models.gemma4.modeling_gemma4 import Gemma4VisionEncoderLayer as HFVisionLayer
@@ -100,7 +105,7 @@ def test_vision_layer(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int
     tt_cos = ttnn.from_torch(cos, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
     tt_sin = ttnn.from_torch(sin, device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
 
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
         sequence_parallel=ParallelFactor(mesh_axis=1 - tp_axis, factor=tuple(mesh_device.shape)[1 - tp_axis]),

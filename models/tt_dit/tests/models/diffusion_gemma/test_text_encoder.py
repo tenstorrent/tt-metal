@@ -20,7 +20,7 @@ from ....parallel.config import DiTParallelConfig, ParallelFactor
 from ....parallel.manager import CCLManager
 from ....utils.check import assert_quality
 from ....utils.tensor import local_device_to_torch
-from ....utils.test import line_params
+from ....utils.test import line_params, ring_params
 
 PCC_THRESHOLD = 0.99
 ALLCLOSE_ATOL = 5e-2
@@ -43,12 +43,17 @@ def _per_layer_moe_substate(model_state: dict, num_layers: int) -> list[dict]:
 
 
 @pytest.mark.parametrize(
-    ("mesh_device", "tp_axis", "num_links", "device_params"),
-    [pytest.param((2, 4), 0, 1, line_params, id="bh_qb2_tp2")],
+    ("mesh_device", "tp_axis", "num_links", "device_params", "topology"),
+    [
+        pytest.param((2, 4), 0, 1, line_params, ttnn.Topology.Linear, id="bh_qb2_tp2"),
+        pytest.param((2, 4), 0, 1, ring_params, ttnn.Topology.Ring, id="wh_t3k_tp2"),
+    ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("seq_len", [64])
-def test_encoder_text_model(mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, seq_len: int) -> None:
+def test_encoder_text_model(
+    mesh_device: ttnn.MeshDevice, tp_axis: int, num_links: int, topology: ttnn.Topology, seq_len: int
+) -> None:
     """TT encoder text model vs HF DiffusionGemmaEncoderTextModel."""
     from transformers.models.diffusion_gemma.modeling_diffusion_gemma import (
         DiffusionGemmaEncoderTextModel as HFEncoderTextModel,
@@ -118,7 +123,7 @@ def test_encoder_text_model(mesh_device: ttnn.MeshDevice, tp_axis: int, num_link
     }
 
     # TT setup.
-    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=ttnn.Topology.Linear)
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=tp_axis, factor=tp_factor),
         sequence_parallel=ParallelFactor(mesh_axis=1 - tp_axis, factor=tuple(mesh_device.shape)[1 - tp_axis]),
@@ -154,7 +159,7 @@ def test_encoder_text_model(mesh_device: ttnn.MeshDevice, tp_axis: int, num_link
         ccl_manager=ccl_manager,
         parallel_config=parallel_config,
         num_links=num_links,
-        topology=ttnn.Topology.Linear,
+        topology=topology,
     )
     tt_encoder.load_state_dict(hf_state)
 

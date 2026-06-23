@@ -152,10 +152,23 @@ class DiffusionGemmaEncoderTextModel(Module):
             tensors per layer (in TP-sharded layout) for the decoder to read.
         """
         # Precompute (cos, sin) once per layer_type for this seq.
+        h = self.embed_tokens(input_ids)
+        return self._forward_from_embeds(h, position_ids, attention_masks)
+
+    def _forward_from_embeds(
+        self,
+        inputs_embeds: ttnn.Tensor,
+        position_ids: torch.Tensor,
+        attention_masks: dict[str, ttnn.Tensor | None],
+    ) -> tuple[ttnn.Tensor, list[tuple[ttnn.Tensor, ttnn.Tensor]]]:
+        """Run the layer stack from pre-computed embeddings.
+
+        Used by the multimodal encoder which builds merged text+vision embeddings before
+        feeding them through the transformer layers.
+        """
         cos_sin = {layer_type: self.rope.get_cos_sin(layer_type, position_ids) for layer_type in set(self.layer_types)}
 
-        h = self.embed_tokens(input_ids)
-
+        h = inputs_embeds
         per_layer_kv: list[tuple[ttnn.Tensor, ttnn.Tensor]] = []
         for i in range(self.num_hidden_layers):
             layer_type = self.layer_types[i]
