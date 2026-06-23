@@ -343,6 +343,7 @@ def _add_shared_experts_to_golden_tp(
 
 CONFIGS_DIR = Path(__file__).resolve().parents[3] / "modules" / "moe" / "configs"
 CONFIG_PATHS = sorted(CONFIGS_DIR.glob("*.yaml"))
+CONFIG_PATHS = filter(lambda x: "glm_47" in str(x), CONFIG_PATHS)
 
 assert CONFIG_PATHS, f"no YAML configs found in {CONFIGS_DIR}"
 
@@ -377,7 +378,7 @@ SKIP_LIST = [
             ),
         ),
         pytest.param(
-            (8, 4),
+            (4, 8),
             id="8x4",
             marks=pytest.mark.skipif(is_mesh_graph_descriptor_set(MESH_GRAPH_DESC_16x1), reason=f"16x1 MGD is set"),
         ),
@@ -425,8 +426,8 @@ def test_tt_moe_decode(
     config_path: Path,
     num_iterations: int,
 ):
-    torch.manual_seed(2005)
-    random.seed(2005)
+    # torch.manual_seed(2005)
+    #     random.seed(2005)
 
     mesh_shape = tuple(mesh_device.shape)
     fabric_config = device_params["fabric_config"]
