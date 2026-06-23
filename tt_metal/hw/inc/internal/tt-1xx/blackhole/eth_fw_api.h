@@ -367,14 +367,27 @@ static void update_boot_results_eth_link_status_check() {
 // already identifies which core observed the down event.
 constexpr uint32_t ETH_LINK_DOWN_RING_BUF_CODE = 0xD09D0000;
 
+// Marker pushed once when ERISC0 observes its link transition back UP after having been down (i.e. FW
+// recovery succeeded). 0x600D reads as "GOOD" in the watcher dump, pairing with the 0xD09D "DOWN"
+// marker above, so a down->recovered cycle reads as ... D09D D09D ... 600D in the per-core ring buffer.
+constexpr uint32_t ETH_LINK_UP_RING_BUF_CODE = 0x600D0000;
+
 // This should only be run on ERISC0, and ERISC1 should not be sending/receiving traffic while this is called.
 static void recover_eth_link_if_down() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    // Per-core down/up edge state (single firmware TU -> one instance per eth core). Constant-
+    // initialized to false, so no static-init guard variable is emitted.
+    static bool eth_link_was_down = false;
     if (!is_link_up()) {
         // Record the down-link/recovery event for the watcher (no-op unless the watcher is enabled).
         WATCHER_RING_BUFFER_PUSH(ETH_LINK_DOWN_RING_BUF_CODE);
+        eth_link_was_down = true;
         reinterpret_cast<void (*)()>(
             (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr))();
+    } else if (eth_link_was_down) {
+        // Link came back up after a down/recovery sequence -- record the recovery edge once.
+        WATCHER_RING_BUFFER_PUSH(ETH_LINK_UP_RING_BUF_CODE);
+        eth_link_was_down = false;
     }
 #endif
 }

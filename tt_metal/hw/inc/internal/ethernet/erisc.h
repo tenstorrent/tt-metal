@@ -52,7 +52,20 @@ inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync(
 #if defined(COOPERATIVE_ERISC)
     rtos_context_switch_ptr();
 #elif defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
+    // Drain the eth mailbox so FW-level messages (e.g. the port-down request injected by
+    // run_link_control) are processed even while the fabric router is the one yielding through this
+    // path. The full risc_context_switch() services the mailbox via aerisc_context_switch(), but the
+    // router's steady-state loop uses this without_noc_sync variant, which otherwise never would.
+    //
+    // service_eth_msg() can dispatch FW handlers (port action, MAC/PCS reinit, link recovery) that use
+    // NOC0. The fabric router runs in dedicated-NOC mode, so it keeps PRIVATE software shadow counters:
+    // base-FW NOC0 use here would desync them and hang the router on resume. Bracket the yield exactly
+    // like the full risc_context_switch() does -- flush the router's in-flight NOC0 first, then realign
+    // its shadow counters after. (TEST-ONLY: this makes the "without_noc_sync" path do a full sync.)
+    ncrisc_noc_full_sync<1>();
+    service_eth_msg();
     update_boot_results_eth_link_status_check();
+    ncrisc_noc_counters_init<1>();
     recover_eth_link_if_down();
 #endif
 #endif
