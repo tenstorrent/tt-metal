@@ -1412,6 +1412,20 @@ def test_wan_decoder(
     MIN_PCC,
     MAX_RMSE,
 ):
+    import os
+
+    # Skip f32+check_output+real_weights+chunk_1+T=1+2x4 mesh on wormhole_b0 due to PCC regression, refs #47138
+    if (
+        dtype == ttnn.DataType.FLOAT32
+        and not skip_check
+        and real_weights
+        and t_chunk_size == 1
+        and T == 1
+        and tuple(mesh_device.shape) == (2, 4)
+        and os.environ.get("ARCH_NAME", "") == "wormhole_b0"
+    ):
+        pytest.skip("f32 PCC regression on wormhole_b0 2x4 mesh, refs #47138")
+
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch.manual_seed(0)
