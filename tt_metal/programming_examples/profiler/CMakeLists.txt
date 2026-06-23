@@ -20,6 +20,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_poll_rate)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_dma_probe)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_grid_drain)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_grid_drain4)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/test_x280_poll4)
 
 add_custom_target(
     profiler_examples
@@ -30,4 +31,5 @@ add_custom_target(
         test_x280_dma_probe
         test_x280_grid_drain
         test_x280_grid_drain4
+        test_x280_poll4
 )

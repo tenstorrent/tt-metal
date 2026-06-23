@@ -41,10 +41,12 @@ _start:
     li    t0, (1 << 9)
     csrs  mstatus, t0
 
-    /* per-hart stack: sp = _stack_top - hartid * STACK_SIZE (32 KiB) */
+    /* per-hart stack: sp = _stack_top - hartid * STACK_SIZE (4 KiB).
+     * 4 KiB stride keeps all 4 harts' stacks inside the LIM region (4 x 4 KiB
+     * = 16 KiB below _stack_top); the FWs use little stack (no recursion). */
     csrr  a0, mhartid
     la    sp, _stack_top
-    li    t0, 0x8000
+    li    t0, 0x1000
     mul   t1, a0, t0
     sub   sp, sp, t1
 
