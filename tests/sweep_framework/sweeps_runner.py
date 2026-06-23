@@ -1315,8 +1315,6 @@ def enable_profiler():
     # ttnn._ttnn.profiler.get_latest_programs_perf_data(); required for the
     # modern (multi-chip-safe) device-perf read in perf_utils.gather_single_test_perf.
     os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
-    # TT_METAL_PROFILER_SYNC skipped: triggers syncAllDevices() on ETH cores,
-    # which deadlocks on Galaxy due to residual fabric state between test iterations.
 
 
 def disable_profiler():
@@ -1325,7 +1323,6 @@ def disable_profiler():
     os.environ.pop("ENABLE_TRACY", None)
     os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
     os.environ.pop("TT_METAL_PROFILER_CPP_POST_PROCESS", None)
-    os.environ.pop("TT_METAL_PROFILER_SYNC", None)
 
 
 if __name__ == "__main__":
