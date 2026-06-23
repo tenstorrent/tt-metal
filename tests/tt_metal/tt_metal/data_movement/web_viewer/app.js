@@ -8,165 +8,74 @@ const KNOWN_ARCHITECTURES = ["blackhole", "wormhole_b0"];
 const GITHUB_BASE =
     "https://github.com/tenstorrent/tt-metal/blob/main/tests/tt_metal/tt_metal/data_movement";
 
-const TESTS = [
-    // ── One from One ───────────────────────────────────────────────
+const TEST_GROUPS = [
     {
-        name: "One from One Packet Sizes",
-        csv: "One from One Packet Sizes.csv",
+        group: "One from One",
+        directory: "one_from_one",
         tags: ["read", "unicast", "L1", "single_core"],
-        directory: "one_from_one",
+        tests: [
+            { name: "Packet Sizes", csv: "One from One Packet Sizes 2.0.csv" },
+            { name: "Virtual Channels", csv: "One from One Virtual Channels.csv" },
+        ],
     },
     {
-        name: "One from One Packet Sizes 2.0",
-        csv: "One from One Packet Sizes 2.0.csv",
-        tags: ["read", "unicast", "L1", "single_core", "2.0_api"],
-        directory: "one_from_one",
-    },
-    {
-        name: "One from One Directed Ideal",
-        csv: "One from One Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "single_core", "directed_ideal"],
-        directory: "one_from_one",
-    },
-    {
-        name: "One from One Virtual Channels",
-        csv: "One from One Virtual Channels.csv",
-        tags: ["read", "unicast", "L1", "single_core", "virtual_channels"],
-        directory: "one_from_one",
-    },
-
-    // ── One to One ─────────────────────────────────────────────────
-    {
-        name: "One to One Packet Sizes",
-        csv: "One to One Packet Sizes.csv",
+        group: "One to One",
+        directory: "one_to_one",
         tags: ["write", "unicast", "L1", "single_core"],
-        directory: "one_to_one",
+        tests: [
+            { name: "Packet Sizes", csv: "One to One Packet Sizes 2.0.csv" },
+            { name: "Virtual Channels", csv: "One to One Virtual Channels.csv" },
+        ],
     },
     {
-        name: "One to One Packet Sizes 2.0",
-        csv: "One to One Packet Sizes 2.0.csv",
-        tags: ["write", "unicast", "L1", "single_core", "2.0_api"],
-        directory: "one_to_one",
-    },
-    {
-        name: "One to One Directed Ideal",
-        csv: "One to One Directed Ideal.csv",
-        tags: ["write", "unicast", "L1", "single_core", "directed_ideal"],
-        directory: "one_to_one",
-    },
-    {
-        name: "One to One Virtual Channels",
-        csv: "One to One Virtual Channels.csv",
-        tags: ["write", "unicast", "L1", "single_core", "virtual_channels"],
-        directory: "one_to_one",
-    },
-
-    // ── One from All ───────────────────────────────────────────────
-    {
-        name: "One from All Packet Sizes",
-        csv: "One from All Packet Sizes.csv",
+        group: "One from All",
+        directory: "one_from_all",
         tags: ["read", "unicast", "L1", "multi_core"],
-        directory: "one_from_all",
+        tests: [
+            { name: "Packet Sizes", csv: "One from All Packet Sizes.csv" },
+            { name: "Virtual Channels", csv: "One from All Virtual Channels.csv" },
+        ],
     },
     {
-        name: "One from All Directed Ideal",
-        csv: "One from All Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
-        directory: "one_from_all",
-    },
-    {
-        name: "One from All Virtual Channels",
-        csv: "One from All Virtual Channels.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "virtual_channels"],
-        directory: "one_from_all",
-    },
-
-    // ── One to All ─────────────────────────────────────────────────
-    {
-        name: "One to All Multicast Linked Packet Sizes",
-        csv: "One to All Multicast Linked Packet Sizes.csv",
+        group: "One to All",
+        directory: "one_to_all",
         tags: ["write", "multicast", "L1", "multi_core"],
-        directory: "one_to_all",
+        tests: [
+            { name: "Multicast Linked Packet Sizes", csv: "One to All Multicast Linked Packet Sizes 2.0.csv" },
+            { name: "Multicast Schemes (Loopback Disabled)", csv: "Multicast Schemes (Loopback Disabled).csv" },
+        ],
     },
     {
-        name: "One to All Multicast Linked Packet Sizes 2.0",
-        csv: "One to All Multicast Linked Packet Sizes 2.0.csv",
-        tags: ["write", "multicast", "L1", "multi_core", "2.0_api"],
-        directory: "one_to_all",
-    },
-    {
-        name: "Multicast Schemes (Loopback Disabled)",
-        csv: "Multicast Schemes (Loopback Disabled).csv",
-        tags: ["write", "multicast", "L1", "multi_core", "2.0_api"],
-        directory: "one_to_all",
-    },
-
-    // ── All to All ─────────────────────────────────────────────────
-    {
-        name: "All to All Packet Sizes 2.0",
-        csv: "All to All Packet Sizes 2.0.csv",
-        tags: ["write", "unicast", "L1", "multi_core", "2.0_api"],
+        group: "All to All",
         directory: "all_to_all",
+        tags: ["write", "unicast", "L1", "multi_core"],
+        tests: [
+            { name: "Packet Sizes", csv: "All to All Packet Sizes 2.0.csv" },
+        ],
     },
-
-    // ── All from All ───────────────────────────────────────────────
     {
-        name: "All from All Packet Sizes",
-        csv: "All from All Packet Sizes.csv",
+        group: "All from All",
+        directory: "all_from_all",
         tags: ["read", "unicast", "L1", "multi_core"],
-        directory: "all_from_all",
+        tests: [
+            { name: "Packet Sizes", csv: "All from All Packet Sizes.csv" },
+        ],
     },
     {
-        name: "All from All Directed Ideal",
-        csv: "All from All Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
-        directory: "all_from_all",
-    },
-    {
-        name: "All from All 2x2 From 1x1 Directed Ideal",
-        csv: "All from All 2x2 From 1x1 Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
-        directory: "all_from_all",
-    },
-    {
-        name: "All from All 4x4 From 1x1 Directed Ideal",
-        csv: "All from All 4x4 From 1x1 Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
-        directory: "all_from_all",
-    },
-    {
-        name: "All from All 1x1 From 2x2 Directed Ideal",
-        csv: "All from All 1x1 From 2x2 Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
-        directory: "all_from_all",
-    },
-    {
-        name: "All from All 1x1 From 4x4 Directed Ideal",
-        csv: "All from All 1x1 From 4x4 Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
-        directory: "all_from_all",
-    },
-    {
-        name: "All from All 2x2 From 2x2 Directed Ideal",
-        csv: "All from All 2x2 From 2x2 Directed Ideal.csv",
-        tags: ["read", "unicast", "L1", "multi_core", "directed_ideal"],
-        directory: "all_from_all",
-    },
-
-    // ── Multi Interleaved ──────────────────────────────────────────
-    {
-        name: "Multi Interleaved Sizes",
-        csv: "Multi Interleaved Sizes.csv",
-        tags: ["read", "unicast", "DRAM", "multi_core"],
+        group: "Multi Interleaved",
         directory: "multi_interleaved",
+        tags: ["read", "unicast", "DRAM", "multi_core"],
+        tests: [
+            { name: "Sizes", csv: "Multi Interleaved Sizes.csv" },
+        ],
     },
-
-    // ── Atomics ────────────────────────────────────────────────────
     {
-        name: "Atomic Semaphore Adjacent Bandwidth Sweep",
-        csv: "Atomic Semaphore Adjacent Bandwidth Sweep.csv",
-        tags: ["write", "unicast", "L1", "multi_core", "atomics"],
+        group: "Atomic Semaphore",
         directory: "atomics",
+        tags: ["write", "unicast", "L1", "multi_core", "atomics"],
+        tests: [
+            { name: "Adjacent Bandwidth Sweep", csv: "Atomic Semaphore Adjacent Bandwidth Sweep.csv" },
+        ],
     },
 ];
 
@@ -175,6 +84,10 @@ const INTERNAL_COLUMNS = new Set([
     "Architecture",
     "Subordinate Grid Size X",
     "Subordinate Grid Size Y",
+]);
+
+const X_AXIS_EXCLUDED = new Set([
+    "NoC Index",
 ]);
 
 const METRIC_COLUMNS = new Set([
@@ -187,8 +100,10 @@ const METRIC_COLUMNS = new Set([
     "Clock Frequency (MHz)",
 ]);
 
-const DEFAULT_X_AXIS = "Transaction Size (bytes)";
-const DEFAULT_SERIES = "Number of Transactions";
+const X_AXIS_PRIORITY = [
+    "Transaction Size (bytes)",
+    "Grid Dimensions",
+];
 
 const SERIES_COLORS = [
     "#7b68ee",
@@ -206,6 +121,7 @@ const SERIES_COLORS = [
 // ── State ──────────────────────────────────────────────────────────
 
 let state = {
+    selectedGroup: null,
     selectedTest: null,
     selectedArch: null,
     availableArchs: [],
@@ -252,15 +168,16 @@ function buildChartConfig(analysis, chosenXAxis) {
         metrics.find((m) => m.includes("Bandwidth")) || null;
     const latencyCol = metrics.find((m) => m.includes("Latency")) || null;
 
-    const allDimensions = sweepDimensions.map((d) => d.column);
+    const allDimensions = sweepDimensions
+        .map((d) => d.column)
+        .filter((d) => !X_AXIS_EXCLUDED.has(d));
 
     let xAxis;
     if (chosenXAxis && allDimensions.includes(chosenXAxis)) {
         xAxis = chosenXAxis;
-    } else if (allDimensions.includes(DEFAULT_X_AXIS)) {
-        xAxis = DEFAULT_X_AXIS;
     } else {
-        xAxis = allDimensions[0];
+        xAxis = X_AXIS_PRIORITY.find((d) => allDimensions.includes(d))
+            || allDimensions[0];
     }
 
     const groupers = sweepDimensions
@@ -305,8 +222,8 @@ async function probeArchitectures(test) {
 
 function getAllTags() {
     const tags = new Set();
-    for (const test of TESTS) {
-        for (const tag of test.tags) {
+    for (const group of TEST_GROUPS) {
+        for (const tag of group.tags) {
             tags.add(tag);
         }
     }
@@ -315,17 +232,19 @@ function getAllTags() {
 
 // ── Filtering ──────────────────────────────────────────────────────
 
-function getFilteredTests() {
-    return TESTS.filter((test) => {
-        if (
-            state.searchQuery &&
-            !test.name.toLowerCase().includes(state.searchQuery.toLowerCase())
-        ) {
-            return false;
+function getFilteredGroups() {
+    const query = state.searchQuery.toLowerCase();
+    return TEST_GROUPS.filter((group) => {
+        if (query) {
+            const groupMatch = group.group.toLowerCase().includes(query);
+            const testMatch = group.tests.some((t) =>
+                t.name.toLowerCase().includes(query)
+            );
+            if (!groupMatch && !testMatch) return false;
         }
         if (state.activeTags.size > 0) {
             for (const tag of state.activeTags) {
-                if (!test.tags.includes(tag)) return false;
+                if (!group.tags.includes(tag)) return false;
             }
         }
         return true;
@@ -526,21 +445,30 @@ function renderTagChips() {
 function renderTestList() {
     const list = document.getElementById("test-list");
     list.innerHTML = "";
-    const filtered = getFilteredTests();
+    const filtered = getFilteredGroups();
 
-    for (const test of filtered) {
+    for (const group of filtered) {
+        const isExpanded = state.selectedGroup === group;
+
         const li = document.createElement("li");
-        if (state.selectedTest && state.selectedTest.name === test.name) {
-            li.className = "selected";
-        }
+        li.className = "group-item" + (isExpanded ? " expanded" : "");
 
-        const nameSpan = document.createElement("span");
-        nameSpan.textContent = test.name;
-        li.appendChild(nameSpan);
+        const header = document.createElement("div");
+        header.className = "group-header";
+        header.textContent = group.group;
+        header.addEventListener("click", () => {
+            state.selectedGroup = isExpanded ? null : group;
+            if (!isExpanded && group.tests.length === 1) {
+                selectTest(group, group.tests[0]);
+            } else {
+                renderTestList();
+            }
+        });
+        li.appendChild(header);
 
         const tagsDiv = document.createElement("div");
         tagsDiv.className = "test-tags";
-        for (const tag of test.tags) {
+        for (const tag of group.tags) {
             const tagSpan = document.createElement("span");
             tagSpan.className = "test-tag";
             tagSpan.textContent = tag;
@@ -548,7 +476,22 @@ function renderTestList() {
         }
         li.appendChild(tagsDiv);
 
-        li.addEventListener("click", () => selectTest(test));
+        if (isExpanded && group.tests.length > 1) {
+            const subList = document.createElement("ul");
+            subList.className = "sub-test-list";
+            for (const test of group.tests) {
+                const subLi = document.createElement("li");
+                subLi.className = state.selectedTest === test ? "selected" : "";
+                subLi.textContent = test.name;
+                subLi.addEventListener("click", (e) => {
+                    e.stopPropagation();
+                    selectTest(group, test);
+                });
+                subList.appendChild(subLi);
+            }
+            li.appendChild(subList);
+        }
+
         list.appendChild(li);
     }
 }
@@ -669,15 +612,17 @@ function renderSweepFilters(config, rows) {
 
 // ── Main Actions ───────────────────────────────────────────────────
 
-async function selectTest(test) {
+async function selectTest(group, test) {
+    state.selectedGroup = group;
     state.selectedTest = test;
 
     document.getElementById("empty-state").style.display = "none";
     document.getElementById("test-view").style.display = "block";
 
-    document.getElementById("test-name").textContent = test.name;
+    document.getElementById("test-name").textContent =
+        group.group + " — " + test.name;
     document.getElementById("readme-link").href =
-        `${GITHUB_BASE}/${test.directory}/README.md`;
+        `${GITHUB_BASE}/${group.directory}/README.md`;
 
     renderTestList();
 
