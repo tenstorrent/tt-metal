@@ -38,7 +38,7 @@ from models.experimental.voxtraltts.utils.audio_tokenizer_optimizations import (
     AudioTokenizerOptimizations,
     voxtral_audio_tokenizer_default_optimizations,
 )
-from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch
+from models.experimental.voxtraltts.utils.mesh import voxtral_from_torch, voxtral_to_torch_replicated
 
 AUDIO_TOKENIZER_ENCODER_OPTIONAL_PREFIXES = ("input_proj.", "encoder_blocks.")
 
@@ -948,7 +948,7 @@ class VoxtralTTAudioTokenizer:
 
         # Remaining segments each exceed max_concat_flat — device concat would exceed L1 CB page
         # limit (page size = last-dim bytes > per-core L1). Download all, cat on CPU, re-upload.
-        host_parts = [ttnn.to_torch(t).bfloat16() for t in tensors]
+        host_parts = [voxtral_to_torch_replicated(t).bfloat16() for t in tensors]
         for t in tensors:
             if t.is_allocated():
                 ttnn.deallocate(t)

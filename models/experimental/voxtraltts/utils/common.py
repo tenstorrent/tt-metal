@@ -481,6 +481,8 @@ def build_voxtral_text_page_table_host(*, max_seq_len: int, paged_block_size: in
 
 def build_voxtral_text_page_table_tt(mesh_device, *, max_seq_len: int, paged_block_size: int = 32) -> ttnn.Tensor:
     """Device page table for paged KV prefill/decode (full block pool)."""
+    from models.experimental.voxtraltts.utils.mesh import voxtral_replicate_mesh_mapper
+
     page_table_host = build_voxtral_text_page_table_host(
         max_seq_len=max_seq_len,
         paged_block_size=paged_block_size,
@@ -491,6 +493,7 @@ def build_voxtral_text_page_table_tt(mesh_device, *, max_seq_len: int, paged_blo
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=voxtral_replicate_mesh_mapper(mesh_device),
     )
 
 

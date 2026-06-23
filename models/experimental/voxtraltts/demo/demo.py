@@ -134,9 +134,12 @@ def _parse_demo_args(argv: list[str] | None = None) -> DemoArgs:
     )
     p.add_argument(
         "--codes-path",
+        "--codes",
         type=str,
         default=None,
-        help="Path to a .pt file with pre-computed [1,37,T] or [T,37] codes (required for --mode codes).",
+        dest="codes_path",
+        help="Path to a .pt file with pre-computed [1,37,T] or [T,37] codes (required for --mode codes). "
+        "Also accepts dict checkpoints saved by text mode (uses ``codes_b37t``).",
     )
     p.add_argument(
         "--latent-path",
@@ -289,13 +292,20 @@ def _check_seq_len_memory(text_max_seq_len: int) -> None:
 
 def _load_pipeline(mesh: ttnn.Device, args: DemoArgs) -> VoxtralTTSPipeline:
     _check_seq_len_memory(args.tt.text_max_seq_len)
+    from models.experimental.voxtraltts.utils.mesh import voxtral_mesh_device_compute_shape
+
+    # QB2 (1×N): HF-aligned fp32 SDPA reduces text-hidden drift in the free-run AR loop so acoustic
+    # reaches natural END_AUDIO. P150 (1×1) keeps the default perf profile unless --hf-aligned-text.
+    multi_device = voxtral_mesh_device_compute_shape() != (1, 1)
+    text_optimizations = (
+        voxtral_text_hf_aligned_optimizations
+        if args.tt.hf_aligned_text or multi_device
+        else voxtral_text_default_optimizations
+    )
     audio_tokenizer_optimizations = (
         voxtral_audio_tokenizer_dense_mask_sdpa_optimizations()
         if args.tt.dense_alibi_sdpa
         else voxtral_audio_tokenizer_native_sdpa_optimizations()
-    )
-    text_optimizations = (
-        voxtral_text_hf_aligned_optimizations if args.tt.hf_aligned_text else voxtral_text_default_optimizations
     )
     return VoxtralTTSPipeline.from_model_name(
         mesh,
@@ -343,13 +353,95 @@ def _apply_output_highpass(w: np.ndarray, sample_rate: int) -> np.ndarray:
     return _sig.sosfilt(sos, w).astype(np.float32)
 
 
-def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+def _load_codes_checkpoint(path: str | Path) -> torch.Tensor:
+    """Load ``[1,37,T]`` codes from a raw tensor checkpoint or a text-mode dict (``.codes.pt``)."""
+    try:
+        raw = torch.load(path, map_location="cpu", weights_only=False)
+    except TypeError:
+        raw = torch.load(path, map_location="cpu")
+    if isinstance(raw, dict):
+        if "codes_b37t" in raw:
+            raw = raw["codes_b37t"]
+        else:
+            raise ValueError(f"Expected a tensor or dict with 'codes_b37t' in {path}, got keys: {sorted(raw.keys())}")
+    codes = torch.as_tensor(raw, dtype=torch.long)
+    if codes.dim() == 2:
+        codes = codes.unsqueeze(0).transpose(1, 2)
+    if codes.dim() != 3 or int(codes.shape[1]) != 37:
+        raise ValueError(f"Expected codes [1,37,T] or [T,37], got {tuple(codes.shape)}")
+    return codes
+
+
+def _waveform_duration_stats(waveform_f32: torch.Tensor, sample_rate: int, *, rms_thresh: float = 0.02) -> dict:
+    """Return file duration, codec-neutral active speech span, and peak amplitude."""
+    w = waveform_f32.detach().float().cpu().numpy().reshape(-1)
+    n_samples = int(w.shape[0])
+    file_s = n_samples / sample_rate if sample_rate > 0 else 0.0
+    peak = float(np.abs(w).max()) if n_samples else 0.0
+    active_s = 0.0
+    if n_samples > 0 and sample_rate > 0:
+        win = max(1, int(0.05 * sample_rate))
+        rms = [float(np.sqrt(np.mean(w[i : i + win] ** 2))) for i in range(0, max(1, n_samples - win), win)]
+        if rms:
+            active_idx = [i for i, v in enumerate(rms) if v > rms_thresh]
+            if active_idx:
+                active_s = (active_idx[-1] - active_idx[0] + 1) * (win / sample_rate)
+    return {"file_s": file_s, "active_s": active_s, "peak": peak, "n_samples": n_samples}
+
+
+def _log_waveform_duration(
+    label: str,
+    waveform_f32: torch.Tensor,
+    sample_rate: int,
+    *,
+    n_frames: int | None = None,
+    downsample_factor: int | None = None,
+    model_frame_rate_hz: float | None = None,
+) -> None:
+    """Log WAV file duration vs codec-implied duration and audible active span."""
+    stats = _waveform_duration_stats(waveform_f32, sample_rate)
+    logger.info(
+        f"[{label}] WAV file duration: {stats['file_s']:.3f} s "
+        f"({stats['n_samples']} samples @ {sample_rate} Hz, peak={stats['peak']:.4f})"
+    )
+    if n_frames is not None and downsample_factor and sample_rate > 0:
+        codec_samples = int(n_frames) * int(downsample_factor)
+        codec_s = codec_samples / sample_rate
+        logger.info(
+            f"[{label}] Codec-implied duration: {codec_s:.3f} s "
+            f"({n_frames} frames × {downsample_factor} samples/frame"
+            + (f" @ {model_frame_rate_hz:.2f} Hz" if model_frame_rate_hz else "")
+            + ")"
+        )
+        if abs(stats["file_s"] - codec_s) > 0.02:
+            logger.warning(
+                f"[{label}] WAV duration ({stats['file_s']:.3f} s) differs from codec-implied "
+                f"({codec_s:.3f} s) by {abs(stats['file_s'] - codec_s):.3f} s"
+            )
+    if stats["active_s"] > 0:
+        logger.info(
+            f"[{label}] Active audio span (RMS>{0.02:.2f}): {stats['active_s']:.3f} s "
+            f"of {stats['file_s']:.3f} s file"
+        )
+    if n_frames is not None and downsample_factor and sample_rate > 0:
+        codec_s = int(n_frames) * int(downsample_factor) / sample_rate
+        if abs(stats["file_s"] - codec_s) <= 0.02:
+            logger.info(f"[{label}] Duration check: WAV matches codec-implied length ({codec_s:.3f} s)")
+
+
+def _finalize_waveform_for_output(waveform_f32: torch.Tensor, sample_rate: int) -> np.ndarray:
+    """HPF + peak normalize to 0.95 (matches saved ``.wav`` content)."""
     w = waveform_f32.detach().float().cpu().numpy().reshape(-1)
     w = _apply_output_highpass(w, sample_rate)
     peak = float(np.abs(w).max())
-    if peak > 0.95:
+    if peak > 0.0:
         w = w * (0.95 / peak)
+    return w
+
+
+def _save_wav(path: Path, waveform_f32: torch.Tensor, sample_rate: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    w = _finalize_waveform_for_output(waveform_f32, sample_rate)
     w = np.clip(w * 32767.0, -32768.0, 32767.0).astype(np.int16)
     wavfile.write(str(path), sample_rate, w)
 
@@ -518,6 +610,14 @@ def run_text_mode(
         first_frame_s=out.first_frame_s,
         bitrate_bps=_codec_bitrate_bps(pipe),
     )
+    _log_waveform_duration(
+        "tt_generate",
+        torch.from_numpy(_finalize_waveform_for_output(wav, sample_rate)),
+        sample_rate,
+        n_frames=n_frames,
+        downsample_factor=pipe._downsample_factor,
+        model_frame_rate_hz=model_fps,
+    )
     logger.info(
         f"[tt_generate] context: prompt_seq_len={prompt_len} peak_seq_len={prompt_len + n_frames} "
         f"text_max_seq_len={text_max_seq_len} model_frame_rate={model_fps:.2f} Hz"
@@ -529,7 +629,13 @@ def run_text_mode(
             f"min={int(semantic.min().item())}, max={int(semantic.max().item())}, "
             f"unique={int(semantic.unique().numel())}, first10={semantic[:10].tolist()}"
         )
-    if not out.hit_end_audio:
+    logger.info(
+        f"[tt_generate] generation stop: hit_end_audio={out.hit_end_audio} "
+        f"frames={n_frames} peak_seq_len={prompt_len + n_frames}"
+    )
+    if out.hit_end_audio:
+        logger.info(f"[tt_generate] Natural END_AUDIO reached after {n_frames} frames.")
+    elif n_frames >= max_tokens:
         logger.warning(
             f"[tt_generate] Reached max_speech_tokens={max_tokens} without END_AUDIO; output was truncated. "
             f"Decode budget for this prompt is {decode_budget} (raise --max-speech-tokens or use 0 for full budget)."
@@ -548,7 +654,7 @@ def run_text_mode(
     logger.info(f"Saved TT generated codes → {codes_path}")
 
     _save_wav(out_path, wav, sample_rate)
-    logger.info(f"Saved TT waveform → {out_path}  ({n_samples} samples @ {sample_rate} Hz)")
+    logger.info(f"Saved TT waveform → {out_path}")
 
 
 def run_codes_mode(
@@ -563,6 +669,13 @@ def run_codes_mode(
     t1 = perf_counter()
     audio_s = int(wav.numel()) / sample_rate if sample_rate > 0 else None
     _log_perf("tt_codes_decode", total_s=t1 - t0, audio_s=audio_s)
+    _log_waveform_duration(
+        "tt_codes_decode",
+        wav.squeeze(0).squeeze(0),
+        sample_rate,
+        n_frames=int(codes_b37t.shape[2]),
+        downsample_factor=pipe._downsample_factor,
+    )
     _save_wav(out_path, wav.squeeze(0).squeeze(0), sample_rate)
     logger.info(f"Saved → {out_path}")
 
@@ -634,7 +747,7 @@ def run_demo(args: DemoArgs) -> None:
     configure_decode_trace(decode_trace=args.tt.decode_trace, decode_trace_2cq=args.tt.decode_trace_2cq)
 
     if voxtral_mesh_device_compute_shape() != (1, 1) and not decode_trace_enabled():
-        logger.warning(
+        logger.info(
             "[demo] Multi-device mesh with trace disabled → slower direct forward per AR step. "
             "Use default trace for best RTF."
         )
@@ -708,15 +821,7 @@ def run_demo(args: DemoArgs) -> None:
                     cp = item.get("codes_path")
                     if not cp:
                         raise ValueError("codes mode requires --codes-path.")
-                    try:
-                        raw = torch.load(cp, map_location="cpu", weights_only=False)
-                    except TypeError:
-                        raw = torch.load(cp, map_location="cpu")
-                    codes = torch.as_tensor(raw, dtype=torch.long)
-                    if codes.dim() == 2:
-                        codes = codes.unsqueeze(0).transpose(1, 2)
-                    if codes.dim() != 3 or int(codes.shape[1]) != 37:
-                        raise ValueError(f"Expected codes [1,37,T] or [T,37], got {tuple(codes.shape)}")
+                    codes = _load_codes_checkpoint(cp)
                     run_codes_mode(pipe, codes, sample_rate, out_dir / f"{tag}_item{pid}.wav")
 
                 elif args.data.mode == "latents":
