@@ -31,7 +31,7 @@ void bind_move(nb::module_& mod) {
             +----------+----------------------------+----------------------------+---------------------------------+----------+
         )doc";
 
-    ttnn::bind_function<"move">(
+    ttnn::bind_function<"move", "ttnn.experimental.quasar.">(
         mod,
         doc,
         &ttnn::operations::experimental::quasar::move,

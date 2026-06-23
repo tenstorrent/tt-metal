@@ -21,7 +21,7 @@ from loguru import logger
 from transformers import DynamicCache
 
 import ttnn
-from models.common.utility_functions import is_blackhole, profiler
+from models.common.utility_functions import hf_cache_layer_kv, is_blackhole, profiler
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json
 from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_6_config import KimiK26Config
@@ -211,7 +211,7 @@ def run_model(
             torch_output = layer_out[0]
         logger.info(f"Torch reference output shape: {torch_output.shape}")
         if ref_cache is not None:
-            ref_kvpe = ref_cache.key_cache[layer_idx]
+            ref_kvpe = hf_cache_layer_kv(ref_cache, layer_idx)[0]
             logger.info(f"Reference KVPE shape: {ref_kvpe.shape}")
         profiler.end("torch_reference")
 

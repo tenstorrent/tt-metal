@@ -556,3 +556,10 @@ TEST_F(DevicePrintOutputFixture, PrintCallstackSkipUnderflow) {
         /* present */ {"CALLSTACK_BEGIN", "...", "CALLSTACK_END"},
         /* absent */ {"inner", "middle", "kernel_main"});
 }
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackCurrent) {
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_helper.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"current"});
+}

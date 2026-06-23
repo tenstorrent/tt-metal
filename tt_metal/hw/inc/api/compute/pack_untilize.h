@@ -496,15 +496,20 @@ pack_untilize_dest(
 ALWI void pack_untilize_uninit(uint32_t ocb) {
     LLK_SAN_FUNCTION();
 #ifndef ARCH_QUASAR
-    // Reconfigure data format to match the initial configuration, before calling init.
-    // Init is called to ensure special untilize init overrides are cleaned up.
-    PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
-    PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_init(ocb)));
 
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_untilize_uninit(ocb)));
 #endif
+
+    // Reconfigure data format to match the initial configuration, before calling init.
+    // Init is called to ensure special untilize init overrides are cleaned up.
+    {
+        LLK_SAN_SILENT_ZONE();
+        PACK((llk_init_packer_dest_offset_registers<PackMode::Default>()));
+        PACK((llk_pack_reconfig_data_format<DST_ACCUM_MODE>(ocb)));
+        PACK((llk_pack_init(ocb)));
+    }
+
 #else
     // No-op: Quasar uses dedicated instructions (PACR_UNTILIZE, PACR_STRIDE) that
     // don't conflict with standard PACR paths, so no reconfiguration is needed.
