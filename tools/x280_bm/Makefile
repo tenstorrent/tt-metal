@@ -27,7 +27,7 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
@@ -71,6 +71,16 @@ $(BUILD)/grid_drain.elf: $(BUILD)/entry.o $(BUILD)/grid_drain.o $(LD_SCRIPT) | t
 $(BUILD)/grid_drain.bin: $(BUILD)/grid_drain.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "grid_drain.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/grid_drain4.o: src/grid_drain4.c include/dma_engine.h include/noc.h | $(BUILD) toolchain
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/grid_drain4.elf: $(BUILD)/entry.o $(BUILD)/grid_drain4.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/grid_drain4.o
+
+$(BUILD)/grid_drain4.bin: $(BUILD)/grid_drain4.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "grid_drain4.bin: $$(wc -c < $@) bytes"
 
 $(BUILD):
 	mkdir -p $@
