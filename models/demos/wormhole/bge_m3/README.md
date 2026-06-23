@@ -181,13 +181,13 @@ Measures trace-replay latency for B1 and B32 at S512. Each iteration copies fres
 
 ```bash
 # Batch 1
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "batch1" -s
+TT_VISIBLE_DEVICES=0 pytest "models/demos/wormhole/bge_m3/tests/perf/perf.py::test_embedding_perf[blackhole-device_params0-batch1]" -s
 
 # Batch 32
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -k "batch32" -s
+TT_VISIBLE_DEVICES=0 pytest "models/demos/wormhole/bge_m3/tests/perf/perf.py::test_embedding_perf[blackhole-device_params0-batch32]" -s
 
-# Both
-TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py -s
+# All batch sizes (1, 8, 16, 32)
+TT_VISIBLE_DEVICES=0 pytest models/demos/wormhole/bge_m3/tests/perf/perf.py::test_embedding_perf -s
 ```
 
 ### `tracy_perf.py` — Kernel-level profiling
