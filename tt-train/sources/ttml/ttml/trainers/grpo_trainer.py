@@ -555,9 +555,7 @@ class GRPOTrainer:
             probs_old_list = []
             tt_model.eval()
             with no_grad():
-                for oi, (p, c) in enumerate(
-                    iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch)
-                ):
+                for p, c in iter_micro_batch(prompts_batch, completions_batch, completions_per_microbatch):
                     nlog_old, mask = completer.compute_nlog_probs(p, c)
                     nlog_old.set_requires_grad(False)
                     mask.set_requires_grad(False)
