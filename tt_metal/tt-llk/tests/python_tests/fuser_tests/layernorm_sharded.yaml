@@ -8,8 +8,6 @@
 # conditional control flow (is_allgather_worker, two_stage_reduce).
 # The global reduce result is modeled as a pre-reduced single-row operand.
 
-# dest_acc: true
-
 operands:
   # x: input tensor
   - name: "x"
@@ -88,6 +86,7 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
+        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
     block_size: [64, 128]
@@ -130,6 +129,7 @@ operations:
         operation: "Reduce"
         reduce_dim: "REDUCE_ROW"
         reduce_pool: "AVG"
+        reduce_to_tile: true
         unpacker: "ReduceUnpacker"
         math_fidelity: "HiFi4"
     block_size: [64, 128]
