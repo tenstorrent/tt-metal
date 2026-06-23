@@ -492,6 +492,10 @@ MLA_CHUNKED_TRACE_DIR = os.environ.get("MLA_CHUNKED_TRACE_DIR")
 # kv_cache/, not the root). It takes precedence over MLA_CHUNKED_TRACE_DIR and skips the root
 # scan/variant-filter entirely; the single trace is shared (cycled) across all users.
 MLA_CHUNKED_TRACE_PATH = os.environ.get("MLA_CHUNKED_TRACE_PATH")
+# MLA_NUM_ITERS repeats the whole device forward-pass sequence N times (default 1). It does NOT change
+# what is computed -- each repeat re-runs the same forward passes -- it just makes the test run longer
+# for perf/power measurement (e.g. MLA_NUM_ITERS=200 pytest ... -k '... func ...').
+MLA_NUM_ITERS = int(os.environ.get("MLA_NUM_ITERS", "1"))
 
 # Per-iteration VALID token counts for the rotation/padding edge cases, tuned for the TARGET 8x4 mesh
 # (sp=8, chunk_local=640, chunk=5120). Each cumulative kv_actual lands on a distinct rotation edge:
@@ -519,6 +523,7 @@ def _run_chunked_prefill(
     num_users=1,
     use_pretrained=False,
     topology=ttnn.Topology.Linear,
+    num_iters=1,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -532,6 +537,7 @@ def _run_chunked_prefill(
     its own cache slot, so cross-user contamination surfaces as a per-user output PCC drop.
     """
     assert reference in ("cpu", "trace", None), f"reference must be 'cpu'|'trace'|None, got {reference!r}"
+    assert num_iters >= 1, f"num_iters must be >= 1, got {num_iters}"
     sp_axis, tp_axis = 0, 1
     mesh_shape = list(mesh_device.shape)
     sp = mesh_shape[sp_axis]
@@ -690,66 +696,76 @@ def _run_chunked_prefill(
     # Accumulated natural-order output per user (only the measured region is filled).
     out_accum = [torch.zeros(1, 1, users[u]["total_len"], hidden_size, dtype=torch.bfloat16) for u in range(num_users)]
 
-    # ---- iterate: interleave users by local iter index (exercises cross-user isolation) ----
+    # ---- iterate: interleave users by local iter index (exercises cross-user isolation). The whole
+    #      iter sequence is repeated num_iters times (MLA_NUM_ITERS, default 1) so perf/power runs get a
+    #      longer-running workload without changing what is computed: each repeat re-runs the same
+    #      forward passes, rewriting the same cache region with the same input (idempotent), so the
+    #      references still hold. The per-iter / final PCC checks run only on the last repeat to avoid
+    #      redundant host work and log spam across the repeats. ----
     n_iters = max(len(u["group"]) for u in users)
-    logger.info(f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)")
-    for i in range(n_iters):
-        for u in range(num_users):
-            g = users[u]["group"]
-            if i >= len(g):
-                continue
-            isl = g[i]
-            kv_actual = prefill_len + sum(g[:i])
-            valid_end = kv_actual + isl
-            total_len = users[u]["total_len"]
+    logger.info(
+        f"Starting DEVICE chunked prefill: up to {n_iters} iters x {num_users} user(s)"
+        + (f", repeated {num_iters}x (MLA_NUM_ITERS)" if num_iters > 1 else "")
+    )
+    for rep in range(num_iters):
+        last_rep = rep == num_iters - 1
+        for i in range(n_iters):
+            for u in range(num_users):
+                g = users[u]["group"]
+                if i >= len(g):
+                    continue
+                isl = g[i]
+                kv_actual = prefill_len + sum(g[:i])
+                valid_end = kv_actual + isl
+                total_len = users[u]["total_len"]
 
-            positions = rotated_chip_positions(kv_actual, sp, chunk_local)
-            flat = [positions[c][r] for c in range(sp) for r in range(chunk_local)]
-            gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
-            chunk_in = users[u]["hidden"][gather_idx].clone()
-            chunk_in[torch.tensor([gp >= valid_end for gp in flat])] = 0.0
+                positions = rotated_chip_positions(kv_actual, sp, chunk_local)
+                flat = [positions[c][r] for c in range(sp) for r in range(chunk_local)]
+                gather_idx = torch.tensor([min(gp, total_len - 1) for gp in flat], dtype=torch.long)
+                chunk_in = users[u]["hidden"][gather_idx].clone()
+                chunk_in[torch.tensor([gp >= valid_end for gp in flat])] = 0.0
 
-            tt_h = ttnn.from_torch(
-                chunk_in.reshape(1, 1, chunk_size_global, hidden_size),
-                device=mesh_device,
-                dtype=ttnn.bfloat16,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
-                ),
-            )
-            tt_out = mla_tt.forward(
-                hidden_states=tt_h,
-                rope_tensors=indexed_rope,
-                kvpe_cache=tt_kvpe_cache,
-                actual_start=kv_actual,
-                actual_end=valid_end,
-                cache_user_id=u,
-            )
-            out_flat = ttnn.to_torch(
-                tt_out,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
-                ),
-            ).to(torch.bfloat16)[0, 0]
-
-            assert torch.isfinite(out_flat).all(), f"user {u} iter {i}: non-finite output"
-            valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
-            src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
-            dst = torch.tensor([gp for _, gp in valid_pairs], dtype=torch.long)
-            out_accum[u][0, 0, dst, :] = out_flat[src, :]
-
-            if users[u]["ref_out"] is not None:
-                _, msg = assert_with_pcc(
-                    users[u]["ref_out"][kv_actual:valid_end].reshape(1, 1, isl, hidden_size),
-                    out_accum[u][:, :, kv_actual:valid_end, :],
-                    0.98,
+                tt_h = ttnn.from_torch(
+                    chunk_in.reshape(1, 1, chunk_size_global, hidden_size),
+                    device=mesh_device,
+                    dtype=ttnn.bfloat16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=hidden_shard_dims
+                    ),
                 )
-                rot = "rotated" if kv_actual % chunk_size_global != 0 else "aligned"
-                logger.info(f"  user {u} iter {i} (kv_actual={kv_actual} isl={isl} {rot}): out PCC {msg}")
-        ttnn.synchronize_device(mesh_device)
-        ttnn.distributed_context_barrier()
+                tt_out = mla_tt.forward(
+                    hidden_states=tt_h,
+                    rope_tensors=indexed_rope,
+                    kvpe_cache=tt_kvpe_cache,
+                    actual_start=kv_actual,
+                    actual_end=valid_end,
+                    cache_user_id=u,
+                )
+                out_flat = ttnn.to_torch(
+                    tt_out,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device, dims=out_concat_dims, mesh_shape=mesh_device.shape
+                    ),
+                ).to(torch.bfloat16)[0, 0]
+
+                assert torch.isfinite(out_flat).all(), f"user {u} rep {rep} iter {i}: non-finite output"
+                valid_pairs = [(row, gp) for row, gp in enumerate(flat) if gp < valid_end]
+                src = torch.tensor([row for row, _ in valid_pairs], dtype=torch.long)
+                dst = torch.tensor([gp for _, gp in valid_pairs], dtype=torch.long)
+                out_accum[u][0, 0, dst, :] = out_flat[src, :]
+
+                if last_rep and users[u]["ref_out"] is not None:
+                    _, msg = assert_with_pcc(
+                        users[u]["ref_out"][kv_actual:valid_end].reshape(1, 1, isl, hidden_size),
+                        out_accum[u][:, :, kv_actual:valid_end, :],
+                        0.98,
+                    )
+                    rot = "rotated" if kv_actual % chunk_size_global != 0 else "aligned"
+                    logger.info(f"  user {u} iter {i} (kv_actual={kv_actual} isl={isl} {rot}): out PCC {msg}")
+            ttnn.synchronize_device(mesh_device)
+            ttnn.distributed_context_barrier()
 
     if reference is None:
         logger.success(f"✓ Functional chunked prefill ran ({num_users} user(s), finite output)")
@@ -871,4 +887,6 @@ def test_mla_chunked_prefill(request, mesh_device, kwargs, reference, device_par
         if device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_1D_RING
         else ttnn.Topology.Linear
     )
-    _run_chunked_prefill(request, mesh_device, reference=reference, topology=topology, **kwargs)
+    _run_chunked_prefill(
+        request, mesh_device, reference=reference, topology=topology, num_iters=MLA_NUM_ITERS, **kwargs
+    )
