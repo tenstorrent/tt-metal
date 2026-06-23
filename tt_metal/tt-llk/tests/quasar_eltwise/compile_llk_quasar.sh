@@ -29,7 +29,10 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TT_METAL_ROOT="${TT_METAL_HOME:-/localdev/nkapre/tt-metal}"
+# This script lives at $TT_METAL_HOME/tt_metal/tt-llk/tests/quasar_eltwise/ —
+# derive the repo root from it so the compile gate is self-contained.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
+TT_METAL_ROOT="${TT_METAL_HOME:-$REPO_ROOT}"
 LLK_TESTS_DIR="$TT_METAL_ROOT/tt_metal/tt-llk/tests"
 LLK_ROOT="$TT_METAL_ROOT/tt_metal/tt-llk"
 ARCH_LLK_ROOT="tt_llk_quasar"

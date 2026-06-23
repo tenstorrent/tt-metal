@@ -65,14 +65,13 @@ unless `--no-compile` is passed.
 For a sweep across the fitter's best configs (poly + rational), use
 `tt_metal/tt-llk/tests/python_tests/quasar/quasar_sweep.sh`.
 
-## Legacy / deprecated scripts
+## Location
 
-The following predate the tt-llk pytest flow and are kept only for reference.
-They reference paths that no longer exist (`tt_metal/third_party/tt_llk`,
-`$HOME/sim/qsr`, `quasar_1_arch.yaml`) or rely on the JIT path that does not work
-for Quasar. **Do not use them; use `run_quasar.sh`.**
-
-- `compile_for_quasar.sh` — JIT compile attempt (designed to fail).
-- `setup_quasar_ttsim.sh`, `run_on_quasar.sh` — old `$HOME/sim/qsr` JIT runs.
-- `run_gelu_on_polaris.sh`, `run_gelu_p1_s4_on_polaris.sh`, `generate_polaris_config.py`,
-  `config/`, `quasar_mock_cluster_desc.yaml` — polaris/neosom RTL-data plumbing.
+This driver is self-contained in the tt-llk tree at
+`tt_metal/tt-llk/tests/quasar_eltwise/`. `run_quasar.sh` and
+`compile_llk_quasar.sh` derive `TT_METAL_HOME` from their own location, so they
+work when invoked from anywhere. Unrelated legacy polaris/neosom RTL-data scripts
+(`compile_for_quasar.sh`, `setup_quasar_ttsim.sh`, `run_on_quasar.sh`,
+`run_gelu_*_on_polaris.sh`, `generate_polaris_config.py`) remain under
+`tt_metal/programming_examples/generic_lut_activation/polaris_test/` and are not
+part of this flow.

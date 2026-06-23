@@ -50,9 +50,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# This script lives at $TT_METAL_HOME/tt_metal/tt-llk/tests/quasar_eltwise/ —
+# derive the repo root from it so the flow is self-contained in the tt-llk tree.
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 
 # --- Pinned env (overridable) ---------------------------------------------
-TT_METAL_HOME="${TT_METAL_HOME:-/localdev/nkapre/tt-metal}"
+TT_METAL_HOME="${TT_METAL_HOME:-$REPO_ROOT}"
 TT_METAL_SIMULATOR="${TT_METAL_SIMULATOR:-/localdev/nkapre/craq-sim-quasar/src/_out/release_qsr/libttsim.so}"
 LLK_TESTS_DIR="$TT_METAL_HOME/tt_metal/tt-llk/tests"
 PYTESTS_DIR="$LLK_TESTS_DIR/python_tests"

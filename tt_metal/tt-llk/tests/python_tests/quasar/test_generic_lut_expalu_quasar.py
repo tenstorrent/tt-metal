@@ -28,14 +28,17 @@ Golden = the TRUE activation over the FULL original domain (the fitter's
 ground_truth), since the standalone exponent-ALU kernel reproduces the whole
 activation. PCC is gated >= 0.99 (same bar as the rational ground-truth path).
 
+QUASAR_LUT_CSV / QUASAR_ACT are OPTIONAL — DEFAULT_CSV points at a real
+exponent-ALU CSV (sigmoid, exp2 mode) so the test RUNS by default (no skip).
+
 Reproduce (from tt_metal/tt-llk/tests/python_tests):
   TT_METAL_HOME=/localdev/nkapre/tt-metal \
   TT_METAL_SIMULATOR=/localdev/nkapre/craq-sim-quasar/src/_out/release_qsr/libttsim.so \
   TT_METAL_SLOW_DISPATCH_MODE=1 CHIP_ARCH=quasar \
-  QUASAR_ACT=sigmoid \
-  QUASAR_LUT_CSV=<...exponent_alu...csv> \
   python -m pytest --run-simulator \
   quasar/test_generic_lut_expalu_quasar.py -x -s -q
+  # or any other exponent-ALU CSV/activation:
+  #   QUASAR_ACT=exp QUASAR_LUT_CSV=<...exp_p4_s1...csv> ...
 """
 
 import csv
@@ -75,8 +78,16 @@ from helpers.test_variant_parameters import (
 from helpers.tile_constants import MAX_NUM_FACES
 from helpers.utils import calculate_pcc
 
-DEFAULT_CSV = os.environ.get("QUASAR_LUT_CSV", "")
-DEFAULT_ACT = os.environ.get("QUASAR_ACT", "sigmoid")
+# A real exponent-ALU CSV so the test RUNS by default (mirrors the newton_root
+# driver's hardcoded DEFAULT_CSV). sigmoid_p5 carries
+# range_reduction_method=exponent_alu_exp2 with expalu_compose=sigmoid, so it
+# exercises EXPALU_MODE 1 (exp_hw_eval + sigmoid compose) end-to-end. Override
+# with QUASAR_LUT_CSV / QUASAR_ACT for any other exponent-ALU activation.
+FITTER = os.environ.get("QUASAR_FITTER_REPO", "/localdev/nkapre/tt-polynomial-fitter")
+DEFAULT_CSV = os.path.join(
+    FITTER, "data/coefficients/sigmoid_p5_s1_uniform_fpminimax_ulp.csv"
+)
+DEFAULT_ACT = "sigmoid"
 
 _MODE_CODE = {
     "exponent_alu_exp2": 1,
@@ -258,10 +269,10 @@ def test_generic_lut_expalu_quasar(
 ):
     torch.manual_seed(0)
 
-    csv_path = os.environ.get("QUASAR_LUT_CSV", DEFAULT_CSV)
+    csv_path = os.environ.get("QUASAR_LUT_CSV") or DEFAULT_CSV
     act = os.environ.get("QUASAR_ACT", DEFAULT_ACT)
-    if not csv_path:
-        pytest.skip("QUASAR_LUT_CSV not set")
+    if not os.path.isfile(csv_path):
+        pytest.skip(f"exponent-ALU CSV not found: {csv_path}")
     lut = parse_expalu_csv(csv_path, act)
     print(
         f"\n[generic_lut_expalu_quasar] act={act} csv={os.path.basename(csv_path)} "

@@ -36,8 +36,9 @@ build; a different SHA may behave differently.
 
 The `tt-llk` pytest harness owns the actual build + on-sim execution
 (`tt_metal/tt-llk/tests/python_tests/helpers/test_config.py` + `conftest.py`).
-The polaris_test scripts are a thin, documented driver that wires the pinned
-sim and the per-method env contract on top of that harness.
+The `tt_metal/tt-llk/tests/quasar_eltwise/` driver scripts are a thin, documented
+layer that wires the pinned sim and the per-method env contract on top of that
+harness.
 
 ```
 1. build SFPI         qsr32 SFPI toolchain (runtime/sfpi), per-TRISC compile
@@ -105,6 +106,16 @@ Sources: `tt_metal/tt-llk/tests/sources/quasar/`. Python goldens:
 `tt_metal/tt-llk/tests/python_tests/quasar/`.
 
 ### Ported-method validation results (pinned sim)
+
+The three `run_quasar.sh` default configs were re-validated from the relocated
+`tt_metal/tt-llk/tests/quasar_eltwise/` driver against the pinned `3ed587aa` sim;
+each runs **2 parametrized cases (fp32 + bf16), 0 skipped**:
+
+| `run_quasar.sh` invocation       | default CSV                                 | fp32 PCC            | bf16 PCC           |
+|----------------------------------|---------------------------------------------|---------------------|--------------------|
+| `-m expalu` (`-a sigmoid`)       | `sigmoid_p5_s1_uniform_fpminimax_ulp.csv`   | 0.9999999962793374  | 0.9999957726870178 |
+| `-m newton_root -a sqrt`         | `sqrt_p0_s1_uniform_fpminimax_ulp.csv`      | 0.9999999458124683  | 0.9999557093489042 |
+| `-m parity -a tanh`              | algorithmic odd-parity LUT (deg [3,5,5,3])  | 0.9999999866691556  | 0.9999968783334164 |
 
 `exponent_alu` (`generic_lut_expalu_quasar_test.cpp`) — all variants PASS vs
 fitter ground_truth (fp32 / bf16 PCC):
@@ -203,10 +214,10 @@ sfpi and are used verbatim.
 
 | File                                                                                       | Role |
 |--------------------------------------------------------------------------------------------|------|
-| `polaris_test/run_quasar.sh`                                                                | single entry point (config → compile gate → sim run → golden compare) |
-| `polaris_test/compile_llk_quasar.sh`                                                        | per-eval-method SFPI compile-only gate (no device/sim) |
-| `polaris_test/README.md`                                                                    | usage / option tables / legacy-script deprecation |
-| `polaris_test/QUASAR_ELTWISE.md`                                                            | this document |
+| `tt_metal/tt-llk/tests/quasar_eltwise/run_quasar.sh`                                        | single entry point (config → compile gate → sim run → golden compare) |
+| `tt_metal/tt-llk/tests/quasar_eltwise/compile_llk_quasar.sh`                                | per-eval-method SFPI compile-only gate (no device/sim) |
+| `tt_metal/tt-llk/tests/quasar_eltwise/README.md`                                            | usage / option tables / legacy-script deprecation |
+| `tt_metal/tt-llk/tests/quasar_eltwise/QUASAR_ELTWISE.md`                                    | this document |
 | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_activation_quasar_test.cpp`              | polynomial cascade + RR methods 1-8 (existing) |
 | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_rational_quasar_test.cpp`                | rational P(x)/Q(x) (existing) |
 | `tt_metal/tt-llk/tests/sources/quasar/generic_lut_expalu_quasar_test.cpp`                  | exponent-ALU standalone evaluator (ported) |
