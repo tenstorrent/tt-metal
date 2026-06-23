@@ -269,10 +269,11 @@ inline void accumulate_row_streaming(uint32_t r, uint32_t slot_base) {
 
 /** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place, so the strip still
  *  untilizes via the fast W=KC path (empty loop when the row is fully valid). */
-inline void stamp_masked_suffix(const WorkUnitSpan& span, uint32_t r, uint32_t slot_base, uint32_t k_tiles_in_unit) {
+inline void stamp_masked_suffix(
+    const WorkUnitSpan& span, uint32_t r, uint32_t slot_base, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles) {
     const uint32_t k_tile0 = span.k_tile_start();
     const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + r;
-    const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit);
+    const uint32_t valid = row_valid_prefix(span.q_tile_start() + r, k_tile0, k_tiles_in_unit, chunk_start_tiles);
     for (uint32_t c = valid; c < k_tiles_per_unit; ++c) {
         stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + c, k_tile0 + c, diag_tile);
     }
@@ -281,6 +282,9 @@ inline void stamp_masked_suffix(const WorkUnitSpan& span, uint32_t r, uint32_t s
 void kernel_main() {
     const uint32_t flat_start = get_arg_val<uint32_t>(0);
     const uint32_t flat_count = get_arg_val<uint32_t>(1);
+    // Per-turn chunk-start offset (in tiles), runtime so distinct chunk_start values reuse one compiled
+    // program (hash-excluded; see the device op's compute_program_hash).
+    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(2);
     if (flat_count == 0) {
         return;
     }
@@ -331,7 +335,8 @@ void kernel_main() {
                 accumulate_row_streaming(r, slot_base);  // PHASE 1+2 head-streaming / KC==1 fallback
             }
 
-            stamp_masked_suffix(span, r, slot_base, k_tiles_in_unit);  // causal -inf on the row's masked suffix
+            stamp_masked_suffix(
+                span, r, slot_base, k_tiles_in_unit, chunk_start_tiles);  // causal -inf on the row's masked suffix
         }
         acc.push_back(unit_strip);
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Shared by indexer_score reader / compute / writer: common compile-time dims (args
-// 0..7), CB indices, derived group/chunk tile counts, and WorkUnitSpan (this core's
+// 0..6), CB indices, derived group/chunk tile counts, and WorkUnitSpan (this core's
 // walk over its flat span of units). One unit = QC q-tile-rows x up-to-KC k-tiles.
 
 #pragma once
@@ -15,16 +15,17 @@
 
 namespace iscore = ttnn::operations::experimental::indexer_score;
 
-// Common dim args 0..7 (same in every kernel).
-constexpr uint32_t num_heads = get_compile_time_arg_val(0);          // indexer heads
-constexpr uint32_t q_len_tiles = get_compile_time_arg_val(1);        // q chunk rows, in tiles
-constexpr uint32_t k_len_tiles = get_compile_time_arg_val(2);        // total k positions, in tiles
-constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(3);     // head dim, in tiles
-constexpr uint32_t chunk_start_tiles = get_compile_time_arg_val(4);  // q chunk start offset, in tiles
-constexpr uint32_t q_tiles_per_unit = get_compile_time_arg_val(5);   // q-tile-rows per work unit (q_chunk knob)
-constexpr uint32_t k_tiles_per_unit = get_compile_time_arg_val(6);   // k tiles per work unit (k_chunk knob)
-constexpr uint32_t heads_per_group = get_compile_time_arg_val(7);    // heads resident at once (head_group knob)
-constexpr uint32_t num_dim_args = 8;
+// Common dim args 0..6 (same in every kernel). chunk_start is NOT here: it is a per-turn runtime
+// value (hash-excluded so distinct chunk_start / valid lengths reuse one compiled program), passed to
+// compute (and, for the padded-unit skip, the reader) as a runtime arg; see the factory and kernels.
+constexpr uint32_t num_heads = get_compile_time_arg_val(0);         // indexer heads
+constexpr uint32_t q_len_tiles = get_compile_time_arg_val(1);       // q chunk rows, in tiles
+constexpr uint32_t k_len_tiles = get_compile_time_arg_val(2);       // total k positions, in tiles (capacity Tt)
+constexpr uint32_t head_dim_tiles = get_compile_time_arg_val(3);    // head dim, in tiles
+constexpr uint32_t q_tiles_per_unit = get_compile_time_arg_val(4);  // q-tile-rows per work unit (q_chunk knob)
+constexpr uint32_t k_tiles_per_unit = get_compile_time_arg_val(5);  // k tiles per work unit (k_chunk knob)
+constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);   // heads resident at once (head_group knob)
+constexpr uint32_t num_dim_args = 7;
 
 // CB indices, forwarded from the factory in CbArg order right after the dim args. Bare names so
 // kernels (and their template-arg uses) read like the host-side constants did.
@@ -53,10 +54,18 @@ constexpr uint32_t k_chunk_tiles = k_tiles_per_unit * head_dim_tiles;           
 // Thin wrappers binding the shared work-split formula to this kernel's CT dims.
 namespace ws = ttnn::operations::experimental::indexer_score;
 
-/** Unmasked prefix k-tiles of absolute q-tile-row q_row_abs in a unit (bound to this kernel's
- *  chunk_start_tiles). */
-inline uint32_t row_valid_prefix(uint32_t q_row_abs, uint32_t k_tile_start, uint32_t k_tiles_in_unit) {
+/** Unmasked prefix k-tiles of absolute q-tile-row q_row_abs in a unit. chunk_start_tiles is the
+ *  per-turn runtime chunk-start offset (in tiles); the compute kernel reads it from a runtime arg. */
+inline uint32_t row_valid_prefix(
+    uint32_t q_row_abs, uint32_t k_tile_start, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles) {
     return ws::valid_prefix_tiles(q_row_abs, k_tile_start, k_tiles_in_unit, chunk_start_tiles);
+}
+
+/** Universal valid k-width (in tiles) for this turn = min(Tt, chunk_start + Sqt): the largest diagonal
+ *  any q-row reaches, so every k-tile at/after it is masked -inf for ALL rows (the padded tail). Bound
+ *  to this kernel's CT dims; chunk_start_tiles is the per-turn runtime offset. */
+inline uint32_t valid_k_tiles_rt(uint32_t chunk_start_tiles) {
+    return ws::valid_k_tiles_of(chunk_start_tiles, q_len_tiles, k_len_tiles);
 }
 
 // Work units per q-row-group: the full k rectangle over the k chunk, uniform across groups (dense

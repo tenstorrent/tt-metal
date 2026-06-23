@@ -12,9 +12,52 @@
 
 namespace ttnn::operations::experimental::indexer_score {
 
+namespace {
+// chunk_start is hash-excluded (runtime), so this alignment + causal-window check runs on BOTH cache
+// miss and hit -- so no turn can run off the end of K with a stale program. The check is identical to
+// the one previously inlined in validate_on_program_cache_miss.
+void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    const uint32_t Sq = tensor_args.q.logical_shape()[2];
+    const uint32_t T = tensor_args.k.logical_shape()[2];
+    TT_FATAL(
+        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
+        "chunk_start_idx {} must be tile-aligned",
+        attrs.chunk_start_idx);
+    TT_FATAL(
+        attrs.chunk_start_idx + Sq <= T,
+        "chunk window [{}, {}+{}) exceeds T={}",
+        attrs.chunk_start_idx,
+        attrs.chunk_start_idx,
+        Sq,
+        T);
+}
+}  // namespace
+
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return program::IndexerScoreProgramFactory{};
+}
+
+ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Everything that shapes the compiled program -- but NOT chunk_start_idx (per-turn runtime, patched in
+    // override_runtime_arguments). q/k/w specs cover dtype (bfp8 vs bf16 changes CB formats) and shape
+    // (Sqt/Tt/Dt are compile-time args; the K capacity Tt is baked here, stable across turns).
+    auto hash = tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
+        attrs.program_config.q_chunk_size,
+        attrs.program_config.k_chunk_size,
+        attrs.program_config.head_group_size,
+        attrs.compute_kernel_config);
+    for (const auto& t : {std::cref(tensor_args.q), std::cref(tensor_args.k), std::cref(tensor_args.weights)}) {
+        hash = ttsl::hash::hash_objects(
+            hash, t.get().padded_shape(), t.get().layout(), t.get().dtype(), t.get().memory_config());
+    }
+    return hash;
+}
+
+void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    validate_chunk_start(attrs, tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
@@ -90,17 +133,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         Sq,
         T,
         D);
-    TT_FATAL(
-        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
-        "chunk_start_idx {} must be tile-aligned",
-        attrs.chunk_start_idx);
-    TT_FATAL(
-        attrs.chunk_start_idx + Sq <= T,
-        "chunk window [{}, {}+{}) exceeds T={}",
-        attrs.chunk_start_idx,
-        attrs.chunk_start_idx,
-        Sq,
-        T);
+    validate_chunk_start(attrs, tensor_args);  // alignment + causal window (also re-run on cache hit)
 
     // Work-unit knobs (elements, tile-aligned); see IndexerScoreProgramConfig.
     const auto& cfg = attrs.program_config;

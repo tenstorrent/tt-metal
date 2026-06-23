@@ -22,12 +22,19 @@ struct IndexerScoreDeviceOperation {
     using tensor_return_value_t = indexer_score::tensor_return_value_t;
     using program_factory_t = std::variant<program::IndexerScoreProgramFactory>;
 
-    // No custom compute_program_hash: operation_attributes_t (chunk_start_idx + every config field)
-    // is a reflectable aggregate, so the default reflection hash already keys distinct programs on all
-    // fields. Do not add a hand-rolled hash that drops fields.
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
+    // Custom hash: chunk_start_idx is a per-turn RUNTIME value (patched in override_runtime_arguments),
+    // so it is EXCLUDED from the key -- distinct chunk_start values (and the valid k-width derived from
+    // it) reuse one compiled program at a fixed K capacity, the whole point of the padded-KV port. Every
+    // program-shaping field (config knobs, dtypes, shapes, memory) IS hashed. Do not re-add
+    // chunk_start_idx here or every turn will recompile.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    // chunk_start is hash-excluded, so its window/alignment check is re-run on cache hits too (mirrors
+    // ring_joint_sdpa's runtime-patched-scalar revalidation).
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 

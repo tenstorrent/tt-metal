@@ -33,4 +33,20 @@ constexpr uint32_t units_in_group(uint32_t k_tiles_per_unit, uint32_t k_len_tile
     return (k_len_tiles + k_tiles_per_unit - 1) / k_tiles_per_unit;
 }
 
+/** Universal valid k-width (in tiles) for a turn = min(Tt, chunk_start_tiles + Sqt). The fullest q-row
+ *  (the last one) reaches diagonal chunk_start_tiles + Sqt, so every k-tile at/after this is masked -inf
+ *  for ALL q-rows -- the padded tail. With K allocated at a fixed capacity Tt this shrinks as chunk_start
+ *  shrinks, so the per-turn work is O(valid) not O(Tt). q_len_tiles is Sqt (total q tiles). */
+constexpr uint32_t valid_k_tiles_of(uint32_t chunk_start_tiles, uint32_t q_len_tiles, uint32_t k_len_tiles) {
+    const uint32_t v = chunk_start_tiles + q_len_tiles;
+    return v < k_len_tiles ? v : k_len_tiles;
+}
+
+/** A work unit is fully padded (entirely in the -inf tail) iff its first k-tile is at/after the valid
+ *  width: no q-row in any group can see it, so its whole QC x KC strip is -inf and the matmul/gate can be
+ *  skipped (the strip is produced by the causal mask instead). */
+constexpr bool unit_is_fully_padded(uint32_t k_tile_start, uint32_t valid_k_tiles) {
+    return k_tile_start >= valid_k_tiles;
+}
+
 }  // namespace ttnn::operations::experimental::indexer_score
