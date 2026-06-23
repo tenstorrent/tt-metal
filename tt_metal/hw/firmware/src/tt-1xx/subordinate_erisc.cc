@@ -56,6 +56,7 @@ volatile tt_l1_ptr uint8_t* const subordinate_erisc_run = mailboxes->subordinate
 // Note: This is just for the firmware
 // The kernel defines NOC_MODE and NOC_INDEX
 uint8_t noc_index = 0;
+uint8_t noc_mode = DM_DEDICATED_NOC;
 
 uint8_t my_x[NUM_NOCS] __attribute__((used));
 uint8_t my_y[NUM_NOCS] __attribute__((used));

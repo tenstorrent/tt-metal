@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "api/debug/ring_buffer.h"
 #include <climits>
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
@@ -249,19 +250,68 @@ struct NocRegisterStateSave {
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
-#if !defined(KERNEL_BUILD)
-    constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
+#if defined(COMPILE_FOR_BRISC)
+    WATCHER_RING_BUFFER_PUSH(901);
+#else
+    WATCHER_RING_BUFFER_PUSH(902);
 #endif
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len<noc_mode>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
+    if (noc_mode == DM_DYNAMIC_NOC) {
+        ncrisc_noc_fast_write_any_len<DM_DYNAMIC_NOC>(
+            noc,
+            write_cmd_buf,
+            src_local_l1_addr,
+            dst_noc_addr,
+            size,
+            NOC_UNICAST_WRITE_VC,
+            false,
+            false,
+            1,
+            true,
+            true);
+    } else {
+        ncrisc_noc_fast_write_any_len<DM_DEDICATED_NOC>(
+            noc,
+            write_cmd_buf,
+            src_local_l1_addr,
+            dst_noc_addr,
+            size,
+            NOC_UNICAST_WRITE_VC,
+            false,
+            false,
+            1,
+            true,
+            true);
+    }
     WAYPOINT("NAWD");
 }
 
 FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
+
+    int i = 0;
+    if (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            i++;
+            if (i == 100) {
+                WATCHER_RING_BUFFER_PUSH(905);
+                WATCHER_RING_BUFFER_PUSH(noc);
+                uint32_t status_reg_val = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+                uint32_t self_risc_acked =
+                    get_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
+                uint32_t other_risc_acked =
+                    get_noc_counter_val<1 - proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc);
+                WATCHER_RING_BUFFER_PUSH(status_reg_val);
+                WATCHER_RING_BUFFER_PUSH(self_risc_acked);
+                WATCHER_RING_BUFFER_PUSH(other_risc_acked);
+            }
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+    } else {
+        while (!ncrisc_noc_posted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NPPD");
 }
 
