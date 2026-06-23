@@ -29,8 +29,13 @@ What this test does:
   the bug for the CCL team. Both outputs match the torch reference in PCC (not a correctness bug);
   the failure is purely an M-dependent reduction order.
 
-Run (4-chip Blackhole, e.g. P150x4 / P300x2):
-  pytest tests/ttnn/unit_tests/operations/ccl/test_reduce_scatter_batch_invariance_bh.py -s
+Run (any multi-chip Blackhole line/ring, e.g. P150x4 / P300x2 / 8-chip box):
+  pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly/test_reduce_scatter_batch_invariance_bh.py -s
+
+Uses the bh_1d_mesh_device fixture, which auto-sizes to whatever Blackhole box is present
+(1/2/4/8/32 chips) and presents it as a 1D line/ring. The reduce-scatter spans all available
+chips, so the per-device hidden stays fixed (PER_DEVICE_N) while the global hidden scales with
+the device count.
 """
 
 import pytest
@@ -41,9 +46,8 @@ import random
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
-# Mirrors the Qwen3-32B / P150x4 wo reduce-scatter exactly:
-NUM_DEVICES = 8
-PER_DEVICE_N = 5120  # self.dim for Qwen3-32B; global hidden = 5120 * 4 = 20480
+# Mirrors the Qwen3-32B / P150x4 wo reduce-scatter (per-device hidden):
+PER_DEVICE_N = 5120  # self.dim for Qwen3-32B; global hidden = PER_DEVICE_N * num_devices
 DIM = 3  # scatter dim (hidden)
 M_BIG = 1024  # batched prefill: 8 users x 128 tokens packed
 M_SMALL = 128  # single-user prefill
@@ -54,19 +58,26 @@ NUM_BUFFERS_PER_CHANNEL = 2
 
 
 def _run_reduce_scatter(mesh_device, global_input, dtype, topology, sub_device_id, sub_stall_group, num_links):
-    """Reduce-scatter one global [1,1,M,PER_DEVICE_N*NUM_DEVICES] tensor across the mesh on DIM.
+    """Reduce-scatter one global [1,1,M,PER_DEVICE_N*num_devices] tensor across the mesh on DIM.
 
-    Replicates on mesh axis 0 and shards DIM across the 4 chips, so each chip holds a
-    [1,1,M,PER_DEVICE_N] partial; reduce_scatter sums the 4 partials and scatters DIM.
-    Returns the composed [1,1,M,PER_DEVICE_N] output (torch) and the torch reference.
+    Shards DIM across all chips (one chip per shard) and replicates the trivial mesh axis, so each
+    chip holds a [1,1,M,PER_DEVICE_N] partial; reduce_scatter sums the num_devices partials and
+    scatters DIM. Returns the composed [1,1,M,PER_DEVICE_N] output (torch) and the torch reference.
     """
+    num_devices = mesh_device.get_num_devices()
     grid = mesh_device.compute_with_storage_grid_size()
     ccl_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
     rs_semaphores = [ttnn.create_global_semaphore(mesh_device, ccl_crs, 0) for _ in range(3)]
     barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ccl_crs, 0)
     mesh_shape = tuple(mesh_device.shape)
 
-    # Per-device input is [1,1,M,PER_DEVICE_N]: replicate on axis 0, shard DIM across axis 1.
+    # bh_1d_mesh_device lays the chips out on a single axis (the other is size 1). Shard DIM across
+    # whichever axis actually holds the devices and replicate the trivial one.
+    shard_axis = 0 if mesh_shape[0] > 1 else 1
+    placements = [ttnn.PlacementReplicate(), ttnn.PlacementReplicate()]
+    placements[shard_axis] = ttnn.PlacementShard(DIM)
+
+    # Per-device input is [1,1,M,PER_DEVICE_N].
     input_mesh = ttnn.from_torch(
         global_input,
         device=mesh_device,
@@ -75,7 +86,7 @@ def _run_reduce_scatter(mesh_device, global_input, dtype, topology, sub_device_i
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.create_mesh_mapper(
             mesh_device,
-            ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(DIM)], ttnn.MeshShape(*mesh_shape)),
+            ttnn.MeshMapperConfig(placements, ttnn.MeshShape(*mesh_shape)),
         ),
     )
 
@@ -100,20 +111,13 @@ def _run_reduce_scatter(mesh_device, global_input, dtype, topology, sub_device_i
     out.deallocate(True)
     input_mesh.deallocate(True)
 
-    chunks = torch.chunk(global_input.float(), NUM_DEVICES, DIM)
+    chunks = torch.chunk(global_input.float(), num_devices, DIM)
     ref = torch.stack(chunks).sum(0)  # [1,1,M,PER_DEVICE_N]
     return out_torch.float(), ref
 
 
 @pytest.mark.parametrize("num_links", [1, 2], ids=["1link", "2link"])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat16], ids=["bfloat8_b", "bfloat16"])
-@pytest.mark.parametrize(
-    "mesh_device",
-    [
-        pytest.param((1, 8)),
-    ],
-    indirect=True,
-)
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -125,9 +129,12 @@ def _run_reduce_scatter(mesh_device, global_input, dtype, topology, sub_device_i
     ids=["fabric_1D_ring"],
     indirect=True,
 )
-def test_reduce_scatter_batch_invariance(mesh_device, dtype, num_links):
-    #    if NUM_DEVICES not in list(mesh_device.shape):
-    #        pytest.skip(f"needs a {NUM_DEVICES}-chip mesh, got shape {list(mesh_device.shape)}")
+def test_reduce_scatter_batch_invariance(bh_1d_mesh_device, dtype, num_links):
+    # bh_1d_mesh_device auto-sizes to the box (1/2/4/8/32 chips); a 1-chip mesh can't reduce-scatter.
+    mesh_device = bh_1d_mesh_device
+    num_devices = mesh_device.get_num_devices()
+    if num_devices < 2:
+        pytest.skip(f"reduce-scatter needs >=2 chips, got {num_devices}")
 
     topology = ttnn.Topology.Ring
 
@@ -146,7 +153,7 @@ def test_reduce_scatter_batch_invariance(mesh_device, dtype, num_links):
     try:
         torch.manual_seed(0)
         # ONE global tensor at M=1024; the M=128 input is its first 128 rows (bit-identical).
-        global_big = torch.rand((1, 1, M_BIG, PER_DEVICE_N * NUM_DEVICES)).bfloat16().float()
+        global_big = torch.rand((1, 1, M_BIG, PER_DEVICE_N * num_devices)).bfloat16().float()
         global_small = global_big[:, :, :M_SMALL, :].clone()
 
         out_big, ref_big = _run_reduce_scatter(
