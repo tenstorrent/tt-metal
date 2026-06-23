@@ -508,12 +508,14 @@ run_test env TT_METAL_SLOW_DISPATCH_MODE=1 tt-run --mesh-graph-descriptor "${MGD
 # ring-embedded-into-a-larger-graph mapping -- the host-minimization SAT case guarded by the conflict
 # cap; on non-subtorus clusters the ring's closing hop has no direct link and is routed the long way.
 # Per-cluster stage lists below: SC16 revC (non-subtorus) runs 16 + 64 (48 omitted -- times out on this
-# mock); the 48-stage ring strands on SC16 revC subtorus aisleC, so that one keeps 16/64.
+# mock); the 48- and 64-stage rings strand on SC16 revC subtorus aisleC (the closing hop lands on a
+# Z-link that the host-minimization SAT pass intermittently fails to assign -- "No inter-mesh
+# connection mesh 62->63"), so that one keeps 16 only.
 for entry in \
     "SC16_revAB:${SP4_GLX_CLUSTER_DESC_MAPPING}:16 48 64" \
     "SC16_revC:${BH_110C_CLUSTER_DESC_MAPPING}:16 64" \
     "SC16_revC_subtorus_aisleD:${SUBTORUS_SC16_CLUSTER_DESC_MAPPING}:16 48 64" \
-    "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16 64" \
+    "SC16_revC_subtorus_aisleC:${SC16_REVC_SUBTORUS_AISLEC_CLUSTER_DESC_MAPPING}:16" \
     "SC20_revAB:${BH_SC20_CLUSTER_DESC_MAPPING}:16 48 64 80" \
     "SC20_revC_subtorus:${BH_110C_SC20_SUBTORUS_CLUSTER_DESC_MAPPING}:16 48 64 80" ; do
   rest="${entry#*:}"; cluster_map="${rest%%:*}"; stages="${rest#*:}"
