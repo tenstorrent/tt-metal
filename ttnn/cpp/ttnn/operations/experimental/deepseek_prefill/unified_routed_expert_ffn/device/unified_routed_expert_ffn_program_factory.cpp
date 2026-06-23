@@ -13,6 +13,8 @@
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -111,6 +113,32 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         MAX_GRID_Y,
         grid_size.x,
         grid_size.y);
+    // Place the GRID_X x GRID_Y compute block at the origin of the provided
+    // sub-device's worker cores, or at grid origin (0, 0) when no
+    // sub-device is given. NOC mcast topology is derived from
+    // worker_core_from_logical_core() of the (offset) logical coords below, so
+    // shifting the origin keeps every sender/receiver rectangle correct.
+    uint32_t origin_x = 0;
+    uint32_t origin_y = 0;
+    if (op.subdevice_id.has_value()) {
+        const auto sd_cores =
+            t.x.device()->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, *op.subdevice_id);
+        const auto bbox = sd_cores.bounding_box();
+        origin_x = bbox.start_coord.x;
+        origin_y = bbox.start_coord.y;
+        const uint32_t sd_width = bbox.end_coord.x - bbox.start_coord.x + 1;
+        const uint32_t sd_height = bbox.end_coord.y - bbox.start_coord.y + 1;
+        TT_FATAL(
+            sd_width >= GRID_X && sd_height >= GRID_Y,
+            "unified_routed_expert_ffn: sub-device worker grid ({}x{} at origin ({},{})) is too small for the "
+            "{}x{} compute block",
+            sd_width,
+            sd_height,
+            origin_x,
+            origin_y,
+            GRID_X,
+            GRID_Y);
+    }
     const uint32_t per_core_M = chunk_M_tiles / GRID_Y;
     TT_FATAL(
         per_core_M * GRID_Y == chunk_M_tiles,
@@ -279,7 +307,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     const uint32_t partials_d_tile_size = tt::tile_size(partials_d_df);
 
     // -------------------------- compute grid ------------------------------
-    const CoreRange core_range({0, 0}, {GRID_X - 1, GRID_Y - 1});
+    const CoreRange core_range({origin_x, origin_y}, {origin_x + GRID_X - 1, origin_y + GRID_Y - 1});
     const CoreRangeSet core_range_set{core_range};
 
     auto* x_buffer = t.x.buffer();
@@ -662,11 +690,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
     // M-row groups using in0_{ready,valid}_sem, and activated mcast within
     // M-row groups (rotating sender per phase-4 K-block) using
     // act_{ready,valid}_sem. No global cross-grid barrier is needed.
+    // Logical cores are offset by the sub-device origin; (gx, gy) below remain
+    // block-relative indices [0, GRID_X) x [0, GRID_Y) used for matmul tiling and
+    // mcast topology, while the physical/logical core is (origin_x+gx, origin_y+gy).
     std::vector<CoreCoord> cores;
     cores.reserve(GRID_X * GRID_Y);
     for (uint32_t gy = 0; gy < GRID_Y; ++gy) {
         for (uint32_t gx = 0; gx < GRID_X; ++gx) {
-            cores.push_back(CoreCoord{gx, gy});
+            cores.push_back(CoreCoord{origin_x + gx, origin_y + gy});
         }
     }
 
@@ -686,11 +717,14 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // multicast destination rectangle is a single NoC column spanning
         // those receiver rows.
         const bool is_in1_sender = (gy == 0);
-        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{gx, 0});
+        const auto sender_noc = device->worker_core_from_logical_core(CoreCoord{origin_x + gx, origin_y + 0});
         // GRID_Y == 1: no receivers — point the unused receiver coords at the
-        // sender row (gy=1 doesn't exist); the reader skips the mcast.
-        const CoreCoord first_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, 1} : CoreCoord{gx, 0};
-        const CoreCoord last_recv_logical = (GRID_Y > 1) ? CoreCoord{gx, GRID_Y - 1} : CoreCoord{gx, 0};
+        // sender row (gy=1 doesn't exist); the reader skips the mcast. Logical
+        // coords are offset by the sub-device origin (origin = (0,0) when none).
+        const CoreCoord first_recv_logical =
+            (GRID_Y > 1) ? CoreCoord{origin_x + gx, origin_y + 1} : CoreCoord{origin_x + gx, origin_y + 0};
+        const CoreCoord last_recv_logical =
+            (GRID_Y > 1) ? CoreCoord{origin_x + gx, origin_y + GRID_Y - 1} : CoreCoord{origin_x + gx, origin_y + 0};
         const auto first_recv_noc = device->worker_core_from_logical_core(first_recv_logical);
         const auto last_recv_noc = device->worker_core_from_logical_core(last_recv_logical);
         const uint32_t in1_num_receivers = GRID_Y - 1;
@@ -704,9 +738,10 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // x (in0) multicast topology: per M-row, sender at gx=0, receivers
         // at gx=1..GRID_X-1.
         const bool is_in0_sender = (gx == 0);
-        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{0, gy});
-        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{1, gy});
-        const auto in0_last_recv_noc = device->worker_core_from_logical_core(CoreCoord{GRID_X - 1, gy});
+        const auto in0_sender_noc = device->worker_core_from_logical_core(CoreCoord{origin_x + 0, origin_y + gy});
+        const auto in0_first_recv_noc = device->worker_core_from_logical_core(CoreCoord{origin_x + 1, origin_y + gy});
+        const auto in0_last_recv_noc =
+            device->worker_core_from_logical_core(CoreCoord{origin_x + GRID_X - 1, origin_y + gy});
         const uint32_t in0_num_receivers = GRID_X - 1;
         const uint32_t in0_mcast_nx_start = in0_first_recv_noc.x;
         const uint32_t in0_mcast_ny_start = in0_first_recv_noc.y;
@@ -766,7 +801,7 @@ UnifiedRoutedExpertFfnProgramFactory::cached_program_t UnifiedRoutedExpertFfnPro
         // phase-4 K-block (kb=0..K_down_tiles_padded-1) to find the sender's
         // NoC addr and to build the M-row mcast rectangle.
         for (uint32_t gxi = 0; gxi < GRID_X; ++gxi) {
-            const auto noc = device->worker_core_from_logical_core(CoreCoord{gxi, gy});
+            const auto noc = device->worker_core_from_logical_core(CoreCoord{origin_x + gxi, origin_y + gy});
             reader_args.push_back(static_cast<uint32_t>(noc.x));
             reader_args.push_back(static_cast<uint32_t>(noc.y));
         }
