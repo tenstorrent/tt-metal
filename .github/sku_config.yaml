@@ -142,10 +142,9 @@ skus:
 
   bh_loudbox:
     runs_on:
-      - in-service
       - arch-blackhole
       - BH-LoudBox
-      - pipeline-functional
+      - minfra-979-bench
 
   bh_p300:
     runs_on:
