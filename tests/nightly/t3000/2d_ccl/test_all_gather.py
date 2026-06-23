@@ -5,7 +5,7 @@
 import pytest
 import ttnn
 from models.common.utility_functions import skip_for_blackhole
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
@@ -70,7 +70,7 @@ from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather
     indirect=["device_params"],
     ids=["fabric_2d_linear"],
 )
-def test_all_gather_async_training_shapes(
+def test_all_gather_training_shapes(
     mesh_device,
     ag_output_shape,
     dim,

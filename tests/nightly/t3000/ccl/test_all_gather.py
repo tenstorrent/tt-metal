@@ -749,7 +749,7 @@ def test_all_gather_subgrid(
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_all_gather_async_training_shapes(
+def test_all_gather_training_shapes(
     mesh_device,
     num_links,
     ag_output_shape,
@@ -853,7 +853,7 @@ def test_all_gather_async_training_shapes(
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_all_gather_async_sharded_to_sharded(
+def test_all_gather_sharded_to_sharded(
     mesh_device,
     num_links,
     layout,
@@ -958,7 +958,7 @@ def test_all_gather_async_sharded_to_sharded(
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_all_gather_async_sharded_to_interleaved(
+def test_all_gather_sharded_to_interleaved(
     mesh_device,
     num_links,
     layout,
@@ -1054,7 +1054,7 @@ def test_all_gather_async_sharded_to_interleaved(
     indirect=["device_params"],
     ids=["fabric_ring", "fabric_linear"],
 )
-def test_all_gather_async_interleaved_to_sharded(
+def test_all_gather_interleaved_to_sharded(
     mesh_device,
     num_links,
     layout,
@@ -1131,7 +1131,7 @@ def test_all_gather_async_interleaved_to_sharded(
     indirect=["device_params"],
     ids=["fabric_linear", "fabric2d_linear"],
 )
-def test_all_gather_async_2x4(
+def test_all_gather_2x4(
     mesh_device,
     ag_output_shape,
     dim,
@@ -1274,7 +1274,7 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config):
         [2, 2, 32, 32],
     ],
 )
-def test_all_gather_async_2x4_non_flat_mesh(mesh_device, input_shape):
+def test_all_gather_2x4_non_flat_mesh(mesh_device, input_shape):
     torch.manual_seed(2005)
     devices = mesh_device.get_num_devices()
     input_shape[-1] *= devices

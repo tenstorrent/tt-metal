@@ -22,7 +22,7 @@ def test_all_gather_minimal_perf_t3000(warmup_iters, arch_type, perf_target_avg_
     step_name = "all_gather_minimal_T3K_perf"
 
     subdir = "ag_perf"
-    file = "pytest tests/nightly/t3000/ccl/test_minimal_all_gather_async.py"
+    file = "pytest tests/nightly/t3000/ccl/test_all_gather.py"
 
     # Target the coalesced production ttnn.all_gather DiT-shape perf case on T3K (ring fabric).
     command = file + '::test_ttnn_all_gather -k "dit_shape and perf and fabric_ring"'

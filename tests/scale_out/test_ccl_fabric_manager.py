@@ -12,7 +12,7 @@ import pytest
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import run_all_to_all_combine_test
 from tests.nightly.t3000.ccl.test_all_to_all_dispatch import run_all_to_all_dispatch_test
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from tests.nightly.t3000.ccl.test_minimal_reduce_scatter_async import run_reduce_scatter_impl
 from models.common.utility_functions import skip_for_blackhole
 

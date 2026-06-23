@@ -4,7 +4,7 @@
 
 import pytest
 import ttnn
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from models.common.utility_functions import skip_for_wormhole_b0, skip_for_n_or_less_dev
 from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gather_nightly import validate_test
 
@@ -34,7 +34,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
     ],
     indirect=["device_params"],
 )
-def test_all_gather_async_training_shapes(
+def test_all_gather_training_shapes(
     bh_2d_mesh_device,
     ag_output_shape,
     dim,

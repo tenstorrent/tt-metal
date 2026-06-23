@@ -6,7 +6,7 @@
 import pytest
 import ttnn
 
-from tests.nightly.t3000.ccl.test_minimal_all_gather_async import run_all_gather_impl
+from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 from models.common.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_n_or_less_dev,
