@@ -2,7 +2,7 @@
 #
 # Run:
 #   python3 boolq_training_example.py --model qwen3 --model_source Qwen/Qwen3-32B \
-#     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_galaxy.yaml
+#     --config ${TT_METAL_RUNTIME_ROOT}/tt-train/configs/training_configs/grpo_boolq_qwen3_32b_fsdp.yaml
 #
 # Uses lazy init (the default for the Qwen3 FSDP path; no config flag needed).
 # With lazy + FSDP, each parameter is built as deferred metadata, fully_shard
