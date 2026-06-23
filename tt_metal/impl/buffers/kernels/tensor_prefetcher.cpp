@@ -219,11 +219,6 @@ void kernel_main() {
     // WaitForCqOnTensorPrefetcher writes an incrementing value here from the
     // dispatcher; a WAIT_CQ request blocks until the requested slot reaches it.
     constexpr uint32_t cq_signal_l1_base = get_compile_time_arg_val(4);
-    // Streaming-split toggle (recv-contig streaming only): when set, a receiver whose
-    // ring-rotated run crosses the physical slab end is read as two contiguous source
-    // segments instead of clamping the whole round's block batch B to the nearest wrap.
-    // When clear, the legacy per-round physical-wrap clamp is used. A/B knob, default on.
-    constexpr uint32_t streaming_split = get_compile_time_arg_val(5);
     constexpr uint32_t ring_half = stage_ring_size / 2;
     constexpr uint32_t stage_slot_a = stage_ring_base;
     constexpr uint32_t stage_slot_b = stage_ring_base + ring_half;
@@ -316,14 +311,15 @@ void kernel_main() {
         // split a bank's receivers, the second core's local receiver r maps to bank-local
         // slab (recv_index_base + r). 0 for a single sender. Receiver-contiguous only.
         const uint32_t recv_index_base = state->recv_index_base;
-        // Per-receiver ring-index (g_r) table, used only in streaming mode to rotate each
-        // receiver's DRAM read so block (g_r + p) mod block_count lands at push step p.
-        volatile tt_l1_ptr uint32_t* rotation_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(state->rotation_table_ptr);
+        // Each layout slot in the page is the geometry struct immediately followed by this GCB's
+        // per-sender streaming rotation table, sized for the largest sender (max_num_receivers) so
+        // the slot stride is uniform across senders. Recover that stride to index the slot table.
+        const uint32_t layout_stride =
+            sizeof(TensorPrefetcherTensorLayout) + state->max_num_receivers * sizeof(uint32_t);
 
         // Entries follow the header (grow forward); the deduplicated layout table grows
-        // backward from the end of the payload, so layout i lives at read_ptr +
-        // kRequestPageBytes - (i+1)*sizeof(layout). See tensor_prefetcher_request.hpp.
+        // backward from the end of the payload, so layout slot i lives at read_ptr +
+        // kRequestPageBytes - (i+1)*layout_stride. See tensor_prefetcher_request.hpp.
         volatile tt_l1_ptr TensorPrefetcherEntry* entries = reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherEntry*>(
             socket.read_ptr + sizeof(TensorPrefetcherRequestHeader));
         const uint32_t layout_table_end = socket.read_ptr + kRequestPageBytes;
@@ -332,7 +328,7 @@ void kernel_main() {
             const uint32_t tensor_base = entries[e].bank_local_base;
             volatile tt_l1_ptr TensorPrefetcherTensorLayout* g =
                 reinterpret_cast<volatile tt_l1_ptr TensorPrefetcherTensorLayout*>(
-                    layout_table_end - (entries[e].layout_index + 1) * sizeof(TensorPrefetcherTensorLayout));
+                    layout_table_end - (entries[e].layout_index + 1) * layout_stride);
             const uint32_t t_num_sub = g->num_sub;
             const uint32_t t_M = g->M;
             const uint32_t t_rows_per_sub = g->rows_per_sub;
@@ -349,6 +345,12 @@ void kernel_main() {
             // Streaming (receiver-contiguous only) is a per-tensor layout attribute: deliver
             // this tensor's blocks in ring-rotated order so the matmul can consume them FIFO.
             const bool streaming = g->streaming != 0;
+            // Per-receiver streaming rotation table, appended right after this tensor's geometry
+            // in the page (host-sliced for this sender). rotation_local[r] is the lead block for
+            // local receiver r, so the kernel sources block (rotation_local[r] + p) mod block_count.
+            // Only read when streaming.
+            volatile tt_l1_ptr uint32_t* rotation_local = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                reinterpret_cast<volatile tt_l1_ptr uint8_t*>(g) + sizeof(TensorPrefetcherTensorLayout));
 
             // Set the sender fifo page size to one full per-receiver page. When resize skips
             // padding to reach the next aligned page (e.g. a larger page after a smaller one in a
@@ -556,40 +558,18 @@ void kernel_main() {
                     if (B > pages_to_wrap) {
                         B = pages_to_wrap;
                     }
-                    if (streaming && !streaming_split) {
-                        // Legacy clamp: a round's B blocks must be contiguous in DRAM for every
-                        // receiver, so clamp B to the nearest N->0 wrap across all receivers
-                        // (analogous to the fifo pages_to_wrap clamp). Because distinct g_r are
-                        // spread across the slab, the nearest wrap is always small, collapsing B.
-                        // streaming_split avoids this by per-receiver source splitting instead.
-                        uint32_t blocks_to_phys_wrap = t_block_count;
-                        for (uint32_t cr = 0; cr < num_receivers; ++cr) {
-                            uint32_t phys = rotation_ptr[cr] + pages_sent_global;
-                            if (phys >= t_block_count) {
-                                phys -= t_block_count;
-                            }
-                            const uint32_t dist = t_block_count - phys;
-                            if (dist < blocks_to_phys_wrap) {
-                                blocks_to_phys_wrap = dist;
-                            }
-                        }
-                        if (B > blocks_to_phys_wrap) {
-                            B = blocks_to_phys_wrap;
-                        }
-                    }
 
                     const uint32_t fifo_snapshot = iface.fifo_wr_ptr;
                     const uint32_t bytes_per_recv = B * t_page_bytes_per_recv;
 
                     // blk (first source block) and wrap_boff (byte offset within the visit where
                     // the source wraps N->0, or bytes_per_recv if it doesn't) for receiver r.
-                    // Wrap only happens under streaming_split, where B is left un-clamped; with
-                    // B <= remaining <= block_count, a visit wraps at most once. Batched and
-                    // legacy-clamped streaming never wrap, so the plan stays uniform.
+                    // Streaming leaves B un-clamped; with B <= remaining <= block_count, a visit
+                    // wraps at most once. Batched never wraps, so its plan stays uniform.
                     auto recv_wrap = [&](uint32_t r, uint32_t& blk_out, uint32_t& wrap_boff_out) {
                         uint32_t blk = pages_sent_global;
                         if (streaming) {
-                            blk += rotation_ptr[r];
+                            blk += rotation_local[r];
                             if (blk >= t_block_count) {
                                 blk -= t_block_count;
                             }
@@ -599,31 +579,13 @@ void kernel_main() {
                             (blk + B > t_block_count) ? (t_block_count - blk) * t_page_bytes_per_recv : bytes_per_recv;
                     };
 
-                    // streaming_split mode 2: keep uniform max-chunk geometry and let the one
-                    // straddling chunk per wrapping receiver issue two DMA reads, instead of
-                    // breaking the visit into ragged tail/head chunks (mode 1).
-                    const bool two_read = (streaming_split == 2u);
-
-                    // Total chunks this round. Mode 2 (and batched / clamp, which never wrap) use the
-                    // uniform count num_receivers * ceil(bytes_per_recv / max_chunk_bytes); mode 1 adds
-                    // an extra chunk for each wrapping receiver (ceil(tail) + ceil(head)).
+                    // Uniform max-chunk geometry: every receiver contributes the same chunk count,
+                    // and the single chunk per wrapping receiver that straddles the source wrap
+                    // issues two contiguous DMA reads (tail then head) into one stage slot. Batched
+                    // never wraps. (This is the two-DMA-read streaming split; the older legacy-clamp
+                    // and ragged-tail/head modes have been removed.)
                     const uint32_t uniform_chunks_per_visit = (bytes_per_recv + max_chunk_bytes - 1) / max_chunk_bytes;
-                    uint32_t total_chunks_round = 0;
-                    if (two_read) {
-                        total_chunks_round = num_receivers * uniform_chunks_per_visit;
-                    } else {
-                        for (uint32_t r = 0; r < num_receivers; ++r) {
-                            uint32_t blk_r, wrap_boff_r;
-                            recv_wrap(r, blk_r, wrap_boff_r);
-                            if (wrap_boff_r >= bytes_per_recv) {
-                                total_chunks_round += uniform_chunks_per_visit;
-                            } else {
-                                const uint32_t head = bytes_per_recv - wrap_boff_r;
-                                total_chunks_round += (wrap_boff_r + max_chunk_bytes - 1) / max_chunk_bytes +
-                                                      (head + max_chunk_bytes - 1) / max_chunk_bytes;
-                            }
-                        }
-                    }
+                    const uint32_t total_chunks_round = num_receivers * uniform_chunks_per_visit;
 
                     // ---- Depth-2 software pipeline over 3 stage slots ----
                     // Per chunk gc we: wait gc's DMA, enqueue gc's NoC writes (posted), THEN
@@ -669,29 +631,17 @@ void kernel_main() {
                         const uint32_t idx = c % 3u;
                         const uint32_t slab = tensor_base + (recv_index_base + gen_r) * t_recv_stride;
                         const bool straddles = (gen_boff < gen_wrap_boff && gen_boff + cb > gen_wrap_boff);
-                        if (two_read) {
-                            // Uniform max-chunk: a chunk that straddles the source wrap is read as two
-                            // contiguous DMAs into the same slot (tail then head); the slot stays one
-                            // contiguous run for the writer. Otherwise a single read.
-                            if (straddles) {
-                                const uint32_t cb1 = gen_wrap_boff - gen_boff;  // tail [blk..N)
-                                const uint32_t src1 = slab + gen_blk * t_page_bytes_per_recv + gen_boff;
-                                const uint32_t src2 = slab;  // head resumes at physical block 0
-                                experimental::dma_async_read(/*stream=*/0, src1, slot_addrs[idx], cb1);
-                                experimental::dma_async_read(/*stream=*/0, src2, slot_addrs[idx] + cb1, cb - cb1);
-                                desc_reads[idx] = 2;
-                            } else {
-                                const uint32_t src = (gen_boff < gen_wrap_boff)
-                                                         ? slab + gen_blk * t_page_bytes_per_recv + gen_boff
-                                                         : slab + (gen_boff - gen_wrap_boff);
-                                experimental::dma_async_read(/*stream=*/0, src, slot_addrs[idx], cb);
-                                desc_reads[idx] = 1;
-                            }
+                        // Uniform max-chunk: a chunk that straddles the source wrap is read as two
+                        // contiguous DMAs into the same slot (tail then head); the slot stays one
+                        // contiguous run for the writer. Otherwise a single read.
+                        if (straddles) {
+                            const uint32_t cb1 = gen_wrap_boff - gen_boff;  // tail [blk..N)
+                            const uint32_t src1 = slab + gen_blk * t_page_bytes_per_recv + gen_boff;
+                            const uint32_t src2 = slab;  // head resumes at physical block 0
+                            experimental::dma_async_read(/*stream=*/0, src1, slot_addrs[idx], cb1);
+                            experimental::dma_async_read(/*stream=*/0, src2, slot_addrs[idx] + cb1, cb - cb1);
+                            desc_reads[idx] = 2;
                         } else {
-                            // Ragged: clip the chunk at the wrap boundary so it is one contiguous read.
-                            if (straddles) {
-                                cb = gen_wrap_boff - gen_boff;
-                            }
                             const uint32_t src = (gen_boff < gen_wrap_boff)
                                                      ? slab + gen_blk * t_page_bytes_per_recv + gen_boff
                                                      : slab + (gen_boff - gen_wrap_boff);
@@ -737,7 +687,7 @@ void kernel_main() {
                         PROF_DECL_TS(t_dw1);
                         PROF_TICK(t_dw0);
                         // Keep chunk gc+1 in flight: wait until outstanding reads drop to that chunk's
-                        // read count (1 in ragged/clamp mode; 1 or 2 in two-read mode), or 0 if gc is last.
+                        // read count (1, or 2 for a chunk that straddles the source wrap), or 0 if gc is last.
                         const uint32_t keep_reads = keep_one ? desc_reads[(gc + 1u) % 3u] : 0u;
                         experimental::dma_async_read_wait_n(/*stream=*/0, keep_reads);
                         PROF_TICK(t_dw1);

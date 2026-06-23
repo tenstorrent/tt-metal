@@ -26,13 +26,14 @@ void queue_tensor_prefetcher_request(
     std::vector<tt::tt_metal::experimental::TensorPrefetcherInput> inputs;
     inputs.reserve(tensors.size());
     for (const auto& item : tensors) {
-        // (tensor, block_count) defaults streaming to false; (tensor, block_count, streaming)
-        // sets it per tensor.
+        // (tensor, block_count) defaults to batched (empty rotation); (tensor, block_count,
+        // rotation) supplies the per-receiver streaming rotation table for that tensor.
         if (const auto* pair = std::get_if<std::pair<ttnn::Tensor, uint32_t>>(&item)) {
-            inputs.push_back({pair->first.mesh_tensor(), pair->second, /*streaming=*/false});
+            inputs.push_back({pair->first.mesh_tensor(), pair->second, /*rotation=*/{}});
         } else {
-            const auto& [tensor, block_count, streaming] = std::get<std::tuple<ttnn::Tensor, uint32_t, bool>>(item);
-            inputs.push_back({tensor.mesh_tensor(), block_count, streaming});
+            const auto& [tensor, block_count, rotation] =
+                std::get<std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>(item);
+            inputs.push_back({tensor.mesh_tensor(), block_count, rotation});
         }
     }
     tt::tt_metal::experimental::QueueTensorPrefetcherRequest(*mesh_device, global_cb, device_subset, inputs, cq_id);

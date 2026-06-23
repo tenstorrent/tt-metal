@@ -897,7 +897,10 @@ def test_tensor_prefetcher_streaming_matmul(
     )
 
     ttnn.experimental.start_tensor_prefetcher(device)
-    ttnn.experimental.queue_tensor_prefetcher_request(device, [(tt_weight, ring_size, True)], global_cb=gcb)
+    # Identity rotation (rotation[r] = r) = natural topology ring order; the consuming ring matmul streams FIFO.
+    ttnn.experimental.queue_tensor_prefetcher_request(
+        device, [(tt_weight, ring_size, list(range(ring_size)))], global_cb=gcb
+    )
     tt_out = ttnn.linear(
         tt_act,
         tt_weight,

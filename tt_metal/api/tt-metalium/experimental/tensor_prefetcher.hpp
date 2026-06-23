@@ -71,12 +71,20 @@ bool IsTensorPrefetcherSupported(const distributed::MeshDevice& mesh_device);
 struct TensorPrefetcherInput {
     std::reference_wrapper<const MeshTensor> tensor;
     uint32_t block_count = 0;
-    // streaming (receiver-contiguous layout only) makes the kernel deliver this tensor's
-    // K-blocks in ring-rotated order (physical block (g_r + p) mod block_count at push step
-    // p) so the consuming matmul can stream them in FIFO order and start before the whole
-    // tensor arrives, allowing a shallow GCB. The matmul must be built with the matching
-    // streaming flag, else it deadlocks. Default false = batched (whole-tensor) delivery.
-    bool streaming = false;
+    // Per-receiver streaming rotation (receiver-contiguous layout only). Empty = batched
+    // (whole-tensor) delivery. When non-empty, the kernel delivers this tensor's K-blocks in
+    // the host-specified ring-rotated order: at push step p, the receiver at global ring
+    // position r sources physical block (rotation[r] + p) mod block_count. This lets the
+    // consuming matmul stream blocks in FIFO order and start before the whole tensor arrives
+    // (allowing a shallow GCB), and gives the host full control over which block leads each
+    // receiver rather than fixing it to the topology ring index.
+    //
+    // When non-empty, `rotation` must have exactly `total_receivers` (== ring size ==
+    // block_count) entries, each in [0, block_count), indexed by global ring position. For the
+    // standard ring matmul, rotation[r] = r reproduces the natural topology order. The matmul
+    // must be built to consume in the matching order, else it deadlocks. The host is
+    // responsible for supplying a rotation consistent with the consumer's ring topology.
+    std::vector<uint32_t> rotation = {};
 };
 
 // Build per-device Programs (one DRISC kernel per DRAM sender core), allocate
@@ -108,8 +116,9 @@ void StartTensorPrefetcher(distributed::MeshDevice& mesh_device, const TensorPre
 //     one request page is transparently split across pages.
 //   - Per-GCB ring-buffer state is preserved across requests, so successive
 //     Queue calls against the same GCB resume where the previous call left off.
-//   - Per-tensor `streaming` (on each TensorPrefetcherInput) is documented on that
-//     struct; it is the only knob that varies delivery order within a request.
+//   - Per-tensor `rotation` (on each TensorPrefetcherInput) is documented on that struct; a
+//     non-empty rotation enables streaming and sets the per-receiver delivery order, the only
+//     knob that varies delivery order within a request.
 //   - `cq_id` is the command queue on which a trace may be recording. When that
 //     CQ is mid trace-capture, the request is captured into the trace instead of
 //     being sent immediately, and is (re)sent on every replay of that trace

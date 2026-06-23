@@ -381,11 +381,12 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     """DRAM-core prefetcher in **streaming** receiver-contiguous mode → discard receiver.
 
     Same recv-contig weight + topology as test_bw_tensor_prefetcher_recv_contig, but
-    the request is queued with streaming=True (each receiver's blocks read circularly from
-    its ring index g_r) and the GCB is sized to a small window of BENCH_GCB_WINDOW_BLOCKS
-    blocks/receiver (default 4) instead of a full layer. This measures the prefetcher-side
-    cost of streaming — the per-round physical-wrap clamp fragmentation plus the shallower
-    GCB backpressure — against the batched recv-contig and K-row-major push-BW numbers.
+    the request is queued with a per-receiver rotation table (each receiver's blocks read
+    circularly from its ring index) and the GCB is sized to a small window of
+    BENCH_GCB_WINDOW_BLOCKS blocks/receiver (default 4) instead of a full layer. This measures
+    the prefetcher-side cost of streaming — the two-DMA-read source split on wrapping receivers
+    plus the shallower GCB backpressure — against the batched recv-contig and K-row-major push-BW
+    numbers.
     The discard consumer drains FIFO order regardless of block content, so the rotated
     delivery is BW-neutral; byte correctness is covered by the validator + matmul PCC tests.
     """
@@ -424,8 +425,9 @@ def test_bw_tensor_prefetcher_streaming(device, op_name, shape):
     )
 
     ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders)
+    # Identity rotation (rotation[r] = r) = natural topology ring order (reproduces old streaming=True).
     ttnn.experimental.queue_tensor_prefetcher_request(
-        device, [(tt_weight, num_receivers, True)] * num_prefetch_layers, global_cb=gcb
+        device, [(tt_weight, num_receivers, list(range(num_receivers)))] * num_prefetch_layers, global_cb=gcb
     )
 
     ttnn.experimental.test_dram_prefetcher_consumer(

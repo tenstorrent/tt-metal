@@ -6,15 +6,37 @@ and what it would take to get there. It builds on
 [`prefetcher_matmul_design.md`](./prefetcher_matmul_design.md), which is the
 authoritative description of the prefetcher↔receiver contract; read that first.
 
-Status: **implemented for receiver-contiguous mode** (opt-in `streaming` flag on
+Status: **implemented for receiver-contiguous mode** (opt-in per-tensor `rotation` on
 `QueueTensorPrefetcherRequest` + `MatmulMultiCoreReuseMultiCast1DProgramConfig.stream_in1`).
 recv-contig already shards per receiver (§4.5's prerequisite), so the only change
 needed was moving the per-receiver rotation out of the matmul (which random-accessed
 the resident block set) and into the prefetcher's circular DRAM read: at push step `p`
-receiver `r` sources block `(g_r + p) mod N`, the matmul consumes the GCB FIFO front-to-
-back, and the GCB shrinks to a small live window. The fan-out-mode obstruction in §3
-below does not apply to recv-contig. The original exploration (for the fan-out layout)
-follows.
+receiver `r` sources block `(rotation[r] + p) mod N`, the matmul consumes the GCB FIFO
+front-to-back, and the GCB shrinks to a small live window. The fan-out-mode obstruction
+in §3 below does not apply to recv-contig. The original exploration (for the fan-out
+layout) follows.
+
+> **Addendum (host-owned rotation, two-DMA-read only).** The shipped API now exposes the
+> rotation table directly rather than a `streaming` bool:
+>
+> - `TensorPrefetcherInput.rotation` (ttnn: the optional 3rd tuple element `(weight,
+>   block_count, rotation)`) is a per-tensor `vector<uint32_t>` indexed by global ring
+>   position, length `total_receivers` (== ring size == `block_count`), each entry in
+>   `[0, block_count)`. Empty == batched. `rotation[r] = r` reproduces the natural
+>   topology order described above; the host can instead choose any per-receiver lead
+>   block, so it owns the full delivery order rather than being fixed to the topology
+>   ring index `g_r`.
+> - The rotation is **host-owned and carried in the request page**, not stamped into the
+>   GCB sender state block. Because request pages broadcast identically to every sender
+>   would have to carry the full `total_receivers` table (256 B at ring=64, > the 128 B
+>   page), pages are now **serialized per sender**: each sender's page carries only its
+>   own receivers' slice (≤ `recv_per_bank` entries), appended right after each layout
+>   slot's geometry (uniform `layout_stride` sized by `max_num_receivers`). See
+>   [`tensor_prefetcher_request.hpp`](./tensor_prefetcher_request.hpp).
+> - Only the **two-DMA-read** source split survives: a receiver whose ring-rotated run
+>   crosses the physical slab end reads it as two contiguous DMAs (tail then head) into
+>   one stage slot. The earlier legacy-clamp and ragged-tail/head modes (and the
+>   `TT_TENSOR_PREFETCHER_STREAMING_SPLIT` env var / compile arg) have been removed.
 
 ---
 

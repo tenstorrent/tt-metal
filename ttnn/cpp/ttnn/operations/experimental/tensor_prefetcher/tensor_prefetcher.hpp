@@ -21,12 +21,14 @@ class MeshDevice;
 
 namespace ttnn::operations::experimental {
 
-// One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, streaming).
-// block_count is the number of K-blocks to divide the tensor's K dimension into. streaming
-// (receiver-contiguous layout only; omitted == false) delivers that tensor's K-blocks in
-// ring-rotated FIFO order for a matching stream_in1 matmul; see TensorPrefetcherInput.
+// One tensor to prefetch: either (tensor, block_count) or (tensor, block_count, rotation).
+// block_count is the number of K-blocks to divide the tensor's K dimension into. rotation
+// (receiver-contiguous layout only; omitted/empty == batched) is the per-receiver streaming
+// ring-rotation table, indexed by global ring position: it delivers that tensor's K-blocks in
+// host-specified ring-rotated FIFO order for a matching stream_in1 matmul. See
+// TensorPrefetcherInput for the rotation contract.
 using TensorPrefetcherQueueTensor =
-    std::variant<std::pair<ttnn::Tensor, uint32_t>, std::tuple<ttnn::Tensor, uint32_t, bool>>;
+    std::variant<std::pair<ttnn::Tensor, uint32_t>, std::tuple<ttnn::Tensor, uint32_t, std::vector<uint32_t>>>;
 
 // Thin ttnn-side wrappers around the queueable
 // tt::tt_metal::experimental::Start/Queue/Stop TensorPrefetcher API.
@@ -41,7 +43,7 @@ using TensorPrefetcherQueueTensor =
 //   2. queue_tensor_prefetcher_request(device, tensors, global_cb, device_subset=None)
 //      - Push one request. `tensors` is the full, flattened list of weights (at
 //        least one), streamed in list order; each item is (weight, block_count)
-//        or (weight, block_count, streaming) (see TensorPrefetcherQueueTensor).
+//        or (weight, block_count, rotation) (see TensorPrefetcherQueueTensor).
 //        block_count is the number of K-blocks to divide that tensor's K
 //        dimension into. Pass distinct tensors for distinct layers, or repeat a
 //        tensor to replay it. device_subset defaults to the full mesh.

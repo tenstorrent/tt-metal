@@ -9,10 +9,11 @@
 #include "impl/buffers/drisc_l1_arena.hpp"
 #include "impl/buffers/h2d_socket_internal.hpp"
 
+#include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -443,31 +444,12 @@ void TensorPrefetcherManager::build_and_launch_programs(uint32_t stage_ring_base
         for (uint32_t s = 0; s < num_senders_; ++s) {
             const CoreCoord sender_logical = sender_logical_cores_[s];
 
-            // Streaming-split A/B mode (TT_TENSOR_PREFETCHER_STREAMING_SPLIT):
-            //   0 = legacy per-round physical-wrap clamp
-            //   1 = per-receiver ragged split — a wrapping receiver gets extra chunks, 1 DMA/chunk (default)
-            //   2 = two-DMA-reads split — uniform max-chunk geometry, the straddling chunk does 2 reads
-            static const uint32_t streaming_split = [] {
-                const char* env = std::getenv("TT_TENSOR_PREFETCHER_STREAMING_SPLIT");
-                if (env == nullptr) {
-                    return 1u;
-                }
-                if (env[0] == '0') {
-                    return 0u;
-                }
-                if (env[0] == '2') {
-                    return 2u;
-                }
-                return 1u;
-            }();
-
             std::vector<uint32_t> compile_args = {
                 stage_ring_base,
                 stage_ring_size,
                 kRemoteCBId,
                 socket_page_size,
                 cq_signal_l1_addr_,
-                streaming_split,
             };
 
             KernelHandle kernel_id = CreateKernel(
@@ -583,7 +565,7 @@ MeshCoordinateRangeSet TensorPrefetcherManager::full_mesh_subset() const {
     return out;
 }
 
-std::vector<std::vector<uint8_t>> TensorPrefetcherManager::serialize_request_pages(
+std::vector<std::vector<std::vector<uint8_t>>> TensorPrefetcherManager::serialize_request_pages(
     const experimental::GlobalCircularBuffer& gcb,
     const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const {
     TT_FATAL(!data_tensors.empty(), "QueueTensorPrefetcherRequest requires at least one tensor");
@@ -614,44 +596,114 @@ std::vector<std::vector<uint8_t>> TensorPrefetcherManager::serialize_request_pag
     constexpr uint32_t kEntryBytes = sizeof(TensorPrefetcherEntry);
     constexpr uint32_t kLayoutBytes = sizeof(TensorPrefetcherTensorLayout);
 
-    std::vector<std::vector<uint8_t>> pages;
+    // ---- Per-sender global ring-index map (single source of truth) ----
+    // Under the strided receiver-contiguous topology, sender s's local receiver r is the matmul
+    // ring position g_r = bank + (recv_index_base + r) * num_dram_banks (bank == sender_logical.x;
+    // recv_index_base accumulates within a bank for dual senders). The host uses this to slice a
+    // caller-supplied global rotation array (indexed by ring position) into each sender's page.
+    // The GCB no longer stamps g_r into the state block, so this is the only place that computes
+    // it. Built in GCB-mapping order, then reindexed to socket (sender_logical_cores_) order.
+    uint32_t num_dram_banks = 0;
+    for (const auto& [sender_logical, _r] : mapping) {
+        num_dram_banks = std::max(num_dram_banks, static_cast<uint32_t>(sender_logical.x) + 1u);
+    }
+    std::vector<std::pair<CoreCoord, std::vector<uint32_t>>> ring_by_core;
+    ring_by_core.reserve(mapping.size());
+    {
+        uint32_t recv_index_base = 0;
+        uint32_t prev_bank = 0;
+        bool have_prev = false;
+        for (const auto& [sender_logical, receivers] : mapping) {
+            const uint32_t bank = static_cast<uint32_t>(sender_logical.x);
+            recv_index_base = (have_prev && bank == prev_bank) ? recv_index_base : 0u;
+            have_prev = true;
+            prev_bank = bank;
+            const uint32_t n = receivers.num_cores();
+            std::vector<uint32_t> ring(n);
+            for (uint32_t r = 0; r < n; ++r) {
+                // g_r is meaningful only for the uniform strided recv-contig topology that
+                // streaming uses; it is garbage-but-unused for batched / K-row-major GCBs, so it
+                // is not range-checked here (only when a streaming tensor indexes the rotation).
+                ring[r] = bank + (recv_index_base + r) * num_dram_banks;
+            }
+            ring_by_core.emplace_back(sender_logical, std::move(ring));
+            recv_index_base += n;
+        }
+    }
+    // Per-socket ring indices, plus max_receivers to size a uniform rotation slot so every
+    // sender's page packs identically (dedup/fit decisions are sender-independent below); each
+    // sender then materializes only its own ring.size() rotation entries. The kernel recovers
+    // this slot stride from max_num_receivers in the GCB state block.
+    std::vector<std::vector<uint32_t>> ring_idx_by_socket(num_senders_);
+    uint32_t max_receivers = 0;
+    for (uint32_t s = 0; s < num_senders_; ++s) {
+        for (const auto& [core, ring] : ring_by_core) {
+            if (core == sender_logical_cores_[s]) {
+                ring_idx_by_socket[s] = ring;
+                break;
+            }
+        }
+        max_receivers = std::max(max_receivers, static_cast<uint32_t>(ring_idx_by_socket[s].size()));
+    }
+    const uint32_t layout_stride = kLayoutBytes + max_receivers * static_cast<uint32_t>(sizeof(uint32_t));
+    TT_FATAL(
+        kHeaderBytes + layout_stride + kEntryBytes <= kRequestPageBytes,
+        "Tensor prefetcher: request page ({} B) too small for one tensor: header({}) + layout slot ({} = "
+        "geometry {} + {} rotation entries) + entry({}). Reduce receivers per sender or grow kRequestPageBytes.",
+        kRequestPageBytes,
+        kHeaderBytes,
+        layout_stride,
+        kLayoutBytes,
+        max_receivers,
+        kEntryBytes);
 
-    // Per-page packing state. Entries grow forward from kHeaderBytes; the layout table
-    // grows backward from kRequestPageBytes (layout i at kRequestPageBytes -
-    // (i+1)*kLayoutBytes). `seen` holds this page's deduplicated layouts in index order.
-    std::vector<uint8_t> page;
-    uint32_t num_entries = 0;
-    uint32_t num_layouts = 0;
-    std::vector<TensorPrefetcherTensorLayout> seen;
-
-    auto begin_page = [&]() {
-        page.assign(aligned_page_bytes, 0);
-        num_entries = 0;
-        num_layouts = 0;
-        seen.clear();
+    // ---- Abstract page plan (sender-independent): entries + dedup'd geometry+rotation slots ----
+    struct Slot {
+        TensorPrefetcherTensorLayout geom;
+        std::vector<uint32_t> rotation;  // caller's global rotation (total_receivers entries), or empty == batched
     };
-    auto finalize_page = [&]() {
-        auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
-        header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
-        header->prefetch.num_entries = static_cast<uint16_t>(num_entries);
-        header->prefetch.num_layouts = num_layouts;
-        header->prefetch.gcb_state_addr = gcb_state_addr;
-        pages.push_back(std::move(page));
+    struct PlanEntry {
+        uint32_t bank_local_base = 0;
+        uint32_t layout_index = 0;
     };
+    struct PagePlan {
+        std::vector<PlanEntry> entries;
+        std::vector<Slot> slots;
+    };
+    auto slot_equal = [](const Slot& a, const Slot& b) {
+        return layout_equal(a.geom, b.geom) && a.rotation == b.rotation;
+    };
+    std::vector<PagePlan> plans(1);
 
-    begin_page();
     for (size_t tensor_idx = 0; tensor_idx < data_tensors.size(); ++tensor_idx) {
         const auto& input = data_tensors[tensor_idx];
-        // Streaming rotates each receiver's read by its ring index g_r in [0, ring_size),
-        // so the rotation (g_r + p) mod block_count is only a valid permutation when
-        // block_count == ring_size (== total_receivers). The consuming ring matmul always
-        // uses num_blocks = ring_size, so this holds for the intended use.
-        TT_FATAL(
-            !input.streaming || input.block_count == total_receivers,
-            "Streaming DRAM-core prefetcher requires block_count ({}) == ring_size ({}) for tensor {}",
-            input.block_count,
-            total_receivers,
-            tensor_idx);
+        const bool streaming = !input.rotation.empty();
+        // Streaming delivers block (rotation[r] + p) mod block_count, only a valid permutation when
+        // block_count == ring_size (== total_receivers). The consuming ring matmul always uses
+        // num_blocks = ring_size, so this holds for the intended use.
+        if (streaming) {
+            TT_FATAL(
+                input.block_count == total_receivers,
+                "Streaming Tensor prefetcher requires block_count ({}) == ring_size ({}) for tensor {}",
+                input.block_count,
+                total_receivers,
+                tensor_idx);
+            TT_FATAL(
+                input.rotation.size() == total_receivers,
+                "Streaming rotation for tensor {} has {} entries but must have total_receivers ({}); it is indexed "
+                "by global ring position.",
+                tensor_idx,
+                input.rotation.size(),
+                total_receivers);
+            for (uint32_t v : input.rotation) {
+                TT_FATAL(
+                    v < input.block_count,
+                    "Streaming rotation entry {} for tensor {} is out of range [0, block_count={}).",
+                    v,
+                    tensor_idx,
+                    input.block_count);
+            }
+        }
         // block_count is per-tensor: it sets how many K-blocks the kernel pushes
         // (and how K is divided in compute_tensor_layout), replacing the GCB ring size.
         TensorPrefetcherTensorLayout layout = compute_tensor_layout(
@@ -663,9 +715,10 @@ std::vector<std::vector<uint8_t>> TensorPrefetcherManager::serialize_request_pag
             ring_half_,
             stage_third_,
             context_id);
-        // Streaming is a per-tensor delivery attribute carried in the layout, so tensors that
-        // differ only in streaming get distinct layout-table entries (layout_equal is a memcmp).
-        layout.streaming = input.streaming ? 1u : 0u;
+        // Streaming is a per-tensor delivery attribute carried in the layout flag; the appended
+        // rotation participates in dedup (slot_equal), so tensors that differ only in rotation get
+        // distinct slots.
+        layout.streaming = streaming ? 1u : 0u;
         // dual_senders_per_bank only makes sense for the receiver-contiguous layout (a K-row-major
         // bank holds one shard, nothing to split). Reject the mismatch here rather than silently
         // building wrong per-sender geometry.
@@ -686,43 +739,90 @@ std::vector<std::vector<uint8_t>> TensorPrefetcherManager::serialize_request_pag
             layout.page_bytes_per_recv,
             tensor_idx);
 
-        const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
+        Slot slot;
+        slot.geom = layout;
+        if (streaming) {
+            slot.rotation = input.rotation;
+        }
 
-        // Find this layout in the current page (dedup), or decide it needs adding.
-        auto find_layout = [&]() -> int32_t {
-            for (uint32_t i = 0; i < num_layouts; ++i) {
-                if (layout_equal(seen[i], layout)) {
-                    return static_cast<int32_t>(i);
+        // Find this slot in the current page (dedup), or decide it needs adding.
+        PagePlan* plan = &plans.back();
+        int32_t slot_idx = -1;
+        for (uint32_t i = 0; i < plan->slots.size(); ++i) {
+            if (slot_equal(plan->slots[i], slot)) {
+                slot_idx = static_cast<int32_t>(i);
+                break;
+            }
+        }
+        const uint32_t need = kEntryBytes + (slot_idx < 0 ? layout_stride : 0);
+        const uint32_t entry_high = kHeaderBytes + static_cast<uint32_t>(plan->entries.size()) * kEntryBytes;
+        const uint32_t layout_low = kRequestPageBytes - static_cast<uint32_t>(plan->slots.size()) * layout_stride;
+        if (need > layout_low - entry_high) {
+            // No room in the current page — start a fresh one. The slot is page-local, so it
+            // becomes a new slot in the next page.
+            plans.emplace_back();
+            plan = &plans.back();
+            slot_idx = -1;
+        }
+        if (slot_idx < 0) {
+            slot_idx = static_cast<int32_t>(plan->slots.size());
+            plan->slots.push_back(std::move(slot));
+        }
+        const uint32_t bank_local_base = static_cast<uint32_t>(input.tensor.get().mesh_buffer().address());
+        plan->entries.push_back(PlanEntry{bank_local_base, static_cast<uint32_t>(slot_idx)});
+    }
+
+    // ---- Materialize each logical page into one byte buffer per sender ----
+    // Header/entry/geometry bytes are identical across senders; only each slot's rotation region
+    // differs (this sender's slice of the caller's global rotation). Batched slots leave it zero.
+    std::vector<std::vector<std::vector<uint8_t>>> pages;
+    pages.reserve(plans.size());
+    for (const auto& plan : plans) {
+        std::vector<std::vector<uint8_t>> per_sender(num_senders_);
+        for (uint32_t s = 0; s < num_senders_; ++s) {
+            std::vector<uint8_t> page(aligned_page_bytes, 0);
+            auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(page.data());
+            header->base.cmd_id = DRAM_PREFETCHER_CMD_PREFETCH;
+            header->prefetch.num_entries = static_cast<uint16_t>(plan.entries.size());
+            header->prefetch.num_layouts = static_cast<uint32_t>(plan.slots.size());
+            header->prefetch.gcb_state_addr = gcb_state_addr;
+            for (uint32_t k = 0; k < plan.entries.size(); ++k) {
+                TensorPrefetcherEntry entry;
+                entry.bank_local_base = plan.entries[k].bank_local_base;
+                entry.layout_index = plan.entries[k].layout_index;
+                std::memcpy(page.data() + (kHeaderBytes + k * kEntryBytes), &entry, kEntryBytes);
+            }
+            const auto& ring = ring_idx_by_socket[s];
+            for (uint32_t i = 0; i < plan.slots.size(); ++i) {
+                const uint32_t slot_start = kRequestPageBytes - (i + 1) * layout_stride;
+                std::memcpy(page.data() + slot_start, &plan.slots[i].geom, kLayoutBytes);
+                if (!plan.slots[i].rotation.empty()) {
+                    TT_FATAL(
+                        !ring.empty(),
+                        "Tensor prefetcher: streaming request targets sender core ({}, {}) that is not in the GCB's "
+                        "sender mapping, so it has no ring indices to slice the rotation by.",
+                        sender_logical_cores_[s].x,
+                        sender_logical_cores_[s].y);
+                    auto* rot = reinterpret_cast<uint32_t*>(page.data() + slot_start + kLayoutBytes);
+                    for (uint32_t r = 0; r < ring.size(); ++r) {
+                        TT_FATAL(
+                            ring[r] < plan.slots[i].rotation.size(),
+                            "Tensor prefetcher: streaming ring index {} (sender core ({}, {}) local receiver {}) is "
+                            "out of range for the rotation table of size {}; streaming requires the uniform strided "
+                            "receiver-contiguous topology.",
+                            ring[r],
+                            sender_logical_cores_[s].x,
+                            sender_logical_cores_[s].y,
+                            r,
+                            plan.slots[i].rotation.size());
+                        rot[r] = plan.slots[i].rotation[ring[r]];
+                    }
                 }
             }
-            return -1;
-        };
-        int32_t layout_idx = find_layout();
-        const uint32_t need = kEntryBytes + (layout_idx < 0 ? kLayoutBytes : 0);
-        const uint32_t entry_high = kHeaderBytes + num_entries * kEntryBytes;
-        const uint32_t layout_low = kRequestPageBytes - num_layouts * kLayoutBytes;
-        if (need > layout_low - entry_high) {
-            // No room in the current page — emit it and start a fresh one. The tensor's
-            // layout is page-local, so it becomes a new layout in the next page.
-            finalize_page();
-            begin_page();
-            layout_idx = -1;
+            per_sender[s] = std::move(page);
         }
-
-        if (layout_idx < 0) {
-            layout_idx = static_cast<int32_t>(num_layouts);
-            std::memcpy(page.data() + (kRequestPageBytes - (num_layouts + 1) * kLayoutBytes), &layout, kLayoutBytes);
-            seen.push_back(layout);
-            ++num_layouts;
-        }
-
-        TensorPrefetcherEntry entry;
-        entry.bank_local_base = bank_local_base;
-        entry.layout_index = static_cast<uint32_t>(layout_idx);
-        std::memcpy(page.data() + (kHeaderBytes + num_entries * kEntryBytes), &entry, kEntryBytes);
-        ++num_entries;
+        pages.push_back(std::move(per_sender));
     }
-    finalize_page();
 
     return pages;
 }
@@ -746,8 +846,9 @@ void TensorPrefetcherManager::queue(
 
     // A Queue call may span more tensors than fit in one socket page; serialize into one
     // or more pages, each an independent request. The per-GCB fifo_wr_ptr persists across
-    // requests, so the split is invisible to the receiver.
-    std::vector<std::vector<uint8_t>> pages = serialize_request_pages(gcb, tensors);
+    // requests, so the split is invisible to the receiver. Each logical page is materialized
+    // per sender (different rotation slice), so `pages[p]` is a vector of num_senders_ buffers.
+    std::vector<std::vector<std::vector<uint8_t>>> pages = serialize_request_pages(gcb, tensors);
 
     // Target devices: subset if given, else full mesh. Caller is responsible
     // for keeping tensors and the GCB alive until stop() — see the public API doc.
@@ -774,9 +875,9 @@ void TensorPrefetcherManager::queue(
         // Push all pages of this call under one lock so they stay contiguous and ordered
         // (required for fifo_wr_ptr continuity across the split), whether captured or sent.
         std::lock_guard<std::mutex> lk(queue_mu_);
-        for (auto& page : pages) {
+        for (auto& sender_pages : pages) {
             Request req;
-            req.page = std::move(page);
+            req.sender_pages = std::move(sender_pages);
             req.target_devices = target_devices;
             if (recording_trace_id.has_value()) {
                 trace_requests_[*recording_trace_id].push_back(std::move(req));
@@ -875,9 +976,10 @@ void TensorPrefetcherManager::enqueue_cq_signal_and_wait(
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
+    // WAIT_CQ has no rotation, so one page broadcast to every sender (sender_pages size 1).
     Request req;
-    req.page.assign(page_bytes, 0);
-    auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(req.page.data());
+    req.sender_pages.assign(1, std::vector<uint8_t>(page_bytes, 0));
+    auto* header = reinterpret_cast<TensorPrefetcherRequestHeader*>(req.sender_pages[0].data());
     header->base.cmd_id = DRAM_PREFETCHER_CMD_WAIT_CQ;
     header->wait_cq.cq_index = cq_id;
     header->wait_cq.cq_wait_value = signal_value;
@@ -910,7 +1012,10 @@ void TensorPrefetcherManager::worker_loop() {
             pending_.pop_front();
         }
 
-        // Fan out: try_write to every target socket; round-robin until each succeeds.
+        // Fan out: try_write to every target socket; round-robin until each succeeds. Each
+        // socket gets that sender's own page (sender_pages indexed by sender s); STOP / WAIT_CQ
+        // carry a single shared page (sender_pages size 1), broadcast to every sender.
+        const bool broadcast = req.sender_pages.size() == 1;
         std::vector<uint32_t> remaining_target_sockets;
         remaining_target_sockets.reserve(req.target_devices.size() * num_senders_);
         for (const auto& dev_coord : req.target_devices) {
@@ -932,7 +1037,9 @@ void TensorPrefetcherManager::worker_loop() {
         while (!still_pending.empty()) {
             std::vector<uint32_t> next_pending;
             for (uint32_t sock_idx : still_pending) {
-                if (experimental::detail::try_write(*sockets_[sock_idx], req.page.data(), 1)) {
+                const uint32_t s = sock_idx % num_senders_;
+                std::vector<uint8_t>& page = broadcast ? req.sender_pages[0] : req.sender_pages[s];
+                if (experimental::detail::try_write(*sockets_[sock_idx], page.data(), 1)) {
                     // Wrote successfully.
                 } else {
                     next_pending.push_back(sock_idx);
@@ -964,7 +1071,8 @@ void TensorPrefetcherManager::stop() {
     const uint32_t pcie_alignment =
         MetalContext::instance(mesh_device_->impl().get_context_id()).hal().get_alignment(HalMemType::HOST);
     const uint32_t page_bytes = align_up(kRequestPageBytes, pcie_alignment);
-    sentinel.page.assign(page_bytes, 0);
+    // STOP is all-zero (cmd_id 0) and rotation-free, so one page broadcast to every sender.
+    sentinel.sender_pages.assign(1, std::vector<uint8_t>(page_bytes, 0));
     const MeshCoordinateRangeSet full_subset = full_mesh_subset();
     for (const auto& range : full_subset.ranges()) {
         for (const auto& coord : range) {
