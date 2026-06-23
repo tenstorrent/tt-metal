@@ -5,9 +5,9 @@
 Runs ONLY on hardware with python_env/bin/python (Python 3.10 + real ttnn).
 
 Run:
-    cd /home/ttuser/ssinghal/tt-metal && \
-    TT_LANG_PYTHON_PATH=/home/ttuser/ssinghal/tt-lang/python \
-    python_env/bin/python -m pytest \
+    cd <tt-metal-repo> && \
+    TT_LANG_PYTHON_PATH=<tt-lang-repo>/python \
+    <tt-lang-venv>/bin/python -m pytest \
         models/demos/nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16/tests/test_mamba2_ssd_scan_ttlang_hw.py \
         --noconftest -v -s
 """

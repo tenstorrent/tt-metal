@@ -5,7 +5,7 @@
 Runs in the tt-lang Python simulator or on Tenstorrent hardware — the
 conditional import at module level selects the right backend automatically.
 
-Set TT_LANG_PYTHON_PATH=/home/ttuser/ssinghal/tt-lang/python before importing.
+Set TT_LANG_PYTHON_PATH=<tt-lang-repo>/python before importing.
 
 Each of the 64 cores (8×8 grid) processes one attention head. The caller
 stacks all heads' tensors along the tile-row dimension; each core uses

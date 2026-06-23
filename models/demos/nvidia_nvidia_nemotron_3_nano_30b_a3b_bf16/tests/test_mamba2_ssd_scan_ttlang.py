@@ -223,7 +223,7 @@ def _build_all_heads_sim_tensors(x_dt_raw, B_in_raw, C_in_raw, x_raw, log_decay_
 # ── Multi-core sim test ───────────────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("n_chunks", [2, 64])
+@pytest.mark.parametrize("n_chunks", [2, 64, 128, 256])
 def test_mamba2_ssd_scan_ttlang_multicore_sim(n_chunks):
     """8×8 multi-core kernel processes all 64 heads in one call (sim)."""
     S = n_chunks * C
