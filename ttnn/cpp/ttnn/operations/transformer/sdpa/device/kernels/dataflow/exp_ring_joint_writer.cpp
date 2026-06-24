@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "dataflow_common.hpp"
@@ -142,7 +143,7 @@ void kernel_main() {
     const uint32_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(argidx++);
     const uint32_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(argidx++);
     const uint8_t fabric_mux_channel_id = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
-    const uint32_t termination_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t termination_sync_sem_id = get_arg_val<uint32_t>(argidx++);
     const uint32_t local_fabric_mux_status_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint32_t local_flow_control_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
     const uint32_t local_teardown_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
@@ -219,6 +220,8 @@ void kernel_main() {
             pkt_unicast_hdr, 1, nullptr, ag_page_size);
 
         // Pre-configure atomic inc header for signaling the injector core on the next device
+        // safe_get_noc_addr() cannot be migrated to Device 2.0 because it creates a cross-chip semaphore address,
+        // while the current Device 2.0 Semaphore class only supports same-chip operations.
         const uint64_t injector_out_ready_sem_noc_addr =
             safe_get_noc_addr(injector_noc_x, injector_noc_y, out_ready_sem_addr, 0);
         fabric_unicast_noc_unicast_atomic_inc_set_state<
@@ -483,14 +486,12 @@ void kernel_main() {
     if (mux_connection_valid) {
         noc.async_atomic_barrier();
         tt::tt_fabric::fabric_client_disconnect(mux_conn);
+        Semaphore<> termination_sync_sem(termination_sync_sem_id);
         if (is_termination_master) {
-            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_sem_addr);
-            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            termination_sync_sem.wait(num_mux_clients - 1);
             tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
         } else {
-            uint64_t dest_addr =
-                get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_sem_addr);
-            noc_semaphore_inc(dest_addr, 1);
+            termination_sync_sem.up(noc, termination_master_noc_x, termination_master_noc_y, 1);
             noc.async_atomic_barrier();
         }
     }
