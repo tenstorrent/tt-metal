@@ -8,12 +8,12 @@ Input: Google Benchmark JSON emitted by benchmark_h2d_stream_service
   (--benchmark_out=results.json --benchmark_out_format=json)
 
 The benchmark is organized by payload regime and mode:
-  - small_payload / size|tune
-  - medium_payload / size|tune
-  - large_payload / size|tune
+  - small_payload / size|host_threads|tune
+  - medium_payload / size|host_threads|tune
+  - large_payload / size|host_threads|tune
 
 Benchmark name grammar:
-  BM_H2DStreamService/<payload_regime>/<mode>/host<serial|parallel>/bytes<per_device_bytes>/max_coalesce<pages|auto>/fifo<pages|auto>
+  BM_H2DStreamService/<payload_regime>/<mode>/<host<serial|parallel>|threads<N>>/bytes<per_device_bytes>/max_coalesce<pages|auto>/fifo<pages|auto>
 
 Usage:
   python3 analyze_h2d_stream_service.py run results.json
@@ -66,12 +66,15 @@ BENCHMARK_PREFIX = "BM_H2DStreamService"
 MODE_AXIS = {
     "size": ("per_device_bytes", "per-device payload"),
     "tune": ("max_coalesce_pages", "max coalesce pages"),
+    "host_threads": ("host_threads", "host push threads"),
 }
+INTEGER_SWEEP_AXES = ("max_coalesce_pages", "fifo_pages", "host_threads")
 
 CASE_KEY = [
     "family",
     "mode",
     "host_push",
+    "host_threads",
     "per_device_bytes",
     "tensor_page_bytes",
     "max_coalesce_pages",
@@ -81,12 +84,19 @@ CASE_KEY = [
 PRIMARY_METRIC = "aggregate_gbps"
 LATENCY_METRIC = "latency_p50_us"
 LATENCY_PLOT_METRICS = ("latency_p50_us", "latency_p90_us", "latency_max_us")
+LATENCY_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "*")
+LATENCY_LINESTYLES = {
+    "latency_p50_us": "-",
+    "latency_p90_us": "--",
+    "latency_max_us": ":",
+}
 
 # Short names for the three sweepable axes, used in per-line labels.
 AXIS_SHORT = {
     "per_device_bytes": "size",
     "tensor_page_bytes": "page_bytes",
     "host_push": "host",
+    "host_threads": "threads",
     "max_coalesce_pages": "max_coalesce",
     "fifo_pages": "fifo",
     "metadata_size_bytes": "meta",
@@ -99,6 +109,7 @@ def held_cols(xcol: str) -> list[str]:
         c
         for c in (
             "host_push",
+            "host_threads",
             "per_device_bytes",
             "tensor_page_bytes",
             "max_coalesce_pages",
@@ -148,6 +159,9 @@ NUMERIC_COLUMNS = [
     "latency_p90_us",
     "latency_max_us",
     "parallel_host_push",
+    "host_push_thread_count",
+    "effective_host_push_thread_count",
+    "host_threads",
     "per_device_bytes",
     "per_device_pages",
     "tensor_page_bytes",
@@ -179,7 +193,12 @@ NUMERIC_COLUMNS = [
 # Tolerates the trailing "/manual_time" that UseManualTime() appends to the name.
 _NAME_RE = re.compile(
     rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/"
-    r"(?:host(?P<host>serial|parallel)/)?bytes(?P<bytes>\d+)/"
+    r"(?:(?:host(?P<host>serial|parallel))|(?:threads(?P<threads>\d+)))/bytes(?P<bytes>\d+)/"
+    r"(?:max_coalesce|page)(?P<page>auto|\d+)/fifo(?P<fifo>auto|\d+)"
+)
+
+_OLD_NAME_RE = re.compile(
+    rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/bytes(?P<bytes>\d+)/"
     r"(?:max_coalesce|page)(?P<page>auto|\d+)/fifo(?P<fifo>auto|\d+)"
 )
 
@@ -222,12 +241,25 @@ def _parse_page_count(value: str) -> int:
 
 def parse_name(name: str) -> dict[str, str | int] | None:
     match = _NAME_RE.match(name)
+    if match:
+        host_threads = int(match.group("threads")) if match.group("threads") is not None else 0
+        return {
+            "family": match.group("family"),
+            "mode": match.group("mode"),
+            "host_push": match.group("host") or "threads",
+            "host_threads": host_threads,
+            "per_device_bytes": int(match.group("bytes")),
+            "max_coalesce_pages": _parse_page_count(match.group("page")),
+            "fifo_pages": _parse_page_count(match.group("fifo")),
+        }
+    match = _OLD_NAME_RE.match(name)
     if not match:
         return None
     return {
         "family": match.group("family"),
         "mode": match.group("mode"),
-        "host_push": match.group("host") or "parallel",
+        "host_push": "parallel",
+        "host_threads": 0,
         "per_device_bytes": int(match.group("bytes")),
         "max_coalesce_pages": _parse_page_count(match.group("page")),
         "fifo_pages": _parse_page_count(match.group("fifo")),
@@ -305,7 +337,7 @@ def plot_family_lines(df: pd.DataFrame, out_dir: Path, prefix: str, metric: str 
         for key, group in sub.groupby(held):
             group = group.sort_values(xcol)
             ax.plot(group[xcol], group[metric], marker="o", label=line_label(held, key, varying))
-        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in INTEGER_SWEEP_AXES)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(metric_label(metric))
         ax.set_ylim(bottom=0)
@@ -346,7 +378,7 @@ def plot_compare_family_lines(merged: pd.DataFrame, out_dir: Path, prefix: str, 
                 label=line_label(held, key, varying),
             )
             ax.plot(group[xcol], group[cand_col], marker="s", linestyle="--", color=color)
-        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in INTEGER_SWEEP_AXES)
         ax.set_xlabel(xlabel)
         ax.set_ylabel(metric_label(metric))
         ax.set_ylim(bottom=0)
@@ -370,9 +402,10 @@ def plot_latency_stat_lines(df: pd.DataFrame, out_dir: Path, prefix: str) -> Non
         varying = [c for c in held if sub[c].nunique() > 1]
         fig, ax = plt.subplots(figsize=(7.5, 4.8))
         plotted = False
-        for key, group in sub.groupby(held):
+        for line_idx, (key, group) in enumerate(sub.groupby(held)):
             group = group.sort_values(xcol)
             base_label = line_label(held, key, varying)
+            marker = LATENCY_MARKERS[line_idx % len(LATENCY_MARKERS)]
             for metric in metrics:
                 metric_group = group[group[metric].notna()]
                 if metric_group.empty:
@@ -380,11 +413,17 @@ def plot_latency_stat_lines(df: pd.DataFrame, out_dir: Path, prefix: str) -> Non
                 label = latency_percentile_label(metric)
                 if base_label != "anchor":
                     label = f"{base_label}, {label}"
-                ax.plot(metric_group[xcol], metric_group[metric], marker="o", label=label)
+                ax.plot(
+                    metric_group[xcol],
+                    metric_group[metric],
+                    marker=marker,
+                    linestyle=LATENCY_LINESTYLES.get(metric, "-"),
+                    label=label,
+                )
                 plotted = True
         if not plotted:
             continue
-        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in INTEGER_SWEEP_AXES)
         ax.set_xlabel(xlabel)
         ax.set_ylabel("serialized issue-to-landed latency (us)")
         ax.set_ylim(bottom=0)
@@ -416,9 +455,10 @@ def plot_compare_latency_stat_lines(merged: pd.DataFrame, out_dir: Path, prefix:
         fig, ax = plt.subplots(figsize=(7.5, 4.8))
         plotted = False
         color_idx = 0
-        for key, group in sub.groupby(held):
+        for line_idx, (key, group) in enumerate(sub.groupby(held)):
             group = group.sort_values(xcol)
             base_label = line_label(held, key, varying)
+            marker = LATENCY_MARKERS[line_idx % len(LATENCY_MARKERS)]
             for metric in metrics:
                 base_col, cand_col = f"{metric}_baseline", f"{metric}_candidate"
                 metric_group = group[group[base_col].notna() & group[cand_col].notna()]
@@ -431,7 +471,7 @@ def plot_compare_latency_stat_lines(merged: pd.DataFrame, out_dir: Path, prefix:
                 ax.plot(
                     metric_group[xcol],
                     metric_group[base_col],
-                    marker="o",
+                    marker=marker,
                     linestyle="-",
                     color=color,
                     label=f"{label} baseline",
@@ -439,7 +479,7 @@ def plot_compare_latency_stat_lines(merged: pd.DataFrame, out_dir: Path, prefix:
                 ax.plot(
                     metric_group[xcol],
                     metric_group[cand_col],
-                    marker="s",
+                    marker=marker,
                     linestyle="--",
                     color=color,
                     label=f"{label} candidate",
@@ -448,7 +488,7 @@ def plot_compare_latency_stat_lines(merged: pd.DataFrame, out_dir: Path, prefix:
                 color_idx += 1
         if not plotted:
             continue
-        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in INTEGER_SWEEP_AXES)
         ax.set_xlabel(xlabel)
         ax.set_ylabel("serialized issue-to-landed latency (us)")
         ax.set_ylim(bottom=0)
@@ -538,8 +578,9 @@ def compare_runs(baseline_df: pd.DataFrame, candidate_df: pd.DataFrame) -> pd.Da
 
 
 def _case_id(row) -> str:
+    host_part = f"threads={int(row.host_threads)}" if row.host_push == "threads" else f"host={row.host_push}"
     return (
-        f"{row.family}/{row.mode}/host={row.host_push}/size={format_payload_bytes(row.per_device_bytes)}/"
+        f"{row.family}/{row.mode}/{host_part}/size={format_payload_bytes(row.per_device_bytes)}/"
         f"page_bytes={format_payload_bytes(row.tensor_page_bytes)}/"
         f"max_coalesce{int(row.max_coalesce_pages)}/fifo{int(row.fifo_pages)}/meta{int(row.metadata_size_bytes)}"
     )

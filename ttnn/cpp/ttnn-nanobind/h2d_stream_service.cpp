@@ -41,7 +41,8 @@ void py_module_types(nb::module_& mod) {
                tt::tt_metal::BufferType socket_buffer_type,
                std::optional<CoreRange> worker_cores,
                uint32_t metadata_size_bytes,
-               bool parallel_host_push) {
+               bool parallel_host_push,
+               uint32_t host_push_thread_count) {
                 tt::tt_metal::H2DStreamService::Config cfg{
                     .global_spec = global_spec,
                     .mapper = std::move(mapper),
@@ -51,6 +52,7 @@ void py_module_types(nb::module_& mod) {
                     .worker_cores = worker_cores,
                     .metadata_size_bytes = metadata_size_bytes,
                     .parallel_host_push = parallel_host_push,
+                    .host_push_thread_count = host_push_thread_count,
                 };
                 new (self) tt::tt_metal::H2DStreamService(mesh_device, std::move(cfg));
             },
@@ -63,6 +65,7 @@ void py_module_types(nb::module_& mod) {
             nb::arg("worker_cores").none() = nb::none(),
             nb::arg("metadata_size_bytes") = 0u,
             nb::arg("parallel_host_push") = false,
+            nb::arg("host_push_thread_count") = 0u,
             R"doc(
                 Construct a persistent H2DStreamService on the given mesh.
 
@@ -120,9 +123,15 @@ void py_module_types(nb::module_& mod) {
                     parallel_host_push (bool, optional): Experimental host-side
                         feeder parallelism. When True and the service owns more
                         than one socket, each forward_to_tensor fans its per-socket
-                        host writes out to a persistent pool of worker threads (one
-                        per socket) and blocks until all finish. No effect with a
-                        single socket. Default: False (writes run serially).
+                        host writes out to a persistent pool of worker threads and
+                        blocks until all finish. No effect with a single socket.
+                        Default: False (writes run serially).
+                    host_push_thread_count (int, optional): Explicit host worker
+                        count, used only when `parallel_host_push` is enabled.
+                        0 is auto and starts the service's tuned default worker
+                        count, clamped by num_sockets. 1 forces serial; N > 1
+                        starts up to N grouped workers, each writing a
+                        contiguous socket range page-major.
             )doc")
         .def(
             "forward_to_tensor",
@@ -368,11 +377,21 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def_static(
             "connect",
-            [](const std::string& service_id, std::optional<uint32_t> timeout_ms) {
-                return tt::tt_metal::H2DStreamService::connect(service_id, timeout_ms);
+            [](const std::string& service_id,
+               std::optional<uint32_t> timeout_ms,
+               bool parallel_host_push,
+               uint32_t host_push_thread_count) {
+                return tt::tt_metal::H2DStreamService::connect(
+                    service_id,
+                    timeout_ms,
+                    /*preprocessor=*/nullptr,
+                    parallel_host_push,
+                    host_push_thread_count);
             },
             nb::arg("service_id"),
             nb::arg("timeout_ms") = nb::none(),
+            nb::arg("parallel_host_push") = false,
+            nb::arg("host_push_thread_count") = 0u,
             R"doc(
                 Attach to an exported H2DStreamService from another process.
 
@@ -394,6 +413,14 @@ void py_module_types(nb::module_& mod) {
                         `export_descriptor`.
                     timeout_ms (int, optional): Max wait time for the
                         descriptor file. Defaults to the C++ default (10s).
+                    parallel_host_push (bool, optional): Connector-local host
+                        feeder choice; not carried by the descriptor.
+                    host_push_thread_count (int, optional): Connector-local
+                        explicit worker count, used only when
+                        `parallel_host_push` is enabled. 0 is auto and starts
+                        the service's tuned default worker count, clamped by
+                        num_sockets. 1 forces serial; N > 1 starts grouped
+                        workers.
 
                 Returns:
                     H2DStreamService: Connector-side service handle.

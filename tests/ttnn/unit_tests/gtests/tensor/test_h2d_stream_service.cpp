@@ -69,6 +69,7 @@ struct H2DServiceCase {
     uint32_t fifo_size_bytes = 0;
     uint32_t metadata_size_bytes = 0;  // optional inline metadata multicast, 0 = disabled
     bool parallel_host_push = false;   // fan each transfer's per-socket writes across host threads
+    uint32_t host_push_thread_count = 0;
 };
 
 tt::tt_metal::distributed::MeshWorkload build_worker_workload(
@@ -193,8 +194,8 @@ void run_h2d_stream_service_case(
     SCOPED_TRACE(
         ::testing::Message() << "global_shape=" << cs.global_shape
                              << " max_socket_page=" << cs.max_socket_page_size_bytes << " fifo=" << cs.fifo_size_bytes
-                             << " input_path=" << input_path_name(input_path)
-                             << " parallel_host_push=" << cs.parallel_host_push);
+                             << " input_path=" << input_path_name(input_path) << " parallel_host_push="
+                             << cs.parallel_host_push << " host_push_thread_count=" << cs.host_push_thread_count);
 
     const auto tensor_layout = TensorLayout(
         DataType::UINT32,
@@ -211,6 +212,7 @@ void run_h2d_stream_service_case(
         .worker_cores = worker_cores,
         .metadata_size_bytes = cs.metadata_size_bytes,
         .parallel_host_push = cs.parallel_host_push,
+        .host_push_thread_count = cs.host_push_thread_count,
     };
 
     tt::tt_metal::H2DStreamService service(mesh_device, std::move(cfg));
@@ -762,6 +764,46 @@ TEST_F(H2DStreamServiceTest, MultiThreadedHostPush_Sweep) {
                 }
             }
         }
+    }
+}
+
+TEST_F(H2DStreamServiceTest, HostPushThreadCount_Sweep) {
+    if (!tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
+        GTEST_SKIP() << "H2DStreamService kernels are only available on UBB Galaxy systems";
+    }
+
+    constexpr uint32_t per_row_size = 640;
+    constexpr uint32_t N = 16;
+    const uint32_t per_row_bytes = per_row_size * sizeof(uint32_t);
+    const uint32_t oversized_thread_count = static_cast<uint32_t>(this->mesh_device_->num_devices()) +
+                                            tt::tt_metal::H2DStreamService::kAutoHostPushThreadCount;
+
+    struct ThreadCountCase {
+        bool parallel_host_push;
+        uint32_t host_push_thread_count;
+        const char* label;
+    };
+    const ThreadCountCase thread_count_cases[] = {
+        {false, oversized_thread_count, "disabled_ignores_large_count"},
+        {true, 0, "auto_tuned_default"},
+        {true, 1, "explicit_serial"},
+        {true, 2, "two_threads"},
+        {true, 3, "odd_thread_count"},
+        {true, tt::tt_metal::H2DStreamService::kAutoHostPushThreadCount, "tuned_default_explicit"},
+        {true, oversized_thread_count, "oversized_count_clamps"},
+    };
+
+    for (const auto& tc : thread_count_cases) {
+        SCOPED_TRACE(::testing::Message() << "thread_count_case=" << tc.label);
+        H2DServiceCase cs{
+            .global_shape = ttnn::Shape({1, 1, N, per_row_size}),
+            .placements = replicate_all(*this->mesh_device_),
+            .max_socket_page_size_bytes = 4 * per_row_bytes,
+            .fifo_size_bytes = 16 * per_row_bytes,
+            .parallel_host_push = tc.parallel_host_push,
+            .host_push_thread_count = tc.host_push_thread_count,
+        };
+        run_h2d_stream_service_case(this->mesh_device_, cs, InputPath::Bytes, /*worker_cores=*/std::nullopt, 3);
     }
 }
 

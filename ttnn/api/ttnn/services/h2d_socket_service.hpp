@@ -49,6 +49,9 @@ namespace tt::tt_metal {
 // bytes into per-coord socket FIFOs (no per-call dispatch).
 class H2DStreamService {
 public:
+    // Tuned auto worker count used when parallel_host_push is enabled and host_push_thread_count == 0.
+    static constexpr uint32_t kAutoHostPushThreadCount = 8;
+
     struct Config {
         // Logical shape & layout of the un-sharded source tensor.
         TensorSpec global_spec;
@@ -90,10 +93,14 @@ public:
         std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor;
 
         // Experimental host-side feeder parallelism. When enabled (and there is more than one
-        // socket), the service runs a persistent pool of one worker thread per socket; each
-        // forward_to_tensor call fans the per-socket writes out to that pool and blocks until all
-        // workers finish. Each worker writes its own socket's pages serially. Disabled by default.
+        // socket), the service runs a persistent pool of host worker threads; each forward_to_tensor
+        // call fans the per-socket writes out to that pool and blocks until all workers finish.
+        // Disabled by default.
         bool parallel_host_push = false;
+        // Optional explicit host worker count. Only used when parallel_host_push is enabled. 0 = auto:
+        // start the service's tuned default worker count, clamped by num_sockets. 1 forces serial.
+        // N > 1 starts up to N grouped workers, each writing a contiguous socket range page-major.
+        uint32_t host_push_thread_count = 0;
     };
 
     H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg);
@@ -186,11 +193,14 @@ public:
     //     `Config::preprocessor`.
     // @param parallel_host_push Process-local feeder choice (same as
     //     `Config::parallel_host_push`); not carried by the descriptor.
+    // @param host_push_thread_count Process-local explicit worker count (same as
+    //     `Config::host_push_thread_count`); not carried by the descriptor.
     static std::unique_ptr<H2DStreamService> connect(
         const std::string& service_id,
         std::optional<uint32_t> timeout_ms = std::nullopt,
         std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor = nullptr,
-        bool parallel_host_push = false);
+        bool parallel_host_push = false,
+        uint32_t host_push_thread_count = 0);
 
 private:
     // Connector-mode ctor used by connect(): `mesh_device_` stays null; arity
@@ -224,18 +234,22 @@ private:
         std::mutex mutex;
         std::condition_variable cv;
         HostPushJobKind job = HostPushJobKind::None;
-        std::byte* payload_base = nullptr;
+        const std::vector<std::byte*>* payload_bases = nullptr;
+        size_t socket_begin = 0;
+        size_t socket_end = 0;
         bool done = true;
         std::exception_ptr error;
     };
 
+    size_t effective_host_push_thread_count() const;
     void start_parallel_host_push_workers();
     void stop_parallel_host_push_workers();
     void parallel_write_payload(const std::vector<std::byte*>& bases);
     void parallel_write_metadata();
-    void submit_host_push_job(size_t socket_index, HostPushJobKind job, std::byte* payload_base = nullptr);
+    void submit_host_push_job(
+        size_t worker_index, HostPushJobKind job, const std::vector<std::byte*>* payload_bases = nullptr);
     void wait_host_push_jobs();
-    void host_push_worker_loop(size_t socket_index);
+    void host_push_worker_loop(size_t worker_index);
 
     // True for owner services (own all device-side resources), false for
     // connector services. The dtor branches on it.

@@ -882,22 +882,45 @@ H2DStreamService::~H2DStreamService() {
     }
 }
 
+size_t H2DStreamService::effective_host_push_thread_count() const {
+    if (sockets_.size() <= 1 || !cfg_.parallel_host_push) {
+        return 0;
+    }
+    if (cfg_.host_push_thread_count == 0) {
+        return std::min<size_t>(kAutoHostPushThreadCount, sockets_.size());
+    }
+    if (cfg_.host_push_thread_count <= 1) {
+        return 0;
+    }
+    return std::min<size_t>(cfg_.host_push_thread_count, sockets_.size());
+}
+
 void H2DStreamService::start_parallel_host_push_workers() {
-    if (!cfg_.parallel_host_push || sockets_.size() <= 1 || !host_push_workers_.empty()) {
+    const size_t worker_count = effective_host_push_thread_count();
+    if (worker_count == 0 || !host_push_workers_.empty()) {
         return;
     }
 
-    host_push_worker_states_.reserve(sockets_.size());
-    host_push_workers_.reserve(sockets_.size());
-    for (size_t socket_index = 0; socket_index < sockets_.size(); ++socket_index) {
-        host_push_worker_states_.push_back(std::make_unique<HostPushWorkerState>());
-        host_push_workers_.emplace_back([this, socket_index]() { host_push_worker_loop(socket_index); });
+    host_push_worker_states_.reserve(worker_count);
+    host_push_workers_.reserve(worker_count);
+    for (size_t worker_index = 0; worker_index < worker_count; ++worker_index) {
+        auto state = std::make_unique<HostPushWorkerState>();
+        state->socket_begin = (worker_index * sockets_.size()) / worker_count;
+        state->socket_end = ((worker_index + 1) * sockets_.size()) / worker_count;
+        TT_FATAL(
+            state->socket_begin < state->socket_end,
+            "H2DStreamService: host push worker {} got an empty socket range [{}, {})",
+            worker_index,
+            state->socket_begin,
+            state->socket_end);
+        host_push_worker_states_.push_back(std::move(state));
+        host_push_workers_.emplace_back([this, worker_index]() { host_push_worker_loop(worker_index); });
     }
 }
 
 void H2DStreamService::stop_parallel_host_push_workers() {
-    for (size_t socket_index = 0; socket_index < host_push_worker_states_.size(); ++socket_index) {
-        auto& state = *host_push_worker_states_[socket_index];
+    for (auto& state_ptr : host_push_worker_states_) {
+        auto& state = *state_ptr;
         {
             std::lock_guard<std::mutex> lock(state.mutex);
             state.job = HostPushJobKind::Stop;
@@ -922,46 +945,43 @@ void H2DStreamService::parallel_write_payload(const std::vector<std::byte*>& bas
         bases.size(),
         sockets_.size());
 
-    for (size_t s = 0; s < sockets_.size(); ++s) {
-        submit_host_push_job(s, HostPushJobKind::Payload, bases[s]);
+    for (size_t worker_index = 0; worker_index < host_push_worker_states_.size(); ++worker_index) {
+        submit_host_push_job(worker_index, HostPushJobKind::Payload, &bases);
     }
     wait_host_push_jobs();
 }
 
 void H2DStreamService::parallel_write_metadata() {
-    TT_FATAL(
-        host_push_worker_states_.size() == sockets_.size(),
-        "H2DStreamService::parallel_write_metadata: worker count {} does not match sockets size {}",
-        host_push_worker_states_.size(),
-        sockets_.size());
+    TT_FATAL(!host_push_worker_states_.empty(), "H2DStreamService::parallel_write_metadata: no host push workers");
 
-    for (size_t s = 0; s < sockets_.size(); ++s) {
-        submit_host_push_job(s, HostPushJobKind::Metadata);
+    for (size_t worker_index = 0; worker_index < host_push_worker_states_.size(); ++worker_index) {
+        submit_host_push_job(worker_index, HostPushJobKind::Metadata);
     }
     wait_host_push_jobs();
 }
 
-void H2DStreamService::submit_host_push_job(size_t socket_index, HostPushJobKind job, std::byte* payload_base) {
+void H2DStreamService::submit_host_push_job(
+    size_t worker_index, HostPushJobKind job, const std::vector<std::byte*>* payload_bases) {
     TT_FATAL(
-        socket_index < host_push_worker_states_.size(),
-        "H2DStreamService::submit_host_push_job: socket index {} out of range",
-        socket_index);
+        worker_index < host_push_worker_states_.size(),
+        "H2DStreamService::submit_host_push_job: worker index {} out of range",
+        worker_index);
     TT_FATAL(
         job == HostPushJobKind::Payload || job == HostPushJobKind::Metadata || job == HostPushJobKind::Stop,
         "H2DStreamService::submit_host_push_job: invalid job {}",
         static_cast<int>(job));
     TT_FATAL(
-        job != HostPushJobKind::Payload || payload_base != nullptr,
-        "H2DStreamService::submit_host_push_job: payload job requires a payload base");
+        job != HostPushJobKind::Payload || payload_bases != nullptr,
+        "H2DStreamService::submit_host_push_job: payload job requires payload bases");
 
-    auto& state = *host_push_worker_states_[socket_index];
+    auto& state = *host_push_worker_states_[worker_index];
     {
         std::lock_guard<std::mutex> lock(state.mutex);
         TT_FATAL(
             state.done && state.job == HostPushJobKind::None,
-            "H2DStreamService::submit_host_push_job: worker for socket {} is still busy",
-            socket_index);
-        state.payload_base = payload_base;
+            "H2DStreamService::submit_host_push_job: worker {} is still busy",
+            worker_index);
+        state.payload_bases = payload_bases;
         state.error = nullptr;
         state.done = false;
         state.job = job;
@@ -984,17 +1004,17 @@ void H2DStreamService::wait_host_push_jobs() {
     }
 }
 
-void H2DStreamService::host_push_worker_loop(size_t socket_index) {
-    auto& state = *host_push_worker_states_[socket_index];
+void H2DStreamService::host_push_worker_loop(size_t worker_index) {
+    auto& state = *host_push_worker_states_[worker_index];
 
     while (true) {
         HostPushJobKind job = HostPushJobKind::None;
-        std::byte* payload_base = nullptr;
+        const std::vector<std::byte*>* payload_bases = nullptr;
         {
             std::unique_lock<std::mutex> lock(state.mutex);
             state.cv.wait(lock, [&state]() { return state.job != HostPushJobKind::None; });
             job = state.job;
-            payload_base = state.payload_base;
+            payload_bases = state.payload_bases;
             state.job = HostPushJobKind::None;
         }
 
@@ -1005,11 +1025,18 @@ void H2DStreamService::host_push_worker_loop(size_t socket_index) {
         std::exception_ptr error;
         try {
             if (job == HostPushJobKind::Metadata) {
-                sockets_[socket_index]->write(metadata_scratch_.data(), /*num_pages=*/1);
+                for (size_t socket_index = state.socket_begin; socket_index < state.socket_end; ++socket_index) {
+                    sockets_[socket_index]->write(metadata_scratch_.data(), /*num_pages=*/1);
+                }
             } else {
+                TT_FATAL(
+                    payload_bases != nullptr,
+                    "H2DStreamService::host_push_worker_loop: payload job missing payload bases");
                 for (uint32_t i = 0; i < num_socket_pages_; ++i) {
                     const size_t offset = static_cast<size_t>(i) * socket_page_size_;
-                    sockets_[socket_index]->write(payload_base + offset, /*num_pages=*/1);
+                    for (size_t socket_index = state.socket_begin; socket_index < state.socket_end; ++socket_index) {
+                        sockets_[socket_index]->write((*payload_bases)[socket_index] + offset, /*num_pages=*/1);
+                    }
                 }
             }
         } catch (...) {
@@ -1018,7 +1045,7 @@ void H2DStreamService::host_push_worker_loop(size_t socket_index) {
 
         {
             std::lock_guard<std::mutex> lock(state.mutex);
-            state.payload_base = nullptr;
+            state.payload_bases = nullptr;
             state.error = error;
             state.done = true;
         }
@@ -1197,7 +1224,8 @@ std::unique_ptr<H2DStreamService> H2DStreamService::connect(
     const std::string& service_id,
     std::optional<uint32_t> timeout_ms,
     std::function<void(ttsl::Span<std::byte> bytes, ttsl::Span<const std::byte> metadata)> preprocessor,
-    bool parallel_host_push) {
+    bool parallel_host_push,
+    uint32_t host_push_thread_count) {
     auto desc = distributed::H2DStreamServiceDescriptor::wait_and_read(
         distributed::descriptor_path_for_service(service_id), timeout_ms.value_or(10000));
 
@@ -1225,9 +1253,10 @@ std::unique_ptr<H2DStreamService> H2DStreamService::connect(
         .max_socket_page_size_bytes = 0,
         .worker_cores = std::nullopt,
         .metadata_size_bytes = desc.metadata_size_bytes,
-        // Preprocessor and parallel-push are process-local; not carried by the descriptor.
+        // Preprocessor and host push threading are process-local; not carried by the descriptor.
         .preprocessor = std::move(preprocessor),
         .parallel_host_push = parallel_host_push,
+        .host_push_thread_count = host_push_thread_count,
     };
 
     return std::unique_ptr<H2DStreamService>(new H2DStreamService(
@@ -1333,7 +1362,7 @@ void H2DStreamService::forward_to_tensor(const Tensor& host_tensor, ttsl::Span<c
         bases.push_back(shard_span.data());
     }
 
-    if (cfg_.parallel_host_push && sockets_.size() > 1) {
+    if (!host_push_worker_states_.empty()) {
         parallel_write_payload(bases);
     } else {
         // Page-major: send page `i` to every socket before `i+1` so every kernel can progress.
@@ -1349,7 +1378,7 @@ void H2DStreamService::forward_to_tensor(const Tensor& host_tensor, ttsl::Span<c
     // to every worker. Same bytes to every device.
     if (cfg_.metadata_size_bytes > 0) {
         std::memcpy(metadata_scratch_.data(), metadata.data(), metadata.size());
-        if (cfg_.parallel_host_push && sockets_.size() > 1) {
+        if (!host_push_worker_states_.empty()) {
             parallel_write_metadata();
         } else {
             for (auto& s : sockets_) {
