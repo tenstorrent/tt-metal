@@ -107,7 +107,13 @@ def load_glm_lazy_state_dict(snapshot_dir: Path, *, num_layers: Optional[int] = 
     layer (47) while config.num_hidden_layers == 47, so layer 47 weights should
     be ignored in the baseline path.
     """
-    state = LazyStateDict(Path(snapshot_dir))
+    snapshot_dir = Path(snapshot_dir)
+    # Pre-read the index and pass _full_to_file directly so LazyStateDict skips its
+    # DeepSeek-specific expert-layout validation (which also imports hf_model_utils,
+    # incompatible with transformers >= 5.x).
+    index_path = snapshot_dir / "model.safetensors.index.json"
+    full_to_file = json.loads(index_path.read_text())["weight_map"]
+    state = LazyStateDict(snapshot_dir, _full_to_file=full_to_file)
     if num_layers is not None:
         state = state.view_with_prefix("", num_layers=num_layers)
     return state

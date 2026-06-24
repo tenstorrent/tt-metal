@@ -427,6 +427,12 @@ def compute_1d_prog_cfg(
         per_core_N = int(ov.per_core_N)
         if per_core_N <= 0:
             raise ValueError(f"per_core_N must be positive, got {per_core_N}")
+        # Override must not require more blocks than available cores (e.g. per_core_N=11
+        # tuned for TP-sharded LM head would give 440 blocks on 110-core Blackhole when
+        # TP is off and N is the full vocab).  Fall back to auto when this would fire.
+        needed_cores = math.ceil(n_tiles / per_core_N)
+        if needed_cores > num_cores:
+            per_core_N = max(1, math.ceil(n_tiles / num_cores))
     else:
         per_core_N = max(1, math.ceil(n_tiles / num_cores))
 
