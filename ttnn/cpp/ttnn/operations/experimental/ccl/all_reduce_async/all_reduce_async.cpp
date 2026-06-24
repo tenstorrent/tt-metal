@@ -6,8 +6,7 @@
 
 #include "all_reduce_async.hpp"
 
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "device/all_reduce_async_device_operation.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"
@@ -17,7 +16,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -180,7 +179,7 @@ ttnn::Tensor all_reduce_async(
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
             ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-        interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
+        interleaved_input_tensor = ttnn::to_memory_config(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
     const ttnn::Tensor& working_input_tensor =
@@ -298,7 +297,7 @@ ttnn::Tensor all_reduce_async(
     if (change_mem_config) {
         ttnn::MemoryConfig working_memory_config{
             ttnn::TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-        interleaved_input_tensor = ttnn::sharded_to_interleaved(input_tensor, working_memory_config, std::nullopt);
+        interleaved_input_tensor = ttnn::to_memory_config(input_tensor, working_memory_config, std::nullopt);
     }
     // .value_or() returns by value, .value() returns by reference
     const ttnn::Tensor& working_input_tensor =

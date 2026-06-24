@@ -488,32 +488,19 @@ from ttnn.operations.matmul import (
     create_matmul_attributes,
     matmul_select_program_factory,
 )
+from ttnn.operations import matmul_auto_tune  # noqa: F401
 
 from ttnn.operations.normalization import (
-    SoftmaxProgramConfig,
-    SoftmaxDefaultProgramConfig,
-    SoftmaxShardedMultiCoreProgramConfig,
-    LayerNormDefaultProgramConfig,
-    LayerNormShardedMultiCoreProgramConfig,
-    LayerNormType,
-    DistributedLayerNormStage,
-    LayerNormParams,
-    LayerNormInputs,
-    LayerNormDeviceOperation,
-    LayerNormMultiCoreProgramFactory,
-    LayerNormShardedProgramFactory,
-    create_group_norm_input_mask,
-    create_group_norm_input_negative_mask,
+    # NOTE: Softmax*/LayerNorm* program configs/types/factories and the
+    # create_group_norm_input_mask / create_layer_norm_reciprocals /
+    # *_compute_config / create_layernorm_program_config bindings were removed
+    # with the nuked softmax/layernorm/rmsnorm/groupnorm ops (agent-regen
+    # baseline). Only the surviving pure-Python group_norm helpers are kept.
     create_group_norm_weight_bias_rm,
     create_group_norm_reciprocals,
-    create_layer_norm_reciprocals,
-    determine_expected_group_norm_sharded_config_and_grid_size,
     determine_expected_group_norm_dram_grid_size,
     get_group_norm_cores_across_channel,
     dram_group_norm_params_from_torch,
-    layernorm_default_compute_config,
-    rmsnorm_default_compute_config,
-    create_layernorm_program_config,
 )
 
 from ttnn.operations.embedding import (
@@ -539,10 +526,6 @@ from ttnn.operations.conv2d import (
     Conv2dDRAMSliceWidth,
     Conv2dL1Full,
     Conv2dL1FullSliceConfig,
-    prepare_conv_weights,
-    prepare_conv_bias,
-    prepare_conv_transpose2d_weights,
-    prepare_conv_transpose2d_bias,
     SlidingWindowParallelConfig,
     Op2DSliceConfig,
     Op2DDRAMSliceHeight,
@@ -565,7 +548,7 @@ experimental.disaggregation = disaggregation
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
-from ttnn.operations.transformer import SDPAProgramConfig
+# NOTE: SDPAProgramConfig removed with the nuked sdpa op (agent-regen baseline).
 
 IndexerScoreProgramConfig = ttnn._ttnn.operations.experimental.IndexerScoreProgramConfig
 
@@ -582,12 +565,8 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
-from ttnn._ttnn.operations.data_movement import (
-    SliceParams,
-    SliceInputs,
-    SliceDeviceOperation,
-    SliceTileProgramFactory,
-)
+
+# TODO(nuked-op slice): removed SliceParams/SliceInputs/SliceDeviceOperation/SliceTileProgramFactory imports (slice op nuked).
 
 import pathlib
 import importlib.util

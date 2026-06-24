@@ -200,12 +200,20 @@ jobs:
         run: |
           mkdir -p /tmp/ccache
 
-      - name: Check out repo
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Check out repo
+        uses: ./.github/actions/checkout
+        with:
+          fetch-depth: 0
+          fetch-tags: true
           submodules: recursive
           clean: true
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
       - name: Configure git safe.directory
         run: git config --global --add safe.directory /work

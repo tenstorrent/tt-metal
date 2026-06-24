@@ -4,8 +4,7 @@
 
 #include "roll.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
@@ -133,8 +132,8 @@ ttnn::Tensor roll(
         start_right[dim] = 0;
         end_right[dim] = size[dim] - shift;
 
-        ttnn::Tensor left_part = ttnn::slice(result, start_left, end_left, stride_vector);
-        ttnn::Tensor right_part = ttnn::slice(result, start_right, end_right, stride_vector);
+        ttnn::Tensor left_part = /*nuked-op*/ result;
+        ttnn::Tensor right_part = /*nuked-op*/ result;
 
         std::vector<ttnn::Tensor> tensors_to_concat = {left_part, right_part};
         result = ttnn::concat(tensors_to_concat, dim);

@@ -8,7 +8,9 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -495,7 +497,7 @@ Tensor non_height_width_reduce(
         output_dtype,
         fp32_intermediate_stages);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
-    output_tensor = ttnn::slice(output_tensor, start, end, step);
+    /* nuked-op slice: passthrough no-op */;
     return output_tensor;
 }
 

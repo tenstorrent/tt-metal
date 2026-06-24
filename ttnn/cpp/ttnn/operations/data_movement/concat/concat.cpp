@@ -19,8 +19,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
+// TODO(nuked-op): removed include of deleted slicing op header
 
 #include <ranges>
 #include <utility>

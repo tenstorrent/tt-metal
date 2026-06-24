@@ -38,11 +38,17 @@ jobs:
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/release_tests.yaml
     steps:
-      - name: Checkout the repository
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: Checkout the repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Install dependencies
         run: |
           pip3 install PyYAML
@@ -126,10 +132,10 @@ jobs:
         NO_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.NO_PROXY) || '' }}
         ARCH_NAME: ${{ contains(matrix.test-group.sku, 'bh_') && 'blackhole' || 'wormhole_b0' }}
       volumes:
-        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - ${{ github.workspace }}:/work
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && !contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || '/no_mlperf' }}
-        - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:rw', contains(join(matrix.test-group.runs_on, ' '), 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
+        - ${{ (contains(matrix.test-group.sku, 'bh_') && !contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && format('{0}:/localdev/blackhole_demos/huggingface_data:ro', contains(join(matrix.test-group.runs_on, ' '), 'pipeline-functional') && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data')) || '/no_bh_cache' }}
       options: >-
         --device /dev/tenstorrent
         ${{ contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '-e TT_GH_CI_INFRA=1' || '' }}
@@ -139,17 +145,22 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Mark repository as safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -159,18 +170,13 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
-      - name: Download Llama model weights from LFC
-        if: ${{ contains(matrix.test-group.name, 'llama') && contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') }}
+      - name: Download model weights from LFC
+        if: ${{ contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && contains(matrix.test-group.name, 'llama') }}
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
-          if [[ "${{ matrix.test-group.model-name }}" == "llama3.3-70b" ]]; then
-            model_path="Llama-3.3-70B-Instruct/"
-          else
-            model_path="Llama-3.1-8B-Instruct/"
-          fi
-          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama "http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/${model_path}"
+          wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Ensure BH links online
         if: ${{ contains(matrix.test-group.sku, 'bh_') }}
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
@@ -219,7 +225,7 @@ jobs:
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()
       - name: Disable Performance mode
         if: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal')) && matrix.test-group.sku != 'bh_p100' && matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' && always() }}

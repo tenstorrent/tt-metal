@@ -6,7 +6,7 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+// TODO(nuked-op): interleaved_to_sharded removed; L1-sharded output routed through to_memory_config below.
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
@@ -73,9 +73,7 @@ ttnn::Tensor pad_via_interleaved_composite(
         sub_core_grids);
 
     if (output_memory_config.is_sharded()) {
-        if (output_memory_config.is_l1()) {
-            return ttnn::interleaved_to_sharded(padded, output_memory_config, std::nullopt);
-        }
+        // interleaved_to_sharded was nuked; to_memory_config handles both L1 and DRAM sharded targets.
         return ttnn::to_memory_config(padded, output_memory_config, std::nullopt);
     }
     return padded;

@@ -13,7 +13,7 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -102,7 +102,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     const uint32_t k,
     const uint32_t adjusted_k,
     const Shape& original_lshape,
-    const MemoryConfig& input_memory_config) {
+    [[maybe_unused]] const MemoryConfig& input_memory_config) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto orig_rank = input_shape.rank();
 
@@ -120,8 +120,8 @@ std::vector<Tensor> post_topk_transform_tensor(
         ttsl::SmallVector<uint32_t> end_index = {output_shape[0], output_shape[1], output_shape[2], k};
 
         // Slice both values and indices tensors to remove extra elements beyond requested K
-        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
-        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+        result[0] = /*nuked-op*/ result[0];
+        result[1] = /*nuked-op*/ result[1];
     }
 
     // Rank restoration - convert from op-required 4D back to original rank
@@ -167,8 +167,8 @@ std::vector<Tensor> post_topk_transform_tensor(
         }
 
         // Apply final corrective slice to both values and indices tensors
-        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
-        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+        result[0] = /*nuked-op*/ result[0];
+        result[1] = /*nuked-op*/ result[1];
     }
 
     // Verify that all transformations resulted in the correct output shape

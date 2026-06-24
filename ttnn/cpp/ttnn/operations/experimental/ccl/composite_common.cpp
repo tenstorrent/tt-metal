@@ -5,8 +5,8 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_device_operation.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
-#include "ttnn/operations/data_movement/split/split.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
@@ -127,7 +127,7 @@ ttnn::Tensor composite_reduce_scatter(
 
     // split the input tensor so we can insert internal padding
     std::vector<ttnn::Tensor> split_tensors =
-        ttnn::split(input_tensor, output_shape[scatter_dim], scatter_dim, input_tensor.memory_config());
+        /*nuked-op*/ {input_tensor};
     if (is_row_major) {
         for (uint32_t i = 0; i < num_devices; ++i) {
             split_tensors[i] =
@@ -181,7 +181,7 @@ ttnn::Tensor composite_reduce_scatter(
         ttsl::SmallVector<int32_t> begins(output_shape.rank(), 0), ends(output_shape.cbegin(), output_shape.cend());
         const ttsl::Span<const int32_t> sbegins(begins), ssteps(steps), sends(ends);
         rs_output_tensor =
-            ttnn::slice(padded_native_rs_output_tensor, sbegins, sends, ssteps, native_rs_output_memory_config);
+            /*nuked-op*/ padded_native_rs_output_tensor;
     }
 
     // Restore the original dtype before any (optional) sharded reshard: typecast on an interleaved

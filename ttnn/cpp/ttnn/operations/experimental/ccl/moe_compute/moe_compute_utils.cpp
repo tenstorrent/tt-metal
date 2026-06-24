@@ -30,7 +30,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op slice): slice removed; slice_basic degraded to a passthrough (see below).
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -60,7 +60,9 @@ ttnn::Tensor permute_to(const ttnn::Tensor& t, std::initializer_list<int64_t> di
 ttnn::Tensor slice_basic(
     const ttnn::Tensor& t, const ttsl::SmallVector<int32_t>& begins, const ttsl::SmallVector<int32_t>& ends) {
     ttsl::SmallVector<int32_t> steps(begins.size(), 1);
-    return ttnn::slice(t, begins, ends, steps);
+    (void)begins;
+    (void)ends;
+    return /*nuked-op slice*/ t;
 }
 
 ttnn::Tensor zeros_like_dtype(std::initializer_list<uint32_t> shape, const ttnn::Tensor& reference) {

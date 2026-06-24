@@ -156,7 +156,51 @@ void kernel_main() {
 #endif  // IN1_SHARDED
 
 #ifndef OUT_SHARDED
-        // WRITER
+        // WRITER — layout of tiles arriving from compute depends on factory intent:
+        //   TILE_PACK_ROW_MAJOR defined  → compute packs per M-row-group in row-major
+        //                               order; read full row-group and write across
+        //                               the full output width per row.
+        //   TILE_PACK_ROW_MAJOR undefined → compute packs sequentially per subblock;
+        //                                read subblock-by-subblock and write at
+        //                                subblock offsets (main/legacy behavior).
+        //
+        // The define is emitted by factories whose compute path uses absolute-offset
+        // packing (matmul_multicore_reuse_optimized). Multicast / DRAM-sharded
+        // factories sharing this writer file don't emit it and rely on the legacy
+        // subblock-order path.
+#ifdef TILE_PACK_ROW_MAJOR
+        {
+            constexpr uint32_t out_row_width = out_subblock_w * out_num_subblocks_w;
+            constexpr uint32_t row_group_tiles = out_subblock_h * out_row_width;
+
+            uint32_t out_tensor_row_group_start = out_tensor_start_tile_id;
+            for (uint32_t sbh = 0; sbh < out_num_subblocks_h; ++sbh) {
+                cb_out.wait_front(row_group_tiles);
+                uint32_t out_read_offset = 0;
+
+                uint32_t out_tensor_row_start = out_tensor_row_group_start;
+                for (uint32_t h = 0; h < out_subblock_h; ++h) {
+                    uint32_t out_tensor_tile_id = out_tensor_row_start;
+                    for (uint32_t w = 0; w < out_row_width; ++w) {
+                        noc.async_write(
+                            use<CircularBuffer::AddrSelector::READ_PTR>(cb_out),
+                            s,
+                            output_single_tile_size_bytes,
+                            {.offset_bytes = out_read_offset},
+                            {.page_id = out_tensor_tile_id});
+
+                        out_read_offset += output_single_tile_size_bytes;
+                        out_tensor_tile_id += out_tensor_stride_w;
+                    }
+                    out_tensor_row_start += out_tensor_stride_h;
+                }
+
+                noc.async_write_barrier();
+                cb_out.pop_front(row_group_tiles);
+                out_tensor_row_group_start += out_tensor_next_subblock_stride_h;
+            }
+        }
+#else
         uint32_t out_tensor_sbh_start_tile_id = out_tensor_start_tile_id;
         for (uint32_t sbh = 0; sbh < out_num_subblocks_h; ++sbh) {
             uint32_t out_tensor_sbw_start_tile_id = out_tensor_sbh_start_tile_id;
@@ -177,7 +221,6 @@ void kernel_main() {
                             {.page_id = out_tensor_tile_id});
 
                         out_read_offset += output_single_tile_size_bytes;
-
                         out_tensor_tile_id += out_tensor_stride_w;
                     }
                     out_tensor_sb_row_start_tile_id += out_tensor_stride_h;
@@ -189,6 +232,7 @@ void kernel_main() {
             }
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
         }
+#endif  // TILE_PACK_ROW_MAJOR
         out_tensor_start_tile_id += MtNt;
 #endif  // OUT_SHARDED
     }
