@@ -170,6 +170,7 @@ Final optimized evidence checklist - these items MUST be completed:
 -[ ] Explicitly configured `memory_config`, `program_config`, and `compute_kernel_config` for important ops.
 -[ ] For any matmul or repeated matmul group that is one of the largest decode-time consumers: swept legal program configs separately for each dominant role, including core grid, `in0_block_w`, output subblocks, output blocks, memory configs, and compute kernel config where applicable. The stage is incomplete without a before/after evidence table or an exact TTNN/runtime blocker.
 -[ ] Decode compute fidelity was swept as a real performance knob for each dominant projection group. Do not assume BFP8 implies HiFi2 is fastest; try legal LoFi and HiFi2 candidates with the same dtype and real traced decode evidence, then keep the fastest policy that passes correctness.
+-[ ] If dense MLP or expert matmuls are among the largest decode-time consumers: BFP4/LoFi trials for FF1/FF3 or equivalent gate/up projections were run before lower-priority prefill-only advice was pursued to completion. FF2/down BFP4 was also tried or rejected with PCC/runtime evidence.
 -[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
 -[ ] DRAM-sharded decode matmuls.
 -[ ] Collective topology minimized. Avoidable gather, reshard, all-reduce, reduce-scatter, and all-gather operations have been removed, moved to cheaper boundaries, or justified with before/after evidence.
@@ -247,6 +248,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - Try BFP8 KV cache. Keep it if PCC remains above threshold and perf/memory improve. If BFP8 KV fails, inspect the prefill fill-cache dtype path before concluding the dtype is invalid: cache-fill tensors should be explicitly typecast to the cache dtype, while decode `paged_update_cache` inputs should remain BF16/FLOAT32.
 - Try BFP4 for MLP FF1/FF3; these often tolerate BFP4 well.
 - Try BFP4 for FF2/down-projection, but expect it to be more sensitive. Fall back based on PCC evidence, not preference.
+- If dense MLP or expert matmuls dominate decode time, the BFP4/LoFi MLP trial is mandatory before accepting the decoder. Do not defer it to datatype sweep and do not spend long on lower-impact prefill-only advice first. Measure a BF16-activation/BFP8-weight baseline, a BFP4 FF1/FF3 or gate/up candidate, and a guarded FF2/down BFP4 candidate when the model can tolerate it.
 - For BFP8 weights, HiFi2 is a safe starting point, not a default answer. Try LoFi for dominant decode projection groups and keep it when full-model accuracy and qualitative generation still pass. Record BFP8+LoFi versus BFP8+HiFi2 as separate candidates, because the speed difference can be large even when dtype is unchanged.
 - For BFP4 weights, LoFi is expected.
 - For BF16 weights or numerically sensitive operations, use HiFi4 or FP32 accumulation where PCC demands it.
