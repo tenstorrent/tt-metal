@@ -43,7 +43,13 @@ def prefill_dispatch(model, tokens, page_table, prompt_lens, use_trace):
     T = int(prompt_lens[0]) if prompt_lens is not None else tokens.shape[1]
     if use_trace:
         return model.prefill_traced_chunked(tokens, page_table, actual_len=T)
-    return model.prefill_paged(tokens, page_table)
+    # The single-device paged path derives its sequence length from tokens.shape and returns logits
+    # for the last token, so a bucket-padded buffer would prefill the padding and read out the pad
+    # boundary instead of prompt_lens[0]-1. Clip to the real length T first (the TP path clips the
+    # same way, and the traced path passes actual_len=T).
+    if tokens.shape[1] > T:
+        tokens = tokens[:, :T]
+    return model.prefill_paged(tokens, page_table, valid_len=T)
 
 
 def prime_decode_trace(generator, model, tokens, current_pos, page_table):
