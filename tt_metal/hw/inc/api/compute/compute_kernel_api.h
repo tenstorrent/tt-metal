@@ -184,10 +184,10 @@ ALWI void silu_tile_init() {
  */
 template <bool fast_and_approx = false>
 ALWI void tanh_tile_init() {
-#ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_INIT(tanh));
-#else
+#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, DST_ACCUM_MODE)));
+#else
+    MATH(SFPU_UNARY_INIT(tanh));
 #endif
 }
 
@@ -211,10 +211,7 @@ ALWI void tanh_tile_init() {
 // clang-format on
 template <bool fast_and_approx = false>
 ALWI void tanh_tile(uint32_t idst) {
-#ifdef ARCH_QUASAR
-    MATH(SFPU_UNARY_CALL(
-        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (8 /* ITERATIONS */), idst, ::ckernel::VectorMode::RC));
-#else
+#ifndef ARCH_QUASAR
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -222,6 +219,9 @@ ALWI void tanh_tile(uint32_t idst) {
         (fast_and_approx, DST_ACCUM_MODE, 8 /* ITERATIONS */),
         idst,
         VectorMode::RC));
+#else
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_tanh, (8 /* ITERATIONS */), idst, ::ckernel::VectorMode::RC));
 #endif
 }
 
