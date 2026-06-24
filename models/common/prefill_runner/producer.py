@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
-"""External producer for the H2D-streamed prefill_runner.
+"""External producer for the H2D-streamed prefill runner.
 
-Pairs with `prefill_runner.py` running in `PREFILL_H2D_EXTERNAL_PRODUCER=1`
-mode. The runner constructs an `H2DStreamService`, calls
+Pairs with `models.common.prefill_runner.runner` running in request mode (the default — i.e. without
+PREFILL_STANDALONE=1). The runner constructs an `H2DStreamService`, calls
 `export_descriptor(service_id)` to drop a flatbuffer at
 `/dev/shm/tt_h2d_stream_service_<service_id>.bin`, then loops on
 `h2d_socket_sync` (blocks on `data_ready_sem`).
@@ -14,15 +14,16 @@ This producer:
   * Attaches to the same service via `ttnn.H2DStreamService.connect(service_id)`
     — no `MeshDevice` handle needed.
   * Reads the input token IDs from this variant's golden trace metadata.json (same source as the
-    runner's standalone loop), pushing the first PREFILL_STANDALONE_NCHUNKS chunks.
+    runner's standalone loop), pushing the first PREFILL_STANDALONE_NCHUNKS chunks. Trace resolution
+    is model-agnostic — it goes through the active adapter (PREFILL_MODEL_VARIANT).
   * Replays the same host-side block-cyclic reshape the runner uses. Kept inline so this
-    script does NOT import the runner module (which would pull in `_migration`).
+    script does NOT need a `MeshDevice` (the device-side prepare_prefill_input_tensor can't run here).
   * Pushes the byte buffer once per chunk via `forward_to_tensor_bytes`. The runner's per-iter
     `h2d_socket_sync` unblocks on each push.
 
 Env vars:
   PREFILL_H2D_SERVICE_ID       — must match runner's value (default: "ds_prefill")
-  PREFILL_MODEL_VARIANT        — selects the variant's prefill_trace_default (default: deepseek_v3_d_p)
+  PREFILL_MODEL_VARIANT        — selects the adapter / its golden trace default (default: deepseek_v3_d_p)
   PREFILL_TRACE_DIR   — golden trace dir (overrides the variant default; must match the runner)
   PREFILL_STANDALONE_NCHUNKS   — chunks to push (default 11 -> 56320 tokens)
   PREFILL_NUM_USERS            — cache user slots (default 2); the requested slot wraps mod this
@@ -34,12 +35,11 @@ Env vars:
 
 Usage (two terminals):
     # terminal A — runner (creates service + exports descriptor + waits):
-    PREFILL_STANDALONE=1 PREFILL_H2D_EXTERNAL_PRODUCER=1 \
-      python -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner
+    python -m models.common.prefill_runner.runner
 
     # terminal B — producer (pushes tokens):
     PREFILL_STANDALONE_ITERS=1 \
-      python -m models.demos.deepseek_v3_d_p.tt.runners.prefill_h2d_producer
+      python -m models.common.prefill_runner.producer
 """
 
 import os
@@ -50,14 +50,11 @@ import torch
 from loguru import logger
 
 import ttnn
-
-# runner_utils is migration-free (no _migration pull), so importing the variant + trace helpers here
-# does not violate this producer's "don't import the runner module" constraint.
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import get_variant, load_trace_token_ids, resolve_trace_dir
+from models.common.prefill_runner.registry import get_adapter
 
 # Per-iter control metadata payload: 3 × uint32 = 12 bytes. Must match the
-# runner's H2D_METADATA_SIZE_BYTES and field order in prefill_runner.py, and
-# the scheduler's PrefillMetadata wire struct.
+# runner's H2D_METADATA_SIZE_BYTES and field order, and the scheduler's
+# PrefillMetadata wire struct.
 _METADATA_SIZE_BYTES = 12
 
 
@@ -78,7 +75,7 @@ MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 60 * 1024))
 CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 
-VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
+ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
 
 
 def _load_tokens():
@@ -86,12 +83,12 @@ def _load_tokens():
     golden trace metadata.json (PREFILL_TRACE_DIR overrides the variant default). Loads the
     first NCHUNKS*CHUNK_SIZE tokens (chunk-aligned, all real). Pairs with the runner's request-loop
     PCC check against the same trace's golden KV."""
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
+    trace_dir = ADAPTER.resolve_trace_dir()
     n_chunks = int(os.environ.get("PREFILL_STANDALONE_NCHUNKS", "11"))
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % NUM_USERS
     total_len = n_chunks * CHUNK_SIZE
     logger.info(f"[producer] reading {total_len} tokens ({n_chunks} chunks) from trace {trace_dir}")
-    token_ids = load_trace_token_ids(trace_dir, total_len)
+    token_ids = ADAPTER.load_trace_token_ids(trace_dir, total_len)
     assert (
         len(token_ids) == total_len
     ), f"trace has {len(token_ids)} tokens but need {total_len}; lower PREFILL_STANDALONE_NCHUNKS"
@@ -107,7 +104,7 @@ def _chunk_to_host_array(chunk_token_ids: list[int]):
     from the descriptor on `connect()`), so this process needs neither a mapper nor a
     MeshDevice. Chunked prefill is block-cyclic, so the chip-major reshape matches the runner's
     prepare_prefill_input_tensor (is_balanced=False) — replicated inline so this producer doesn't
-    import the runner module.
+    need a MeshDevice.
     """
     sp_factor = GLOBAL_MESH_SHAPE[0]
     assert len(chunk_token_ids) == CHUNK_SIZE, f"chunk must be CHUNK_SIZE={CHUNK_SIZE}, got {len(chunk_token_ids)}"

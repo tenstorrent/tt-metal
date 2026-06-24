@@ -2,6 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
+"""Model-agnostic prefill runner.
+
+Same standalone / request-loop driver as the DeepSeek-specific prefill_runner.py, but everything
+model-specific is reached through a `PrefillModelAdapter` resolved from PREFILL_MODEL_VARIANT (see
+registry.py). The core imports no model package directly.
+
+Run as:  python -m models.common.prefill_runner.runner
+"""
+
 import os
 import signal
 
@@ -9,50 +18,17 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
-from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
+from models.common.prefill_runner.device import open_mesh_device
+from models.common.prefill_runner.h2d_service import (
+    H2D_METADATA_SIZE_BYTES,
+    H2D_SYNC_WORKER_CORES,
     build_h2d_service,
-    get_variant,
-    load_hf_config,
-    load_trace_token_ids,
-    open_mesh_device,
-    prepare_prefill_input_tensor,
-    resolve_trace_dir,
-    resolve_weight_cache_path,
+    h2d_socket_sync,
 )
-from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
-    TtDeepSeekPrefillPipeline,
-    TtPrefillPipelineConfig,
-)
+from models.common.prefill_runner.migration import send_kv_chunk_table
+from models.common.prefill_runner.registry import get_adapter
 
-# Sync-op worker core. Single core suffices: the kernel only copies the
-# backing tensor's pages into a fresh output, no per-core parallelism needed.
-H2D_SYNC_WORKER_CORES = ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))
-
-# Inline metadata payload — packed by the producer per-iter, surfaced by the
-# kernel via h2d_socket_sync's optional metadata output. Matches the prefill
-# scheduler's PrefillMetadata wire struct (12 bytes, 3 × uint32):
-#   [0] slot_id        — which per-slot KV-cache buffer to write
-#   [1] actual_start   — inclusive absolute KV pos of the first real token
-#   [2] actual_end     — exclusive absolute KV pos past the last real token
-# Trailing positions in the chunk past `actual_end` are PAD_ID. See
-# include/tt_llm_engine/scheduler/prefill/prefill_metadata.hpp for the
-# source-of-truth definition the scheduler builds.
-H2D_METADATA_SIZE_BYTES = 12
-
-# Per-iter mesh distribution for the token input. Used by the H2D service's
-# internal mapper; the producer process builds an equivalent mapper from
-# MeshShape on its side.
-# `Shard(0)` shards the leading axis across mesh rows (SP); `Replicate()`
-# duplicates across mesh cols (TP).
-H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
-    placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()],
-)
-
-
-VARIANT = get_variant(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
-MODEL_CFG = VARIANT.model_config
+ADAPTER = get_adapter(os.environ.get("PREFILL_MODEL_VARIANT", "deepseek_v3_d_p"))
 
 _sp = int(os.environ.get("PREFILL_SP", 8))
 _tp = int(os.environ.get("PREFILL_TP", 4))
@@ -65,9 +41,9 @@ CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
 MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 4 * CHUNK_SIZE))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
-# Model-agnostic gate-mode default comes from the active variant (DEVICE_FP32 for the
+# Model-agnostic gate-mode default comes from the active adapter (DEVICE_FP32 for the
 # deepseek_v3_d_p variant; HOST_ALL source default is much slower).
-GATE_FALLBACK_MODE = os.environ.get("PREFILL_GATE_FALLBACK_MODE", VARIANT.default_gate_mode)
+GATE_FALLBACK_MODE = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
 # When on (default), the last transformer layer runs kv-only: it fills the KV
 # cache for migration and skips its Q/SDPA/wo, FFN/MoE, final norm, and LM head.
 KV_ONLY_LAST_LAYER = os.environ.get("PREFILL_KV_ONLY_LAST_LAYER", "1") == "1"
@@ -75,7 +51,7 @@ PREFILL_DEBUG = os.environ.get("PREFILL_DEBUG", "0") == "1"
 # Kimi (single expert group, device gate) routes the MoE routing all-gather's global semaphores to
 # L1_SMALL so they don't pin the main-L1 floor and clash with the next layer's MLA static CBs. This
 # requires opening the mesh with an L1_SMALL region. Off for DeepSeek (semaphores stay in main L1).
-_ROUTING_USE_L1_SMALL_SEMAPHORES = VARIANT.name == "kimi_k2_6"
+_ROUTING_USE_L1_SMALL_SEMAPHORES = ADAPTER.uses_l1_small_semaphores
 _L1_SMALL_SIZE = 512 if _ROUTING_USE_L1_SMALL_SEMAPHORES else 0
 
 _shutdown = False
@@ -86,10 +62,7 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-os.environ.setdefault("PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)
-
-
-def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
+def run_standalone_loop(pipeline) -> None:
     """Standalone chunked prefill: read the input token IDs from this variant's golden trace and drive
     them through the pipeline in chunk_size chunks (advancing kv_actual per chunk), filling slot_id's
     KV cache. No H2D socket, no SHM, no external producer — single process, for local bring-up / perf.
@@ -112,7 +85,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
 
     cfg = pipeline.config
     chunk_size = cfg.chunk_size
-    trace_dir = resolve_trace_dir(os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default))
+    trace_dir = ADAPTER.resolve_trace_dir()
     # PREFILL_STANDALONE_INPUT overrides the trace's default token_ids with a user-supplied JSON file
     # ({"token_ids": [...]}); the trace is still used for the optional golden PCC check below.
     input_override = os.environ.get("PREFILL_STANDALONE_INPUT")
@@ -122,7 +95,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         logger.info(f"[standalone] input override: {len(token_ids)} token_ids from {input_override}")
     else:
         logger.info(f"[standalone] reading input token_ids from {trace_dir}/metadata.json")
-        token_ids = load_trace_token_ids(trace_dir)
+        token_ids = ADAPTER.load_trace_token_ids(trace_dir)
     task_id = 0
     actual_isl = len(token_ids)
     slot_id = int(os.environ.get("PREFILL_STANDALONE_SLOT", "0")) % cfg.num_users
@@ -150,7 +123,7 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         for c in range(n_chunks):
             kv_actual = c * chunk_size
             pipeline.prefill(
-                prepare_prefill_input_tensor(
+                ADAPTER.prepare_prefill_input_tensor(
                     token_ids[kv_actual : kv_actual + chunk_size],
                     pipeline.mesh_device,
                     cfg.sp_factor,
@@ -175,12 +148,10 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
     print(f"[standalone] prefill_complete task_id={task_id} slot={slot_id} isl={actual_isl}")
 
     if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
-        from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import kv_cache_pcc_check
-
-        kv_cache_pcc_check(pipeline, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
+        ADAPTER.kv_cache_pcc_check(pipeline, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
 
 
-def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
+def run_request_loop(pipeline, h2d_service: ttnn.H2DStreamService) -> None:
     """Request loop: token IDs + per-iter control metadata arrive over the H2D
     socket service, pushed by a separate producer process (prefill_h2d_producer.py
     today; the inference-server / prefill scheduler in production).
@@ -240,10 +211,10 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
 def _print_config() -> None:
     """Print all env var values at startup so the config is visible in logs."""
     rows = [
-        ("PREFILL_MODEL_VARIANT", VARIANT.name),
-        ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", VARIANT.hf_model_default)),
-        ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", VARIANT.ttnn_cache_default)),
-        ("resolved weight_cache_path", str(resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE))),
+        ("PREFILL_MODEL_VARIANT", ADAPTER.name),
+        ("PREFILL_HF_MODEL", os.environ.get("PREFILL_HF_MODEL", "<adapter default>")),
+        ("PREFILL_TTNN_CACHE", os.environ.get("PREFILL_TTNN_CACHE", "<adapter default>")),
+        ("resolved weight_cache_path", str(ADAPTER.resolve_weight_cache_path(GLOBAL_MESH_SHAPE))),
         ("PREFILL_SP", str(_sp)),
         ("PREFILL_TP", str(_tp)),
         ("PREFILL_NUM_LAYERS", str(NUM_LAYERS)),
@@ -254,7 +225,7 @@ def _print_config() -> None:
         ("PREFILL_GATE_FALLBACK_MODE", GATE_FALLBACK_MODE),
         ("PREFILL_KV_ONLY_LAST_LAYER", str(KV_ONLY_LAST_LAYER)),
         ("PREFILL_STANDALONE", os.environ.get("PREFILL_STANDALONE", "0")),
-        ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default)),
+        ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", "<adapter default>")),
         ("PREFILL_STANDALONE_INPUT", os.environ.get("PREFILL_STANDALONE_INPUT", "<trace default>")),
         ("PREFILL_STANDALONE_ITERS", os.environ.get("PREFILL_STANDALONE_ITERS", "1")),
         ("PREFILL_ENABLE_MIGRATION", os.environ.get("PREFILL_ENABLE_MIGRATION", "0")),
@@ -289,59 +260,42 @@ def main() -> None:
         f"migration={'ON (KV chunk table publish)' if enable_migration else 'OFF'}"
     )
 
-    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, MODEL_CFG, l1_small_size=_L1_SMALL_SIZE)
+    mesh_device = open_mesh_device(GLOBAL_MESH_SHAPE, ADAPTER.fabric_payload_size, l1_small_size=_L1_SMALL_SIZE)
 
-    hf_config = load_hf_config(VARIANT)
-    hf_config.max_seq_len = MAX_SEQ_LEN
+    hf_config = ADAPTER.load_hf_config(MAX_SEQ_LEN)
 
-    cache_path = resolve_weight_cache_path(VARIANT, GLOBAL_MESH_SHAPE)
-    pipeline_config = TtPrefillPipelineConfig(
-        num_layers=NUM_LAYERS,
-        max_seq_len=MAX_SEQ_LEN,
-        mesh_shape=GLOBAL_MESH_SHAPE,
-        chunk_size=CHUNK_SIZE,
-        num_users=NUM_USERS,
-        num_links=2,
-        capacity_factor=CAPACITY_FACTOR,
-        gate_fallback_mode=GateComputeMode[GATE_FALLBACK_MODE],
-        weight_cache_path=cache_path,
-        model_cfg=MODEL_CFG,
-        kv_only_last_layer=KV_ONLY_LAST_LAYER,
-        routing_use_l1_small_for_semaphores=_ROUTING_USE_L1_SMALL_SEMAPHORES,
-    )
-
-    pipeline = TtDeepSeekPrefillPipeline(
+    cache_path = ADAPTER.resolve_weight_cache_path(GLOBAL_MESH_SHAPE)
+    pipeline = ADAPTER.build_pipeline(
         mesh_device=mesh_device,
         hf_config=hf_config,
-        state_dict={},
-        config=pipeline_config,
+        mesh_shape=GLOBAL_MESH_SHAPE,
+        num_layers=NUM_LAYERS,
+        max_seq_len=MAX_SEQ_LEN,
+        chunk_size=CHUNK_SIZE,
+        num_users=NUM_USERS,
+        capacity_factor=CAPACITY_FACTOR,
+        gate_fallback_mode=GATE_FALLBACK_MODE,
+        weight_cache_path=cache_path,
+        kv_only_last_layer=KV_ONLY_LAST_LAYER,
     )
     pipeline.compile()
 
     ack_channel = None
     if enable_migration:
-        # Standalone-worker model: build the KV chunk address table from the device
-        # KV layout and serialize it to a .pb file. The inference server / orchestrator
-        # forwards this path to the migration_worker via
-        # MigrationLayerClient.send_kv_chunk_table(path). The runner owns the device,
-        # so only it knows the KV cache NoC addresses; it has no IPC with the worker.
-        from models.demos.deepseek_v3_d_p.tt.runners.integration_setup import (
-            build_and_serialize_kv_chunk_table,
-            send_kv_chunk_table,
-        )
-
-        table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-        build_and_serialize_kv_chunk_table(
-            mesh_device=mesh_device,
-            kvpe_cache=pipeline.kvpe_cache,
-            seq_len=MAX_SEQ_LEN,
-            num_layers=NUM_LAYERS,
-            mesh_shape=GLOBAL_MESH_SHAPE,
-            sp_axis=0,  # GLOBAL_MESH_SHAPE = (sp, tp) — SP is axis 0
-            num_users=NUM_USERS,
-            path=table_path,
-        )
-        send_kv_chunk_table(table_path)
+        if not ADAPTER.supports_migration:
+            logger.warning(
+                f"[migration] PREFILL_ENABLE_MIGRATION=1 but adapter {ADAPTER.name!r} has no "
+                f"migration support; skipping KV chunk table publish."
+            )
+        else:
+            # Standalone-worker model: build the KV chunk address table from the device
+            # KV layout and serialize it to a .pb file. The inference server / orchestrator
+            # forwards this path to the migration_worker via
+            # MigrationLayerClient.send_kv_chunk_table(path). The runner owns the device,
+            # so only it knows the KV cache NoC addresses; it has no IPC with the worker.
+            table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
+            ADAPTER.build_and_serialize_kv_chunk_table(pipeline, table_path)
+            send_kv_chunk_table(table_path)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
@@ -363,7 +317,7 @@ def main() -> None:
             mesh_device,
             mesh_shape=GLOBAL_MESH_SHAPE,
             chunk_size=CHUNK_SIZE,
-            mapper_config=H2D_MAPPER_CONFIG,
+            mapper_config=ADAPTER.h2d_mapper_config,
             worker_cores=H2D_SYNC_WORKER_CORES,
             metadata_size_bytes=H2D_METADATA_SIZE_BYTES,
         )

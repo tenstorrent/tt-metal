@@ -15,13 +15,16 @@ Serialization uses the ttnn binding
 ``ttnn.experimental.disaggregation.export_to_protobuf_file`` (no separate
 _migration extension needed).
 
+This is the MODEL-SPECIFIC half of the disaggregation integration: building the table from the
+deepseek KV layout (block-cyclic, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK). The generic half — forwarding
+the serialized .pb to the migration worker (`send_kv_chunk_table`) — is model-agnostic and lives in
+`models.common.prefill_runner.migration`. The deepseek adapter exposes this builder over the runner
+seam via `build_and_serialize_kv_chunk_table`.
+
 NOTE: only the table-publish half of the disaggregation integration lives here.
 The per-layer LayerAck channel + scheduler-driven migration are intentionally
 left out (owned by the scheduler/worker side).
 """
-
-import os
-import sys
 
 from loguru import logger
 
@@ -33,10 +36,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 # bfp8 [1, 1, 32, 576] KV chunk: 18 tiles * 1088 B = 19584 B.
 _CHUNK_SIZE_BYTES = 19584
-
-# Sentinel dst_slot the inference server sends when a request must NOT trigger
-# migration (e.g. warmup probes, scheduler-skipped requests).
-INVALID_SLOT_ID = 0xFFFFFFFF
 
 
 def _disaggregation():
@@ -79,50 +78,3 @@ def build_and_serialize_kv_chunk_table(
     _serialize_table_to_path(table, path)
     logger.info(f"[migration] KV chunk address table serialized to {path} (entries={table.total_entries()})")
     return path
-
-
-def send_kv_chunk_table(table_path: str) -> bool:
-    """Forward the serialized table to the migration_worker via SET_TABLE, using
-    the tt-llm-engine MigrationLayerClient.
-
-    The client extension (``_migration_client``) lives in tt-llm-engine (the
-    superproject), so it is imported LAZILY here — only when migration is actually
-    being driven — to avoid a hard tt-metal -> tt-llm-engine dependency. The call
-    no-ops gracefully (returns False, logs a warning) if the extension or the
-    orchestrator-owned shmem queues are not present, so a standalone runner still
-    writes the .pb without requiring the full migration stack.
-
-    Env:
-      PREFILL_MIGRATION_CLIENT_DIR  dir holding _migration_client*.so (optional if
-                                    already on PYTHONPATH)
-      PREFILL_MIGRATION_CMD_QUEUE / _TABLE_QUEUE / _RESP_QUEUE  shmem queue names
-                                    (must match the orchestrator/IS that owns them)
-    """
-    client_dir = os.environ.get("PREFILL_MIGRATION_CLIENT_DIR")
-    if client_dir and client_dir not in sys.path:
-        sys.path.insert(0, client_dir)
-    try:
-        import _migration_client
-    except ImportError as e:
-        logger.warning(
-            f"[migration] _migration_client not importable ({e}); table written to {table_path} "
-            f"but NOT sent. Set PREFILL_MIGRATION_CLIENT_DIR or add the extension to PYTHONPATH."
-        )
-        return False
-
-    cmd_q = os.environ.get("PREFILL_MIGRATION_CMD_QUEUE", "/prefill_mig_cmd_1")
-    table_q = os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", "/prefill_mig_tbl_1")
-    resp_q = os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", "/prefill_mig_rsp_1")
-    try:
-        client = _migration_client.MigrationLayerClient(cmd_q, table_q, resp_q)
-    except RuntimeError as e:
-        logger.warning(
-            f"[migration] could not attach MigrationLayerClient to queues "
-            f"({cmd_q}, {table_q}, {resp_q}): {e}; table NOT sent. The orchestrator/IS "
-            f"must create the shmem queues (and launch the worker) before the runner sends."
-        )
-        return False
-
-    client.send_kv_chunk_table(table_path)
-    logger.info(f"[migration] sent SET_TABLE({table_path}) via MigrationLayerClient on {table_q}")
-    return True
