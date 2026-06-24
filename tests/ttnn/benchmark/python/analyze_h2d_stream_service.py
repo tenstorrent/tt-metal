@@ -20,14 +20,16 @@ Usage:
   python3 analyze_h2d_stream_service.py run results.json --out-dir analysis/
   python3 analyze_h2d_stream_service.py compare baseline.json candidate.json
 
-Produces a normalized per-case CSV and one throughput line chart per family/mode
-(plus baseline-vs-candidate overlays and a per-case delta CSV in compare mode).
+Produces a normalized per-case CSV and line charts per family/mode (plus
+baseline-vs-candidate overlays and a per-case delta CSV in compare mode).
 
-Note on metrics: charts use aggregate_gbps as the primary steady-state feeder
-throughput. The benchmark also records untimed barrier/Finish tails so post-window
-DRAM-completion or worker-ACK backlog is visible without changing the headline
-timed loop. Fully sharded rows have matching aggregate and global payload
-throughput; replicated rows intentionally differ, so the CSV carries both.
+Note on metrics: aggregate_gbps is the steady-state feeder-throughput metric from
+the pipelined push loop. Size-anchor rows can also carry serialized
+issue-to-landed latency counters from a separate forward_to_tensor()+barrier()
+loop. The benchmark also records untimed barrier/Finish tails so post-window
+DRAM-completion or worker-ACK backlog is visible without changing the timed loop.
+Fully sharded rows have matching aggregate and global payload throughput;
+replicated rows intentionally differ, so the CSV carries both.
 """
 
 from __future__ import annotations
@@ -76,6 +78,8 @@ CASE_KEY = [
     "metadata_size_bytes",
 ]
 PRIMARY_METRIC = "aggregate_gbps"
+LATENCY_METRIC = "latency_p50_us"
+LATENCY_PLOT_METRICS = ("latency_p50_us", "latency_p90_us", "latency_max_us")
 
 # Short names for the three sweepable axes, used in per-line labels.
 AXIS_SHORT = {
@@ -127,6 +131,11 @@ NUMERIC_COLUMNS = [
     "num_sockets",
     "warmup_iters",
     "perf_iters",
+    "latency_iters",
+    "latency_avg_us",
+    "latency_p50_us",
+    "latency_p90_us",
+    "latency_max_us",
     "per_device_bytes",
     "per_device_pages",
     "tensor_page_bytes",
@@ -166,7 +175,15 @@ def metric_label(metric: str) -> str:
     return {
         "aggregate_gbps": "aggregate feeder throughput (GB/s)",
         "global_payload_gbps": "global payload throughput (GB/s)",
+        "latency_avg_us": "serialized issue-to-landed latency avg (us)",
+        "latency_p50_us": "serialized issue-to-landed latency p50 (us)",
+        "latency_p90_us": "serialized issue-to-landed latency p90 (us)",
+        "latency_max_us": "serialized issue-to-landed latency max (us)",
     }.get(metric, metric)
+
+
+def latency_percentile_label(metric: str) -> str:
+    return metric.removeprefix("latency_").removesuffix("_us").upper()
 
 
 def load_gbench_results(path: str | Path) -> pd.DataFrame:
@@ -261,7 +278,10 @@ def plot_family_lines(df: pd.DataFrame, out_dir: Path, prefix: str, metric: str 
     if not HAS_MATPLOTLIB:
         print("  Skipping plots: matplotlib is not installed")
         return
+    if metric not in df.columns:
+        return
     for (family, mode), sub in df.groupby(["family", "mode"]):
+        sub = sub[sub[metric].notna()].copy()
         xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
         if sub.empty:
             continue
@@ -289,7 +309,9 @@ def plot_compare_family_lines(merged: pd.DataFrame, out_dir: Path, prefix: str, 
     base_col, cand_col = f"{metric}_baseline", f"{metric}_candidate"
     if base_col not in merged.columns or cand_col not in merged.columns:
         return
-    shared = merged[merged["_merge"] == "both"]
+    shared = merged[(merged["_merge"] == "both") & merged[base_col].notna() & merged[cand_col].notna()].copy()
+    if shared.empty:
+        return
     cmap = plt.get_cmap("tab10")
     for (family, mode), sub in shared.groupby(["family", "mode"]):
         xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
@@ -320,6 +342,111 @@ def plot_compare_family_lines(merged: pd.DataFrame, out_dir: Path, prefix: str, 
         _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_{metric}.png")
 
 
+def plot_latency_stat_lines(df: pd.DataFrame, out_dir: Path, prefix: str) -> None:
+    if not HAS_MATPLOTLIB:
+        print("  Skipping latency plots: matplotlib is not installed")
+        return
+    metrics = [metric for metric in LATENCY_PLOT_METRICS if metric in df.columns and df[metric].notna().any()]
+    if not metrics:
+        return
+    latency_df = df[df[metrics].notna().any(axis=1)].copy()
+    for (family, mode), sub in latency_df.groupby(["family", "mode"]):
+        xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
+        held = held_cols(xcol)
+        varying = [c for c in held if sub[c].nunique() > 1]
+        fig, ax = plt.subplots(figsize=(7.5, 4.8))
+        plotted = False
+        for key, group in sub.groupby(held):
+            group = group.sort_values(xcol)
+            base_label = line_label(held, key, varying)
+            for metric in metrics:
+                metric_group = group[group[metric].notna()]
+                if metric_group.empty:
+                    continue
+                label = latency_percentile_label(metric)
+                if base_label != "anchor":
+                    label = f"{base_label}, {label}"
+                ax.plot(metric_group[xcol], metric_group[metric], marker="o", label=label)
+                plotted = True
+        if not plotted:
+            continue
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("serialized issue-to-landed latency (us)")
+        ax.set_ylim(bottom=0)
+        ax.grid(True, linestyle=":", alpha=0.5)
+        ax.set_title(f"{family}/{mode} serialized latency stats{tune_anchor_label(sub, mode)}")
+        ax.legend(fontsize=8)
+        _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_latency_stats_us.png")
+
+
+def plot_compare_latency_stat_lines(merged: pd.DataFrame, out_dir: Path, prefix: str) -> None:
+    if not HAS_MATPLOTLIB:
+        print("  Skipping compare latency plots: matplotlib is not installed")
+        return
+    metrics = [
+        metric
+        for metric in LATENCY_PLOT_METRICS
+        if f"{metric}_baseline" in merged.columns and f"{metric}_candidate" in merged.columns
+    ]
+    if not metrics:
+        return
+    shared = merged[merged["_merge"] == "both"].copy()
+    if shared.empty:
+        return
+    cmap = plt.get_cmap("tab10")
+    for (family, mode), sub in shared.groupby(["family", "mode"]):
+        xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
+        held = held_cols(xcol)
+        varying = [c for c in held if sub[c].nunique() > 1]
+        fig, ax = plt.subplots(figsize=(7.5, 4.8))
+        plotted = False
+        color_idx = 0
+        for key, group in sub.groupby(held):
+            group = group.sort_values(xcol)
+            base_label = line_label(held, key, varying)
+            for metric in metrics:
+                base_col, cand_col = f"{metric}_baseline", f"{metric}_candidate"
+                metric_group = group[group[base_col].notna() & group[cand_col].notna()]
+                if metric_group.empty:
+                    continue
+                label = latency_percentile_label(metric)
+                if base_label != "anchor":
+                    label = f"{base_label}, {label}"
+                color = cmap(color_idx % 10)
+                ax.plot(
+                    metric_group[xcol],
+                    metric_group[base_col],
+                    marker="o",
+                    linestyle="-",
+                    color=color,
+                    label=f"{label} baseline",
+                )
+                ax.plot(
+                    metric_group[xcol],
+                    metric_group[cand_col],
+                    marker="s",
+                    linestyle="--",
+                    color=color,
+                    label=f"{label} candidate",
+                )
+                plotted = True
+                color_idx += 1
+        if not plotted:
+            continue
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("serialized issue-to-landed latency (us)")
+        ax.set_ylim(bottom=0)
+        ax.grid(True, linestyle=":", alpha=0.5)
+        ax.legend(fontsize=8)
+        ax.set_title(
+            f"{family}/{mode} serialized latency stats{tune_anchor_label(sub, mode)}: "
+            "baseline (solid) vs candidate (dashed)"
+        )
+        _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_latency_stats_us.png")
+
+
 def print_run_report(df: pd.DataFrame) -> None:
     print("\n" + "=" * 72)
     print(f"  H2DStreamService benchmark summary ({len(df)} case row(s))")
@@ -347,6 +474,24 @@ def print_run_report(df: pd.DataFrame) -> None:
                 f"{lo[PRIMARY_METRIC]:.3f} -> {hi[PRIMARY_METRIC]:.3f}]"
             )
 
+    if LATENCY_METRIC in df.columns and df[LATENCY_METRIC].notna().any():
+        print("\n  Serialized issue-to-landed latency:")
+        latency_df = df[df[LATENCY_METRIC].notna()].copy()
+        for (family, mode), sub in latency_df.groupby(["family", "mode"]):
+            xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
+            held = held_cols(xcol)
+            varying = [c for c in held if sub[c].nunique() > 1]
+            print(f"\n  [{family}/{mode}] {LATENCY_METRIC} vs {xlabel} ({len(list(sub.groupby(held)))} line(s)):")
+            for key, group in sub.groupby(held):
+                group = group.sort_values(xcol)
+                lo, hi = group.iloc[0], group.iloc[-1]
+                label = line_label(held, key, varying)
+                print(
+                    f"    {label:<22} {group[LATENCY_METRIC].min():8.3f}-{group[LATENCY_METRIC].max():8.3f} us  "
+                    f"[{AXIS_SHORT[xcol]} {axis_value_label(xcol, lo[xcol])}->{axis_value_label(xcol, hi[xcol])}: "
+                    f"{lo[LATENCY_METRIC]:.3f} -> {hi[LATENCY_METRIC]:.3f}]"
+                )
+
     tail_cols = [c for c in ("barrier_tail_ms", "drain_finish_tail_ms") if c in df.columns]
     if tail_cols:
         print("\n  Untimed tail diagnostics:")
@@ -362,6 +507,7 @@ def write_run_outputs(df: pd.DataFrame, out_dir: Path, prefix: str) -> None:
     df.to_csv(cases_path, index=False, float_format="%.6f")
     print(f"  Saved {cases_path}")
     plot_family_lines(df, out_dir, prefix)
+    plot_latency_stat_lines(df, out_dir, prefix)
 
 
 def compare_runs(baseline_df: pd.DataFrame, candidate_df: pd.DataFrame) -> pd.DataFrame:
@@ -425,6 +571,7 @@ def write_compare_outputs(merged: pd.DataFrame, out_dir: Path, prefix: str) -> N
     merged.to_csv(compare_path, index=False, float_format="%.6f")
     print(f"  Saved {compare_path}")
     plot_compare_family_lines(merged, out_dir, prefix)
+    plot_compare_latency_stat_lines(merged, out_dir, prefix)
 
 
 def default_out_dir(path: str | Path) -> Path:

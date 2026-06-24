@@ -63,6 +63,7 @@ using ::tt::tt_metal::distributed::MeshWorkload;
 constexpr uint32_t kMinWarmupIters = 4;
 constexpr uint32_t kWarmupSettlingIters = 2;
 constexpr uint32_t kPerfIters = 300;
+constexpr uint32_t kLatencyIters = 50;
 
 constexpr uint32_t kElemBytes = sizeof(uint32_t);
 constexpr uint32_t kGenericTensorPageBytes = 4 * 1024;
@@ -91,6 +92,7 @@ struct BenchmarkCase {
     uint32_t max_socket_page_size_bytes = 0;  // 0 = service default.
     uint32_t fifo_size_bytes = 0;             // 0 = service auto.
     uint32_t metadata_size_bytes = 0;
+    bool measure_latency = false;
 };
 
 struct WarmupPlan {
@@ -98,6 +100,13 @@ struct WarmupPlan {
     uint64_t host_fifo_depth_transfers;
     uint64_t device_cb_depth_transfers;
     uint64_t pipeline_depth_transfers;
+};
+
+struct LatencyStats {
+    double avg_us = 0.0;
+    double p50_us = 0.0;
+    double p90_us = 0.0;
+    double max_us = 0.0;
 };
 
 template <typename T>
@@ -195,6 +204,22 @@ WarmupPlan compute_warmup_plan(
         .host_fifo_depth_transfers = host_fifo_depth_transfers,
         .device_cb_depth_transfers = device_cb_depth_transfers,
         .pipeline_depth_transfers = pipeline_depth_transfers,
+    };
+}
+
+LatencyStats summarize_latency_us(std::vector<double> latencies_us) {
+    TT_FATAL(!latencies_us.empty(), "latencies_us must not be empty");
+    std::sort(latencies_us.begin(), latencies_us.end());
+    const auto percentile = [&](double fraction) {
+        const auto idx = static_cast<std::size_t>((latencies_us.size() - 1) * fraction + 0.5);
+        return latencies_us[idx];
+    };
+    const double sum = std::accumulate(latencies_us.begin(), latencies_us.end(), 0.0);
+    return LatencyStats{
+        .avg_us = sum / static_cast<double>(latencies_us.size()),
+        .p50_us = percentile(0.50),
+        .p90_us = percentile(0.90),
+        .max_us = latencies_us.back(),
     };
 }
 
@@ -327,6 +352,8 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     const WarmupPlan warmup_plan =
         compute_warmup_plan(effective_fifo_size_bytes, per_shard_payload_bytes, slot_count, num_socket_pages);
     const uint32_t warmup_iters = warmup_plan.warmup_iters;
+    const bool measure_latency = cs.measure_latency;
+    const uint32_t latency_iters = measure_latency ? kLatencyIters : 0;
     log_info(
         tt::LogTest,
         "[{}] Geometry: sockets={}, per_shard_payload_bytes={}, socket_page_size={}, num_socket_pages={}, "
@@ -346,9 +373,9 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         warmup_iters);
 
     // The drain kernel runs a bounded loop of exactly this many iterations, so the host must push
-    // exactly total_iters transfers (warmup + perf) below; a mismatch deadlocks the service's
+    // exactly total_iters transfers (warmup + perf + optional latency) below; a mismatch deadlocks the service's
     // worker-sync wait. This is why the benchmark must run a single state iteration (guard above).
-    const uint32_t total_iters = warmup_iters + kPerfIters;
+    const uint32_t total_iters = warmup_iters + kPerfIters + latency_iters;
     auto drain_workload = build_drain_workload(g_mesh_device, service, kWorkerCores, total_iters);
     log_info(
         tt::LogTest,
@@ -383,8 +410,8 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         // Time only the steady-state feeder loop. After the reader/writer split, socket ACKs mean
         // "reader staged the page into L1", not "writer committed the transfer to DRAM" and not
         // "workers drained it". The primary metric therefore remains aggregate bytes accepted by the
-        // service under its real backpressure, while the untimed tail measurements below show how
-        // much DRAM-completion / worker-ACK cleanup remained after the timed push window.
+        // service under its real backpressure. The barrier tail below shows how much DRAM-completion
+        // cleanup remained after the timed push window before the optional serialized latency loop.
         log_info(tt::LogTest, "[{}] Starting timed phase with {} iterations", case_name, kPerfIters);
         const auto t0 = std::chrono::steady_clock::now();
         for (uint32_t iter = 0; iter < kPerfIters; ++iter) {
@@ -397,7 +424,31 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         service.barrier();
         const auto barrier_t1 = std::chrono::steady_clock::now();
 
-        log_info(tt::LogTest, "[{}] Starting untimed drain Finish() tail", case_name);
+        LatencyStats latency_stats;
+        if (measure_latency) {
+            log_info(
+                tt::LogTest, "[{}] Starting serialized latency phase with {} iterations", case_name, latency_iters);
+            std::vector<double> latency_us;
+            latency_us.reserve(latency_iters);
+            for (uint32_t iter = 0; iter < latency_iters; ++iter) {
+                const auto latency_t0 = std::chrono::steady_clock::now();
+                push_once();
+                service.barrier();
+                const auto latency_t1 = std::chrono::steady_clock::now();
+                latency_us.push_back(std::chrono::duration<double, std::micro>(latency_t1 - latency_t0).count());
+            }
+            latency_stats = summarize_latency_us(std::move(latency_us));
+            log_info(
+                tt::LogTest,
+                "[{}] Serialized latency phase complete: avg_us={:.3f}, p50_us={:.3f}, p90_us={:.3f}, max_us={:.3f}",
+                case_name,
+                latency_stats.avg_us,
+                latency_stats.p50_us,
+                latency_stats.p90_us,
+                latency_stats.max_us);
+        }
+
+        log_info(tt::LogTest, "[{}] Starting final untimed drain Finish() tail", case_name);
         const auto finish_t0 = std::chrono::steady_clock::now();
         tt::tt_metal::distributed::Finish(g_mesh_device->mesh_command_queue());
         const auto finish_t1 = std::chrono::steady_clock::now();
@@ -419,6 +470,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["num_sockets"] = static_cast<double>(sockets.size());
         state.counters["warmup_iters"] = static_cast<double>(warmup_iters);
         state.counters["perf_iters"] = static_cast<double>(kPerfIters);
+        state.counters["latency_iters"] = static_cast<double>(latency_iters);
         state.counters["per_device_bytes"] = static_cast<double>(per_device_payload_bytes(cs));
         state.counters["per_device_pages"] = static_cast<double>(cs.per_device_pages);
         state.counters["tensor_page_bytes"] = static_cast<double>(cs.tensor_page_bytes);
@@ -442,6 +494,12 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["pipeline_depth_transfers"] = static_cast<double>(warmup_plan.pipeline_depth_transfers);
         state.counters["barrier_tail_ms"] = barrier_tail_ms;
         state.counters["drain_finish_tail_ms"] = drain_finish_tail_ms;
+        if (measure_latency) {
+            state.counters["latency_avg_us"] = latency_stats.avg_us;
+            state.counters["latency_p50_us"] = latency_stats.p50_us;
+            state.counters["latency_p90_us"] = latency_stats.p90_us;
+            state.counters["latency_max_us"] = latency_stats.max_us;
+        }
         log_info(
             tt::LogTest,
             "[{}] Timed phase complete: elapsed_s={:.6f}, aggregate_gbps={:.6f}, "
@@ -454,9 +512,8 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
             drain_finish_tail_ms);
     }
 
-    // service.barrier() and Finish() are intentionally measured outside the primary timed region:
-    // they are tail diagnostics for hidden DRAM-completion and worker-ACK backlog, not part of the
-    // aggregate feeder-throughput headline number.
+    // service.barrier(), optional serialized latency, and Finish() are intentionally outside the
+    // primary timed region. They are diagnostics/side measurements, not part of aggregate throughput.
     log_info(tt::LogTest, "[{}] Benchmark case complete", case_name);
 }
 
@@ -478,7 +535,8 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
                         uint32_t tensor_page_bytes,
                         uint32_t max_coalesce_pages,
                         uint32_t fifo_pages,
-                        uint32_t metadata_size_bytes = 0) {
+                        uint32_t metadata_size_bytes = 0,
+                        bool measure_latency = false) {
         TT_FATAL(tensor_page_bytes > 0, "tensor_page_bytes must be > 0");
         TT_FATAL(
             per_device_bytes % tensor_page_bytes == 0,
@@ -503,18 +561,46 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
             .max_socket_page_size_bytes = max_socket_page_size_bytes,
             .fifo_size_bytes = fifo_size_bytes,
             .metadata_size_bytes = metadata_size_bytes,
+            .measure_latency = measure_latency,
         });
     };
 
     // Size anchors characterize payload regimes without tying the benchmark to one use case.
     for (uint32_t bytes : {4u * 1024, 8u * 1024, 16u * 1024, 32u * 1024}) {
-        add_case("small_payload", "size", PlacementPattern::FullShard2D, bytes, kGenericTensorPageBytes, 0, 0);
+        add_case(
+            "small_payload",
+            "size",
+            PlacementPattern::FullShard2D,
+            bytes,
+            kGenericTensorPageBytes,
+            0,
+            0,
+            /*metadata_size_bytes=*/0,
+            /*measure_latency=*/true);
     }
     for (uint32_t bytes : {64u * 1024, 128u * 1024, 256u * 1024, 512u * 1024}) {
-        add_case("medium_payload", "size", PlacementPattern::FullShard2D, bytes, kGenericTensorPageBytes, 0, 0);
+        add_case(
+            "medium_payload",
+            "size",
+            PlacementPattern::FullShard2D,
+            bytes,
+            kGenericTensorPageBytes,
+            0,
+            0,
+            /*metadata_size_bytes=*/0,
+            /*measure_latency=*/true);
     }
     for (uint32_t bytes : {1u * 1024 * 1024, 2u * 1024 * 1024, 4u * 1024 * 1024, 8u * 1024 * 1024}) {
-        add_case("large_payload", "size", PlacementPattern::FullShard2D, bytes, kGenericTensorPageBytes, 0, 0);
+        add_case(
+            "large_payload",
+            "size",
+            PlacementPattern::FullShard2D,
+            bytes,
+            kGenericTensorPageBytes,
+            0,
+            0,
+            /*metadata_size_bytes=*/0,
+            /*measure_latency=*/true);
     }
 
     // Tune rows perturb socket-page cap and FIFO depth within each payload regime.
