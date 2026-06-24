@@ -122,6 +122,12 @@ void WatcherServer::Impl::attach_devices() {
         return;
     }
 
+    if (env_.get_hal().get_arch() == tt::ARCH::QUASAR && rtoptions.get_fast_dispatch()) {
+        log_warning(
+            tt::LogMetal,
+            "Watcher NOC sanitization has been disabled as it is currently not supported on Quasar in fast dispatch.");
+    }
+
     {
         const std::lock_guard<std::mutex> lock(watch_mutex_);
         create_log_file();
