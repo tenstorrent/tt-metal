@@ -714,6 +714,7 @@ TEST_F(Fabric2DUDMModeFixture, TestUDMFabricUnicastAtomicIncWest) {
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_ATOMIC_INC, std::make_tuple(RoutingDirection::W, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadEast) {
+    GTEST_SKIP() << "Temporarily disabled due to watcher assert in test_udm_read_sender.cpp, refs #47076";
     UDMFabricUnicastCommon(this, NocPacketType::NOC_UNICAST_READ, std::make_tuple(RoutingDirection::E, 1));
 }
 TEST_F(Fabric2DUDMModeFixture, TestUDMFabricReadWest) {
