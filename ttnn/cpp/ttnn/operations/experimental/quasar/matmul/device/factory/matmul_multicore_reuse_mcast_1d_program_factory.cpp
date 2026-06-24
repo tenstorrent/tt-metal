@@ -5805,6 +5805,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     };
 
     tt_metal::NOC in0_noc = tt::tt_metal::detail::preferred_noc_for_dram_write(device->arch());
+    // [#47797] in1 reader/writer must run on in1_noc (NOC0), the opposite NOC from the in0 mcast
+    // (NOC1), exactly like legacy. Relying on the WRITER role hint instead lands it on NOC1 once in0
+    // is explicitly pinned, so in1's writes contend with the in0 mcast on NOC1 and never drain
+    // (npw_sent=0 -> hang at the final barrier).
+    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     // in0 sender DFB / semaphore / tensor bindings (interleaved vs sharded).
     auto in0_dfb_bindings = [&]() -> std::vector<m2::DFBBinding> {
@@ -5891,7 +5896,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             },
         .compile_time_args = make_in0_sender_cta(1, 1),
         .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
-        .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+        // [#47797] Pin RISCV_1 + in0_noc instead of a plain READER role hint. The in0 block-sharded
+        // mcast dest rectangle is swapped for in0_noc (start>end on NOC1), so the multicast MUST
+        // issue on in0_noc; a READER hint resolves to NOC0, inverts the rectangle into a degenerate
+        // multicast that never delivers VALID, and the whole grid hangs at receiver_sem.wait(VALID).
+        // Matches the working mcast_2d factory.
+        .hw_config =
+            m2::DataMovementHardwareConfig{
+                .gen1_config =
+                    m2::DataMovementHardwareConfig::Gen1Config{
+                        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
     });
 
     const bool has_no_work_in_recv =
@@ -5916,7 +5930,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 },
             .compile_time_args = make_in0_sender_cta(0, 1),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+            // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         });
     }
     if (has_no_work_not_in_recv) {
@@ -5937,7 +5956,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 },
             .compile_time_args = make_in0_sender_cta(0, 0),
             .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+            // [#47797] Pin RISCV_1 + in0_noc (see in0 sender above); block-sharded mcast geometry.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         });
     }
 
@@ -5969,7 +5993,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                     {"get_batch_from_reader", 0u},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+            // [#47797] Pin RISCV_1 + in0_noc for NOC parity with the in0 sender (the receiver's
+            // sender_sem.up to the sender must use the same NOC as the mcast geometry).
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         });
     }
 
@@ -6076,7 +6106,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
             .tensor_bindings = std::move(tb),
             .compile_time_args = std::move(cta),
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+            // [#47797] Pin RISCV_0 + in1_noc (NOC0) instead of a plain WRITER role hint, so in1's
+            // reads/output-writes run on the opposite NOC from the in0 mcast (NOC1) — legacy parity.
+            // The bare WRITER hint resolves to NOC1 here and the writes never leave the NIU
+            // (npw_sent=0), hanging the final barrier.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 

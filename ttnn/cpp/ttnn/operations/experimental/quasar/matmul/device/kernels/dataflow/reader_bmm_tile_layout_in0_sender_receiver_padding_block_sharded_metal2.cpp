@@ -28,6 +28,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // [DEBUG #47797] in0 mcast handshake diagnosis
 
 void kernel_main() {
     constexpr bool core_has_output_block_work = (bool)get_arg(args::core_has_output_block_work);
@@ -121,6 +122,32 @@ void kernel_main() {
     }
     receiver_sem.set(VALID);
 
+    // ---- [DEBUG #47797] one-shot per-core dump of the in0 mcast handshake config. ----
+    // For block 0, block_id == 0, so the core whose sender_id == 0 must take the sender branch
+    // (line `if (block_id == sender_id)`). If NO core prints sender_id==0, nobody multicasts VALID
+    // and every receiver hangs at `receiver_sem.wait(VALID)`. Compare `sid` here against the host
+    // log_info "[in0bs-host]" line for the same core; they must agree (sid == core.x non-transpose).
+    DPRINT(
+        "[in0bs-dev] sid={} noc={} cir={} tm={} nbps={} nblk={} ndst={} ncore={} nx={} ny={}\n",
+        (uint32_t)sender_id,
+        (uint32_t)noc_index,  // [DEBUG #47797] actual NOC the framework launched this kernel on
+        (uint32_t)core_in_in0_receiver_mcast_grid,
+        (uint32_t)transpose_mcast,
+        (uint32_t)num_blocks_per_shard,
+        (uint32_t)num_blocks_inner_dim,
+        (uint32_t)in0_mcast_num_dests,
+        (uint32_t)in0_mcast_num_cores,
+        (uint32_t)num_x,
+        (uint32_t)num_y);
+    DPRINT(
+        "[in0bs-dev] dst_x[{}..{}] dst_y[{}..{}] remote_sender0=({},{})\n",
+        (uint32_t)in0_mcast_dest_noc_start_x,
+        (uint32_t)in0_mcast_dest_noc_end_x,
+        (uint32_t)in0_mcast_dest_noc_start_y,
+        (uint32_t)in0_mcast_dest_noc_end_y,
+        (uint32_t)remote_sender_noc_x[0],
+        (uint32_t)remote_sender_noc_y[0]);
+
     cb_in2.reserve_back(batch * in0_block_num_tiles);
 
     uint32_t in0_tensor_shard_read_addr = cb_in2.get_read_ptr();
@@ -145,6 +172,20 @@ void kernel_main() {
                     uint32_t block_id = block / num_blocks_per_shard;
                     if constexpr (fuse_op) {
                         block_id = fused_op_receiver.align_to_slice_and_sync(block, sender_id);
+                    }
+
+                    // [DEBUG #47797] Per-block enter trace. role=1 => this core is the sender for
+                    // this block (multicasts in0+VALID); role=0 => receiver (waits for VALID). The
+                    // LAST "enter" line per core file shows the block it is stuck on; the matching
+                    // "SENT" line (below) for that block tells us whether its sender actually issued
+                    // the multicast. Print only first batch/h/w slice to bound spam to <=num_blocks lines.
+                    if (b == 0 && bh == 0 && bw == 0) {
+                        DPRINT(
+                            "[in0bs-dev] enter block={} block_id={} sid={} role={}\n",
+                            (uint32_t)block,
+                            (uint32_t)block_id,
+                            (uint32_t)sender_id,
+                            (uint32_t)(block_id == sender_id));
                     }
 
                     cb_in0.reserve_back(in0_block_num_tiles);
@@ -328,6 +369,21 @@ void kernel_main() {
                         if constexpr (!(core_in_in0_receiver_mcast_grid && (in0_mcast_num_cores == 1))) {
                             noc.async_writes_flushed();
                         }
+                        // [DEBUG #47797] Sender finished issuing the in0 data + VALID multicast for
+                        // this block on `noc`. If this prints for the stuck block but the receivers
+                        // never advance past it, the multicast/flag is not landing (NOC/geometry),
+                        // not an arg problem. (b==0,bh==0,bw==0 slice only, to bound spam.)
+                        if (b == 0 && bh == 0 && bw == 0) {
+                            DPRINT(
+                                "[in0bs-dev] SENT block={} noc={} ncore={} dst_x[{}..{}] dst_y[{}..{}]\n",
+                                (uint32_t)block,
+                                (uint32_t)noc_index,
+                                (uint32_t)in0_mcast_num_cores,
+                                (uint32_t)in0_mcast_dest_noc_start_x,
+                                (uint32_t)in0_mcast_dest_noc_end_x,
+                                (uint32_t)in0_mcast_dest_noc_start_y,
+                                (uint32_t)in0_mcast_dest_noc_end_y);
+                        }
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
                         // Increment remote sender's semaphore using pre-computed coordinates
                         sender_sem.up(noc, remote_sender_noc_x[block_id], remote_sender_noc_y[block_id], 1);
@@ -348,5 +404,24 @@ void kernel_main() {
         }
     }
 
+    // [DEBUG #47797] Dump SW NoC issued-counters vs HW completion just before the drain. The
+    // full_barrier hangs in the reads-flushed wait (NIU_MST_RD_RESP_RECEIVED == noc_reads_num_issued).
+    // If reads_issued is non-zero here (this kernel issues no source-level reads when
+    // extract_shard_sub_blocks is false), a metal2 primitive over-incremented the issued counter.
+    // reads_flushed / npw_sent == 0 means that category will block the barrier forever.
+    DPRINT(
+        "[in0bs-dev] PREBARRIER noc={} reads_issued={} npw_issued={} reads_flushed={} npw_sent={}\n",
+        (uint32_t)noc_index,
+        (uint32_t)noc_reads_num_issued[noc_index],
+        (uint32_t)noc_nonposted_writes_num_issued[noc_index],
+        (uint32_t)ncrisc_noc_reads_flushed(noc_index),
+        (uint32_t)ncrisc_noc_nonposted_writes_sent(noc_index));
+
     noc.async_write_barrier();
+    // [#47797] Fully drain this kernel's NOC transactions before completing. The metal2 firmware
+    // epilogue does not auto-flush, so a kernel that issues mcast writes + non-posted atomics
+    // (sender_sem.up / receiver_sem mcast) and (in the extract path) reads must drain all NOC
+    // categories itself, or the watcher trips DebugAssertNCriscNOCReadsFlushedTripped (inter-kernel
+    // race). Matches the sibling metal2 readers (in0_sender_padding, in1_sender_writer).
+    noc.async_full_barrier();
 }

@@ -29,6 +29,10 @@
 #include "api/compute/tilize.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
+// DEBUG: enable per-block ring-buffer markers inside compute_kernel_lib::tilize (F1..F4) to localize the
+// block-sharded conv tilize stall. Must precede the tilize_helpers include. Remove after.
+#define CONV_TILIZE_RB_DEBUG 1
+#include "api/debug/ring_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
@@ -56,7 +60,9 @@ template <
     uint32_t in_cb_id,
     uint32_t out_cb_id,
     bool init_tilize = true,
-    bool uninit_tilize = true>
+    bool uninit_tilize = true,
+    compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure,
+    bool allow_fast = true>
 __attribute__((noinline)) void tilize_in(
 #else
 template <
@@ -64,7 +70,9 @@ template <
     uint32_t in_cb_id,
     uint32_t out_cb_id,
     bool init_tilize = true,
-    bool uninit_tilize = true>
+    bool uninit_tilize = true,
+    compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure,
+    bool allow_fast = true>
 void tilize_in(
 #endif
     uint32_t in_num_subblocks) {
@@ -82,7 +90,10 @@ void tilize_in(
         out_cb_id,
         init_uninit_mode,
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        reconfig_mode>(in_num_subblocks);
+        reconfig_mode,
+        compute_kernel_lib::tilize_config::Fp32Mode::Fast,
+        remap_mode,
+        allow_fast>(in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
@@ -348,15 +359,28 @@ void kernel_main() {
                         if (in1_block_w_i == 0 && in0_block_h_i == 0 && in0_block_w_i == 0) {
                             DPRINT("CC pre_tilize (bs)\n");  // DEBUG (remove after)
                         }
+                        RB_CMP(7, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: pre tilize_in (bs)
+                        // Force the standard (non-fast) tilize here (allow_fast=false). On the
+                        // block-sharded 2D-mcast path the BH fast-tilize init (DEST remap +
+                        // MOVA2D/SrcA-bank machinery, plus its tensix_sync/MATH_PACK drain) deadlocks
+                        // inside the cross-core tilize->mcast->matmul loop from the second height-block
+                        // onward — the unpacker prefetches the next block's matmul-unpack of the
+                        // not-yet-produced mcast result and the BH fast-tilize MATH can't make progress.
+                        // WH works because its fast-tilize has no such remap/bank path; the standard
+                        // tilize behaves the same on WH/BH/Quasar (slightly slower, correct everywhere).
                         tilize_in<
                             in0_block_w,
                             in0_pretilize_cb_id,
                             tilized_in0_cb_id,
                             true,
-                            !split_reader || split_reader_cb_shared>(in0_num_subblocks_read);
-                        if (in1_block_w_i == 0 && in0_block_h_i == 0 && in0_block_w_i == 0) {
-                            DPRINT("CC post_tilize (bs)\n");  // DEBUG (remove after)
-                        }
+                            !split_reader || split_reader_cb_shared,
+                            compute_kernel_lib::tilize_config::RemapMode::Configure,
+                            /*allow_fast=*/false>(in0_num_subblocks_read);
+                        RB_CMP(
+                            6,
+                            in1_block_w_i,
+                            in0_block_h_i,
+                            in0_block_w_i);  // DEBUG: post tilize_in (ACT_TILIZED pushed)
 
 #ifdef SPLIT_READER
                         if constexpr (split_reader && !split_reader_cb_shared) {

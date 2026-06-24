@@ -159,7 +159,11 @@ template <
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
         tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
     tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast,
-    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure>
+    tilize_config::RemapMode remap_mode = tilize_config::RemapMode::Configure,
+    // allow_fast=false forces the standard (non-fast) tilize even when can_use_fast_tilize() is true.
+    // Needed by the block-sharded 2D-mcast conv: the BH fast-tilize DEST-remap/MOVA2D/SrcA-bank path
+    // deadlocks inside the cross-core tilize->mcast->matmul loop (works on WH, which has no such path).
+    bool allow_fast = true>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib

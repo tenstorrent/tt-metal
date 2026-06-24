@@ -493,6 +493,18 @@ void kernel_main() {
     cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+    // [DEBUG #47797] Dump SW NoC issued-counters vs HW completion just before the drain. in1 hangs
+    // in the nonposted-writes-sent wait (NIU_MST_NONPOSTED_WR_REQ_SENT == noc_nonposted_writes_num_issued).
+    // If npw_issued exceeds the actual HW sends (npw_sent==0), a metal2 primitive (likely the in1
+    // multicast wrapper counting issued += num_dests while the NIU counts one request) over-incremented.
+    DPRINT(
+        "[in1-dev] PREBARRIER noc={} reads_issued={} npw_issued={} reads_flushed={} npw_sent={}\n",
+        (uint32_t)noc_index,
+        (uint32_t)noc_reads_num_issued[noc_index],
+        (uint32_t)noc_nonposted_writes_num_issued[noc_index],
+        (uint32_t)ncrisc_noc_reads_flushed(noc_index),
+        (uint32_t)ncrisc_noc_nonposted_writes_sent(noc_index));
+
     // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
     noc.async_full_barrier();
     DPRINT("WSM end\n");  // DEBUG: matmul layer3 hang

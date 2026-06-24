@@ -4351,6 +4351,29 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     m2::KernelRunArgs in1_receiver_writer_run_args{.kernel = RO_IN1_RECEIVER_WRITER_KERNEL};
     m2::KernelRunArgs in1_receiver_writer_other_run_args{.kernel = RO_IN1_RECEIVER_WRITER_OTHER_KERNEL};
 
+    // ---- [DEBUG #47797] one-time summary of the in0 block-sharded mcast geometry. ----
+    log_info(
+        LogOp,
+        "[in0bs-host] in0_block_sharded={} transpose_mcast={} in0_noc={} start_core=({},{}) "
+        "num_blocks_x={} num_blocks_y={} num_blocks(inner)={} num_x_bs={} num_y_bs={} "
+        "in0_sender_num_cores_along_width={} in0_shard_width_in_tiles={} in0_block_w={} "
+        "diff_coord[start={} end={}]",
+        in0_block_sharded,
+        transpose_mcast,
+        static_cast<int>(in0_noc),
+        start_core_x,
+        start_core_y,
+        num_blocks_x,
+        num_blocks_y,
+        num_blocks,
+        num_x_bs,
+        num_y_bs,
+        in0_sender_num_cores_along_width,
+        in0_shard_width_in_tiles,
+        in0_block_w,
+        in0_mcast_receiver_grid_diff_coord_start,
+        in0_mcast_receiver_grid_diff_coord_end);
+
     for (const auto& core : cores) {
         CoreCoord left_core = {(std::size_t)start_core_x, (std::size_t)core.y};
         CoreCoord left_core_plus_one = {(std::size_t)start_core_x + 1, (std::size_t)core.y};
@@ -4436,6 +4459,31 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     v.push_back(in0_mcast_receiver_grid_same_coord);
                 }
             }
+            // [DEBUG #47797] Per-core in0 sender RTAs as actually emitted. `sender_id` here MUST
+            // match the device "[in0bs-dev] sid=" for the same core; for the leftmost work column
+            // (the block-0 senders) sender_id must be 0. `kernel` shows which variant the core got
+            // (SENDER cores participate in the handshake; NO_WORK cores are outside the receiver grid).
+            // Interpret the dest rectangle with transpose_mcast from the one-time summary: non-transpose
+            // mcasts along x = [diff_start..diff_end] at y = same; transpose mcasts along y similarly.
+            const uint32_t dbg_sender_id =
+                transpose_mcast ? static_cast<uint32_t>(core.y) : static_cast<uint32_t>(core.x);
+            log_info(
+                LogOp,
+                "[in0bs-host] core=({},{}) in0_idx={} in1_idx={} kernel={} sender_id={} "
+                "diff_coord[{}..{}] same_coord={} nvarargs={} vararg_first={} vararg_last={}",
+                core.x,
+                core.y,
+                in0_idx,
+                in1_idx,
+                (in1_idx < num_blocks_x) ? "SENDER" : (has_in0_no_work ? "NO_WORK" : "DROPPED"),
+                dbg_sender_id,
+                in0_mcast_receiver_grid_diff_coord_start,
+                in0_mcast_receiver_grid_diff_coord_end,
+                in0_mcast_receiver_grid_same_coord,
+                v.size(),
+                v.empty() ? 0u : v.front(),
+                v.empty() ? 0u : v.back());
+
             if (in1_idx < num_blocks_x) {
                 in0_sender_run_args.runtime_arg_values.push_back(
                     m2::KernelRunArgs::NodeRuntimeArgs{.node = core, .args = leading});

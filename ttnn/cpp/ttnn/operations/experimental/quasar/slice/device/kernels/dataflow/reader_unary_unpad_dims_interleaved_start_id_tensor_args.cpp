@@ -60,6 +60,10 @@ void kernel_main() {
     uint32_t start_buffer_l1_addr = cb_tensor.get_read_ptr();
     noc.async_read(start_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
+    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
+    // is left balanced after this single-tile staging read.
+    cb_tensor.push_back(1);
+    cb_tensor.wait_front(1);
 
     volatile tt_l1_ptr uint32_t* start_data = (volatile tt_l1_ptr uint32_t*)start_buffer_l1_addr;
 
@@ -73,6 +77,10 @@ void kernel_main() {
     uint32_t end_buffer_l1_addr = cb_tensor.get_read_ptr();
     noc.async_read(end_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
+    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
+    // is left balanced after this single-tile staging read.
+    cb_tensor.push_back(1);
+    cb_tensor.wait_front(1);
 
     volatile tt_l1_ptr uint32_t* end_data = (volatile tt_l1_ptr uint32_t*)end_buffer_l1_addr;
 
