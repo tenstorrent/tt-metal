@@ -31,40 +31,35 @@ inline bool has_nontile_w(const ttnn::Shape& shape) {
     return shape.rank() >= 1 && shape[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
-// Route through sharded_to_interleaved only when native kernels are unsafe.
-// Regular RM B/W-sharded I/O is handled natively via noc_async_*_sharded in the
-// default RM program factory (mirrors slice.cpp composite predicates).
+// Route through sharded_to_interleaved only when native kernels cannot handle the input.
+//
+// All L1 WIDTH/BLOCK sharded inputs are handled natively:
+//   - TILE layout: tile factories use TensorAccessor page_id addressing, resolved transparently
+//     by the Device 2.0 API for any sharded buffer.
+//   - RM layout: noc_async_*_sharded in the default RM factory iterates across per-row pages
+//     regardless of tile alignment; the front_padding kernel branch reads into a temp buffer
+//     and memmoves to the correct L1 offset, so width front-pad is also handled natively.
+//
+// Only DRAM-sharded W/B inputs are routed through S2I: factory core-grid setup assumes L1
+// buffers and auditing it for DRAM semantics is out of scope.
 inline bool needs_pad_composite_fallback(
     const ttnn::Tensor& input_tensor,
     const MemoryConfig& output_memory_config,
     std::span<const uint32_t> input_tensor_start) {
     (void)output_memory_config;
-    if (!input_tensor.is_sharded()) {
+    (void)input_tensor_start;
+    if (!is_bw_sharded(input_tensor.memory_config())) {
         return false;
     }
-    if (!input_tensor.memory_config().is_l1()) {
-        return true;
-    }
-    const auto input_layout = input_tensor.memory_config().memory_layout();
-    if (input_layout != TensorMemoryLayout::WIDTH_SHARDED && input_layout != TensorMemoryLayout::BLOCK_SHARDED) {
-        return false;
-    }
-    // TILE layout: tile factories use TensorAccessor with page_id addressing, which the Device 2.0
-    // API resolves transparently for sharded buffers. No composite fallback needed.
-    if (input_tensor.layout() == Layout::TILE) {
-        return false;
-    }
-    // RM + W/B sharded: native only when W is tile-aligned and no width front-pad.
-    const bool width_front_pad = input_tensor_start.size() >= 4 && input_tensor_start[3] > 0;
-    return has_nontile_w(input_tensor.logical_shape()) || width_front_pad;
+    return !input_tensor.memory_config().is_l1();  // DRAM-sharded edge case only
 }
 
 inline bool needs_pad_composite_output(
-    const ttnn::Tensor& input_tensor, const MemoryConfig& output_memory_config, const ttnn::Shape& output_shape) {
-    if (input_tensor.layout() != Layout::ROW_MAJOR || !is_bw_sharded(output_memory_config)) {
-        return false;
-    }
-    return has_nontile_w(output_shape);
+    const ttnn::Tensor& /*input_tensor*/,
+    const MemoryConfig& /*output_memory_config*/,
+    const ttnn::Shape& /*output_shape*/) {
+    // RM W/B sharded output is written natively via noc_async_write_sharded; no composite needed.
+    return false;
 }
 
 ttnn::Tensor pad_via_interleaved_composite(
