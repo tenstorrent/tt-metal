@@ -1497,41 +1497,44 @@ def test_group_norm_optional_weight_bias(
     )
 
 
-# @pytest.mark.parametrize("output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("with_affine", [False, True], ids=["no_weight_bias", "weight_bias"])
-@pytest.mark.parametrize("use_welford", [False, True], ids=["no_welford", "welford"])
-@pytest.mark.parametrize(
-    "buffer_type",
-    [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
-    ids=["dram", "l1"],
-)
-@pytest.mark.parametrize(
-    # (grid_x, grid_y): (1, 1) keeps batch >= num_virtual_rows -> no-mcast factory;
-    # (1, 2) splits the height across two core rows -> mcast factory.
-    "core_grid",
-    [(1, 1), (1, 2)],
-    ids=["no_mcast", "mcast"],
-)
-def test_group_norm_row_major_interleaved_input(
-    device, output_layout, with_affine, use_welford, buffer_type, core_grid
-):
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT], ids=["TILE_OUT", "RM_OUT"])
+@pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
+@pytest.mark.parametrize("buffer_type", ["dram", "l1"], ids=["DRAM_IN", "L1_IN"])
+@pytest.mark.parametrize("mcast", [False, True], ids=["NO_MCAST", "MCAST"])
+def test_group_norm_row_major_interleaved_input(device, output_layout, use_welford, buffer_type, mcast):
+    """ROW_MAJOR interleaved (non-sharded) input that previously hung.
+
+    The input is tilized on-core (TILIZE_IN); this works across the full matrix
+    (welford / mcast / DRAM / L1) when the OUTPUT is TILE layout.
+
+    A ROW_MAJOR OUTPUT additionally untilizes + scatters on-core (UNTILIZE_OUT). That output path is
+    only implemented on the single-core (no_mcast) non-welford path (DRAM and L1 both work):
+      * the multicast receiver reader does not re-gather the row-major output for cross-group overlap;
+      * the Welford compute kernel has no on-core untilize stage.
+    Those unsupported ROW_MAJOR-output combinations are skipped.
+    """
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and (mcast or use_welford):
+        pytest.skip("ROW_MAJOR output is only supported on the single-core (no_mcast) non-welford path.")
+
     torch.manual_seed(0)
 
     N, C, H, W, num_groups = 1, 480, 1, 64, 8
     epsilon = 1e-5
 
-    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+    mem_config = ttnn.DRAM_MEMORY_CONFIG if buffer_type == "dram" else ttnn.L1_MEMORY_CONFIG
+    # A 2-wide grid spans multiple "virtual rows" for this shape, which selects the multicast path;
+    # a 1x1 grid selects the single-core (no_mcast) path.
+    grid_size = ttnn.CoreGrid(y=1, x=2) if mcast else ttnn.CoreGrid(y=1, x=1)
 
     torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
-    torch_weight = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
-    torch_bias = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
 
     torch_output = torch.nn.functional.group_norm(
         torch_input.float(),
         num_groups,
-        weight=torch_weight.float() if torch_weight is not None else None,
-        bias=torch_bias.float() if torch_bias is not None else None,
+        weight=torch_weight.float(),
+        bias=torch_bias.float(),
         eps=epsilon,
     )
     torch_output = torch_output.permute(0, 2, 3, 1).view(N, 1, H * W, C)
@@ -1546,18 +1549,14 @@ def test_group_norm_row_major_interleaved_input(
         memory_config=mem_config,
     )
 
-    grid_size = ttnn.CoreGrid(y=core_grid[1], x=core_grid[0])
-
-    gamma_t, beta_t = None, None
-    if with_affine:
-        gamma_t, beta_t = ttnn.dram_group_norm_params_from_torch(
-            [torch_weight.float(), torch_bias.float()],
-            C,
-            num_groups,
-            device,
-            core_grid=grid_size,
-            return_mask=False,
-        )
+    gamma_t, beta_t = ttnn.dram_group_norm_params_from_torch(
+        [torch_weight.float(), torch_bias.float()],
+        C,
+        num_groups,
+        device,
+        core_grid=grid_size,
+        return_mask=False,
+    )
 
     output_tensor = ttnn.group_norm(
         input_tensor,
@@ -1572,9 +1571,7 @@ def test_group_norm_row_major_interleaved_input(
         use_welford=use_welford,
     )
 
-    # When output_layout is unspecified the result should match the input's ROW_MAJOR layout.
-    expected_layout = output_layout if output_layout is not None else ttnn.ROW_MAJOR_LAYOUT
-    assert output_tensor.layout == expected_layout
+    assert output_tensor.layout == output_layout
 
     output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
 

@@ -186,6 +186,21 @@ Tensor group_norm(
         input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED,
         "Unsupported memory layout: Input tensor cannot be width-sharded.");
 
+    // ROW_MAJOR output for non-sharded interleaved tensors is produced by an on-core untilize
+    // (UNTILIZE_OUT) that only the non-welford compute kernel implements. The Welford compute kernel
+    // has no untilize stage, so reject that combination explicitly (Welford + ROW_MAJOR input ->
+    // TILE output is still supported).
+    {
+        const bool rm_interleaved = !input_tensor.is_sharded();
+        const Layout effective_output_layout = output_layout.value_or(input_tensor.layout());
+        if (rm_interleaved && use_welford) {
+            TT_FATAL(
+                effective_output_layout != Layout::ROW_MAJOR,
+                "group_norm: ROW_MAJOR output for non-sharded interleaved input is not supported with "
+                "use_welford=true yet. Use use_welford=false, or request a TILE-layout output.");
+        }
+    }
+
     const auto& input_shape = input_tensor.logical_shape();
     TT_FATAL(
         input_shape.rank() == 4, "Invalid tensor shape: Input tensor must have rank 4. (rank={})", input_shape.rank());

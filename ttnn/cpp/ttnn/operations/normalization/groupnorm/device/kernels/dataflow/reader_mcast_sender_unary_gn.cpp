@@ -206,6 +206,11 @@ void kernel_main() {
     constexpr uint32_t cb_out0_id = tt::CBIndex::c_16;
     constexpr uint32_t cb_x_id = tt::CBIndex::c_24;
     constexpr uint32_t cb_reread_out_id = tt::CBIndex::c_23;
+#ifdef UNTILIZE_OUT
+    // Row-major reread scratch CB (c_20): gathered ROW_MAJOR output rows for the shared tiles, tilized
+    // on-core by the compute kernel into cb_reread_out (c_23) for cross-group accumulation.
+    constexpr uint32_t cb_reread_rm_id = tt::CBIndex::c_20;
+#endif
 
     CircularBuffer cb_ex_partial(cb_ex_partial_id);
     CircularBuffer cb_ex2_partial(cb_ex2_partial_id);
@@ -217,6 +222,9 @@ void kernel_main() {
     CircularBuffer cb_repack_out(cb_repack_out_id);
     CircularBuffer cb_out0(cb_out0_id);
     CircularBuffer cb_reread_out(cb_reread_out_id);
+#ifdef UNTILIZE_OUT
+    CircularBuffer cb_reread_rm(cb_reread_rm_id);
+#endif
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(cb_out0_id);
@@ -449,6 +457,39 @@ void kernel_main() {
                             uint32_t block_w_curr =
                                 index_g_offset == (per_core_N - block_w_last) ? block_w_last : block_w;
 
+#ifdef UNTILIZE_OUT
+                            // ROW_MAJOR output: the previously written output is row-major in DRAM, so
+                            // gather the rows for the reread tiles into the row-major scratch CB (c_20)
+                            // exactly like the TILIZE_IN input gather. The compute kernel tilizes c_20
+                            // into cb_reread_out (c_23) before the cross-group accumulation. Gather the
+                            // full block_w width so the on-core tilize (compile-time block_w wide) sees a
+                            // well-formed block; out-of-range columns are masked out downstream.
+                            constexpr uint32_t reread_row_chunk_bytes = tile_width * datum_size_bytes;
+                            uint32_t l1_write_addr = cb_reread_rm.get_write_ptr();
+                            cb_reread_rm.reserve_back(out_block_hw_normal);
+                            for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                                for (uint32_t r = 0; r < tile_height; r++) {
+                                    for (uint32_t nt = 0; nt < block_w; nt++) {
+                                        const uint32_t page_id_tile = out_start_id + out_block_start_id_offset +
+                                                                      (mt * num_channels_tiles) + nt + index_b_offset +
+                                                                      index_g_offset;
+                                        const uint32_t tile_row = page_id_tile / num_channels_tiles;
+                                        const uint32_t tile_col = page_id_tile % num_channels_tiles;
+                                        const uint32_t rm_row = (tile_row * tile_height) + r;
+                                        const uint32_t col_off_bytes = tile_col * reread_row_chunk_bytes;
+                                        noc.async_read(
+                                            dst_a,
+                                            CoreLocalMem<uint32_t>(l1_write_addr),
+                                            reread_row_chunk_bytes,
+                                            {.page_id = rm_row, .offset_bytes = col_off_bytes},
+                                            {});
+                                        l1_write_addr += reread_row_chunk_bytes;
+                                    }
+                                }
+                                noc.async_read_barrier();
+                            }
+                            cb_reread_rm.push_back(out_block_hw_normal);
+#else
                             const uint32_t dst_tile_bytes = get_tile_size(cb_reread_out_id);
                             uint32_t l1_write_addr;
                             l1_write_addr = cb_reread_out.get_write_ptr();
@@ -468,6 +509,7 @@ void kernel_main() {
                                 }
                             }
                             cb_reread_out.push_back(out_block_hw_normal);
+#endif
                         }
                         out_block_start_id_offset += out_block_h_actual * num_channels_tiles;
                     }
