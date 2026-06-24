@@ -4336,9 +4336,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     uint32_t in0_end_idx = num_blocks_y - 1;
     uint32_t in1_end_idx = num_blocks_x - 1;
 
-    // For block-sharded the noc_x/noc_y arrays are runtime varargs.
-    const uint32_t in0_sharded_num_varargs =
-        in0_block_sharded ? (transpose_mcast ? in0_mcast_noc_y.size() : in0_mcast_noc_x.size()) : 0;
+    // For block-sharded the noc_x/noc_y arrays are runtime varargs. The kernel reads num_x + num_y
+    // entries (in0_mcast_noc_x[num_x] then in0_mcast_noc_y[num_y]); the mcast-dimension table holds W
+    // coords and the off-axis dimension contributes its single same-coord, so the total is
+    // num_x_bs + num_y_bs (matches the per-core vararg vector built below).
+    const uint32_t in0_sharded_num_varargs = in0_block_sharded ? (num_x_bs + num_y_bs) : 0;
 
     m2::ProgramRunArgs run_args;
     m2::KernelRunArgs in0_sender_run_args{.kernel = RO_IN0_SENDER_KERNEL};
