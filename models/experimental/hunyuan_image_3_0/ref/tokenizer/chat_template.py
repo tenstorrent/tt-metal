@@ -15,7 +15,8 @@
 #   5   | gen_image_mask + scatter indices           | TokenizerEncodeOutput side tensors
 #   6   | CFG cond/uncond batch stack                | _stack_batch (uncond_p=0 / 1)
 #
-# Scope: mode='gen_image' (T2I and I2I with cond images), sequence_template='pretrain'|'instruct'.
+# Scope: mode='gen_image' (T2I and I2I with cond images) and mode='gen_text' (recaption /
+# think AR prefix), sequence_template='pretrain'|'instruct'.
 #
 # References
 # ----------
@@ -554,6 +555,8 @@ class ChatTemplateEncoder:
         *,
         max_length: int | None = None,
         add_assistant_prefix: bool = False,
+        bot_task: str = "auto",
+        image_base_size: int | None = None,
         uncond_p: float = 0.0,
     ) -> tuple[TokenizerEncodeOutput, list[dict[str, Any]]]:
         if self.sequence_template == "pretrain":
@@ -616,8 +619,15 @@ class ChatTemplateEncoder:
                 _sub_sections.append(dict(type="text", text=suffix))
             return _sub_sections, _cur_message_idx
 
+        if self.sequence_template == "instruct":
+            answer_prefix = self.tokenizer.convert_ids_to_tokens(self.special.answer_token_id)
+            answer_suffix = self.tokenizer.convert_ids_to_tokens(self.special.end_answer_token_id)
+        else:
+            answer_prefix = answer_suffix = ""
+
         sections: list[dict[str, Any]] = []
         cur_message_idx = 0
+        final_role: str | None = None
         while cur_message_idx < len(message_list):
             for role, prefix, suffix in (
                 ("system", "", system_suffix),
@@ -628,9 +638,33 @@ class ChatTemplateEncoder:
                     message_list, cur_message_idx, role, prefix, suffix
                 )
                 sections.extend(sub_sections)
+                if sub_sections:
+                    final_role = role
 
         if add_assistant_prefix:
-            raise NotImplementedError("add_assistant_prefix not used for gen_image pretrain path")
+            if bot_task == "img_ratio" and image_base_size is None:
+                raise ValueError("image_base_size is required when bot_task='img_ratio'")
+            if final_role == "assistant":
+                _bot_prefix = ""
+                if sections and sections[-1]["type"] == "text" and sections[-1]["text"] == bot_suffix:
+                    sections = sections[:-1]
+            else:
+                _bot_prefix = bot_prefix
+            recaption_str = self.tokenizer.convert_ids_to_tokens(self.special.recaption_token_id)
+            think_str = self.tokenizer.convert_ids_to_tokens(self.special.think_token_id)
+            boi_str = self.tokenizer.convert_ids_to_tokens(self.special.boi_token_id)
+            if bot_task == "img_ratio":
+                size_str = self.tokenizer.convert_ids_to_tokens(self.special.size_token_id(image_base_size))
+                bot_response_prefix = f"{_bot_prefix}{answer_prefix}{boi_str}{size_str}"
+            elif bot_task == "think":
+                bot_response_prefix = f"{_bot_prefix}{think_str}"
+            elif bot_task == "recaption":
+                bot_response_prefix = f"{_bot_prefix}{recaption_str}"
+            elif bot_task == "image":
+                bot_response_prefix = ""
+            else:
+                bot_response_prefix = _bot_prefix
+            sections.append(dict(type="text", text=bot_response_prefix))
 
         output = self.encode_general(sections=sections, add_eos=False, add_pad=False)
         if max_length is not None and output.tokens.shape[-1] > max_length:
@@ -694,7 +728,7 @@ class ChatTemplateEncoder:
         self,
         *,
         batch_prompt: list[str],
-        batch_gen_image_info: list[ImageInfo],
+        batch_gen_image_info: list[ImageInfo] | None = None,
         mode: str = "gen_image",
         batch_cond_images: list[CondImage] | list[list[CondImage]] | None = None,
         batch_system_prompt: list[str] | None = None,
@@ -702,19 +736,33 @@ class ChatTemplateEncoder:
         max_length: int | None = None,
         cfg_factor: int = 1,
         sequence_template: str | None = None,
+        bot_task: str = "auto",
+        image_base_size: int | None = None,
+        add_assistant_prefix: bool | None = None,
     ) -> dict[str, Any]:
-        if mode != "gen_image":
-            raise NotImplementedError(f"mode={mode!r} not ported; use mode='gen_image'")
+        if mode not in ("gen_image", "gen_text"):
+            raise ValueError(f"mode={mode!r} not supported; use 'gen_image' or 'gen_text'")
+        if bot_task not in ("auto", "image", "think", "recaption", "img_ratio"):
+            raise ValueError(
+                f"bot_task={bot_task!r} not supported; " "use one of 'auto', 'image', 'think', 'recaption', 'img_ratio'"
+            )
         if sequence_template is not None:
             self.sequence_template = sequence_template
+        if mode == "gen_text":
+            cfg_factor = 1
+        if add_assistant_prefix is None:
+            add_assistant_prefix = mode != "gen_image"
 
         batch_size = len(batch_prompt)
         if batch_system_prompt is None:
             batch_system_prompt = [None] * batch_size
         if batch_cot_text is None:
             batch_cot_text = [None] * batch_size
-        if len(batch_gen_image_info) == 1 and batch_size > 1:
-            batch_gen_image_info = batch_gen_image_info * batch_size
+        if mode == "gen_image":
+            if batch_gen_image_info is None:
+                raise ValueError("batch_gen_image_info is required when mode='gen_image'")
+            if len(batch_gen_image_info) == 1 and batch_size > 1:
+                batch_gen_image_info = batch_gen_image_info * batch_size
         if batch_cond_images is not None:
             if len(batch_cond_images) != batch_size:
                 raise ValueError(
@@ -726,12 +774,17 @@ class ChatTemplateEncoder:
         else:
             batch_cond_images = [[] for _ in range(batch_size)]
 
+        if mode == "gen_image":
+            gen_infos_iter = batch_gen_image_info
+        else:
+            gen_infos_iter = [None] * batch_size
+
         batch_message_list = []
         for prompt, system_prompt, cot_text, gen_image_info, cond_images in zip(
             batch_prompt,
             batch_system_prompt,
             batch_cot_text,
-            batch_gen_image_info,
+            gen_infos_iter,
             batch_cond_images,
         ):
             message_list: list[dict[str, Any]] = []
@@ -747,7 +800,8 @@ class ChatTemplateEncoder:
             message_list.append(dict(role="user", type="text", content=prompt))
             if cot_text is not None:
                 message_list.append(dict(role="assistant", type="text", content=cot_text))
-            message_list.append(dict(role="assistant", type="gen_image", content=gen_image_info))
+            if mode == "gen_image":
+                message_list.append(dict(role="assistant", type="gen_image", content=gen_image_info))
             batch_message_list.append(message_list)
 
         cond_outputs: list[TokenizerEncodeOutput] = []
@@ -755,11 +809,25 @@ class ChatTemplateEncoder:
         all_sections: list[list[dict[str, Any]]] = []
 
         for message_list in batch_message_list:
-            out_cond, sections = self.apply_general_template(message_list, max_length=max_length, uncond_p=0.0)
+            out_cond, sections = self.apply_general_template(
+                message_list,
+                max_length=max_length,
+                add_assistant_prefix=add_assistant_prefix,
+                bot_task=bot_task,
+                image_base_size=image_base_size,
+                uncond_p=0.0,
+            )
             cond_outputs.append(out_cond)
             all_sections.append(sections)
             if cfg_factor > 1:
-                out_uncond, _ = self.apply_general_template(message_list, max_length=max_length, uncond_p=1.0)
+                out_uncond, _ = self.apply_general_template(
+                    message_list,
+                    max_length=max_length,
+                    add_assistant_prefix=add_assistant_prefix,
+                    bot_task=bot_task,
+                    image_base_size=image_base_size,
+                    uncond_p=1.0,
+                )
                 uncond_outputs.append(out_uncond)
 
         if cfg_factor > 1:

@@ -60,6 +60,8 @@ class GenImageHostInputs:
     cfg_factor: int
     seq_len: int
     sections: list[list[dict[str, Any]]]
+    bot_task: str | None = None
+    mode: str = "gen_image"
     vae_image_slices: list | None = None
     vit_image_slices: list | None = None
     joint_image_slices: list | None = None
@@ -161,6 +163,8 @@ def _build_host_inputs_from_template(
     batch_size: int,
     cfg_factor: int,
     batch_cond_images: list[list[Any]] | None = None,
+    mode: str = "gen_image",
+    bot_task: str | None = None,
 ) -> GenImageHostInputs:
     batch_rows = output.tokens.shape[0]
     sections_list = _expand_sections_for_cfg(sections, batch_size=batch_size, cfg_factor=cfg_factor)
@@ -197,6 +201,8 @@ def _build_host_inputs_from_template(
         joint_image_slices=output.joint_image_slices,
         gen_image_slices=output.gen_image_slices,
         batch_cond_images=batch_cond_images,
+        mode=mode,
+        bot_task=bot_task,
     )
 
 
@@ -434,6 +440,130 @@ def prepare_gen_image_inputs(
     )
 
 
+def prepare_recaption_inputs(
+    tok: HunyuanTokenizer,
+    prompt: str | list[str],
+    *,
+    cond_images: CondImage | list[CondImage] | list[list[CondImage]] | None = None,
+    bot_task: str = "recaption",
+    system_prompt: str | None = None,
+    max_length: int | None = None,
+    sequence_template: str | None = None,
+    image_base_size: int | None = None,
+) -> GenImageHostInputs:
+    """Build host inputs for the Instruct autoregressive recaption/think prefix (``mode='gen_text'``).
+
+    Mirrors upstream ``prepare_model_inputs(..., mode='gen_text', bot_task='recaption')`` step 1:
+    chat template + ``input_ids`` + 2D RoPE metadata. Does not run VAE/ViT encode or AR generation.
+
+    Note: upstream ``preprocess_inputs`` defaults to ``sequence_template='pretrain'`` (via
+    ``generation_config``). Pass ``sequence_template='pretrain'`` for bit-exact token parity with
+    ``HunyuanImage3ForCausalMM.preprocess_inputs`` / ``generate_image(recaption)``.
+    """
+    if bot_task not in ("auto", "image", "think", "recaption", "img_ratio"):
+        raise ValueError(
+            f"bot_task={bot_task!r} not supported; " "use one of 'auto', 'image', 'think', 'recaption', 'img_ratio'"
+        )
+    if sequence_template is None:
+        # Match upstream preprocess_inputs default (generation_config.sequence_template or pretrain).
+        sequence_template = "pretrain"
+
+    batch_prompt = [prompt] if isinstance(prompt, str) else list(prompt)
+    batch_size = len(batch_prompt)
+
+    batch_cond_images = None
+    if cond_images is not None:
+        if isinstance(cond_images, CondImage):
+            batch_cond_images = [[cond_images] for _ in range(batch_size)]
+        elif cond_images and isinstance(cond_images[0], CondImage):
+            if len(cond_images) == batch_size:
+                batch_cond_images = [[c] for c in cond_images]
+            else:
+                batch_cond_images = [list(cond_images) for _ in range(batch_size)]
+        else:
+            batch_cond_images = list(cond_images)
+            if len(batch_cond_images) != batch_size:
+                raise ValueError(
+                    f"cond_images batch length ({len(batch_cond_images)}) must match prompt batch ({batch_size})"
+                )
+
+    result = tok.apply_chat_template(
+        batch_prompt,
+        cond_images=batch_cond_images,
+        system_prompt=system_prompt,
+        mode="gen_text",
+        bot_task=bot_task,
+        max_length=max_length,
+        cfg_factor=1,
+        sequence_template=sequence_template,
+        image_base_size=image_base_size,
+    )
+    output = result["output"]
+    sections = result["sections"]
+    return _build_host_inputs_from_template(
+        tok,
+        output=output,
+        sections=sections,
+        batch_size=batch_size,
+        cfg_factor=1,
+        batch_cond_images=batch_cond_images,
+        mode="gen_text",
+        bot_task=bot_task,
+    )
+
+
+def print_recaption_inputs_report(
+    bundle: GenImageHostInputs,
+    tok: HunyuanTokenizer,
+    *,
+    upstream_ids: torch.Tensor | None = None,
+    label: str = "recaption",
+) -> dict[str, Any]:
+    """Print a human-readable sanity report and return structured check results."""
+    ids = bundle.input_ids[0].tolist()
+    sp = tok.special
+    tail_n = min(12, len(ids))
+    tail_ids = ids[-tail_n:]
+    tail_strs = tok.token_strings(tail_ids)
+    ends_with_prefix = ids[-1] in {
+        sp.recaption_token_id,
+        sp.think_token_id,
+    }
+    parity_ok = None
+    if upstream_ids is not None:
+        ref = upstream_ids[0] if upstream_ids.ndim > 1 else upstream_ids
+        parity_ok = torch.equal(bundle.input_ids[0].cpu(), ref.cpu())
+
+    vit_count = int(bundle.vit_image_mask[0].sum()) if bundle.vit_image_mask is not None else 0
+    vae_count = int(bundle.vae_image_mask[0].sum()) if bundle.vae_image_mask is not None else 0
+
+    report = {
+        "label": label,
+        "mode": bundle.mode,
+        "bot_task": bundle.bot_task,
+        "seq_len": bundle.seq_len,
+        "batch_size": bundle.batch_size,
+        "ends_with_recaption_or_think_prefix": ends_with_prefix,
+        "last_token_id": ids[-1],
+        "last_token_str": tail_strs[-1],
+        "vit_placeholder_count": vit_count,
+        "vae_placeholder_count": vae_count,
+        "rope_image_spans": len(bundle.rope_image_info[0]) if bundle.rope_image_info else 0,
+        "upstream_parity_ok": parity_ok,
+        "recaption_inputs_ok": ends_with_prefix and (parity_ok is not False),
+    }
+
+    print(f"\n=== {label}: prepare_recaption_inputs report ===")
+    print(f"mode={report['mode']}  bot_task={report['bot_task']}  seq_len={report['seq_len']}")
+    print(f"vit_placeholders={vit_count}  vae_placeholders={vae_count}  rope_spans={report['rope_image_spans']}")
+    print(f"ends_with_recaption_or_think_prefix={ends_with_prefix}  last_token={tail_strs[-1]!r} (id={ids[-1]})")
+    print(f"tail_{tail_n}_tokens: {tail_strs}")
+    if parity_ok is not None:
+        print(f"upstream_token_parity_ok={parity_ok}")
+    print(f"recaption_inputs_ok={report['recaption_inputs_ok']}")
+    return report
+
+
 def prepare_i2i_inputs(
     tok: HunyuanTokenizer,
     prompt: str | list[str],
@@ -589,3 +719,52 @@ def build_i2i_inputs_embeds(
     bundle.cond_timesteps = enc.cond_timesteps
     bundle.inputs_embeds = hidden
     return bundle
+
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+
+    ROOT = Path(__file__).resolve().parents[4]
+    UPSTREAM = Path("/home/iguser/tt-ign/HunyuanImage-3.0")
+    for p in (str(ROOT), str(UPSTREAM)):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+
+    from hunyuan_image_3.system_prompt import get_system_prompt
+
+    from models.experimental.hunyuan_image_3_0.ref.tokenizer import HunyuanTokenizer, prepare_recaption_inputs
+    from models.experimental.hunyuan_image_3_0.ref.tokenizer.gen_image_inputs import print_recaption_inputs_report
+
+    tok = HunyuanTokenizer.from_pretrained(sequence_template="pretrain")
+    prompt = "a photo of a cat wearing a tiny hat"
+    system_prompt = get_system_prompt("en_recaption", "recaption")
+    bundle = prepare_recaption_inputs(
+        tok,
+        prompt,
+        bot_task="recaption",
+        system_prompt=system_prompt,
+    )
+
+    upstream_ids = None
+    try:
+        from hunyuan_image_3.configuration_hunyuan_image_3 import HunyuanImage3Config
+        from hunyuan_image_3.modeling_hunyuan_image_3 import HunyuanImage3ForCausalMM
+        from models.experimental.hunyuan_image_3_0.ref.weights import MODEL_DIR
+
+        if (MODEL_DIR / "config.json").is_file():
+            config = HunyuanImage3Config.from_pretrained(str(MODEL_DIR))
+            model = HunyuanImage3ForCausalMM(config, skip_load_module={"all"})
+            model.load_tokenizer(str(MODEL_DIR))
+            hf_out = model._tokenizer.apply_chat_template(
+                batch_prompt=[prompt],
+                mode="gen_text",
+                bot_task="recaption",
+                batch_system_prompt=[system_prompt],
+                sequence_template="pretrain",
+            )
+            upstream_ids = hf_out["output"].tokens
+    except Exception as exc:
+        print(f"(upstream parity skipped: {exc})")
+
+    print_recaption_inputs_report(bundle, tok, upstream_ids=upstream_ids, label="manual_recaption_demo")
