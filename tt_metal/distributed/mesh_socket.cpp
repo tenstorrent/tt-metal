@@ -40,9 +40,7 @@ void barrier_across_send_recv_ranks(
     sub_context->barrier();
 }
 
-// Retained for mesh-id-addressed validation paths; rank-addressed sockets skip it (cores are
-// in submesh-local space). [[maybe_unused]] since the only call site is currently gated out.
-[[maybe_unused]] void validate_device_ownership(
+void validate_device_ownership(
     multihost::Rank global_sender_rank, multihost::Rank global_receiver_rank, const SocketConfig& config) {
     const auto& global_distributed_context = DistributedContext::get_current_world();
     const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
@@ -132,11 +130,7 @@ void MeshSocket::process_host_ranks() {
 
     config_.sender_mesh_id = std::get<0>(global_logical_bindings.at(sender_rank));
     config_.receiver_mesh_id = std::get<0>(global_logical_bindings.at(receiver_rank));
-    // Skip coordinate validation for rank-addressed sockets (this path): the socket cores are
-    // expressed in submesh-local space, which doesn't match the parent-mesh coord range that
-    // validate_device_ownership / get_coord_range expect. This holds for cross-mesh rank-
-    // addressed sockets too — they use the same submesh-local cores. Role correctness is
-    // enforced by the rank-based check in the constructor.
+    validate_device_ownership(sender_rank, receiver_rank, config_);
 }
 
 void MeshSocket::process_mesh_ids() {
@@ -206,11 +200,6 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
         "SocketConfig must specify both sender and receiver mesh IDs or neither.");
     rank_scoped_socket_ = socket_uses_rank_scoped_semantics(config_);
 
-    // Addressed by explicit ranks (vs mesh ids)? Captured before process_host_ranks() fills in
-    // the derived mesh ids. When the endpoint ranks are known we use a point-to-point 2-rank
-    // handshake even across meshes; only the mesh-id-addressed case needs the all-hosts handshake.
-    rank_addressed_ = !config_.sender_mesh_id.has_value();
-
     if (config_.sender_mesh_id.has_value()) {
         TT_FATAL(
             config.receiver_mesh_id.has_value(), "Expected receiver mesh id to be set when sender mesh id is set.");
@@ -224,17 +213,17 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
     auto local_mesh_binding = tt::tt_metal::MetalContext::instance().get_control_plane().get_local_mesh_id_bindings();
     TT_FATAL(local_mesh_binding.size() == 1, "Local mesh binding must be exactly one.");
 
+    bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
     bool is_sender;
 
-    if (rank_addressed_) {
-        // Known endpoints: only the two named ranks participate (works same-mesh or cross-mesh).
+    if (rank_scoped_socket_ || same_mesh) {
         auto current_rank = *context->rank();
         auto sender_rank_val = *config_.sender_rank;
         auto receiver_rank_val = *config_.receiver_rank;
         if (current_rank != sender_rank_val && current_rank != receiver_rank_val) {
             log_warning(
                 LogMetal,
-                "Creating a null rank-addressed socket on rank {} (sender={}, receiver={}).",
+                "Creating a null rank-scoped socket on rank {} (sender={}, receiver={}).",
                 current_rank,
                 sender_rank_val,
                 receiver_rank_val);
@@ -267,14 +256,13 @@ MeshSocket::MeshSocket(const std::shared_ptr<MeshDevice>& device, const SocketCo
 }
 
 void MeshSocket::connect_with_peer(const std::shared_ptr<multihost::DistributedContext>& context) {
+    bool same_mesh = config_.sender_mesh_id.value() == config_.receiver_mesh_id.value();
     auto local_endpoint_desc = generate_local_endpoint_descriptor(*this, context->id());
     SocketPeerDescriptor remote_endpoint_desc;
 
-    // Rank-addressed sockets (endpoints known) use a point-to-point 2-rank handshake even
-    // when the two ranks are on different meshes — inter-mesh routing is set up by the kernels
-    // from fabric node ids, which generate_fabric_node_id_map resolves per (mesh_id, rank).
-    // Only mesh-id-addressed sockets need the all-hosts-of-both-meshes handshake.
-    if (rank_addressed_) {
+    // Explicit sender/receiver ranks define a point-to-point socket between the
+    // owning ranks, even when the owners sit on different meshes.
+    if (rank_scoped_socket_ || same_mesh) {
         Rank peer_rank =
             (socket_endpoint_type_ == SocketEndpoint::SENDER) ? config_.receiver_rank : config_.sender_rank;
 
