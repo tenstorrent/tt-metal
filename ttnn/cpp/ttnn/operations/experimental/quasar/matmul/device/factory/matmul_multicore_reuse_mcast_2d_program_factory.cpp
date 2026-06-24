@@ -4404,10 +4404,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     {"in0_mcast_dest_noc_end_x", in0_mcast_receiver_grid_same_coord},
                     {"in0_mcast_dest_noc_end_y", in0_mcast_receiver_grid_diff_coord_end},
                 };
-                // Kernel reads in0_mcast_noc_x[num_x=1] then in0_mcast_noc_y[num_y=W]: the single x
-                // coord is this core's physical X (same_coord), then the W mcast Y coords.
-                v.reserve(in0_mcast_noc_y.size() + 1);
-                v.push_back(in0_mcast_receiver_grid_same_coord);
+                // Kernel reads in0_mcast_noc_x[num_x] then in0_mcast_noc_y[num_y]. For transpose the y
+                // table holds the W mcast coords; the x side is num_x_bs copies of this core's physical
+                // X (same_coord). Total == num_x_bs + num_y_bs == declared num_runtime_varargs.
+                v.reserve(num_x_bs + in0_mcast_noc_y.size());
+                for (uint32_t i = 0; i < num_x_bs; ++i) {
+                    v.push_back(in0_mcast_receiver_grid_same_coord);
+                }
                 for (auto y : in0_mcast_noc_y) {
                     v.push_back(y);
                 }
@@ -4420,13 +4423,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     {"in0_mcast_dest_noc_end_x", in0_mcast_receiver_grid_diff_coord_end},
                     {"in0_mcast_dest_noc_end_y", in0_mcast_receiver_grid_same_coord},
                 };
-                // Kernel reads in0_mcast_noc_x[num_x=W] then in0_mcast_noc_y[num_y=1]: the W mcast X
-                // coords, then this core's physical Y (same_coord). Matches legacy (the trailing push).
-                v.reserve(in0_mcast_noc_x.size() + 1);
+                // Kernel reads in0_mcast_noc_x[num_x] then in0_mcast_noc_y[num_y]. For non-transpose the
+                // x table holds the W mcast coords; the y side is num_y_bs copies of this core's physical
+                // Y (same_coord). Total == num_x_bs + num_y_bs == declared num_runtime_varargs.
+                v.reserve(in0_mcast_noc_x.size() + num_y_bs);
                 for (auto x : in0_mcast_noc_x) {
                     v.push_back(x);
                 }
-                v.push_back(in0_mcast_receiver_grid_same_coord);
+                for (uint32_t i = 0; i < num_y_bs; ++i) {
+                    v.push_back(in0_mcast_receiver_grid_same_coord);
+                }
             }
             if (in1_idx < num_blocks_x) {
                 in0_sender_run_args.runtime_arg_values.push_back(
