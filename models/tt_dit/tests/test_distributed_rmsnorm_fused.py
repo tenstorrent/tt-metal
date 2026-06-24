@@ -58,7 +58,7 @@ import ttnn
 
 from ..parallel.manager import CCLManager
 from ..utils.mochi import get_rot_transformation_mat, stack_cos_sin
-from ..utils.tensor import bf16_tensor, from_torch
+from ..utils.tensor import bf16_tensor, float32_tensor, from_torch
 from ..utils.test import line_params, ring_params
 
 WAN = "wan"
@@ -112,6 +112,15 @@ class Cfg:
     full_heads: int  # model NUM_HEADS (per-head RoPE table + reference reshape)
     broadcast_rope: bool  # True => Wan (cos/sin shared across heads); False => LTX per-head
     per_head_norm: bool = False  # FLUX: RMSNorm over head_dim per head (no AG, is_tp_1)
+    # Activation dtypes (model params stay bf16). Default bf16 = current behavior; the
+    # stability sweep varies these to exercise the fp32 input/output codepaths.
+    in_dtype: str = "bf16"  # "bf16" | "fp32"
+    out_dtype: str = "bf16"  # "bf16" | "fp32"
+    # Affine knobs for the sweep. "auto" = current behavior (qk->weight only,
+    # block->adaLN weight+bias). "none"/"bcast" override for the qk path.
+    # (per-token [N,D] weight/bias not yet built — see test_sweep notes.)
+    weight_mode: str = "auto"  # "auto" | "none" | "bcast"
+    bias_mode: str = "auto"  # "auto" | "none" | "bcast"
 
     @property
     def is_block(self) -> bool:
@@ -200,9 +209,13 @@ def _select(cfgs: list[Cfg], env: str) -> list[Cfg]:
 
 def _build(submesh: ttnn.MeshDevice, cfg: Cfg, tp_axis: int) -> dict:
     torch.manual_seed(0)
-    x = torch.randn((1, 1, cfg.rows, cfg.dim), dtype=torch.bfloat16)
+    # Input activation dtype is cfg.in_dtype (model params below stay bf16). _torch_ref
+    # draws x with the SAME dtype so the RNG streams stay in lock-step for determinism.
+    in_fp32 = cfg.in_dtype == "fp32"
+    x = torch.randn((1, 1, cfg.rows, cfg.dim), dtype=(torch.float32 if in_fp32 else torch.bfloat16))
     # Feature dim sharded across the TP mesh axis; the other mesh axis (if any) replicates.
-    out = {"x": bf16_tensor(x, device=submesh, mesh_axis=tp_axis, shard_dim=-1)}
+    _act_tensor = float32_tensor if in_fp32 else bf16_tensor
+    out = {"x": _act_tensor(x, device=submesh, mesh_axis=tp_axis, shard_dim=-1)}
 
     if cfg.is_block:
         # adaLN: out = normed*(1+scale) + shift. scale/shift per-channel; the fused
@@ -219,8 +232,14 @@ def _build(submesh: ttnn.MeshDevice, cfg: Cfg, tp_axis: int) -> dict:
         out["shift_b"] = bf16_tensor(shift.reshape(1, 1, 1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
         return out
 
-    w = torch.randn(cfg.dim, dtype=torch.bfloat16)
-    out["weight"] = bf16_tensor(w.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    # qk path: weight on unless weight_mode="none"; optional broadcast bias when
+    # bias_mode="bcast". Draw order (x, [w], [b], [cos/sin]) mirrors _torch_ref.
+    if cfg.weight_mode != "none":
+        w = torch.randn(cfg.dim, dtype=torch.bfloat16)
+        out["weight"] = bf16_tensor(w.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
+    if cfg.bias_mode == "bcast":
+        b = torch.randn(cfg.dim, dtype=torch.bfloat16)
+        out["bias"] = bf16_tensor(b.reshape(1, cfg.dim), device=submesh, mesh_axis=tp_axis, shard_dim=-1)
     if cfg.rope:
         if cfg.broadcast_rope:  # Wan: shared across heads, fp32, replicated
             cos_raw = torch.randn(1, cfg.rows, 1, cfg.head_dim // 2)
@@ -242,9 +261,9 @@ def _build(submesh: ttnn.MeshDevice, cfg: Cfg, tp_axis: int) -> dict:
 
 def _torch_ref(cfg: Cfg) -> torch.Tensor:
     """fp32 PyTorch reference: full-feature RMSNorm + weight(+bias), then RoPE.
-    Reseeds and draws in the SAME order as _build so the random sources match."""
+    Reseeds and draws in the SAME order/dtype as _build so the random sources match."""
     torch.manual_seed(0)
-    x = torch.randn((1, 1, cfg.rows, cfg.dim), dtype=torch.bfloat16)
+    x = torch.randn((1, 1, cfg.rows, cfg.dim), dtype=(torch.float32 if cfg.in_dtype == "fp32" else torch.bfloat16))
     xf = x.float().reshape(cfg.rows, cfg.dim)
     if cfg.per_head_norm:
         # FLUX.2 per-head RMSNorm: reduce over head_dim per head (no cross-device AG),
@@ -260,8 +279,12 @@ def _torch_ref(cfg: Cfg) -> torch.Tensor:
         shift = torch.randn(cfg.dim, dtype=torch.bfloat16)
         return y * (scale.float() + 1.0) + shift.float()
 
-    w = torch.randn(cfg.dim, dtype=torch.bfloat16).float()
-    y = y * w
+    if cfg.weight_mode != "none":
+        w = torch.randn(cfg.dim, dtype=torch.bfloat16).float()
+        y = y * w
+    if cfg.bias_mode == "bcast":
+        b = torch.randn(cfg.dim, dtype=torch.bfloat16).float()
+        y = y + b
     if cfg.rope:
         h = cfg.full_heads
         if cfg.broadcast_rope:
@@ -340,7 +363,7 @@ def _call_op(
         transformation_mat=(inp["trans"] if rope else None),
         rope_cos=(inp["cos"] if rope else None),
         rope_sin=(inp["sin"] if rope else None),
-        dtype=None,
+        dtype=(ttnn.float32 if cfg.out_dtype == "fp32" else None),  # None => bf16 (current default)
         persistent_output_buffer=pob if use_device_op else None,
         num_preferred_links=num_links,
         use_device_op=use_device_op,
@@ -349,7 +372,7 @@ def _call_op(
 
 
 def _run_fused(inp, submesh, sem, cfg, topology, tp_axis, pob, op_override):
-    bias = inp.get("bias") if cfg.is_block else None
+    bias = inp.get("bias")  # present for block adaLN and for qk bias_mode="bcast"; else None
     return _call_op(
         inp,
         submesh,
@@ -360,7 +383,7 @@ def _run_fused(inp, submesh, sem, cfg, topology, tp_axis, pob, op_override):
         use_device_op=True,
         pob=pob,
         num_links=_fused_links(op_override),
-        weight=inp["weight"],
+        weight=inp.get("weight"),  # None when weight_mode="none" (pure RMSNorm)
         bias=bias,
         rope=cfg.rope,
     )
@@ -383,7 +406,7 @@ def _run_baseline(inp, submesh, sem, cfg, topology, tp_axis, op_override):
             use_device_op=False,
             pob=None,
             num_links=op_override,
-            weight=inp["weight"],
+            weight=inp.get("weight"),  # None when weight_mode="none" (pure RMSNorm)
             bias=None,
             rope=cfg.rope,
             per_head_norm=False,
@@ -769,3 +792,162 @@ def test_traced_corr(mesh_device, model, tp, topology, op_override, tp_axis, ful
             flagged.append(cfg.cid)
             logger.warning(f"RMSTRACE {cfg.cid:<22} CONFIG FAILED: {type(e).__name__}: {str(e)[:220]}")
     logger.info(f"RMSTRACE [{model} tp{tp}] flagged: {flagged if flagged else 'NONE'}")
+
+
+# ===========================================================================
+# Stability sweep — orthogonal option coverage (fused vs fp32-torch only)
+# ===========================================================================
+# Goal: ~15 min of broad coverage to confirm the op is stable. Sweeps seq / dim /
+# heads×head_dim / weight / bias / rope / per_head_norm / in+out dtype, across
+# tp1/2/4 LINE + tp4/tp8 RING. Each config: PCC(fused:fp32-torch) ≥ 0.999, sane
+# maxabs/worstrow, N-run bit-exact determinism (SWEEP_DET_REPEATS, default 3), and
+# no hang. SWEEP_ONLY=cid,... subsets. The composite baseline is NOT used (the fp32
+# torch ref is the true oracle). KNOWN GAP: per-token [N,D] weight/bias (the compute
+# supports it, but _build doesn't yet synthesize that layout) — broadcast/none only.
+
+_SW_RING = ttnn.Topology.Ring
+_SW_LINE = ttnn.Topology.Linear
+
+
+def _swcfg(
+    tp,
+    cid,
+    rows,
+    feat_local,
+    head_dim,
+    *,
+    rope=False,
+    bcast_rope=True,
+    phn=False,
+    weight="auto",
+    bias="auto",
+    indt="bf16",
+    outdt="bf16",
+):  # noqa: E501
+    dim = feat_local * tp
+    full_heads = (feat_local // head_dim) * tp if head_dim else 1  # total heads across TP
+    return Cfg(
+        f"sw_{cid}_tp{tp}",
+        "SWEEP",
+        tp,
+        rows,
+        dim,
+        head_dim,
+        rope,
+        full_heads,
+        bcast_rope,
+        phn,
+        indt,
+        outdt,
+        weight,
+        bias,
+    )
+
+
+def _sweep_cfgs(tp, topology):
+    """Tiered config list for one (tp, topology). Dims scale as feat_local*tp so every
+    config is valid at any tp (feat_local chosen divisible by head_dim)."""
+    HD = 128
+    is_ring = topology == _SW_RING
+    c = []
+    # ---- Tier 2: topology cross — 8 diverse configs on EVERY (tp, topology) ----
+    c += [
+        _swcfg(tp, "tiny_block", 32, 512, None),  # block adaLN, 1 worker
+        _swcfg(tp, "small_qk", 512, 512, HD),  # qk + weight
+        _swcfg(tp, "mid_rope", 2048, 1024, HD, rope=True),  # qk + broadcast rope
+        _swcfg(tp, "large_qk", 8192, 768, HD),  # large, deep rounds
+        _swcfg(tp, "adaln", 1024, 1024, None),  # block weight+bias
+        _swcfg(tp, "perhead_norm", 512, 512, HD, rope=True, phn=True),  # FLUX per-head norm+rope
+        _swcfg(tp, "perhead_rope", 1024, 512, 64, rope=True, bcast_rope=False),  # LTX per-head rope
+        _swcfg(tp, "fp32_io", 512, 512, HD, indt="fp32", outdt="fp32"),  # fp32 in/out
+    ]
+    # ---- Tier 1: one-axis sweep — only on the base topology (tp4 ring) ----
+    if tp == 4 and is_ring:
+        for r in (32, 128, 512, 1216, 2048, 4096, 8192):  # seq
+            c.append(_swcfg(tp, f"seq{r}", r, 1024, HD, rope=True))
+        for fl in (512, 768, 1024, 1536, 2048):  # per-device width
+            c.append(_swcfg(tp, f"fl{fl}", 2048, fl, HD, rope=True))
+        for h, hd in ((4, 128), (8, 64), (8, 128), (12, 128), (16, 64)):  # heads × head_dim
+            c.append(_swcfg(tp, f"h{h}x{hd}", 2048, h * hd, hd, rope=True))
+        for wm in ("auto", "none"):  # weight × bias
+            for bm in ("none", "bcast"):
+                if wm == "none" and bm == "bcast":
+                    continue  # op requires weight when bias is given (device_op validation)
+                c.append(_swcfg(tp, f"w_{wm}_b_{bm}", 2048, 1024, HD, weight=wm, bias=bm))
+        c += [
+            _swcfg(tp, "rope_none", 2048, 1024, HD, rope=False),  # rope variants
+            _swcfg(tp, "rope_bcast", 2048, 1024, HD, rope=True, bcast_rope=True),
+            _swcfg(tp, "rope_perhead", 2048, 1024, HD, rope=True, bcast_rope=False),
+            _swcfg(tp, "phn", 2048, 1024, HD, rope=True, phn=True),  # per_head_norm
+            _swcfg(tp, "dt_fp32in", 2048, 1024, HD, indt="fp32"),  # dtype axis
+            _swcfg(tp, "dt_fp32io", 2048, 1024, HD, indt="fp32", outdt="fp32"),
+            _swcfg(tp, "dt_fp32out", 2048, 1024, HD, outdt="fp32"),
+        ]
+    # ---- Tier 3: interaction / stress, per (tp, topology) ----
+    if is_ring:
+        c.append(_swcfg(tp, "uneven1216", 1216, 1024, HD, rope=True))  # zero-present-round path
+        c.append(_swcfg(tp, "uneven2368", 2368, 1024, HD, rope=True))
+        if tp == 8:
+            c.append(_swcfg(tp, "huge16384", 16384, 768, HD, rope=True))  # deep rounds, 8-wide ring
+            c.append(_swcfg(tp, "wide_perhead", 2048, 2048, 128, rope=True, bcast_rope=False))  # wide L1
+    c.append(_swcfg(tp, "fp32_large", 4096, 768, HD, rope=True, indt="fp32", outdt="fp32"))  # precision path
+    return c
+
+
+_SWEEP_PARAMS = [
+    ((4, 8), _DP_GAL, 1, _SW_LINE, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, 2, _SW_LINE, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL, 4, _SW_LINE, GALAXY_LINKS, 1, False),
+    ((4, 8), _DP_GAL_RING, 4, _SW_RING, GALAXY_LINKS, 0, False),
+    ((4, 8), _DP_GAL_RING, 8, _SW_RING, GALAXY_LINKS, 1, True),
+]
+_SWEEP_IDS = ["tp1_line", "tp2_line", "tp4_line", "tp4_ring", "tp8_ring"]
+
+
+@pytest.mark.parametrize(
+    ("mesh_device", "device_params", "tp", "topology", "op_override", "tp_axis", "full_mesh"),
+    [pytest.param(*p, id=i) for p, i in zip(_SWEEP_PARAMS, _SWEEP_IDS)],
+    indirect=["mesh_device", "device_params"],
+)
+def test_sweep(mesh_device, tp, topology, op_override, tp_axis, full_mesh):
+    """Broad option-space stability sweep, fused vs fp32-torch ref. Run all 5 params
+    for full coverage (~15 min); warm up first to dodge the cold-after-reset flake."""
+    submesh = _resolve_submesh(mesh_device, tp, tp_axis, full_mesh)
+    links = _fused_links(op_override)
+    reps = int(_os.getenv("SWEEP_DET_REPEATS", "3"))
+    topo = "ring" if topology == _SW_RING else "line"
+    flagged = []
+    cfgs = _select(_sweep_cfgs(tp, topology), "SWEEP_ONLY")
+    for cfg in cfgs:
+        try:
+            ccl = CCLManager(mesh_device=submesh, num_links=(op_override or 1), topology=topology)
+            ag = ccl.get_ag_ping_pong_semaphore(tp_axis)
+            inp = _build(submesh, cfg, tp_axis)
+            ref = _torch_ref(cfg)
+            pob = _make_pob(inp, submesh, cfg, links, tp_axis)
+            out0 = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
+            ndiff, maxdelta = 0, 0.0
+            for _ in range(max(0, reps - 1)):  # bit-exact determinism across repeated launches
+                oi = _gather(_run_fused(inp, submesh, ag, cfg, topology, tp_axis, pob, op_override), tp_axis)
+                d = (oi - out0).abs().max().item()
+                if d > 0.0:
+                    ndiff += 1
+                    maxdelta = max(maxdelta, d)
+                del oi
+            det = ndiff == 0
+            pcc = _pcc(out0, ref)
+            maxabs = (out0 - ref).abs().max().item()
+            worstrow = ((out0 - ref).abs().mean(-1) / ref.abs().mean(-1).clamp_min(1e-6)).max().item()
+            susp = (pcc < 0.999) or (worstrow > 0.10) or (not det)
+            if susp:
+                flagged.append(cfg.cid)
+            logger.info(
+                f"RMSSWEEP {cfg.cid:<26} det={'OK' if det else 'FAIL'} pcc={pcc * 100:.4f}% "
+                f"maxabs={maxabs:.4f} worstrow={worstrow * 100:.2f}% in={cfg.in_dtype} out={cfg.out_dtype} "
+                f"det_ndiff={ndiff}/{max(0, reps - 1)}{'  <-- SUSPICIOUS' if susp else ''}"
+            )
+        except Exception as e:  # noqa: BLE001 — characterize (OOM / hang-timeout) without losing the rest
+            flagged.append(cfg.cid)
+            logger.warning(f"RMSSWEEP {cfg.cid:<26} CONFIG FAILED: {type(e).__name__}: {str(e)[:200]}")
+    logger.info(f"RMSSWEEP [{topo} tp{tp}] {len(cfgs)} cfgs — flagged: {flagged if flagged else 'NONE'}")
+    assert not flagged, f"{len(flagged)} sweep config(s) flagged on {topo} tp{tp}: {flagged}"
