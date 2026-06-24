@@ -494,10 +494,10 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
         per_core_M=per_core_M,
     )
 
-    ep_l1 = _env_bool("GLM4_MOE_LITE_EP_L1", default=False)
+    ep_l1 = _env_bool("GLM4_MOE_LITE_EP_L1", default=True)
     decode_memory_config = ttnn.L1_MEMORY_CONFIG if ep_l1 else ttnn.DRAM_MEMORY_CONFIG
 
-    fuse_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", default=False)
+    fuse_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", default=True)
     gate_up_fused_program_config = None
     if fuse_gate_up:
         # Sweep winner (K=2048 N=3072): 8x6 pcN2 ob_w2 osb_w2 → 226us, 1.85x vs the
@@ -509,7 +509,7 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
             per_core_M=per_core_M,
         )
 
-    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "2").strip() or "2")
     ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
     ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
 
@@ -871,7 +871,7 @@ def moe_dense_experts_forward_decode_tt(
         ttnn.deallocate(weighted, force=False)
 
         # Sum contributions across devices (experts are sharded across the mesh).
-        _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+        _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "2").strip() or "2")
         _topo = (
             rt.topology
             if rt is not None
@@ -1140,7 +1140,7 @@ def moe_dense_experts_forward_prefill_tt(
     ttnn.deallocate(weighted, force=False)
 
     # All-reduce across devices (experts sharded across mesh).
-    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "2").strip() or "2")
     _topo = (
         rt.topology
         if rt is not None
@@ -1456,7 +1456,7 @@ def moe_packed_experts_forward_prefill_tt(
     # out_accum: [1, 1, T, H] — local expert contribution
 
     # All-reduce across devices (experts sharded across mesh).
-    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    _nl = rt.num_links if rt is not None else int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "2").strip() or "2")
     _topo = (
         rt.topology
         if rt is not None
@@ -1810,7 +1810,7 @@ def moe_sparse_experts_forward_tt(
             )
             ttnn.deallocate(topk_weights_rm, force=False)
             block = int(rt.sparsity_block_size)
-            if _env_bool("GLM4_MOE_LITE_MOE_FAST_REMAP") and total_tokens == block:
+            if _env_bool("GLM4_MOE_LITE_MOE_FAST_REMAP", default=True) and total_tokens == block:
                 # Decode (single sparsity block): `moe_expert_token_remap` splits work over
                 # metadata pages in multiples of `reduction_size`. With reduction_size ==
                 # total_tokens there is exactly ONE work unit, so the kernel runs on a single
@@ -1863,7 +1863,7 @@ def moe_sparse_experts_forward_tt(
     # Decode (num_blocks == 1) uses pre-created configs; prefill creates dynamic ones
     # since prefill is not traced (trace_mode=decode_only) and per_core_M must match.
     if num_blocks > 1:
-        if _env_bool("GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED"):
+        if _env_bool("GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED", default=True):
             _gate_up_pc = _tuned_prefill_sparse_matmul_pc(grid_x=3, grid_y=8, per_core_M=num_blocks)
             _down_pc = _tuned_prefill_sparse_matmul_pc(grid_x=4, grid_y=8, per_core_M=num_blocks)
             _gate_up_fused_pc = (

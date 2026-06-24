@@ -118,7 +118,7 @@ _KVB2_DECODE_CKC = ttnn.WormholeComputeKernelConfig(
 
 
 def prefill_matmul_tuned_enabled() -> bool:
-    return os.environ.get("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED", "").strip() == "1"
+    return os.environ.get("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED", "1").strip() == "1"
 
 
 def _prefill_1d_ws_max_mt() -> int:

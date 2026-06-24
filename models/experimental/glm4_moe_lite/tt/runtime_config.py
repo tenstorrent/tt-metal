@@ -144,7 +144,7 @@ class Glm4RuntimeConfig:
     def from_env(cls, *, device: Any) -> "Glm4RuntimeConfig":
         """Parse all GLM4_MOE_LITE_* env vars once. Call at model init."""
         tp_ax = tp_cluster_axis(device)
-        tp_on = tp_ax is not None and _env_bool("GLM4_MOE_LITE_TP")
+        tp_on = tp_ax is not None and _env_bool("GLM4_MOE_LITE_TP", default=True)
         _, mesh_cols = mesh_shape(device)
         mesh_rows, _ = mesh_shape(device)
         tp_sz = int((mesh_rows, mesh_cols)[tp_ax]) if tp_ax is not None else 1
@@ -170,17 +170,17 @@ class Glm4RuntimeConfig:
             mla_fp32_acc=mla_fp32,
             mla_scale_mode=_env_str("GLM4_MOE_LITE_MLA_SCALE_MODE", default="qk").lower(),
             mla_k_chunk_size=_env_int("GLM4_MOE_LITE_MLA_K_CHUNK_SIZE", default=64),
-            # Scale decode FlashMLA cores with KV length (default-off): the op caps at
+            # Scale decode FlashMLA cores with KV length (default-on): the op caps at
             # max_cores_per_head_batch=16, which serializes the growing KV read at long
             # context. When enabled, cores are derived from the allocated cache size.
-            decode_mla_core_scale=_env_bool("GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE"),
+            decode_mla_core_scale=_env_bool("GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE", default=True),
             # Hard override for max_cores_per_head_batch (0 = auto/struct default).
             mla_max_cores=_env_int("GLM4_MOE_LITE_MLA_MAX_CORES", default=0),
             packer_l1_acc=_env_bool("GLM4_MOE_LITE_PACKER_L1_ACC"),
-            skip_typecast=_env_bool("GLM4_MOE_LITE_SKIP_TYPECAST"),
+            skip_typecast=_env_bool("GLM4_MOE_LITE_SKIP_TYPECAST", default=True),
             # Memory layout
-            decode_l1_act=_env_bool("GLM4_MOE_LITE_DECODE_L1_ACT"),
-            sharded_decode_norm=_env_bool("GLM4_MOE_LITE_SHARDED_DECODE_NORM"),
+            decode_l1_act=_env_bool("GLM4_MOE_LITE_DECODE_L1_ACT", default=True),
+            sharded_decode_norm=_env_bool("GLM4_MOE_LITE_SHARDED_DECODE_NORM", default=True),
             dram_sharded_weights=dram_sharded,
             dram_sharded_attn=dram_sharded and _env_bool("GLM4_MOE_LITE_DRAM_SHARDED_ATTN"),
             dram_sharded_mlp=dram_sharded_mlp_val,
@@ -189,34 +189,34 @@ class Glm4RuntimeConfig:
             explicit_prog_cfg=_env_bool("GLM4_MOE_LITE_EXPLICIT_PROG_CFG"),
             # Attention
             concat_heads=_env_bool("GLM4_MOE_LITE_CONCAT_HEADS"),
-            attn_dp=_env_bool("GLM4_MOE_LITE_ATTN_DP"),
-            head_parallel_kvb2=(_env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2") and tp_on and tp_sz > 1),
+            attn_dp=_env_bool("GLM4_MOE_LITE_ATTN_DP", default=True),
+            head_parallel_kvb2=(_env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", default=True) and tp_on and tp_sz > 1),
             # Head-parallel MLA core: shard q_b (column-parallel) + kv_b1 (per-head) so the
             # whole q-path / FlashMLA / kv_b2 / o_proj runs on H/tp_size heads per device with
             # a single all_reduce after o_proj (no new collectives). Builds on HEAD_PARALLEL_KVB2.
             head_parallel_attn=(
-                _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN")
+                _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", default=True)
                 and tp_on
                 and tp_sz > 1
-                and _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2")
+                and _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", default=True)
             ),
             use_v_cache_slice=_env_bool("GLM4_MOE_LITE_MLA_USE_V_CACHE_SLICE"),
             shard_q=_env_bool("GLM4_MOE_LITE_MLA_SHARD_Q"),
             # MLP / MoE
-            fuse_mlp_moe_reduce=_env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE"),
-            fuse_shared_gate_up=_env_bool("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP"),
+            fuse_mlp_moe_reduce=_env_bool("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", default=True),
+            fuse_shared_gate_up=_env_bool("GLM4_MOE_LITE_FUSE_SHARED_GATE_UP", default=True),
             moe_experts_impl=_env_str("GLM4_MOE_LITE_MOE_EXPERTS_IMPL", default="sparse").lower(),
             moe_router_impl=_env_str("GLM4_MOE_LITE_MOE_ROUTER_IMPL", default="tt").lower(),
             moe_dense_prefill=_env_bool("GLM4_MOE_LITE_MOE_DENSE_PREFILL"),
             moe_packed_prefill=_env_bool("GLM4_MOE_LITE_MOE_PACKED_PREFILL"),
             # Defensive copies
-            skip_defensive_clones=_env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES"),
+            skip_defensive_clones=_env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES", default=True),
             # TP
             tp_enabled=tp_on,
             tp_axis=tp_ax,
             tp_size=tp_sz,
             # CCL
-            ccl_num_links=_env_int("GLM4_MOE_LITE_CCL_NUM_LINKS", default=1),
+            ccl_num_links=_env_int("GLM4_MOE_LITE_CCL_NUM_LINKS", default=2),
             ccl_topology=(
                 ttnn.Topology.Ring
                 if _env_str("GLM4_MOE_LITE_CCL_TOPOLOGY", default="linear").lower() == "ring"

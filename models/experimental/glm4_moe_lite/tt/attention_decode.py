@@ -50,8 +50,8 @@ _KVB2_INPUT_L1 = True
 # reshape->[1,1,H,HD] then permute(0,2,1,3). Puts the H heads in the batch dim on clean
 # head_dim=8-tile column boundaries, avoiding the sub-tile head-into-tile-height scatter
 # (~10us ReshapeView) and the following permute (~3us). Validated bit-identical (PCC=1.0)
-# to reshape+permute ONLY at batch==1; ~10us/layer device saving. Default off.
-_Q_DIRECT_RESHAPE = os.environ.get("GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE", "0").strip() == "1"
+# to reshape+permute ONLY at batch==1; ~10us/layer device saving. Default on.
+_Q_DIRECT_RESHAPE = os.environ.get("GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE", "1").strip() == "1"
 
 
 def _flatten_v_heads_for_wo(
