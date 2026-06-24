@@ -25,6 +25,14 @@ DEVICE_PERF_KEYS = [
     "CORE COUNT",
 ]
 
+# Sentinel returned as the device-perf value when a sweep module opts a vector out of
+# profiling by setting _SKIP_DEVICE_PERF (e.g. conv2d's heavy FABRIC_1D path, where the
+# profiler read/clock-ARC over the busy fabric hangs). Distinct from None, which means
+# "profiler ran but produced nothing" -> FAIL_UNSUPPORTED_DEVICE_PERF. The runner treats
+# this sentinel as PASS with device-perf N/A, so an unprofilable-but-correct vector is
+# not counted as a failure.
+DEVICE_PERF_SKIPPED = "__device_perf_skipped__"
+
 
 def clear_disk_kernel_cache() -> None:
     """Clear disk kernel cache for current git hash."""
@@ -230,8 +238,11 @@ def run_with_cache_comparison(
     # A sweep module can set _SKIP_DEVICE_PERF (per-vector) to opt this vector out of
     # the profiler read -- e.g. conv2d's heavy FABRIC_1D path, where the profiler's
     # remote-chip AICLK ARC read hangs over the fabric-busy ETH link. Checked AFTER
-    # execute_test() since run() sets the flag.
-    measure_dp = getattr(config, "measure_device_perf", False) and not getattr(test_module, "_SKIP_DEVICE_PERF", False)
+    # execute_test() since run() sets the flag. dp_skipped -> return the SKIPPED
+    # sentinel so the runner marks PASS (perf N/A), not FAIL_UNSUPPORTED_DEVICE_PERF.
+    dp_requested = getattr(config, "measure_device_perf", False)
+    dp_skipped = dp_requested and getattr(test_module, "_SKIP_DEVICE_PERF", False)
+    measure_dp = dp_requested and not dp_skipped
 
     device_perf_uncached = None
     if measure_dp:
@@ -286,6 +297,8 @@ def run_with_cache_comparison(
         if device_perf_cached:
             simplified_perf["cached"] = simplify_device_perf(device_perf_cached)
         return status, message, e2e_perf, simplified_perf, peak_memory
+    elif dp_skipped:
+        return status, message, e2e_perf, DEVICE_PERF_SKIPPED, peak_memory
     else:
         return status, message, e2e_perf, None, peak_memory
 
@@ -302,10 +315,13 @@ def run_single(
 
         peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
+    dp_requested = getattr(config, "measure_device_perf", False)
     # Per-vector opt-out: a module sets _SKIP_DEVICE_PERF when the profiler read would
     # hang (e.g. conv2d heavy FABRIC_1D path -> remote-chip AICLK ARC read over fabric).
-    measure_dp = getattr(config, "measure_device_perf", False) and not getattr(test_module, "_SKIP_DEVICE_PERF", False)
-    if measure_dp:
+    # Return the SKIPPED sentinel (not None) so the runner marks PASS, not unsupported.
+    if dp_requested and getattr(test_module, "_SKIP_DEVICE_PERF", False):
+        return status, message, e2e_ms, DEVICE_PERF_SKIPPED, peak_memory
+    if dp_requested:
         perf_result = gather_single_test_perf(_resolve_perf_device(device, test_module), status)
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)

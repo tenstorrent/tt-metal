@@ -34,7 +34,7 @@ from framework.constants import parse_mesh_suffix
 from framework.statuses import TestStatus, VectorValidity
 from framework.sweeps_logger import sweeps_logger as logger
 from framework.vector_source import VectorSourceFactory
-from sweep_utils.perf_utils import run_single, run_with_cache_comparison
+from sweep_utils.perf_utils import run_single, run_with_cache_comparison, DEVICE_PERF_SKIPPED
 
 
 @dataclass
@@ -464,7 +464,13 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
 
     if status:
         if config.measure_device_perf:
-            if device_perf is None:
+            if device_perf == DEVICE_PERF_SKIPPED:
+                # Module opted this vector out of profiling (unsupported config, e.g.
+                # conv2d heavy FABRIC_1D -> profiler ARC read hangs). PCC passed, so
+                # PASS with device-perf N/A -- not a failure.
+                result["status"] = TestStatus.PASS
+                result["device_perf"] = None
+            elif device_perf is None:
                 result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
             else:
                 result["status"] = TestStatus.PASS
