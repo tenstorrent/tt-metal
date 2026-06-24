@@ -626,32 +626,27 @@ def test_pcc_1x8_all_stages():
         ), f"prefill shape {tuple(tt_prefill_out.shape)} vs ref {tuple(ref_prefill_out.shape)}"
         pcc_prefill = _pcc(ref_prefill_out, tt_prefill_out)
 
-        # ---- 3. Denoise-attributable PCC (estimated) -------------------------
-        # No isolated denoise test (would require injecting torch KV — per-layer
-        # shape/layout/dtype conversion is non-trivial; not done here).
-        # Estimate the denoise-only drift by treating stage PCCs as multiplicative:
-        #   denoise_attrib ≈ pcc_e2e / (pcc_vision * pcc_prefill)
-        # Rough proxy — PCC isn't strictly multiplicative, but for high-PCC stages
-        # it's a useful directional indicator of how much drift the denoise loop
-        # adds on top of upstream stages.
-        denoise_attrib = pcc_e2e / max(1e-6, (pcc_vision * pcc_prefill))
+        # ---- 3. Denoise-attributable PCC -------------------------------------
+        # Disabled: the previous estimate `pcc_e2e / (pcc_vision * pcc_prefill)`
+        # is not statistically meaningful (PCC isn't multiplicative and the
+        # value can exceed 1.0). A real isolated denoise PCC would require
+        # injecting torch-side KV cache into the TT denoise expert — per-layer
+        # shape/layout/dtype conversion is non-trivial. Skip the estimate.
 
         print("\n" + "=" * 72)
         print(f"1×8 pi0.5 PCC report  (N_CAMS={N_CAMS}, steps={cfg.num_denoising_steps})")
         print("=" * 72)
         print(f"  vision   (N_CAMS,256,{cfg.vlm_config.width})       PCC = {pcc_vision:.6f}   (target ≥ 0.997)")
         print(f"  prefill  (1,{seq_len},{cfg.vlm_config.width})      PCC = {pcc_prefill:.6f}   (target ≥ 0.99)")
-        print(f"  denoise  (e2e / (vision·prefill))         PCC ≈ {denoise_attrib:.6f}")
-        print(f"  e2e      (1,{cfg.action_horizon},{cfg.action_dim})           PCC = {pcc_e2e:.6f}   (target ≥ 0.95)")
+        print(f"  e2e      (1,{cfg.action_horizon},{cfg.action_dim})           PCC = {pcc_e2e:.6f}   (target ≥ 0.99)")
         print("=" * 72)
         print(" Note: e2e uses seed-around-both pattern (seed before pipe.sample_actions")
-        print(" and before Pi0_5Model construction+call). Denoise PCC is estimated as")
-        print(" e2e / (vision · prefill) — no isolated denoise test (needs torch→TT KV).")
+        print(" and before Pi0_5Model construction+call).")
         print("=" * 72)
 
         assert pcc_vision >= 0.997, f"vision PCC {pcc_vision:.6f} < 0.997"
         assert pcc_prefill >= 0.99, f"prefill PCC {pcc_prefill:.6f} < 0.99"
-        assert pcc_e2e >= 0.95, f"e2e PCC {pcc_e2e:.6f} < 0.95"
+        assert pcc_e2e >= 0.99, f"e2e PCC {pcc_e2e:.6f} < 0.99"
 
 
 @pytest.mark.skipif(
