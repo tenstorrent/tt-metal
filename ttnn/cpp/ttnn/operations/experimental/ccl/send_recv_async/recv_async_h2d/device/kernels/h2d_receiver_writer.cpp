@@ -47,7 +47,6 @@ void kernel_main() {
     uint32_t output_base_addr = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t num_pages = get_arg_val<uint32_t>(rt_args_idx++);
 
-    // Device 2.0 migration: legacy primitive retained: PCIe write command buffer state setup has no typed D2 endpoint.
     // socket_notify_sender for H2D sockets posts the local bytes_acked counter back to the
     // host via a PCIe NOC write, which itself uses noc_wwrite_with_state. Initialize the
     // write command buffer state up front so the in-loop notifications hit a hot path.

@@ -107,9 +107,7 @@ void kernel_main() {
     Semaphore<> in1_sender_sem(in1_sender_semaphore_id);
     Semaphore<> in1_receiver_sem(in1_receiver_semaphore_id);
     Semaphore<> in1_valid_sem(in1_valid_semaphore_id);
-    // Device 2.0 migration: legacy primitive retained: local L1 offset, source for noc_semaphore_set_remote
     const uint32_t in1_valid_semaphore_addr = get_semaphore(in1_valid_semaphore_id);
-    // Device 2.0 migration: legacy primitive retained: local L1 offset, consumed by precomposed-NoC destination
     const uint32_t in1_receiver_semaphore_addr = get_semaphore(in1_receiver_semaphore_id);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
@@ -210,7 +208,6 @@ void kernel_main() {
 
     in1_valid_sem.set(VALID);
 
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address consumed by raw NoC primitives
     const uint64_t in1_receiver_semaphore_noc_addr =
         get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
 
@@ -249,8 +246,6 @@ void kernel_main() {
     }
 
     // FSDP semaphores (forward + backward counters incremented by remote fabric sends).
-    // Device 2.0 migration: legacy primitive retained: GlobalSemaphore-style raw L1 address from common args,
-    // passed by ptr into compute_actual_k_block helper that consumes it with noc_semaphore_wait_min
     volatile tt_l1_ptr uint32_t* fsdp_sem_forward_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fsdp_sem_forward);
     volatile tt_l1_ptr uint32_t* fsdp_sem_backward_ptr =
@@ -415,8 +410,6 @@ void kernel_main() {
                     const uint32_t local_k_end = local_k_start + K_tiles_per_device;
                     {
                         uint32_t write_ptr = in1_start_address;
-                        // Device 2.0 migration: legacy primitive retained: TensorAccessor-based read API matches
-                        // helper functions' internal idiom; no D2 equivalent in matmul_dataflow_common.hpp helpers
                         // Left half (real data: local weight DRAM if this is our stripe, else PWB).
                         for (uint32_t k = 0; k < k_left_tiles; k++) {
                             uint32_t global_k_tile = k_block_left_tile + k;
@@ -494,7 +487,6 @@ void kernel_main() {
                      */
                     for (uint32_t i = 0; i < K_block_tiles; i++) {
                         uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
-                        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC destination
                         noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
                         in1_start_address += full_N_tiles_bytes;
                     }
@@ -503,8 +495,6 @@ void kernel_main() {
                     noc_obj.async_writes_flushed();
 #endif
 
-                    // Device 2.0 migration: legacy primitive retained: src/dst sems use different L1 ids, so
-                    // Semaphore<>::set_multicast cannot be substituted (writes remote at sender's L1 offset)
                     noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
                 }
 #ifdef FSDP_FUSED
@@ -578,8 +568,6 @@ void kernel_main() {
 
                 uint32_t l1_write_addr_in2 = cb_in2.get_write_ptr();
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    // Device 2.0 migration: legacy primitive retained: matches helper internal idiom in
-                    // matmul_dataflow_common.hpp (TensorAccessor-based per-page reads)
                     noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);
                     l1_write_addr_in2 += in2_tile_size;
                 }
@@ -689,7 +677,6 @@ void kernel_main() {
     noc_obj.async_write_barrier();
 
     // Reset FSDP semaphores so the next op-launch starts clean (matches the in0 pattern).
-    // Device 2.0 migration: legacy primitive retained: GlobalSemaphore-style raw L1 ptr, no Semaphore<> id available
     noc_semaphore_set(fsdp_sem_forward_ptr, 0);
     noc_semaphore_set(fsdp_sem_backward_ptr, 0);
 #endif

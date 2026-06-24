@@ -27,12 +27,9 @@ void kernel_main() {
     CircularBuffer cb(cb_id);
 
     // 1. Wait for signal from All-Gather worker
-    // Device 2.0 migration: legacy primitive retained: out_ready_sem_bank_addr is an absolute L1 address from the
-    // program factory, which is a target of a remote atomic increment over fabric. Semaphore<> binds to ids only.
     noc_semaphore_wait(out_ready_sema, out_ready_sem_wait_value);
 
     // 2. Signal compute kernel to start processing
     cb.push_back(total_num_reduction_tiles);
-    // Device 2.0 migration: legacy primitive retained: same absolute-L1-address sem as above; Semaphore<> binds ids.
     noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem_bank_addr), 0);
 }

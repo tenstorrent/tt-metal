@@ -168,16 +168,12 @@ void compute_actual_k_block(
                 // m_block exactly at sem_target with nothing left in flight, so no compensation
                 // (and no end-of-op drain) is needed.
                 if (device_iter > 0) {
-                    // Device 2.0 migration: legacy primitive retained: out_ready_semaphore_forward is a
-                    // GlobalSemaphore address (raw L1 pointer); Semaphore<> binds to per-program ids.
                     noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + 1);
                     sem_target_forward += 1;
                 }
             } else if (device_iter > 0) {
                 // Ring: both halves arrive simultaneously from both directions
                 // (both neighbors always exist for Ring topology by construction).
-                // Device 2.0 migration: legacy primitive retained: out_ready_semaphore_forward/backward are
-                // GlobalSemaphore addresses (raw L1 pointer); Semaphore<> binds to per-program ids.
                 noc_semaphore_wait_min(out_ready_semaphore_forward, sem_target_forward + core_order_size);
                 sem_target_forward += core_order_size;
                 noc_semaphore_wait_min(out_ready_semaphore_backward, sem_target_backward + core_order_size);
@@ -1048,13 +1044,11 @@ FORCE_INLINE void close_mux(
     tt::tt_fabric::fabric_client_disconnect(*mux_connection_handle);
     if (is_termination_master) {
         auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_address);
-        // Device 2.0 migration: legacy primitive retained: fabric-mux sync address (raw L1 pointer, not a program id).
         noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
         tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
     } else {
         uint64_t dest_addr =
             safe_get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_address, 0);
-        // Device 2.0 migration: legacy primitive retained: fabric-mux sync address (raw L1 pointer, not a program id).
         noc_semaphore_inc(dest_addr, 1);
         noc.async_atomic_barrier();
     }

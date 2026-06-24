@@ -128,9 +128,7 @@ void kernel_main() {
     Semaphore<> in0_sender_sem(in0_sender_semaphore_id);
     Semaphore<> in0_receiver_sem(in0_receiver_semaphore_id);
     Semaphore<> in0_valid_sem(in0_valid_semaphore_id);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     uint32_t in0_valid_semaphore_addr = get_semaphore(in0_valid_semaphore_id);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     uint32_t in0_receiver_semaphore_addr = get_semaphore(in0_receiver_semaphore_id);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
@@ -251,7 +249,6 @@ void kernel_main() {
 
     in0_valid_sem.set(VALID);
 
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
     // all gather
@@ -440,15 +437,12 @@ void kernel_main() {
                      * in0 is M_block_tiles x K_block_tiles. When M block is partial, we don't need to write the
                      * padded tiles. Use `current_block_bytes`.
                      */
-                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address
                     noc_async_write(in0_start_address, in0_unicast_data_addr, current_block_bytes);
 
 #ifdef ARCH_BLACKHOLE
                     noc_obj.async_writes_flushed();
 #endif
 
-                    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address (src/dst sems
-                    // have different L1 offsets in this chain-mcast, so Semaphore<>::set_multicast can't be used)
                     noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                 }
 #ifdef USE_MUX
@@ -698,10 +692,6 @@ void kernel_main() {
 
     noc_obj.async_write_barrier();
 
-    // Device 2.0 migration: legacy primitive retained: GlobalSemaphore address (common runtime arg, not a per-program
-    // id)
     noc_semaphore_set(out_ready_sem_backward_addr_ptr, 0);
-    // Device 2.0 migration: legacy primitive retained: GlobalSemaphore address (common runtime arg, not a per-program
-    // id)
     noc_semaphore_set(out_ready_sem_forward_addr_ptr, 0);
 }

@@ -318,9 +318,6 @@ void kernel_main() {
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
             // while first expert still being processed
-            // Device 2.0 migration: legacy primitive retained: matmul_chunk_ready_semaphore_addr is a runtime-resolved
-            // L1 semaphore address (delivered via cb_w2c_md), not a per-program id, so it cannot be wrapped in
-            // Semaphore<> (which binds via get_semaphore<>(id)).
             detail::noc_semaphore_wait_min(
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(matmul_chunk_ready_semaphore_addr),
                 matmul_chunk_ready_semaphore_wait_value++);
