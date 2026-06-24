@@ -326,8 +326,11 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
     uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
     uint32_t in2_CB_size = single_tile_size * (use_welford ? 3 : 1);
-    // in3 - eps
-    uint32_t in3_CB_size = single_tile_size;
+    // in3 - eps. Always bfloat16: generate_bcast_col_scalar (in the writer/reader) writes a bf16
+    // scalar, so the eps CB must be bf16 regardless of the compute format (fp32 would misread the
+    // bf16 bit pattern as garbage). eps is tiny, so bf16 precision is irrelevant.
+    uint32_t eps_single_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    uint32_t in3_CB_size = eps_single_tile_size;
     // gamma
     uint32_t gamma_beta_num_cols_tile_per_core = per_core_Nt;
     uint32_t in5_CB_size = gamma_beta_num_cols_tile_per_core * gamma_beta_single_tile_size;
@@ -943,8 +946,8 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
         .core_ranges = all_cores,
         .format_descriptors = {{CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(in3_cb_index),
-            .data_format = cb_data_format,
-            .page_size = single_tile_size,
+            .data_format = tt::DataFormat::Float16_b,
+            .page_size = eps_single_tile_size,
         }}},
     });
     // in4 scaler-c

@@ -368,7 +368,7 @@ Tensor group_norm(
     if (input_tensor.is_sharded()) {
         const ttnn::prim::GroupNormShardedMultiCoreProgramConfig program_config = {
             .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
-            .im_data_format = dtype.value_or(input_tensor.dtype()),
+            .im_data_format = DataType::BFLOAT16,
             .out_data_format = dtype.value_or(input_tensor.dtype()),
             .inplace = inplace.value_or(false),
             .output_layout = output_layout.value_or(input_tensor.layout())};
@@ -392,7 +392,7 @@ Tensor group_norm(
     const ttnn::prim::GroupNormMultiCoreProgramConfig program_config = {
         .compute_with_storage_grid_size = core_grid.value().to_CoreCoord(),
         .im_data_format = DataType::BFLOAT16,
-        .out_data_format = DataType::BFLOAT16,
+        .out_data_format = dtype.value_or(input_tensor.dtype()),
         .inplace = inplace.value_or(false),
         .output_layout = output_layout.value_or(input_tensor.layout()),
         .num_out_blocks = core_grid_auto_selected ? -1 : num_out_blocks.value_or(1)};
