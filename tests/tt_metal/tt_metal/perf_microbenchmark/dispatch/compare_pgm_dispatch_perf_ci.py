@@ -42,7 +42,9 @@ def add_benchmark_iterations(input):
             out[name] = benchmark
         elif benchmark["repetitions"] == 2:
             if benchmark["run_type"] == "iteration":
-                if name in out:
+                if "error_occurred" in benchmark:
+                    out.setdefault(name, benchmark)
+                elif name in out and "IterationTime" in out[name]:
                     # Use the minimum time to reduce the impact of flakes. Flakes are unlikely to improve performance,
                     # but may hurt performance due to some other process using CPU. Avoid using the median in the 2
                     # repetition case, because it reverts to the mean and is more sensitive to flakes.
