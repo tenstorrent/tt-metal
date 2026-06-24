@@ -207,29 +207,6 @@ ReduceDeviceOperation::tensor_return_value_t ReduceDeviceOperation::create_outpu
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.device());
 }
 
-ttsl::hash::hash_t ReduceDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return tt::tt_metal::operation::hash_operation<ReduceDeviceOperation>(
-        operation_attributes.math_op,
-        operation_attributes.dim,
-        operation_attributes.scaler,
-        operation_attributes.output_mem_config,
-        operation_attributes.output_dtype,
-        operation_attributes.compute_kernel_config,
-        operation_attributes.sub_core_grids,
-        operation_attributes.negate,
-        operation_attributes.post_mul_scaler,
-        operation_attributes.row_major_w_dense_path,
-        operation_attributes.row_major_h_dense_path,
-        program_factory.index(),
-        tensor_args.dtype(),
-        tensor_args.memory_config(),
-        tensor_args.padded_shape(),
-        tensor_args.tensor_spec().tile());
-}
-
 ttnn::Tensor reduce(
     const Tensor& input_tensor,
     tt::tt_metal::ReduceOpMath reduce_math,

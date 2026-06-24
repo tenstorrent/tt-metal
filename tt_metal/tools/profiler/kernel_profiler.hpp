@@ -210,6 +210,10 @@ inline __attribute__((always_inline)) void set_profiler_zone_valid(bool conditio
     profiler_control_buffer[PROFILER_DONE] = !condition;
 }
 
+inline __attribute__((always_inline)) bool get_profiler_zone_valid() {
+    return profiler_control_buffer[PROFILER_DONE] == 1;
+}
+
 inline __attribute__((always_inline)) void risc_finished_profiling() {
     for (int i = 0; i < SUM_COUNT; i++) {
         if (sums[i] > 0) {
