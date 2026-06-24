@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Reader for indexer_score (DMA bottleneck). Walks this core's flat span of work units
-// (QC q-rows x up-to-KC k-tiles): per group pushes resident w + (if all heads fit) q,
-// per unit pushes the k chunk. Builds the [diag, full] -inf mask tiles once.
+// Reader for indexer_score (DMA bottleneck). Walks this core's (group-phase x k-band) rectangle
+// (each cell = QC q-rows x up-to-KC k-tiles): per group pushes resident w + (if all heads fit) q,
+// per band pushes the k chunk. Builds the [diag, full] -inf mask tiles once.
 //
-// Grid-aligned multicast: grid ROW shares q/w, grid COLUMN shares the k-band. role 1
-// (sender) reads DRAM + mcasts; role 2 (receiver) takes the L1->L1 copy; role 0 plain
-// DRAM read. Q/W (row) and K (column) mcast are independent; either may be off (role 0).
+// Banded-product multicast: a grid ROW shares q/w (q-mcast), a grid COLUMN shares the k-band
+// (k-mcast). role sender reads DRAM + mcasts; role receiver takes the L1->L1 copy; role none is a
+// plain DRAM read. Q/W (row) and K (column) mcast are independent; either may be off (role none).
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -131,10 +131,10 @@ inline void build_mask_tiles(Noc noc) {
  *  page layout is [Hi][q_len_tiles][head_dim_tiles]. */
 template <typename QAcc>
 inline uint32_t read_q_row_into(Noc noc, const QAcc& q_acc, uint32_t ptr, uint32_t q_row_abs, uint32_t first_head) {
-    for (uint32_t h = first_head; h < first_head + heads_per_group; ++h) {
-        const uint32_t base = h * q_len_tiles * head_dim_tiles + q_row_abs * head_dim_tiles;
-        for (uint32_t d = 0; d < head_dim_tiles; ++d) {
-            noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), q_tile_bytes, {.page_id = base + d}, {});
+    for (uint32_t head = first_head; head < first_head + heads_per_group; ++head) {
+        const uint32_t base = head * q_len_tiles * head_dim_tiles + q_row_abs * head_dim_tiles;
+        for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
+            noc.async_read(q_acc, CoreLocalMem<uint32_t>(ptr), q_tile_bytes, {.page_id = base + dim_tile}, {});
             ptr += q_tile_bytes;
         }
     }
@@ -149,8 +149,8 @@ inline void read_q_block(Noc noc, const QAcc& q_acc, uint32_t q_row_start, uint3
     read_block_or_mcast<cb_q, q_mcast_on, q_send_sem, q_recv_sem, q_valid_sem>(
         noc, q_group_tiles, q_group_tiles * q_tile_bytes, q_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
-            for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                ptr = read_q_row_into(noc, q_acc, ptr, q_row_start + r, first_head);
+            for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
+                ptr = read_q_row_into(noc, q_acc, ptr, q_row_start + q_row, first_head);
             }
         });
 }
@@ -164,8 +164,8 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
     CircularBuffer cb(cb_q);
     cb.reserve_back(q_group_tiles);
     const uint32_t base = cb.get_write_ptr();
-    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-        const uint32_t row_addr = base + r * row_tiles * q_tile_bytes;
+    for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
+        const uint32_t row_addr = base + q_row * row_tiles * q_tile_bytes;
         if constexpr (q_mcast_on) {
             if (q_dir.role == iscore::mcast_role_receiver) {  // one mcast handshake per row -> row_addr
                 mcast_recv<q_send_sem, q_recv_sem>(noc, q_dir);
@@ -173,7 +173,7 @@ inline void read_q_rows(Noc noc, const QAcc& q_acc, uint32_t q_row_start, const 
                 continue;
             }
         }
-        read_q_row_into(noc, q_acc, row_addr, q_row_start + r, /*first_head=*/0);
+        read_q_row_into(noc, q_acc, row_addr, q_row_start + q_row, /*first_head=*/0);
         noc.async_read_barrier();
         if constexpr (q_mcast_on) {
             if (q_dir.role == iscore::mcast_role_sender) {  // broadcast this row to the rest of the grid row
@@ -190,13 +190,13 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
     read_block_or_mcast<cb_w, q_mcast_on, q_send_sem, q_recv_sem, q_valid_sem>(
         noc, w_group_tiles, w_group_tiles * bf16_tile_bytes, q_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
-            for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-                for (uint32_t h = 0; h < num_heads; ++h) {
+            for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
+                for (uint32_t head = 0; head < num_heads; ++head) {
                     noc.async_read(
                         w_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         bf16_tile_bytes,
-                        {.page_id = h * q_len_tiles + q_row_start + r},
+                        {.page_id = head * q_len_tiles + q_row_start + q_row},
                         {});
                     ptr += bf16_tile_bytes;
                 }
@@ -214,13 +214,13 @@ inline void read_k_chunk(
     read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
-            for (uint32_t c = 0; c < k_tiles_in_unit; ++c) {
-                for (uint32_t d = 0; d < head_dim_tiles; ++d) {
+            for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
+                for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
                     noc.async_read(
                         k_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         k_tile_bytes,
-                        {.page_id = (k_tile_start + c) * head_dim_tiles + d},
+                        {.page_id = (k_tile_start + k_col) * head_dim_tiles + dim_tile},
                         {});
                     ptr += k_tile_bytes;
                 }
@@ -232,10 +232,16 @@ void kernel_main() {
     const uint32_t q_addr = get_arg_val<uint32_t>(0);
     const uint32_t k_addr = get_arg_val<uint32_t>(1);
     const uint32_t w_addr = get_arg_val<uint32_t>(2);
-    const uint32_t flat_start = get_arg_val<uint32_t>(3);
-    const uint32_t flat_count = get_arg_val<uint32_t>(4);
-    const McastDir k_dir = read_mcast_dir(5);   // K column mcast: args [5, 13)
-    const McastDir q_dir = read_mcast_dir(13);  // Q/W row mcast: args [13, 21)
+    // Generalized banded schedule: this core owns a (group-phase x band) rectangle. groups -> grid rows
+    // (q/w shared along a row = q_dir mcast), k-bands -> grid columns (k shared down a column = k_dir mcast).
+    const uint32_t row_group0 = get_arg_val<uint32_t>(3);
+    const uint32_t group_stride = get_arg_val<uint32_t>(4);
+    const uint32_t num_groups = get_arg_val<uint32_t>(5);
+    const uint32_t band0 = get_arg_val<uint32_t>(6);
+    const uint32_t num_bands = get_arg_val<uint32_t>(7);
+    const uint32_t max_bands = get_arg_val<uint32_t>(8);  // row's widest column; streaming pads q to this
+    const McastDir k_dir = read_mcast_dir(9);             // K column mcast: args [9, 17)
+    const McastDir q_dir = read_mcast_dir(17);            // Q/W row mcast: args [17, 25)
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -246,37 +252,47 @@ void kernel_main() {
     build_mask_tiles(noc);
 
     WorkUnitSpan span;
-    span.start(flat_start);
 
-    // Resident-heads path order: k -> q -> w. w (gates) is consumed only in the mul phase, so read it
-    // LAST behind the latency-critical q/k. Streaming path reads w FIRST: compute's mul drains streamed
-    // q, so w must be present or compute blocks on w while the reader blocks on the full q CB => deadlock.
-    bool need_group = true;
-    for (uint32_t i = 0; i < flat_count; ++i) {
-        const bool group_start = need_group;
-        if (group_start && stream_heads) {
-            read_w_group(noc, w_acc, span.q_tile_start(), q_dir);  // gates before the streamed q
-        }
-        // k FIRST: compute waits the whole k chunk before any row, so reading k ahead of q lets the
-        // split q-row0 push unblock the first matmul (else the k wait re-serializes it).
-        read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir);
-        if (group_start && !stream_heads) {
-            read_q_rows(noc, q_acc, span.q_tile_start(), q_dir);  // per-row: compute starts on row 0
-        }
+    // group-OUTER, band-INNER. Resident-heads order within a group: k -> q -> w (w/gates consumed only in
+    // the mul phase, so read LAST behind latency-critical q/k). Streaming path reads w FIRST: compute's mul
+    // drains streamed q, so w must be present or both kernels block => deadlock. q/w are read once per
+    // group (j==0); k-mcast fires every band down the column, q/w-mcast once per group along the row.
+    //
+    // Streaming pads the band loop to max_bands so every core in a row issues the SAME number of q reads
+    // (hence q-mcast rendezvous): columns own uneven band counts, but a phantom band [num_bands, max_bands)
+    // re-issues only the band-independent q reads -- no k (k-mcast is per column, already balanced) and no
+    // output -- keeping the row's q-mcast in lockstep. Resident reads q once per group, so it never pads.
+    const uint32_t band_iters = stream_heads ? max_bands : num_bands;
+    for (uint32_t phase = 0; phase < num_groups; ++phase) {
+        const uint32_t group = row_group0 + phase * group_stride;
+        const uint32_t q_row_start = group * q_tiles_per_unit;
         if constexpr (stream_heads) {
-            // one q-block per (r, c) output tile per head group; must match compute's tile order, which
-            // walks the FULL k_tiles_per_unit columns (compute masks the padded tail of a partial last
-            // unit). Using span.k_tiles() here would under-produce q blocks on a partial unit and hang
-            // compute, which still waits/pops a q block for every padded column.
-            for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
-                for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
-                    read_q_block(noc, q_acc, span.q_tile_start(), first_head, q_dir);
+            read_w_group(noc, w_acc, q_row_start, q_dir);  // gates before the streamed q (once per group)
+        }
+        for (uint32_t band = 0; band < band_iters; ++band) {
+            const bool real_band = band < num_bands;  // phantom bands (streaming pad) carry q-mcast only
+            if (real_band) {
+                span.set(group, band0 + band);
+                // k FIRST: compute waits the whole k chunk before any row, so reading k ahead of q lets the
+                // split q-row0 push unblock the first matmul (else the k wait re-serializes it).
+                read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir);
+                if (band == 0 && !stream_heads) {
+                    read_q_rows(noc, q_acc, q_row_start, q_dir);   // per-row: compute starts on row 0
+                    read_w_group(noc, w_acc, q_row_start, q_dir);  // gates deferred behind q/k
+                }
+            }
+            if constexpr (stream_heads) {
+                // one q-block per (q_row, k_col) output tile per head group; must match compute's order, which
+                // walks the FULL k_tiles_per_unit columns (compute masks the padded tail of a partial last
+                // band). Using span.k_tiles() here would under-produce q blocks on a partial band and hang
+                // compute, which still waits/pops a q block for every padded column. q is band-independent,
+                // so the phantom band re-issues this identical sequence purely to keep the row in lockstep.
+                for (uint32_t tile_idx = 0; tile_idx < q_tiles_per_unit * k_tiles_per_unit; ++tile_idx) {
+                    for (uint32_t first_head = 0; first_head < num_heads; first_head += heads_per_group) {
+                        read_q_block(noc, q_acc, q_row_start, first_head, q_dir);
+                    }
                 }
             }
         }
-        if (group_start && !stream_heads) {
-            read_w_group(noc, w_acc, span.q_tile_start(), q_dir);  // gates deferred behind q/k
-        }
-        need_group = span.advance();
     }
 }

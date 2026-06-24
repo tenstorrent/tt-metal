@@ -508,3 +508,72 @@ def test_indexer_score_perf_check(case_id, heads, expected_util):
         f"Math utilization {utilization:.2f}% outside band [{lower:.2f}, {upper:.2f}] "
         f"(expected {expected_util:.2f}%, margin +/- {INDEXER_PERF_MARGIN * 100:.1f}%)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Generalized-multicast regime coverage (accuracy): exercises the banded-product scheduler paths the
+# small knobs/shapes tests miss -- chiefly G > grid.y (groups phase-stacked onto rows, the case that
+# would deadlock the k-mcast column if rows took uneven group counts), G prime > grid.y (rows_used==1,
+# k-mcast off but still correct), uneven k-band split across columns (U not a multiple of grid.x),
+# partial last band, and phase-stacking under head streaming. Same exact -inf + PCC + negative-gate
+# check as the deployments. q_chunk/k_chunk are in ELEMENTS (tiles*32); head_group 0 = all resident.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group",
+    [
+        # G>gy, uniform groups/row (G=12 -> rows_used=6, 2 groups/row), U==grid.x (k-mcast on)
+        (8, 128, 384, 704, 128, 32, 64, 0),
+        # G>gy with U NOT a multiple of grid.x=11 (G=20 -> rows_used=10, 2 groups/row; U=50, uneven cols)
+        (8, 128, 640, 1600, 256, 32, 32, 0),
+        # G prime > gy (Sqt=11, QC=1 -> G=11 -> rows_used=1, k-mcast off): correctness without mcast
+        (8, 128, 352, 512, 128, 32, 32, 0),
+        # G>gy + KC does not divide Tt (partial last band) + U<grid.x (G=12, U=7)
+        (8, 128, 384, 608, 64, 32, 96, 0),
+        # G>gy + head streaming (HB=8<16): q-mcast + k-mcast on, phase-stacked groups
+        (16, 128, 384, 704, 128, 32, 64, 8),
+        # G>gy big (G=40 -> rows_used=10, 4 groups/row) + uneven U
+        (8, 128, 1280, 1600, 256, 32, 32, 0),
+    ],
+    ids=[
+        "Ggy_uniform",
+        "Ggy_uneven_U",
+        "Ggy_prime",
+        "Ggy_partial_kc",
+        "Ggy_stream",
+        "Ggy_big",
+    ],
+)
+def test_indexer_score_genmcast_regimes(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group):
+    """Banded-product scheduler regimes beyond the original knobs/shapes coverage: G>grid.y phase
+    stacking, prime G, uneven k-band columns, partial bands, and streaming -- all checked for exact
+    causality + PCC like the deployments."""
+    _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)
+
+
+def test_indexer_score_streaming_qmcast_uneven_bands(device):
+    """Streaming (HB<Hi) q-mcast with an UNEVEN k-band split across a grid row -- the situation a naive
+    per-output-tile q-mcast would deadlock on: cores in the same row own different band counts, so they
+    would issue different numbers of q reads / mcast rendezvous and the row's sender would wait forever
+    on receivers that already finished.
+
+    The dummy-pad scheduler fixes this by padding every core's streaming band loop to max_bands (the
+    row's widest column) with phantom q-only bands, so the q-mcast handshake count is uniform per row.
+    This test pins that the op stays correct (no hang, exact -inf + PCC) on that shape. U=23 is prime,
+    so min(U, grid.x) never divides it -> the band split is uneven (max_bands > min band count) on any
+    Blackhole grid width.
+    """
+    heads, dim, sq, t = 16, 128, 128, 736  # Hi=16, Sqt=4, Tt=23
+    chunk_start, q_chunk, k_chunk, head_group = 128, 32, 32, 8  # QC=1, KC=1, HB=8 (< Hi -> streaming)
+
+    grid = device.compute_with_storage_grid_size()
+    QC, KC = q_chunk // 32, k_chunk // 32
+    G, U = (sq // 32) // QC, ((t // 32) + KC - 1) // KC
+    cols_used = min(U, grid.x)
+    max_bands = (U + cols_used - 1) // cols_used
+    min_bands = U // cols_used
+    # Precondition: this really is the deadlock-prone shape (streaming, >1 column, uneven bands).
+    assert head_group < heads, "must be streaming (HB < Hi)"
+    assert cols_used > 1, f"need >1 column for q-mcast: cols_used={cols_used}"
+    assert max_bands > min_bands, f"need an uneven band split: U={U}, cols_used={cols_used}"
+
+    _run_and_check(device, heads, dim, sq, t, chunk_start, q_chunk, k_chunk, head_group)

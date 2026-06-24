@@ -4,11 +4,17 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-// #include "api/debug/dprint.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
+#include "api/tensor/tensor_accessor.h"
+#include "experimental/kernel_args.h"
 
 template <typename DSpec>
 inline void write_tiles_in_block(
-    uint32_t cb_id_out0,
+    Noc& noc,
+    DataflowBuffer& cb_out0,
     uint32_t block_height_ntiles,
     uint32_t block_width_ntiles,
     uint32_t block_start_row_id,
@@ -21,39 +27,41 @@ inline void write_tiles_in_block(
     uint32_t block_row_id = block_start_row_id;
     for (uint32_t tile_row_id = 0; tile_row_id < block_height_ntiles; tile_row_id++) {
         // We reserve back an entire row of tiles in a block and issue a bunch of reads
-        cb_wait_front(cb_id_out0, block_width_ntiles);
-        uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
+        cb_out0.wait_front(block_width_ntiles);
+        uint32_t l1_read_addr = cb_out0.get_read_ptr();
         for (uint32_t j = 0; j < TILE_HEIGHT; j++) {
             if (block_row_id >= num_rows_unpadded) {
                 break;
             }
-            uint64_t dst_noc_addr = s.get_noc_addr(block_row_id, block_row_offset);
-            noc_async_write(l1_read_addr, dst_noc_addr, block_row_size_unpadded);
+            CoreLocalMem<uint32_t> src(l1_read_addr);
+            noc.async_write(
+                src,
+                s,
+                block_row_size_unpadded,
+                {.offset_bytes = 0},
+                {.page_id = block_row_id, .offset_bytes = block_row_offset});
             l1_read_addr += block_row_size;
             block_row_id++;
         }  // for tile_nrows
-        noc_async_write_barrier();
-        cb_pop_front(cb_id_out0, block_width_ntiles);
+        noc.async_write_barrier();
+        cb_out0.pop_front(block_width_ntiles);
     }  // for block_height_ntiles
 }
-void kernel_main() {
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);  // out_dram_addr
-    uint32_t num_rows_block = get_arg_val<uint32_t>(1);
-    uint32_t block_row_size = get_arg_val<uint32_t>(2);  // in0_block_w * TILE_WIDTH * dtype_nbytes
-    uint32_t batch = get_arg_val<uint32_t>(3);
-    uint32_t num_blocks_h = get_arg_val<uint32_t>(4);
-    uint32_t num_blocks_w = get_arg_val<uint32_t>(5);
-    uint32_t last_block_row_size_unpadded = get_arg_val<uint32_t>(6);  // unpadded last block width
-    uint32_t num_output_rows_unpadded = get_arg_val<uint32_t>(7);
-    uint32_t block_start_row_id = get_arg_val<uint32_t>(8);
-    uint32_t block_start_row_offset = get_arg_val<uint32_t>(9);
 
-    constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(0) == 1;
-    constexpr auto dst_args = TensorAccessorArgs<2>();
+void kernel_main() {
+    uint32_t num_rows_block = get_arg(args::num_rows_block);
+    uint32_t block_row_size = get_arg(args::block_row_size);  // in0_block_w * TILE_WIDTH * dtype_nbytes
+    uint32_t batch = get_arg(args::batch);
+    uint32_t num_blocks_h = get_arg(args::num_blocks_h);
+    uint32_t num_blocks_w = get_arg(args::num_blocks_w);
+    uint32_t last_block_row_size_unpadded = get_arg(args::last_block_row_size_unpadded);  // unpadded last block width
+    uint32_t num_output_rows_unpadded = get_arg(args::num_output_rows_unpadded);
+    uint32_t block_start_row_id = get_arg(args::block_start_row_id);
+    uint32_t block_start_row_offset = get_arg(args::block_start_row_offset);
+
+    constexpr bool FLOAT32_DTYPE = get_arg(args::float32_dtype) == 1;
 
     // NOTE: Row major layout only supports bfp16
-    constexpr uint32_t cb_id_out0 = tt::CBIndex::c_16;
-
     constexpr uint32_t TILE_HEIGHT = 32;  // TODO: use common source of truth
 
     const uint32_t block_width_ntiles =
@@ -61,7 +69,11 @@ void kernel_main() {
                       : block_row_size >> 6;  // Assuming 4/2 bytes per datum, there are 128/64 bytes per tile row
     const uint32_t block_height_ntiles = num_rows_block / TILE_HEIGHT;
 
-    const auto s = TensorAccessor(dst_args, dst_addr);
+    const auto s = TensorAccessor(tensor::output);
+
+    Noc noc;
+    DataflowBuffer cb_out0(dfb::out);
+
     uint32_t num_rows_unpadded = num_output_rows_unpadded + block_start_row_id;
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t block_h = 0; block_h < num_blocks_h; block_h++) {
@@ -72,7 +84,8 @@ void kernel_main() {
                     current_block_row_size_unpadded = last_block_row_size_unpadded;
                 }
                 write_tiles_in_block(
-                    cb_id_out0,
+                    noc,
+                    cb_out0,
                     block_height_ntiles,
                     block_width_ntiles,
                     block_start_row_id,

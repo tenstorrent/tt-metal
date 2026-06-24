@@ -9,33 +9,29 @@
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/tensor/noc_traits.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
     // same arg indices as in reader_binary_diff_lengths for compat
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t MtKt = get_arg_val<uint32_t>(5);  // if 0
-    uint32_t KtNt = get_arg_val<uint32_t>(6);
-    uint32_t batch = get_arg_val<uint32_t>(7);
-    uint32_t bcast_B = get_arg_val<uint32_t>(8);  // if 1 we broadcast B to batch
-    uint32_t output_tile_start_id = get_arg_val<uint32_t>(9);
-    uint32_t num_output_tiles = get_arg_val<uint32_t>(10);
-    uint32_t MtNt = get_arg_val<uint32_t>(11);
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t MtKt = get_arg(args::MtKt);  // if 0
+    uint32_t KtNt = get_arg(args::KtNt);
+    uint32_t batch = get_arg(args::batch);
+    uint32_t bcast_B = get_arg(args::bcast_B);  // if 1 we broadcast B to batch
+    uint32_t output_tile_start_id = get_arg(args::output_tile_start_id);
+    uint32_t num_output_tiles = get_arg(args::num_output_tiles);
+    uint32_t MtNt = get_arg(args::MtNt);
 
-    constexpr uint32_t in0_last_ktile_w = get_compile_time_arg_val(0);
-    constexpr uint32_t in0_last_ktile_h = get_compile_time_arg_val(1);
-    constexpr auto src0_args = TensorAccessorArgs<2>();
-    constexpr auto src1_args = TensorAccessorArgs<src0_args.next_compile_time_args_offset()>();
+    constexpr uint32_t in0_last_ktile_w = get_arg(args::in0_last_ktile_w);
+    constexpr uint32_t in0_last_ktile_h = get_arg(args::in0_last_ktile_h);
 
     // DPRINT("Mt={} Kt={} Nt={} MtKt={} KtNt={}\n", Mt, Kt, Nt, MtKt, KtNt);
-    // DPRINT("src0={} src1={}\n", src0_addr, src1_addr);
     // DPRINT("batch={}\n", batch);
 
-    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in0");
-    constexpr uint32_t cb_id_in1 = get_named_compile_time_arg_val("cb_in1");
+    constexpr uint32_t cb_id_in0 = dfb::in0;
+    constexpr uint32_t cb_id_in1 = dfb::in1;
 
     constexpr uint32_t onetile = 1;
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
@@ -51,12 +47,12 @@ void kernel_main() {
         itileB += output_tile_start_id / MtNt * KtNt;  // offset into correct batch if not bcasting
     }
 
-    const auto s0 = TensorAccessor(src0_args, src0_addr);
-    const auto s1 = TensorAccessor(src1_args, src1_addr);
+    const auto s0 = TensorAccessor(tensor::in0);
+    const auto s1 = TensorAccessor(tensor::in1);
 
     Noc noc;
-    CircularBuffer cb_in0(cb_id_in0);
-    CircularBuffer cb_in1(cb_id_in1);
+    DataflowBuffer cb_in0(dfb::in0);
+    DataflowBuffer cb_in1(dfb::in1);
 
     for (uint32_t n = 0; n < num_output_tiles; n++) {
         for (uint32_t kt = 0; kt < Kt; kt++) {

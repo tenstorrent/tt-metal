@@ -45,8 +45,12 @@ inline void write_strip(Noc noc, const OutAcc& out_acc, uint32_t q_row, uint32_t
 
 void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
-    const uint32_t flat_start = get_arg_val<uint32_t>(1);
-    const uint32_t flat_count = get_arg_val<uint32_t>(2);
+    // Generalized banded schedule (matches reader/compute): group-phase x band rectangle.
+    const uint32_t row_group0 = get_arg_val<uint32_t>(1);
+    const uint32_t group_stride = get_arg_val<uint32_t>(2);
+    const uint32_t num_groups = get_arg_val<uint32_t>(3);
+    const uint32_t band0 = get_arg_val<uint32_t>(4);
+    const uint32_t num_bands = get_arg_val<uint32_t>(5);
 
     constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 1>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
@@ -54,15 +58,17 @@ void kernel_main() {
     Noc noc;
 
     WorkUnitSpan span;
-    span.start(flat_start);
 
-    for (uint32_t i = 0; i < flat_count; ++i) {
-        const uint32_t k_tile0 = span.k_tile_start();
-        const uint32_t valid_w = span.k_tiles();  // == KC for interior units, < KC for a partial last unit
-        // One KC-wide strip per row; masked suffix already stamped by compute. Write only valid_w columns.
-        for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
-            write_strip(noc, out_acc, span.q_tile_start() + r, k_tile0, valid_w);
+    for (uint32_t phase = 0; phase < num_groups; ++phase) {
+        const uint32_t group = row_group0 + phase * group_stride;
+        for (uint32_t band = 0; band < num_bands; ++band) {
+            span.set(group, band0 + band);
+            const uint32_t k_tile0 = span.k_tile_start();
+            const uint32_t valid_w = span.k_tiles();  // == KC for interior bands, < KC for a partial last band
+            // One KC-wide strip per row; masked suffix already stamped by compute. Write only valid_w columns.
+            for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
+                write_strip(noc, out_acc, span.q_tile_start() + q_row, k_tile0, valid_w);
+            }
         }
-        span.advance();
     }
 }
