@@ -704,7 +704,17 @@ struct profileScopeGuaranteed {
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeMainAccumulate {
     bool start_marked = false;
+    // The profiler's own device-host clock sync runs a kernel that writes raw
+    // samples directly into the optional region starting at CUSTOM_MARKERS and
+    // owns that whole region. Accumulate's main/child zones also live at wIndex
+    // (>= CUSTOM_MARKERS), so they would corrupt the sync samples. The host sets
+    // FW_RESET_H for the sync run; when it is set we skip profiling entirely and
+    // leave the buffer to the sync kernel.
+    bool sync_run = profiler_control_buffer[FW_RESET_H] != 0;
     inline __attribute__((always_inline)) profileScopeMainAccumulate() {
+        if (sync_run) {
+            return;
+        }
         if constexpr (index == 0) {
             // wIndex is a per-RISC global, zero-initialized in BSS and left at
             // CUSTOM_MARKERS by init_profiler(), so it is only ever 0 before this
@@ -730,6 +740,9 @@ struct profileScopeMainAccumulate {
         }
     }
     inline __attribute__((always_inline)) ~profileScopeMainAccumulate() {
+        if (sync_run) {
+            return;
+        }
         if (start_marked) {
             mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
             wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
