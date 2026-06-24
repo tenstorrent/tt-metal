@@ -1,16 +1,16 @@
-# Single BH galaxy, carved to a single 4x4 sub-TORUS with a Ring-4 on BOTH axes.
+# Single Blackhole galaxy carved to a 4x4 sub-torus: Ring-4 on both axes.
 #
-# Variant of single_bh_galaxy_subtorus_y4, but dim_types [RING, RING]: dim 0 (rows / Y) AND
-# dim 1 (cols / X) are each closed Ring-4s -> a full 4x4 2D torus over 16 of the galaxy's 32
-# chips. dim-0 wrap closes on the physical green vertical 1x4-ring cables; dim-1 wrap closes on
-# the galaxy's horizontal X-ring (the 4x8 torus is a ring on the 4-wide X axis too).
+# device_topology [4,4] [RING,RING]: dim 0 (rows / Y) and dim 1 (cols / X) are each a closed ring of
+# 4, forming a full 4x4 2D torus over 16 of the galaxy's 32 chips. The dim-0 wrap closes on the
+# physical vertical ring cables; the dim-1 wrap closes on the horizontal ring cables. The chip_id ->
+# physical mapping is chosen by the placement solver (any valid 16-chip embedding).
 #
-# Select via TT_MESH_GRAPH_DESC_PATH (override) paired with FabricConfig.FABRIC_2D_TORUS_XY.
-# Open a (4,4) mesh_device and run Topology.Ring on BOTH cluster_axis=0 (SP) AND cluster_axis=1
-# (TP) — both axes are physically wrapped here, so unlike the y4 [RING, LINE] descriptor the TP
-# axis must also be Ring (a Linear TP collective would wait on a wrap link / mismatch the fabric).
-# Single host / single rank.
-# RELAXED so the 16-chip slice maps onto the partial 32-chip UBB board.
+# Usage: select with TT_MESH_GRAPH_DESC_PATH, pair with FabricConfig.FABRIC_2D_TORUS_XY, open a (4,4)
+# mesh_device, and run Topology.Ring on both cluster_axis=0 and cluster_axis=1. Both axes are
+# physically wrapped, so a Linear collective on either axis would wait on a wrap link the fabric does
+# not service. Restrict TT_VISIBLE_DEVICES to the 16 chips whose wiring forms the rings (ASICs
+# 3, 4, 7, 8 of trays 1-4). Single host / single rank. RELAXED tolerates the 16-chip slice mapping
+# onto a partial 32-chip UBB board.
 
 mesh_descriptors {
   name: "M0"
