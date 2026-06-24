@@ -31,8 +31,9 @@ mypy==1.9.0
 # For Mistral-7B-v0.3 demo tests
 protobuf==4.25.8
 
-# For TT-Transformers Qwen3 support and Kimi K2.6 tokenizer (moonshotai/Kimi-K2.6)
-transformers == 4.57.1
+# For TT-Transformers Qwen3 support, Kimi K2.6 tokenizer (moonshotai/Kimi-K2.6),
+# and GLM-5.1 (zai-org/GLM-5.1)
+transformers == 5.12.1
 huggingface-hub >= 0.30.0
 
 # testing
