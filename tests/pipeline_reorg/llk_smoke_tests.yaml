@@ -8,7 +8,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 --timeout=60 \
       --junitxml=pytest-report-wormhole-1.xml .
@@ -24,7 +24,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 --timeout=60 \
       --junitxml=pytest-report-wormhole-2.xml .
@@ -40,7 +40,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 --timeout=60 \
       --junitxml=pytest-report-wormhole-3.xml .
@@ -56,7 +56,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 --timeout=60 \
       --junitxml=pytest-report-wormhole-4.xml .
@@ -72,7 +72,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 --timeout=60 \
       --junitxml=pytest-report-blackhole-1.xml .
@@ -88,7 +88,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 --timeout=60 \
       --junitxml=pytest-report-blackhole-2.xml .
@@ -104,7 +104,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 --timeout=60 \
       --junitxml=pytest-report-blackhole-3.xml .
@@ -120,7 +120,7 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    pytest -q --override-ini=log_cli=false -n auto \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 --timeout=60 \
       --junitxml=pytest-report-blackhole-4.xml .
