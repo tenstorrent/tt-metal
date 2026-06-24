@@ -979,7 +979,9 @@ class Pi0_5GLX1x8Pipeline:
                 ttnn.copy_host_to_device_tensor(hn_noise, self.x_t_fp32, cq_id=1)
                 write_event = ttnn.record_event(mesh, 1)
 
-            ttnn.synchronize_device(mesh)
+            # to_torch is itself blocking on _captured_actions, which serializes
+            # implicitly after the trace. The explicit synchronize_device was
+            # redundant and added host overhead.
             last_actions = ttnn.to_torch(
                 self._captured_actions,
                 mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=0),

@@ -175,21 +175,31 @@ def _make_pipeline(mesh):
 
 
 def test_perf_1x8_eager():
-    """Eager sample_actions call on the 1×8 pipeline.
+    """Eager sample_actions on the 1×8 pipeline.
 
-    Asserts the output shape is (1, action_horizon, action_dim). PCC vs torch
-    reference is OFF by default — set PI05_E2E_PCC=1 to enable (matches the
-    existing socket-traced run script's behavior). PCC requires CPU torch
-    inference which is slow; the shape check alone is enough to catch any
-    structural error in the pipeline glue.
+    Honors PI05_E2E_NUM_WARMUP (default 0) and PI05_E2E_NUM_ITERS (default 1)
+    to mirror the single-chip eager test's interface — useful for tracy
+    profiling where the canonical inference is the LAST one captured.
     """
     from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+
+    n_warmup = int(os.environ.get("PI05_E2E_NUM_WARMUP", "0"))
+    n_iters = int(os.environ.get("PI05_E2E_NUM_ITERS", "1"))
 
     with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=128 * 1024 * 1024) as mesh:
         pipe, cfg = _make_pipeline(mesh)
         images, lang_tokens = _build_test_inputs(cfg.siglip_config)
 
-        actions = pipe.sample_actions(images, lang_tokens=lang_tokens)
+        if n_warmup > 0:
+            print(f"\n🔥 Warmup ({n_warmup} call{'s' if n_warmup > 1 else ''}) — full sample_actions (JIT compile)")
+            for _ in range(n_warmup):
+                _ = pipe.sample_actions(images, lang_tokens=lang_tokens)
+
+        print(f"\n⏱️  Measuring steady-state ({n_iters} sample_actions call{'s' if n_iters > 1 else ''})")
+        actions = None
+        for i in range(n_iters):
+            actions = pipe.sample_actions(images, lang_tokens=lang_tokens)
+            print(f"   call {i + 1:2d}: done")
 
         ah = cfg.action_horizon
         ad = cfg.action_dim
