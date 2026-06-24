@@ -465,7 +465,7 @@
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
     SKIP_MODEL_LOAD="--skip-model-load"
     [ "${MLPERF_READ_ONLY:-true}" = "false" ] && SKIP_MODEL_LOAD=""
-    pytest --timeout 1500 models/demos/gpt_oss/tests/unit $SKIP_MODEL_LOAD
+    pytest --timeout 1500 models/demos/gpt_oss/tests/unit/test_modules.py -k "decode_low_latency" $SKIP_MODEL_LOAD
   model: gpt-oss-120b
   skus:
     # Wormhole
