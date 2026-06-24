@@ -55,17 +55,16 @@ inline void load_and_clear_high_bits(
 // Helper Functions
 // ============================================================================
 
-// Int32 SUM/AVG keep their data in dest as sign-magnitude (matching the MAX/MIN path and the packer),
-// but SFPIADD is a two's-complement adder. Wormhole bridges this with the INT32_2S_COMP load/store mode,
-// which converts sign-magnitude<->two's-complement in hardware; on Blackhole that conversion is a no-op
-// (tenstorrent/tt-llk-bh#16), so we must do it explicitly: convert each operand to two's-complement right
-// after load, and convert results back to sign-magnitude right before store.
+// SFPIADD adds in two's-complement while SFPSWAP compares in sign-magnitude, so the Int32 reduce paths
+// have to move operands between the two encodings. Wormhole does this in the INT32_2S_COMP load/store
+// mode; on Blackhole that mode is deprecated and does not convert (BlackholeA0 SFPLOAD.md), so the reduce
+// code converts explicitly with this helper.
 //
-// We use the same SFPCAST+SFPSETSGN primitive as the proven element-wise int kernels (see _add_int_): it is
-// direction-neutral (the same cast mode converts both ways) and, crucially, uses no condition codes, so it is
-// robust regardless of SFPABS/cc interaction. It requires one free GPR (LREG0-7) as scratch; LREG8-15 are
-// constant/config registers that SFPCAST cannot write.
-// "Representation swap": converts an integer between its sign-magnitude and two's-complement representations.
+// It uses the same SFPCAST+SFPSETSGN primitive as the element-wise int kernels (see _add_int_): the cast
+// is direction-neutral (one mode converts both ways) and uses no condition codes, so it is robust against
+// SFPABS/cc interaction. It needs one free GPR (LREG0-7) as scratch; LREG8-15 are constant/config
+// registers that SFPCAST cannot write.
+// "Representation swap": converts an integer between sign-magnitude and two's-complement.
 constexpr InstrModCast REDUCE_INT_REPRESENTATION_SWAP_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
 
 // Convert one int operand between sign-magnitude and two's-complement, in place. `scratch_gpr` must be a free
@@ -1226,29 +1225,25 @@ inline void calculate_reduce_max_min_uint16() {
 }
 
 /**
- * @brief Column-wise maximum/minimum reduction kernel for Int32 (issue #47647, Blackhole).
+ * @brief Column-wise Int32 MAX/MIN reduction for Blackhole.
  *
- * Int32 MAX/MIN column reduce receives its operands in two's-complement (both the real data and the
- * dim=0/dim=1 pad sentinels 0x80000001 / 0x7FFFFFFF that ttnn/tt-llk inject), but SFPSWAP(VEC_MIN_MAX)
- * is a sign-magnitude comparator (tt-isa SFPSWAP.md): two's-complement negatives and the sentinels are
- * mis-ordered by it, which is the #47647 regression. On Wormhole the INT32_2S_COMP load/store mode (12)
- * converts two's-complement<->sign-magnitude in hardware, so the float/UInt32 LOADMACRO path
- * (calculate_reduce_max_min) just works; on Blackhole that mode is a deprecated no-op (tt-isa
- * SFPLOAD.md / tt-llk-bh#16), so the conversion must be done explicitly with SFPCAST+SFPSETSGN.
+ * Int32 operands reach DEST as two's-complement (real data plus the dim=0/dim=1 pad sentinels
+ * 0x80000001 / 0x7FFFFFFF), but SFPSWAP(VEC_MIN_MAX) compares in sign-magnitude, so it mis-orders
+ * two's-complement negatives and the sentinels. On Wormhole the INT32_2S_COMP load/store mode converts
+ * between the two encodings in hardware and the float/UInt32 LOADMACRO path handles it for free; on
+ * Blackhole that mode is deprecated and does not convert, so we cast explicitly with SFPCAST+SFPSETSGN.
  *
- * Because CAST and SWAP are both SIMPLE instructions they cannot be fused inside a LOADMACRO, so we use
- * the same manual load/swap structure as calculate_reduce_max_min_uint16() (which exists for the
- * analogous "mask cannot live inside a LOADMACRO" reason), substituting the UInt16 high-bit masks with
- * representation casts: convert each operand two's-complement -> sign-magnitude after load, run the
- * sign-magnitude compare-and-swap reduce, then convert the winners sign-magnitude -> two's-complement
- * before the packer-visible store. Reuses init_reduce_max_min_int32()'s 3-swap replay buffer and
- * swap-direction config. Single 32x32 tile per call (block height 1), matching the column-reduce driver.
+ * CAST and SWAP are both SIMPLE instructions and cannot be fused into a LOADMACRO, so this mirrors the
+ * manual load/swap structure of calculate_reduce_max_min_uint16(): load each operand, cast it
+ * two's-complement -> sign-magnitude, run the compare-and-swap reduce, then cast the winners back to
+ * two's-complement before the store. Reuses init_reduce_max_min_int32()'s 3-swap replay buffer and
+ * swap-direction config. One 32x32 tile per call (block height 1), matching the column-reduce driver.
  *
- * @tparam pool_type The pool type (MAX or MIN) to determine swap direction
- * @tparam reduce_dim The reduction dimension (currently only REDUCE_COL is supported)
- * @tparam INSTRUCTION_MODE INT32_2S_COMP (raw no-op load/store on Blackhole)
- * @tparam clear_high_bits Unused for Int32 (always false); kept for signature symmetry
- * @tparam pack_low16 Unused for Int32 (always false); kept for signature symmetry
+ * @tparam pool_type MAX or MIN (sets swap direction)
+ * @tparam reduce_dim Only REDUCE_COL is supported
+ * @tparam INSTRUCTION_MODE INT32_2S_COMP (a raw no-op load/store on Blackhole)
+ * @tparam clear_high_bits Unused for Int32; kept for signature symmetry
+ * @tparam pack_low16 Unused for Int32; kept for signature symmetry
  */
 template <
     PoolType pool_type,
@@ -1277,10 +1272,9 @@ inline void calculate_reduce_max_min_int32() {
     // packer-visible two's-complement result. Both use the plain (raw, no-op on Blackhole) instruction mode.
     constexpr std::uint32_t STORE_MODE = static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
-    // Establish the manual compare-and-swap setup here rather than relying on init_reduce(): the shared
-    // reduce init cannot tell a column reduce from a row-MAX reduce, and the two need opposite SFPSWAP
-    // directions. This records the 3-swap replay buffer (slots 0-2) and sets the swap-direction config for
-    // the sign-magnitude manual path (the same setup the UInt16 manual path gets from its paired init).
+    // Record the 3-swap replay buffer (slots 0-2) and swap-direction config here rather than in
+    // init_reduce(): the shared init cannot tell a column reduce from a row-MAX reduce, which need
+    // opposite SFPSWAP directions.
     init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
 
     for (std::uint32_t j = 0; j < 2; j++) {
@@ -1498,13 +1492,13 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Int32 SUM loads with plain INT32. The dest word is already two's-complement and SFPIADD adds in
-    // two's-complement. The explicit sign-magnitude<->two's-complement cast in the reduce code only runs
-    // under INT32_2S_COMP, so plain INT32 skips it; otherwise the cast would mangle the already-two's-
-    // complement operand and break negatives. AVG keeps INT32_2S_COMP (its divide-by-32 step relies on it),
-    // and MAX/MIN keep INT32_2S_COMP to match the column-reduce path. init_reduce has no reduce_dim, but the
-    // row-MAX path re-records its own replay buffer, so picking INT32_2S_COMP for every Int32 MAX/MIN here
-    // does no harm.
+    // Int32 reduce operands are two's-complement in DEST. SUM loads with plain INT32 so the word reaches
+    // SFPIADD (a two's-complement adder) unchanged; the reduce code's explicit sign-magnitude<->two's-
+    // complement cast only runs under INT32_2S_COMP, so plain INT32 skips it. MAX/MIN use INT32_2S_COMP so
+    // SFPSWAP (a sign-magnitude comparator) gets sign-magnitude operands, the cast being applied in the
+    // manual column path. AVG keeps INT32_2S_COMP; its divide-by-32 step assumes that mode. init_reduce has
+    // no reduce_dim, so every Int32 MAX/MIN takes INT32_2S_COMP here; the row-MAX path re-records its own
+    // replay buffer regardless.
     constexpr bool int32_2s_comp =
         (format == DataFormat::Int32 &&
          (pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN));
@@ -1527,11 +1521,10 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
             // replay buffer and swap-direction config (the body is format-agnostic).
             init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
         } else {
-            // Int32 column MAX/MIN (issue #47647) records its own 3-swap buffer and swap-direction config
-            // inside calculate_reduce_max_min_int32() because the shared init cannot distinguish a column
-            // reduce (needs the manual sign-magnitude swap setup) from a row-MAX reduce (needs the default
-            // direction). For Int32 this LOADMACRO setup is therefore overwritten and harmless; row-MAX
-            // re-records its own buffer too.
+            // Int32 column MAX/MIN records its own 3-swap buffer and swap direction inside
+            // calculate_reduce_max_min_int32(), since the shared init cannot tell a column reduce (manual
+            // sign-magnitude swap) from a row-MAX reduce (default direction). This LOADMACRO setup is
+            // overwritten for Int32; the row-MAX path re-records its own buffer too.
             init_reduce_max_min<INSTRUCTION_MODE, pool_type, false>(block_ct_dim);
         }
     } else if constexpr (pool_type == PoolType::SUM || pool_type == PoolType::AVG) {
@@ -1576,15 +1569,14 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Pick the load/store mode for each Int32 reduction:
-    //   * SUM uses plain INT32. The dest word is already two's-complement and SFPIADD adds in two's-complement,
-    //     so it has to reach the adder untouched. The explicit sign-magnitude<->two's-complement cast in the
-    //     reduce code only runs under INT32_2S_COMP, so plain INT32 skips it; otherwise it would mangle the
-    //     already-two's-complement operand and break negatives.
-    //   * AVG uses INT32_2S_COMP, which its divide-by-32 step depends on.
-    //   * MAX/MIN column reduce uses INT32_2S_COMP. On Blackhole the load/store conversion is a no-op, so the
-    //     column path casts explicitly around a sign-magnitude SFPSWAP. Scoped to REDUCE_COL so the row-MAX
-    //     path stays on plain sign-magnitude INT32.
+    // Int32 load/store mode per reduction. Operands are two's-complement in DEST.
+    //   SUM: plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged; the reduce code's
+    //        explicit sign-magnitude<->two's-complement cast only runs under INT32_2S_COMP, so plain INT32
+    //        skips it.
+    //   AVG: INT32_2S_COMP, which its divide-by-32 step assumes.
+    //   MAX/MIN column reduce: INT32_2S_COMP. On Blackhole the load/store conversion is a no-op, so the
+    //        column path casts explicitly around a sign-magnitude SFPSWAP. Scoped to REDUCE_COL so the
+    //        row-MAX path keeps plain INT32.
     constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
     constexpr bool int32_max_min_col =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
@@ -1615,9 +1607,9 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
             // UInt16 in 32-bit dest: manual load/mask/swap path (LOADMACRO cannot mask between load and swap).
             calculate_reduce_max_min_uint16<pool_type, reduce_dim, INSTRUCTION_MODE, clear_high_bits, pack_low16>();
         } else if constexpr (INSTRUCTION_MODE == InstrModLoadStore::INT32_2S_COMP) {
-            // Int32 column reduce (issue #47647): manual load/cast/swap path. The cast cannot live inside a
-            // LOADMACRO, and on Blackhole the mode-12 load/store does not convert two's-complement<->sign-
-            // magnitude, so we convert explicitly around a sign-magnitude SFPSWAP reduce.
+            // Int32 column reduce: manual load/cast/swap path. The cast cannot live inside a LOADMACRO, and
+            // on Blackhole INT32_2S_COMP does not convert two's-complement<->sign-magnitude, so we cast
+            // explicitly around a sign-magnitude SFPSWAP reduce.
             calculate_reduce_max_min_int32<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>();
         } else {
             calculate_reduce_max_min<pool_type, reduce_dim, INSTRUCTION_MODE, false, pack_low16>(block_rt_dim);

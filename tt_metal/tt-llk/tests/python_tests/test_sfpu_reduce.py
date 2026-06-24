@@ -65,23 +65,20 @@ def get_supported_reduce_axioms(reduce_pool: ReducePool) -> list[MathOperation]:
 def use_int32_twos_complement(
     formats: InputOutputFormat, reduce_pool: ReducePool
 ) -> bool:
-    """Whether Int32 stimuli/results must use two's-complement (not sign-magnitude) L1 encoding.
+    """Whether Int32 stimuli/results use two's-complement (not sign-magnitude) L1 encoding.
 
-    The Int32 MAX/MIN *column* reduce kernel loads DEST with SFPLOAD mode ``INT32_2S_COMP``
-    (``MOD0_FMT_INT32_SM``), which applies ``SignMagToTwosComp`` on load, while the MAX/MIN
-    comparator ``SFPSWAP(VEC_MIN_MAX)`` orders its operands as *sign-magnitude* (tt-isa
-    ``SFPLOAD.md`` / ``SFPSWAP.md``). The two only agree when DEST already holds
-    two's-complement: the load conversion then undoes itself into sign-magnitude for the
-    comparator. This is exactly how the ttnn op feeds the path, so the test must encode
-    Int32 MAX/MIN operands as two's-complement to match the shipped (ttnn-green) kernel.
+    This matches how ttnn feeds the device: Int32 reduce operands sit in DEST as two's-complement.
 
-    SUM is two's-complement as well. Int32 is stored in two's-complement and ``SFPIADD`` adds in
-    two's-complement, so the SUM kernel loads with plain ``INT32`` and the word reaches the adder
-    untouched. Feeding sign-magnitude here would mask the i32 SUM bug where ``INT32_2S_COMP``
-    corrupts negative operands, so SUM operands must be two's-complement too.
+    MAX/MIN load with ``INT32_2S_COMP``, which applies ``SignMagToTwosComp`` on load (tt-isa
+    ``SFPLOAD.md``), turning the two's-complement word into the sign-magnitude operand that
+    ``SFPSWAP(VEC_MIN_MAX)`` compares in (tt-isa ``SFPSWAP.md``).
 
-    AVG is left out: it still loads with ``INT32_2S_COMP`` (its divide-by-32 step depends on that
-    mode), so its sign-magnitude contract is still the right match.
+    SUM loads with plain ``INT32`` so the word reaches ``SFPIADD`` (a two's-complement adder)
+    unchanged. Sign-magnitude stimuli would hide the SUM bug where ``INT32_2S_COMP`` corrupts
+    negatives, so SUM operands are two's-complement too.
+
+    AVG is excluded: it still loads with ``INT32_2S_COMP`` (its divide-by-32 step assumes that
+    mode), so sign-magnitude remains the right encoding for it.
     """
     return formats.input_format == DataFormat.Int32 and reduce_pool in (
         ReducePool.Max,
@@ -93,16 +90,16 @@ def use_int32_twos_complement(
 def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
     """Identity fill for the padded (non-data) rows of a sub-tile column reduce.
 
-    Mirrors ttnn's ``get_pad_value``: the padding must never win the reduction, so the
-    device result over the full 32-row tile equals the golden over just the real rows.
-    For Int32 MAX/MIN the operands are two's-complement (see ``use_int32_twos_complement``),
-    so the sentinels are the ordinary two's-complement reduction identities.
+    Mirrors ttnn's ``get_pad_value``: the pad must never win the reduction, so the device result
+    over the full 32-row tile equals the golden over just the real rows. For Int32 MAX/MIN the
+    operands are two's-complement (see ``use_int32_twos_complement``), so the sentinels are the
+    ordinary two's-complement reduction identities.
     """
     if reduce_pool == ReducePool.Max:
         if input_format == DataFormat.Int32:
             return (
                 -2147483647
-            )  # INT32_MIN + 1 (ttnn get_pad_value); avoids INT32_MIN (#44750)
+            )  # INT32_MIN + 1 (matches ttnn get_pad_value; avoids INT32_MIN)
         if input_format.is_integer():
             return 0  # unsigned formats: 0 is the smallest representable value
         return -3.0e30  # float "-inf"-ish, finite so PCC stays well-defined
@@ -110,13 +107,11 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
         if input_format == DataFormat.Int32:
             return 2147483647  # 0x7FFFFFFF == INT32_MAX
         if input_format == DataFormat.UInt32:
-            # The device MAX/MIN comparator (SFPSWAP) is a *sign-magnitude* comparator (tt-isa
-            # SFPSWAP.md), so it can only order unsigned values whose bit 31 is clear, i.e. [0, 2^31).
-            # The natural unsigned-MIN identity 0xFFFFFFFF (UINT32_MAX) has bit 31 set and is read as
-            # the most-negative sign-magnitude value, so it would wrongly win the MIN. The largest
-            # value the comparator ranks as maximal is 0x7FFFFFFF; with stimuli in [0, 1000] this is a
-            # valid (never-winning) MIN identity. UInt32 reduce is therefore only correct for [0, 2^31).
-            return 2147483647  # 0x7FFFFFFF (largest sign-magnitude-orderable value)
+            # SFPSWAP compares in sign-magnitude (tt-isa SFPSWAP.md), so it only orders UInt32 values
+            # with bit 31 clear, i.e. [0, 2^31). The usual MIN identity 0xFFFFFFFF has bit 31 set and
+            # reads as the most-negative sign-magnitude value, so it would wrongly win. 0x7FFFFFFF is
+            # the largest value the comparator ranks as maximal and never wins for stimuli in [0, 1000].
+            return 2147483647  # 0x7FFFFFFF
         if input_format == DataFormat.UInt16:
             return 65535  # 0xFFFF (UInt16 fits in the 31-bit sign-magnitude positive range)
         if input_format.is_integer():
@@ -134,17 +129,15 @@ def get_reduce_extents(
 ) -> list[int]:
     """Number of real (unpadded) rows on the column-reduce axis.
 
-    ``TILE_DIM`` (32) is the original full-tile behavior. Smaller values keep only the
-    first N rows as real data and pad the rest with the reduction identity, exercising
-    the padded column-reduce path that ttnn takes for ``dim=0``/``dim=1`` and that the
-    #47647 regression breaks. The sub-tile sweep is restricted to:
+    ``TILE_DIM`` (32) is the full-tile case. Smaller values keep only the first N rows as real data
+    and pad the rest with the reduction identity, exercising the padded column-reduce path ttnn
+    takes for ``dim=0``/``dim=1``. The sub-tile sweep is restricted to:
       * ``ReduceColumn`` (only the column reduce has a paddable 32-row axis),
-      * a single tile column ``[32, 32]`` (padding is independent of the column-tile
-        count, so sweeping every dimension combo would only add redundant cases), and
-      * Max/Min/Sum (identity padding is exact; Average's divisor would not match a
-        golden reduced over only the real rows).
-    The fail bands reported in the issue (small extents) are covered for Int32; the
-    other formats get a thin sanity slice so the padding path itself stays guarded.
+      * a single tile column ``[32, 32]`` (padding is independent of the column-tile count, so
+        sweeping every dimension combo only adds redundant cases), and
+      * Max/Min/Sum (identity padding is exact; Average's divisor would not match a golden reduced
+        over only the real rows).
+    Int32 sweeps the small extents; other formats get a thin slice to keep the padding path guarded.
     """
     full = [TILE_DIM]
     if (
@@ -330,11 +323,10 @@ def test_sfpu_reduce(
         )
     src_B = torch.zeros_like(src_A)
 
-    # Sub-tile column reduce: keep only the first `reduced_extent` rows of the 32-row
-    # reduce axis as real data and fill the remaining rows with the reduction identity
-    # (mirrors the padding ttnn injects when folding dim=0/dim=1 onto H). A correct
-    # kernel must let the real data win so the result matches a golden reduced over
-    # only the real rows; the #47647 regression lets the padded sentinel win instead.
+    # Sub-tile column reduce: keep only the first `reduced_extent` rows of the 32-row reduce axis as
+    # real data and fill the rest with the reduction identity (mirrors the padding ttnn injects when
+    # folding dim=0/dim=1 onto H). The real data must win so the result matches a golden reduced over
+    # only the real rows.
     if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
         pad_value = get_reduce_pad_value(reduce_pool, formats.input_format)
         src_A = src_A.view(TILE_DIM, tile_cnt * TILE_DIM)
