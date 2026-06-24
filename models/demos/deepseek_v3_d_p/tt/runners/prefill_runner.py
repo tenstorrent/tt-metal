@@ -441,14 +441,12 @@ def main() -> None:
 
         request_id_box = None
         if pipelined:
-            if world_size > 1:
-                raise RuntimeError(
-                    "PREFILL_PIPELINED multi-host (world_size > 1) is not supported yet: "
-                    "completion seq values would collide across hosts because per-host layer "
-                    "sharding / completion merging is not wired (Step 1 is transport-only, "
-                    "single-host correct). Run with a single rank, or wait for the "
-                    "layer-sharding/merging step."
-                )
+            # Multi-host (world_size > 1) requires the rank-sliced model so each host owns a
+            # disjoint set of GLOBAL layer indices — only then do completion seqs tile densely
+            # across hosts instead of colliding. That slicing is provided by the pipeline-parallel
+            # D2D runtime (jjovicic/pipeline-prefill-d2d, #47420); this branch carries only the
+            # layer-completion transport + routing and relies on that runtime being present once
+            # the branches are merged. No guard here — the precondition is the merged model.
             # Pipelined prefill: push full completions into a host-local ring;
             # the router forwards them to the master rank, which re-emits them
             # in order into the scheduler counter channel (named ack_shm_name —
