@@ -12,6 +12,7 @@ import torch
 import ttnn
 
 from models.experimental.glm4_moe_lite.tt.linear_helpers import decode_width_sharded_norm_input_config
+from models.experimental.glm4_moe_lite.tt.runtime_config import _env_bool
 
 
 def _prefill_embed_l1_max_bytes() -> int:
@@ -60,7 +61,7 @@ def prefill_embed_memory_config(*, seq_tokens: int, hidden_dim: int) -> ttnn.Mem
 
 def _decode_embed_width_sharded_enabled() -> bool:
     """Embed directly into WIDTH_SHARDED L1 matching decode input RMSNorm (requires sharded norm)."""
-    if os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() != "1":
+    if not _env_bool("GLM4_MOE_LITE_SHARDED_DECODE_NORM"):
         return False
     raw = os.environ.get("GLM4_MOE_LITE_DECODE_EMBED_WIDTH_SHARDED", "0").strip().lower()
     return raw in {"1", "true", "yes", "on"}

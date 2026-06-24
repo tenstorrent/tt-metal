@@ -24,7 +24,7 @@ import sys
 from pathlib import Path
 
 # ISL (input sequence length) in tokens - replicate prompt to reach these
-ISL_VALUES = [2000, 4000, 8000, 16000, 32000, 64000, 128000]
+ISL_VALUES = [2048, 4096, 8192, 16384, 32768, 65536, 131072]
 BATCH_SIZES = [1, 2, 4, 8, 16, 20, 24, 28, 30, 32]
 
 # Short prompt; script will use --simulate-context-len to repeat to target ISL
@@ -103,6 +103,10 @@ def run_one(
     # Scale decode FlashMLA cores with KV length (long-context decode is otherwise serialized
     # on 16 cores). Measured: 16K -5%, 32K -10% at batch=1; bit-identical greedy output.
     env["GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE"] = "1"
+    # Dump KV-cache size + FlashMLA decode config once per run (see attention_decode.py).
+    env["GLM4_MOE_LITE_DECODE_DEBUG"] = "1"
+    env["GLM4_MOE_LITE_MLA_FIDELITY"] = "hi_fi_2"
+    env["GLM4_MOE_LITE_MLA_APPROX"] = "1"
 
     result = {
         "isl": isl,
@@ -188,6 +192,9 @@ def run_one(
             # TTFT from user perspective: prefill + first decode token
             if result["prefill_s"] is not None:
                 result["ttft_ms"] = result["prefill_s"] * 1000 + result["first_token_decode_ms"]
+
+        # Capture decode-config dump lines (emitted once by attention_decode.py)
+        result["decode_debug"] = [ln.strip() for ln in stdout.splitlines() if "[DECODE_DEBUG]" in ln]
 
         if result["prefill_s"] is not None or result["agg_tok_s"] is not None:
             result["status"] = "ok"
@@ -680,6 +687,8 @@ def main() -> int:
                     f"per_user_tok_s={pu:.2f} ttft_ms={r['ttft_ms']:.0f}{decode_info}",
                     flush=True,
                 )
+                for ln in r.get("decode_debug", []):
+                    print(f"    {ln}", flush=True)
             else:
                 detail = f" ({r['oom_detail']})" if r.get("oom_detail") else ""
                 print(f"    status={r['status']}{detail}", flush=True)

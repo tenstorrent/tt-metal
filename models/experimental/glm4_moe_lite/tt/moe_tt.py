@@ -23,6 +23,7 @@ from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     prepare_sparse_moe_matmul_in0,
     tuned_moe_router_prefill_linear,
 )
+from models.experimental.glm4_moe_lite.tt.runtime_config import _env_bool, moe_sparse_dispatch_impl
 
 _SCATTER_ZERO_CACHE: dict[tuple[int, int, int], ttnn.Tensor] = {}
 
@@ -90,13 +91,6 @@ def _parse_math_fidelity(value: str, *, default: ttnn.MathFidelity) -> ttnn.Math
         "hifi4": ttnn.MathFidelity.HiFi4,
     }
     return table.get(raw, default)
-
-
-def _env_bool(name: str, *, default: bool = False) -> bool:
-    raw = os.environ.get(name, "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw not in {"0", "false", "no", "off"}
 
 
 def _tt_to_torch_device0(t: ttnn.Tensor) -> torch.Tensor:
@@ -497,7 +491,7 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
     ep_l1 = _env_bool("GLM4_MOE_LITE_EP_L1", default=False)
     decode_memory_config = ttnn.L1_MEMORY_CONFIG if ep_l1 else ttnn.DRAM_MEMORY_CONFIG
 
-    fuse_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", default=False)
+    fuse_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP")
     gate_up_fused_program_config = None
     if fuse_gate_up:
         # Sweep winner (K=2048 N=3072): 8x6 pcN2 ob_w2 osb_w2 → 226us, 1.85x vs the
@@ -1003,21 +997,11 @@ def moe_dense_experts_forward_prefill_tt(
     topk_expert_weights = ttnn.reshape(topk_expert_weights, (1, 1, tokens, k))
 
     # ---- Build batched expert weights: [E_local, 1, H, I] ----
-    w_rank = len(moe_w.w1_experts.shape)
-
+    # w_stacked layout: rank-4 → [1, E_local, H, I], rank-5 (mesh) → [1, 1, E_local, H, I].
+    # Both are contiguous in tile order and reshape to [E_local, 1, H, I] without moving data.
+    # This replaces the original E_local-slice + concat loop (saved ~43 µs ConcatDeviceOperation).
     def _batch_weight(w_stacked: ttnn.Tensor, dim_a: int, dim_b: int) -> ttnn.Tensor:
-        parts: list[ttnn.Tensor] = []
-        for e in range(experts_per_device):
-            if w_rank == 5:
-                w_e = ttnn.slice(w_stacked, [0, 0, e, 0, 0], [1, 1, e + 1, dim_a, dim_b])
-                w_e = ttnn.squeeze(w_e, 2)
-            else:
-                w_e = ttnn.slice(w_stacked, [0, e, 0, 0], [1, e + 1, dim_a, dim_b])
-            parts.append(w_e)
-        w_batched = ttnn.concat(parts, dim=0, memory_config=memory_config)
-        for p in parts:
-            ttnn.deallocate(p, force=False)
-        return w_batched  # [E_local, 1, H, I]
+        return ttnn.reshape(w_stacked, (experts_per_device, 1, dim_a, dim_b))  # [E_local, 1, H, I]
 
     use_fused = getattr(moe_w, "w1w3_experts", None) is not None
 
@@ -1536,9 +1520,7 @@ def moe_sparse_experts_forward_tt(
     num_dispatch_devices = int((mesh_rows, mesh_cols)[rt.dispatch_cluster_axis])
     num_dispatch_devices = max(1, num_dispatch_devices)
 
-    dispatch_impl = os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL", "").strip().lower()
-    if not dispatch_impl:
-        dispatch_impl = "reduce"
+    dispatch_impl = moe_sparse_dispatch_impl()
     if dispatch_impl not in {"reduce", "a2a", "all_to_all"}:
         raise ValueError(
             f"Invalid GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL={dispatch_impl!r}; " "expected one of ['reduce','a2a']"
@@ -1590,7 +1572,7 @@ def moe_sparse_experts_forward_tt(
             total_tokens += pad_tokens
             tokens_per_device += pad_tokens
 
-    debug = os.environ.get("GLM4_MOE_LITE_MOE_SPARSE_DEBUG", "").strip() == "1"
+    debug = _env_bool("GLM4_MOE_LITE_MOE_SPARSE_DEBUG")
     if debug:
         device_tensors = ttnn.get_device_tensors(hidden_states)
         mesh_info = "no-mesh"

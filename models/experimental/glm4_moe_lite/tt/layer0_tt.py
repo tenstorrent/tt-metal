@@ -86,6 +86,7 @@ def make_rope_tensors(
     seq_len: int,
     rope_dim: int,
     rope_theta: float,
+    with_rm_copies: bool = False,
 ) -> dict[str, object]:
     cos_t, sin_t = _rope_cos_sin_torch(seq_len=seq_len, dim=rope_dim, base=rope_theta)
     trans_t = _rot_transformation_mat_torch().to(dtype=torch.bfloat16)
@@ -120,13 +121,40 @@ def make_rope_tensors(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None,
     )
-    return {
+    out = {
         "cos_matrix": cos,
         "sin_matrix": sin,
         "trans_matrix": trans,
         "cos_matrix_host": cos_host,
         "sin_matrix_host": sin_host,
     }
+
+    # Optional ROW_MAJOR copies of the cos/sin tables for the decode RoPE gather.
+    # ttnn.embedding with a TILE weight + TILE output runs the fused-tilized path,
+    # which tilizes the entire [seq_len, rope_dim] table on every decode step (a
+    # long-context decode hotspot). A ROW_MAJOR weight + ROW_MAJOR output makes it
+    # a cheap per-batch-row gather instead (see _embed_rope_cos_sin_rows). These are
+    # only used by the persistent/model-level decode rope, so build them on request.
+    if with_rm_copies:
+        mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh_device else None
+        out["cos_matrix_rm"] = ttnn.from_torch(
+            cos_t.to(dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+        out["sin_matrix_rm"] = ttnn.from_torch(
+            sin_t.to(dtype=torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=mapper,
+        )
+
+    return out
 
 
 def _linear_weight_tt(

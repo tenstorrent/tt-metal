@@ -25,6 +25,7 @@ if _SIGNPOST_ENABLED:
 _PROFILER_READ_INTERVAL = int(os.environ.get("GLM4_MOE_LITE_PROFILER_READ_INTERVAL", "0").strip() or "0")
 
 from models.experimental.glm4_moe_lite.tt.decoder_layer_tt import (
+    _embed_rope_cos_sin_rows,
     prepare_decode_rope_and_positions_tt,
     prepare_decode_rope_inputs_for_rotary_llama_decode_mode_tt,
     run_decoder_layer_decode_one_step_update_cache_tt,
@@ -41,8 +42,7 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import (
     convert_decoder_layer_weights,
 )
 from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear, sharded_decode_norm
-
-_SHARDED_DECODE_NORM = os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() == "1"
+from models.experimental.glm4_moe_lite.tt.runtime_config import _env_bool
 from models.experimental.glm4_moe_lite.tt.tt_embedding import (
     convert_embedding_weight_to_tt,
     prefill_embed_memory_config,
@@ -50,6 +50,10 @@ from models.experimental.glm4_moe_lite.tt.tt_embedding import (
     run_tt_embedding,
 )
 from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict, load_glm_lazy_state_dict
+
+
+def _sharded_decode_norm_enabled() -> bool:
+    return _env_bool("GLM4_MOE_LITE_SHARDED_DECODE_NORM")
 
 
 @dataclass
@@ -345,6 +349,7 @@ class Glm4MoeLiteDenseOnlyTT:
             seq_len=int(max_seq_len),
             rope_dim=int(hparams.qk_rope_head_dim),
             rope_theta=float(hparams.rope_theta),
+            with_rm_copies=True,
         )
 
         # Output norm + LM head.
@@ -1519,7 +1524,7 @@ class Glm4MoeLiteDenseOnlyTT:
         skip_embed_clone = os.environ.get("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES", "").strip() == "1"
         embed_width_sharded = (
             os.environ.get("GLM4_MOE_LITE_DECODE_EMBED_WIDTH_SHARDED", "0").strip() == "1"
-            and os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() == "1"
+            and _sharded_decode_norm_enabled()
         )
         embed_tokens_tt = prep_state.tokens_tt if prep_state is not None else None
         x = run_tt_decode_embedding(
@@ -1613,7 +1618,7 @@ class Glm4MoeLiteDenseOnlyTT:
         if _SIGNPOST_ENABLED:
             signpost("lm_head-start")
         t0 = time.perf_counter() if profile_on else 0.0
-        if _SHARDED_DECODE_NORM:
+        if _sharded_decode_norm_enabled():
             x = sharded_decode_norm(
                 self.final_norm,
                 x,
@@ -2834,7 +2839,7 @@ class Glm4MoeLiteDenseOnlyTT:
         """All-gather sharded logits then a single argmax, instead of the slow
         per-shard ttnn.max (~490us). Greedy-equivalent. Default off."""
         return (
-            os.environ.get("GLM4_MOE_LITE_DECODE_SAMPLING_ALLGATHER", "0").strip() == "1"
+            _env_bool("GLM4_MOE_LITE_DECODE_SAMPLING_ALLGATHER")
             and self.lm_head_sharded_vocab
             and _is_mesh_device(self.device)
         )
@@ -2969,8 +2974,7 @@ class Glm4MoeLiteDenseOnlyTT:
         # 4. RoPE for MTP position (same pattern as main trace)
         rope_dim = int(self.hparams.qk_rope_head_dim)
         padded_batch = int(state.mtp_rot_idxs_padded_batch)
-        cos_rows = ttnn.embedding(state.mtp_rot_idxs_tt, self.rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
-        sin_rows = ttnn.embedding(state.mtp_rot_idxs_tt, self.rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
+        cos_rows, sin_rows = _embed_rope_cos_sin_rows(self.rope, state.mtp_rot_idxs_tt)
         cos_batch_view = ttnn.unsqueeze_to_4D(cos_rows)
         sin_batch_view = ttnn.unsqueeze_to_4D(sin_rows)
         if padded_batch != batch:
@@ -3035,8 +3039,7 @@ class Glm4MoeLiteDenseOnlyTT:
         # the decode layout expected by rotary_embedding_llama(is_decode_mode=True).
         rope_dim = int(self.hparams.qk_rope_head_dim)
         padded_batch = int(state.rot_idxs_padded_batch)
-        cos_rows = ttnn.embedding(state.rot_idxs_tt, self.rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
-        sin_rows = ttnn.embedding(state.rot_idxs_tt, self.rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
+        cos_rows, sin_rows = _embed_rope_cos_sin_rows(self.rope, state.rot_idxs_tt)
         cos_batch_view = ttnn.unsqueeze_to_4D(cos_rows)  # [1,1,B_pad,D]
         sin_batch_view = ttnn.unsqueeze_to_4D(sin_rows)  # [1,1,B_pad,D]
         if padded_batch != batch:

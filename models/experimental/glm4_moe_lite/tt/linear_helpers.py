@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import ttnn
-from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, _env_bool
 
 # Down proj tuning: 32 cores, per_core_N=2, out_subblock_w=2 (avoids subblock_h*w==1 penalty).
 _DOWN_MATMUL_NUM_CORES = 32
@@ -118,7 +118,7 @@ _KVB2_DECODE_CKC = ttnn.WormholeComputeKernelConfig(
 
 
 def prefill_matmul_tuned_enabled() -> bool:
-    return os.environ.get("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED", "").strip() == "1"
+    return _env_bool("GLM4_MOE_LITE_PREFILL_MATMUL_TUNED")
 
 
 def _prefill_1d_ws_max_mt() -> int:

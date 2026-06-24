@@ -25,7 +25,7 @@ from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     sharded_decode_norm,
 )
 from models.experimental.glm4_moe_lite.tt.mlp_decode import dense_mlp_forward, moe_mlp_forward
-from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, _env_bool
 from models.experimental.glm4_moe_lite.fused_ops.q_split_heads import (
     prefill_q_heads_memory_config,
     prefill_q_nlp_input_memory_config,
@@ -141,11 +141,51 @@ def _parse_math_fidelity(value: str, *, default: ttnn.MathFidelity) -> ttnn.Math
     return table.get(raw, default)
 
 
-def _env_bool(name: str, *, default: bool = False) -> bool:
-    raw = os.environ.get(name, "").strip().lower()
-    if not raw:
-        return bool(default)
-    return raw not in {"0", "false", "no", "off"}
+# Default-on: gather decode RoPE cos/sin rows from ROW_MAJOR tables instead of
+# tilizing the full [seq_len, rope_dim] table every step. Set to 0 to revert to the
+# original full-table TILE embedding path.
+_DECODE_ROPE_RM_GATHER = os.environ.get("GLM4_MOE_LITE_DECODE_ROPE_RM_GATHER", "1").strip() != "0"
+
+
+def _embed_rope_cos_sin_rows(
+    rope: dict[str, ttnn.Tensor],
+    rot_idxs: ttnn.Tensor,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Gather per-position RoPE cos/sin rows -> TILE [1, B_pad, rope_dim].
+
+    ttnn.embedding with a TILE weight + TILE output runs the fused-tilized path,
+    which tilizes the entire [seq_len, rope_dim] cos/sin table on every decode step
+    (the dominant long-context decode TM cost, ~133 us per table at 64K). With
+    ROW_MAJOR weight tables + ROW_MAJOR output it becomes a cheap per-batch-row
+    gather; we then tilize only the small [B_pad, rope_dim] result. Bit-identical
+    to the TILE path (same gathered bf16 rows, lossless layout change).
+
+    Falls back to the original full-table TILE embedding when the ROW_MAJOR copies
+    are absent (e.g. prefill rope) or the gather is disabled via env.
+    """
+    if _DECODE_ROPE_RM_GATHER and rope.get("cos_matrix_rm") is not None:
+        import sys
+
+        print(
+            f"[ROPE_RM_GATHER] flag={_DECODE_ROPE_RM_GATHER} key_present={rope.get('cos_matrix_rm') is not None}",
+            file=sys.stderr,
+            flush=True,
+        )
+        cos_rows = ttnn.embedding(rot_idxs, rope["cos_matrix_rm"], layout=ttnn.ROW_MAJOR_LAYOUT)
+        sin_rows = ttnn.embedding(rot_idxs, rope["sin_matrix_rm"], layout=ttnn.ROW_MAJOR_LAYOUT)
+        cos_rows = ttnn.to_layout(cos_rows, ttnn.TILE_LAYOUT)
+        sin_rows = ttnn.to_layout(sin_rows, ttnn.TILE_LAYOUT)
+        return cos_rows, sin_rows
+    import sys
+
+    print(
+        f"[ROPE_TILE_FALLBACK] flag={_DECODE_ROPE_RM_GATHER} key_present={rope.get('cos_matrix_rm') is not None}",
+        file=sys.stderr,
+        flush=True,
+    )
+    cos_rows = ttnn.embedding(rot_idxs, rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
+    sin_rows = ttnn.embedding(rot_idxs, rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
+    return cos_rows, sin_rows
 
 
 @torch.no_grad()
@@ -211,8 +251,7 @@ def prepare_decode_rope_and_positions_tt(
     )
 
     # embedding([1, B], [1,1,S,D]) -> [1, B, D]
-    cos_rows = ttnn.embedding(rot_idxs, rope["cos_matrix"], layout=ttnn.TILE_LAYOUT)
-    sin_rows = ttnn.embedding(rot_idxs, rope["sin_matrix"], layout=ttnn.TILE_LAYOUT)
+    cos_rows, sin_rows = _embed_rope_cos_sin_rows(rope, rot_idxs)
 
     # `ttnn.unsqueeze_to_4D` is a reshape which can behave like a view. Some
     # TTNN view-like ops do not refcount underlying buffers, so aggressively
@@ -724,7 +763,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         return interleaved
 
     tp_axis = _tp_cluster_axis(device)
-    tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
+    tp_enabled = tp_axis is not None and _env_bool("GLM4_MOE_LITE_TP")
     mesh_rows, mesh_cols = _mesh_shape(device)
     tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
@@ -1071,9 +1110,7 @@ def run_decoder_layer_prefill_update_cache_tt(
 
     t0 = time.perf_counter() if profile is not None else 0.0
     use_nlp_concat = os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS", "1").strip() != "0"
-    head_parallel_kvb2 = (
-        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1" and tp_enabled and tp_size > 1
-    )
+    head_parallel_kvb2 = _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2") and tp_enabled and tp_size > 1
 
     if head_parallel_kvb2:
         # Shard heads across TP; fuse kv_b2 + w_o partials into one all_reduce (matches decode).

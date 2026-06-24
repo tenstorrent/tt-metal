@@ -28,7 +28,7 @@ from models.experimental.glm4_moe_lite.tt.linear_helpers import (
     sharded_decode_norm,
     tp_row_parallel_linear,
 )
-from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig
+from models.experimental.glm4_moe_lite.tt.runtime_config import Glm4RuntimeConfig, _env_bool
 
 
 def _profile_add(profile: dict[str, float] | None, key: str, elapsed_s: float) -> None:
@@ -46,12 +46,14 @@ _DECODE_CFG_PRINTED = False
 # FlashMLA → kv_b2 → w_o op-chain tuning constants (edit to retune without touching function bodies).
 _KVB2_INPUT_L1 = True
 
+
 # At batch==1, reshape the q_b output [1,1,1,H*HD] straight to [1,H,1,HD] instead of
 # reshape->[1,1,H,HD] then permute(0,2,1,3). Puts the H heads in the batch dim on clean
 # head_dim=8-tile column boundaries, avoiding the sub-tile head-into-tile-height scatter
 # (~10us ReshapeView) and the following permute (~3us). Validated bit-identical (PCC=1.0)
-# to reshape+permute ONLY at batch==1; ~10us/layer device saving. Default off.
-_Q_DIRECT_RESHAPE = os.environ.get("GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE", "0").strip() == "1"
+# to reshape+permute ONLY at batch==1; ~10us/layer device saving.
+def _q_direct_reshape_enabled() -> bool:
+    return _env_bool("GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE")
 
 
 def _flatten_v_heads_for_wo(
@@ -299,7 +301,7 @@ def q_projection(
     q = attn_linear(q_a, w_q_b, device=device, cfg=cfg, force_no_tp=cfg.attn_dp or cfg.head_parallel_attn)
     ttnn.deallocate(q_a, force=False)
 
-    if _Q_DIRECT_RESHAPE and batch == 1:
+    if _q_direct_reshape_enabled() and batch == 1:
         q = ttnn.reshape(q, (1, heads_local, 1, int(hparams.qk_head_dim)))
     else:
         q = ttnn.reshape(q, (1, batch, heads_local, int(hparams.qk_head_dim)))
@@ -426,7 +428,10 @@ def flash_mla_and_output(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
         q_chunk_size=0,
         k_chunk_size=cfg.mla_k_chunk_size,
-        exp_approx_mode=False,
+        # Wire the flash-softmax exp approximation to the MLA approx toggle
+        # (GLM4_MOE_LITE_MLA_APPROX). Was hardcoded False, leaving the ~1.4x
+        # long-context SDPA win (with MLA_FIDELITY=hifi2) unreachable.
+        exp_approx_mode=cfg.mla_approx,
         max_cores_per_head_batch=mla_max_cores,
     )
 

@@ -673,8 +673,8 @@ def convert_decoder_layer_weights(
     # becomes per-head sharded; q-path/FlashMLA/kv_b2/o_proj then run on H/tp_size heads
     # with the single existing post-o_proj all_reduce. Builds on HEAD_PARALLEL_KVB2.
     head_parallel_attn = (
-        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "").strip() == "1"
-        and os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1"
+        _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN")
+        and _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2")
         and tp_enabled
         and tp_size > 1
     )
@@ -800,9 +800,7 @@ def convert_decoder_layer_weights(
     # redundant head computation and eliminating the post-kv_b2 all_reduce.
     # Otherwise use attn_proj_mapper (replicated when ATTN_DP=1, TP-sharded on
     # kv_lora dim when ATTN_DP=0).
-    head_parallel_kvb2 = (
-        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1" and tp_enabled and tp_size > 1
-    )
+    head_parallel_kvb2 = _env_bool("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2") and tp_enabled and tp_size > 1
     if head_parallel_kvb2:
         kvb2_mapper = _tp_mesh_mapper(device, shard_dim=1)  # shard heads across TP
         kvb2_variant = f"{attn_variant}_headpar"
@@ -1000,7 +998,7 @@ def convert_decoder_layer_weights(
 
         # Optional fused gate+up (w1+w3) tensor for single sparse_matmul.
         w1w3_experts_tt: Optional[ttnn.Tensor] = None
-        fuse_gate_up = os.environ.get("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", "").strip() == "1"
+        fuse_gate_up = _env_bool("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP")
         if fuse_gate_up:
             w1w3_stacked = torch.cat([w1_stacked, w3_stacked], dim=2)  # [E, hidden, 2*moe_intermediate]
             w1w3_experts_tt = _experts_weight_tt(

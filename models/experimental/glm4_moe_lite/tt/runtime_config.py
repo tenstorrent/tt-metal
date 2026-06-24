@@ -20,15 +20,50 @@ from typing import Any
 import ttnn
 
 
-def _env_bool(name: str, *, default: bool = False) -> bool:
+# Production/demo defaults (Blackhole 1×4 TP bring-up). Set env var to 0/false to disable.
+_ENV_BOOL_DEFAULTS: dict[str, bool] = {
+    "GLM4_MOE_LITE_TP": True,
+    "GLM4_MOE_LITE_ATTN_DP": True,
+    "GLM4_MOE_LITE_HEAD_PARALLEL_KVB2": True,
+    "GLM4_MOE_LITE_HEAD_PARALLEL_ATTN": True,
+    "GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP": True,
+    "GLM4_MOE_LITE_SPARSE_MATMUL_PREFILL_TUNED": True,
+    "GLM4_MOE_LITE_MOE_SPARSE_DEBUG": True,
+    "GLM4_MOE_LITE_SHARDED_DECODE_NORM": True,
+    "GLM4_MOE_LITE_MOE_FAST_REMAP": True,
+    "GLM4_MOE_LITE_DECODE_Q_DIRECT_RESHAPE": True,
+    "GLM4_MOE_LITE_DECODE_SAMPLING_ALLGATHER": True,
+    "GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE": True,
+    "GLM4_MOE_LITE_PREFILL_MATMUL_TUNED": True,
+    # Explicitly off in demo (separate sharded q_a norm ops).
+    "GLM4_MOE_LITE_DECODE_FUSE_QA_NORM": False,
+}
+
+_ENV_STR_DEFAULTS: dict[str, str] = {
+    "GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL": "all_to_all",
+}
+
+
+def _env_bool(name: str, *, default: bool | None = None) -> bool:
+    resolved = _ENV_BOOL_DEFAULTS.get(name, False) if default is None else default
     raw = os.environ.get(name, "").strip().lower()
     if not raw:
-        return bool(default)
+        return bool(resolved)
     return raw not in {"0", "false", "no", "off"}
 
 
-def _env_str(name: str, *, default: str = "") -> str:
-    return os.environ.get(name, default).strip()
+def _env_str(name: str, *, default: str | None = None) -> str:
+    resolved = _ENV_STR_DEFAULTS.get(name, "") if default is None else default
+    return os.environ.get(name, resolved).strip()
+
+
+def moe_sparse_dispatch_impl() -> str:
+    """MoE token dispatch: reduce | a2a | all_to_all (default all_to_all)."""
+    for var in ("GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL", "GLM4_MOE_LITE_MOE_DISPATCH_IMPL"):
+        raw = os.environ.get(var, "").strip().lower()
+        if raw:
+            return raw
+    return _ENV_STR_DEFAULTS.get("GLM4_MOE_LITE_MOE_SPARSE_DISPATCH_IMPL", "all_to_all")
 
 
 def _env_int(name: str, *, default: int) -> int:
@@ -169,12 +204,11 @@ class Glm4RuntimeConfig:
             mla_approx=_env_str("GLM4_MOE_LITE_MLA_APPROX", default="0") != "0",
             mla_fp32_acc=mla_fp32,
             mla_scale_mode=_env_str("GLM4_MOE_LITE_MLA_SCALE_MODE", default="qk").lower(),
-            mla_k_chunk_size=_env_int("GLM4_MOE_LITE_MLA_K_CHUNK_SIZE", default=64),
+            mla_k_chunk_size=_env_int("GLM4_MOE_LITE_MLA_K_CHUNK_SIZE", default=128),
             # Scale decode FlashMLA cores with KV length (default-off): the op caps at
             # max_cores_per_head_batch=16, which serializes the growing KV read at long
             # context. When enabled, cores are derived from the allocated cache size.
             decode_mla_core_scale=_env_bool("GLM4_MOE_LITE_DECODE_MLA_CORE_SCALE"),
-            # Hard override for max_cores_per_head_batch (0 = auto/struct default).
             mla_max_cores=_env_int("GLM4_MOE_LITE_MLA_MAX_CORES", default=0),
             packer_l1_acc=_env_bool("GLM4_MOE_LITE_PACKER_L1_ACC"),
             skip_typecast=_env_bool("GLM4_MOE_LITE_SKIP_TYPECAST"),
