@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import math
+
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
@@ -16,6 +18,31 @@ from .operations import (
     split_qkv_heads_prefill,
 )
 from .weights import AttentionWeights
+
+
+def _zero_request_kv_blocks(cache, like_kv, page_table_user, seq_len, block_size, user_id):
+    """Zero this request's paged KV blocks (full block-aligned range) before the
+    real prompt K/V is written.
+
+    Recycled paged blocks are not cleared on (re)allocation, so the unwritten tail
+    of a request's last (partial) block can still hold leftover K/V from a previous
+    request. Decode attention then reads non-deterministic stale bytes from those
+    slots, producing different outputs across otherwise-identical requests. Zeroing
+    the blocks this request owns (across the full block boundary) makes that tail
+    deterministically zero. Only blocks in this request's page table are touched,
+    so concurrent requests' blocks are not disturbed.
+
+    ``like_kv`` is the per-user K (or V) tensor, used only for shape/dtype/layout.
+    """
+    n_blocks = math.ceil(seq_len / block_size)
+    zlen = n_blocks * block_size
+    zeros = ttnn.mul(like_kv, 0.0)
+    if zlen > zeros.shape[2]:
+        zeros = ttnn.pad(zeros, [(0, 0), (0, 0), (0, zlen - zeros.shape[2]), (0, 0)], value=0.0)
+    elif zlen < zeros.shape[2]:
+        zeros = zeros[:, :, :zlen, :]
+    ttnn.experimental.paged_fill_cache(cache, zeros, page_table_user, batch_idx=user_id)
+    zeros.deallocate(True)
 
 
 def prefill_forward(
@@ -115,11 +142,17 @@ def prefill_forward(
                 k_b = tt_k[b : b + 1, :, :, :]
                 v_b = tt_v[b : b + 1, :, :, :]
                 pt_b = page_table[b : b + 1, :]
+                # Clear stale K/V in this user's recycled blocks before writing.
+                _zero_request_kv_blocks(k_cache, k_b, pt_b, seq_len, block_size, 0)
+                _zero_request_kv_blocks(v_cache, v_b, pt_b, seq_len, block_size, 0)
                 k_b_fill = k_b[:, :, :page_len, :] if page_len < k_b.shape[2] else k_b
                 v_b_fill = v_b[:, :, :page_len, :] if page_len < v_b.shape[2] else v_b
                 ttnn.experimental.paged_fill_cache(k_cache, k_b_fill, pt_b, batch_idx=0)
                 ttnn.experimental.paged_fill_cache(v_cache, v_b_fill, pt_b, batch_idx=0)
         else:
+            # Clear stale K/V in this request's recycled blocks before writing.
+            _zero_request_kv_blocks(k_cache, tt_k, page_table, seq_len, block_size, user_id)
+            _zero_request_kv_blocks(v_cache, tt_v, page_table, seq_len, block_size, user_id)
             tt_k_sliced = tt_k[:, :, :page_len, :] if page_len < tt_k.shape[2] else tt_k
             tt_v_sliced = tt_v[:, :, :page_len, :] if page_len < tt_v.shape[2] else tt_v
             ttnn.experimental.paged_fill_cache(k_cache, tt_k_sliced, page_table, batch_idx=user_id)
