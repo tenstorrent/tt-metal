@@ -29,7 +29,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 
     - A stem plot of signed error measured in ULPs:
 
-          signed_ulp_error(x) = (hw(x) - golden(x)) / local_ulp(golden(x))
+      $$\text{signed\_ulp\_error}(x) = \frac{\text{hw}(x) - \text{golden}(x)}{\text{local\_ulp}(\text{golden}(x))}$$
 
     - Positive stems mean HW is above golden.
     - Negative stems mean HW is below golden.
@@ -40,7 +40,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 
     - Scatter plot of
 
-          rel_error(x) = |hw(x) - golden(x)| / |golden(x)|
+      $$\text{rel\_error}(x) = \frac{|\text{hw}(x) - \text{golden}(x)|}{|\text{golden}(x)|}$$
 
       for points where `golden(x) ≠ 0`.
     - Y-axis is **log scale**.
@@ -95,7 +95,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 
     Examples near 1.0:
 
-    - **bfloat16 (Float16_b)**
+    - **bfloat16**
       `1 ULP ≈ 2^-7 ≈ 7.81e-3`
     - **float16**
       `1 ULP ≈ 2^-10 ≈ 9.77e-4`
@@ -107,7 +107,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 - **Relative error**
   For each x where `golden(x) ≠ 0` we define:
 
-      relative_error = |hw - golden| / |golden|
+  $$\text{rel\_error}(x) = \frac{|\text{hw}(x) - \text{golden}(x)|}{|\text{golden}(x)|}$$
 
 - **ULP error (error in ULP units)**
   For the signed-ULP **plot** and the CDF, we measure error in units of the **true local ULP** of the golden output.
@@ -115,11 +115,11 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
     The local ULP is the distance from a value to the next representable floating-point value in the target format.
     For each output value **y**, we define:
 
-      local_ulp(y) = nextafter(|y|, +∞) - |y|
+    $$\text{local\_ulp}(y) = \text{nextafter}(|y|, +\infty) - |y|$$
 
     Then the signed ULP error is:
 
-      signed_ulp_error(x) = (hw(x) - golden(x)) / local_ulp(golden(x))
+    $$\text{signed\_ulp\_error}(x) = \frac{\text{hw}(x) - \text{golden}(x)}{\text{local\_ulp}(\text{golden}(x))}$$
 
     This tells us how many local floating-point steps the hardware result is away from the golden result.
 
@@ -164,22 +164,22 @@ For all **finite** points:
 
 - **Max absolute error**
 
-      max_abs_error = max_x |hw(x) - golden(x)|
+  $$\text{max\_abs\_error} = \max_x |\text{hw}(x) - \text{golden}(x)|$$
 
   This is the largest absolute difference between HW and golden over all sampled x.
 - **Mean absolute error**
 
-      mean_abs_error = mean_x |hw(x) - golden(x)|
+  $$\text{mean\_abs\_error} = \operatorname{mean}_x |\text{hw}(x) - \text{golden}(x)|$$
 
   This is the average absolute difference between HW and golden.
 - **Max / median relative error**
     - **Max relative error**:
 
-          max_rel_error = max_x rel_error(x)
+      $$\text{max\_rel\_error} = \max_x \text{rel\_error}(x)$$
 
     - **Median relative error**:
 
-          median_rel_error = median(rel_error(x))
+      $$\text{median\_rel\_error} = \operatorname{median}(\text{rel\_error}(x))$$
 
       (50% of the points have relative error below this value.)
 
@@ -187,7 +187,7 @@ For all **finite** points:
 
 We approximate the effective number of bits of precision as:
 
-    bits(x) = -log2(relative_error(x))
+$$\text{bits}(x) = -\log_2(\text{rel\_error}(x))$$
 
 and then summarize:
 
