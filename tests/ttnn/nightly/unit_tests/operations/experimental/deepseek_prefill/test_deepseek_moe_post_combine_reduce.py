@@ -79,7 +79,29 @@ def _model_params_with_xfail(xfails):
 STRUCTURED_DATA_MODEL_PARAMS = _model_params_with_xfail(
     {"gptoss_120b": _GPTOSS_STRUCTURED_XFAIL, "dsv4_flash": _DSV4_FLASH_STRUCTURED_XFAIL}
 )
-MULTI_CHUNK_STRUCTURED_MODEL_PARAMS = _model_params_with_xfail({"gptoss_120b": _GPTOSS_STRUCTURED_XFAIL})
+
+# test_multi_chunk_structured crosses config with num_tokens, so its failures are keyed per
+# (model, num_tokens) and applied by _xfail_multi_chunk_structured. gptoss_120b's emb_dim makes the
+# structured reshape invalid for every token count, but each combination is marked independently so
+# one that starts passing trips strict xfail instead of hiding behind a model-wide mark.
+_MULTI_CHUNK_NUM_TOKENS = [4096, 6400, 8192]
+_MULTI_CHUNK_STRUCTURED_XFAIL = {("gptoss_120b", n): _GPTOSS_STRUCTURED_XFAIL for n in _MULTI_CHUNK_NUM_TOKENS}
+_CONFIG_TO_MODEL_NAME = {config: name for name, config, _ in MODELS}
+
+
+@pytest.fixture(autouse=True)
+def _xfail_multi_chunk_structured(request):
+    """Strict-xfail the (model, num_tokens) combinations in _MULTI_CHUNK_STRUCTURED_XFAIL, scoped to
+    test_multi_chunk_structured so it does not touch the other tests that reuse these params."""
+    if request.node.name.split("[")[0] != "test_multi_chunk_structured":
+        return
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is None:
+        return
+    name = _CONFIG_TO_MODEL_NAME.get(callspec.params.get("config"))
+    reason = _MULTI_CHUNK_STRUCTURED_XFAIL.get((name, callspec.params.get("num_tokens")))
+    if reason:
+        request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
 
 
 def pytorch_reference(combine, weights):
@@ -334,8 +356,8 @@ def test_output_layout(device, config):
 # ============================================================================
 
 
-@pytest.mark.parametrize("num_tokens", [4096, 6400, 8192])
-@pytest.mark.parametrize("config", MULTI_CHUNK_STRUCTURED_MODEL_PARAMS)
+@pytest.mark.parametrize("num_tokens", _MULTI_CHUNK_NUM_TOKENS)
+@pytest.mark.parametrize("config", MODEL_PARAMS)
 def test_multi_chunk_structured(device, num_tokens, config):
     """Structured data with >100 chunks so some cores get 2+ chunks each."""
     emb_dim = config.EMB_SIZE
