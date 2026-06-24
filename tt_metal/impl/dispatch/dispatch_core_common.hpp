@@ -30,6 +30,10 @@ enum DispatchWorkerType : uint32_t {
 
 CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 
+// Resolve effective dispatch core type (Quasar dispatch-engine vs interim Tensix; WH/BH from config).
+CoreType resolve_dispatch_core_type(
+    tt::tt_metal::MetalEnvImpl& env, ChipId device_id, const DispatchCoreConfig& dispatch_core_config);
+
 // Resolve the dispatch core axis from a DispatchCoreConfig without depending on MetalContext.
 // Uses the config's explicit axis if set; otherwise falls back to arch-based resolution.
 // TODO: https://github.com/tenstorrent/tt-metal/issues/39974

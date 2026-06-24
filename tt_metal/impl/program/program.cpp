@@ -45,6 +45,7 @@
 #include "core_coord.hpp"
 #include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
 #include "jit_build/hlk_desc.hpp"
 #include "hal_types.hpp"
@@ -122,7 +123,8 @@ void validate_kernel_placement(bool force_slow_dispatch, std::shared_ptr<Kernel>
     bool slow_dispatch = !(MetalContext::instance().rtoptions().get_fast_dispatch());
 
     const auto& dispatch_core_config = MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config();
-    tt::CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    tt::CoreType dispatch_core_type =
+        resolve_dispatch_core_type(MetalEnvAccessor(MetalContext::instance().get_env()).impl(), device_id, dispatch_core_config);
 
     // Kernels used to implement fast dispatch can be placed on dispatch cores
     if (not slow_dispatch and not force_slow_dispatch) {
