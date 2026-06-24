@@ -495,7 +495,11 @@ jobs:
               uv pip install --no-deps -e vllm/plugins/vllm-tt-plugin
             fi
             # Per-model Python deps when the model directory pins versions that
-            # differ from the docker image (Gemma4 needs transformers==5.5.0).
+            # differ from the docker image. This runs AFTER the vLLM install
+            # above on purpose: vLLM pins transformers<5, which downgrades the
+            # image's transformers, but Gemma4's `gemma4_unified` model_type
+            # needs transformers>=5 — models/demos/gemma4/requirements.txt
+            # re-pins it so vLLM's ModelConfig can recognize the checkpoint.
             case "${{ matrix.test-group.model }}" in
               google/gemma-4-*) uv pip install -r models/demos/gemma4/requirements.txt ;;
             esac

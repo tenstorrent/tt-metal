@@ -1,1 +1,7 @@
 sentencepiece
+# vLLM pins transformers<5, so `uv pip install vllm/` downgrades the image's
+# transformers. Gemma4's `gemma4_unified` model_type only exists in
+# transformers>=5, so re-pin it here — the vLLM nightly installs this file
+# *after* vLLM (see .github/workflows/vllm-nightly-tests-impl.yaml), restoring
+# the version. Matches the tt-metal base pin.
+transformers==5.10.2
