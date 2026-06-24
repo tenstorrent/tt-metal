@@ -496,24 +496,40 @@ ROUTED_EXPERT_MODELS = [
 ]
 
 
-# Models whose routed-expert op currently fails on BH, keyed by model name -> reason (with the
-# tracking issue link). xfail'd so CI stays green while the issues are worked on; delete an entry
-# once its issue is resolved.
+# Routed-expert combinations the op does not yet pass on BH, keyed by model name -> the mesh layouts
+# that still fail (ids from ROUTED_EXPERT_MESH_PARAMS) and the tracking issue. Applied as strict xfail
+# per (model, mesh) by _xfail_known_routed_expert_failures, so a layout that starts passing turns CI
+# red. Drop a layout once it passes; drop the whole entry once all of its layouts do.
 XFAIL_ROUTED_EXPERT = {
-    "gptoss_120b": "GPT-OSS 120B routed expert — https://github.com/tenstorrent/tt-metal/issues/47604",
+    "gptoss_120b": {
+        "reason": "GPT-OSS 120B routed expert — https://github.com/tenstorrent/tt-metal/issues/47604",
+        "mesh_ids": {"linear-4"},
+    },
 }
+
+
+@pytest.fixture(autouse=True)
+def _xfail_known_routed_expert_failures(request):
+    """Strict-xfail the exact (model, mesh-layout) routed-expert combinations in XFAIL_ROUTED_EXPERT.
+    Marking the combination rather than the whole model keeps already-passing layouts green and lets
+    strict xfail flag any layout that newly passes."""
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is None:
+        return
+    test_id = f"-{callspec.id}-"
+    for model_name, entry in XFAIL_ROUTED_EXPERT.items():
+        if f"{model_name}-dims" not in test_id:
+            continue
+        if any(f"-{mesh_id}-" in test_id for mesh_id in entry["mesh_ids"]):
+            request.applymarker(pytest.mark.xfail(reason=entry["reason"], strict=True))
 
 
 def routed_expert_shape_params():
     """Build the per-model shape parametrization. Non-baseline models carry the extended_model
-    marker on their params so they stay gated exactly as the separate tests were. Models listed in
-    XFAIL_ROUTED_EXPERT additionally carry an xfail marker tied to their tracking issue."""
+    marker on their params so they stay gated exactly as the separate tests were."""
     params = []
     for name, config, extended in ROUTED_EXPERT_MODELS:
         marks = (pytest.mark.extended_model,) if extended else ()
-        xfail_reason = XFAIL_ROUTED_EXPERT.get(name)
-        if xfail_reason:
-            marks += (pytest.mark.xfail(reason=xfail_reason, strict=True),)
         params.append(
             pytest.param(
                 640,

@@ -166,9 +166,9 @@ SINGLE_EXPERT_MODELS = [
 
 # Currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}" param id ->
 # xfail reason (with tracking issue), so CI stays green while the linked issues are worked on. The
-# entries mirror exactly the failing cases reported by CI (gptoss_120b hits a K_gate divisibility
-# error; dsv4_pro overflows L1 only at the larger token counts). strict=True keeps CI green
-# whether a marked case fails or (unexpectedly) passes. Delete an entry once its issue is resolved.
+# failures are blackhole-specific (gptoss_120b hits a K_gate divisibility error; dsv4_pro overflows
+# L1 only at the larger token counts) and these cases pass on other arches, so _TOKEN_SWEEP_XFAIL is
+# applied (strict) only on blackhole by _xfail_blackhole_token_sweep. Delete an entry once resolved.
 _GPTOSS_KGATE_XFAIL = (
     "GPT-OSS 120B single routed expert: K_gate_tiles not divisible by in0_block_w_gu — "
     "https://github.com/tenstorrent/tt-metal/issues/47604"
@@ -192,19 +192,34 @@ _FAKED_XFAIL = {
 
 def single_routed_expert_token_sweep_params():
     """Build the per-model (num_tokens, emb_dim, hidden_dim) parametrization over _TOKEN_SWEEP.
-    Non-baseline models carry the extended_model marker so they stay gated as before; param ids
-    listed in _TOKEN_SWEEP_XFAIL additionally carry an xfail marker tied to their tracking issue."""
+    Non-baseline models carry the extended_model marker so they stay gated as before; the
+    _TOKEN_SWEEP_XFAIL cases are xfail'd per-arch by _xfail_blackhole_token_sweep, not here."""
     params = []
     for name, config, extended in SINGLE_EXPERT_MODELS:
         for num_tokens, tag in _TOKEN_SWEEP:
             test_id = f"{name}-{tag}"
             marks = (pytest.mark.extended_model,) if extended else ()
-            if test_id in _TOKEN_SWEEP_XFAIL:
-                marks += (pytest.mark.xfail(reason=_TOKEN_SWEEP_XFAIL[test_id], strict=True),)
             params.append(
                 pytest.param(num_tokens, config.EMB_SIZE, config.MOE_INTERMEDIATE_SIZE, marks=marks, id=test_id)
             )
     return params
+
+
+@pytest.fixture(autouse=True)
+def _xfail_blackhole_token_sweep(request, silicon_arch_name):
+    """Strict-xfail the _TOKEN_SWEEP_XFAIL cases only on blackhole: the K_gate / L1 issues are
+    blackhole-specific and these cases pass on other arches, where an unconditional strict xfail
+    would turn CI red on XPASS. Keyed by the full param id so each (model, token-count) is marked
+    independently."""
+    if silicon_arch_name != "blackhole" or request.node.name.split("[")[0] != "test_single_routed_expert_models":
+        return
+    callspec = getattr(request.node, "callspec", None)
+    if callspec is None:
+        return
+    for param_id, reason in _TOKEN_SWEEP_XFAIL.items():
+        if callspec.id.endswith(param_id):
+            request.applymarker(pytest.mark.xfail(reason=reason, strict=True))
+            break
 
 
 @pytest.mark.parametrize("num_tokens, emb_dim, hidden_dim", single_routed_expert_token_sweep_params())
@@ -318,7 +333,7 @@ def single_routed_expert_faked_params():
             test_id = f"{name}-{tag}"
             marks = (pytest.mark.extended_model,) if extended else ()
             if test_id in _FAKED_XFAIL:
-                marks += (pytest.mark.xfail(reason=_FAKED_XFAIL[test_id], strict=False),)
+                marks += (pytest.mark.xfail(reason=_FAKED_XFAIL[test_id], strict=True),)
             params.append(
                 pytest.param(
                     alloc,
