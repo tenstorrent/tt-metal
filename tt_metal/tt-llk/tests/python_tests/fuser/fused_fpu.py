@@ -23,11 +23,14 @@ class Fpu:
     and override methods to emit the C++ LLK calls that configure and drive the
     Math thread, plus a Python golden function for test validation.
 
-    The lifecycle called by ComputeNode.fpu_calculate() is:
+    The lifecycle called by the pipeline is:
         init() -> loop.math_loop() [which calls calculate()] -> uninit()
 
     Override `loop` with an appropriate FusedLoop subclass to control
     the tile iteration pattern used by the math phase.
+
+    Set `per_block_init = True` if init() needs block dimensions and must
+    be called per-block inside the batch loop rather than hoisted out.
 
     To create a new FPU:
         1. Subclass Fpu
@@ -39,6 +42,7 @@ class Fpu:
 
     # Controls the tile iteration pattern for the math loop.
     loop: FusedLoop = FusedLoop()
+    per_block_init: bool = False
 
     def init(
         self,

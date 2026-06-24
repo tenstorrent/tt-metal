@@ -66,7 +66,7 @@ VARIANTS = {
         # /mnt/models/moonshotai/Kimi-K2.6-dequantized dir name).
         hf_model_default="models/demos/deepseek_v3_d_p/reference/kimi_k2_6",
         ttnn_cache_default="/mnt/models/Kimi-K2_6-Cache/Kimi-K2_6-Cache-prefill",
-        default_gate_mode="HOST_ALL",  # Kimi (1 expert group) is validated only with the host gate
+        default_gate_mode="DEVICE_FP32",  # Kimi (1 expert group)
         # vllm-traced golden: metadata.json + kv_cache live under a single run-hash subdir, and the
         # per-layer KV is row-sharded into layer_N/rows_*.safetensors. resolve_trace_dir descends to
         # the subdir; kv_cache_pcc_check reassembles the shards.
@@ -116,8 +116,10 @@ def load_hf_config(variant: RunnerVariant):
 # ---------------------------------------------------------------------------
 # Device / weight-cache / H2D-service setup
 # ---------------------------------------------------------------------------
-def open_mesh_device(mesh_shape: tuple, model_cfg: type) -> ttnn.MeshDevice:
-    """Configure fabric (1D for sp<=8, else 2D) and open the mesh device."""
+def open_mesh_device(mesh_shape: tuple, model_cfg: type, l1_small_size: int = 0) -> ttnn.MeshDevice:
+    """Configure fabric (1D for sp<=8, else 2D) and open the mesh device. `l1_small_size` > 0 carves an
+    L1_SMALL region (needed when an op routes its semaphores there, e.g. the Kimi MoE routing all-gather
+    with use_l1_small_for_semaphores)."""
     sp = mesh_shape[0]
     fabric_config = ttnn.FabricConfig.FABRIC_1D if sp <= 8 else ttnn.FabricConfig.FABRIC_2D
 
@@ -134,7 +136,7 @@ def open_mesh_device(mesh_shape: tuple, model_cfg: type) -> ttnn.MeshDevice:
         ttnn.FabricManagerMode.DEFAULT,
         fabric_router_config,
     )
-    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape))
+    return ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(*mesh_shape), l1_small_size=l1_small_size)
 
 
 def resolve_weight_cache_path(variant: RunnerVariant, mesh_shape: tuple) -> Optional[Path]:

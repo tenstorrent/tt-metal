@@ -32,7 +32,7 @@ file(
     pad/device/kernels/*
     permute/device/kernels/*
     reshape_on_device/device/kernels/*
-    repeat/device/kernels/repeat_*_rm.cpp
+    repeat/device/kernels/*
     reshape_view/device/device/*
     scatter/device/kernels/*
     sharded/device/kernels/*
@@ -97,6 +97,7 @@ target_sources(
             concat/device/concat_program_factory.hpp
             concat/device/concat_s2i_program_factory.hpp
             concat/device/concat_s2s_multi_program_factory.hpp
+            concat/device/concat_block_sharded_program_factory.hpp
             concat/device/concat_s2s_rm_program_factory.hpp
             concat/device/concat_s2s_tiled_program_factory.hpp
             # copy/

@@ -34,10 +34,15 @@ enum class DataFormat : uint8_t {
     Lf8 = 10,
     Fp8_e4m3 = 26,
     MxFp4 = 22,
+    MxFp4_2x_B = 29,  // remapped in genfiles.
+    MxFp4_2x_A = 27,
     MxFp6P = 21,
     MxFp6R = 19,
     MxFp8R = 18,
     MxFp8P = 20,
+    MxInt8 = 12,
+    MxInt4 = 16,
+    MxInt2 = 17,
     Int8 = 14,
     Tf32 = 4,
     UInt8 = 30,
@@ -81,6 +86,9 @@ constexpr static uint32_t datum_size(const DataFormat& format) {
         case DataFormat::MxFp6R: throw std::invalid_argument("datum for mxfp6r is invalid");
         case DataFormat::MxFp8R: throw std::invalid_argument("datum for mxfp8r is invalid");
         case DataFormat::MxFp8P: throw std::invalid_argument("datum for mxfp8p is invalid");
+        case DataFormat::MxInt8: throw std::invalid_argument("datum for mxint8 is invalid");
+        case DataFormat::MxInt4: throw std::invalid_argument("datum for mxint4 is invalid");
+        case DataFormat::MxInt2: throw std::invalid_argument("datum for mxint2 is invalid");
         case DataFormat::Float16:
         case DataFormat::Float16_b: return 2;
         case DataFormat::Float32: return 4;
@@ -123,6 +131,9 @@ constexpr static uint32_t tile_size(const DataFormat& format) {
         case DataFormat::MxFp6R: return 1024 + 32;       // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
         case DataFormat::MxFp8R: return (1024) + 32;     // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
         case DataFormat::MxFp8P: return (1024) + 32;     // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data
+        case DataFormat::MxInt8: return 1024 + 32;  // 1056 bytes: 32 scales (1 per 32-elem block) + 1024 data (int8)
+        case DataFormat::MxInt4: return (1024 / 2) + 32;  // 544 bytes: 32 scales + 512 data (int4, 2 per byte)
+        case DataFormat::MxInt2: return (1024 / 4) + 32;  // 288 bytes: 32 scales + 256 data (int2, 4 per byte)
         case DataFormat::Float16:
         case DataFormat::Float16_b: return (1024 * 2);
         case DataFormat::Float32: return (1024 * 4);

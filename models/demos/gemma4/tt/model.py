@@ -24,7 +24,7 @@ from models.common.sampling.generator import SamplingGenerator
 from models.demos.gemma4.tt.attention import Gemma4AttentionConfig
 from models.demos.gemma4.tt.layer import Gemma4DecoderLayer
 from models.demos.gemma4.tt.rms_norm import RMSNorm
-from models.demos.gemma4.utils.general_utils import get_cache_file_name
+from models.demos.gemma4.utils.general_utils import cast_host_for_ttnn, get_cache_file_name
 from models.demos.gemma4.utils.substate import substate
 
 
@@ -59,6 +59,11 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
     for layer_type in set(hf_config.layer_types):
         cos, sin = rope(x_dummy, pos_ids, layer_type=layer_type)
         # cos, sin: [1, max_seq_len, head_dim]
+        # Cast to bfloat16 on host so from_torch's requested dtype matches the
+        # source: a dtype conversion inside from_torch queries tile metadata on
+        # the row-major host intermediate and emits the #18536 warning.
+        cos = cos.to(torch.bfloat16)
+        sin = sin.to(torch.bfloat16)
 
         # 4D for prefill: [1, 1, max_seq_len, head_dim]
         cos_4d = ttnn.from_torch(
@@ -101,6 +106,44 @@ def create_rope_caches(mesh_device, hf_config, max_seq_len):
         caches_2d[layer_type] = (cos_2d, sin_2d)
 
     return caches_4d, caches_2d
+
+
+def _inject_missing_kv_shared_attention_weights(state_dict, hf_config, kv_shared_layer_map):
+    """Add placeholder K/V tensors for checkpoint-omitted kv-shared layers.
+
+    Gemma4 E2B/E4B checkpoints can omit K/V projections for layers that reuse a
+    source layer's KV cache. The runtime correctly skips K/V work for those
+    layers, but the constructor still builds a fused QKV tensor before that
+    runtime flag is known. Zero K/V placeholders make weight loading complete;
+    they are discarded under ``is_kv_shared=True``.
+    """
+    if not state_dict or not kv_shared_layer_map:
+        return
+
+    for layer_idx in kv_shared_layer_map:
+        cfg = Gemma4AttentionConfig(hf_config, layer_idx)
+        kv_size = cfg.num_key_value_heads * cfg.head_dim
+        for prefix in ("model.language_model.", "model."):
+            attn_prefix = f"{prefix}layers.{layer_idx}.self_attn"
+            q_key = f"{attn_prefix}.q_proj.weight"
+            if q_key not in state_dict:
+                continue
+
+            weight_dtype = state_dict[q_key].dtype
+            norm_dtype = state_dict.get(f"{attn_prefix}.q_norm.weight", state_dict[q_key]).dtype
+            state_dict.setdefault(
+                f"{attn_prefix}.k_proj.weight",
+                torch.zeros((kv_size, hf_config.hidden_size), dtype=weight_dtype),
+            )
+            if not cfg.use_kv_tying:
+                state_dict.setdefault(
+                    f"{attn_prefix}.v_proj.weight",
+                    torch.zeros((kv_size, hf_config.hidden_size), dtype=weight_dtype),
+                )
+            state_dict.setdefault(
+                f"{attn_prefix}.k_norm.weight",
+                torch.ones((cfg.head_dim,), dtype=norm_dtype),
+            )
 
 
 class Gemma4Model:
@@ -176,6 +219,8 @@ class Gemma4Model:
             if self.kv_shared_layer_map:
                 logger.info(f"KV sharing enabled: {len(self.kv_shared_layer_map)} layers share KV from earlier layers")
 
+        _inject_missing_kv_shared_attention_weights(state_dict, hf_config, self.kv_shared_layer_map)
+
         # RoPE caches per layer type (sliding vs global)
         # Needs real HF text config (set by create_tt_model via _hf_text_config)
         hf_text_config = getattr(hf_config, "_hf_text_config", None)
@@ -212,7 +257,7 @@ class Gemma4Model:
                 embed_mapper = replicate
             embed_suffix = f"_{dtype_to_str(embedding_dtype)}"
             self.embedding_weight = ttnn.as_tensor(
-                embed_weight.unsqueeze(0).unsqueeze(0),
+                cast_host_for_ttnn(embed_weight.unsqueeze(0).unsqueeze(0), embedding_dtype),
                 device=mesh_device,
                 dtype=embedding_dtype,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -553,7 +598,17 @@ class Gemma4Model:
         if pli_combined is not None:
             pli_combined_tt = pli_combined
         elif pli_device_tensors is not None:
-            pass  # Pre-computed device tensors provided externally
+            # Pre-computed device tensors provided externally (legacy trace mode).
+            # For PLI models every layer must receive its per-layer input: a short
+            # list would silently run the remaining layers with pli_tt=None, which
+            # drops PLI and produces bad output with no other failure signal. The
+            # normal _compute_per_layer_inputs path treats missing PLI as a hard
+            # error, so enforce the same invariant at this boundary.
+            if self.hidden_size_per_layer_input and len(pli_device_tensors) != len(self.layers):
+                raise ValueError(
+                    f"pli_device_tensors has {len(pli_device_tensors)} entries "
+                    f"but PLI model has {len(self.layers)} layers"
+                )
         else:
             per_layer_inputs = self._compute_per_layer_inputs(input_ids_torch, embeds_torch)
 
@@ -584,8 +639,9 @@ class Gemma4Model:
             if pli_combined_tt is not None:
                 # On-device decode: slice layer i from combined [1, 1, n_layers, pli_size]
                 pli_tt = pli_combined_tt[:, :, i : i + 1, :]
-            elif pli_device_tensors is not None and i < len(pli_device_tensors):
-                # Pre-computed device tensors (legacy trace mode)
+            elif pli_device_tensors is not None:
+                # Pre-computed device tensors (legacy trace mode). Length was
+                # validated to match len(self.layers) for PLI models above.
                 pli_tt = pli_device_tensors[i]
             elif per_layer_inputs is not None and i < len(per_layer_inputs):
                 pli_layer = per_layer_inputs[i]
@@ -940,7 +996,21 @@ class Gemma4Model:
             return
         persistent = getattr(self, "_persistent_per_layer_page_tables", None)
         if persistent is None or len(persistent) != len(page_tables_per_layer):
-            return
+            # First call (warmup) — the persistent buffers don't exist yet.
+            # Allocate them *now*, while we're still out-of-trace. The bridge
+            # invokes this method before ``Generator.{prefill,decode}_forward``,
+            # which is what captures the trace; deferring allocation to
+            # ``_page_tables_to_ttnn`` inside the traced forward would create
+            # the buffers *during* an active trace capture (the "Allocating
+            # device buffers is unsafe due to the existence of an active trace"
+            # case). The captured paged-attention reads would then bind to
+            # buffers whose backing memory the trace can invalidate, so replay
+            # reads stale block IDs and decode emits garbage. Pre-allocating
+            # here binds capture to stable addresses; later calls just do the
+            # in-place host->device copy below.
+            persistent = self._page_tables_to_ttnn(page_tables_per_layer)
+            if persistent is None:
+                return
         for i, pt in enumerate(page_tables_per_layer):
             if pt is None or persistent[i] is None or isinstance(pt, ttnn.Tensor):
                 continue
@@ -1100,6 +1170,7 @@ class Gemma4Model:
         batch_size=1,
         input_ids_torch=None,
         embeds_torch=None,
+        pli_device_tensors=None,
         page_tables_per_layer=None,
         **kwargs,
     ):
@@ -1140,6 +1211,7 @@ class Gemma4Model:
             is_decode=False,
             input_ids_torch=input_ids_torch,
             embeds_torch=embeds_torch,
+            pli_device_tensors=pli_device_tensors,
             get_last_token=get_last_token,
             page_tables_per_layer=page_tables_per_layer,
             batch_size=batch_size,
@@ -1210,8 +1282,11 @@ class Gemma4Model:
         # Stage token IDs (not embeddings): embed_tokens runs on device in
         # ttnn_decode_forward. One device embedding op handles all B users —
         # the host-embedding path was hardcoded single-token. [1, batch] uint32.
+        # int64 (not int32) source: ttnn downcasts int64 to uint32 host-side, so the
+        # C++ to_dtype path is skipped. An int32->uint32 conversion would instead query
+        # tile metadata on a row-major host buffer and emit the #18536 warning.
         tokens_tt = ttnn.from_torch(
-            tok_flat.to(torch.int32).reshape(1, batch),
+            tok_flat.to(torch.int64).reshape(1, batch),
             layout=ttnn.ROW_MAJOR_LAYOUT,
             dtype=ttnn.uint32,
             mesh_mapper=replicate,
@@ -1220,8 +1295,10 @@ class Gemma4Model:
         # Position: [1, 32] uint32 padded — per-user positions in the first
         # `batch` entries. The decode RoPE embedding lookup gathers one cos/sin
         # row per user, so different users can sit at different positions.
-        pos_i32 = pos_flat.to(torch.int32).reshape(1, batch)
-        pos_padded = F.pad(pos_i32, (0, 32 - batch), "constant", 0) if batch < 32 else pos_i32
+        # int64 source for the uint32 tensor (see tokens above): avoids the int32->uint32
+        # host conversion that triggers the #18536 row-major get_tile() warning.
+        pos_i64 = pos_flat.to(torch.int64).reshape(1, batch)
+        pos_padded = F.pad(pos_i64, (0, 32 - batch), "constant", 0) if batch < 32 else pos_i64
         pos_tt = ttnn.from_torch(pos_padded, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=replicate)
 
         # int32 positions [batch] for KV cache update + SDPA (per user).

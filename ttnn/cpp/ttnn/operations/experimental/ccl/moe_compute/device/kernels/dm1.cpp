@@ -270,9 +270,13 @@ void kernel_main() {
                     }
 
                     // Wait for current data to be ready in cb_s2c_in2
+#if !defined(ARCH_BLACKHOLE)
                     while ((*my_semaphore_ptr) < semaphore_value) {
                     };
-
+#else
+                    // on BH we use standard semaphore APIs AND require the cache invalidation they provide
+                    noc_semaphore_wait_min(my_semaphore_ptr, semaphore_value);
+#endif
                     // Signal to compute core that data is ready
                     cb_reserve_back(cb_w2c_rdy, 1);
                     cb_push_back(cb_w2c_rdy, 1);
