@@ -7,6 +7,9 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <numeric>
+
 #include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/random_data.hpp"
@@ -146,16 +149,15 @@ struct ErrorMetrics {
 
 static ErrorMetrics compute_error_metrics(
     const xt::xarray<float>& reference, const xt::xarray<float>& actual, const std::string& name) {
-    float sum_error = 0.0f;
-    float max_error = 0.0f;
     size_t count = reference.size();
 
-    for (size_t i = 0; i < count; ++i) {
-        float error = std::abs(reference(i) - actual(i));
-        sum_error += error;
-        max_error = std::max(max_error, error);
-    }
+    auto errors = std::vector<float>(count);
+    std::transform(reference.begin(), reference.end(), actual.begin(), errors.begin(), [](float r, float a) {
+        return std::abs(r - a);
+    });
 
+    float sum_error = std::accumulate(errors.begin(), errors.end(), 0.0f);
+    float max_error = *std::max_element(errors.begin(), errors.end());
     float mean_error = sum_error / static_cast<float>(count);
     return {mean_error, max_error, name};
 }

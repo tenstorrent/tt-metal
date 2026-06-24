@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <memory>
 #include <umd/device/cluster.hpp>
 #include <vector>
@@ -39,12 +40,8 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeOne) {
     auto res = ttnn::max(tensor, /* dim */ 3, /* keepdim */ true);
     auto res_vector = ttml::core::to_vector(res);
     EXPECT_EQ(res_vector.size(), 6);
-    bool all_equal = true;
-    for (const auto& value : res_vector) {
-        if (std::fabs(value + 1.F) > 1e-2) {
-            all_equal = false;
-        }
-    }
+    bool all_equal =
+        std::all_of(res_vector.begin(), res_vector.end(), [](float v) { return std::fabs(v + 1.F) <= 1e-2F; });
     EXPECT_TRUE(all_equal);
 }
 
@@ -62,12 +59,9 @@ TEST_F(TrivialTnnFixedTest, TestMaxNegativeBatch) {
     auto res = ttnn::max(tensor, /* dim */ 3, /* keepdim */ true);
     auto res_vector = ttml::core::to_vector(res);
     EXPECT_EQ(res_vector.size(), 4);
-    bool all_equal = true;
-    for (int i = 0; i < 4 && all_equal; ++i) {
-        if (std::fabs(res_vector[i] - (-static_cast<float>(i + 1))) > 1e-2) {
-            all_equal = false;
-        }
-    }
+    bool all_equal = std::all_of(res_vector.begin(), res_vector.end(), [i = 0](float v) mutable {
+        return std::fabs(v - (-static_cast<float>(i++ + 1))) <= 1e-2F;
+    });
     EXPECT_TRUE(all_equal);
 }
 
@@ -134,10 +128,8 @@ TEST_F(TrivialTnnFixedTest, TestStableSoftmax_2) {
     auto res = ttml::ttnn_fixed::softmax(tensor, /* dim */ 3);
     auto res_vector = ttml::core::to_vector(res);
 
-    auto exp_sum = 0.0F;
-    for (auto& elem : data) {
-        exp_sum += std::exp(elem);
-    }
+    auto exp_sum =
+        std::accumulate(data.begin(), data.end(), 0.0F, [](float acc, float v) { return acc + std::exp(v); });
 
     for (int i = 0; i < res_vector.size(); ++i) {
         EXPECT_NEAR(res_vector[i], std::exp(data[i]) / exp_sum, 1e-2);
