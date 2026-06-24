@@ -366,16 +366,23 @@ ttnn::Tensor indexer_score(
     std::optional<uint32_t> cluster_axis) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
 
-    // Resolve the base = rank 0's absolute chunk_start. Multichip: omit it -> deduce from the chunked-prefill
-    // invariant base = T - sp_ring*Sq, where sp_ring is the mesh extent along cluster_axis (whole mesh if
-    // unset; so a 2D SP x TP mesh uses the SP-axis length, not total devices). Single chip: caller passes it.
+    // base = rank 0's absolute chunk_start. Multichip: omit it -> deduce base = T - sp_ring*Sq (assumes K is
+    // history + the full SP-gathered chunk). Caveats: (1) deduced window ends exactly at T, so it's incompatible
+    // with a growing kv_len < T -- pass chunk_start_idx explicitly there; (2) single-chip default flipped to
+    // nullopt (was 0), so omitting now gives base = T - Sq, not 0.
     uint32_t base = 0;
     if (chunk_start_idx.has_value()) {
         base = *chunk_start_idx;
     } else {
         const uint32_t Sq = q.logical_shape()[2];
         const uint32_t T = k.logical_shape()[2];
-        const uint32_t sp_ring = ttnn::ccl::get_topological_dimension(q, cluster_axis);
+        // sp_ring with the per-device rank's min-relative convention (get_linearized_index returns coord-min, so
+        // sp_ring = max_rank + 1). get_topological_dimension (max+1) would over-count on a nonzero-offset sub-mesh.
+        uint32_t max_rank = 0;
+        for (const auto& coord : q.device_storage().get_coords()) {  // single device -> one coord, max_rank 0
+            max_rank = std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, cluster_axis));
+        }
+        const uint32_t sp_ring = max_rank + 1;
         TT_FATAL(
             T >= sp_ring * Sq,
             "indexer_score: cannot deduce chunk_start_idx -- T={} < sp_ring({})*Sq({}). Pass chunk_start_idx "

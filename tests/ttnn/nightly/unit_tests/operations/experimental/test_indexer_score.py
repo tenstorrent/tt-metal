@@ -17,9 +17,11 @@ Two deployments, both Galaxy chunked prefill (50K history + 5K chunk =
              heads and the -inf mask is head-independent, so -inf survives the
              cross-TP sum)
 
-SP enters only via ``chunk_start``, so this is single-chip with ``sp_rank``
-selecting the ring position. This file is deliberately narrow (GLM5/DSv32 shapes
-only); broader knob/corner/validation coverage will be migrated in separately.
+We test on single chip with an explicit ``chunk_start``, ``sp_rank`` selecting the ring
+position. The multi-device QuietBox tests at the end instead derive ``chunk_start`` per
+device from the real mesh coordinate (one hash-excluded program serving every SP rank).
+This file is deliberately narrow (GLM5/DSv32 shapes only); broader knob/corner/validation
+coverage will be migrated in separately.
 """
 
 import os
@@ -831,11 +833,6 @@ QB_CASES = [("glm5", 8), ("dsv32", 16)]
 QB_IDS = [c[0] for c in QB_CASES]
 
 
-def _require_devices(mesh_device, n):
-    if mesh_device.get_num_devices() < n:
-        pytest.skip(f"requires {n} devices, have {mesh_device.get_num_devices()}")
-
-
 def _global_inputs(heads, chunk, t, seed):
     """Global GLX tensors (bf16; deployed dtypes applied at shard time): q/w over `chunk` queries, k over
     `t` all-gathered keys. Weights are random so some gates are negative (-inf must stay distinguishable
@@ -882,8 +879,6 @@ def _shard_1d(mesh_device, heads, seed):
 def test_indexer_score_qb_per_device_chunk_start(mesh_device, case_id, heads):
     """One mesh dispatch over 4 BH devices, each deriving its own chunk_start from its coordinate.
     Validate each device's output against its own chunk_start reference."""
-    _require_devices(mesh_device, QB_SP)
-
     q_g, k_g, w_g, q_dev, k_dev, w_dev = _shard_1d(mesh_device, heads, seed=42)
 
     # chunk_start_idx OMITTED -> the op deduces base = T - sp_ring*Sq = QB_HISTORY (sp_ring = 4 devices,
@@ -900,8 +895,6 @@ def test_indexer_score_qb_per_device_chunk_start(mesh_device, case_id, heads):
 def test_indexer_score_qb_one_compile_all_chunk_starts(mesh_device, case_id, heads):
     """chunk_start is excluded from the program hash: running several different bases must add exactly
     ONE program-cache entry (the first compile), proving no per-value recompile."""
-    _require_devices(mesh_device, QB_SP)
-
     _, _, _, q_dev, k_dev, w_dev = _shard_1d(mesh_device, heads, seed=7)
 
     # Three distinct chunk-start bases (all within the causal window). Only the first should compile.
@@ -943,8 +936,6 @@ def test_indexer_score_qb_sp2_tp2(mesh_device, case_id, heads):
     cluster_axis (SP), constant across the TP axis; heads split across TP. Each TP device computes a
     partial head-sum, which the test sums back (the TP all-reduce) and validates per SP rank against
     its own full-head, own-chunk_start reference."""
-    _require_devices(mesh_device, QB2_SP * QB2_TP)
-
     q_g, k_g, w_g = _global_inputs(heads, QB2_CHUNK, QB2_T, seed=42)
 
     # q/w: seq (dim 2) sharded along the SP axis, heads (dim 1) along the TP axis. k replicated.
