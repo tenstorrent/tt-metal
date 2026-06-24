@@ -177,39 +177,7 @@ public:
     // `consumer_ack_count` — the handshake wait count (used only under PRE_HANDSHAKE). Defaults to
     // ACK_EQUALS_FANOUT, meaning "= the EXCLUDE fan-out the rect derives" (the dense case). Both are
     // runtime ctor args; everything they feed is precomputed ONCE here so send() does no arithmetic.
-    explicit SenderPipe(
-        const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count = ACK_EQUALS_FANOUT) :
-        noc_(noc), dest_(dest), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
-        // Catch a NoC mismatch early (only meaningful under --dev): the precomputed routing corners and
-        // my_x/my_y are baked for NOC_ID, so a `noc` running a different NoC would mcast to the wrong
-        // corners / mis-test containment.
-        ASSERT(noc_.get_noc_id() == NOC_ID);
-        // `consumer_ready` is NOT kernel-initialized: remote receivers increment it with no
-        // happens-before relative to this ctor, so a ctor set(0) would clobber an early ack and hang.
-        // Its initial 0 comes from host `CreateSemaphore(..., 0)`.
-        //
-        // Initial VALID for the flag cell that set_multicast broadcasts. send() re-asserts it each call
-        // (so a core that also receives on this cell doesn't broadcast a stale INVALID).
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
-            data_ready_.set(VALID);
-        }
-        // Whether this sender's own core lies in the receiver rect is fixed at construction (my coords
-        // and the rect are both constant now), so compute it ONCE here rather than per send().
-        in_rect_ = my_x[NOC_ID] >= dest_.xlo() && my_x[NOC_ID] <= dest_.xhi() && my_y[NOC_ID] >= dest_.ylo() &&
-                   my_y[NOC_ID] <= dest_.yhi();
-        // Fan-out, derived from the rect area (num_dests == area ± source) — precomputed so send()
-        // branch-selects between two constants with no arithmetic:
-        //   * EXCLUDE-source count: area minus self if this sender is in its own box;
-        //   * INCLUDE-source (loopback) count: +1 for the sender's own self-copy.
-        num_dests_excl_ = dest_.area() - (in_rect_ ? 1u : 0u);
-        num_dests_incl_ = num_dests_excl_ + 1u;
-        // Degenerate self-only box (a 1x1 rect that IS the sender): no receivers, send() does a local
-        // copy. (`area==1 && in_rect` => excl==0.)
-        degenerate_ = (num_dests_excl_ == 0u);
-        // Handshake ack count: the dense default IS the EXCLUDE fan-out (every landing core acks);
-        // a divergent caller overrides with its smaller active-core count.
-        ack_count_ = (consumer_ack_count == ACK_EQUALS_FANOUT) ? num_dests_excl_ : consumer_ack_count;
-    }
+    explicit SenderPipe(const Noc& noc, const McastRect<NOC_ID>& dest, uint32_t consumer_ack_count = ACK_EQUALS_FANOUT);
 
     // ===== DATA channel (a block + a ready signal) =====
     // send() is atomic and absorbs ALL FOUR guards (callers cannot reorder or skip them):
@@ -217,111 +185,27 @@ public:
     //   mcast data                                — object API auto-chunks a ready block > burst
     //   signal ready                              — data-before-signal, same VC; reset owned by receiver
     //   fence                                     — flush; atomic-barrier on the Counter path
-    void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
-        // Degenerate: no receiver cores. If the sender is in its own box and lands a copy elsewhere, do
-        // a local copy (a loopback to just self may hang); else nothing.
-        if (degenerate_) {
-            if (in_rect_) {
-                local_copy_(src_l1, dst_l1, size);
-            }
-            return;
-        }
-        if constexpr (PRE_HANDSHAKE) {
-            consumer_ready_.wait(ack_count_);
-            consumer_ready_.set(0);
-        }
-        // Loopback iff the sender is in the box AND lands its own copy somewhere other than its source
-        // (src == dst means the copy is already in place; never self-overwrite in place). The
-        // in-box test is precomputed in the ctor; only the src/dst aliasing varies per send.
-        const bool loopback = in_rect_ && src_l1 != dst_l1;
-        // Branch-select between the two precomputed fan-out counts (no arithmetic): the loopback path
-        // adds the sender's own self-copy (+1), which never acks, so the consumer_ready wait above stays
-        // on ack_count_ regardless.
-        const uint32_t mcast_dests = loopback ? num_dests_incl_ : num_dests_excl_;
-        send_data_(src_l1, dst_l1, size, loopback, mcast_dests);
-        signal_ready_(loopback, mcast_dests);  // the signal rides the same mode as the data
-        fence_();
-    }
+    void send(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     // ===== CONTROL channel (a pure ready signal, no data block) =====
     // Broadcast a plain readiness signal (a doorbell). Always plain (EXCLUDE-source) — no data
     // accompanies it. Pairs with ReceiverPipe::receive_signal().
-    void send_signal() {
-        if (degenerate_) {
-            return;  // nobody to signal
-        }
-        signal_ready_(/*loopback=*/false, num_dests_excl_);
-        fence_();
-    }
+    void send_signal();
 
 private:
     // ---- data multicast via the Noc object ----
-    void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests) {
-        const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
-        UnicastEndpoint src_ep;
-        MulticastEndpoint dst_ep;
-        const typename noc_traits_t<UnicastEndpoint>::src_args_type src_args{.addr = src_l1};
-        const typename noc_traits_t<MulticastEndpoint>::dst_args_mcast_type dst_args{r.sx, r.sy, r.ex, r.ey, dst_l1};
-        // Data is always linked to the following signal mcast (signal_ready_ issues the signal with
-        // linked=false to terminate the chain). The linked pair enforces data-before-signal without a
-        // barrier.
-        if (loopback) {
-            noc_.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
-                src_ep, dst_ep, size, mcast_dests, src_args, dst_args, /*linked=*/true);
-        } else {
-            noc_.async_write_multicast<NocOptions::DEFAULT>(
-                src_ep, dst_ep, size, mcast_dests, src_args, dst_args, /*linked=*/true);
-        }
-    }
+    void send_data_(uint32_t src_l1, uint32_t dst_l1, uint32_t size, bool loopback, uint32_t mcast_dests);
 
     // ---- signal the receivers the data is ready ----
     // `loopback` mirrors the data mcast of the same send(); send_signal() has no data, so it is always
     // plain (EXCLUDE-source).
-    void signal_ready_(bool loopback, uint32_t mcast_dests) {
-        const auto& r = dest_.bounds();  // routing-correct start/end (precomputed in the rect's ctor)
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-            data_ready_.inc_multicast(noc_, r.sx, r.sy, r.ex, r.ey, /*value=*/1, mcast_dests);  // monotone +1
-        } else {
-            // set_multicast broadcasts this core's own cell as the source, so re-assert VALID first: a
-            // core that also receives on this cell leaves it INVALID after a receive, and a once-only set
-            // would go stale and stall the receivers. Redundant no-op for a send-only core.
-            data_ready_.set(VALID);
-            if (loopback) {
-                data_ready_.set_multicast<NocOptions::MCAST_INCL_SRC>(
-                    noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
-            } else {
-                data_ready_.set_multicast<NocOptions::DEFAULT>(
-                    noc_, r.sx, r.sy, r.ex, r.ey, mcast_dests, /*linked=*/false);
-            }
-        }
-    }
+    void signal_ready_(bool loopback, uint32_t mcast_dests);
 
     // ---- post-send fence ----
-    void fence_() {
-        noc_.async_writes_flushed();  // SENT — source L1 safe to reuse. The signal proves arrival.
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-            // inc_multicast is a NON-POSTED multicast atomic: it expects num_dests acks that the flush
-            // above does not drain, so the Counter path additionally waits the atomic barrier.
-            noc_.async_atomic_barrier();
-        }
-    }
+    void fence_();
 
     // ---- local L1 self-copy (degenerate self-only guard) via the Noc object ----
-    void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size) {
-        if (src_l1 == dst_l1) {
-            return;  // src == dst: nothing to copy
-        }
-        UnicastEndpoint src_ep, dst_ep;
-        const uint32_t mx = my_x[NOC_ID];
-        const uint32_t my = my_y[NOC_ID];
-        noc_.async_read(
-            src_ep,
-            dst_ep,
-            size,
-            typename noc_traits_t<UnicastEndpoint>::src_args_type{mx, my, src_l1},
-            typename noc_traits_t<UnicastEndpoint>::dst_args_type{0, 0, dst_l1});
-        noc_.async_read_barrier();
-    }
+    void local_copy_(uint32_t src_l1, uint32_t dst_l1, uint32_t size);
 
     Noc noc_;
     McastRect<NOC_ID> dest_;
@@ -360,44 +244,18 @@ class ReceiverPipe {
         "Pass it, or set PRE_HANDSHAKE=false to wait the data-ready signal without acking.");
 
 public:
-    explicit ReceiverPipe(const Noc& noc) :
-        noc_(noc), data_ready_(DATA_READY_SEM_ID), consumer_ready_(CONSUMER_READY_SEM_ID) {
-        // Init the flag THIS side waits on. The Counter signal needs no reset/init (monotone).
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Flag) {
-            data_ready_.set(INVALID);
-        }
-    }
+    explicit ReceiverPipe(const Noc& noc);
 
     // receive(): [ack the sender], wait data-ready, clear the flag (clear-before-ack).
     // `sender_x`/`sender_y` are the SENDER core's NoC coords — the target of the receiver->sender
     // readiness ack. On return the block is in the receiver's dst L1, bit-exact (signal arrival =>
     // data arrival). What the caller does with the dst is its own business.
-    void receive(uint32_t sender_x, uint32_t sender_y) {
-        if constexpr (PRE_HANDSHAKE) {
-            // tell the sender "my dest is free / I am ready" (remote atomic inc on its counter)
-            consumer_ready_.up(noc_, sender_x, sender_y, 1);
-        }
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-            data_ready_.wait_min(++round_);
-        } else {
-            data_ready_.wait(VALID);
-            data_ready_.set(INVALID);  // clear this round's flag; next receive()'s ack follows
-        }
-    }
+    void receive(uint32_t sender_x, uint32_t sender_y);
 
     // Wait the control signal. Symmetric with SenderPipe::send_signal().
     //   * Flag    — a plain doorbell: returns once the signal arrives, then clears it.
     //   * Counter — returns the monotone round number reached.
-    uint32_t receive_signal() {
-        if constexpr (DATA_READY_SIGNAL == DataReadySignal::Counter) {
-            data_ready_.wait_min(++round_);
-            return round_;
-        } else {
-            data_ready_.wait(VALID);
-            data_ready_.set(INVALID);
-            return VALID;
-        }
-    }
+    uint32_t receive_signal();
 
 private:
     Noc noc_;
@@ -407,3 +265,5 @@ private:
 };
 
 }  // namespace dataflow_kernel_lib
+
+#include "mcast_pipe.inl"
