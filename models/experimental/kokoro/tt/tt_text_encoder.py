@@ -128,6 +128,39 @@ def _mask_keep_flat(text_mask: torch.Tensor, *, device: ttnn.Device) -> ttnn.Ten
     return ttnn.from_torch(keep, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
+def _fused_recurrent_program_config(hidden_size: int, device: ttnn.Device):
+    """Tuned program config for the per-step fused recurrent matmul ``[B, 2H] @ [2H, 8H]``.
+
+    The matmul sweep (``perf/test_matmul_text_encoder_perf_sweep.py``) found a 1D mcast config
+    (8x8 grid, ``in0_block_w=4``, ``per_core_M=per_core_N=1``) is the fastest PCC-passing option for
+    the H=256 shape that keeps ``in0``/out interleaved — ~8 µs vs ~11 µs for the default config, with
+    PCC unchanged (the matmul is bit-exact across layouts; only the tiling/mcast schedule changes).
+    Interleaved in0 is required: a sharded-in0 winner would need an InterleavedToSharded per step
+    inside the host-driven loop, a net regression on this dispatch-bound model.
+
+    ``per_core_M=1`` holds for any ``B<=32`` (Mt=1). Returns ``None`` (use the default config) unless
+    the shape matches the swept/validated H (``8H`` tiles == 64, evenly mapped onto an 8x8 grid), so
+    other-width BiLSTMs are unaffected.
+    """
+    if device.arch() != ttnn.device.Arch.BLACKHOLE:
+        return None
+    n_tiles = (8 * hidden_size) // 32  # 8H output cols in tiles
+    k_tiles = (2 * hidden_size) // 32  # 2H contraction in tiles
+    if n_tiles != 64 or k_tiles % 4 != 0:  # validated shape only (H=256 -> Nt=64, Kt=16)
+        return None
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=ttnn.CoreCoord(8, 8),  # 64 cores -> one 8H tile each
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=1,
+        per_core_N=1,
+        fuse_batch=True,
+        fused_activation=None,
+        mcast_in0=True,
+    )
+
+
 def _maybe_interleaved(x: ttnn.Tensor) -> ttnn.Tensor:
     if ttnn.is_tensor_storage_on_device(x):
         try:
@@ -210,6 +243,7 @@ class TTTextEncoder:
             )
             for bp in params.blocks
         )
+        self._recurrent_program_config = _fused_recurrent_program_config(params.lstm_fwd.hidden_size, device)
 
     def forward(
         self,
@@ -300,6 +334,8 @@ class TTTextEncoder:
             # TextEncoder is the one LSTM that tolerates the gate-sum rounding change; fold the
             # per-step gates_x add into the recurrent matmul bias (one fewer BinaryNg/step).
             fold_gates_bias=True,
+            # Tuned 1D mcast config for the per-step recurrent matmul (interleaved, loop-safe).
+            recurrent_program_config=self._recurrent_program_config,
         )
 
         if mask_keep is not None:

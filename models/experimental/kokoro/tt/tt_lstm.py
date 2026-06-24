@@ -25,6 +25,11 @@ _TILE = 32
 # tensor allocations on BH (see kmodel L1 circular-buffer overlap at ~137 KiB).
 _L1_STEP_BUDGET_BYTES = 512 * 1024
 _L1_STEP_HIDDEN_MAX = 64
+# Direction-fused loop only: max ``[L, B, 2H]`` output-accumulation footprint kept on L1-interleaved
+# per-step tensors (the sole L-scaling term; the rest of the working set is fixed-size). 4 MiB ≈
+# L<=128 at B=2/H=256 — verified to fit BH L1 with margin (tested at L=48 ~1.5 MiB); longer
+# sequences fall back to DRAM. Only consulted when a tuned recurrent program config is supplied.
+_FUSED_L1_ACCUM_BUDGET_BYTES = 4 * 1024 * 1024
 
 
 def _dtype_nbytes(dtype) -> int:
@@ -246,6 +251,7 @@ def _lstm_step_fused(
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     fold_bias: bool = False,
+    program_config=None,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
     """One fused BiLSTM step advancing both directions at once.
 
@@ -254,6 +260,11 @@ def _lstm_step_fused(
     order ``[i_f i_r f_f f_r g_f g_r o_f o_r]`` and ``w_h_block`` is the block-diagonal recurrent
     weight from :func:`build_fused_recurrent_weight`. Identical cell math to :func:`_lstm_step`,
     just run once over ``2H``-wide tensors instead of twice over ``H``-wide ones.
+
+    ``program_config`` (optional) overrides the recurrent ``h @ W_h_block`` matmul's program config.
+    A tuned 1D mcast config beats the default for the ``[B, 2H] @ [2H, 8H]`` shape on Blackhole
+    (~8 vs ~11 µs at H=256, PCC unchanged) while keeping ``in0``/``out`` interleaved — i.e. no
+    per-step reshard. See :func:`models.experimental.kokoro.tt.tt_text_encoder` and the matmul sweep.
     """
     if fold_bias:
         # Fold gates_x into the recurrent matmul bias epilogue (one fp32 epilogue add): drops one
@@ -264,6 +275,7 @@ def _lstm_step_fused(
             bias=gates_x,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
+            program_config=program_config,
         )
     else:
         gates_h = ttnn.linear(
@@ -272,6 +284,7 @@ def _lstm_step_fused(
             bias=None,
             memory_config=memory_config,
             compute_kernel_config=compute_kernel_config,
+            program_config=program_config,
         )
         gates = ttnn.add(gates_x, gates_h, memory_config=memory_config)
         ttnn.deallocate(gates_h)
@@ -333,6 +346,7 @@ def tt_bilstm_nlc(
     fp32_state: bool = False,
     w_h_block: Optional[ttnn.Tensor] = None,
     fold_gates_bias: bool = False,
+    recurrent_program_config=None,
 ) -> ttnn.Tensor:
     """
     1-layer BiLSTM over sequence for NLC ``[B, L, in]``.
@@ -439,6 +453,22 @@ def tt_bilstm_nlc(
     # set of slices and one cell-math chain per step instead of two. Bit-identical to the
     # per-direction loops (the block-diagonal recurrent weight's zeros add 0.0 in fp32 accum).
     if w_h_block is not None and valid_all is None:
+        # Per-step tensors (state/gates/slices) on L1-interleaved instead of DRAM: the small
+        # elementwise/slice/sigmoid ops are memory-bound, so L1 cuts their device time ~10-15%
+        # (matmul is launch-bound, unaffected). L1-interleaved spreads across banks, so it needs
+        # NO per-step reshard (unlike width-sharding) — interleaved in/out throughout.
+        # Two guards: (1) only with ``recurrent_program_config`` set — its bounded matmul CBs avoid
+        # the L1 circular-buffer clash that forced DRAM at H>64 with the default config; (2) only
+        # when ``not do_fold`` — the bias-fold recurrent matmul TT_FATALs with L1 in0/out. The
+        # ``[L,B,2H]`` output accumulation is the only L-scaling term, so gate on a sequence-length
+        # budget and fall back to DRAM for long sequences (keeps L1 footprint bounded).
+        if (
+            recurrent_program_config is not None
+            and not do_fold
+            and step_mc.buffer_type != ttnn.BufferType.L1
+            and L * _tensor_nbytes((B, 2 * H), state_dtype) <= _FUSED_L1_ACCUM_BUDGET_BYTES
+        ):
+            step_mc = ttnn.L1_MEMORY_CONFIG
         H2 = 2 * H
         H8 = 8 * H
         # Reverse the sequence in time with an anti-identity matmul (each output row is exactly
@@ -496,6 +526,7 @@ def tt_bilstm_nlc(
                 compute_kernel_config=compute_kernel_config,
                 memory_config=step_mc,
                 fold_bias=do_fold,
+                program_config=recurrent_program_config,
             )
             # hc = [h_f@pos t | h_r@pos L-1-t]: forward output for position t and reverse output for
             # position L-1-t. Stash the whole [B,2H] state and split in bulk after the loop (avoids
