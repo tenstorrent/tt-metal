@@ -10,7 +10,24 @@
 namespace ckernel {
 namespace sfpu {
 
-inline void _init_gelu_() {
+// Calculates GELU for number of rows of output SFPU ops (Quasar = 2 rows)
+inline void _calculate_gelu_sfp_rows_() {
+    TTI_SFPLOAD(
+        p_sfpu::LREG3,
+        p_sfpu::sfpmem::DEFAULT,
+        ADDR_MOD_7,
+        0,
+        0);  // load from dest into lreg[3], uses ADDR_MOD_7 (set to all zeroes)
+    TTI_SFPLUTFP32(
+        p_sfpu::LREG4,
+        0x2);  // Calculate piecewise part on lreg[3] and store in lreg[4], using FP16 6-entry format mode 1 LUT
+    TTI_SFPMAD(
+        p_sfpu::LREG6, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5, 0);  // 0.5 * x + piecewise result, store in lreg[5]
+    TTI_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, 0, 0);                    // store from lreg[5] into dest register
+}
+
+template <bool APPROXIMATION_MODE = true>
+inline void gelu_init() {
     // Need a fixed constant of 0.5 for the MAD part of the operation
     TTI_SFPLOADI(p_sfpu::LREG6, 0x8, 0x3F00);
     TTI_SFPLOADI(p_sfpu::LREG6, 0xA, 0x0000);
@@ -43,28 +60,7 @@ inline void _init_gelu_() {
     _sfpu_load_config32_(0xC, 0xB122, 0xA3AE);
 }
 
-// Calculates GELU for number of rows of output SFPU ops (Quasar = 2 rows)
-inline void _calculate_gelu_sfp_rows_() {
-    TTI_SFPLOAD(
-        p_sfpu::LREG3,
-        p_sfpu::sfpmem::DEFAULT,
-        ADDR_MOD_7,
-        0,
-        0);  // load from dest into lreg[3], uses ADDR_MOD_7 (set to all zeroes)
-    TTI_SFPLUTFP32(
-        p_sfpu::LREG4,
-        0x2);  // Calculate piecewise part on lreg[3] and store in lreg[4], using FP16 6-entry format mode 1 LUT
-    TTI_SFPMAD(
-        p_sfpu::LREG6, p_sfpu::LREG3, p_sfpu::LREG4, p_sfpu::LREG5, 0);  // 0.5 * x + piecewise result, store in lreg[5]
-    TTI_SFPSTORE(p_sfpu::LREG5, 0, ADDR_MOD_7, 0, 0);                    // store from lreg[5] into dest register
-}
-
-template <[[maybe_unused]] bool APPROXIMATION_MODE = true>
-inline void gelu_init() {
-    _init_gelu_();
-}
-
-template <int ITERATIONS = SFPU_ITERATIONS>
+template <bool APPROXIMATION_MODE = true, int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_gelu() {
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {

@@ -76,7 +76,7 @@ void init_unary_sfpu_operation_quasar()
 {
     if constexpr (OPERATION == SfpuType::gelu)
     {
-        _init_gelu_();
+        gelu_init();
     }
     else if constexpr (OPERATION == SfpuType::square)
     {
@@ -167,7 +167,7 @@ void call_unary_sfpu_operation_quasar(std::uint32_t dst_index, DataFormat sfpu_f
     }
     else if constexpr (OPERATION == SfpuType::gelu)
     {
-        _llk_math_eltwise_unary_sfpu_params_(calculate_gelu<ITERATIONS>, dst_index);
+        _llk_math_eltwise_unary_sfpu_params_(calculate_gelu<true /* APPROX */, ITERATIONS>, dst_index);
     }
     else if constexpr (OPERATION == SfpuType::relu)
     {
