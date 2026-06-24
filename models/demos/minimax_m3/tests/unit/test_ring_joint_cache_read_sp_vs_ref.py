@@ -42,7 +42,11 @@ def _torch_gqa_causal(q, k, v):
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize("n_chunks,chunk_local", [(2, 32)], ids=["2x256"])
+@pytest.mark.parametrize(
+    "n_chunks,chunk_local",
+    [(2, 32), (2, 640)],  # 2x256 (quick) and 2x5120 — the REAL M3 prefill chunk (640/chip at SP=8)
+    ids=["2x256", "2x5120"],
+)
 def test_ring_joint_cache_read_sp(mesh_device, device_params, n_chunks, chunk_local, reset_seeds):
     """ring_joint cache-read: last chunk's Q attends to the full cached prefix, SP=8 x TP=4, vs golden.
 
