@@ -18,8 +18,8 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
@@ -229,7 +229,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     if (tensor.memory_config().is_sharded()) {
         TT_FATAL(!sub_core_grid.has_value(), "Sharded reshape does not support sub core grid specification\n");
         MemoryConfig temp_memory_config{TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-        temp_tensor = ttnn::sharded_to_interleaved(tensor, temp_memory_config, std::nullopt);
+        temp_tensor = ttnn::to_memory_config(tensor, temp_memory_config);
     }
     if (memory_config.is_sharded()) {
         intermediate_out_memory_config =
@@ -247,7 +247,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
             /*explicit_memory_config=*/false,
             tensor.memory_config().shard_spec());
         if (output_mem_config.is_sharded()) {
-            return ttnn::interleaved_to_sharded(temp_tensor2, output_mem_config, std::nullopt);
+            return ttnn::to_memory_config(temp_tensor2, output_mem_config);
         }
     }
     return temp_tensor2;
@@ -402,7 +402,7 @@ ttnn::Tensor reshape_tiled(
             if (tensor.memory_config().is_sharded()) {
                 MemoryConfig working_input_memory_config{
                     TensorMemoryLayout::INTERLEAVED, tensor.memory_config().buffer_type()};
-                tensor3d = ttnn::sharded_to_interleaved(tensor3d, working_input_memory_config, std::nullopt);
+                tensor3d = ttnn::to_memory_config(tensor3d, working_input_memory_config);
             }
             tensor3d = ttnn::typecast(tensor3d, DataType::BFLOAT16);
 
@@ -432,7 +432,7 @@ ttnn::Tensor reshape_tiled(
                     explicit_memory_config,
                     tensor.memory_config().shard_spec());
                 if (output_mem_config.is_sharded()) {
-                    output_tensor_3d = ttnn::interleaved_to_sharded(output_tensor_3d, output_mem_config, std::nullopt);
+                    output_tensor_3d = ttnn::to_memory_config(output_tensor_3d, output_mem_config);
                 }
             }
             return PerformView(output_tensor_3d, logical_shape, compute_padded_shape(logical_shape));
@@ -459,7 +459,7 @@ ttnn::Tensor reshape_tiled(
         // prim::reshape_view sees matching layouts.
         if (tensor3d.memory_config().is_sharded() && !target_output_mem_config.is_sharded()) {
             MemoryConfig interleaved_input{TensorMemoryLayout::INTERLEAVED, tensor3d.memory_config().buffer_type()};
-            tensor3d = ttnn::sharded_to_interleaved(tensor3d, interleaved_input, std::nullopt);
+            tensor3d = ttnn::to_memory_config(tensor3d, interleaved_input);
         }
 
         auto output_tensor_3d = ttnn::prim::reshape_view(
@@ -482,9 +482,9 @@ ttnn::Tensor reshape_tiled(
                 // without overflowing fill_pad_writer's per-core runtime-arg cap (341).
                 const auto sharded_mem_config = output_tensor_3d.memory_config();
                 MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
-                auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
+                auto interleaved = ttnn::to_memory_config(output_tensor_3d, interleaved_mem);
                 interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
-                output_tensor_3d = ttnn::interleaved_to_sharded(interleaved, sharded_mem_config, std::nullopt);
+                output_tensor_3d = ttnn::to_memory_config(interleaved, sharded_mem_config);
             } else {
                 output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
             }

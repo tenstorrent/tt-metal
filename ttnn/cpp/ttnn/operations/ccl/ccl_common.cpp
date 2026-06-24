@@ -8,7 +8,7 @@
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -417,7 +417,7 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
         begins[dim] = i * output_tensor.at(0).logical_shape()[dim] / num_devices;
         ends[dim] = begins[dim] + unpad_elements[dim];
 
-        ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
+        ttnn::Tensor sliced_tensor = /*nuked-op*/ output_tensor.at(0);
 
         combined_tensors.push_back(sliced_tensor);
     }

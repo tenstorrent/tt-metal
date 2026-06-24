@@ -10,8 +10,8 @@
 #include <ttnn/tensor/layout/layout.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/tensor.hpp>
-#include <ttnn/operations/experimental/slice_write/slice_write.hpp>
-#include <ttnn/operations/experimental/padded_slice/padded_slice.hpp>
+// TODO(nuked-op): removed include of deleted slicing op header
+// TODO(nuked-op): removed include of deleted slicing op header
 namespace ttnn::operations::op_slicing {
 
 // Compute the rounding value for slice boundaries based on output layout and slice type.
@@ -481,12 +481,7 @@ void run_sliced_op(
         auto sliced_input_tensor_memory_config = op_slice_attr->get_input_memory_config(
             {output_slice_height_start, output_slice_width_start}, {output_slice_height_end, output_slice_width_end});
 
-        const Tensor sliced_input_tensor = ttnn::experimental::padded_slice(
-            input_tensor,
-            ttsl::SmallVector<uint32_t>{0, input_slice_height_start, input_slice_width_start, 0},  // Start
-            ttsl::SmallVector<uint32_t>{batch_size, input_slice_height_end, input_slice_width_end, input_channels},
-            ttsl::SmallVector<uint32_t>{1, 1, 1, 1},  // Step
-            sliced_input_tensor_memory_config);
+        const Tensor sliced_input_tensor = /*nuked-op*/ input_tensor;
 
         auto sliced_output_tensors = op_slice_attr->run_L1_op(
             sliced_input_tensor,
@@ -519,13 +514,8 @@ void run_sliced_op(
                     ttnn::Shape(
                         {batch_size, output_slice_height, output_slice_width, sliced_output_tensor.padded_shape()[3]}));
             }
-            ttnn::experimental::slice_write(
-                sliced_output_tensor,
-                output_tensor,
-                ttsl::SmallVector<uint32_t>{0, output_slice_height_start, output_slice_width_start, 0},
-                ttsl::SmallVector<uint32_t>{
-                    batch_size, output_slice_height_end, output_slice_width_end, output_channels},
-                ttsl::SmallVector<uint32_t>{1, 1, 1, 1});
+            output_tensor = sliced_output_tensor;  // TODO(nuked-op slice_write): was slice_write(sliced_output_tensor,
+                                                   // output_tensor, ...)
         }
         output_slice_dim_start += output_slice_size;
         slice_index++;

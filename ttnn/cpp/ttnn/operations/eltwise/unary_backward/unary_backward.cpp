@@ -13,7 +13,7 @@
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
 #include "ttnn/operations/reduction/prod/prod.hpp"
@@ -1732,7 +1732,7 @@ std::vector<Tensor> prod_bw(
             ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
             ttsl::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[2]};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
+            Tensor new_slice_tensor = /*nuked-op*/ required;
             after_permute_dims = {0, 2, 3, 1};
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if (updated_grad.storage_type() != StorageType::DEVICE) {
@@ -1746,7 +1746,7 @@ std::vector<Tensor> prod_bw(
             ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
             ttsl::SmallVector<uint32_t> end_index = {
                 grad.padded_shape()[0], 1, grad.padded_shape()[1], grad.padded_shape()[3]};
-            Tensor new_slice_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
+            Tensor new_slice_tensor = /*nuked-op*/ required;
             updated_grad = ttnn::permute(new_slice_tensor, after_permute_dims, output_memory_config);
             if (updated_grad.layout() == Layout::ROW_MAJOR) {
                 updated_grad =
@@ -1819,8 +1819,8 @@ std::vector<Tensor> prod_bw(
             ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
             ttsl::SmallVector<uint32_t> end_index = {
                 input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
-            auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
-            grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
+            auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+            grad_result = /*nuked-op*/ result;
         }
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
@@ -1868,7 +1868,7 @@ std::vector<Tensor> prod_bw(
         ttsl::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttsl::SmallVector<uint32_t> end_index = {
             input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
-        grad_result = ttnn::slice(result, start_index, end_index, step, std::nullopt);
+        grad_result = /*nuked-op*/ result;
     }
     grad_tensor.emplace_back(grad_result);
     return grad_tensor;

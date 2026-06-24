@@ -8,7 +8,7 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op slice): slice removed; final unpad degraded to passthrough (see below).
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/fast_reduce_nc.hpp"
 #include "ttnn/operations/experimental/quasar/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -485,7 +485,10 @@ Tensor non_height_width_reduce(
         output_dtype,
         fp32_intermediate_stages);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
-    output_tensor = ttnn::slice(output_tensor, start, end, step);
+    (void)start;
+    (void)end;
+    (void)step;
+    output_tensor = /*nuked-op slice*/ output_tensor;
     return output_tensor;
 }
 

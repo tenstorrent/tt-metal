@@ -14,7 +14,7 @@
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/functions.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -58,7 +58,7 @@ Tensor _std(
 }
 
 std::vector<Tensor> split_tensor_for_glu(
-    const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
+    const Tensor& input_a, int32_t dim, [[maybe_unused]] const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
     ttnn::Shape inshape(input_a.padded_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
@@ -68,9 +68,9 @@ std::vector<Tensor> split_tensor_for_glu(
     ttsl::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     ttsl::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
 
-    auto step = ttsl::SmallVector<uint32_t>({1, 1, 1, 1});
-    Tensor t_a = ttnn::slice(input_a, s_a, e_a, step, output_mem_config);
-    Tensor t_b = ttnn::slice(input_a, s_b, e_b, step, output_mem_config);
+    auto step = ttnn::SmallVector<uint32_t>({1, 1, 1, 1});
+    Tensor t_a = /*nuked-op*/ input_a;
+    Tensor t_b = /*nuked-op*/ input_a;
 
     t_split.emplace_back(t_a);
     t_split.emplace_back(t_b);

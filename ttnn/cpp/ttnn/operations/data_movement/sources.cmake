@@ -10,7 +10,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     bcast/device/bcast_sharded_h_optimised_program_factory.cpp
     bcast/device/bcast_multi_core_w_program_factory.cpp
     bcast/device/bcast_multi_core_hw_program_factory.cpp
-    chunk/chunk.cpp
     clone/clone.cpp
     clone/device/clone_device_operation.cpp
     clone/device/clone_program_factory.cpp
@@ -54,7 +53,6 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     move/device/move_overlap_program_factory.cpp
     move/device/move_sharded_program_factory.cpp
     move/move.cpp
-    narrow/narrow.cpp
     non_zero_indices/device/non_zero_indices_device_operation.cpp
     non_zero_indices/device/non_zero_indices_program_factory.cpp
     non_zero_indices/non_zero_indices.cpp
@@ -93,36 +91,7 @@ set(TTNN_OP_DATA_MOVEMENT_SRCS
     scatter/device/scatter_device_operation.cpp
     scatter/device/scatter_reduce_bfloat16_program_factory.cpp
     scatter/device/scatter_program_factory.cpp
-    sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.cpp
-    sharded/interleaved_to_sharded/device/interleaved_to_sharded_program_factory.cpp
-    sharded/interleaved_to_sharded/interleaved_to_sharded.cpp
-    sharded/reshard/device/reshard_device_operation.cpp
-    sharded/reshard/device/reshard_program_factory_same_width.cpp
-    sharded/reshard/device/reshard_program_factory_same_height.cpp
-    sharded/reshard/device/reshard_program_factory_generic.cpp
-    sharded/reshard/device/nd_reshard_program_factory_copy_pages.cpp
-    sharded/reshard/device/nd_reshard_program_factory_copy_local.cpp
-    sharded/reshard/reshard.cpp
     sharded/sharded_common.cpp
-    sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.cpp
-    sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.cpp
-    sharded/sharded_to_interleaved/sharded_to_interleaved.cpp
-    sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_op.cpp
-    sharded_partial/interleaved_to_sharded_partial/device/interleaved_to_sharded_partial_program_factory.cpp
-    sharded_partial/interleaved_to_sharded_partial/interleaved_to_sharded_partial.cpp
-    sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_device_operation.cpp
-    sharded_partial/sharded_to_interleaved_partial/device/sharded_to_interleaved_partial_program_factory.cpp
-    sharded_partial/sharded_to_interleaved_partial/sharded_to_interleaved_partial.cpp
-    slice/device/slice_device_operation.cpp
-    slice/device/slice_program_factory_rm.cpp
-    slice/device/slice_program_factory_rm_sharded.cpp
-    slice/device/slice_program_factory_rm_stride.cpp
-    slice/device/slice_program_factory_tile.cpp
-    slice/device/slice_program_factory_tile_tensor_args.cpp
-    slice/slice.cpp
-    split/device/split_device_operation.cpp
-    split/device/split_program_factory.cpp
-    split/split.cpp
     squeeze/squeeze.cpp
     stack/stack.cpp
     tilize/device/tilize_device_operation.cpp
@@ -196,13 +165,6 @@ set(TTNN_OP_DATA_MOVEMENT_API_HEADERS
     repeat/repeat.hpp
     reshape_view/reshape.hpp
     reshape_view/reshape_common.hpp
-    sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp
-    sharded/interleaved_to_sharded/interleaved_to_sharded.hpp
-    sharded/reshard/reshard.hpp
-    sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation_types.hpp
-    sharded/sharded_to_interleaved/device/sharded_to_interleaved_program_factory.hpp
-    sharded/sharded_to_interleaved/device/sharded_to_interleaved_device_operation.hpp
-    slice/slice.hpp
     tilize_with_val_padding/tilize_with_val_padding.hpp
     tilize_with_val_padding/device/tilize_with_val_padding_device_operation.hpp
     transpose/transpose.hpp

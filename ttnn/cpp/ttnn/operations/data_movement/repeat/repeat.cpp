@@ -8,9 +8,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
-#include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/functions.hpp"
@@ -201,20 +199,24 @@ ttnn::Tensor repeat(
     // Native path: sharded input, single-axis repeat, predicate accepts. Else composite.
     bool native_sharded = false;
     if (input_tensor.memory_config().is_sharded()) {
-        const auto non_one_count = std::count_if(
-            working_repetition_vector.cbegin(), working_repetition_vector.cend(), [](uint32_t r) { return r != 1; });
-        if (non_one_count == 1) {
-            int32_t native_dim = -1;
-            uint32_t native_reps = 1;
-            for (size_t i = 0; i < working_repetition_vector.size(); ++i) {
-                if (working_repetition_vector[i] != 1) {
-                    native_dim = static_cast<int32_t>(i);
-                    native_reps = working_repetition_vector[i];
-                    break;
-                }
-            }
-            native_sharded = operations::data_movement::repeat::is_native_repeat_sharding(
-                working_tensor.tensor_spec(), std::optional<MemoryConfig>{output_mem_config}, native_dim, native_reps);
+        MemoryConfig working_memory_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
+        working_tensor = ttnn::to_memory_config(input_tensor, working_memory_config);
+    }
+    if (working_output_mem_config.is_sharded()) {
+        working_output_mem_config =
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, working_output_mem_config.buffer_type()};
+    }
+
+    // tiled -> RM
+    if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT);
+    }
+
+    // loop over dims in repetition vector, backwards because repeat pages first is faster
+    for (auto it = working_repetition_vector.crbegin(); it != working_repetition_vector.crend(); ++it) {
+        // no op for unit repetitions
+        if (*it == 1) {
+            continue;
         }
     }
 
@@ -271,19 +273,14 @@ ttnn::Tensor repeat(
         }
     }
 
-    // Composite-only re-shard; native path already wrote sharded output.
-    if (!native_sharded && output_mem_config.is_sharded()) {
-        MemoryConfig final_mc = output_mem_config;
-        if (!final_mc.shard_spec().has_value()) {
-            auto synth = operations::data_movement::repeat::generate_repeat_shard_spec(
-                working_tensor, working_tensor.padded_shape(), final_mc.memory_layout(), input_orientation_hint);
-            if (synth.has_value()) {
-                final_mc = MemoryConfig(final_mc.memory_layout(), final_mc.buffer_type(), synth);
-            } else {
-                return working_tensor;  // No valid spec; keep interleaved.
-            }
-        }
-        working_tensor = ttnn::interleaved_to_sharded(working_tensor, final_mc, std::nullopt);
+    // RM -> OG page layout
+    if (input_tensor.layout() == ttnn::TILE_LAYOUT) {
+        working_tensor = ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, input_tensor.dtype());
+    }
+
+    // Interleaved to OG mem layout
+    if (output_mem_config.is_sharded()) {
+        working_tensor = ttnn::to_memory_config(working_tensor, output_mem_config);
     }
 
     return working_tensor;

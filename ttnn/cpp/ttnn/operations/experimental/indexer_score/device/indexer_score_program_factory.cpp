@@ -18,7 +18,37 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
-#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
+// TODO(nuked-op): sdpa/device/sdpa_subblock_utils.hpp was nuked; determine_largest_subblock_size
+// is inlined below (the only symbol indexer_score consumed from it).
+#include <array>
+#include <utility>
+namespace ttnn::prim::detail {
+// Largest matmul subblock (h*w <= dst_size; h|block_height, w|block_width; ordered by volume).
+static inline std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
+    uint32_t block_height,
+    uint32_t block_width,
+    uint32_t dst_size,
+    uint32_t max_subblock_h = UINT32_MAX,
+    uint32_t max_subblock_w = UINT32_MAX) {
+    constexpr std::array<std::pair<uint32_t, uint32_t>, 20> subblocks = {{
+        {2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7}, {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
+        {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
+    }};
+    for (auto [subblock_height, subblock_width] : subblocks) {
+        if (subblock_height * subblock_width > dst_size) {
+            continue;
+        }
+        if (subblock_height > max_subblock_h || subblock_width > max_subblock_w) {
+            continue;
+        }
+        if ((block_height % subblock_height != 0) || (block_width % subblock_width != 0)) {
+            continue;
+        }
+        return {subblock_height, subblock_width};
+    }
+    return {1, 1};
+}
+}  // namespace ttnn::prim::detail
 #include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
 #include "kernels/indexer_score_cb.hpp"          // shared host/device CB-index argument layout (CbArg)
 #include "kernels/indexer_score_work_split.hpp"  // shared host/device causal work-split formula

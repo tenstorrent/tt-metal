@@ -7,7 +7,7 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
@@ -17,7 +17,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/sharded/reshard/reshard.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/data_movement/fold/device/fold_device_op.hpp"
@@ -104,11 +104,11 @@ std::vector<Tensor> fold_with_transpose_(
         // slice
         n = output_shape.value()[0], w = output_shape.value()[1], h = output_shape.value()[2],
         c = output_shape.value()[3];
-        tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n, w, h, c};
-        tt::tt_metal::Array4D step = {1, 1, 1, 1};
+        [[maybe_unused]] tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
+        [[maybe_unused]] tt::tt_metal::Array4D slice_output_tensor_end = {n, w, h, c};
+        [[maybe_unused]] tt::tt_metal::Array4D step = {1, 1, 1, 1};
         auto slice_output =
-            ttnn::slice(transpose_hc_output2, slice_output_tensor_start, slice_output_tensor_end, step, L1_mem_config);
+            /*nuked-op*/ transpose_hc_output2;
 
         output_tensors.emplace_back(slice_output);
 
@@ -243,17 +243,16 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 
     std::vector<Tensor> output_tensors;
     // override output shape
-    auto steps = tt::tt_metal::Array4D({1, 1, 1, 1});
+    [[maybe_unused]] auto steps = tt::tt_metal::Array4D({1, 1, 1, 1});
     if (output_shape.has_value()) {
         // slice
         n = output_shape.value()[0], h = output_shape.value()[1], w = output_shape.value()[2],
         c = output_shape.value()[3];
-        tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
+        [[maybe_unused]] tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
+        [[maybe_unused]] tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
             ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
-        tt_output_tensor =
-            ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
+        /* nuked-op slice: passthrough no-op */;
 
         output_tensors.emplace_back(tt_output_tensor);
 
@@ -261,12 +260,11 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     } else {
         // slice
         n = slice_output_shape[0], h = slice_output_shape[1], w = slice_output_shape[2], c = slice_output_shape[3];
-        tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
-        tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
+        [[maybe_unused]] tt::tt_metal::Array4D slice_output_tensor_start = {0, 0, 0, 0};
+        [[maybe_unused]] tt::tt_metal::Array4D slice_output_tensor_end = {n, h, w, c};
         auto slice_mem_config = create_sharded_memory_config(
             ttnn::Shape({n, h, w, c}), grid_size, shard_spec.orientation, override_memory_config);
-        tt_output_tensor =
-            ttnn::slice(tt_output_tensor, slice_output_tensor_start, slice_output_tensor_end, steps, slice_mem_config);
+        /* nuked-op slice: passthrough no-op */;
 
         output_tensors.emplace_back(tt_output_tensor);
 
@@ -374,10 +372,9 @@ Tensor reshard_if_needed(const Tensor& input, const uint32_t stride_h, const uin
         CoreRangeSet new_core_range = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_grid_size, true);
         new_shard_spec.grid = new_core_range;
 
-        auto new_mem_config =
-            MemoryConfig(input.memory_config().memory_layout(), input.memory_config().buffer_type(), new_shard_spec);
-        // need to reshard
-        return ttnn::reshard(input, new_mem_config, std::nullopt);
+        auto new_mem_config = input.memory_config().with_shard_spec(new_shard_spec);
+        // need to reshard (routed through to_memory_config since the reshard op was removed)
+        return ttnn::to_memory_config(input, new_mem_config);
     }
     return input;
 }

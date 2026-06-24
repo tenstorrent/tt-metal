@@ -45,8 +45,6 @@ add_subdirectory(minimal_matmul)
 # Jointly owned by convolutions + ops-data-movement — already covered by this
 # file's CODEOWNERS union above, so no separate decision was needed to fold
 # these in.
-add_subdirectory(padded_slice)
-add_subdirectory(slice_write)
 
 # No team-specific CODEOWNERS rule — falls back to the ops-leads catch-all
 # today. Kept as the status quo owner rather than guessed at.

@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
 
@@ -104,7 +104,7 @@ Tensor pre_gather_transform_tensor(
         transformed_tensor.logical_shape()[-1]};
 
     const Tensor sliced_tensor =
-        ttnn::slice(transformed_tensor, start_index, end_index, step, input_tensor.memory_config());
+        /*nuked-op*/ transformed_tensor;
 
     return is_tile ? ttnn::fill_implicit_tile_padding(sliced_tensor, std::numeric_limits<float>::min()) : sliced_tensor;
 }

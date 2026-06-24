@@ -8,7 +8,7 @@
 #include "tt-metalium/math.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
-#include "ttnn/operations/data_movement/narrow/narrow.hpp"
+// TODO(nuked-op narrow): narrow removed; chunk views degraded to passthrough (see below).
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -145,16 +145,12 @@ ttnn::Tensor routed_expert_ffn_chunked(
         const uint32_t begin_m = i * chunk_M;
         const uint32_t end_m = std::min(begin_m + chunk_M, M);
         const uint32_t this_len = end_m - begin_m;
-        auto chunk_x = ttnn::narrow(
-            /*input_tensor=*/x,
-            /*narrow_dim=*/narrow_dim,
-            /*narrow_start=*/static_cast<int32_t>(begin_m),
-            /*length=*/this_len);
-        auto chunk_out_view = ttnn::narrow(
-            /*input_tensor=*/full_output,
-            /*narrow_dim=*/narrow_dim,
-            /*narrow_start=*/static_cast<int32_t>(begin_m),
-            /*length=*/this_len);
+        (void)begin_m;
+        (void)end_m;
+        (void)this_len;
+        (void)narrow_dim;
+        auto chunk_x = /*nuked-op narrow*/ x;
+        auto chunk_out_view = /*nuked-op narrow*/ full_output;
         (void)routed_expert_ffn_bh(
             /*x=*/chunk_x,
             /*gate_proj=*/gate_proj,

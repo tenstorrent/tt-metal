@@ -96,7 +96,7 @@ jobs:
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
         DONT_USE_VIRTUAL_ENVIRONMENT: 1
       volumes:
-        - ${{ github.workspace }}/docker-job:/work
+        - ${{ github.workspace }}:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
@@ -105,17 +105,22 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
-      - name: 🧬 Checkout Repository
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: 🧬 Checkout Repository
+        uses: ./.github/actions/checkout
+        with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
-          path: docker-job
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Mark repository as safe directory
         run: git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./docker-job/.github/actions/setup-job
+        uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
           private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
@@ -138,10 +143,9 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-profiler-${{ matrix.test-group.cmd }}-${{ matrix.test-group.sku }}
-          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
-          # The sidecar writes --out /work/power_report.json inside the container;
-          # this host path is what the upload-artifact action reads.
-          path: ${{ github.workspace }}/docker-job/power_report.json
+          # The sidecar writes --out /work/power_report.json inside the container,
+          # which is mounted from the workspace root. upload-artifact reads the host path.
+          path: ${{ github.workspace }}/power_report.json
           if-no-files-found: warn
           retention-days: 30
       - name: 📊 CCache Report
@@ -155,5 +159,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
+      - uses: ./.github/actions/cleanup
         if: always()

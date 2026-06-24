@@ -15,7 +15,6 @@
 #include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc_fused/deepseek_moe_fast_reduce_nc_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/integral_image/intimg_nanobind.hpp"
 #include "ttnn/operations/experimental/reduction/deepseek_grouped_gate/deepseek_grouped_gate_nanobind.hpp"
-#include "ttnn/operations/experimental/slice_write/slice_write_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/hc_sum_reduce/hc_sum_reduce_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/prefix_scan/prefix_scan_nanobind.hpp"
 #include "ttnn/operations/experimental/ssm/repeat_and_interleave_eltwise_mul/repeat_and_interleave_eltwise_mul_nanobind.hpp"
@@ -37,13 +36,11 @@
 #include "ttnn/operations/experimental/transformer/dit_layernorm_pre_all_gather/dit_layernorm_pre_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_layernorm_post_all_gather/dit_layernorm_post_all_gather_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/dit_minimal_matmul_addcmul_fused/dit_minimal_matmul_addcmul_fused_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/dit_rms_norm_unary_fused/dit_rms_norm_unary_fused_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding/rotary_embedding_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_hf/rotary_embedding_hf_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/rotary_embedding_llama_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/rotate_half/rotate_half_nanobind.hpp"
-#include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/copy/typecast/typecast_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul/attn_matmul/attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
@@ -57,7 +54,6 @@
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
 #include "ttnn/operations/experimental/transformer/all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.hpp"
 #include "ttnn/operations/experimental/unary_backward/gelu_backward/gelu_backward_nanobind.hpp"
-#include "ttnn/operations/experimental/padded_slice/padded_slice_nanobind.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 #include "ttnn/operations/experimental/test/prefetcher_consumer/dram_prefetcher_consumer_nanobind.hpp"
@@ -96,11 +92,7 @@
 namespace ttnn::operations::experimental {
 
 void py_module(nb::module_& mod) {
-    slice_write::bind_slice_write(mod);
-    padded_slice::bind_padded_slice(mod);
-
     transformer::detail::bind_concatenate_heads(mod);
-    transformer::detail::bind_split_qkv(mod);
     transformer::detail::bind_nlp_create_qkv_heads(mod);
     transformer::detail::bind_create_qkv_heads_from_separate_tensors(mod);
     nlp_concat_heads_decode::detail::bind_nlp_concat_heads_decode(mod);
@@ -118,7 +110,6 @@ void py_module(nb::module_& mod) {
     transformer::bind_dit_layernorm_pre_all_gather(mod);
     transformer::bind_dit_layernorm_post_all_gather(mod);
     transformer::bind_dit_minimal_matmul_addcmul_fused(mod);
-    transformer::bind_dit_rms_norm_unary_fused(mod);
     transformer::bind_rotary_embedding(mod);
     transformer::bind_rotary_embedding_hf(mod);
     transformer::bind_rotary_embedding_llama(mod);

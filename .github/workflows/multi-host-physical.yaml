@@ -90,11 +90,17 @@ jobs:
       - in-service
     needs: build-artifact
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️ Download Build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
@@ -197,11 +203,17 @@ jobs:
       - in-service
     needs: build-artifact
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️ Download Build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
@@ -250,11 +262,17 @@ jobs:
       - in-service
     needs: build-artifact
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️ Download Build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
@@ -304,11 +322,17 @@ jobs:
       - in-service
     needs: build-artifact
     steps:
-      - name: ⬇️ Checkout
+      - name: Bootstrap local actions
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
+          sparse-checkout: .github/actions
+          sparse-checkout-cone-mode: false
+      - name: ⬇️ Checkout
+        uses: ./.github/actions/checkout
+        with:
           submodules: recursive
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️ Download Build
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
