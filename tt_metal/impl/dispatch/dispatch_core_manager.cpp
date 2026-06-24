@@ -193,7 +193,12 @@ const tt_cxy_pair& dispatch_core_manager::dispatcher_s_core(ChipId device_id, ui
 }
 
 CoreType dispatch_core_manager::get_dispatch_core_type() {
-    return get_core_type_from_config(this->dispatch_core_config_);
+    const auto& cluster = env_.get_cluster();
+    if (cluster.all_chip_ids().empty()) {
+        return get_core_type_from_config(this->dispatch_core_config_);
+    }
+    const ChipId device_id = *cluster.all_chip_ids().begin();
+    return resolve_dispatch_core_type(env_, device_id, this->dispatch_core_config_);
 }
 
 DispatchCoreConfig dispatch_core_manager::get_dispatch_core_config() { return this->dispatch_core_config_; }
@@ -256,7 +261,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         // When running Multiple CQs using Ethernet Dispatch, we may need more dispatch cores than those allocated in
         // the core descriptor (ex: 2 CQs on N300 need 10 dispatch cores and the core descriptor only allocates 6).
         // Infer the remaining dispatch cores from the idle eth core list (this is device dependent).
-        if (get_core_type_from_config(dispatch_core_config) == CoreType::ETH) {
+        if (resolve_dispatch_core_type(env, device_id, dispatch_core_config) == CoreType::ETH) {
             for (const auto& idle_eth_core : env_.get_control_plane().get_inactive_ethernet_cores(device_id)) {
                 add_dispatch_core_to_device_locked(device_id, idle_eth_core);
             }
@@ -274,7 +279,7 @@ void dispatch_core_manager::reset_dispatch_core_manager(
         const bool fabric_tensix_datamover_enabled =
             env.get_fabric_tensix_config() != tt_fabric::FabricTensixConfig::DISABLED;
         const bool is_quasar = env.get_cluster().arch() == tt::ARCH::QUASAR;
-        if (is_mmio && get_core_type_from_config(dispatch_core_config) == CoreType::WORKER &&
+        if (is_mmio && resolve_dispatch_core_type(env, device_id, dispatch_core_config) == CoreType::WORKER &&
             !fabric_tensix_datamover_enabled && !is_quasar && !logical_dispatch_cores.empty()) {
             CoreCoord rt_core = logical_dispatch_cores.back();
             logical_dispatch_cores.pop_back();
