@@ -11,6 +11,7 @@ Goal completion requirements:
 - Revisit doc/context_contract.json for the multichip plan. Tensor parallelism changes per-device KV-cache and weight memory. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
 - Multi-chip prefill and decode PCC are validated against the single-chip TTNN optimized baseline for every meaningful layer kind.
 - Paged KV-cache behavior, page tables, current positions, local KV-head/cache layout, and stacked-decoder input/output layout contracts are validated on the target mesh.
+- The multichip path preserves support for valid non-aligned logical sequence lengths; sharding, padding, and chunking must not expose an aligned-only public contract.
 - Warmed trace replay works for decode on the target mesh.
 - Warmed single-chip baseline latency and multi-chip latency, speedup, and efficiency are reported.
 - tt-perf-report human-readable tables and CSV/provenance logs exist. Use them to check communication, DRAM, compute, CCL, and data movement before accepting the path.

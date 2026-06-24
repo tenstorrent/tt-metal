@@ -7,15 +7,19 @@ This goal creates the TTI release handoff state. Start only after optimized-vLLM
 Goal completion requirements:
 - Optimized vLLM artifacts already exist under models/autoports/<model>/doc/optimized_vllm/.
 - The TTI release workflow evaluates the generated `models/autoports/<model>` implementation of HF_MODEL. Do not run stock `tt-transformers`, `models/demos`, or another packaged implementation. Such a report is invalid even if `run.py` exits 0.
-- The TTI model spec or equivalent release wiring points at `models/autoports/<model>` and the Docker/server path can import that autoport code.
-- The release spec, server launch, evals, and benchmarks preserve doc/context_contract.json. Do not cap context, LongBench, benchmark request length, or API limits to hide a model context bug. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value. Only reject or adjust mathematically invalid prompt+completion requests.
-- Use the reservation container for `tt-smi` health/reset and the physical loudbox host for Docker. Use the checkout's own `run.py --help`, matching release tag/image, and required CLI spelling.
-- Run `run.py --workflow release --docker-server --no-auth` for the autoport spec, without printing tokens or copying secrets, caches, weights, Docker layers, persistent TT caches, or large raw eval dumps.
+- Prefer TTI client-side workflows against the already-working autoport vLLM server from optimized-vLLM. Use Docker only as an explicit fallback after investigating why the external-server path cannot work.
+- The TTI model spec or equivalent release wiring points at `models/autoports/<model>` and the server path imports that autoport code.
+- For custom TTI model specs, make the embedded spec `cli_args` correct before running: `docker_server=false`, `local_server=false`, the right `service_port`, and the intended workflow. Do not rely on command-line flags alone to override a loaded JSON spec.
+- The release spec, server, evals, and benchmarks preserve doc/context_contract.json. Do not cap context or request length to hide a model bug. Only reject mathematically invalid prompt+completion requests.
+- If TTI sends a valid prompt length that is not divisible by an internal prefill chunk/page/tile/trace size, the autoport must handle it. Do not waive the failure or align the benchmark; fix the model/generator/adapter path.
+- Use the reservation container for `tt-smi` health/reset and autoport vLLM serving. Use the physical loudbox host only for Docker fallback or host-level recovery. Use the checkout's own `run.py --help`, matching release tag/image, and required CLI spelling.
+- Before full release, run a tiny no-Docker TTI smoke against the autoport server: health check, one OpenAI-compatible request, then one small TTI benchmark with `disable_trace_capture=true`.
+- Run `run.py --workflow release --no-auth` for the no-Docker autoport spec after the smoke passes, without printing tokens or copying secrets, caches, weights, Docker layers, persistent TT caches, or large raw eval dumps.
 - Recover ARC/ERISC/remote-Ethernet/reset failures before stopping; use $autofix for release test/spec/API/eval/benchmark harness failures, not pure infra failures.
 - Copy the final release report and small JSON/CSV/log artifacts to models/autoports/<model>/doc/tti_release/.
-- RUN_NOTES.md records host/context, TTI tag/SHA, Docker image, command, key env, recovery actions, report path, pass/fail summary, and an "Autoport implementation check" naming the matched run spec/report data.
+- RUN_NOTES.md records server mode, host/context, TTI tag/SHA, Docker image if used, command, key env, recovery, report path, pass/fail summary, and autoport implementation check.
 - The copied TTI run spec or report data proves the evaluated code path is `models/autoports/<model>` and does not identify stock `models/tt_transformers`, `models/demos`, or another packaged implementation.
-- The release report is skimmed; failed accuracy/API/benchmark/missing metric rows are fixed or row-specific issue-waived. Unwaived `meta_ifeval` or `meta_gpqa_cot` failures are blocking. No leftover TTI tmux session or Docker container remains.
+- Skim the release report; fix or issue-waive failed accuracy/API/benchmark/missing metric rows. Unwaived `meta_ifeval` or `meta_gpqa_cot` failures are blocking. Leave no servers, tmux sessions, or containers.
 - $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
 
 Unmet requirements, review findings, failed gates: work. Stop only after `$autofix` fails.

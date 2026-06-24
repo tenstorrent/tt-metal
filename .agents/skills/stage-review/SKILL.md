@@ -142,6 +142,10 @@ For generation or serving stages, also inspect:
 - context-length evidence: `doc/context_contract.json`, served `max_model_len`,
   eval/benchmark context settings, and any cap or truncation introduced by the
   stage.
+- prompt-shape evidence for LLM stages: valid logical prompt or prefill lengths
+  that are not divisible by internal chunk, tile, block, page, or trace sizes.
+  A public model/generator/serving path that rejects such lengths needs more
+  work unless the HF model itself has that semantic restriction.
 - capability-contract evidence: for nonstandard or non-LLM models, the
   model-specific equivalent of context length, cache/state semantics, mode
   switches, and advertised input/output limits.
@@ -164,6 +168,13 @@ For optimization stages, also inspect:
 - before/after measurements in the same regime;
 - whether optimized paths from previous stages were preserved;
 - evidence for rejected optimizations or "already optimal" claims;
+- whether rejected optimizations were actually earned. For any material
+  optimization that would remove an op, collective, reshard, or layout
+  conversion, a first TTNN/API error is not enough. Require evidence that the
+  stage adapted shape, layout, padding, or weight packing and retried, or used
+  `$autofix`. Accept rejection only when the adapted path is measured slower,
+  fails correctness for an understood reason, or a minimal repro proves the op
+  cannot express the required contract;
 - whether performance claims compare like with like.
 
 For datatype-sweep stages, also inspect:

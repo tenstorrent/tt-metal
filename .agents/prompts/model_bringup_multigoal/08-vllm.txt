@@ -9,14 +9,15 @@ Goal completion requirements:
 - The adapter reuses the full-model generator's canonical split-sampling token-out path. It has no separate sampling path, host argmax path, full-logits readback path, generic top-k greedy fallback, or Python readback/writeback token-feedback loop.
 - The vLLM path uses the selected precision config, including weight groups, activation/CCL dtype, KV-cache dtype, compute fidelities, and layer exceptions.
 - The model is registered in vllm/plugins/vllm-tt-plugin/src/vllm_tt_plugin/platform.py::register_tt_models().
-- vLLM serving mode preserves correct KV-cache ownership: vLLM allocates the serving cache and the adapter passes that cache through the generator/model path without hidden standalone-cache assumptions.
-- The served `max_model_len` matches doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
+- vLLM owns the serving cache; the adapter passes it through without hidden standalone-cache assumptions.
+- Served `max_model_len` matches doc/context_contract.json. Reduce advertised capability only for a hard physical limit, with evidence and the largest feasible value.
+- Serving accepts valid prompt lengths that are not divisible by internal chunk/page/tile/trace sizes. Include a direct request or targeted runner check with a non-aligned prompt length.
 - run_vllm_server succeeds with the final sampling profile defined by $vllm-integration.
 - Sampling tests, qualitative outputs, primary single-user benchmark artifacts, and CI serving-burst benchmark artifacts exist under readiness_vllm/.
 - `supports_async_decode=True`, decode trace is enabled, and stale-token/current-position/page-table tests pass through the adapter. Full-model split sampling is already present.
-- `tt_async_decode_allows_overlap` is separate from `supports_async_decode`: it is `False` by default and `True` only with async-scheduling/on-device-sampling overlap tests proving step N+1 cannot use stale sampled-token/current-position state. Record the value and proof or disable reason.
+- `tt_async_decode_allows_overlap` is separate from `supports_async_decode`: default `False`; set `True` only with stale-token/current-position overlap proof.
 - The qualitative outputs are read and judged for coherence, topic, repetition, gibberish, wrong-language drift, and request contamination.
-- Record the exact successful server invocation, TT config, max model length, max-num-seqs, sampling profile, primary single-user benchmark workload config including temperature/generation-config mode, raw vLLM benchmark artifact path, TTFT median/P99, TPOT mean/P99, ITL median/P99, aggregate throughput, and TPOT-derived decode t/s/u from `vllm_benchmark.json`.
+- Record server command, TT config, max model length, max-num-seqs, sampling profile, workload shape, raw benchmark path, TTFT/TPOT/ITL P50/P99, throughput, and TPOT-derived t/s/u.
 - Record the CI serving-burst benchmark workload config and metrics from `vllm_ci_serving_benchmark.json`. Do not use the CI burst profile as the headline decode t/s/u because burst admission and chunked prefill can affect TPOT.
 - Serving performance is compared against full-model teacher-forcing only as a lower bound, with no avoidable vLLM-specific decode overhead left in the measured path.
 - Runtime fallback and process cleanup are audited; leftover vLLM/EngineCore processes are not left holding devices.

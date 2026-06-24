@@ -7,7 +7,7 @@ description: Build a complete TTNN autoregressive model and generator from a Hug
 
 This skill starts from working TTNN block or decoder code and turns it into a complete autoregressive model that can run end-to-end on real weights. The output should be a model wrapper plus a generator appropriate to the project. If a project-specific orchestration skill defines filenames, class names, readiness runners, or artifact locations, follow that contract there; this skill describes the general engineering work.
 
-The full model stage does not implement the vLLM adapter, but it must design the model and generator so a later serving adapter can drive the same low-level prefill/decode path without duplicating model logic.
+The full model stage does not implement the vLLM adapter, but it must design the model and generator so a later serving adapter can drive the same low-level prefill/decode path without duplicating model logic. Treat the generator as a serving component, not only as a demo loop: external callers may own scheduling, cache/page-table state, prompt lengths, positions, sampling parameters, fixed request slots, inactive rows, and mixed-length prompts.
 
 ## What To Build
 
@@ -29,6 +29,8 @@ Use the strongest correct implementation available as your block stack. If there
 The full model must support the context length advertised by the HF config. Start from `models/autoports/<model>/doc/context_contract.json`, then recompute it for the full layer stack. Include all loaded weights, the full-layer KV cache, page tables, trace buffers, persistent CCL buffers, and other long-lived tensors that consume device DRAM.
 
 Also preserve the rest of the advertised model capability contract established by earlier stages: cache/state semantics, layer kinds, mode switches, and the externally visible generation behavior. Do not reduce the advertised model capability to make bringup, tests, profiling, or serving easier. A reduction is acceptable only when a hard physical device limit prevents the advertised capability from fitting or running, such as device DRAM capacity for weights + KV/cache/state + required persistent buffers. If reduced, record the byte calculation or failed capacity probe, the largest feasible supported value, and the exact construction/serving setting that uses it.
+
+Prompt length is a logical API input. The full model and generator must accept valid prompt lengths up to the supported context, including lengths that are not divisible by internal prefill chunk, tile, block, page, or trace sizes. If an op path needs aligned physical shapes, pad or chunk internally, mask padded tokens, and slice returned logits/output state back to the logical prompt length. Do not expose assertions such as `seq_len % chunk_size == 0` unless the HF model itself has that semantic restriction.
 
 Batch handling is part of the capability contract. Optimize primarily for batch-1 single-user latency, but do not hard-code batch 1 into the model, generator, cache, page tables, position handling, sampling, or output formatting. Support larger batches through the same low-level API and test up to batch 32 when the target hardware, memory, and harness allow it. If batch 32 cannot run, record the largest tested batch and the hard physical limit.
 
@@ -109,6 +111,7 @@ Compare full-model behavior against the HuggingFace reference with real weights.
 - deterministic greedy behavior for repeated identical inputs;
 - logits output by the ported model on a given prompt being deterministic across repeated runs and batch positions
 - sequence lengths tested and any measured capacity limits;
+- at least one valid non-aligned prompt length through the public generator path, preferably near a chunk/page boundary and one long non-divisible length near supported context;
 - watcher, fallback, or runtime-integrity checks appropriate to the environment.
 
 Run correctness from the smallest useful surface to the full gate. Start with a short smoke check on the reduced full-model probe when the all-layer gate is slow, then move to the complete all-layer model after the smoke check passes. If a test, prompt, or command fails, rerun that failing item directly while debugging; do not rerun the whole suite after every edit. Once the targeted failure is fixed, rerun the smoke check, then rerun the full all-layer correctness gate for final evidence.
