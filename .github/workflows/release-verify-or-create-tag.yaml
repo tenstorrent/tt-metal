@@ -116,13 +116,6 @@ jobs:
                 console.log(`Tag ${version} already exists at the current commit sha ${sha}, all good.`);
               } else {
                 console.warn(`Tag ${version} already exists at a different commit sha ${currentSha} than the current commit sha ${sha}.`);
-                await github.rest.git.updateRef({
-                  owner: owner,
-                  repo: repo,
-                  ref: `tags/${version}`,
-                  sha: sha,
-                  force: true,
-                });
               }
             }
 
