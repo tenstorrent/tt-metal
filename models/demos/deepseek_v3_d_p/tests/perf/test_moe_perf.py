@@ -41,16 +41,18 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        # Recalibrated 2026-06-23 on BH LoudBox 8x1 after the unified_routed_expert_ffn
-        # changes; measured device time dropped below the prior lower bound (35.08 ms vs
-        # the old 36.27 ms target's 35.18 ms floor). Was 36_272_143.
-        expected_ns_8x1=35_082_637,
+        # Recalibrated 2026-06-24 on BH LoudBox 8x1 after the unified_routed_expert_ffn
+        # output buffer switched from zeros_like to ttnn::empty (no per-layer full-buffer
+        # device fill). The 8x1 proxy (perf-host-64) is dominated by that fill — it fills
+        # the full capacity buffer for only 64 active tokens — so it drops the most:
+        # 35.08 ms -> 27.59 ms. Was 35_082_637.
+        expected_ns_8x1=27_586_144,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        # Recalibrated 2026-06-21 on BH LoudBox 2x4 after the unified_routed_expert_ffn
-        # two-RISC (UP_SPLIT) read overlap sped up the gate/up weight stream (~10% MoE
-        # device-time drop, bit-exact). Was 39_194_517.
-        expected_ns_2x4=35_127_772,
+        # Recalibrated 2026-06-24 on BH LoudBox 2x4 for the same ttnn::empty change
+        # (no full-buffer device fill per layer): 35.13 ms -> 32.17 ms. UP_SPLIT was
+        # already baked in (39_194_517 -> 35_127_772). Was 35_127_772.
+        expected_ns_2x4=32_173_471,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
