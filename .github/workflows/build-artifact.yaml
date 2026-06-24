@@ -581,6 +581,11 @@ jobs:
           echo "build-artifact.yaml running: ${build_args[*]}"
           "${build_args[@]}"
 
+      - name: Debug
+        run: |
+          set -eu # basic shell hygiene
+          bash ccache-diagnose.sh ./build
+
       - name: 📦 Pack CPM cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
         run: |
