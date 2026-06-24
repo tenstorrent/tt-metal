@@ -20,6 +20,11 @@
 //
 // Runtime arg: num_tiles (this core's shard tile count).
 // Compile-time arg: num_tiles_per_cycle (tiles processed per DST acquire; bounded by DST capacity).
+//
+// Profiling: when ENABLE_KERNEL_TIMER is defined (by the program factory), this kernel times its
+// tile-processing work with the rdcycle-based kernel timer and writes the cycle count to L1 slot 1
+// at compile-time arg timer_l1_addr. See api/debug/kernel_timer.h. WALL_CLOCK is NOT usable here —
+// reading it hangs the Quasar emulator.
 
 #include <cstdint>
 
@@ -29,6 +34,11 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#ifdef ENABLE_KERNEL_TIMER
+#include "api/debug/kernel_timer.h"
+constexpr uint32_t kTimerSlotCompute = 1;  // reader=0, compute=1, writer=2
+#endif
+
 #ifndef PROCESS_POST_ACTIVATIONS
 #define PROCESS_POST_ACTIVATIONS(i)
 #endif
@@ -36,6 +46,11 @@
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
     constexpr uint32_t num_tiles_per_cycle = get_arg(args::num_tiles_per_cycle);
+
+#ifdef ENABLE_KERNEL_TIMER
+    KernelTimer _timer;
+    _timer.start();
+#endif
 
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
@@ -79,4 +94,8 @@ void kernel_main() {
     if (remainder > 0) {
         process_tiles(remainder);
     }
+
+#ifdef ENABLE_KERNEL_TIMER
+    kernel_timer_write(get_arg(args::timer_l1_addr), kTimerSlotCompute, _timer.stop());
+#endif
 }

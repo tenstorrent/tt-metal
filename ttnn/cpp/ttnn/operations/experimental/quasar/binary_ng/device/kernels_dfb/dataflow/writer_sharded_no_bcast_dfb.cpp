@@ -17,8 +17,18 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#ifdef ENABLE_KERNEL_TIMER
+#include "api/debug/kernel_timer.h"
+constexpr uint32_t kTimerSlotWriter = 2;  // reader=0, compute=1, writer=2
+#endif
+
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
+
+#ifdef ENABLE_KERNEL_TIMER
+    KernelTimer _timer;
+    _timer.start();
+#endif
 
     DataflowBuffer dfb_out(dfb::out);
 
@@ -26,4 +36,8 @@ void kernel_main() {
     // the DFB ring drains. Mirrors the CB writer's DST_SHARDED no-op (FIFO sync, no NoC traffic).
     dfb_out.wait_front(num_tiles);
     dfb_out.pop_front(num_tiles);
+
+#ifdef ENABLE_KERNEL_TIMER
+    kernel_timer_write(get_arg(args::timer_l1_addr), kTimerSlotWriter, _timer.stop());
+#endif
 }

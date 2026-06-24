@@ -17,8 +17,18 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
+#ifdef ENABLE_KERNEL_TIMER
+#include "api/debug/kernel_timer.h"
+constexpr uint32_t kTimerSlotReader = 0;  // reader=0, compute=1, writer=2
+#endif
+
 void kernel_main() {
     const uint32_t num_tiles = get_arg(args::num_tiles);
+
+#ifdef ENABLE_KERNEL_TIMER
+    KernelTimer _timer;
+    _timer.start();
+#endif
 
     DataflowBuffer dfb_in0(dfb::in0);
     DataflowBuffer dfb_in1(dfb::in1);
@@ -30,4 +40,8 @@ void kernel_main() {
 
     dfb_in1.reserve_back(num_tiles);
     dfb_in1.push_back(num_tiles);
+
+#ifdef ENABLE_KERNEL_TIMER
+    kernel_timer_write(get_arg(args::timer_l1_addr), kTimerSlotReader, _timer.stop());
+#endif
 }

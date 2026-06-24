@@ -22,6 +22,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <set>
@@ -223,6 +224,18 @@ ProgramArtifacts create_sharded_artifacts(
     }
 
     // -----------------------------------------------------------------------------------------
+    // Optional per-kernel cycle timing (profiling). Off by default; enabled via the env var
+    // TT_QUASAR_ADD_KERNEL_TIMER=1. When on, each kernel (reader/compute/writer) times its work
+    // with the rdcycle-based timer and writes its cycle count to L1 slots 0/1/2 at kTimerL1Addr
+    // (offset within the uncached L1 region; the kernel adds MEM_L1_UNCACHED_BASE). A host gtest
+    // reads these back. WALL_CLOCK is not usable here (reading it hangs the Quasar emulator).
+    const bool enable_kernel_timer = std::getenv("TT_QUASAR_ADD_KERNEL_TIMER") != nullptr;
+    constexpr uint32_t kTimerL1Addr = 0;  // base offset within the uncached L1 region for timer slots
+    if (enable_kernel_timer) {
+        compute_defines_tbl.emplace("ENABLE_KERNEL_TIMER", "1");
+    }
+
+    // -----------------------------------------------------------------------------------------
     // Kernels.
     // -----------------------------------------------------------------------------------------
     // Reader/writer take NO tensor bindings: the input/output shards are borrowed by the DFBs
@@ -268,6 +281,17 @@ ProgramArtifacts create_sharded_artifacts(
                 .fp32_dest_acc_en = fp32_dest_acc_en,
             },
     };
+
+    // Inject timer instrumentation into all three kernels when enabled. The compute kernel already
+    // received ENABLE_KERNEL_TIMER via compute_defines_tbl; add it to reader/writer here, and give
+    // every kernel the timer_l1_addr compile-time arg the kernels read.
+    if (enable_kernel_timer) {
+        reader_spec.compiler_options.defines.emplace("ENABLE_KERNEL_TIMER", "1");
+        writer_spec.compiler_options.defines.emplace("ENABLE_KERNEL_TIMER", "1");
+        reader_spec.compile_time_args.emplace("timer_l1_addr", kTimerL1Addr);
+        writer_spec.compile_time_args.emplace("timer_l1_addr", kTimerL1Addr);
+        compute_spec.compile_time_args.emplace("timer_l1_addr", kTimerL1Addr);
+    }
 
     // -----------------------------------------------------------------------------------------
     // Work unit over the shard grid.
