@@ -69,6 +69,7 @@ jobs:
     with:
       runs-on-large: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       runs-on-medium: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
+      check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
   # TODO: Duplicate check-harbor call. build-all-docker-images.yaml (called by
   # docker-images above) also calls check-harbor internally, but does not expose
@@ -79,6 +80,8 @@ jobs:
   check-harbor:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
 
   find-changes:
