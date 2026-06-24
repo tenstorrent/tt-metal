@@ -227,8 +227,14 @@ def run_with_cache_comparison(
     # First run (without cache)
     status_uncached, message_uncached, e2e_uncached_ms = execute_test(test_module, test_vector, device)
 
+    # A sweep module can set _SKIP_DEVICE_PERF (per-vector) to opt this vector out of
+    # the profiler read -- e.g. conv2d's heavy FABRIC_1D path, where the profiler's
+    # remote-chip AICLK ARC read hangs over the fabric-busy ETH link. Checked AFTER
+    # execute_test() since run() sets the flag.
+    measure_dp = getattr(config, "measure_device_perf", False) and not getattr(test_module, "_SKIP_DEVICE_PERF", False)
+
     device_perf_uncached = None
-    if getattr(config, "measure_device_perf", False):
+    if measure_dp:
         # Each gather's ttnn.ReadDeviceProfiler refreshes the in-memory "latest"
         # program perf data, so the cached run below reads its own data with no
         # legacy CSV-log clearing needed.
@@ -238,7 +244,7 @@ def run_with_cache_comparison(
     status_cached, message_cached, e2e_cached_ms = execute_test(test_module, test_vector, device)
 
     device_perf_cached = None
-    if getattr(config, "measure_device_perf", False):
+    if measure_dp:
         device_perf_cached = gather_single_test_perf(_resolve_perf_device(device, test_module), status_cached)
 
     # Determine combined status and message
@@ -269,7 +275,7 @@ def run_with_cache_comparison(
     e2e_perf = {"uncached": e2e_uncached_ms, "cached": e2e_cached_ms}
 
     # Device perf dict (simplified) and message augmentation
-    if getattr(config, "measure_device_perf", False):
+    if measure_dp:
         combined_device_perf = {"uncached": device_perf_uncached, "cached": device_perf_cached}
         if device_perf_uncached or device_perf_cached:
             message = get_updated_message(message, combined_device_perf)
@@ -296,7 +302,10 @@ def run_single(
 
         peak_memory = capture_peak_memory(test_module, test_vector, device, use_no_dispatch=True)
 
-    if getattr(config, "measure_device_perf", False):
+    # Per-vector opt-out: a module sets _SKIP_DEVICE_PERF when the profiler read would
+    # hang (e.g. conv2d heavy FABRIC_1D path -> remote-chip AICLK ARC read over fabric).
+    measure_dp = getattr(config, "measure_device_perf", False) and not getattr(test_module, "_SKIP_DEVICE_PERF", False)
+    if measure_dp:
         perf_result = gather_single_test_perf(_resolve_perf_device(device, test_module), status)
         message = get_updated_message(message, perf_result)
         simplified_perf = simplify_device_perf(perf_result)
