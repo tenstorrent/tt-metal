@@ -9,6 +9,7 @@
 
 #include "common/core_coord.hpp"
 #include "core_descriptor.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -141,6 +142,34 @@ void validate_quasar_dispatch_cores_for_fd(
         "Set TT_METAL_TENSIX_DISPATCH_CORES=1 to use interim Tensix dispatch cores from core descriptor YAML "
         "(device {})",
         device_id);
+}
+
+CoreType resolve_dispatch_core_type(
+    tt::ARCH arch,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config,
+    const metal_SocDescriptor& soc_desc,
+    bool use_quasar_tensix_dispatch_cores) {
+    if (arch != tt::ARCH::QUASAR) {
+        return tt::tt_metal::get_core_type_from_config(dispatch_core_config);
+    }
+    if (use_quasar_tensix_dispatch_cores) {
+        return CoreType::WORKER;
+    }
+    if (soc_desc.get_num_dispatch_engine_cores() > 0) {
+        return CoreType::DISPATCH;
+    }
+    return CoreType::WORKER;
+}
+
+CoreType resolve_dispatch_core_type(
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config) {
+    return resolve_dispatch_core_type(
+        env.get_cluster().arch(),
+        dispatch_core_config,
+        env.get_cluster().get_soc_desc(device_id),
+        env.get_rtoptions().get_use_quasar_tensix_dispatch_cores());
 }
 
 }  // namespace tt::tt_metal::internal

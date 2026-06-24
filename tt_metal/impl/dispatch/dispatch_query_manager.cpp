@@ -14,6 +14,7 @@
 #include "context/metal_env_accessor.hpp"
 #include "core_descriptor.hpp"
 #include "dispatch/dispatch_core_manager.hpp"
+#include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -102,12 +103,18 @@ NOC DispatchQueryManager::go_signal_noc() const { return go_signal_noc_; }
 void DispatchQueryManager::reset(DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     num_hw_cqs_ = num_hw_cqs;
     dispatch_core_config_ = dispatch_core_config;
-    const tt::ARCH arch = MetalEnvAccessor(env_).impl().get_cluster().arch();
-    dispatch_s_enabled_ =
-        (num_hw_cqs == 1 or dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::WORKER);
-    distributed_dispatcher_ =
-        (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
-    go_signal_noc_ = (dispatch_s_enabled_ and arch != tt::ARCH::QUASAR) ? NOC::NOC_1 : NOC::NOC_0;
+
+    
+    auto& env_impl = MetalEnvAccessor(env_).impl();
+    const auto& cluster = env_impl.get_cluster();
+    TT_FATAL(not cluster.all_chip_ids().empty(), "Cannot reset DispatchQueryManager with no devices");
+    const ChipId device_id = *cluster.all_chip_ids().begin();
+    const CoreType resolved_dispatch_core_type =
+        resolve_dispatch_core_type(env_impl, device_id, dispatch_core_config_);
+    dispatch_s_enabled_ = (num_hw_cqs == 1 or resolved_dispatch_core_type == CoreType::WORKER) and
+                          resolved_dispatch_core_type != CoreType::DISPATCH;
+    distributed_dispatcher_ = (num_hw_cqs == 1 and resolved_dispatch_core_type == CoreType::ETH);
+    go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
     const CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
     worker_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::WORKER, dispatch_core_type, num_hw_cqs);
     eth_cq_dispatch_layout_ = generate_cq_dispatch_layout(arch, CoreType::ETH, dispatch_core_type, num_hw_cqs);
