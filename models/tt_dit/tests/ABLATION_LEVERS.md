@@ -169,3 +169,54 @@ existing `WAN_RMSNORM_WORKER_CAP` knob). It is a free +20–44% on the large AG-
 with zero effect on small ones. Cap at 64, not 68 (dispatch-core headroom). Combined with the
 "compute is the #1 lever" finding, the two near-term wins are: (1) bump the worker cap to 64,
 (2) optimize the compute kernel (PRE sum-of-squares + POST math).
+
+---
+
+# Fabric re-ablation at the grid-derived worker cap (cap=64)
+
+After the worker cap change (`510cc544204`, cap=64), re-ran **skip-fabric** (`WAN_ABLATION=4`)
+on all AG-path shapes. `fabric Δ` = `baseline(cap64) − skip_fabric(cap64)` = the exposed fabric
+still on the critical path = the **ceiling** for a fabric-overlap optimization (e.g. overlapping
+the all-gather behind the next row's PRE). All `phn1` shapes ≈ 0 (no AG — control, omitted).
+
+| config | base µs | no-fabric µs | **fabric Δ µs** | Δ% |
+|---|---:|---:|---:|---:|
+| self_sp4_N18944 | 634.3 | 594.3 | **+40.0** | +6% |
+| cross_q_sp4_N18944 | 516.8 | 502.8 | +13.9 | +3% |
+| self_sp8_N9472 | 346.6 | 329.6 | **+16.9** | +5% |
+| cross_q_sp8_N9472 | 278.5 | 268.1 | +10.3 | +4% |
+| flux_tp8_N16384_phn0 | 407.5 | 368.3 | **+39.2** | +10% |
+| flux_tp4_N8192_phn0 | 356.0 | 343.2 | +12.9 | +4% |
+| flux_tp8_N4096_phn0 | 134.9 | 120.5 | +14.4 | +11% |
+| tp4_v_block_s2 | 159.6 | 151.3 | +8.2 | +5% |
+| tp4_v_selfattn_qk_s2 | 231.4 | 225.8 | +5.6 | +2% |
+| tp4_a2v_videoQ_s2 | 135.7 | 131.5 | +4.1 | +3% |
+| tp4_v_textcross_q_s2 | 146.4 | 136.6 | +9.8 | +7% |
+| self_sp32_N2368 | 129.5 | 123.7 | +5.8 | +4% |
+| cross_q_sp32_N2368 | 102.2 | 95.9 | +6.3 | +6% |
+| flux_tp4_N2048_phn0 | 124.5 | 119.0 | +5.5 | +4% |
+| tp4_v_block_s1 | 68.5 | 64.2 | +4.3 | +6% |
+| tp4_v_selfattn_qk_s1 | 78.7 | 75.7 | +3.0 | +4% |
+| tp4_a2v_videoQ_s1 | 54.4 | 50.6 | +3.8 | +7% |
+| tp4_v_textcross_q_s1 | 64.3 | 59.6 | +4.6 | +7% |
+| flux_tp8_N1024_phn0 | 61.0 | 53.8 | +7.2 | +12% |
+| flux_tp4_N512_phn0 | 69.7 | 65.6 | +4.1 | +6% |
+| flux_tp8_N128_phn0 | 48.5 | 41.9 | +6.6 | +14% |
+| flux_tp4_N64_phn0 | 107.2 | 100.5 | +6.7 | +6% |
+| cross_k_prompt_L512 | 46.2 | 42.4 | +3.8 | +8% |
+| tp4_v_textcross_k | 55.2 | 51.0 | +4.2 | +8% |
+| tp4_a_textcross_k | 40.4 | 36.1 | +4.3 | +11% |
+| tp4_a2v_audioK | 38.6 | 34.5 | +4.1 | +11% |
+
+Findings:
+- **The worker cap already harvested most of the fabric cost.** flux_tp8_N16384 fabric was
+  **+105µs at the old 32 cap → +39µs at cap=64**; more workers = fewer rounds = less serial
+  fabric. The fabric lever is now the "remaining slice," not the dominant cost.
+- **Ceiling is modest:** the most exposed fabric is **~40µs (self_sp4) / ~39µs (flux_tp8_N16384)**;
+  everything else is ≤17µs absolute, mostly **3–11%** even on the giants. Small shapes show a
+  higher *fraction* (8–14%) but tiny absolute (4–7µs) — and they're compute/dispatch-bound, so
+  an overlap can't help much there.
+- **Verdict on fabric-overlap-behind-PRE:** worthwhile **only if the large TP=8 / SP=4 shapes
+  dominate** — there it's the biggest remaining structural lever (~6–10%, up to ~40µs). It needs
+  a real pipeline restructure (decouple PRE(N+1) from POST(N), double-buffer stats across rows),
+  so scope it to the AG path and validate on flux_tp8_N16384 + self_sp4 where the payoff sits.
