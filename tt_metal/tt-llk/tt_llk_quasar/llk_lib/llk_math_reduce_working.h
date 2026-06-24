@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Reference copy: Int8->Int32 row reduce WORKING path (warmup enabled).
+// Compare side-by-side with llk_math_reduce.h (warmup commented out).
+// Not included by the build — for review / diff only.
+
 #pragma once
 
 #include <cstdint>
@@ -67,32 +71,32 @@ inline void _reduce_row_transpose_alu_cfg_exit_()
     cfg_rmw(ALU_ACC_CTRL_Zero_Flag_disabled_src_RMW, 0);
 }
 
-// /**
-//  * @brief One-time prime of the SrcB transpose region (and engine latch) with zeros,
-//  *        so the first real hi16 MOVB2D in _reduce_row_transpose_fpu_ doesn't read
-//  *        power-on garbage. Must transpose KNOWN-ZERO data, not raw dest.
-//  */
-// inline void _reduce_row_transpose_warmup_()
-// {
-//     constexpr std::uint32_t warmup_scratch_row = 16; // any in-tile row the real pool will overwrite
-//
-//     tensix_sync();
-//     _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
-//     _reduce_row_transpose_alu_cfg_enter_();
-//
-//     // Guarantee the source datums are zero before we transpose them
-//     TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, warmup_scratch_row);
-//
-//     // Dummy transpose of zeros: flushes the transpose-engine latch and leaves
-//     // SrcB[16:31] holding a known zero column before the first real use.
-//     TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, warmup_scratch_row);
-//     TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, warmup_scratch_row);
-//
-//     tensix_sync();
-//     _reduce_row_transpose_alu_cfg_exit_();
-//     _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
-//     tensix_sync();
-// }
+/**
+ * @brief One-time prime of the SrcB transpose region (and engine latch) with zeros,
+ *        so the first real hi16 MOVB2D in _reduce_row_transpose_fpu_ doesn't read
+ *        power-on garbage. Must transpose KNOWN-ZERO data, not raw dest.
+ */
+inline void _reduce_row_transpose_warmup_()
+{
+    constexpr std::uint32_t warmup_scratch_row = 16; // any in-tile row the real pool will overwrite
+
+    tensix_sync();
+    _configure_mov_ops_explicit_alu_data_format_state_<true>(DataFormat::Int32, DataFormat::Int32);
+    _reduce_row_transpose_alu_cfg_enter_();
+
+    // Guarantee the source datums are zero before we transpose them
+    TTI_ZEROACC(p_zeroacc::CLR_SPECIFIC, 0, 0, ADDR_MOD_0, warmup_scratch_row);
+
+    // Dummy transpose of zeros: flushes the transpose-engine latch and leaves
+    // SrcB[16:31] holding a known zero column before the first real use.
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, p_movd2b::TRANSPOSE_ON, warmup_scratch_row);
+    TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0, warmup_scratch_row);
+
+    tensix_sync();
+    _reduce_row_transpose_alu_cfg_exit_();
+    _llk_math_srcAB_hw_configure_<false, false /*fp32_dest*/, true /*int32_dest*/>(DataFormat::Int32, DataFormat::Int32);
+    tensix_sync();
+}
 
 /**
  * @brief Int32 half-dest row transpose at an explicit dest row (row-reduce uses row 0).
@@ -551,7 +555,7 @@ inline void _llk_math_reduce_init_(const TensorShape& tensor_shape, const bool e
         }
         else
         {
-            // _reduce_row_transpose_warmup_(); // prime SrcB once for the FPU glue path
+            _reduce_row_transpose_warmup_(); // prime SrcB once for the FPU glue path
         }
     }
     else if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_SCALAR)

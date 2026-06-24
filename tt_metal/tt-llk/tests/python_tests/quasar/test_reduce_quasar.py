@@ -148,10 +148,7 @@ def test_reduce_quasar(
 
     input_dimensions = [64, 64]
 
-    if formats.input_format == DataFormat.Int8:
-        stimuli_spec = StimuliSpec.uniform(low=-127, high=127)
-    else:
-        stimuli_spec = StimuliSpec.uniform(low=0.0, high=1.0)
+    stimuli_spec = StimuliSpec.constant(value=-100)
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
@@ -299,11 +296,14 @@ def test_reduce_quasar_mxfp4_2x_gapool(
 ):
     input_dimensions = [64, 64]
 
+    stimuli_spec = StimuliSpec.constant(value=-100)
     src_A, tile_cnt, _, _ = generate_stimuli(
         stimuli_format_A=formats.input_format,
         input_dimensions_A=input_dimensions,
         stimuli_format_B=formats.input_format,
         input_dimensions_B=input_dimensions,
+        spec_A=stimuli_spec,
+        spec_B=stimuli_spec,
     )
 
     # SrcB scale: Sum uses 1.0 per element; Average uses 1/32 so the row/col reduce gives
