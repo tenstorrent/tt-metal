@@ -180,6 +180,7 @@ def _process_prefill_chunk(
     # Process each split and stream-concatenate to avoid holding all split outputs.
     next_states_reduced_acc = None
     for i, down_input_split in enumerate(down_input_list):
+        split_seq_len = down_input_split.shape[2]  # actual chunk size (handles uneven last chunk)
         down = ttnn.sparse_matmul(
             down_input_split,
             weights.down_proj,
@@ -189,14 +190,13 @@ def _process_prefill_chunk(
             output_tile=output_tile,
             is_input_a_sparse=True,
             program_config=program_config.get_prefill_down_config(
-                down_input_split.shape[2], weights.down_proj.shape[-1], k=down_input_split.shape[-1]
+                split_seq_len, weights.down_proj.shape[-1], k=down_input_split.shape[-1]
             ),
             dtype=activation_dtype,
         )
         down_input_split.deallocate(True)
 
         # Apply bias and routing weights
-        split_seq_len = seq_len if seq_len < split_size else split_size
         # Note: reshape returns a view - do not deallocate original
         next_states = ttnn.reshape(down, (batch_size, config.num_experts, split_seq_len, config.hidden_size))
         bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
