@@ -7,9 +7,9 @@
 // so the CB index can be remapped by the fusion infrastructure.
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -19,12 +19,12 @@ void kernel_main() {
     constexpr uint32_t cb_id_out = get_named_compile_time_arg_val("cb_out");
     constexpr auto dst_args = TensorAccessorArgs<0>();
 
-    // Create experimental objects for Device 2.0 API
-    experimental::CircularBuffer cb_out(cb_id_out);
+    // Create objects for Device 2.0 API
+    CircularBuffer cb_out(cb_id_out);
 
     // Get page size from CB interface (works for both TILE and ROW_MAJOR layouts)
     const uint32_t page_bytes = cb_out.get_tile_size();
-    experimental::Noc noc;
+    Noc noc;
 
 #ifdef OUT_SHARDED
     cb_out.wait_front(num_pages);

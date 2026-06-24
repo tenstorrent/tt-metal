@@ -31,7 +31,8 @@ jobs:
       issues: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           fetch-depth: 1
 
@@ -60,7 +61,7 @@ jobs:
           # slack_token: Slack Bot Token for fetching messages
           slack_token: ${{ secrets.SLACK_BOT_TOKEN }}
           # channel_id: Slack channel ID to fetch messages from
-          channel_id: ${{ secrets.SLACK_METAL_INFRA_CHANNEL_ID }}
+          channel_id: ${{ secrets.FULL_CI_TRIAGE_CHANNEL }}
           update_mode: ${{ inputs.update_mode || 'update' }}
           start_date: ${{ inputs.start_date || steps['calc-date'].outputs.start_date }}
           end_date: ${{ inputs.end_date || '' }}

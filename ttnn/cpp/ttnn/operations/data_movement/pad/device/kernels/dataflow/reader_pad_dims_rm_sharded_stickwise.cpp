@@ -6,7 +6,7 @@
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint_pages.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #define u8_l1_ptr volatile tt_l1_ptr uint8_t*
 #define u8_vol_ptr volatile uint8_t*
 #define u8_ptr uint8_t*
@@ -23,8 +23,8 @@ void kernel_main() {
     constexpr uint32_t unpadded_stick_step = get_compile_time_arg_val(7);
     constexpr uint32_t padded_stick_step = get_compile_time_arg_val(8);
 
-    experimental::CircularBuffer cb_input_shard(input_shard_cb);
-    experimental::CircularBuffer cb_output_shard(output_shard_cb);
+    CircularBuffer cb_input_shard(input_shard_cb);
+    CircularBuffer cb_output_shard(output_shard_cb);
 
     uint32_t input_shard_base_addr = cb_input_shard.get_write_ptr();
     uint32_t output_shard_base_addr = cb_output_shard.get_write_ptr();

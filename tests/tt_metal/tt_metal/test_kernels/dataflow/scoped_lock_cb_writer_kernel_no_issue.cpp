@@ -4,9 +4,9 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/core_local_mem.h"
-#include "experimental/endpoints.h"
-#include "experimental/noc_semaphore.h"
+#include "api/core_local_mem.h"
+#include "api/dataflow/endpoints.h"
+#include "api/dataflow/noc_semaphore.h"
 
 void kernel_main() {
     uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
@@ -21,12 +21,12 @@ void kernel_main() {
     uint32_t other_noc_x = get_arg_val<uint32_t>(9);
     uint32_t other_noc_y = get_arg_val<uint32_t>(10);
 
-    experimental::Semaphore my_sem(my_sem_id);
-    experimental::Semaphore other_sem(other_sem_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint unicast_endpoint;
+    Semaphore my_sem(my_sem_id);
+    Semaphore other_sem(other_sem_id);
+    Noc noc;
+    UnicastEndpoint unicast_endpoint;
 
-    experimental::CoreLocalMem<uint32_t> local_buffer(local_buffer_addr);
+    CoreLocalMem<uint32_t> local_buffer(local_buffer_addr);
 
     for (uint32_t addr = target_start_addr; addr + write_size <= target_end_addr; addr += stride) {
         noc.async_write(

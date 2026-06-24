@@ -10,8 +10,9 @@ from loguru import logger
 
 import ttnn
 from models.perf.benchmarking_utils import BenchmarkProfiler
-
-from ....pipelines.motif.pipeline_motif import MotifPipeline
+from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VAEParallelConfig
+from models.tt_dit.pipelines.events import profiler_event_callback
+from models.tt_dit.pipelines.motif.pipeline_motif import MotifPipeline, MotifPipelineConfig
 
 
 @pytest.mark.parametrize(
@@ -20,7 +21,7 @@ from ....pipelines.motif.pipeline_motif import MotifPipeline
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 31000000}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "l1_small_size": 32768, "trace_region_size": 50000000}],
     indirect=True,
 )
 @pytest.mark.parametrize(("width", "height", "num_inference_steps"), [(1024, 1024, 20)])
@@ -83,21 +84,18 @@ def test_motif_pipeline(
     model_location_generator,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    pipeline = MotifPipeline.create_pipeline(
-        mesh_device=mesh_device,
-        dit_cfg=cfg,
-        dit_sp=sp,
-        dit_tp=tp,
-        encoder_tp=encoder_tp,
-        vae_tp=vae_tp,
-        enable_t5_text_encoder=True,
-        use_torch_t5_text_encoder=False,
-        use_torch_clip_text_encoder=False,
-        num_links=num_links,
-        topology=topology,
-        width=width,
-        height=height,
-        checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+    pipeline = MotifPipeline(
+        device=mesh_device,
+        config=MotifPipelineConfig.default(
+            dit_parallel_config=DiTParallelConfig.from_tuples(cfg=cfg, sp=sp, tp=tp),
+            encoder_parallel_config=EncoderParallelConfig.from_tuple(encoder_tp),
+            vae_parallel_config=VAEParallelConfig.from_tuple(vae_tp),
+            num_links=num_links,
+            topology=topology,
+            height=height,
+            width=width,
+            checkpoint_name=model_location_generator("Motif-Technologies/Motif-Image-6B-Preview"),
+        ),
     )
 
     # Setup CI environment
@@ -130,14 +128,14 @@ def test_motif_pipeline(
     def run(*, prompt: str, number: int, seed: int) -> None:
         benchmark_profiler = BenchmarkProfiler()
         with benchmark_profiler("run", iteration=0):
-            images = pipeline.run_single_prompt(
-                prompt=prompt,
+            images = pipeline(
+                prompts=[prompt],
                 num_inference_steps=num_inference_steps,
-                cfg_scale=5.0,
                 seed=seed,
                 traced=traced,
-                profiler=benchmark_profiler,
-                profiler_iteration=0,
+                vae_traced=False,
+                encoder_traced=False,
+                on_event=profiler_event_callback(benchmark_profiler, 0),
             )
 
         output_filename = f"{filename_prefix}_{number}.png"

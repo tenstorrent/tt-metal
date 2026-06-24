@@ -53,7 +53,7 @@ inline void calculate_fmod(const uint value, const uint recip) {
         v_endif;
         v = v - quotient * s;
 
-        v = setsgn(v, val);
+        v = copysgn(v, val);
 
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;

@@ -7,30 +7,56 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-
-#ifdef ARCH_QUASAR
-#include "experimental/dataflow_buffer.h"
-#else
-#include "experimental/circular_buffer.h"
-#endif
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
+#ifdef SFPU_BINARY_OP
+    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
+    uint32_t per_core_block_size = get_compile_time_arg_val(1);
+    CircularBuffer buff_in0(tt::CBIndex::c_0);
+    CircularBuffer buff_in1(tt::CBIndex::c_1);
+    CircularBuffer buff_out(tt::CBIndex::c_16);
+    const uint32_t in0_id = tt::CBIndex::c_0;
+    const uint32_t in1_id = tt::CBIndex::c_1;
+    const uint32_t out_id = tt::CBIndex::c_16;
+
+    init_sfpu(in0_id, out_id);
+    for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
+        for (uint32_t i = 0; i < per_core_block_size; ++i) {
+            buff_in0.wait_front(1);
+            buff_in1.wait_front(1);
+            buff_out.reserve_back(1);
+
+            tile_regs_acquire();
+
+            copy_tile_to_dst_init_short(in0_id);
+            copy_tile(in0_id, /*tile_index=*/0, /*dst_index=*/0);
+            copy_tile_to_dst_init_short(in1_id);
+            copy_tile(in1_id, /*tile_index=*/0, /*dst_index=*/1);
+
+#ifdef SFPU_OP_CHAIN_0
+            SFPU_OP_CHAIN_0
+#endif
+
+            tile_regs_commit();
+
+            tile_regs_wait();
+            pack_tile(/*dst_index=*/2, out_id);
+            tile_regs_release();
+
+            buff_out.push_back(1);
+            buff_in0.pop_front(1);
+            buff_in1.pop_front(1);
+        }
+    }
+#else
     uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     uint32_t per_core_block_dim = get_compile_time_arg_val(1);
 
-#ifdef ARCH_QUASAR
-    constexpr uint32_t dfb_in_id = get_compile_time_arg_val(2);
-    constexpr uint32_t dfb_out_id = get_compile_time_arg_val(3);
-    experimental::DataflowBuffer buff_in(dfb_in_id);
-    experimental::DataflowBuffer buff_out(dfb_out_id);
-    const uint32_t in_id = buff_in.get_id();
-    const uint32_t out_id = buff_out.get_id();
-#else
-    experimental::CircularBuffer buff_in(tt::CBIndex::c_0);
-    experimental::CircularBuffer buff_out(tt::CBIndex::c_16);
+    CircularBuffer buff_in(tt::CBIndex::c_0);
+    CircularBuffer buff_out(tt::CBIndex::c_16);
     const uint32_t in_id = tt::CBIndex::c_0;
     const uint32_t out_id = tt::CBIndex::c_16;
-#endif
     init_sfpu(in_id, out_id);
     for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
         buff_out.reserve_back(per_core_block_dim);
@@ -50,4 +76,5 @@ void kernel_main() {
         }
         buff_out.push_back(per_core_block_dim);
     }
+#endif
 }

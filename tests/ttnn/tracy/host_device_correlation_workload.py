@@ -34,7 +34,7 @@ def main():
 
     def collect_record(record):
         entry = {
-            "program_id": record.program_id,
+            "runtime_id": record.runtime_id,
             "chip_id": record.chip_id,
             "start_timestamp": record.start_timestamp,
             "end_timestamp": record.end_timestamp,

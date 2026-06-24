@@ -7,9 +7,9 @@
  */
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);     // Destination address in dram
@@ -25,8 +25,8 @@ void kernel_main() {
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_out_buf(cb_out);
+    Noc noc;
+    CircularBuffer cb_out_buf(cb_out);
 
     uint32_t tile_id = tile_offset;
     for (uint32_t i = 0; i < num_tiles; i += blk) {
@@ -34,7 +34,7 @@ void kernel_main() {
         uint32_t write_offset = 0;
         for (uint32_t j = 0; j < blk; j++) {
             noc.async_write(
-                experimental::use<experimental::CircularBuffer::AddrSelector::READ_PTR>(cb_out_buf),
+                use<CircularBuffer::AddrSelector::READ_PTR>(cb_out_buf),
                 s,
                 tile_bytes,
                 {.offset_bytes = write_offset},

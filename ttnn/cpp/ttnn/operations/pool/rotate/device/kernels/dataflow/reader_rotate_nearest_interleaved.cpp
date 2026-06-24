@@ -35,8 +35,8 @@ void kernel_main() {
 
     experimental::CB output_cb(output_cb_id);
     experimental::CB fill_cb(fill_cb_id);
-    experimental::Noc noc;
-    experimental::UnicastEndpoint self_ep;
+    Noc noc;
+    UnicastEndpoint self_ep;
 
     uint32_t fill_stick_addr = fill_cb.get_write_ptr();
     if constexpr (fill_is_zero) {

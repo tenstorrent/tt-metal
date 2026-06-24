@@ -15,26 +15,16 @@ struct McastRect {
 
 #ifndef COMPILE_FOR_TRISC
 // Shorthand for the multicast destination args type used by Noc::async_write_multicast.
-using McastDst = experimental::noc_traits_t<experimental::MulticastEndpoint>::dst_args_mcast_type;
+using McastDst = noc_traits_t<MulticastEndpoint>::dst_args_mcast_type;
 #endif
 
 // Zero out all tiles for a given circular buffer.
 template <uint32_t cb_id>
-FORCE_INLINE void zero_out_tiles(experimental::Noc noc, experimental::CB cb) {
+FORCE_INLINE void zero_out_tiles(Noc noc, experimental::CB cb) {
     constexpr uint32_t tile_size = get_tile_size(cb_id);
-    static_assert(
-        tile_size % MEM_ZEROS_SIZE == 0, "Tile size must be a multiple of MEM_ZEROS_BASE for zeroing out tiles");
     const uint32_t num_tiles = get_local_cb_interface(cb_id).fifo_num_pages;
-    const uint32_t num_zeros_reads = (tile_size / MEM_ZEROS_SIZE) * num_tiles;
-
-    constexpr uint32_t packet_size = MEM_ZEROS_SIZE;
-
-    experimental::set_read_state<packet_size>(noc, MEM_ZEROS_BASE);
-
-    for (uint32_t i = 0; i < num_zeros_reads; ++i) {
-        experimental::read_with_state(noc, cb, MEM_ZEROS_BASE, {.offset_bytes = i * packet_size});
-    }
-    noc.async_read_barrier();
+    noc.async_write_zeros(cb, tile_size * num_tiles);
+    noc.write_zeros_l1_barrier();
 }
 
 template <
@@ -46,7 +36,7 @@ template <
     uint32_t weight_size_w,
     uint32_t stride_w>
 FORCE_INLINE void read_sticks(
-    experimental::Noc noc,
+    Noc noc,
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
     uint32_t reader_offset,
     uint32_t& l1_write_addr_act,
@@ -80,7 +70,7 @@ FORCE_INLINE void read_sticks(
 }
 
 template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
-FORCE_INLINE void read_kernel_w(experimental::Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
+FORCE_INLINE void read_kernel_w(Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
     experimental::read_with_state(noc, l1_write_addr_act, act_l1_offset);
     l1_write_addr_act += coalesced_read_bytes;
     act_l1_offset += stride_h_bytes;
@@ -106,7 +96,7 @@ FORCE_INLINE void pass_to_the_next_image_width(
 }
 
 template <uint32_t cb_id_act, uint32_t act_cb_w_tiles>
-FORCE_INLINE void push_full_tile_height(experimental::Noc noc, experimental::CB cb_act) {
+FORCE_INLINE void push_full_tile_height(Noc noc, experimental::CB cb_act) {
     noc.async_read_barrier();
     cb_act.push_back(act_cb_w_tiles);
 }
@@ -131,7 +121,7 @@ template <
     uint32_t conv_act_c_read_bytes,
     uint32_t act_block_w_extra_align_bytes>
 FORCE_INLINE void read_first_image_row_window(
-    experimental::Noc noc,
+    Noc noc,
     experimental::CB cb_act,
     uint32_t& l1_write_addr_act,
     uint32_t reader_offset,
@@ -156,7 +146,7 @@ template <
     uint32_t outer_coalesced_read_bytes,
     uint32_t outer_stride_h_bytes>
 FORCE_INLINE void read_image_row_window_with_reuse(
-    experimental::Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
+    Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {
     l1_write_addr_act += outer_coalesced_read_bytes;
     act_l1_offset += outer_stride_h_bytes;
     read_kernel_w<coalesced_read_bytes, stride_h_bytes>(noc, l1_write_addr_act, act_l1_offset);
@@ -204,7 +194,7 @@ template <
     uint32_t window_reuse_offset,
     bool single_core_processes_multiple_batches>
 FORCE_INLINE void read_sticks_activation_reuse(
-    experimental::Noc noc,
+    Noc noc,
     experimental::CB cb_act,
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
     uint32_t reader_offset,
@@ -362,7 +352,7 @@ FORCE_INLINE void read_sticks_activation_reuse(
 }
 
 template <uint32_t dram_addr_index, uint32_t page_size_index, uint32_t tensor_args_index, uint32_t cb_reader_index>
-void load_config_tensor_if_in_dram(experimental::Noc noc, experimental::CB reader_cb, uint32_t core_index) {
+void load_config_tensor_if_in_dram(Noc noc, experimental::CB reader_cb, uint32_t core_index) {
 #ifdef CONFIG_TENSOR_IN_DRAM
     // TODO: Instead of all cores reading from dram, only the first column reads, and does an MCAST to all the other
     // cores in the row.
@@ -379,7 +369,7 @@ void load_config_tensor_if_in_dram(experimental::Noc noc, experimental::CB reade
 
 template <int window_height, int window_width>
 FORCE_INLINE void read_dilated_channels(
-    experimental::Noc noc,
+    Noc noc,
     uint32_t& l1_write_addr_act,
     const uint32_t act_l1_read_addr,
     const uint32_t reader_channel_idx,
@@ -402,7 +392,7 @@ FORCE_INLINE void read_dilated_channels(
 
 template <int window_height>
 FORCE_INLINE void read_channels(
-    experimental::Noc noc,
+    Noc noc,
     uint32_t& l1_write_addr_act,
     const uint32_t act_l1_read_addr,
     const uint32_t reader_channel_idx,
@@ -430,7 +420,7 @@ template <
     uint32_t weight_size_h,
     uint32_t window_outer_offset>
 FORCE_INLINE void read_activation_data(
-    experimental::Noc noc,
+    Noc noc,
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
     uint32_t& reader_offset,
     uint32_t& l1_write_addr_act,

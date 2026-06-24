@@ -4,12 +4,12 @@
 
 // Tests multiple DRISC L1 (128KB) to DRAM GDDR Xfer over DMA and measures bandwidth
 
-#include "experimental/core_local_mem.h"
+#include "api/core_local_mem.h"
 #include "experimental/gddr_dma.h"
 #include "risc_common.h"
 
 void writes_cycles_consumed(uint32_t l1_addr, uint32_t offset, uint64_t total_time) {
-    experimental::CoreLocalMem<uint64_t> total_time_res(l1_addr);
+    CoreLocalMem<uint64_t> total_time_res(l1_addr);
     total_time_res[offset] = total_time;
 }
 

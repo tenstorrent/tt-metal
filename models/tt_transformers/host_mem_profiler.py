@@ -77,8 +77,12 @@ from pathlib import Path
 
 from loguru import logger
 
+_ALLOWED_PACKAGES = {"memory-profiler", "matplotlib"}
+
 
 def _require(package, import_name=None):
+    if package not in _ALLOWED_PACKAGES:
+        raise ValueError(f"Package '{package}' is not in the allowed list: {_ALLOWED_PACKAGES}")
     import_name = import_name or package
     try:
         importlib.import_module(import_name)

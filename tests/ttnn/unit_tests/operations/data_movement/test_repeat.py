@@ -76,14 +76,10 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
         output.shape == torch_result.shape
     ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
 
-    # Convert unsigned PyTorch dtypes to int32 for PCC check since comp_pcc doesn't support uint dtypes
-    pcc_torch_result = torch_result
-    pcc_output = output
-    if torch_dtype == torch.uint16:
-        pcc_torch_result = torch_result.to(torch.int32)
-        pcc_output = output.to(torch.int32)
-
-    assert_with_pcc(pcc_torch_result, pcc_output, 0.9999)
+    if ttnn_dtype == ttnn.bfloat8_b:
+        assert_with_pcc(torch_result, output, 0.9999)
+    else:
+        assert_equal(torch_result, output)
 
 
 @pytest.mark.parametrize("layout", layouts)

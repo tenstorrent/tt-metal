@@ -6,6 +6,7 @@
 
 #include <optional>
 #include <cstdint>
+#include <filesystem>
 #include <map>
 #include <string_view>
 #include <unordered_map>
@@ -78,6 +79,8 @@ struct DataMovementConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
@@ -85,7 +88,8 @@ struct ReaderDataMovementConfig : public DataMovementConfig {
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
         std::unordered_map<std::string, uint32_t> named_compile_args = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::vector<std::filesystem::path> compiler_include_paths = {});
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
@@ -93,7 +97,8 @@ struct WriterDataMovementConfig : public DataMovementConfig {
         std::vector<uint32_t> compile_args = {},
         std::map<std::string, std::string> defines = {},
         std::unordered_map<std::string, uint32_t> named_compile_args = {},
-        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2,
+        std::vector<std::filesystem::path> compiler_include_paths = {});
 };
 
 struct ComputeConfig {
@@ -118,6 +123,8 @@ struct ComputeConfig {
     std::unordered_map<std::string, uint32_t> named_compile_args;
     // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
+    // Provide include paths for the kernel compiler (-I)
+    std::vector<std::filesystem::path> compiler_include_paths;
 };
 
 // These are only used in op_profiler, are unstable and have not been designed for general use.

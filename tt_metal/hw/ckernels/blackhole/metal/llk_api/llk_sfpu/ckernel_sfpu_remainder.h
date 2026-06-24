@@ -59,7 +59,7 @@ inline void calculate_remainder(const uint value, const uint recip) {
 
         v_if(value_tmp < 0 && v != 0) { v = v + value_tmp; }
         v_endif;
-        v = setsgn(v, value_tmp);
+        v = sfpi::copysgn(v, value_tmp);
         v_if(s == 0) { v = std::numeric_limits<float>::quiet_NaN(); }
         v_endif;
 

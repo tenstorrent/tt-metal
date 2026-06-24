@@ -18,9 +18,9 @@
 
 namespace tt::tt_metal {
 
-JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs) {
+JitDeviceConfig create_jit_device_config(ChipId device_id, uint8_t num_hw_cqs, ContextId context_id) {
     // Need both runtime state and hardware query
-    auto& ctx = MetalContext::instance();
+    auto& ctx = MetalContext::instance(context_id);
     auto& env = MetalEnvAccessor(ctx.get_env()).impl();
     const auto& hal = env.get_hal();
     const auto& cluster = env.get_cluster();

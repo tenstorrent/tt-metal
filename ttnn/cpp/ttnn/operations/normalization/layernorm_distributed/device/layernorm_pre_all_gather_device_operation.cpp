@@ -96,6 +96,7 @@ namespace ttnn::prim {
 
 Tensor layer_norm_pre_all_gather(
     const Tensor& input,
+    const std::optional<Tensor>& residual_input_tensor,
     const std::optional<Tensor>& recip_tensor,
     LayerNormDistributedType norm_type,
     const std::optional<tt::tt_metal::DataType>& dtype,
@@ -103,7 +104,35 @@ Tensor layer_norm_pre_all_gather(
     const LayerNormProgramConfig& program_config,
     const std::optional<bool>& use_2d_core_grid) {
     using OperationType = LayerNormPreAllGatherDeviceOperation;
+
+    // Validate the residual before fill_implicit_tile_padding so a malformed residual surfaces
+    // a clear error here instead of crashing inside the fill helper. The device op's
+    // validate_on_program_cache_miss runs after launch, which is too late once fill has run.
+    if (residual_input_tensor.has_value()) {
+        const auto& b = residual_input_tensor.value();
+        TT_FATAL(b.layout() == Layout::TILE, "Residual tensor must have TILE layout, got: {}", b.layout());
+        TT_FATAL(
+            input.logical_shape() == b.logical_shape() && input.padded_shape() == b.padded_shape(),
+            "Input and residual logical and padded shapes must match, got input: logical={} padded={} vs residual: "
+            "logical={} padded={}",
+            input.logical_shape(),
+            input.padded_shape(),
+            b.logical_shape(),
+            b.padded_shape());
+        TT_FATAL(
+            b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "Residual tensor must be interleaved.");
+        TT_FATAL(b.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
+        TT_FATAL(b.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
+        TT_FATAL(input.device() == b.device(), "Input and residual tensors must be on same device");
+    }
+
     auto input_padded = ttnn::fill_implicit_tile_padding(input, 0.0f);
+    // Also zero residual's implicit tile padding so it doesn't contaminate the kernel-fused
+    // a + b that gets fed into the per-row stats.
+    auto residual_padded = residual_input_tensor.has_value()
+                               ? std::make_optional(ttnn::fill_implicit_tile_padding(*residual_input_tensor, 0.0f))
+                               : std::nullopt;
     return ttnn::device_operation::detail::launch<OperationType>(
         OperationType::operation_attributes_t{
             .norm_type = norm_type,
@@ -114,6 +143,7 @@ Tensor layer_norm_pre_all_gather(
         },
         OperationType::tensor_args_t{
             .input = input_padded,
+            .residual_input_tensor = residual_padded,
             .recip_tensor = recip_tensor,
         });
 }

@@ -45,7 +45,6 @@ class BinarySfpu(Sfpu):
         return [
             "ckernel_defs.h",
             "ckernel_sfpu.h",
-            "ckernel_sfpu_binary.h",
             "llk_math_common.h",
             "llk_math_eltwise_binary_sfpu.h",
             "sfpu_operations.h",
@@ -60,7 +59,7 @@ class BinarySfpu(Sfpu):
         batch_dims: tuple,
         batch_tile_cnt: int,
     ) -> torch.Tensor:
-        math_format = operation.output.data_format
+        math_format = config.sentinel.golden_math_format
 
         generate_binary_golden = get_golden_generator(BinarySFPUGolden)
         golden_tensor = generate_binary_golden(
@@ -77,21 +76,12 @@ class BinarySfpu(Sfpu):
 
         return golden_tensor
 
+    def _format_arg(self, config: GlobalConfig) -> str:
+        if self.operation == MathOperation.SfpuAddTopRow:
+            return "0"
+        return config.sentinel.math_format
+
     def init(
-        self,
-        operation: FusedOperation,
-        config: GlobalConfig,
-        compute_unit: ComputeNode,
-        block: BlockData,
-    ) -> str:
-        stage = operation.stage_id
-
-        return (
-            f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
-            f"    _llk_math_eltwise_binary_sfpu_init_<SfpuType::add1>();\n"
-        )
-
-    def calculate(
         self,
         operation: FusedOperation,
         config: GlobalConfig,
@@ -102,19 +92,35 @@ class BinarySfpu(Sfpu):
         op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
         approx_mode = self.approx_mode.cpp_enum_value
         iterations = self.iterations
+        format = self._format_arg(config)
+
+        return (
+            f"    // Operation {stage}: Binary {self.operation.cpp_enum_value} SFPU\n"
+            f"    test_utils::call_binary_sfpu_operation_init<{approx_mode}, {op}, {iterations}, {format}>();\n"
+        )
+
+    def calculate(
+        self,
+        operation: FusedOperation,
+        config: GlobalConfig,
+        compute_unit: ComputeNode,
+        block: BlockData,
+    ) -> str:
+        dest_sync = operation.dest_sync.cpp_enum_value
+        op = f"ckernel::BinaryOp::{self.operation.cpp_enum_value}"
+        approx_mode = self.approx_mode.cpp_enum_value
+        dest_acc = config.dest_acc.cpp_enum_value
+        iterations = self.iterations
         src1 = self.dst_index_in0
         src2 = self.dst_index_in1
         dst = self.dst_index_out
-
-        if self.operation == MathOperation.SfpuAddTopRow:
-            format = "0"
-        else:
-            format = config.sentinel.math_format
+        format = self._format_arg(config)
 
         return (
-            f"    _llk_math_eltwise_binary_sfpu_start_<dest_sync{stage}>(0);\n"
-            f"    test_utils::call_binary_sfpu_operation<{approx_mode}, {op}, {iterations}, {format}>({src1}, {src2}, {dst});\n"
-            f"    _llk_math_eltwise_binary_sfpu_done_();\n"
+            f"    test_utils::call_binary_sfpu_operation<"
+            f"{dest_sync}, {dest_acc}, "
+            f"{approx_mode}, {op}, {iterations}, {format}"
+            f">({src1} /* dst_index_in0 */, {src2} /* dst_index_in1 */, {dst} /* dst_index_out */);\n"
         )
 
     def __str__(self) -> str:

@@ -99,6 +99,11 @@ class MLP1DConfig:
     activation_dtype: ttnn.DataType | None = None
     ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
     ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    # Optional decode-only overrides (DRAM-sharded decode matmuls). When None, match ff1_3 / ff2.
+    decode_ff1_3_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    decode_ff2_compute_kernel_cfg: ttnn.WormholeComputeKernelConfig | None = None
+    # If True, move W1 decode output to DRAM before W3 linear so W3 CB validation does not overlap W1 L1.
+    decode_spill_w1_to_dram_before_w3: bool = False
 
     linear_dtype: ttnn.DataType | None = None
     mul_dtype: ttnn.DataType | None = None
@@ -207,16 +212,21 @@ class MLP1D(LightweightModule):
             self.w1,
             dtype=cfg.linear_dtype,
             core_grid=None,
-            compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
+            compute_kernel_config=cfg.decode_ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
+        if cfg.decode_spill_w1_to_dram_before_w3:
+            w1_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(w1_out)
+            w1_out = w1_dram
+
         w3_out = ttnn.linear(
             x,
             self.w3,
             dtype=cfg.linear_dtype,
             core_grid=None,
-            compute_kernel_config=cfg.ff1_3_compute_kernel_cfg,
+            compute_kernel_config=cfg.decode_ff1_3_compute_kernel_cfg,
             program_config=cfg.decode_w1_w3_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
         )
@@ -225,12 +235,13 @@ class MLP1D(LightweightModule):
         # --- STAGE 2: No CCL for non-TG ---
 
         # --- STAGE 3: Activation + Multiply ---
+        mul_out_memcfg = ttnn.DRAM_MEMORY_CONFIG if cfg.decode_spill_w1_to_dram_before_w3 else w1_out.memory_config()
         w2_in = ttnn.mul(
             w1_out,
             w3_out,
             input_tensor_a_activations=[cfg.mlp_activation_type],
             dtype=cfg.mul_dtype,
-            memory_config=w1_out.memory_config(),
+            memory_config=mul_out_memcfg,
         )
 
         # --- STAGE 3.5: Reshard for w2 ---
@@ -245,7 +256,7 @@ class MLP1D(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=cfg.ff2_compute_kernel_cfg,
+            compute_kernel_config=cfg.decode_ff2_compute_kernel_cfg,
             dtype=cfg.linear_dtype,
             program_config=cfg.decode_w2_prg_config,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -586,6 +597,9 @@ class MLP1D(LightweightModule):
             activation_dtype=activation_dtype,
             ff1_3_compute_kernel_cfg=ff1_3_compute_kernel_cfg,
             ff2_compute_kernel_cfg=ff2_compute_kernel_cfg,
+            decode_ff1_3_compute_kernel_cfg=ff1_3_compute_kernel_cfg,
+            decode_ff2_compute_kernel_cfg=ff2_compute_kernel_cfg,
+            decode_spill_w1_to_dram_before_w3=False,
             # Use prefill_len_cutoff from args to match original MLP behavior
             prefill_len_cutoff=args.prefill_len_cutoff,
         )
@@ -821,6 +835,13 @@ def _resolve_mlp1d_config(config: MLP1DConfig) -> MLP1DConfig:
         to_set["ff1_3_compute_kernel_cfg"] = _compute_kernel_config_hifi2_fp16()
     if config.ff2_compute_kernel_cfg is None:
         to_set["ff2_compute_kernel_cfg"] = _compute_kernel_config_hifi2_fp16()
+
+    ff13_resolved = config.ff1_3_compute_kernel_cfg or to_set.get("ff1_3_compute_kernel_cfg")
+    ff2_resolved = config.ff2_compute_kernel_cfg or to_set.get("ff2_compute_kernel_cfg")
+    if config.decode_ff1_3_compute_kernel_cfg is None:
+        to_set["decode_ff1_3_compute_kernel_cfg"] = ff13_resolved
+    if config.decode_ff2_compute_kernel_cfg is None:
+        to_set["decode_ff2_compute_kernel_cfg"] = ff2_resolved
 
     # --- Phase 3: Decode program configs ---
     # Note: Use padded_hidden_dim to match auto-padding in LazyWeight

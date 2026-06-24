@@ -56,6 +56,8 @@ inline std::string get_generic_reduction_doc(const char* op_name, const char* qu
                   - TILE
 
             The output tensor will be in TILE layout and have the same dtype as the :attr:`input_tensor`.
+            Exception: for sum and mean, 4D ROW_MAJOR BFLOAT16/FLOAT32 inputs with INTERLEAVED memory
+            config reduced along the last (-1) or second-to-last (-2) dimension preserve ROW_MAJOR layout.
 
         Memory Support:
             - Interleaved: DRAM and L1
@@ -82,6 +84,11 @@ Tensor generic_reduction_with_deprecated_correction(
     std::optional<bool> correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     if (correction.has_value()) {
+        // Re-acquire the GIL: this function is registered via bind_function<>(),
+        // which applies nb::call_guard<nb::gil_scoped_release>(), so the GIL is
+        // released by default. PyErr_WarnEx / PyExc_DeprecationWarning are Python
+        // C API and require the GIL.
+        nb::gil_scoped_acquire acquire;
         PyErr_WarnEx(
             PyExc_DeprecationWarning,
             "The 'correction' parameter is deprecated and will be removed in a future release.",

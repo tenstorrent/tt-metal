@@ -96,6 +96,8 @@ void kernel_main() {
                     token_start_idx + i, indices_addrg, indices_write_addr + i * indices_aligned_page_size);
             }
             noc_async_read_barrier();
+            // Indices stay as uint16 in the CB — the compute kernel reads them
+            // directly via read_tile_value_uint16.
             cb_push_back(cb_indices, TOKENS_PER_CHUNK);
         }
 
@@ -105,8 +107,10 @@ void kernel_main() {
 
             bool has_local = true;
             if constexpr (use_dispatch_table_skip) {
-                int32_t* dispatch_table = (int32_t*)dispatch_table_write_addr;
-                int32_t* token_indices = (int32_t*)(indices_write_addr + token_idx * indices_aligned_page_size);
+                tt_l1_ptr int32_t* dispatch_table = reinterpret_cast<tt_l1_ptr int32_t*>(dispatch_table_write_addr);
+                // Indices stay as uint16 in the CB — no in-place expansion.
+                tt_l1_ptr uint16_t* token_indices =
+                    reinterpret_cast<tt_l1_ptr uint16_t*>(indices_write_addr + token_idx * indices_aligned_page_size);
                 has_local = false;
                 for (uint32_t k = 0; k < num_experts; ++k) {
                     if (dispatch_table[token_indices[k]] != -1) {
@@ -125,7 +129,8 @@ void kernel_main() {
                     if (!has_local && is_last) {
                         // No local experts for this token — zero the weight tile so compute's
                         // must_zero_init multiply produces zeros regardless of combine_output.
-                        volatile uint32_t* ptr = (volatile uint32_t*)cb_write_addr;
+                        volatile tt_l1_ptr uint32_t* ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_write_addr);
                         for (uint32_t w = 0; w < weight_tile_size / sizeof(uint32_t); w++) {
                             ptr[w] = 0;
                         }

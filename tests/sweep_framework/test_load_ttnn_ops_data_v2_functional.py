@@ -90,6 +90,7 @@ def _make_master_json(
             "models": [source],
             "unique_operations": len(operations),
             "total_configurations": sum(len(c) for c in ops.values()),
+            "trace_uid": "fixture-trace-uid",
         },
     }
     p = tmp_path / filename
@@ -681,7 +682,7 @@ class TestModelFilteredReconstruction:
             "metadata": {"models": ["models/demos/audio/whisper/demo/demo.py"]},
         }
         result = reconstruct_from_manifest(str(f), scope="model_traced")
-        mock_recon.assert_called_once_with(538, schema="ttnn_ops_v5", model_names={"whisper"})
+        mock_recon.assert_called_once_with(538, schema="ttnn_ops_v6", model_names={"whisper"})
         assert result["operations"]["ttnn::add"]["configurations"][0]["config_hash"] == "h1"
 
     @patch("tests.sweep_framework.load_ttnn_ops_data_v2.reconstruct_from_trace_run")
@@ -746,7 +747,7 @@ class TestModelFilteredReconstruction:
             "metadata": {"models": ["models/demos/deepseek_v3/demo/demo.py"]},
         }
         result = reconstruct_from_manifest(str(f), scope="lead_models")
-        mock_recon.assert_called_once_with(35, schema="ttnn_ops_v5", model_names={"deepseek_v3"})
+        mock_recon.assert_called_once_with(35, schema="ttnn_ops_v6", model_names={"deepseek_v3"})
         assert "ttnn::linear" in result["operations"]
 
     @patch("tests.sweep_framework.load_ttnn_ops_data_v2.reconstruct_from_trace_run")
@@ -962,23 +963,15 @@ class TestLoadDataWithMockedDB:
                         }
                     ]
                 }
-            }
+            },
+            "metadata": {"trace_uid": "fixture-trace-uid"},
         }
         p = tmp_path / "multi_source.json"
         p.write_text(json.dumps(data))
 
         _, mock_cur = self._setup_mock_db(mock_pg)
-        mock_cur.fetchone.side_effect = [
-            (1,),  # op id
-            # execution 1: whisper
-            (10,),  # model id (whisper)
-            (20,),  # hardware id
-            (30,),  # config id
-            (40,),  # trace run id
-            # execution 2: llama
-            (11,),  # model id (llama)
-            *[(n,) for n in range(9)],  # _fetch_db_totals
-        ]
+        # Keep this fixture resilient to internal query count changes.
+        mock_cur.fetchone.return_value = (1,)
 
         load_data(json_path=str(p), tt_metal_sha="sha", dry_run=True)
         # In dry run: rollback is called, commit is not
@@ -1020,7 +1013,9 @@ class TestLoadDataWithMockedDB:
     def test_emit_id_file_writes_new_trace_run_id(self, mock_get_trace_run, mock_drafts, mock_pg, tmp_path):
         """--emit-id-file writes the new trace_run_id so CI can pin validation."""
 
-        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None):
+        def fake_trace_run(
+            cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None, **_unused
+        ):
             cache[trace_uid] = 77
             return 77
 
@@ -1046,7 +1041,9 @@ class TestLoadDataWithMockedDB:
     def test_emit_id_file_not_written_on_dry_run(self, mock_get_trace_run, mock_pg, tmp_path):
         """Dry run must never produce an ID file — the trace_run doesn't exist."""
 
-        def fake_trace_run(cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None):
+        def fake_trace_run(
+            cur, cache, trace_uid, hardware_id, tt_metal_sha=None, pytest_args=None, schema=None, **_unused
+        ):
             cache[trace_uid] = 77
             return 77
 
@@ -1324,7 +1321,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None, None, None, None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                     (
@@ -1342,6 +1339,9 @@ class TestReconstructFromTraceRunFunctional:
                         {"arguments": {"a": {"type": "int", "value": 1}}},
                         None,
                         None,
+                        None,
+                        None,
+                        None,
                         5,
                         "models/demos/audio/whisper/demo/demo.py",
                         None,
@@ -1353,6 +1353,9 @@ class TestReconstructFromTraceRunFunctional:
                         {"arguments": {"a": {"type": "int", "value": 1}}},
                         None,
                         None,
+                        None,
+                        None,
+                        None,
                         3,
                         "models/tt_transformers/demo/simple_text_demo.py",
                         "meta-llama/Llama-3.2-1B-Instruct",
@@ -1362,6 +1365,9 @@ class TestReconstructFromTraceRunFunctional:
                         200,
                         "h2",
                         {"arguments": {"b": {"type": "float", "value": 2.0}}},
+                        None,
+                        None,
+                        None,
                         None,
                         None,
                         10,
@@ -1395,7 +1401,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None, None, None, None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                     (2, "path/llama.py", "meta-llama/Llama-3.2-1B", "llama-3.2-1b"),
@@ -1406,6 +1412,9 @@ class TestReconstructFromTraceRunFunctional:
                         100,
                         "h1",
                         {"arguments": {}},
+                        None,
+                        None,
+                        None,
                         None,
                         None,
                         5,
@@ -1428,7 +1437,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None),
+                "tr_meta": (538, "Wormhole", "n300", 1, None, "2026-03-21", 7000, "", None, None, None, None),
                 "trace_models": [
                     (1, "models/demos/audio/whisper/demo/demo.py", None, "whisper"),
                 ],
@@ -1445,7 +1454,7 @@ class TestReconstructFromTraceRunFunctional:
         mock_conn, mock_cur = _mock_db_for_reconstruct(
             mock_pg,
             {
-                "tr_meta": (35, "Wormhole", "tt-galaxy-wh", 32, "sha", "2026-03-21", 323, "", None),
+                "tr_meta": (35, "Wormhole", "tt-galaxy-wh", 32, "sha", "2026-03-21", 323, "", None, None, None, None),
                 "trace_models": [
                     (1, "models/demos/deepseek_v3/demo/demo.py", None, "deepseek_v3"),
                 ],
@@ -1455,6 +1464,9 @@ class TestReconstructFromTraceRunFunctional:
                         100,
                         "h1",
                         {"arguments": {}},
+                        "Wormhole",
+                        "tt-galaxy-wh",
+                        32,
                         [4, 8],
                         32,
                         128,

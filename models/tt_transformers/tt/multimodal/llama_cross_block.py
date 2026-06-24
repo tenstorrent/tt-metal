@@ -9,7 +9,6 @@ from models.tt_transformers.tt.common import Mode
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.mlp import MLP
 from models.tt_transformers.tt.multimodal.llama_cross_attention import TtLlamaCrossAttention
-from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
@@ -68,7 +67,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             self.tt_ccl,
         )
 
-        self.gate_attn = from_torch_host_to_device(
+        self.gate_attn = ttnn.as_tensor(
             state_dict[f"{state_dict_prefix}gate_attn"].unsqueeze(0).expand(1, self.hidden_size),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,
@@ -104,7 +103,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             self.tt_ccl,
         )
 
-        self.gate_ffwd = from_torch_host_to_device(
+        self.gate_ffwd = ttnn.as_tensor(
             state_dict[f"{state_dict_prefix}gate_ffwd"].unsqueeze(0).expand(1, self.hidden_size),
             dtype=ttnn.bfloat16,
             device=self.mesh_device,

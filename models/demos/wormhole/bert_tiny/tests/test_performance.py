@@ -34,7 +34,7 @@ def test_perf_bert_tiny(
     reset_seeds,
 ):
     model_name = str(model_location_generator(model_name, model_subdir="Bert"))
-    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name, torchscript=False)
+    hugging_face_reference_model = BertForQuestionAnswering.from_pretrained(model_name)
     config = hugging_face_reference_model.config
     pytorch_model = hugging_face_reference_model
 

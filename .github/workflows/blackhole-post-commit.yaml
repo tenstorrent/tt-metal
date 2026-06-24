@@ -9,7 +9,7 @@ on:
         type: string
         default: '["P150"]'
       enable-watcher:
-        description: 'Enable watcher in BH Post commit'
+        description: "Enable watcher in BH Post commit"
         default: false
         type: boolean
       platform:
@@ -32,12 +32,7 @@ on:
         type: boolean
         default: true
         description: "Run TTNN unit tests"
-      run-models-unit-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run model unit tests"
-      run-profiler-regression:
+      run-profiler-tests:
         required: false
         type: boolean
         default: true
@@ -62,6 +57,16 @@ on:
         type: boolean
         default: true
         description: "Run Blackhole multi-card fast unit tests"
+      run-smoke-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run smoke tests"
+      run-basic-tests:
+        required: false
+        type: boolean
+        default: true
+        description: "Run basic tests"
       # Pre-built artifacts (optional - if provided, skips build-artifact job)
       dev-docker-image:
         required: false
@@ -96,7 +101,7 @@ on:
         type: string
         default: '["P150"]'
       enable-watcher:
-        description: 'Enable watcher in BH Post commit'
+        description: "Enable watcher in BH Post commit"
         default: false
         type: boolean
       platform:
@@ -108,7 +113,7 @@ on:
           - "Ubuntu 24.04"
         description: "Platform to build and test"
       build-type:
-        description: 'Build type for the workflow'
+        description: "Build type for the workflow"
         required: false
         default: Release
         type: choice
@@ -128,12 +133,7 @@ on:
         type: boolean
         default: true
         description: "Run TTNN unit tests"
-      run-models-unit-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run model unit tests"
-      run-profiler-regression:
+      run-profiler-tests:
         required: false
         type: boolean
         default: true
@@ -165,7 +165,7 @@ on:
         description: "Enable LLK asserts"
   schedule:
     - cron: "0 */4 * * *"
-    - cron: "0 7 * * *"  # Every day at 7:00 UTC
+    - cron: "0 7 * * *" # Every day at 7:00 UTC
   # Pause this since not enough runners to support every commit to main
   # push:
   #  branches: ["main"]
@@ -187,6 +187,9 @@ permissions:
   checks: write
 
 jobs:
+  check-harbor:
+    uses: ./.github/workflows/check-harbor.yaml
+
   generate-matrix:
     runs-on: ubuntu-latest
     outputs:
@@ -241,12 +244,15 @@ jobs:
           echo "civ2_viommu_matrix: $civ2_viommu_matrix"
 
   build-artifact:
+    needs: check-harbor
     if: ${{ inputs.dev-docker-image == '' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
+      contents: read
       packages: write
     secrets: inherit
     with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
@@ -260,6 +266,7 @@ jobs:
     if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
     outputs:
       dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
+      ci-test-docker-image: ${{ steps.resolve.outputs.ci-test-docker-image }}
       build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
       schedule-runs-all-tests-effective: ${{ steps.resolve.outputs.schedule-runs-all-tests-effective }}
@@ -280,10 +287,12 @@ jobs:
           # Use provided artifacts if available, otherwise use built artifacts
           if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
             echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "ci-test-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
           else
             echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
+            echo "ci-test-docker-image=${{ needs.build-artifact.outputs.ci-test-docker-image }}" >> "$GITHUB_OUTPUT"
             echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
             echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
           fi
@@ -302,26 +311,35 @@ jobs:
             echo "schedule-runs-all-tests-effective: true"
           fi
 
-  run-profiler-regression:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-profiler-regression == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    uses: ./.github/workflows/run-profiler-regression.yaml
+  resolve-docker-pull-refs:
+    needs: [check-harbor, resolve-artifacts]
+    if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' }}
+    uses: ./.github/workflows/resolve-docker-pull-refs.yaml
+    with:
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
+      dev-docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      ci-test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+
+  profiler-tests:
+    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
+    if: ${{ always() && !cancelled() && (inputs.run-profiler-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
+    uses: ./.github/workflows/single-card-profiler-tests-impl.yaml
     secrets: inherit
     strategy:
       fail-fast: false
       matrix:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
-      arch: "blackhole"
-      runner-label: ${{ matrix.test-group }}
-      post_commit_only: true
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      # civ2-matrix emits P100a or P150b; map to viommu SKUs.
+      enabled-skus: ${{ matrix.test-group == 'P100a' && 'bh_p100a_civ2_viommu' || 'bh_p150b_civ2_viommu' }}
+      test-selection: post-commit
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
@@ -332,29 +350,12 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  models-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    secrets: inherit
-    uses: ./.github/workflows/models-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      timeout: 20
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix, check-harbor]
     if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
@@ -364,44 +365,22 @@ jobs:
         test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
     with:
       enabled-skus: ${{ (matrix.test-group == 'P100' || matrix.test-group == 'P100a') && 'bh_p100' || 'bh_p150b_civ2' }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
+      harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout-minutes-override: ${{ inputs.enable-watcher && 120 || 0 }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-  ops-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
+  ops-sanity-tests:
+    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
     if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
     secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    uses: ./.github/workflows/ops-post-commit.yaml
+    uses: ./.github/workflows/ops-sanity-impl.yaml
     with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
+      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      enable-watcher: ${{ inputs.enable-watcher || false }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  # TT-CNN Unit Tests
-  tt-cnn-unit-tests:
-    needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || (github.event_name == 'schedule' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    secrets: inherit
-    uses: ./.github/workflows/tt-cnn-post-commit.yaml
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: ${{ fromJson(needs.generate-matrix.outputs.civ2-matrix) }}
-    with:
-      arch: blackhole
-      runner-label: ${{ matrix.test-group }}
-      docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
+      enabled-skus: "bh_p150b_civ2_viommu"
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
@@ -409,16 +388,17 @@ jobs:
   blackhole-multi-card-fast-unit-tests:
     # Don't run on daily P100-only schedule
     if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (github.event_name == 'schedule' && github.event.schedule != '0 7 * * *' && needs.resolve-artifacts.outputs.schedule-runs-all-tests-effective == 'true')) }}
-    needs: [resolve-artifacts, generate-matrix]
+    needs: [resolve-docker-pull-refs, resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false
       matrix:
-        test-group: [ "BH-LLMBox", "BH-LoudBox", "P300-viommu"]
+        test-group: [ "BH-Quietbox-2", "P300-viommu"]
     with:
       arch: blackhole
       runner-label: ${{ matrix.test-group }}
+      # CIv1 runners: cannot use harbor-prefix (resolve-docker-pull-refs)
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}

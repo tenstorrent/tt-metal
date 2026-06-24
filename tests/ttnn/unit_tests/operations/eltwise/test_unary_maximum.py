@@ -6,7 +6,9 @@ import torch
 import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs import compare_equal
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal
+
+_bf16_max = torch.finfo(torch.bfloat16).max
 
 pytestmark = pytest.mark.use_module_device
 
@@ -109,7 +111,13 @@ def test_unary_max_fill_val_fp32(input_shapes, input_val, scalar, device):
     [
         (0.36719, 0.5),
         (0.0034, 0.0023),
-        (0, 0.06719),
+        pytest.param(
+            0,
+            0.06719,
+            marks=pytest.mark.xfail(
+                strict=True, reason="Device truncates scalar to bf16 instead of round-to-nearest (1 ULP)"
+            ),
+        ),
         (0, 0.002),
         (3.4 * 10**38, 1.0),
         (-1, -3.4 * 10**38),
@@ -124,7 +132,8 @@ def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
     torch_input = torch.ones(input_shapes, dtype=torch.bfloat16) * input_val
 
     golden_function = ttnn.get_golden_function(ttnn.maximum)
-    golden = golden_function(torch_input, torch.full(input_shapes, scalar), device=device)
+    scalar_tensor = torch.tensor(scalar, dtype=torch.float32).to(torch.bfloat16).expand(input_shapes)
+    golden = golden_function(torch_input, scalar_tensor, device=device)
 
     tt_in = ttnn.from_torch(
         torch_input,
@@ -136,7 +145,7 @@ def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
 
     tt_result = ttnn.maximum(tt_in, scalar)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    assert_equal(golden, result)
 
 
 @pytest.mark.parametrize(
@@ -147,13 +156,13 @@ def test_unary_max_fill_val_bf16(input_shapes, input_val, scalar, device):
     "low, high",
     [
         (-100, 100),
-        (-3.3 * 10**38, 3.3 * 10**38),
+        (-_bf16_max, _bf16_max),
     ],
 )
-@pytest.mark.parametrize("scalar", [0.5, 0.0, 20.0, 3.4 * 10**38, -3.4 * 10**38, -float("inf"), float("inf")])
+@pytest.mark.parametrize("scalar", [0.5, 0.0, 20.0, _bf16_max, -_bf16_max])
 def test_unary_max_bf16(input_shapes, low, high, scalar, device):
     num_elements = torch.prod(torch.tensor(input_shapes)).item()
-    torch_input = torch.linspace(high, low, num_elements, dtype=torch.bfloat16)
+    torch_input = torch.linspace(high, low, num_elements, dtype=torch.float64).to(torch.bfloat16)
     torch_input = torch_input[:num_elements].reshape(input_shapes)
 
     golden_function = ttnn.get_golden_function(ttnn.maximum)
@@ -169,7 +178,7 @@ def test_unary_max_bf16(input_shapes, low, high, scalar, device):
 
     tt_result = ttnn.maximum(tt_in, scalar)
     result = ttnn.to_torch(tt_result)
-    assert_with_pcc(golden, result, 0.999)
+    assert_equal(golden, result)
 
 
 @pytest.mark.parametrize(

@@ -12,6 +12,8 @@ from pathlib import Path
 
 import torch
 
+from models.demos.deepseek_v3.demo.token_accuracy import decompress_lzma_payload
+
 # Try to load tokenizer for decoding tokens to text
 try:
     from transformers import AutoTokenizer
@@ -46,6 +48,26 @@ def inspect_reference_file(reference_file: Path = REFERENCE_FILE):
 
     # Load the reference file
     payload = torch.load(reference_file, weights_only=False)
+    fmt = payload.get("format_version", "")
+    if fmt == "multi_prompt_v1_lzma_v1":
+        raw_kb = payload.get("tensor_raw_bytes_uncompressed", 0) / 1024
+        lzma_kb = payload.get("tensor_lzma_bytes", 0) / 1024
+        print(f"LZMA-compressed format detected ({lzma_kb:.1f} KB compressed / {raw_kb:.1f} KB raw)")
+
+        entries = decompress_lzma_payload(payload)
+        if not entries:
+            raise ValueError("Compressed payload decompressed to empty entries list.")
+        e0 = entries[0]
+
+        # Materialize entry-0 convenience keys for the existing inspection logic.
+        payload = dict(payload)
+        payload["entries"] = entries
+        payload["prompt_tokens"] = e0["prompt_tokens"]
+        payload["generated_tokens"] = e0["generated_tokens"]
+        payload["top5_tokens"] = e0["top5_tokens"]
+        payload["tf_prompt_len"] = int(e0["tf_prompt_len"])
+        payload["reference_tokens"] = torch.cat([e0["prompt_tokens"], e0["generated_tokens"]], dim=1)
+        print()
 
     print("Keys in reference file:")
     for key in payload.keys():

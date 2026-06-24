@@ -6,9 +6,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "tensix_types.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 // #define DEBUG
 #ifdef DEBUG
@@ -36,18 +36,15 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(in0_tensor_args, in0_tensor_addr);
 
-    experimental::Noc noc;
-    experimental::CircularBuffer cb_in0(cb_id_in0);
+    Noc noc;
+    CircularBuffer cb_in0(cb_id_in0);
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;
 #ifdef DEBUG
-    // DPRINT << "Reader Tile ID Offset: " << in0_tensor_tile_id << ENDL() << ENDL();
-    // DPRINT << "Reader Z Stride: " << z_stride << ENDL();
-    // DPRINT << "Reader Y Stride: " << y_stride << ENDL();
-    // DEVICE_PRINT("Reader Tile ID Offset: {}\n\n", in0_tensor_tile_id);
-    // DEVICE_PRINT("Reader Z Stride: {}\n", z_stride);
-    // DEVICE_PRINT("Reader Y Stride: {}\n", y_stride);
+    // DPRINT("Reader Tile ID Offset: {}\n\n", in0_tensor_tile_id);
+    // DPRINT("Reader Z Stride: {}\n", z_stride);
+    // DPRINT("Reader Y Stride: {}\n", y_stride);
 #endif
     for (uint32_t out_tensor_id = 0; out_tensor_id < out_num_tensors; out_tensor_id++) {
         uint32_t z_stride_cum = 0;
@@ -66,10 +63,8 @@ void kernel_main() {
                     noc.async_read_barrier();
                     cb_in0.push_back(onetile);
 #ifdef DEBUG
-                    // DPRINT << "Reader Tile ID: " << tile_id  + in0_tensor_tile_id << ENDL();
-                    // DPRINT << "Reader Address: " << l1_write_addr_in0 << ENDL() << ENDL();
-                    // DEVICE_PRINT("Reader Tile ID: {}\n", tile_id + in0_tensor_tile_id);
-                    // DEVICE_PRINT("Reader Address: {}\n\n", l1_write_addr_in0);
+                    // DPRINT("Reader Tile ID: {}\n", tile_id + in0_tensor_tile_id);
+                    // DPRINT("Reader Address: {}\n\n", l1_write_addr_in0);
 #endif
                 }
                 y_stride_cum += y_stride;

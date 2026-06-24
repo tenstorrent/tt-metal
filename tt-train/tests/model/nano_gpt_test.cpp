@@ -16,6 +16,7 @@
 #include "datasets/utils.hpp"
 #include "models/distributed/llama.hpp"
 #include "models/llama.hpp"
+#include "ops/distributed/losses.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
@@ -269,7 +270,9 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         auto start_timer = std::chrono::high_resolution_clock::now();
         optimizer->zero_grad();
         auto output = (*model)(features, masks);
-        auto loss = ttml::ops::cross_entropy_loss(output, target);
+        auto loss = use_tensor_parallel
+                        ? ttml::ops::distributed::vocab_parallel_cross_entropy_loss(output, target, /*cluster_axis*/ 1U)
+                        : ttml::ops::cross_entropy_loss(output, target);
         auto loss_float = get_loss_value(loss);
         loss->backward();
 

@@ -31,7 +31,7 @@ The tests use the Mesh Device API with fast dispatch mode:
 | core_coord                    | CoreCoord             | Logical coordinates for the Tensix core. |
 | dram_channel                  | uint32_t              | Specifies which DRAM channel to use for the test. |
 | virtual_channel               | uint32_t              | Option to specify unicast VC for each transaction. |
-| use_2_0_api                   | bool                  | Determines if the test uses the experimental device 2.0 API. |
+| use_2_0_api                   | bool                  | Determines if the test uses the device 2.0 API. |
 
 ## Test Cases
 Each test case uses bfloat16 as L1 data format and flit size (32B for WH, 64B for BH) as page size.
@@ -45,15 +45,20 @@ Each test case has multiple runs, and each run has a unique runtime host id, ass
 
 4. **TensixDataMovementDRAMDirectedIdeal** (Test ID: 3) - Tests the most optimal data movement setup between DRAM and a Tensix core that maximizes the transaction size and performs enough transactions to amortize initialization overhead.
 
-5. **TensixDataMovementDRAMPacketSizes2_0** (Test ID: 40) - Device 2.0 API version of the packet sizes test. Tests the same packet size variations as test ID 0 but uses the experimental NOC API with structured endpoints and virtual channel support.
+5. **TensixDataMovementDRAMPacketSizes2_0** (Test ID: 40) - Device 2.0 API version of the packet sizes test. Tests the same packet size variations as test ID 0 but uses the NOC API with structured endpoints and virtual channel support.
 
 ## Device 2.0 API Tests
-This test suite now includes tests using the new device 2.0 experimental NOC API. These tests provide the same functionality as the original tests but use an updated API design:
+This test suite now includes tests using the new device 2.0 NOC API. These tests provide the same functionality as the original tests but use an updated API design:
 
 ### Key Features of Device 2.0 API Tests:
-- **Experimental NOC API**: Uses `experimental::Noc`, `experimental::UnicastEndpoint`, `experimental::Semaphore` and `experimental::AllocatorBankType` for structured NOC operations
+- **NOC API**: Uses `Noc`, `UnicastEndpoint`, `Semaphore` and `AllocatorBankType` for structured NOC operations
 - **Structured Arguments**: Source and destination arguments are defined using structured `noc_traits_t` types
 
 ### Device 2.0 Kernels:
-- `writer_unary_2_0.cpp`: Implements the writer functionality using the experimental NOC API
-- `reader_unary_2_0.cpp`: Implements the reader functionality using the experimental NOC API
+- `writer_unary_2_0.cpp`: Implements the writer functionality using the NOC API
+- `reader_unary_2_0.cpp`: Implements the reader functionality using the NOC API
+
+Both API versions run the same test cases but use different underlying implementations. The device 2.0 tests serve as a validation and performance comparison for the new API.
+
+## Quasar Notes
+`TensixDataMovementDRAMDirectedIdeal` includes a Quasar-specific code path inside `GenericMeshDeviceFixture`. Requires `TT_METAL_SLOW_DISPATCH_MODE=1` and the Quasar simulator.

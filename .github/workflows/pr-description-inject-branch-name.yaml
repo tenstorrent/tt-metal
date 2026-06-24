@@ -26,8 +26,9 @@ jobs:
             const owner = context.repo.owner;
             const repo = context.repo.repo;
 
-            // Replace branch name placeholder (no-op on synchronize, idempotent)
-            let body = pr.body || "";
+            // Normalize line endings: webhook payload delivers CRLF from Windows-edited
+            // PR bodies, but GitHub stores LF. Sending CRLF back causes GitHub API 500s.
+            let body = (pr.body || "").replace(/\r\n/g, '\n');
             body = body.replaceAll("{{branch_name}}", branchName);
 
             // Pipelines to report on.

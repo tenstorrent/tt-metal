@@ -4,8 +4,8 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc_semaphore.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc_semaphore.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t cb_id = get_arg_val<uint32_t>(0);
@@ -14,10 +14,10 @@ void kernel_main() {
     uint32_t other_noc_x = get_arg_val<uint32_t>(3);
     uint32_t other_noc_y = get_arg_val<uint32_t>(4);
 
-    experimental::Semaphore my_sem(my_sem_id);
-    experimental::Semaphore other_sem(other_sem_id);
-    experimental::Noc noc;
-    experimental::CircularBuffer cb(cb_id);
+    Semaphore my_sem(my_sem_id);
+    Semaphore other_sem(other_sem_id);
+    Noc noc;
+    CircularBuffer cb(cb_id);
 
     my_sem.down(1);
 

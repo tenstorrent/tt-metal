@@ -9,24 +9,21 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <vector>
+#include <tt-metalium/tilize_utils.hpp>
 
 namespace ttnn::prim {
 
-ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
+tt::tt_metal::ProgramDescriptor ConcatS2IProgramFactory::create_descriptor(
     const ConcatParams& /*operation_attributes*/, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
 
     const std::vector<Tensor>& input_tensors = tensor_args.input_tensors;
     Tensor& output = tensor_return_value;
-    Program program = CreateProgram();
-
-    // CoreRangeSet all_cores({CoreRange(CoreCoord(0,0), compute_with_storage_grid_size)});
+    ProgramDescriptor desc;
 
     const uint32_t num_output_rows = output.padded_shape()[-1];
     const uint32_t num_input_tensors = input_tensors.size();
-
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(output.dtype());
     const CoreRangeSet all_cores = input_tensors[0].shard_spec().value().grid;
 
@@ -37,28 +34,37 @@ ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
         const ShardSpec& shard_spec = input_tensors[input_id].shard_spec().value();
         const uint32_t num_input_units = shard_spec.shape[0] * input_num_units_per_shard_width;
         const uint32_t input_page_size = round_up_to_mul32(input_unit_size);
-        CircularBufferConfig input_cb_config =
-            CircularBufferConfig(num_input_units * input_page_size, {{input_id, cb_data_format}})
-                .set_page_size(input_id, input_page_size)
-                .set_globally_allocated_address(*input_tensors[input_id].buffer());
-        CreateCircularBuffer(program, all_cores, input_cb_config);
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = num_input_units * input_page_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(input_id),
+                .data_format = cb_data_format,
+                .page_size = input_page_size,
+            }}},
+            .buffer = input_tensors[input_id].buffer(),
+        });
     }
 
-    std::vector<uint32_t> reader_compile_time_args = {num_input_tensors};
-    std::vector<uint32_t> writer_compile_time_args = {num_input_tensors, input_unit_size};
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {num_input_tensors};
+    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {num_input_tensors, input_unit_size};
     TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
-    KernelHandle unary_reader_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2i_width.cpp",
-        all_cores,
-        ReaderDataMovementConfig(reader_compile_time_args));
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/reader_s2i_width.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = std::move(reader_compile_time_args);
+    reader_desc.config = ReaderConfigDescriptor{};
 
-    KernelHandle unary_writer_kernel_id = CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/writer_s2i_width.cpp",
-        all_cores,
-        WriterDataMovementConfig(writer_compile_time_args));
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/writer_s2i_width.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = std::move(writer_compile_time_args);
+    writer_desc.config = WriterConfigDescriptor{};
 
     const bool row_wise = input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, row_wise);
@@ -83,61 +89,14 @@ ConcatS2IProgramFactory::cached_program_t ConcatS2IProgramFactory::create(
             reader_runtime_args.push_back(input_shard_spec.shape[0]);
             writer_runtime_args.push_back(input_id);
         }
-        SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_runtime_args);
-
-        SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_runtime_args);
+        reader_desc.runtime_args.emplace_back(core, std::move(reader_runtime_args));
+        writer_desc.runtime_args.emplace_back(core, std::move(writer_runtime_args));
         core_id++;
     }
 
-    return {
-        std::move(program),
-        {.num_input_tensors = num_input_tensors,
-         .reader_kernel_id = unary_reader_kernel_id,
-         .writer_kernel_id = unary_writer_kernel_id,
-         .all_cores = all_cores}};
-}
-
-void ConcatS2IProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConcatParams& /*operation_attributes*/,
-    const ConcatInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    using namespace tt::tt_metal;
-
-    auto& program = cached_program.program;
-    const auto& shared_vars = cached_program.shared_variables;
-
-    const bool row_wise = tensor_args.input_tensors[0].shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
-    Buffer* dst_buffer = tensor_return_value.buffer();
-    auto cores = corerange_to_cores(shared_vars.all_cores, std::nullopt, row_wise);
-    auto input_cores = tensor_args.input_tensors[0].shard_spec().value().grid;
-    const uint32_t num_output_rows = tensor_return_value.padded_shape()[-1];
-    const uint32_t num_output_rows_per_core = tt::div_up(num_output_rows, input_cores.num_cores());
-
-    for (const CoreCoord& core : cores) {
-        uint32_t curr_num_input_tensors;
-        uint32_t curr_num_output_rows;
-        if (input_cores.contains(core)) {
-            curr_num_input_tensors = shared_vars.num_input_tensors;
-            curr_num_output_rows = num_output_rows_per_core;
-        } else {
-            curr_num_input_tensors = 0;
-            curr_num_output_rows = 0;
-        }
-
-        std::vector<uint32_t> reader_runtime_args = {curr_num_input_tensors};
-        std::vector<uint32_t> writer_runtime_args = {
-            dst_buffer->address(), curr_num_input_tensors, curr_num_output_rows};
-        for (uint32_t input_id = 0; input_id < shared_vars.num_input_tensors; input_id++) {
-            UpdateDynamicCircularBufferAddress(program, input_id, *dst_buffer);
-            const ShardSpec& input_shard_spec = tensor_args.input_tensors[input_id].shard_spec().value();
-            reader_runtime_args.push_back(input_id);
-            reader_runtime_args.push_back(input_shard_spec.shape[1]);
-            writer_runtime_args.push_back(input_id);
-        }
-        SetRuntimeArgs(program, shared_vars.reader_kernel_id, core, reader_runtime_args);
-        SetRuntimeArgs(program, shared_vars.writer_kernel_id, core, writer_runtime_args);
-    }
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    return desc;
 }
 
 }  // namespace ttnn::prim

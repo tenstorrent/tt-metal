@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "ckernel_common_ops.h"
+#include "ckernel_fence.h"
 #include "ckernel_instr_params.h"
 #include "ckernel_ops.h"
 #include "internal/risc_attribs.h"
@@ -23,11 +24,6 @@
 #if defined(COMPILE_FOR_TRISC)
 #include "lltt.h"
 #endif
-
-// compiler hints
-#define LIKELY(condition)   __builtin_expect(static_cast<bool>(condition), 1)
-#define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
-#define UNREACHABLE()       __builtin_unreachable()
 
 #define UNROLL_LOOP(factor) GCC unroll factor
 
@@ -48,6 +44,8 @@
 #endif
 
 #define TT_ALWAYS_INLINE inline __attribute__((always_inline))
+#define NOINLINE         __attribute__((noinline))
+#define NOCLONE          __attribute__((noclone))
 
 #include <cstdint>
 
@@ -591,9 +589,6 @@ inline void record_kernel_runtime(std::uint64_t kernel_runtime)
     debug_mailbox_base[mailbox_end - 1] = (kernel_runtime >> 48) & 0xffff;
 }
 
-void debug_dump(const std::uint8_t *data, std::uint32_t byte_size);
-void debug_dump_seek(std::uint8_t offset);
-
 // If the TRACK_x bit is set, then the Tensix hardware will automatically
 // stall TRISC memory accesses and/or Tensix instructions to x in order
 // to guarantee correct ordering. This should eliminate most cases where
@@ -932,15 +927,6 @@ inline void store_force(T &ref, U &&val)
     // "m" input constraint: tells compiler this asm reads from ref
     // Effect: compiler must flush any pending write to ref before this point
     asm volatile("" : : "m"(ref));
-}
-
-/**
- * @brief Compiler-only barrier: prevents reordering of memory accesses across this point.
- * @note Does not enforce CPU or system memory ordering by itself.
- */
-inline void fence_compiler()
-{
-    asm volatile("" ::: "memory");
 }
 
 /**

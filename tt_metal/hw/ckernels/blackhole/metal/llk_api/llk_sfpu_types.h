@@ -118,6 +118,7 @@ enum class SfpuType {
     remainder,
     fmod,
     ceil,
+    isclose,
     unused,
     reshuffle_rows,
     cumsum,
@@ -157,8 +158,10 @@ enum class SfpuType {
     unary_min_uint32,
     addcdiv,
     lerp,
+    snake_beta,
     xielu,
     lgamma,
     polygamma,
+    mish,
     ne,
 };

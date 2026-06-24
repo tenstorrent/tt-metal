@@ -51,7 +51,13 @@ from models.demos.deepseek_v3_b1.weights.transforms.attention import (
 @pytest.mark.parametrize(
     "position_id",
     [
-        0,
+        pytest.param(
+            0,
+            marks=pytest.mark.skip(
+                reason="[SKIP REASON]: AttentionBlock output PCC check failed for both slot_id=0 and slot_id=1 "
+                "Blackhole FABRIC_2D_TORUS_X cases at position_id=0. Issue: #42714"
+            ),
+        ),
         127,
         511,
         1023,

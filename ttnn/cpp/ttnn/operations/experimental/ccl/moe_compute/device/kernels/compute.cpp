@@ -4,6 +4,7 @@
 
 #include "moe_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
@@ -17,8 +18,11 @@
 #ifdef TRISC_PACK
 #include "ckernel_sfpu_exp.h"
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
-#include "llk_math_eltwise_unary_sfpu_silu.h"
-#include "llk_math_eltwise_binary_sfpu_binop.h"
+#include "ckernel_sfpu_silu.h"
+#include "ckernel_sfpu_binary.h"
+#include "llk_math_eltwise_unary_sfpu_macros.h"
+#include "llk_math_eltwise_binary_sfpu_macros.h"
+#include "ckernel_sfpu_gelu.h"
 #endif
 
 namespace detail {
@@ -32,6 +36,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
+// Note GELU gets init'd at each iteration in the pack_compute_activation specialization
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_init_activation() {};
 
@@ -42,7 +47,7 @@ inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivation
 
 template <>
 inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK((llk_math_eltwise_unary_sfpu_silu_init<true>()));
+    PACK(SFPU_UNARY_INIT_FN(silu, sfpu::silu_init, (true /*APPROXIMATE*/)));
 };
 
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
@@ -50,11 +55,39 @@ inline void pack_compute_activation() {};
 
 template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::SILU>() {
-    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(0)));
-    PACK((llk_math_eltwise_unary_sfpu_silu<true, false>(2)));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_silu,
+        (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        0 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_silu,
+        (false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        2 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
 
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(0, 1, 0)));
-    PACK((llk_math_eltwise_binary_sfpu_binop<true, ckernel::BinaryOp::MUL>(2, 3, 2)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        0 /*DST_IN0*/,
+        1 /*DST_IN1*/,
+        0 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        2 /*DST_IN0*/,
+        3 /*DST_IN1*/,
+        2 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
 };
 
 template <>
@@ -63,18 +96,61 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
     PACK((llk_math_eltwise_binary_sfpu_swiglu<false>(2, 3, 2)));
 };
 
+template <>
+inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
+    // GELU programs an SFPU LUT (gelu_init). The trailing binary MUL below clobbers that LUT,
+    // so when the activation loop runs >1 iteration per chunk (tiles_per_step > 2, which happens
+    // for ring sizes where ceil(Nt/ring) is odd — e.g. gemma at ring=8) the next iteration's
+    // gelu reads a stale LUT and produces garbage. Re-init the LUT here so every gelu is valid.
+    // SILU/SWIGLU don't use this LUT, so they keep their cheaper once-per-chunk init.
+    PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_gelu,
+        (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        0 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
+    PACK(SFPU_UNARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_gelu,
+        (true /*APPROXIMATE*/, false /*is_fp32_dest_acc_en*/, 8 /*ITERATIONS*/),
+        2 /*DST_IDX*/,
+        ::ckernel::VectorMode::RC));
+
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        0 /*DST_IN0*/,
+        1 /*DST_IN1*/,
+        0 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
+    PACK((SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_sfpu_binary,
+        (true /*APPROXIMATE*/, ckernel::BinaryOp::MUL, 8 /*ITERATIONS*/),
+        2 /*DST_IN0*/,
+        3 /*DST_IN1*/,
+        2 /*DST_OUT*/,
+        ::ckernel::VectorMode::RC)));
+};
+
 }  // namespace detail
 void kernel_main() {
-    // Extract config type from compile-time argument
-    constexpr uint32_t moe_config_type_value = get_named_compile_time_arg_val("moe_config_type");
     constexpr bool has_bias = get_named_compile_time_arg_val("has_bias") == 1;
-
-    constexpr auto config_type = static_cast<ttnn::experimental::prim::detail::MoEConfigType>(moe_config_type_value);
-    using config_t = moe_ring::ConfigType_t<has_bias, config_type>;
+    constexpr uint32_t Ht = get_named_compile_time_arg_val("hidden_tiles");
+    constexpr uint32_t Nt = get_named_compile_time_arg_val("intermediate_tiles");
+    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
 
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
-    constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
-    constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    [[maybe_unused]] constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
+    constexpr uint32_t num_shared_experts = get_named_compile_time_arg_val("num_shared_experts");
+    constexpr uint32_t shared_expert_tp_factor = get_named_compile_time_arg_val("shared_expert_tp_factor");
+
     constexpr auto activation_type =
         ttnn::experimental::prim::detail::MoEActivationFunction(get_named_compile_time_arg_val("activation_function"));
 
@@ -83,15 +159,15 @@ void kernel_main() {
 
     // Run-time arguments
     uint32_t argidx = 0;
-    const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
-    const auto vchannel = get_arg_val<uint32_t>(argidx++);
-    const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
-    const auto w2_addr = get_arg_val<uint32_t>(argidx++);
-    const auto out_addr = get_arg_val<uint32_t>(argidx++);
-    const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto vchannel = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w0_w1_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto w2_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto out_addr = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_semaphore_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
-    const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
+    [[maybe_unused]] const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
 
     // CBs
     constexpr auto cb_s2c_in = tt::CBIndex::c_0;     // tilize_output_cb_id
@@ -109,57 +185,52 @@ void kernel_main() {
     // CB Aliases
     constexpr auto cb_r2c_w2 = tt::CBIndex::c_3;  // reuse cb_r2c_w0_w1
 
-    // Constants for MoE
-    constexpr uint32_t num_w0_w1_tiles_h = config_t::NUM_W0_W1_TILES_H;
-    constexpr uint32_t num_w2_tiles_h = config_t::NUM_W2_TILES_H;
+    // Pre-computed shard lookup tables — avoids runtime div/mod in inner loops.
+    // ring_core_id is a runtime arg, but Nt/Ht/num_cores are compile-time.
+    constexpr auto shard_tiles_lut = moe_ring::make_shard_lut<Nt, num_cores>();
+    constexpr auto w2_shard_tiles_lut = moe_ring::make_w2_shard_lut<Ht, Nt, num_cores>();
 
-    const uint32_t num_w0_w1_tiles_w = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
-    const uint32_t num_w2_tiles_w = config_t::W2_TILES_PER_CORE[ring_core_id];
+    // Constants for MoE — derived from compile-time shape args
+    constexpr uint32_t num_w0_w1_tiles_h = Ht;
+    constexpr uint32_t num_w2_tiles_h = Nt;
 
-    const uint32_t num_in2_tiles = num_w2_tiles_w;
-    const uint32_t num_mm2_tiles = num_w2_tiles_w;
+    [[maybe_unused]] const uint32_t num_w0_w1_tiles_w = shard_tiles_lut[ring_core_id];
+    const uint32_t num_w2_tiles_w = w2_shard_tiles_lut[ring_core_id];
+
+    [[maybe_unused]] const uint32_t num_in2_tiles = num_w2_tiles_w;
+    [[maybe_unused]] const uint32_t num_mm2_tiles = num_w2_tiles_w;
 
     //-------------------------------------------------------------------------
     // W0 and W1 reading constants
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_txns_per_block = moe_ring::W0_W1_TXNS_PER_BLOCK;
     constexpr uint32_t w0_w1_tiles_per_txn = moe_ring::W0_W1_TILES_PER_TXN;
-    constexpr uint32_t w0_w1_block_tiles_h = moe_ring::W0_W1_BLOCK_TILES_H;
     constexpr uint32_t w0_w1_tiles_per_block = w0_w1_tiles_per_txn * w0_w1_txns_per_block;  // 14 * 2 = 28
 
-    // When has_bias, dm0 reads (num_w0_w1_tiles_h + 1) tiles per column (weights + 1 bias row).
-    // Block counts must match what dm0 pushes into the CB.
-    constexpr uint32_t w0_w1_dram_tiles_h = config_t::NUM_W0_W1_DRAM_TILES_H;
-    constexpr uint32_t w0_w1_blocks_per_two_elt_tile = detail::div_up<w0_w1_dram_tiles_h, w0_w1_block_tiles_h>();
-    constexpr uint32_t w0_w1_blocks_per_expert = w0_w1_blocks_per_two_elt_tile * config_t::IN2_TILES_PER_STEP / 2;
-    // W2 reading constants
+    using Cfg = moe_ring::MoeRingConfig<Ht, Nt, num_cores, has_bias, shared_expert_tp_factor>;
+
+    // W2 reading constants (base-constant aliases only; derived values come from Cfg)
     constexpr auto w2_tiles_per_iter_w = moe_ring::W2_TILES_PER_A2A_ITER_W;
-    constexpr auto w2_tiles_per_expert_w = config_t::W2_TILES_PER_EXPERT_W;
-    // constexpr uint32_t w2_subblock_rem_idx = config_t::W2_SUBBLOCK_REM * w2_tiles_per_iter_w;
-    constexpr uint32_t w2_txns_per_block = moe_ring::W2_TXNS_PER_BLOCK;
-    constexpr uint32_t w2_tiles_per_txn = moe_ring::W2_TILES_PER_TXN;
-    constexpr uint32_t w2_tiles_per_block = w2_tiles_per_txn * w2_txns_per_block;               // 14 * 2 = 28
-    constexpr uint32_t w2_dram_tiles_h = config_t::NUM_W2_DRAM_TILES_H;
-    constexpr uint32_t w2_txns_h = (w2_dram_tiles_h + w2_tiles_per_txn - 1) / w2_tiles_per_txn;
-    constexpr uint32_t w2_blocks_per_expert = config_t::W2_BLOCKS_PER_EXPERT;
+    constexpr uint32_t w2_tiles_per_block = moe_ring::W2_TILES_PER_TXN * moe_ring::W2_TXNS_PER_BLOCK;  // 14 * 2 = 28
+    [[maybe_unused]] constexpr uint32_t w2_tiles_per_iter_h = moe_ring::W2_TILES_PER_A2A_ITER_H;
 
     //-------------------------------------------------------------------------
     // Ring setup
     //-------------------------------------------------------------------------
-    // The number of times to repeat the all2all
-    constexpr uint32_t num_a2a_iters = config_t::NUM_A2A_ITERS;
+    constexpr uint32_t w2_blocks_per_a2a_iter = Cfg::w2_blocks_per_expert / Cfg::num_a2a_iters;
 
-    constexpr uint32_t w2_blocks_per_a2a_iter = w2_blocks_per_expert / num_a2a_iters;
+    [[maybe_unused]] constexpr uint32_t num_a2a_steps_per_iter = num_cores;
 
-    // The number of steps to take in the all2all is the number of cores
-    constexpr uint32_t num_a2a_steps_per_iter = moe_ring::NUM_CORES;
-
-    // The number of tiles to send in each step
-    constexpr uint32_t tiles_per_step = config_t::IN2_TILES_PER_STEP;  // max(num_w0_w1_tiles_w)
+    constexpr uint32_t tiles_per_step = Cfg::in2_tiles_per_step;
+    constexpr uint32_t tiles_per_step_shared = Cfg::in2_tiles_per_step_shared;
 
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
+    // compute_kernel_hw_startup must be the first compute API call; the has_bias block below
+    // issues compute work, so the startup is hoisted above it (otherwise it would be mid-kernel).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
         // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
@@ -228,11 +299,15 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            detail::pack_init_activation<activation_type>();
+            // GELU re-inits its SFPU LUT inside pack_compute_activation on every iteration (the
+            // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
+            // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
+            if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
+                detail::pack_init_activation<activation_type>();
+            }
 
             // Initialize matmul for W0
-            mm_block_init(
-                cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+            matmul_block_init(cb_s2c_in, cb_r2c_w0_w1, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert
@@ -244,12 +319,18 @@ void kernel_main() {
             //---------------------------------------------------------------------
             // Compute in @ {W0,W1}
             //---------------------------------------------------------------------
-            for (uint32_t tile_id = 0; tile_id < tiles_per_step; tile_id += 2) {
+            // Shared experts are TP-split + front-packed: produce only the real TpNt prefix
+            // (dm0 reads the matching shortened W0/W1), then zero-fill the rest of the full
+            // tiles_per_step stride below. The unchanged full W2 walk then contracts real×real
+            // in the prefix and (zero in2)×(front-packed zero W2) past it.
+            const bool is_shared_expert = expert_id >= num_experts - num_shared_experts;
+            const uint32_t prod_tiles_per_step = is_shared_expert ? tiles_per_step_shared : tiles_per_step;
+            for (uint32_t tile_id = 0; tile_id < prod_tiles_per_step; tile_id += 2) {
                 uint32_t in0_index = use_second_half_buffer ? num_w0_w1_tiles_h : 0;
 
                 tile_regs_acquire();
                 [[maybe_unused]] uint32_t k_tracker = 0;
-                for (uint32_t block_id = 0; block_id < w0_w1_blocks_per_two_elt_tile; ++block_id) {
+                for (uint32_t block_id = 0; block_id < Cfg::w0_w1_blocks_per_col; ++block_id) {
                     cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
 
                     for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
@@ -314,6 +395,21 @@ void kernel_main() {
                 tile_regs_release();
             }
 
+            // Zero-fill the unproduced tail [prod_tiles_per_step, tiles_per_step) of this core's in2
+            // stride for shared experts, so the full W2 walk reads zeros there (annihilated by the
+            // front-packed zero W2 rows) rather than stale data from a prior expert.
+            if (is_shared_expert) {
+                tile_regs_acquire();
+                fill_tile_init();
+                fill_tile(0, 0.0f);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t tile_id = prod_tiles_per_step; tile_id < tiles_per_step; ++tile_id) {
+                    pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
+                }
+                tile_regs_release();
+            }
+
             // Signal to DM1 that the output from this core is ready
             cb_reserve_back(cb_c2w_rdy, 1);
             cb_push_back(cb_c2w_rdy, 1);
@@ -323,9 +419,18 @@ void kernel_main() {
             //---------------------------------------------------------------------
 
             cb_reserve_back(cb_c2s_out, num_w0_w1_tiles_h);
-            for (uint32_t iter = 0; iter < num_a2a_iters; ++iter) {
-                uint32_t dm1_step = 0;
-                uint32_t dm1_tiles_remaining = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][0];
+
+            // Init pack_untilize ONCE before the iter loop (hoisted, mirrors moe_gpt pattern).
+            // Cycling init/uninit per-iter triggers BH's MATH reconfig_remap workaround
+            // (pack_untilize.h:66-80, tt-metal#17132) which races with in-flight PACR/MOP
+            // execution and produces garbage output (NaN/Inf) on BH silicon.
+            pack_untilize_dest_init<
+                /*block_ct_dim=*/w2_tiles_per_iter_w,
+                /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(cb_c2s_out);
+
+            for (uint32_t iter = 0; iter < Cfg::num_a2a_iters; ++iter) {
+                uint32_t src_core = ring_core_id;
+                uint32_t dm1_tiles_remaining = shard_tiles_lut[ring_core_id];
                 cb_wait_front(cb_w2c_rdy, 1);
 
                 uint32_t in2_offset = 0, in2_index = 0;
@@ -359,7 +464,8 @@ void kernel_main() {
                         if (dm1_tiles_remaining == 0) {
                             cb_pop_front(cb_w2c_rdy, 1);
                             cb_wait_front(cb_w2c_rdy, 1);
-                            dm1_tiles_remaining = config_t::W0_W1_TILES_PER_CORE_PER_STEP[ring_core_id][++dm1_step];
+                            src_core = (src_core == 0) ? num_cores - 1 : src_core - 1;
+                            dm1_tiles_remaining = shard_tiles_lut[src_core];
                             in2_offset += tiles_per_step;
                             in2_index = in2_offset;
                         }
@@ -384,20 +490,21 @@ void kernel_main() {
                 tile_regs_commit();
 
                 tile_regs_wait();
-                pack_untilize_dest_init</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
-                    cb_c2s_out);
-
-                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/w2_tiles_per_expert_w>(
+                pack_untilize_dest</*block_ct_dim=*/w2_tiles_per_iter_w, /*full_ct_dim=*/Cfg::w2_tiles_per_expert_w>(
                     cb_c2s_out, /*block_rt_dim=*/1, /*block_c_index=*/iter);
-                pack_untilize_uninit(cb_c2s_out);
 
                 tile_regs_release();
             }
+
+            // Uninit pack_untilize ONCE after the iter loop (hoisted, mirrors moe_gpt pattern).
+            pack_untilize_uninit(cb_c2s_out);
 
             cb_push_back(cb_c2s_out, num_w0_w1_tiles_h);
 
             // Toggle the buffer to use
             use_second_half_buffer = !use_second_half_buffer;
+            // Restore packer data format for next chunk's activation pipeline (mirrors moe_gpt:342).
+            pack_reconfig_data_format(cb_s2c_in2);
 
         }  // end for (chunk)
     }  // end for (expert_id)

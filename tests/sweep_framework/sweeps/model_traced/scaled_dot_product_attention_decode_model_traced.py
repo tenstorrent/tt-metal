@@ -3,25 +3,25 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    mesh_tensor_to_torch,
-    get_mesh_composer,
-)
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    create_mesh_device,
+    get_mesh_composer,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+)
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 # Import helper functions from unit test
 from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import (
-    nearest_n,
-    nearest_pow_2,
     fa_rand,
     get_chunk_size,
+    nearest_n,
+    nearest_pow_2,
 )
-
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 TIMEOUT = 300
 
@@ -174,13 +174,40 @@ def run(
     # Create TTNN tensors using unit test approach
     dram_memcfg = ttnn.DRAM_MEMORY_CONFIG
 
+    # Use traced input_a memory config for Q if available (master may have sharded)
+    q_mem_cfg = dram_memcfg
+    traced_input_a_mem = kwargs.get("input_a_memory_config")
+    if traced_input_a_mem is not None and traced_input_a_mem != "__ABSENT__":
+        if isinstance(traced_input_a_mem, dict):
+            parsed_q_mem = parse_dict_value("input_a_memory_config", traced_input_a_mem)
+            if parsed_q_mem is not None:
+                # Validate sharded config fits device grid
+                try:
+                    if hasattr(parsed_q_mem, "is_sharded") and parsed_q_mem.is_sharded():
+                        shard_spec = parsed_q_mem.shard_spec
+                        if shard_spec is not None:
+                            grid = device.compute_with_storage_grid_size()
+                            fits = True
+                            for cr in shard_spec.grid:
+                                if cr.end.x >= grid.x or cr.end.y >= grid.y:
+                                    fits = False
+                                    break
+                            if fits:
+                                q_mem_cfg = parsed_q_mem
+                    else:
+                        q_mem_cfg = parsed_q_mem
+                except Exception:
+                    pass  # Intentionally ignored: memory config parsing is best-effort, fallback to default
+        elif not isinstance(traced_input_a_mem, str):
+            q_mem_cfg = traced_input_a_mem
+
     # Q tensor: slice to actual heads (unit test does this)
     tt_Q = ttnn.as_tensor(
         Q[:, :, :nh_q],
         device=device,
         dtype=input_a_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=dram_memcfg,
+        memory_config=q_mem_cfg,
     )
 
     # K, V tensors
@@ -214,8 +241,14 @@ def run(
         else:
             is_causal_flag = bool(is_causal)
 
-    # Force output to be DRAM_INTERLEAVED as operation doesn't support sharded output
+    # Use traced memory_config if present, otherwise default to DRAM
     output_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
+    traced_memory_config = kwargs.get("memory_config")
+    absent_keys = set(kwargs.get("__absent_keys__") or [])
+    if "memory_config" not in absent_keys and traced_memory_config is not None and traced_memory_config != "__ABSENT__":
+        parsed_mc = parse_dict_value("memory_config", traced_memory_config)
+        if parsed_mc is not None:
+            output_mem_cfg = parsed_mc
 
     # Build program_config - prefer V2 format (single dict) over V1 split params
     # Validate that the traced grid fits the test device to avoid TT_FATAL
@@ -287,7 +320,9 @@ def run(
     # Start with all parsed V2 kwargs, then override with explicitly built params
     op_kwargs = dict(parsed_op_kwargs)
 
-    op_kwargs["is_causal"] = is_causal_flag
+    # Only add is_causal when master trace had it (not absent)
+    if "is_causal" not in absent_keys and is_causal is not None:
+        op_kwargs["is_causal"] = is_causal_flag
     op_kwargs["cur_pos_tensor"] = cur_pos_tensor
     op_kwargs["scale"] = compute_scale
 

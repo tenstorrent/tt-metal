@@ -6,7 +6,7 @@ inputs:
     description: 'Environment name'
     required: true
   namespace:
-    description: 'Kubernetes namespace for the environment'
+    description: 'Target namespace for the environment'
     required: false
     default: 'ttop-ci'
 
@@ -16,4 +16,4 @@ runs:
     - name: Delete Environment
       shell: bash
       run: |
-        kubectl -n ${{ inputs.namespace }} delete helmrelease/${{ inputs.environmentName }} --ignore-not-found
+        kubectl -n ${{ inputs.namespace }} delete helmrelease/${{ inputs.environmentName }} || true

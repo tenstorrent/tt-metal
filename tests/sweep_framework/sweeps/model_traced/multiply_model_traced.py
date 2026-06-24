@@ -2,27 +2,30 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
-from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
-from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.common.utility_functions import torch_random
 from functools import partial
-from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
-    get_model_traced_mesh_shape,
-    create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
-    broadcast_torch_inputs_to_global,
-)
+
+import torch
+
+import ttnn
+from models.common.utility_functions import torch_random
 
 # Import V2 master config loader for traced model configurations
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
+from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
+    broadcast_torch_inputs_to_global,
+    create_mesh_device,
+    create_tensor_on_mesh,
+    get_model_traced_mesh_shape,
+    mesh_tensor_to_torch,
+    reconcile_golden_to_actual,
+)
 from tests.sweep_framework.sweep_utils.op_kwargs_utils import (
     build_op_kwargs,
     extract_named_tensor_kwargs,
     parse_dict_value,
 )
+from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -55,8 +58,19 @@ if model_traced_params:
 
 
 def mesh_device_fixture():
+    import os as _os
+
     mesh_shape = get_model_traced_mesh_shape()
-    device = create_mesh_device(mesh_shape)
+    # Prefer WORKER COL: every traced config of this op runs on COL, but the
+    # auto-detect over-routes the whole module to ROW from a single x=7/8-8 master
+    # config, breaking the COL-only configs in single-pass (no-env) runs. Defer to
+    # TTNN_DISPATCH_AXIS when set so CI's two-pass (row+col) is unchanged.
+    _axis = (
+        None
+        if _os.environ.get("TTNN_DISPATCH_AXIS", "").strip().lower() in ("col", "row")
+        else ttnn.DispatchCoreAxis.COL
+    )
+    device = create_mesh_device(mesh_shape, dispatch_core_axis=_axis)
     device_name = ttnn.get_arch_name()
     yield (device, device_name)
     ttnn.close_mesh_device(device)
@@ -183,13 +197,37 @@ def run(
     # Re-add memory_config and dtype to op_kwargs when present in master config.
     # NOTE: memory_config and dtype are declared as named params on run(), so
     # they live in their own bindings — kwargs.get() would never see them.
-    if memory_config is not None:
+    # Use __absent_keys__ to distinguish "master had kwarg=None" from "master never had kwarg".
+    absent_keys = kwargs.get("__absent_keys__")
+    has_absent_info = absent_keys is not None
+    absent_keys = set(absent_keys or [])
+    if has_absent_info and "memory_config" not in absent_keys:
+        if memory_config is not None:
+            parsed_mc = (
+                parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
+            )
+            if parsed_mc is not None:
+                op_kwargs["memory_config"] = parsed_mc
+            else:
+                op_kwargs["memory_config"] = None
+        else:
+            op_kwargs["memory_config"] = None
+    elif memory_config is not None:
         parsed_mc = (
             parse_dict_value("memory_config", memory_config) if isinstance(memory_config, dict) else memory_config
         )
         if parsed_mc is not None:
             op_kwargs["memory_config"] = parsed_mc
-    if dtype is not None:
+    if has_absent_info and "dtype" not in absent_keys:
+        if dtype is not None:
+            parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
+            if parsed_dt is not None:
+                op_kwargs["dtype"] = parsed_dt
+            else:
+                op_kwargs["dtype"] = None
+        else:
+            op_kwargs["dtype"] = None
+    elif dtype is not None:
         parsed_dt = parse_dict_value("dtype", dtype) if isinstance(dtype, dict) else dtype
         if parsed_dt is not None:
             op_kwargs["dtype"] = parsed_dt
@@ -256,6 +294,16 @@ def run(
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)
+
+    # Reconcile the per-chip torch golden to the mesh-stitched actual output:
+    # for sharded inputs the golden is the full/global tensor while the device
+    # output is a per-device shard, so the golden must be sliced down to match
+    # (the previous code sliced the *actual* to the golden, which is backwards
+    # when the golden is larger -> shape-mismatch assert). Mirrors add_model_traced.
+    if is_mesh_device:
+        torch_output_tensor = reconcile_golden_to_actual(
+            torch_output_tensor, output_tensor, input_a_tensor_placement, input_b_tensor_placement
+        )
 
     # Slice output back to original shape in case tile padding expanded it
     if output_tensor.shape != torch_output_tensor.shape:

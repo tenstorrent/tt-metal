@@ -1,0 +1,27 @@
+# Matrix multiply that bypasses the MOP sequencer.
+
+supported_archs: ["wormhole"]
+
+operands:
+  - name: "input_A"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "input_B"
+    dims: [256, 256]
+    format: "Float16_b"
+  - name: "matmul_no_mop_out"
+    dims: [256, 256]
+    format: "Float16_b"
+
+operations:
+  - math:
+      - type: "Fpu"
+        src_a: "input_A"
+        src_b: "input_B"
+        operation: "MatmulNoMop"
+        unpacker: "MatmulUnpacker"
+        math_fidelity: "HiFi2"
+    block_size: [64, 128]
+    pack:
+      - output: "matmul_no_mop_out"
+        packer: "Packer"

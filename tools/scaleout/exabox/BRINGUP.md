@@ -225,45 +225,49 @@ Where:
 
 This step is for managing large deployments where cables or nodes are added to the physical cluster over time. The goal is to grow the virtual state (descriptors) in sync with the physical state of the deployment.
 
-Use the `merge_cluster_configs.py` script to combine the new cabling descriptor with the existing cluster configuration. **Always output to a local directory** to ensure that existing shared state isn't corrupted - only copy to the shared location after verifying the merge (Step 3).
+Use the `merge_cluster_configs.py` script to combine the new cabling descriptor with the existing cluster configuration. The script walks a directory tree and emits an `aggregated/` directory containing the merged descriptors. **Always stage inputs in a local directory** to ensure that existing shared state isn't corrupted - only copy to the shared location after verifying the merge (Step 3).
 
 ### With Existing Deployment Descriptor
 
-If you're adding hosts to an existing deployment, merge both cabling and deployment descriptors:
+If you're adding hosts to an existing deployment, lay out both clusters as sibling subdirectories and run the aggregator:
 
 ```bash
-./tools/scaleout/cabling_generator/merge_cluster_configs.py \
-    --cabling1 /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-    --cabling2 /data/<your-username>/new_cabling_descriptor.textproto \
-    --deployment1 /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-    --deployment2 /data/<your-username>/new_deployment_descriptor.textproto \
-    --output-dir merged_output
+mkdir -p merged_output/existing merged_output/new
+cp /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto    merged_output/existing/
+cp /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto merged_output/existing/
+cp /data/<your-username>/new_cabling_descriptor.textproto    merged_output/new/cabling_descriptor.textproto
+cp /data/<your-username>/new_deployment_descriptor.textproto merged_output/new/deployment_descriptor.textproto
+
+./tools/scaleout/cabling_generator/merge_cluster_configs.py merged_output
 ```
 
 ### With Same Deployment (Intra-Cluster Cabling Only)
 
-If you're only adding new cables between existing hosts (no new deployment):
+If you're only adding new cables between existing hosts (no new deployment), drop the new cabling as a glue file at the composite level. Any filename matching `*inter*.textproto` or `*glue*.textproto` is picked up as additional cabling:
 
 ```bash
-./tools/scaleout/cabling_generator/merge_cluster_configs.py \
-    --cabling1 /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto \
-    --cabling2 /data/<your-username>/new_cabling_descriptor.textproto \
-    --deployment1 /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto \
-    --output-dir merged_output
+mkdir -p merged_output/existing
+cp /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto    merged_output/existing/
+cp /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto merged_output/existing/
+cp /data/<your-username>/new_cabling_descriptor.textproto merged_output/new_inter_cabling.textproto
+
+./tools/scaleout/cabling_generator/merge_cluster_configs.py merged_output
 ```
 
 ### Output Files
 
-The script generates in `merged_output/`:
-- `merged_fsd.textproto` - Factory System Descriptor
-- `merged_cabling_descriptor.textproto` - Combined cabling topology
-- `merged_deployment_descriptor.textproto` - Combined host deployment
+The script generates in `merged_output/aggregated/`:
+- `factory_system_descriptor.textproto` - Factory System Descriptor
+- `cabling_descriptor.textproto` - Combined cabling topology
+- `deployment_descriptor.textproto` - Combined host deployment
+
+The same script can also be pointed at a whole tree of cluster configs (e.g. `tt-cluster-configs/exabox/`) to populate an `aggregated/` directory at every composite level. Pass `--output <dir>` to mirror the layout to a different location instead of aggregating in place, or `--dry-run` to print the plan without writing files.
 
 ## Step 3: Run Physical Validation
 
 Run physical validation **before** deploying configs to a shared location. This ensures the descriptors are in sync with the physical state before other users rely on them.
 
-Run `run_validation.sh` with `--cabling-descriptor-path` and `--deployment-descriptor-path` pointing to your local merged output from Step 2.
+Run `run_validation.sh` with `--cabling-descriptor-path` and `--deployment-descriptor-path` pointing to the merged outputs in `merged_output/aggregated/` from Step 2.
 
 See [Physical Validation](./README.md#physical-validation) for script usage, analysis commands, and interpreting results. For troubleshooting failures, see [TROUBLESHOOTING.md](./TROUBLESHOOTING.md).
 
@@ -272,7 +276,7 @@ See [Physical Validation](./README.md#physical-validation) for script usage, ana
 Once validation passes, copy the merged configuration to a shared location accessible by all cluster hosts:
 
 ```bash
-sudo cp -r merged_output/ /data/scaleout_configs/<your-config-name>/
+sudo cp -r merged_output/aggregated/ /data/scaleout_configs/<your-config-name>/
 ```
 
 **Important:** The path must be accessible on all cluster nodes (typically via NFS).

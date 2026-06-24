@@ -102,10 +102,18 @@ TensorSpec ShardedToInterleavedDeviceOperation::compute_output_specs(
     }
 
     const auto& input_tensor = tensor_args.input_tensor;
+    // Propagate the input's padded_shape so the destination DRAM tensor has matching stick stride.
+    // Without this, when the source shard width exceeds the destination's logical width, the writer
+    // kernel writes more bytes per stick than the destination tensor's stick page can hold, causing
+    // inter-stick byte overlap and data corruption.
     return tt::tt_metal::TensorSpec(
         input_tensor.logical_shape(),
-        tt::tt_metal::TensorLayout(
-            args.output_dtype, tt::tt_metal::PageConfig(input_tensor.layout()), args.output_mem_config));
+        tt::tt_metal::TensorLayout::fromPaddedShape(
+            args.output_dtype,
+            tt::tt_metal::PageConfig(input_tensor.layout()),
+            args.output_mem_config,
+            input_tensor.logical_shape(),
+            input_tensor.padded_shape()));
 }
 
 Tensor ShardedToInterleavedDeviceOperation::create_output_tensors(

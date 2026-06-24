@@ -5,11 +5,11 @@
 #include <cstdint>
 
 #include "api/compute/transpose_wh.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 template <uint32_t BatchSize = 1>
 FORCE_INLINE void transpose(
-    uint32_t cb_in_id, uint32_t cb_out_id, experimental::CircularBuffer& cb_in, experimental::CircularBuffer& cb_out) {
+    uint32_t cb_in_id, uint32_t cb_out_id, CircularBuffer& cb_in, CircularBuffer& cb_out) {
     cb_in.wait_front(BatchSize);
 
     tile_regs_acquire();
@@ -48,13 +48,13 @@ void kernel_main() {
     constexpr uint32_t groups = get_compile_time_arg_val(12);
     constexpr uint32_t MAX_BATCH_SIZE = get_compile_time_arg_val(13);
 
-    experimental::CircularBuffer input0_cb(input0_cb_id);
-    experimental::CircularBuffer input1_cb(input1_cb_id);
-    experimental::CircularBuffer input0_transpose_cb(input0_transpose_cb_id);
-    experimental::CircularBuffer input1_transpose_cb(input1_transpose_cb_id);
-    experimental::CircularBuffer concat_cb(concat_cb_id);
-    experimental::CircularBuffer output_transpose_cb(output_transpose_cb_id);
-    experimental::CircularBuffer output_cb(output_cb_id);
+    CircularBuffer input0_cb(input0_cb_id);
+    CircularBuffer input1_cb(input1_cb_id);
+    CircularBuffer input0_transpose_cb(input0_transpose_cb_id);
+    CircularBuffer input1_transpose_cb(input1_transpose_cb_id);
+    CircularBuffer concat_cb(concat_cb_id);
+    CircularBuffer output_transpose_cb(output_transpose_cb_id);
+    CircularBuffer output_cb(output_cb_id);
 
     transpose_wh_init(input0_cb_id, input0_transpose_cb_id);
 

@@ -192,7 +192,10 @@ TensorSpec BcastDeviceOperation::compute_output_specs(
             // Derive output shard_spec based on input
             shard_spec = input_tensor.shard_spec().value();
         }
-        const MemoryConfig mem_config = operation_attributes.output_mem_config.with_shard_spec(shard_spec);
+        const MemoryConfig mem_config = MemoryConfig(
+            operation_attributes.output_mem_config.memory_layout(),
+            operation_attributes.output_mem_config.buffer_type(),
+            shard_spec);
         return TensorSpec(
             input_tensor.logical_shape(),
             TensorLayout::fromPaddedShape(
@@ -223,19 +226,6 @@ Tensor BcastDeviceOperation::create_output_tensors(
     }
     const spec_return_value_t spec = compute_output_specs(operation_attributes, tensor_args);
     return create_device_tensor(spec, tensor_args.input_a.device());
-}
-
-ttsl::hash::hash_t BcastDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "BcastDeviceOperation::compute_program_hash is called");
-
-    const bool bcast_scalar = (tensor_args.input_b.padded_shape()[-2] * tensor_args.input_b.padded_shape()[-1] == 1) &&
-                              operation_attributes.dim == BcastOpDim::HW;
-
-    auto program_factory = select_program_factory(operation_attributes, tensor_args);
-
-    return operation::hash_operation<BcastDeviceOperation>(
-        operation_attributes, tensor_args, bcast_scalar, program_factory.index());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> BcastDeviceOperation::create_op_performance_model(

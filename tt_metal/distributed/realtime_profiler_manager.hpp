@@ -16,6 +16,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
+#include "context/context_types.hpp"
+
 namespace tt::tt_metal {
 
 class IDevice;
@@ -47,6 +49,7 @@ struct RealtimeProfilerCoreL1Addrs {
 //     drops the Tracy handler. Idempotent.
 //   * trigger_sync_check() pauses the receiver, runs a sync handshake only on devices
 //     whose last finish/init sync was at least 60s ago (each device tracked separately),
+//     or on the first finish-path attempt after init (so short runs still get FINISH_SYNC),
 //     then resumes the receiver. Called from the FD command queue's finish path.
 //     Constructor init uses the same interval process-wide per chip_id to throttle full
 //     run_sync + SYNC_CHECK when reopening meshes on the same chips.
@@ -72,7 +75,7 @@ public:
     // Pauses receiver if at least one device needs a sync, then performs the handshake
     // only on those devices (others are unchanged). No-op when no devices are active,
     // the Tracy handler has been released, or every device was synced within the last
-    // 60 seconds.
+    // 60 seconds (except the first finish-path sync after init, which always runs).
     void trigger_sync_check();
 
     // First active device's D2H socket, or nullptr if no device is active.
@@ -101,6 +104,10 @@ private:
         // Updated after a successful finish-path or init SYNC_CHECK handshake; used to
         // throttle redundant finish syncs (minimum 60s between attempts per device).
         std::optional<std::chrono::steady_clock::time_point> last_finish_sync_at;
+        // After init, the first finish-path sync bypasses the throttle so short runs still
+        // get a FINISH_SYNC pair even when finish runs within the minimum interval of init.
+        // Cleared after the first successful finish-path handshake for this device.
+        bool pending_first_unthrottled_finish_sync = false;
 
         DeviceState();
         ~DeviceState();
@@ -112,6 +119,12 @@ private:
 
     void run_sync(DeviceState& dev_state, uint32_t num_samples);
 
+    // ContextId of the owning MeshDevice, captured in the constructor. All MetalContext
+    // accesses inside this manager must go through MetalContext::instance(context_id_)
+    // so a non-default (mock / coexistence) context routes through its own HAL, cluster
+    // and dispatch_mem_map instead of leaking to the silicon DEFAULT_CONTEXT_ID via the
+    // bare instance() inline fallback. See #38445 / #39849 for the broader migration.
+    ContextId context_id_;
     std::vector<DeviceState> devices_;
     std::thread receiver_thread_;
     std::atomic<bool> stop_{false};

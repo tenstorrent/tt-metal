@@ -39,7 +39,7 @@ void kernel_main() {
     // word of each DFB entry will end up corrupted in the DRAM output buffer.
     const uint32_t vararg_xor = get_vararg(0) ^ get_vararg(1) ^ get_vararg(2) ^ get_common_vararg(0);
 
-    experimental::DataflowBuffer buf(dfb::loopback_dfb);
+    DataflowBuffer buf(dfb::loopback_dfb);
 
     for (uint32_t i = 0; i < num_entries; i++) {
         buf.reserve_back(1);

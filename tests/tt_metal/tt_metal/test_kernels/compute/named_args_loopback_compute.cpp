@@ -34,7 +34,7 @@
 #include <cstdint>
 
 #include "api/compute/common.h"
-#include "experimental/dataflow_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
 void kernel_main() {
@@ -52,7 +52,7 @@ void kernel_main() {
     const uint32_t vararg_xor =
         magic ^ entry_size ^ num_tiles ^ input_offset ^ get_vararg(0) ^ get_vararg(1) ^ get_common_vararg(0);
 
-    experimental::DataflowBuffer dfb_out(dfb::out_dfb);
+    DataflowBuffer dfb_out(dfb::out_dfb);
 
     for (uint32_t t = 0; t < num_tiles; ++t) {
         dfb_out.reserve_back(1);  // implementation gates this to PACK only

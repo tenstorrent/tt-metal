@@ -5,7 +5,6 @@
 #include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/operations/transformer/sdpa_windowed/device/sdpa_windowed_program_factory.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operation.hpp"
@@ -138,20 +137,6 @@ TensorSpec WindowedScaledDotProductAttentionDeviceOperation::compute_output_spec
 Tensor WindowedScaledDotProductAttentionDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& tensors) {
     return create_device_tensor(compute_output_specs(attrs, tensors), tensors.q.device());
-}
-
-ttsl::hash::hash_t WindowedScaledDotProductAttentionDeviceOperation::compute_program_hash(
-    const operation_attributes_t& attrs, const tensor_args_t& tensors) {
-    operation::Hash hash = operation::hash_operation<WindowedScaledDotProductAttentionDeviceOperation>(
-        attrs.scale,
-        attrs.output_mem_config,
-        attrs.program_config,
-        attrs.compute_kernel_config,
-        tensors.q,
-        tensors.k,
-        tensors.v,
-        tensors.cu_window_seqlens);
-    return hash;
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor>

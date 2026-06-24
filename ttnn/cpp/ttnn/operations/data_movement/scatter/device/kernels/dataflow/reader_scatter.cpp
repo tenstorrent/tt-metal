@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
 #include "../scatter_common.hpp"
 
 #include <array>
@@ -97,6 +97,7 @@ FORCE_INLINE void scatter_along_chunk(
 }  // namespace
 
 void kernel_main() {
+    Noc noc;
     constexpr auto ctas{get_ctas()};
 
     const uint32_t input_buffer_address = get_arg_val<uint32_t>(0);
@@ -128,10 +129,10 @@ void kernel_main() {
 
     std::array<uint32_t, N> coord{from_id<N>(start_stick_id, input_dims)};
 
-    experimental::CircularBuffer input_cb(ctas.input_cb);
-    experimental::CircularBuffer output_cb(ctas.output_cb);
-    experimental::CircularBuffer index_cb(ctas.index_cb);
-    experimental::CircularBuffer source_cb(ctas.source_cb);
+    CircularBuffer input_cb(ctas.input_cb);
+    CircularBuffer output_cb(ctas.output_cb);
+    CircularBuffer index_cb(ctas.index_cb);
+    CircularBuffer source_cb(ctas.source_cb);
 
     for (uint32_t input_stick_id = start_stick_id; input_stick_id < start_stick_id + sticks_for_core;
          ++input_stick_id) {
@@ -143,6 +144,7 @@ void kernel_main() {
 
             // first phase: copy input data to output
             load_to_cb(
+                noc,
                 ctas.input_cb,
                 input_addr_gtor,
                 input_offset * sizeof(input_std_type),
@@ -165,6 +167,7 @@ void kernel_main() {
                         std::min(ctas.source_stick_size - source_offset, source_chunk_size);
 
                     load_to_cb(
+                        noc,
                         ctas.index_cb,
                         index_addr_gtor,
                         index_offset * sizeof(index_std_type),
@@ -173,6 +176,7 @@ void kernel_main() {
                     // source tensor is sliced beforehand to match index tensor's dimensions, therefore their stick ids
                     // map 1:1
                     load_to_cb(
+                        noc,
                         ctas.source_cb,
                         source_addr_gtor,
                         source_offset * sizeof(input_std_type),

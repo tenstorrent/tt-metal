@@ -11,11 +11,6 @@
  *************************************************************************/
 
 template <PoolType type, ReduceDim dim>
-inline void llk_unpack_reduce_mop_config() {
-    _llk_unpack_reduce_mop_config_<type, dim>();
-}
-
-template <PoolType type, ReduceDim dim>
 inline void llk_unpack_reduce_init(const std::uint32_t within_face_16x16_transpose = 0) {
     constexpr std::uint32_t unpA_operand_id = 0;
 

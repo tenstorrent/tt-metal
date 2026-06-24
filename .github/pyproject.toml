@@ -1,2 +1,8 @@
 [tool.pyright]
 extraPaths = ["."]
+
+# Match the repo-root [tool.black] line-length so black-via-pre-commit doesn't
+# fall back to its 88-char default for files under .github/ (black walks up
+# from the file's directory and stops at the first pyproject.toml it finds).
+[tool.black]
+line-length = 120

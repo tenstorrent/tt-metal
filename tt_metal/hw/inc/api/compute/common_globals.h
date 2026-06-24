@@ -14,24 +14,23 @@
 
 #ifdef TRISC_MATH
 #include "llk_math_common_api.h"
-#define MATH(x) x
+#define MATH(...) __VA_ARGS__
 #define MAIN math_main()
 #else
-#define MATH(x)
+#define MATH(...)
 #endif
 
 #ifdef TRISC_PACK
-#include "llk_pack_api.h"
-#define PACK(x) x
+#define PACK(...) __VA_ARGS__
 #define MAIN pack_main()
 #else
-#define PACK(x)
+#define PACK(...)
 #endif
 
 #ifdef TRISC_UNPACK
 #include "llk_unpack_common_api.h"
-#define UNPACK(x) x
+#define UNPACK(...) __VA_ARGS__
 #define MAIN unpack_main()
 #else
-#define UNPACK(x)
+#define UNPACK(...)
 #endif

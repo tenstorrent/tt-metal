@@ -16,6 +16,10 @@
 #include "ttnn/operations/pool/pool_utils.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+#include <utility>
 
 namespace ttnn::operations::pool {
 // Generic pool uop -- called from the macro-ops
@@ -42,46 +46,18 @@ struct Pool2D {
     using tensor_return_value_t = std::vector<Tensor>;
 
     struct MultiCore {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader0_kernel{};
-            tt::tt_metal::KernelHandle reader1_kernel{};
-            tt::tt_metal::KernelHandle compute_kernel{};
-            tt::tt_metal::CBHandle raw_in_cb{};
-            tt::tt_metal::CBHandle out_cb{};
-            tt::tt_metal::CBHandle out_idx_cb{};
-            tt::tt_metal::CBHandle in_scalar_cb_0{};
-            tt::tt_metal::CBHandle in_scalar_cb_1{};
-            tt::tt_metal::CBHandle clear_value_cb{};
-            tt::tt_metal::CBHandle in_reader_indices_cb{};
-            tt::tt_metal::CBHandle in_cb_0{};
-            tt::tt_metal::CBHandle in_cb_1{};
-            tt::tt_metal::CBHandle pre_tilize_cb{};
-            tt::tt_metal::CBHandle config_cb{};
-            tt::tt_metal::CBHandle in_idx_cb{};
-            tt::tt_metal::CBHandle pack_tmp_cb{};
-            tt::tt_metal::CBHandle pack_idx_tmp_cb{};
-            tt::tt_metal::CBHandle right_inc_cb{};
-            tt::tt_metal::CBHandle down_left_wrap_inc_cb{};
-            tt::tt_metal::CBHandle up_left_wrap_inc_cb{};
-            tt::tt_metal::CBHandle intra_kernel_right_inc_cb{};
-            tt::tt_metal::CBHandle intra_kernel_down_left_wrap_inc_cb{};
-            tt::tt_metal::CBHandle compute_tmp_idx_cb{};
-            uint32_t ncores{};
-            tt::tt_metal::DeviceStorage reader_indices_storage;
-            tt::tt_metal::DeviceStorage scalar_config_storage;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
+        // Builds the entire workload in one call (cache miss):
+        //   1. Uploads the halo lookup table (and, for avg-pool variants that
+        //      need it, the per-stick scalar config tensor) and parks the
+        //      backing MeshBuffers in the descriptor's `buffers` vector so
+        //      they outlive the cached workload.
+        //   2. Loops `tensor_coords` and pushes a ProgramDescriptor per coord
+        //      into `programs`.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& op_attr,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output_tensor);
+            tensor_return_value_t& output_tensors,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
     };
 
     using program_factory_t = std::variant<MultiCore>;

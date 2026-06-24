@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_eltwise_binary_backward ${LIB_TYPE})
 add_library(TTNN::Ops::Eltwise::Binary::Backward ALIAS ttnn_op_eltwise_binary_backward)
 
-tt_reuse_precompile_headers(ttnn_op_eltwise_binary_backward TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_eltwise_binary_backward TTNN::PCHLean)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_binary_backward)
 
 target_sources(
@@ -10,9 +12,9 @@ target_sources(
         FILE_SET api
         TYPE HEADERS
         BASE_DIRS ${FixmeOpAPIDir}
-        FILES binary_backward.hpp
+        FILES ${TTNN_OP_ELTWISE_BINARY_BACKWARD_API_HEADERS}
     PRIVATE
-        binary_backward.cpp
+        ${TTNN_OP_ELTWISE_BINARY_BACKWARD_SRCS}
 )
 
 target_include_directories(ttnn_op_eltwise_binary_backward PRIVATE ${FixmeOpIncDirs})

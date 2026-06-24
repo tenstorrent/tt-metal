@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/endpoints.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 // #include "tools/profiler/kernel_profiler.hpp"
 
 void kernel_main() {
@@ -16,9 +16,9 @@ void kernel_main() {
     constexpr uint32_t cb_id = get_compile_time_arg_val(0);
     constexpr uint32_t block_size_tiles = get_compile_time_arg_val(1);
 
-    experimental::CircularBuffer cb(cb_id);
-    experimental::Noc noc;
-    experimental::AllocatorBank<experimental::AllocatorBankType::DRAM> dram_dst;
+    CircularBuffer cb(cb_id);
+    Noc noc;
+    AllocatorBank<AllocatorBankType::DRAM> dram_dst;
 
     uint32_t block_size_bytes = cb.get_tile_size() * block_size_tiles;
 

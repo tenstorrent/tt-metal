@@ -1,7 +1,9 @@
+include(sources.cmake)
+
 add_library(ttnn_op_debug ${LIB_TYPE})
 add_library(TTNN::Ops::Debug ALIAS ttnn_op_debug)
 
-tt_reuse_precompile_headers(ttnn_op_debug TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_debug TTNN::PCHFull)
 TT_ENABLE_UNITY_BUILD(ttnn_op_debug)
 
 set_target_properties(
@@ -25,8 +27,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        apply_device_delay.cpp
-        device/apply_device_delay_device_operation.cpp
+        ${TTNN_OP_DEBUG_SRCS}
 )
 
 target_include_directories(ttnn_op_debug PRIVATE ${FixmeOpIncDirs})

@@ -13,7 +13,7 @@
 
 namespace ttnn::prim {
 
-ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::create(
+tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
@@ -55,8 +55,7 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
         "Group size must be at least 16 for input1 (was {})",
         input_tensors[1].padded_shape()[-1] / groups);
 
-    Program program = CreateProgram();
-
+    ProgramDescriptor desc;
     const CoreRangeSet all_cores = input_tensors[0].shard_spec().value().grid;  // assume all inputs have same grid
 
     const auto get_num_tiles_per_shard = [](const ShardSpec& shard_spec) -> std::pair<uint32_t, uint32_t> {
@@ -68,7 +67,6 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
         TT_FATAL(num_tiles_along_height != 0 && num_tiles_along_width != 0, "Expected tensor to have at least 1 tiles");
         return {num_tiles_along_height, num_tiles_along_width};
     };
-
     const auto get_total_num_tiles_per_shard = [](const std::pair<uint32_t, uint32_t>& num_tiles) -> uint32_t {
         return num_tiles.first * num_tiles.second;
     };
@@ -85,43 +83,38 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     const std::pair<uint32_t, uint32_t> num_tiles_for_output_shard =
         get_num_tiles_per_shard(output.shard_spec().value());
 
-    const auto create_circular_buffer = [&program, &cores = all_cores](
-                                            uint32_t index,
-                                            uint32_t num_tiles,
-                                            uint32_t tile_size,
-                                            const tt::DataFormat& format,
-                                            Buffer* buffer) -> CBHandle {
-        CircularBufferConfig config =
-            CircularBufferConfig(num_tiles * tile_size, {{index, format}}).set_page_size(index, tile_size);
-        if (buffer) {
-            config.set_globally_allocated_address(*buffer);
-        }
-        return CreateCircularBuffer(program, cores, config);
-    };
-
-    const auto create_cb_from_tensor =
-        [&create_circular_buffer](uint32_t idx, const Tensor& input_tensor, uint32_t total_num_tiles) -> CBHandle {
-        const auto data_format = datatype_to_dataformat_converter(input_tensor.dtype());
-        const auto tile_size = tt::tile_size(data_format);
-        return create_circular_buffer(idx, total_num_tiles, tile_size, data_format, input_tensor.buffer());
-    };
-
     TT_FATAL(input_tensors.at(0).dtype() == input_tensors.at(1).dtype(), "Input tensor data types must match");
     const tt::DataFormat data_format = datatype_to_dataformat_converter(input_tensors.at(0).dtype());
     const uint32_t tile_size = tt::tile_size(data_format);
-
     const uint32_t num_input_tensors = input_tensors.size();
-    std::vector<CBHandle> cb_inputs;
-    cb_inputs.reserve(num_input_tensors);
+
     for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
         const Tensor& input_tensor = input_tensors.at(idx);
         const uint32_t total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_each_input_shard[idx]);
-        cb_inputs.push_back(create_cb_from_tensor(idx, input_tensor, total_num_tiles));
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = total_num_tiles * tile_size,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(idx),
+                .data_format = datatype_to_dataformat_converter(input_tensor.dtype()),
+                .page_size = tt::tile_size(datatype_to_dataformat_converter(input_tensor.dtype())),
+            }}},
+            .buffer = input_tensor.buffer(),
+        });
     }
 
-    const uint32_t cb_output_id = cb_inputs.size();
+    const uint32_t cb_output_id = num_input_tensors;
     const uint32_t total_num_output_tiles = get_total_num_tiles_per_shard(num_tiles_for_output_shard);
-    const CBHandle cb_output = create_cb_from_tensor(cb_output_id, output, total_num_output_tiles);
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = total_num_output_tiles * tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_output_id),
+            .data_format = datatype_to_dataformat_converter(output.dtype()),
+            .page_size = tt::tile_size(datatype_to_dataformat_converter(output.dtype())),
+        }}},
+        .buffer = output.buffer(),
+    });
 
     tt::DataFormat cb_data_format = data_format;
     uint32_t cb_tile_size = tile_size;
@@ -132,19 +125,51 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     }
 
     const uint32_t in0_total_tiles_width = num_tiles_for_each_input_shard[0].second;
-    const uint32_t cb_input0_transpose_id = cb_inputs.size() + 1;
-    create_circular_buffer(cb_input0_transpose_id, in0_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
+    const uint32_t cb_input0_transpose_id = num_input_tensors + 1;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in0_total_tiles_width * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_input0_transpose_id),
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
 
     const uint32_t in1_total_tiles_width = num_tiles_for_each_input_shard[1].second;
-    const uint32_t cb_input1_transpose_id = cb_inputs.size() + 2;
-    create_circular_buffer(cb_input1_transpose_id, in1_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
+    const uint32_t cb_input1_transpose_id = num_input_tensors + 2;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = in1_total_tiles_width * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_input1_transpose_id),
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
 
     const uint32_t out_total_tiles_width = in0_total_tiles_width + in1_total_tiles_width;
-    const uint32_t cb_concat_id = cb_inputs.size() + 3;
-    create_circular_buffer(cb_concat_id, out_total_tiles_width, cb_tile_size, cb_data_format, nullptr);
+    const uint32_t cb_concat_id = num_input_tensors + 3;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_total_tiles_width * cb_tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_concat_id),
+            .data_format = cb_data_format,
+            .page_size = cb_tile_size,
+        }}},
+    });
 
-    const uint32_t cb_output_transpose_id = cb_inputs.size() + 4;
-    create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
+    const uint32_t cb_output_transpose_id = num_input_tensors + 4;
+    desc.cbs.push_back(CBDescriptor{
+        .total_size = out_total_tiles_width * tile_size,
+        .core_ranges = all_cores,
+        .format_descriptors = {{CBFormatDescriptor{
+            .buffer_index = static_cast<uint8_t>(cb_output_transpose_id),
+            .data_format = data_format,
+            .page_size = tile_size,
+        }}},
+    });
 
     // TODO: Skip the tile transpose in compute kernel if the following condition is true:
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
@@ -162,7 +187,7 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384 : 8192;
     const bool use_single_packet_read = (input0_stride <= noc_max_burst_size && input1_stride <= noc_max_burst_size);
 
-    std::vector<uint32_t> compile_time_args_0 = {
+    KernelDescriptor::CompileTimeArgs compile_time_args = {
         0,
         1,
         cb_input0_transpose_id,
@@ -178,59 +203,52 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
         groups,
         batch_size,
     };
-    std::map<std::string, std::string> reader_defines;
+
+    KernelDescriptor::Defines reader_defines;
     if (is_bf8) {
-        reader_defines["BF8"] = "1";
+        reader_defines.emplace_back("BF8", "1");
     }
     if (use_single_packet_read) {
-        reader_defines["USE_SINGLE_PACKET_READ"] = "1";
+        reader_defines.emplace_back("USE_SINGLE_PACKET_READ", "1");
     }
-    CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
-        "reader_height_sharded_width_concat_two_tensors_tiled.cpp",
-        all_cores,
-        ReaderDataMovementConfig(compile_time_args_0, std::move(reader_defines)));
-    CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
-        "writer_height_sharded_width_concat_two_tensors_tiled.cpp",
-        all_cores,
-        WriterDataMovementConfig(compile_time_args_0));
 
-    CreateKernel(
-        program,
+    KernelDescriptor reader_desc;
+    reader_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+        "reader_height_sharded_width_concat_two_tensors_tiled.cpp";
+    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    reader_desc.core_ranges = all_cores;
+    reader_desc.compile_time_args = compile_time_args;
+    reader_desc.defines = std::move(reader_defines);
+    reader_desc.config = ReaderConfigDescriptor{};
+
+    KernelDescriptor writer_desc;
+    writer_desc.kernel_source =
+        "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+        "writer_height_sharded_width_concat_two_tensors_tiled.cpp";
+    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    writer_desc.core_ranges = all_cores;
+    writer_desc.compile_time_args = compile_time_args;
+    writer_desc.config = WriterConfigDescriptor{};
+
+    KernelDescriptor compute_desc;
+    compute_desc.kernel_source =
         "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/compute/"
-        "height_sharded_width_concat_two_tensors.cpp",
-        all_cores,
-        ComputeConfig{
-            .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-            .fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
-                                data_format == tt::DataFormat::UInt32,
-            .math_approx_mode = false,
-            .compile_args = compile_time_args_0});
+        "height_sharded_width_concat_two_tensors.cpp";
+    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    compute_desc.core_ranges = all_cores;
+    compute_desc.compile_time_args = std::move(compile_time_args);
+    compute_desc.config = ComputeConfigDescriptor{
+        .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
+        .fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
+                            data_format == tt::DataFormat::UInt32,
+        .math_approx_mode = false,
+    };
 
-    return {
-        std::move(program),
-        {.num_input_tensors = num_input_tensors,
-         .cb_inputs = cb_inputs,
-         .cb_output = cb_output,
-         .all_cores = all_cores}};
-}
-
-void ConcatS2STiledProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const ConcatParams& /*operation_attributes*/,
-    const ConcatInputs& tensor_args,
-    Tensor& tensor_return_value) {
-    auto& program = cached_program.program;
-    const auto& shared_vars = cached_program.shared_variables;
-
-    for (uint32_t input_id = 0; input_id < shared_vars.num_input_tensors; input_id++) {
-        UpdateDynamicCircularBufferAddress(
-            program, shared_vars.cb_inputs[input_id], *tensor_args.input_tensors[input_id].buffer());
-    }
-    UpdateDynamicCircularBufferAddress(program, shared_vars.cb_output, *tensor_return_value.buffer());
+    desc.kernels.push_back(std::move(reader_desc));
+    desc.kernels.push_back(std::move(writer_desc));
+    desc.kernels.push_back(std::move(compute_desc));
+    return desc;
 }
 
 }  // namespace ttnn::prim

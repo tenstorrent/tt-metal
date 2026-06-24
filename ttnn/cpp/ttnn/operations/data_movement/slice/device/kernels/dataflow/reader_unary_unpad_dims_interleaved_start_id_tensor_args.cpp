@@ -4,9 +4,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/noc.h"
-#include "experimental/circular_buffer.h"
-#include "experimental/tensor.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
@@ -32,10 +32,10 @@ void kernel_main() {
 
     const auto s0 = TensorAccessor(src_args, src_addr);
 
-    // Create experimental objects for Device 2.0 API
-    experimental::CircularBuffer cb_in0(cb_id_in0);
-    experimental::CircularBuffer cb_tensor(cb_id_tensor);
-    experimental::Noc noc;
+    // Create objects for Device 2.0 API
+    CircularBuffer cb_in0(cb_id_in0);
+    CircularBuffer cb_tensor(cb_id_tensor);
+    Noc noc;
 
     // Get tile size from CB interface
     const uint32_t tile_size = cb_in0.get_tile_size();
@@ -53,6 +53,10 @@ void kernel_main() {
     uint32_t start_buffer_l1_addr = cb_tensor.get_write_ptr();
     noc.async_read(start_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
+    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
+    // is left balanced after this single-tile staging read.
+    cb_tensor.push_back(1);
+    cb_tensor.wait_front(1);
 
     volatile tt_l1_ptr uint32_t* start_data = (volatile tt_l1_ptr uint32_t*)start_buffer_l1_addr;
 
@@ -66,6 +70,10 @@ void kernel_main() {
     uint32_t end_buffer_l1_addr = cb_tensor.get_write_ptr();
     noc.async_read(end_tensor_accessor, cb_tensor, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
+    // Complete the producer/consumer handshake (reserve -> push -> wait -> pop) so the scratch CB
+    // is left balanced after this single-tile staging read.
+    cb_tensor.push_back(1);
+    cb_tensor.wait_front(1);
 
     volatile tt_l1_ptr uint32_t* end_data = (volatile tt_l1_ptr uint32_t*)end_buffer_l1_addr;
 

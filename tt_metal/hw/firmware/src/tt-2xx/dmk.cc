@@ -50,7 +50,15 @@ uint32_t _start() {
     uint32_t thread_0_hartid = hartid;
     if (launch_msg->kernel_config.enables & (1u << hartid)) {
         for (uint32_t j = 0; j < MaxDMProcessorsPerCoreType; j++) {
-            if (launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
+            // DM0 and DM1 are reserved, so their kernel_text_offset[] slots are
+            // left zero-initialized. Skip reserved slots here, otherwise if the
+            // user binary happens to land at offset 0 (e.g. no RTAs/CRTAs/sems/CBs/DFBs
+            // precede it in the kernel-config ring buffer), the search would falsely
+            // match slot 0 and set thread_0_hartid = 0. DM0 never sets
+            // shared_globals_ready[0] = GO, so the user DMs hang forever in the
+            // wait loop below.
+            if ((launch_msg->kernel_config.enables & (1u << j)) &&
+                launch_msg->kernel_config.kernel_text_offset[j] == my_kt) {
                 thread_0_hartid = j;
                 break;
             }
@@ -73,9 +81,7 @@ uint32_t _start() {
     }
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-#if defined(NOC_API_V2)
-        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
-#endif
+        overlay_cmd_buff_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS

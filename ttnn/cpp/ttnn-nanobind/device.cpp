@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -33,9 +34,11 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 // #include "ttnn/operations/experimental/auto_format/auto_format.hpp" // TODO_NANOBIND
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/memory_reporter.hpp>
 #include <tt-metalium/experimental/kernel_cache.hpp>
@@ -141,7 +144,7 @@ void py_device_module_types(nb::module_& m_device) {
 
     nb::class_<tt::tt_metal::experimental::ProgramRealtimeRecord>(
         m_device, "ProgramRealtimeRecord", "Record containing real-time profiler data from a device.")
-        .def_ro("program_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::program_id, "Runtime program ID")
+        .def_ro("runtime_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::runtime_id, "Runtime ID")
         .def_ro(
             "start_timestamp",
             &tt::tt_metal::experimental::ProgramRealtimeRecord::start_timestamp,
@@ -155,10 +158,12 @@ void py_device_module_types(nb::module_& m_device) {
             &tt::tt_metal::experimental::ProgramRealtimeRecord::frequency,
             "Device clock frequency (cycles per ns)")
         .def_ro("chip_id", &tt::tt_metal::experimental::ProgramRealtimeRecord::chip_id, "Device chip ID")
-        .def_ro(
+        .def_prop_ro(
             "kernel_sources",
-            &tt::tt_metal::experimental::ProgramRealtimeRecord::kernel_sources,
-            "Kernel source paths for this program");
+            [](const tt::tt_metal::experimental::ProgramRealtimeRecord& record) {
+                return std::vector<std::string>(record.kernel_sources.begin(), record.kernel_sources.end());
+            },
+            "Kernel source paths associated with this runtime ID");
 
     nb::class_<tt::tt_metal::detail::MemoryView>(
         m_device, "MemoryView", "Class representing view of the memory (dram, l1, l1_small, trace) of a device.")
@@ -475,6 +480,50 @@ void device_module(nb::module_& m_device) {
         nb::arg("buffer_type").noconvert(),
         get_memory_view_doc.data());
 
+    constexpr std::string_view get_allocator_base_address_doc = R"doc(
+        Return the base address (in bytes) of the device's allocator region for the given buffer type.
+
+        For ``ttnn.BufferType.L1`` this is the worker-L1 unreserved base, i.e. the lowest address
+        that the allocator is allowed to hand out for tensor / buffer storage on Tensix worker
+        cores. Combined with the worker-L1 size (queryable via :py:func:`ttnn.get_memory_view`), it
+        defines the address range available for compute-time L1 allocations.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to query                  | ttnn.Device           |             | Yes      |
+        | buffer_type      | Allocator region (L1 / DRAM)     | ttnn.BufferType       |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc";
+    auto buffer_type_to_hal_mem_type = [](const BufferType& buffer_type) {
+        switch (buffer_type) {
+            case BufferType::DRAM: return HalMemType::DRAM;
+            case BufferType::L1:
+            case BufferType::L1_SMALL:
+            case BufferType::TRACE: return HalMemType::L1;
+            default:
+                throw std::invalid_argument(
+                    "GetAllocatorBaseAddress: unsupported buffer_type=" +
+                    std::to_string(static_cast<int>(buffer_type)));
+        }
+    };
+    m_device.def(
+        "GetAllocatorBaseAddress",
+        [buffer_type_to_hal_mem_type](IDevice* device, const BufferType& buffer_type) {
+            return device->allocator()->get_base_allocator_addr(buffer_type_to_hal_mem_type(buffer_type));
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_allocator_base_address_doc.data());
+    m_device.def(
+        "GetAllocatorBaseAddress",
+        [buffer_type_to_hal_mem_type](MeshDevice* device, const BufferType& buffer_type) {
+            return device->allocator()->get_base_allocator_addr(buffer_type_to_hal_mem_type(buffer_type));
+        },
+        nb::arg("device").noconvert(),
+        nb::arg("buffer_type").noconvert(),
+        get_allocator_base_address_doc.data());
+
     constexpr std::string_view synchronize_device_doc = R"doc(
                 Synchronize the device with host by waiting for all operations to complete.
                 If cq_id is provided then only the operations associated with that cq_id are waited for,
@@ -640,7 +689,7 @@ void device_module(nb::module_& m_device) {
 
             Example:
                 >>> def my_callback(record):
-                ...     print(f"Program {record.program_id} on chip {record.chip_id}")
+                ...     print(f"runtime_id={record.runtime_id} on chip {record.chip_id}")
                 >>> handle = ttnn.device.RegisterProgramRealtimeProfilerCallback(my_callback)
         )doc");
 

@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "api/dataflow/circular_buffer.h"
 #include "api/debug/assert.h"
 #include "api/debug/dprint_tile.h"
 #include "api/debug/dprint.h"
@@ -46,31 +47,32 @@ enum class CBAccessType : uint8_t { CB_FRONT_RW, CB_BACK_RW, CB_FRONT_RO, CB_BAC
  *   - size(): Get number of elements available in the buffer
  *
  * Example usage:
- *   ArrayView<uint32_t, cb_id, CBAccessType::CB_FRONT> view_rw;
+ *   CircularBuffer cb(cb_id);
+ *   ArrayView<uint32_t, CBAccessType::CB_FRONT_RW> view_rw(cb);
  *   view_rw[0] = 42; // write to front of CB
  *   uint32_t val = view_rw[1]; // read from front of CB
  *
- *   ArrayView<uint32_t, cb_id, CBAccessType::CB_FRONT_RO> view_ro;
+ *   ArrayView<uint32_t, CBAccessType::CB_FRONT_RO> view_ro(cb);
  *   uint32_t val = view_ro[0]; // read-only access
  *   // view_ro[0] = 42; // Compile error - no write access
  */
 template <typename T, CBAccessType _type>
 struct ArrayView {
-    ArrayView(uint32_t cb_id, uint32_t tile_id_offset = 0, uint32_t ntiles = 1) {
+    ArrayView(const CircularBuffer& cb, uint32_t tile_id_offset = 0, uint32_t ntiles = 1) {
         ASSERT(ntiles > 0);
 
-        auto tile_size = get_tile_size(cb_id);
+        auto tile_size = cb.get_tile_size();
         if constexpr (_type == CBAccessType::CB_FRONT_RW || _type == CBAccessType::CB_FRONT_RO) {
-            _ptr = reinterpret_cast<volatile tt_l1_ptr T*>(CB_RD_PTR(cb_id) + tile_id_offset * tile_size);
+            _ptr = reinterpret_cast<volatile tt_l1_ptr T*>(cb.get_read_ptr() + tile_id_offset * tile_size);
 
 #if defined(WATCHER_OVERHEAD_OK)
-            _base_addr = CB_RD_PTR(cb_id) + tile_id_offset * tile_size;
+            _base_addr = cb.get_read_ptr() + tile_id_offset * tile_size;
 #endif
         } else {
-            _ptr = reinterpret_cast<volatile tt_l1_ptr T*>(CB_WR_PTR(cb_id) + tile_id_offset * tile_size);
+            _ptr = reinterpret_cast<volatile tt_l1_ptr T*>(cb.get_write_ptr() + tile_id_offset * tile_size);
 
 #if defined(WATCHER_OVERHEAD_OK)
-            _base_addr = CB_WR_PTR(cb_id) + tile_id_offset * tile_size;
+            _base_addr = cb.get_write_ptr() + tile_id_offset * tile_size;
 #endif
         }
         _size = ntiles * tile_size / sizeof(T);
@@ -99,21 +101,17 @@ struct ArrayView {
     void print() const {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
-            DPRINT << DEC() << ptr[i] << " ";
-            DEVICE_PRINT("{} ", ptr[i]);
+            DPRINT("{} ", ptr[i]);
         }
-        DPRINT << ENDL();
-        DEVICE_PRINT("\n");
+        DPRINT("\n");
     }
 
     void print_hex() const {
         auto ptr = _ptr;
         for (uint32_t i = 0; i < _size; ++i) {
-            DPRINT << HEX() << ptr[i] << " ";
-            DEVICE_PRINT("{:X} ", ptr[i]);
+            DPRINT("{:X} ", ptr[i]);
         }
-        DPRINT << ENDL();
-        DEVICE_PRINT("\n");
+        DPRINT("\n");
     }
 #endif
 

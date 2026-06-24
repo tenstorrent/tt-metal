@@ -6,7 +6,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/remote_circular_buffer.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
 constexpr uint32_t num_layers = get_compile_time_arg_val(0);
@@ -37,13 +37,13 @@ void kernel_main() {
     start_page_size = page_size[0];
 
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
-    experimental::Noc noc;
+    Noc noc;
 
     constexpr uint32_t cb_id_in1 = 1;
-    experimental::CircularBuffer local_cb{cb_id_in1};
+    CircularBuffer local_cb{cb_id_in1};
 
     constexpr uint32_t sync_cb_id = 2;
-    experimental::CircularBuffer sync_cb{sync_cb_id};
+    CircularBuffer sync_cb{sync_cb_id};
 
     for (uint32_t l = 0; l < num_layers; ++l) {
         uint32_t curr_page_size = page_size[l];

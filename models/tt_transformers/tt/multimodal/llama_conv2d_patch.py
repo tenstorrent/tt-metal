@@ -7,7 +7,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import nearest_32
-from models.tt_transformers.tt.multimodal.tensor_utils import from_torch_host_to_device
 
 
 class TtLlamaConv2dPatch(LightweightModule):
@@ -46,11 +45,11 @@ class TtLlamaConv2dPatch(LightweightModule):
         self.stride = stride
 
         self.bias = (
-            from_torch_host_to_device(
+            ttnn.as_tensor(
                 torch.reshape(state_dict[f"{state_dict_prefix}_linear.bias"], (1, -1)),
-                device=self.mesh_device,
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
+                device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
@@ -66,11 +65,11 @@ class TtLlamaConv2dPatch(LightweightModule):
         padded_weight = torch.cat([weight, padding], dim=-1)
         padded_weight = padded_weight.permute(1, 0).reshape(1, 1, -1, self.out_channels)
 
-        self._linear_weight = from_torch_host_to_device(
+        self._linear_weight = ttnn.as_tensor(
             padded_weight,
-            device=self.mesh_device,
             dtype=dtype,
             layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
@@ -92,11 +91,11 @@ class TtLlamaConv2dPatch(LightweightModule):
         padding = torch.zeros((x.shape[0], x.shape[1], pad_len), dtype=x.dtype, device=x.device)
         x = torch.cat([x, padding], dim=-1)
 
-        x = from_torch_host_to_device(
+        x = ttnn.as_tensor(
             x,
-            device=self.mesh_device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )

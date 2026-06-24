@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 #include "matmul_wo_ring_common.h"
 
 void kernel_main() {
@@ -25,15 +26,18 @@ void kernel_main() {
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
 
     // CBs
-    constexpr auto cb_r2c_w = tt::CBIndex::c_0;
-    constexpr auto cb_s2c_in = tt::CBIndex::c_1;
-    constexpr auto cb_c2w_out = tt::CBIndex::c_2;
-    constexpr auto cb_s2c_in2 = tt::CBIndex::c_3;
+    constexpr auto cb_r2c_w_id = tt::CBIndex::c_0;
+    constexpr auto cb_s2c_in_id = tt::CBIndex::c_1;
+    constexpr auto cb_c2w_out_id = tt::CBIndex::c_2;
+    constexpr auto cb_s2c_in2_id = tt::CBIndex::c_3;
+
+    CircularBuffer cb_c2w_out(cb_c2w_out_id);
+    CircularBuffer cb_s2c_in2(cb_s2c_in2_id);
 
     // Tile sizes
-    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
-    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w);
-    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out);
+    constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in_id);
+    constexpr uint32_t w_tile_size = get_tile_size(cb_r2c_w_id);
+    constexpr uint32_t out_tile_size = get_tile_size(cb_c2w_out_id);
 
     // Constants for the kernel
     constexpr uint32_t num_w_tiles_w = matmul_wo_ring::NUM_W_TILES_W;
@@ -50,7 +54,7 @@ void kernel_main() {
 
     // Get dst address
     // Since we write to 7 different collector cores, get all their addresses in an array
-    const uint32_t local_collector_base_addr = get_write_ptr(cb_s2c_in2);
+    const uint32_t local_collector_base_addr = cb_s2c_in2.get_write_ptr();
     uint64_t collector_dst_base_addr[num_collectors];
     for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
         collector_dst_base_addr[collector_idx] = get_noc_addr(
@@ -89,8 +93,8 @@ void kernel_main() {
     noc_async_write_set_trid(semaphore_trid, /*noc=*/1);
 
     for (uint32_t iter_id = 0; iter_id < num_iters; ++iter_id) {
-        cb_wait_front(cb_c2w_out, num_n_tiles_per_iter);
-        uint32_t local_collector_src_addr = get_read_ptr(cb_c2w_out);
+        cb_c2w_out.wait_front(num_n_tiles_per_iter);
+        uint32_t local_collector_src_addr = cb_c2w_out.get_read_ptr();
 
         for (uint32_t collector_idx = 0; collector_idx < num_collectors; ++collector_idx) {
             noc_async_write_one_packet_set_state</*posted=*/true>(
@@ -102,11 +106,12 @@ void kernel_main() {
             local_collector_src_addr += out_tile_size;
         }
 
-        cb_pop_front(cb_c2w_out, num_n_tiles_per_iter);
+        cb_c2w_out.pop_front(num_n_tiles_per_iter);
 
         local_collector_dst_addr += collector_dst_stride;
     }
 
     // Ensure write and semaphore have left the core before continuing
     noc_async_write_flushed_with_trid(semaphore_trid, /*noc=*/1);
+    noc_async_write_set_trid(0, /*noc=*/1);
 }

@@ -7,7 +7,9 @@
 #include "ttnn/operations/experimental/conv3d/prepare_conv3d_weights.hpp"
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/common/constants.hpp"
+#include <numeric>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 using namespace tt::tt_metal;
@@ -54,8 +56,21 @@ ttnn::Tensor conv3d(
     uint32_t groups_,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
-    // If no config provided, use conservative default blocking:
-    // minimal spatial blocks (1,1,1), smallest valid channel blocks (TILE_WIDTH) to minimize L1 pressure
+    // Conservative default blocking: minimal spatial blocks, smallest valid C_in_block.
+    // C_in_block must satisfy: kernel_vol * C_in_block ≡ 0 (mod TILE_WIDTH) for weight tile
+    // alignment, and C_in_block % l1_alignment == 0 for L1 alignment.
+    uint32_t kernel_vol = kernel_size_[0] * kernel_size_[1] * kernel_size_[2];
+    uint32_t tile_align_factor = tt::constants::TILE_WIDTH / std::gcd(kernel_vol, (uint32_t)tt::constants::TILE_WIDTH);
+    uint32_t l1_alignment = tt::tt_metal::hal::get_l1_alignment();
+    uint32_t min_c_in_block = std::lcm(l1_alignment, tile_align_factor);
+
+    // Default C_in_block must match the weight's blocking or the matmul contracts mismatched rows
+    // -> near-zero PCC (issue #47316). rank-5 (unprepared): blocked + computed here, so
+    // min_c_in_block keeps large kernels in L1. rank-2 (pre-prepared): not re-blocked, so match
+    // prepare_conv3d_weights' own default of 0 (full block).
+    const bool weight_already_prepared = weight_tensor.logical_shape().rank() == 2;
+    const uint32_t default_c_in_block = weight_already_prepared ? 0u : min_c_in_block;
+
     auto config = config_opt.value_or(ttnn::experimental::prim::Conv3dConfig(
         tt::tt_metal::DataType::BFLOAT16,                        // weights_dtype
         tt::tt_metal::Layout::ROW_MAJOR,                         // output_layout
@@ -63,7 +78,7 @@ ttnn::Tensor conv3d(
         1,                                                       // W_out_block
         1,                                                       // H_out_block
         tt::constants::TILE_WIDTH,                               // C_out_block (one tile width)
-        tt::constants::TILE_WIDTH,                               // C_in_block (one tile width, min L1)
+        default_c_in_block,                                      // C_in_block (match weight blocking)
         dilation_,                                               // dilation (match the op's dilation)
         32,                                                      // alignment
         input_tensor.device()->compute_with_storage_grid_size()  // use full device grid

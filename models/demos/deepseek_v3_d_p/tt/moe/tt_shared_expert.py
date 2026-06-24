@@ -19,6 +19,8 @@ from loguru import logger
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -26,6 +28,82 @@ COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
     fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
+
+
+def get_bh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+    """Program configs for the gate / up / down matmuls on Blackhole."""
+    grid = ttnn.CoreCoord(11, 9)
+    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+    )
+    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=down_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    return gate, up, down
+
+
+def get_wh_program_configs(per_core_M: int, gate_n_tiles: int, down_n_tiles: int):
+    """Program configs for the gate / up / down matmuls on Wormhole."""
+    grid = ttnn.CoreCoord(8, 7)
+    gate = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+    )
+    up = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=4,
+        out_subblock_h=1,
+        out_subblock_w=8,
+        per_core_M=per_core_M,
+        per_core_N=gate_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    down = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=1,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        out_block_h=1,
+        out_block_w=1,
+        per_core_M=per_core_M,
+        per_core_N=down_n_tiles,
+        fuse_batch=False,
+        mcast_in0=False,
+    )
+    return gate, up, down
 
 
 class TtSharedExpert(LightweightModule):
@@ -159,6 +237,8 @@ class TtSharedExpert(LightweightModule):
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,
         weight_cache_path: Optional[Path] = None,
         cache_name_prefix: Optional[str] = None,
+        subdevice_id: Optional[ttnn.SubDeviceId] = None,
+        subdevice_cores: Optional[ttnn.CoreRangeSet] = None,
     ):
         """
         Initialize TtSharedExpert module.
@@ -186,7 +266,17 @@ class TtSharedExpert(LightweightModule):
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
+        self.subdevice_id = subdevice_id
+        self.subdevice_cores = subdevice_cores
         self.weight_cache_path = weight_cache_path
+        # Hold the reduce-scatter INPUT alive until the next forward so it is not freed while the
+        # async reduce_scatter is still reading it and reused by the concurrent dispatch op (the
+        # catastrophic use-after-free). See forward().
+        self._rs_input_keepalive = None
+        # Shared per-mesh CCL handle. Drives reduce_scatter_minimal_async and owns the shared,
+        # stable-address reduce_scatter INTERMEDIATE buffer (one per mesh, reused by all layers'
+        # shared experts) — see forward() and TT_CCL.get_shared_rs_intermediate.
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.cache_name_prefix = cache_name_prefix
 
         logger.debug(f"Initializing TtSharedExpert with emb_dim={emb_dim}, hidden_dim={hidden_dim}")
@@ -319,57 +409,108 @@ class TtSharedExpert(LightweightModule):
             logger.warning(f"{x.dtype=} typecasting {self.activations_dtype}")
             x = ttnn.typecast(x, self.activations_dtype)
 
-        # Step 1: Gate projection
-        # x: [batch, seq_len, emb_dim]
-        # gate_proj: [emb_dim, hidden_dim / num_devices]
-        # Output: [batch, seq_len, hidden_dim / num_devices]
         assert (
             x.shape[-1] == self.gate_proj.shape[-2]
         ), f"Matmul shape mismatch: x[-1]={x.shape[-1]} != gate_proj[-2]={self.gate_proj.shape[-2]}"
-        gate_out = ttnn.matmul(x, self.gate_proj, compute_kernel_config=self.compute_kernel_config)
-        logger.debug(f"After gate_proj matmul: {gate_out.shape}")
-
-        # Step 2: Up projection
-        # x: [batch, seq_len, emb_dim]
-        # up_proj: [emb_dim, hidden_dim / num_devices]
-        # Output: [batch, seq_len, hidden_dim / num_devices]
         assert (
             x.shape[-1] == self.up_proj.shape[-2]
         ), f"Matmul shape mismatch: x[-1]={x.shape[-1]} != up_proj[-2]={self.up_proj.shape[-2]}"
-        up_out = ttnn.matmul(x, self.up_proj, compute_kernel_config=self.compute_kernel_config)
-        logger.debug(f"After up_proj matmul: {up_out.shape}")
-
-        # Step 3: SiLU activation and element-wise multiplication (fused)
-        # activated = silu(gate_out) * up_out
-        # Output: [batch, seq_len, hidden_dim / num_devices]
-        activated = ttnn.mul(
-            gate_out,
-            up_out,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-        )
-        logger.debug(f"After SiLU fusion: {activated.shape}")
-
-        # Step 4: Down projection
-        # activated: [batch, seq_len, hidden_dim / num_devices]
-        # down_proj: [hidden_dim / num_devices, emb_dim]
-        # Output: [batch, seq_len, emb_dim]
         assert (
-            activated.shape[-1] == self.down_proj.shape[-2]
-        ), f"Matmul shape mismatch: activated[-1]={activated.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
-        output_full = ttnn.matmul(activated, self.down_proj, compute_kernel_config=self.compute_kernel_config)
-        logger.debug(f"After down_proj matmul: {output_full.shape}")
+            self.gate_proj.shape[-1] == self.down_proj.shape[-2]
+        ), f"Matmul shape mismatch: gate_proj[-1]={self.gate_proj.shape[-1]} != down_proj[-2]={self.down_proj.shape[-2]}"
 
-        # Step 5: Reduce-scatter output across mesh columns
-        if self.mesh_device.shape[1] > 1:
-            output = ttnn.reduce_scatter(
-                output_full,
-                dim=-1,  # Scatter along last dimension
-                cluster_axis=1,  # Scatter along mesh columns
-                num_links=self.num_links,
-                topology=self.topology,
+        # ===== Inlined shared expert FFN — height-sharded sub-device matmuls =====
+        # Available compute grid: BH = 11x9, WH = 8x7.
+        TILE = 32
+        max_cores = 11 * 9 if is_blackhole() else 8 * 7
+
+        # Pick the largest divisor of M_tiles that fits in the sub-device — gives
+        # max parallelism with no padding waste.
+        m_tiles = x.padded_shape[-2] // TILE
+        num_cores = m_tiles
+        while num_cores > max_cores or m_tiles % num_cores != 0:
+            num_cores -= 1
+        per_core_M = m_tiles // num_cores
+
+        gate_n_tiles = self.gate_proj.padded_shape[-1] // TILE
+        down_n_tiles = self.down_proj.padded_shape[-1] // TILE
+        if is_blackhole():
+            gate_program_config, up_program_config, down_program_config = get_bh_program_configs(
+                per_core_M, gate_n_tiles, down_n_tiles
             )
         else:
-            output = output_full  # No need to reduce-scatter if only one device in mesh column - there is no TP
-        logger.debug(f"After reduce_scatter: {output.shape}")
+            gate_program_config, up_program_config, down_program_config = get_wh_program_configs(
+                per_core_M, gate_n_tiles, down_n_tiles
+            )
+
+        # 1) Compute gate and up projections
+        gate_out = ttnn.matmul(
+            x,
+            self.gate_proj,
+            program_config=gate_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+            sub_device_id=self.subdevice_id,
+        )
+        up_out = ttnn.matmul(
+            x,
+            self.up_proj,
+            program_config=up_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+            sub_device_id=self.subdevice_id,
+        )
+
+        # 2) Multiply gate and up projection
+        ttnn.multiply_(gate_out, up_out, sub_core_grids=self.subdevice_cores)
+        ttnn.deallocate(up_out)
+
+        # 3) Compute down projection
+        output_full = ttnn.matmul(
+            gate_out,
+            self.down_proj,
+            program_config=down_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+            sub_device_id=self.subdevice_id,
+        )
+        ttnn.deallocate(gate_out)
+
+        # 4) Reduce-scatter across mesh columns when TP > 1.
+        if self.mesh_device.shape[1] > 1:
+            # This reduce_scatter runs overlapped with the MoE dispatch op (on a separate
+            # sub-device, overlap_shared_expert_with_dispatch). The op is async: its kernels keep
+            # accessing its DRAM buffers after this Python call returns, while the concurrent
+            # dispatch allocates its own (large) buffers. Any buffer this op frees before its
+            # kernels finish can be re-handed to dispatch and overwritten mid-flight — corrupting
+            # the result non-deterministically. Both the reduce_scatter INPUT and its INTERMEDIATE
+            # accumulator were observed (via DRAM address tracing) re-handed to the dispatch op's
+            # `metadata` / `dispatched_buffer` at the exact same address: the input alias produced
+            # the catastrophic period-2 failure, the intermediate alias the residual non-determinism.
+            #
+            # Own the intermediate (reduce_scatter_minimal_async with an explicit persistent buffer),
+            # reusing one shared, stable-address buffer owned by tt_ccl (shared across all layers,
+            # which run sequentially). This keeps it alive across the overlap (so dispatch can't reuse
+            # its slot) AND fixes its DRAM address every iteration, so the op's fabric reduction order
+            # is identical each iteration — giving bit-exact determinism. The op overwrites the
+            # intermediate before reading it (the line-reduction compute skips the first slice), so no
+            # per-iteration re-zeroing is needed.
+            rs_intermediate = self.tt_ccl.get_shared_rs_intermediate(output_full)
+            output = ttnn.experimental.reduce_scatter_minimal_async(
+                output_full,
+                persistent_output_buffers=[rs_intermediate],
+                dim=-1,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
+                num_links=self.num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                intermediate_memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.topology,
+                cluster_axis=1,
+                subdevice_id=self.subdevice_id,
+            )
+            # Keep the (fresh-per-iter) RS input alive until the next forward so the concurrent
+            # dispatch cannot reuse its slot mid-flight. (The intermediate is kept alive by the cache.)
+            self._rs_input_keepalive = output_full
+        else:
+            output = output_full
+        logger.debug(f"After shared_expert_ffn: {output.shape}")
 
         return output

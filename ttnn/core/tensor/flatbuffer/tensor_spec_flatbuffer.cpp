@@ -52,6 +52,7 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
         case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
         case tt::tt_metal::DataType::INT32: return flatbuffer::DataType::Int32;
+        case tt::tt_metal::DataType::FP8_E4M3: TT_THROW("FP8_E4M3 cannot be serialized to flatbuffer");
         case tt::tt_metal::DataType::INVALID: return flatbuffer::DataType::Invalid;
     }
     TT_THROW("Unsupported DataType to flatbuffer.");
@@ -248,7 +249,8 @@ flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
         to_flatbuffer(config.buffer_type()),
         shard_spec,
         nd_shard_spec,
-        config.created_with_nd_shard_spec());
+        config.created_with_nd_shard_spec(),
+        tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(config));
 }
 
 tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config) {
@@ -260,12 +262,16 @@ tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* confi
     if (config->nd_shard_spec()) {
         nd_shard_spec = from_flatbuffer(config->nd_shard_spec());
     }
-    return tt::tt_metal::MemoryConfig::create_with_prepopulated_shard_specs(
+    auto memory_config = tt::tt_metal::MemoryConfig::create_with_prepopulated_shard_specs(
         from_flatbuffer(config->memory_layout()),
         from_flatbuffer(config->buffer_type()),
         shard_spec,
         nd_shard_spec,
         config->created_with_nd_shard_spec());
+    if (config->per_core_allocation()) {
+        tt::tt_metal::experimental::per_core_allocation::set_per_core_allocation(memory_config, true);
+    }
+    return memory_config;
 }
 
 flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(

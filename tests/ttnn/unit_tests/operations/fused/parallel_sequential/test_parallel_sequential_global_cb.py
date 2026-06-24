@@ -41,7 +41,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_reserve_back(cb_id, 1);
         uint32_t l1_write_addr = get_write_ptr(cb_id);
-        noc_async_read_tile(i, s, l1_write_addr);
+        noc_async_read_page(i, s, l1_write_addr);
         noc_async_read_barrier();
         cb_push_back(cb_id, 1);
     }
@@ -89,7 +89,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(i, d, l1_read_addr);
+        noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
     }
@@ -99,16 +99,16 @@ void kernel_main() {
 # Writer (riscv_1): Push tiles from local CB to remote CB via GlobalCB
 GLOBALCB_SENDER_WRITER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_out");
     constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
     constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    experimental::CircularBuffer local_cb{local_cb_id};
+    CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
-    experimental::Noc noc;
+    Noc noc;
     remote_cb.set_receiver_page_size(noc, page_size);
     for (uint32_t i = 0; i < num_tiles; i++) {
         local_cb.wait_front(1);
@@ -124,16 +124,16 @@ void kernel_main() {
 # Reader (riscv_0): Wait on GlobalCB, align local CB, push for writer
 GLOBALCB_RECEIVER_READER_SOURCE = """\
 #include "api/dataflow/dataflow_api.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 #include "api/remote_circular_buffer.h"
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
     constexpr uint32_t remote_cb_id = get_named_compile_time_arg_val("cb_remote");
     constexpr uint32_t local_cb_id = get_named_compile_time_arg_val("cb_in");
     constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
-    experimental::CircularBuffer local_cb{local_cb_id};
+    CircularBuffer local_cb{local_cb_id};
     experimental::RemoteCircularBuffer remote_cb{remote_cb_id};
-    experimental::Noc noc;
+    Noc noc;
     experimental::update_remote_cb_config_in_l1(remote_cb_id);
     remote_cb.set_sender_page_size(noc, page_size);
     experimental::align_local_cbs_to_remote_cb<1>(remote_cb_id, {local_cb_id});
@@ -162,7 +162,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_tiles; i++) {
         cb_wait_front(cb_id, 1);
         uint32_t l1_read_addr = get_read_ptr(cb_id);
-        noc_async_write_tile(i, d, l1_read_addr);
+        noc_async_write_page(i, d, l1_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_id, 1);
     }

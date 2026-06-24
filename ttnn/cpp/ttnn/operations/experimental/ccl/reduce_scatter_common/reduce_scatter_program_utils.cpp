@@ -219,4 +219,63 @@ void append_fabric_mux_connection_rt_args(
     std::copy(rt_args.begin(), rt_args.end(), std::back_inserter(worker_rt_args));
 }
 
+void append_fabric_mux_connection_rt_args(
+    bool mux_connection_valid,
+    const tt::tt_metal::CoreCoord& mux_virtual_core,
+    tt::tt_fabric::FabricMuxChannelType channel_type,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    const tt::tt_metal::CoreCoord& worker_logical_core,
+    uint32_t worker_per_direction_id,
+    bool is_termination_master,
+    tt::tt_metal::CoreCoord termination_master_virtual_core,
+    tt::tt_metal::ProgramDescriptor& desc,
+    tt::tt_metal::KernelDescriptor::RTArgList& worker_rt_args) {
+    // Allocate a worker-core-scoped semaphore by querying the next available ID
+    // and parking a SemaphoreDescriptor on the ProgramDescriptor. Returns the new ID.
+    auto alloc_sem = [&]() -> uint32_t {
+        auto id_opt = desc.find_available_semaphore_id(worker_logical_core, tt::CoreType::WORKER);
+        TT_FATAL(
+            id_opt.has_value(),
+            "No available semaphore ID for fabric mux connection on worker core (x={}, y={}, core_type=WORKER); "
+            "{} SemaphoreDescriptors already allocated on this ProgramDescriptor.",
+            worker_logical_core.x,
+            worker_logical_core.y,
+            desc.semaphores.size());
+        const uint32_t id = id_opt.value();
+        desc.semaphores.push_back(tt::tt_metal::SemaphoreDescriptor{
+            .id = id,
+            .core_type = tt::CoreType::WORKER,
+            .core_ranges =
+                tt::tt_metal::CoreRangeSet(tt::tt_metal::CoreRange(worker_logical_core, worker_logical_core)),
+            .initial_value = 0});
+        return id;
+    };
+
+    constexpr auto num_rt_args = 17;
+    worker_rt_args.reserve(num_rt_args);
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_connection_valid));
+    worker_rt_args.push_back(static_cast<uint32_t>(is_termination_master));
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_virtual_core.x));
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_virtual_core.y));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_channel_base_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_connection_info_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(static_cast<uint32_t>(
+        mux_kernel_config.get_connection_handshake_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_flow_control_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_buffer_index_address(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(
+        static_cast<uint32_t>(mux_kernel_config.get_channel_credits_stream_id(channel_type, worker_per_direction_id)));
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(alloc_sem());
+    worker_rt_args.push_back(static_cast<uint32_t>(termination_master_virtual_core.x));
+    worker_rt_args.push_back(static_cast<uint32_t>(termination_master_virtual_core.y));
+}
+
 }  // namespace ttnn::experimental::ccl

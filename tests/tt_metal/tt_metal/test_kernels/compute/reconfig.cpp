@@ -9,7 +9,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
-#include "experimental/circular_buffer.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
@@ -21,21 +21,21 @@ void kernel_main() {
     constexpr auto cb_out0 = tt::CBIndex::c_16;  // Fp32
     constexpr auto cb_out1 = tt::CBIndex::c_17;  // Bfp8_b
 
-    experimental::CircularBuffer cbin0(tt::CBIndex::c_0);
-    experimental::CircularBuffer cbin1(tt::CBIndex::c_1);
-    experimental::CircularBuffer cbin2(tt::CBIndex::c_2);
-    experimental::CircularBuffer cbout0(tt::CBIndex::c_16);
-    experimental::CircularBuffer cbout1(tt::CBIndex::c_17);
+    CircularBuffer cbin0(tt::CBIndex::c_0);
+    CircularBuffer cbin1(tt::CBIndex::c_1);
+    CircularBuffer cbin2(tt::CBIndex::c_2);
+    CircularBuffer cbout0(tt::CBIndex::c_16);
+    CircularBuffer cbout1(tt::CBIndex::c_17);
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    binary_tiles_init<false, ELWADD>(cb_in0, cb_in1);
+    binary_tiles_init<false, EltwiseBinaryType::ELWADD>(cb_in0, cb_in1);
     for (uint32_t block = 0; block < num_tiles; ++block) {
         cbin0.wait_front(ublock_size_tiles);
         cbin1.wait_front(ublock_size_tiles);
         cbout0.reserve_back(ublock_size_tiles);
         cbout1.reserve_back(ublock_size_tiles);
 
-        acquire_dst();
+        tile_regs_acquire();
 
         // ------------------------- Copy to DEST -----------------------------
 
@@ -86,6 +86,9 @@ void kernel_main() {
             add_tiles(cb_in1, cb_in0, i, i, i);
         }
 
+        tile_regs_commit();
+        tile_regs_wait();
+
         // ----------------------- Pack to 2 outs -----------------------------
 
         // Reconfig for L1 accumulation with old calc values
@@ -106,7 +109,7 @@ void kernel_main() {
         pack_reconfig_l1_acc(false);
 
         pack_tile_block(0, cb_out1, ublock_size_tiles);
-        release_dst();
+        tile_regs_release();
 
         cbin0.pop_front(ublock_size_tiles);
         cbin1.pop_front(ublock_size_tiles);
