@@ -13,8 +13,8 @@ on-device-sampling crossover sweep (≥8-device meshes are where on-device top-k
 
 **Workload:** performance tests prefill each prompt at its natural length (TTTv1
 ``preprocess_inputs_prefill`` semantics; these sample prompts are ~90-125 tokens -> 128
-prefill bucket) + 200 decode iterations. Accuracy / teacher-forcing uses 511 continuation
-tokens. See ``generate_controlled_refpt.py``.
+prefill bucket) + 200 decode iterations. Accuracy / teacher-forcing scores the model
+against the committed ``.refpt`` continuation tokens.
 
 Usage::
 
@@ -33,11 +33,10 @@ Usage::
 LazyWeight tensor cache: ``TT_CACHE_PATH/<device_name>`` when set, otherwise
 ``model_cache/<HF_MODEL>/<device_name>`` under the current working directory.
 
-Reference artifact (``.refpt``): use ``generate_controlled_refpt.py`` to produce a
-metadata-rich ``.refpt`` with ``prompt_len=512`` before running the accuracy test.
-The legacy TTTv1 artifact at ``models/tt_transformers/tests/reference_outputs/`` may
-lack ``prompt_len`` metadata and its intrinsic top-1 ceiling may be below PERF.md
-thresholds. See the reference-sanity guide.
+Reference artifact (``.refpt``): the accuracy test gates against the committed book
+reference at ``models/tt_transformers/tests/reference_outputs/<basename(HF_MODEL)>.refpt``
+(ground-truth real-text targets, PERF.md-comparable). The loader supports both the
+legacy half-split format and a metadata-rich format carrying ``prompt_len``.
 """
 
 import json
@@ -180,13 +179,13 @@ def lazy_weight_cache_dir_for_demo(mesh_device: ttnn.MeshDevice, hf_model_id: st
 def load_reference_data(hf_model_id: str):
     """Load reference tensors and optional metadata from ``.refpt``.
 
-    Supports both the metadata-rich format (``prompt_len`` + ``metadata`` keys)
-    produced by ``generate_controlled_refpt.py`` and the legacy half-split format.
+    Supports both the metadata-rich format (``prompt_len`` + ``metadata`` keys) and
+    the legacy half-split book format.
     """
     name = hf_model_id.strip("/").split("/")[-1]
     ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
-        pytest.skip(f"Reference file not found: {ref_path}. Run generate_controlled_refpt.py first.")
+        pytest.skip(f"Reference file not found: {ref_path}")
 
     ref_data = torch.load(ref_path, map_location="cpu", weights_only=False)
     reference_tokens = ref_data["reference_tokens"]
@@ -381,7 +380,6 @@ def _run_token_accuracy(model: Llama32_3BTransformer1D, mesh_device, expected):
     """Teacher-forcing token accuracy vs ``.refpt``."""
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-3B-Instruct")
     reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(hf_model)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
 
     if reference_tokens.dim() > 1:
         reference_tokens = reference_tokens.squeeze()
@@ -392,10 +390,7 @@ def _run_token_accuracy(model: Llama32_3BTransformer1D, mesh_device, expected):
         logger.info(f"Using metadata prompt_len={prompt_len}")
     else:
         prompt_len = len(reference_tokens) // 2
-        logger.warning(
-            f"Reference missing prompt_len metadata; legacy half-split={prompt_len}. "
-            "Run generate_controlled_refpt.py for a PERF.md-aligned .refpt."
-        )
+        logger.info(f"Reference missing prompt_len metadata; using legacy half-split={prompt_len}.")
 
     if metadata:
         logger.info(
