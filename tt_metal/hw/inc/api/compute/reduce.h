@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include "api/compute/common.h"
 #include "api/compute/sentinel/compute_kernel_sentinel.h"
 #include "tensor_shape.h"
@@ -62,9 +63,10 @@ namespace ckernel {
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-#ifdef ARCH_BLACKHOLE
-    // BH REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
+ALWI void reduce_init(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
+#ifndef ARCH_QUASAR
+    // REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
     // Reconfig formats to match: SrcA=scaler format, SrcB=data
     constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
     if constexpr (swap_operands) {
@@ -73,14 +75,11 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t 
     } else {
         state_configure(icb, icb_scaler, ocb, call_line);
     }
-#else
-    state_configure(icb, icb_scaler, ocb, call_line);
-#endif
-#ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, enforce_fp32_accumulation>(
         icb, icb_scaler)));
 #else
+    state_configure(icb, icb_scaler, ocb, call_line);
     UNPACK((llk_unpack_AB_reduce_init<reduce_dim>(icb, icb_scaler)));
     MATH((llk_math_reduce_init<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY>(icb, icb_scaler)));
 #endif
@@ -104,7 +103,7 @@ ALWI void reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t 
  */
 // clang-format on
 template <bool enforce_fp32_accumulation = false>
-ALWI void reduce_uninit(uint32_t icb = 0) {
+ALWI void reduce_uninit(std::uint32_t icb = 0) {
 #ifndef ARCH_QUASAR
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit<enforce_fp32_accumulation>()));
@@ -154,7 +153,8 @@ ALWI void reduce_uninit(uint32_t icb = 0) {
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
+ALWI void reduce_tile(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         icb, icb_scaler, idst)));
@@ -194,14 +194,14 @@ ALWI void reduce_tile(uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
+ALWI void reduce_tile_math(std::uint32_t idst, std::uint32_t num_faces = 4) {
 #ifndef ARCH_QUASAR
     ASSERT(num_faces > 0 && num_faces <= MAX_NUM_FACES);
     const ckernel::TensorShape tensor_shape = {
         MAX_FACE_R_DIM,
         MAX_FACE_C_DIM,
-        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(1) : MAX_NUM_FACES_R_DIM,
-        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(1) : MAX_NUM_FACES_R_DIM,
+        (num_faces <= MAX_NUM_FACES_C_DIM) ? static_cast<std::uint8_t>(num_faces) : MAX_NUM_FACES_C_DIM};
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, tensor_shape)));
 #else
@@ -223,7 +223,7 @@ ALWI void reduce_tile_math(uint32_t idst, uint32_t num_faces = 4) {
  */
 // clang-format on
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_tile_math(uint32_t idst, const ckernel::TensorShape& tensor_shape) {
+ALWI void reduce_tile_math(std::uint32_t idst, const ckernel::TensorShape& tensor_shape) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, MATH_FIDELITY, false, enforce_fp32_accumulation>(
         idst, tensor_shape)));
