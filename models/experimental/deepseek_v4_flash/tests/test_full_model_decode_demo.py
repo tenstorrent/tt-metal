@@ -33,11 +33,9 @@ from loguru import logger
 
 import ttnn
 from models.experimental.deepseek_v4_flash.encoding_dsv4 import render_message
-from models.experimental.deepseek_v4_flash.tt.deepseek_v4_flash import (
-    DeepSeekV4Model,
-    Linear,
-    WeightCache,
-)
+from models.experimental.deepseek_v4_flash.tt.layers import Linear
+from models.experimental.deepseek_v4_flash.tt.model import DeepSeekV4Model
+from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     DeepseekV4WeightLoader,
@@ -94,17 +92,10 @@ def _build_rope(config, max_seq: int) -> dict:
     return rope
 
 
-@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
-@pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + many decode steps
-@torch.no_grad()
-@pytest.mark.parametrize(
-    "device_params",
-    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D})],
-    indirect=["device_params"],
-    ids=["fabric_2d"],
-)
-@pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
-def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
+def _build_and_prefill(mesh_device, text: str):
+    """Build the full ttnn model, prepare the static traced-decode buffers, and
+    prefill ``text`` one token at a time. Returns the populated state shared by
+    the decode demo and the max-perf measurement tests."""
     from transformers import AutoTokenizer
     from transformers.models.deepseek_v4.configuration_deepseek_v4 import DeepseekV4Config
 
@@ -115,7 +106,6 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
 
     max_new_tokens = int(os.environ.get("DEEPSEEK_V4_MAX_NEW_TOKENS", "1024"))
     pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else config.eos_token_id
-    eos_id = config.eos_token_id
 
     # Wrap the user input in the V4 chat template, tokenize, and build the RoPE
     # tables for the longest sequence we might decode (prompt + new tokens).
@@ -179,13 +169,46 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
             hidden = model.decode(prompt_ids[pos], pos, rope)  # [1, 1, D]
             logits = ttnn.to_torch(lm_head(hidden)).reshape(1, -1).float()
         next_id = int(logits[0].argmax().item())
-    generated: list[int] = [next_id]
     logger.info(f"prefill ({real_len} tokens) -> token id {next_id} {tokenizer.decode([next_id])!r}")
+
+    return {
+        "model": model,
+        "lm_head": lm_head,
+        "tokenizer": tokenizer,
+        "config": config,
+        "rope": rope,
+        "prompt_ids": prompt_ids,
+        "real_len": real_len,
+        "max_seq": max_seq,
+        "max_new_tokens": max_new_tokens,
+        "eos_id": config.eos_token_id,
+        "next_id": next_id,
+        "traced": traced,
+    }
+
+
+@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + many decode steps
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+@pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
+def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
+    import time
+
+    state = _build_and_prefill(mesh_device, text)
+    model, lm_head, tokenizer = state["model"], state["lm_head"], state["tokenizer"]
+    rope, prompt_ids, real_len = state["rope"], state["prompt_ids"], state["real_len"]
+    max_seq, max_new_tokens, eos_id = state["max_seq"], state["max_new_tokens"], state["eos_id"]
+    traced, next_id = state["traced"], state["next_id"]
+    generated: list[int] = [next_id]
 
     # Each step feeds the previously generated token at its absolute position and
     # reads back the single-token logits (no recompute over the prior context).
-    import time
-
     decode_tokens = 0
     decode_time = 0.0
     for step in range(1, max_new_tokens):
@@ -227,3 +250,89 @@ def test_full_model_decode_demo(mesh_device, reset_seeds, text: str) -> None:
     assert generated, "no tokens were generated"
     logger.info(f"PROMPT    : {tokenizer.decode(prompt_ids)!r}")
     logger.info(f"GENERATED : {tokenizer.decode(generated)!r}  ({len(generated)} tokens)")
+
+
+@pytest.mark.skip(reason="perf benchmark; run explicitly with DEEPSEEK_V4_PERF_ITERS set")
+@pytest.mark.skipif(not _checkpoint_available(), reason=f"V4-Flash checkpoint not found under {_DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + trace capture
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+@pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
+def test_full_model_decode_max_perf(mesh_device, reset_seeds, text: str) -> None:
+    """Measure the traced-decode throughput ceiling.
+
+    Replays the captured trace back-to-back with a *fixed* input at a fixed
+    position, never reading the output. This drops the autoregressive dependency
+    (host argmax + device->host sync per step) so the device runs the trace
+    uninterrupted. Skipped by default; enable by setting ``DEEPSEEK_V4_PERF_ITERS``.
+    """
+    import time
+
+    state = _build_and_prefill(mesh_device, text)
+    model, real_len, next_id, traced = state["model"], state["real_len"], state["next_id"], state["traced"]
+    assert traced, "max-perf measurement requires the traced decode path"
+
+    perf_iters = int(os.environ.get("DEEPSEEK_V4_PERF_ITERS", "100"))
+    fixed_pos = real_len  # any valid in-range position; correctness is irrelevant here
+    model._set_step_inputs(next_id, fixed_pos)  # write the (fixed) inputs once
+    if not model._traced_captured:
+        model._capture_traces()
+
+    def _replay() -> None:
+        for sm in model.submeshes_io:
+            ttnn.execute_trace(sm["device"], sm["tid"], cq_id=0, blocking=False)
+
+    def _sync() -> None:
+        for sm in model.submeshes_io:
+            ttnn.synchronize_device(sm["device"])
+
+    _replay()  # warmup
+    _sync()
+    t0 = time.perf_counter()
+    for _ in range(perf_iters):
+        _replay()
+    _sync()  # single host sync after all replays
+    dt = time.perf_counter() - t0
+    logger.info(f"MAX PERF: {perf_iters / dt:.2f} tok/s ({perf_iters} iters in {dt:.3f}s)")
+
+
+@pytest.mark.skip("Test disabled by default")
+@pytest.mark.timeout(14400)  # heavy: bf4 conversion of every expert + trace capture
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "device_params",
+    [({"fabric_config": ttnn.FabricConfig.FABRIC_2D, "num_command_queues": 2})],
+    indirect=["device_params"],
+    ids=["fabric_2d"],
+)
+@pytest.mark.parametrize("text", (_DEFAULT_TEXT,))
+def test_full_model_decode_on_device_sampling(mesh_device, reset_seeds, text: str) -> None:
+    """Greedy (top-1) sampling done on device, fed back without going to host.
+
+    After prefill, runs a burst of decode steps where each step argmaxes the logits
+    on device and copies the sampled id straight back into the embedding input
+    buffer (no per-step device->host round trip). All sampled token ids are read
+    back to the host in a single transfer at the end.
+    """
+    import time
+
+    n_iters = int(os.environ.get("DEEPSEEK_V4_SAMPLE_ITERS", "25"))
+
+    state = _build_and_prefill(mesh_device, text)
+    model, tokenizer = state["model"], state["tokenizer"]
+    real_len, next_id, traced = state["real_len"], state["next_id"], state["traced"]
+    assert traced, "on-device sampling requires the traced decode path"
+
+    t0 = time.perf_counter()
+    tokens = model.decode_sampled_burst(next_id, real_len, n_iters)  # single host transfer at the end
+    dt = time.perf_counter() - t0
+
+    assert len(tokens) == n_iters
+    logger.info(f"on-device sampling: {n_iters} tokens in {dt:.3f}s ({n_iters / dt:.2f} tok/s)")
+    logger.info(f"SAMPLED IDS : {tokens}")
+    logger.info(f"SAMPLED TEXT: {tokenizer.decode(tokens)!r}")

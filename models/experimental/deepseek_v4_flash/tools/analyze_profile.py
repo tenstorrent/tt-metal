@@ -6,7 +6,7 @@
 The Tracy/ttnn op profile is a *flat* list of device operations with no notion of
 which Python module (attention, MoE, norm, ...) issued them, so this tool attributes
 each op back to a ``DeepSeekV4DecoderLayer`` sub-module
-(``models/experimental/deepseek_v4_flash/tt/deepseek_v4_flash.py``) using an ordered
+(``models/experimental/deepseek_v4_flash/tt/decoder_layer.py``) using an ordered
 set of heuristic rules over the op code + tensor shapes.
 
 Because several modules reuse the same primitive (e.g. ``MatmulDeviceOperation`` is
