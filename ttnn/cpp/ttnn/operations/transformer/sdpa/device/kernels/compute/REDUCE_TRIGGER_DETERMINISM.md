@@ -329,3 +329,125 @@ columns independently) — high effort/risk, low reward; deferred. For a genuine
 - Perf A/B (§9), and the optional no-mask fast path that keeps the overlap.
 - The NOP repro scaffolding is kept (gated off) for regression — remove it before final merge
   if undesired.
+
+---
+
+## 11. Adversarial review of the fix (Pavle's objection) — verdict + Phase-2 mandate
+
+A reviewer (Pavle) challenged both the diagnosis and the fix. A multi-agent investigation
+(5 lenses → red/blue debate → judge, conf 0.8) ruled on each claim against the actual code:
+
+| # | Claim | Verdict | Why (code-grounded) |
+|---|-------|---------|---------------------|
+| 1 | Sync only needed on the **last** MOP half (early columns already committed) | **WRONG** | Geometry premise is right — `run()#1` reads the *early* columns (LLK `outerloop=block_ct_dim/2`, Z-increment, single counter reset, no reset between halves). But the conclusion fails: the producer is **T2 pack**, the trailing stage, with no happens-before to the early-column read; deleting the first-half wait reverts to the old "run first half immediately" shape, and the re-anchored post fires *later* (after the whole mask), **widening** the stale window. Also the in-place mask rewrites those low columns *after* the QK packs, so "early columns committed" cannot hold on any masked (production) config. |
+| 2 | Math-thread serialization (MM math before reduce math on T1) is a backstop | **WRONG** | Wrong thread pair. Hazard is **T2 pack → T0 unpack** on L1. T1 in-order math orders neither the T0 L1 read nor the T2 L1 write; the three threads' frontends are independent and sync only on CB flags / T6 sems. |
+| 3 | The fix is just timing perturbation, not a real barrier | **WRONG** | The fix installs genuine ordering ops: release = `STALLWAIT(STALL_SYNC,STALL_PACK)+SEMPOST` (drains the pack engine; only emitted when `WaitRes!=NONE` — the *old* `p_stall::NONE` post emitted **no** drain), acquire = `SEMWAIT/STALL_ON_ZERO`. Corroborated by the wait_front isolation (count-based barrier flips FAIL→PASS). |
+| 4 | Cleaner to **fuse mm+reduce in the LLK** (kill the cb_qkt_im L1 round-trip) | **HALF / RIGHT DIRECTION** | Correct long-term *performance* play (row-max is associative → foldable per sub-block), but **not** a refutation of the current fix and **not** a drop-in: the in-place mask must run on the full score row between QK and reduce, and `cb_qkt_im` is read 3× (reduce / sub_exp / @V), so fusing mm+reduce alone still needs the L1 materialization. |
+
+**Bottom line:** the shipped fix is **correct** and minimal; the added first-half wait is
+**load-bearing**; it is **not** timing perturbation. Pavle is wrong that it's incorrect — but
+**right that it costs perf**: it concedes the first-half/pack overlap on every masked production
+path (§9). That perf cost is the real open issue and is what Phase 2 must close.
+
+### One honest residual (the only place Pavle isn't clearly wrong)
+For a **no-mask** config (`uses_lightweight_mask == false`), with the post draining the whole
+pack engine, the second-half wait *might* also order the first-half columns — so the first-half
+wait *could* be redundant there. All masked production paths still need it. (Isolated by the
+"no-mask second-half-wait-only" experiment below.)
+
+### Decisive experiments (to run on HW — settle remaining uncertainty)
+1. **First-half wait load-bearing?** Keep the re-anchored `STALL_PACK` post, revert *only* the LLK
+   to second-half-wait-only (drop the first-half wait). Run determinism (+ PACK-NOP repro, P=4096)
+   with/without LLK asserts. **Predict: FAILS** (ND returns) → first-half wait load-bearing, claim #1 wrong.
+2. **Post re-anchor load-bearing?** Keep both LLK waits, revert the post to old per-last-subblock
+   `p_stall::NONE`. **Predict: FAILS** → STALL_PACK re-anchor independently necessary.
+3. **No-mask isolation:** on `uses_lightweight_mask==false`, second-half-wait-only + re-anchored post
+   → isolates whether the first-half wait is redundant absent the mask.
+4. **Perf A/B:** shipped fix vs pre-fix (parent `26fdd6e5a5a^`) on ring-MLA masked configs → quantify
+   the conceded overlap loss; bounds the value of the Phase-2 fused work.
+
+### Phase-2 mandate (chosen direction)
+Keep the proven barrier for **correctness**; recover the conceded perf so the single-chip/QB
+`SDPA_PERF_CHECKS` gates (±1% band) pass at-or-above main. Candidate mechanisms, cheapest→biggest:
+(a) **no-mask fast path** keeps the overlap where safe; (b) **column-phased mask split** (signal
+first-half columns independently); (c) **fused mm+reduce LLK primitive** (Pavle) — biggest, recovers
+all paths. Phase 2 converges on the safest mechanism that meets the perf gate.
+
+---
+
+## 12. Measured perf A/B (the owed §9 numbers) — QuietBox ring4, BH
+
+Clean A/B isolating the fix (revert the 3 correctness files: BH+WH LLK + `compute_streaming.hpp`;
+keep `ring_joint_sdpa.cpp` at HEAD so the NOP repro stays OFF). `SDPA_PERF_CHECKS=1`, single samples:
+
+| config (ring4) | pre-fix baseline | with fix | Δ util | Δ wall | perf gate (±1%) |
+|---|---|---|---|---|---|
+| `wan2_2_1xGLX` q288/k512 (**non-causal, no mask**) | 68.60% / 7.883 ms | 67.06% / 8.063 ms | **−1.54 pp** | **+2.3%** | pre-fix PASS → fix **FAIL** |
+| `mla_100k` q160/k320 (causal, mask iter0 only) | 62.85% / 4.812 ms | 62.49% / 4.840 ms | −0.36 pp | +0.6% | pre-fix PASS → fix **FAIL (marginal/noise)** |
+| ring_mla < separate-V | 4.674 < 4.804 ms ✓ | 4.720 < 4.850 ms ✓ | — | — | both PASS |
+
+Also re-confirmed: determinism+asserts **PASS** with fix (21 s); **FAIL** unfixed with **NOP OFF**
+(13 s) — i.e. the natural race reproduces without the artificial NOP amplifier.
+
+**Conclusion:** the fix is a real perf regression on the perf gate. The dominant hit (`wan`,
+−1.54 pp) is a **no-mask** config, so it is **pure lost pack↔reduce overlap** — the mask is not
+even involved there. Recovering the first-half/pack overlap on no-mask iterations (and the
+non-masked ring iterations of causal configs) is the highest-value, lowest-surface fix. This is
+exactly the Phase-2 mandate (§11).
+
+---
+
+## 13. Phase-2 solution (chosen + validated design) — two-phase reduce_trigger handshake
+
+**Goal:** recover the §12 perf loss (esp. wan −1.54pp, a no-mask config) WITHOUT reopening the race.
+
+**Why the obvious options fail:**
+- *Single-semaphore two-phase* (architect's first idea): impossible. FPU_SFPU is `SEMINIT(0,1)`, `wait_on_zero` is non-consuming, one `get` at uninit. Once any post sets the saturating token, ALL later non-consuming waits (run#2, every row) pass → second half loses its barrier.
+- *Wait-elision on no-mask (mechanism a)*: `run#1(no wait); wait; run#2` is **exactly the pre-fix LLK shape**; run#1 is unguarded → reopens #47911 (pre-fix measured FAIL). Ruled out by construction.
+
+**Chosen: TWO SEMAPHORES (two-phase), no-mask path only.**
+- Borrow **`UNPACK_MATH_DONE` (T6 sem 6)** as `PHASE1_SEM` — the only T6 index with **zero use** in the SDPA compute call graph AND not firmware-inited (firmware inits 1,2,4,7). Precedent: DeepSeek `SFPU_FPU` alias. **PACK_DONE(4) rejected**: its Phase-2 poster (@V region) can race across the q_subblock boundary and prematurely satisfy a phase-1 wait.
+- **Producer (PACK):** on the no-mask overlap path, post `PHASE1_SEM` (STALL_PACK) inside the kt loop right after subblock `first_half_last_sb = (active_Sk/2 − 1) / actual_sbw` packs — the subblock that *covers* the last first-half column. Exact half-boundary alignment is **not** required: committing a superset of `[0, active_Sk/2)` is safe (run#1's columns are a subset), so no `active_Sk % (2*actual_sbw)` constraint is imposed. Keep the existing `FPU_SFPU` post after `cb_push_back` (gates run#2 = late columns).
+- **Consumer (LLK overlap branch):** `wait(PHASE1_SEM); run#1; wait(FPU_SFPU); run#2`. Non-consuming waits; **one `get` each at uninit, the phase-1 get CONDITIONAL on overlap** (keeps balance for any group_size; masked path never posts/waits/gets PHASE1).
+- **Gate:** `overlap_first_half = ENABLE_REDUCE_FIRST_HALF_OVERLAP && reduce_trigger && no_mask_this_iter`, where `no_mask_this_iter` is hoisted from the existing mask branches (`use_provided_mask` / `uses_lightweight_mask` / `should_apply_lightweight_mask`, incl. straddle) as the single source of truth. `can_reduce_trigger` already guarantees `kt_num_full_subblocks ≥ 2` so a second half always exists. Masked → fall back **byte-identical** to the committed barrier.
+
+**Determinism safety (by construction):** `t6_semaphore_post<STALL_PACK>` emits `STALLWAIT(STALL_SYNC,STALL_PACK)` before `SEMPOST`, so the phase-1 token isn't observable until the first-half packs commit to L1 — same drain argument as the committed full-row fix, applied to the first half. run#2 unchanged. Masked iters execute the identical committed instruction stream.
+
+**Files:** LLK `_llk_unpack_AB_reduce_block_max_row_runtime_` + `_uninit_` (BH+WH); llk_api wrappers (BH+WH); `reduce_custom.h` (runtime + uninit); `compute_streaming.hpp` (init seminit, kt-loop phase-1 post + predicate, `reduce_c_row_group` plumbing). **Build gotcha (confirmed by compile failure):** `TTI_SEMWAIT`/`SEMPOST`/`SEMINIT` encode the semaphore as an **immediate**, so run#1's semaphore must be a compile-time constant — the LLK selects it with an `if (overlap_first_half) wait(UNPACK_MATH_DONE) else wait(FPU_SFPU)` literal branch, **not** a runtime `first_sem` variable (a runtime select fails with "impossible constraint in 'asm'"). A constexpr master switch `ENABLE_REDUCE_FIRST_HALF_OVERLAP` gates the whole thing for easy A/B / one-line rollback.
+
+**Validation order (Phase 3 loop):** determinism+asserts on masked mla (must PASS, must stay byte-identical) → no-mask determinism + NOP repro (P=4096) PASS → group_size>1 no-hang → perf gate ≥ pre-fix → accuracy. Rollback: if any determinism gate fails, set the master switch off (= committed fix) and accept the regression.
+
+---
+
+## 14. Phase-2 validation results (QuietBox ring4, BH) — two-phase fix
+
+Implemented (UNPACK_MATH_DONE phase-1 token, `ENABLE_REDUCE_FIRST_HALF_OVERLAP=true`, no-mask path).
+Build note: `TTI_SEMWAIT` encodes the semaphore as an **immediate**, so the run()#1 semaphore must
+be a compile-time constant — the LLK branches with literal sem constants (a runtime sem select fails
+to compile with "impossible constraint in 'asm'").
+
+**Goal 1 — determinism (must PASS with fix, FAIL without):**
+- two-phase + `TT_METAL_LLK_ASSERTS=1`, `ring_mla-mla_100k-q160-k320` (exercises masked iter0 barrier
+  AND no-mask iters overlap): **PASS** (21 s), reproduced 3× (no flakiness).
+- two-phase + asserts + **NOP repro `SDPA_NOP_P=4096`** (pack-thread delay, the decisive race-widener):
+  **PASS** — proves the phase-1 STALL_PACK post truly orders run()#1's first-half read.
+- unfixed (revert the 3 correctness files), asserts, **NOP off**: **FAIL** (natural race).
+
+**Goal 2 — perf (must be unchanged-or-better vs main; ±1% gate):**
+
+| config (ring4) | pre-fix (main) | committed single-token fix | **two-phase** | gate |
+|---|---|---|---|---|
+| `wan2_2_1xGLX` q288/k512 (no mask) | 68.60% / 7.883 ms | 67.06% (−1.54pp) ❌ | **68.56% / 7.887 ms** ✓ | [68.21,69.59] |
+| `mla_100k` q160/k320 (causal) | 62.85% / 4.812 ms | 62.49% (−0.36pp) ❌ | **62.76% / 4.820 ms** ✓ | [62.57,63.83] |
+| ring_mla < separate-V | 4.674<4.804 | 4.720<4.850 | **4.690<4.809 ms** ✓ | — |
+
+Two-phase recovers **+1.50pp on wan** (back to pre-fix within noise) and **+0.27pp on mla**; all perf
+gates PASS. The recovery also confirms the overlap path engages at runtime.
+
+**Goal 3 — accuracy:** `test_ring_mla_accuracy` + `test_ring_joint_attention_sdpa_accuracy` (wan2_2 1x/4x,
+videogen ×3, mla_100k, mla_128k): **8/8 PASS**.
+
+**Verdict:** the two-phase handshake keeps determinism fixed (Pavle's correctness objection answered:
+the barrier is moved earlier, not removed) AND closes the perf regression he flagged. WH mirror is
+code-identical (overlap branch + conditional get); WH CI still owed. Rollback is one line
+(`ENABLE_REDUCE_FIRST_HALF_OVERLAP=false` → committed single-token fix).

@@ -273,12 +273,23 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
     return use_blocked_pack_width;
 }
 
+// #47911 Phase-2 master switch for the no-mask two-phase reduce_trigger overlap (perf recovery).
+// true = run()#1 overlaps the second-half pack via the PHASE-1 token (UNPACK_MATH_DONE) on no-mask,
+// half-aligned iterations. Set false to fall back to the committed single-token barrier everywhere
+// (byte-identical to commit 26fdd6e5a5a) for A/B and rollback. Compiles out when false.
+constexpr bool ENABLE_REDUCE_FIRST_HALF_OVERLAP = true;
+
 ALWI void init_sdpa_streaming_semaphores() {
     // reduce_trigger splits QK row-max reduce across a PACK->UNPACK handshake:
     // PACK posts FPU_SFPU after QK writes are visible, then UNPACK waits before
     // running the second half of the reduce MOP. Default firmware init covers
     // common math/pack semaphores, but not FPU_SFPU, so initialize it here.
     PACK((t6_semaphore_init(semaphore::FPU_SFPU, 0, 1)));
+    // #47911 Phase-2: borrow UNPACK_MATH_DONE as the reduce_trigger PHASE-1 token (no-mask overlap
+    // path). It has zero other use in the SDPA compute call graph and is not firmware-inited, so we
+    // own its lifetime. PACK posts it in-loop once the first-half QK columns are committed, letting
+    // the first-half row-max overlap the second-half pack. Init here to match the FPU_SFPU poster.
+    PACK((t6_semaphore_init(semaphore::UNPACK_MATH_DONE, 0, 1)));
 }
 
 #if defined(TRISC_MATH) && defined(ARCH_WORMHOLE)
@@ -459,7 +470,8 @@ void reduce_c_row_group(
     uint32_t sbh,
     uint32_t reduce_cols,
     bool respect_trigger = false,
-    uint32_t mirror_cb = INVALID_CB) {
+    uint32_t mirror_cb = INVALID_CB,
+    bool overlap_first_half = false) {
     const uint32_t group_size = sbh;
     const uint32_t row_start = row_group_index * group_size;
 
@@ -491,9 +503,9 @@ void reduce_c_row_group(
     reduce_block_max_row_init_runtime(out_cb, reduce_cols, respect_trigger);
     for (uint32_t i = 0; i < group_size; i++) {
         const uint32_t input_tile_start = (row_start + i) * row_stride;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger, overlap_first_half);
     }
-    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
+    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger, overlap_first_half);
 
     tile_regs_commit();
     tile_regs_wait();
@@ -1311,6 +1323,24 @@ static void sdpa_inner_loop_step(
         // so blocked_matmul_and_pack must reconfigure when q_subblock > 0.
         // When q_subblock == 0, no sub_exp → global stays set → skip there too.
         configure_row_pack_width(cb_qkt_im, actual_sbw);
+
+        // #47911 Phase-2: hoist the mask predicates (single source of truth — reused by the mask
+        // branch below) and decide whether this row group takes the no-mask two-phase reduce overlap.
+        // Overlap requires only: reduce_trigger on, and NO in-place mask stamped this iter (else the
+        // mask would rewrite the first-half columns AFTER the PHASE-1 post). can_reduce_trigger
+        // already guarantees kt_num_full_subblocks >= 2, so a second half always exists to overlap.
+        constexpr bool uses_lightweight_mask =
+            ring_mode || is_causal_sdpa || use_padded_mask || sliding_window_size > 0;
+        const bool should_apply_lightweight_mask = kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) ||
+                                                   apply_sliding_window || (apply_mask && lw_partial_tile_idx > 0);
+        const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
+        const bool overlap_first_half = ENABLE_REDUCE_FIRST_HALF_OVERLAP && reduce_trigger && no_mask_this_iter;
+        // run()#1 reads columns [0, active_Sk/2) (MOP outerloop = block_ct_dim/2). Post PHASE-1 after
+        // the subblock that COVERS the last first-half column active_Sk/2-1; exact half-boundary
+        // alignment is NOT required — posting after a subblock that commits a superset of the first
+        // half is still safe (run()#1's columns are a subset of what is committed).
+        const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
+
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
                 uint32_t prev_q_subblock = q_subblock - 1;
@@ -1347,6 +1377,14 @@ static void sdpa_inner_loop_step(
                     in0_block_w,
                     kt_trigger_reduce,
                     /*skip_pack_configure=*/q_subblock == 0);
+                // #47911 Phase-2: PHASE-1 post. On the no-mask overlap path, signal that the first
+                // half [0, active_Sk/2) is committed the instant subblock first_half_last_sb packs,
+                // so the reduce's run()#1 starts while the packer fills the second half (recovers the
+                // overlap the single-token barrier gave up). STALL_PACK drains those L1 writes before
+                // the token retires (same drain guarantee as the FPU_SFPU post after push).
+                if (overlap_first_half && kt_subblock == first_half_last_sb) {
+                    PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::UNPACK_MATH_DONE)));
+                }
                 kt_index_offset += actual_sbw;
             }
         }
@@ -1358,8 +1396,7 @@ static void sdpa_inner_loop_step(
         // user mask supplies all masking itself (causal/sliding/padding baked in by the caller),
         // so exactly one of these branches is compiled. The only config that stamps nothing is plain
         // non-causal attention with no mask at all (uses_lightweight_mask == false).
-        constexpr bool uses_lightweight_mask =
-            ring_mode || is_causal_sdpa || use_padded_mask || sliding_window_size > 0;
+        // uses_lightweight_mask is hoisted above the kt loop (single source of truth, #47911 Phase-2).
         if constexpr (use_provided_mask) {
             // Dense user-provided mask: the full per-position mask, applied on every K chunk (no
             // chunk skipping); the user mask defines the visible region. begin_mask_l1_accumulate
@@ -1382,8 +1419,7 @@ static void sdpa_inner_loop_step(
         } else if constexpr (uses_lightweight_mask) {
             // Lightweight stamp: causal and/or padding masks. Active for ring, causal non-ring, or
             // non-causal padded with a partial-tile mask (single-chip streaming partial-K case).
-            const bool should_apply_lightweight_mask = kv_pad_rotation_enabled || (is_causal_sdpa && apply_causal) ||
-                                                       apply_sliding_window || (apply_mask && lw_partial_tile_idx > 0);
+            // should_apply_lightweight_mask is hoisted above the kt loop (single source of truth).
             if (should_apply_lightweight_mask) {
                 begin_mask_l1_accumulate<false>(cb_qkt_im, cb_mask_in);
                 apply_lightweight_mask_streaming<
@@ -1447,7 +1483,8 @@ static void sdpa_inner_loop_step(
                 qkt_subblock_h,
                 active_Sk,
                 reduce_trigger,
-                save_max_cb);
+                save_max_cb,
+                overlap_first_half);
             CircularBuffer(cur.max).push_back(qkt_subblock_h);
             if (save_max_cb != INVALID_CB) {
                 CircularBuffer(save_max_cb).push_back(qkt_subblock_h);

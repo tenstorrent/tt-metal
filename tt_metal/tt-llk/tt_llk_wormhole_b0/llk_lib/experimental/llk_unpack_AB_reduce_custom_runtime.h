@@ -98,7 +98,8 @@ inline void _llk_unpack_AB_reduce_block_max_row_init_runtime_(std::uint32_t bloc
  * This function should NOT be used as a substitute for the native _llk_unpack_AB_ LLK.
  * Use the standard _llk_unpack_AB_ in a loop for general-purpose block reduction operations.
  */
-inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t address_a, const std::uint32_t address_b, bool respect_trigger = false)
+inline void _llk_unpack_AB_reduce_block_max_row_runtime_(
+    const std::uint32_t address_a, const std::uint32_t address_b, bool respect_trigger = false, bool overlap_first_half = false)
 {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111); // reset counters
 
@@ -121,18 +122,30 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t add
 
     if (respect_trigger)
     {
-        // #47911: wait before BOTH MOP halves on a single sticky FPU_SFPU token. The producer now
-        // posts it once, after the QK pack + in-place mask + cb_push_back (see compute_streaming.hpp),
-        // so the token dominates every write to the columns this MOP reads. wait_on_zero is
-        // non-consuming, so one token gates both halves and every per-row reduce iteration; the lone
-        // decrement is the get in _uninit_. Previously the first half ran with no wait at all, which
-        // let the unpacker read score tiles the packer had not yet written (the race).
-        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
-        // MOP is programmed for half of block_ct_dim; run the first half.
+        // #47911 + Phase-2 perf recovery: two-phase reduce_trigger handshake. run()#1 reads the
+        // first-half columns [0, N/2); run()#2 reads [N/2, N) (MOP outerloop = block_ct_dim/2, single
+        // Z reset above, Z continues across the two run()s). Each half waits on a token its producer
+        // posts under STALL_PACK only after that half's columns are committed to L1, so neither half
+        // ever reads score tiles the packer has not yet written (the race).
+        //   overlap_first_half (no-mask, half-aligned path only): run()#1 gates on UNPACK_MATH_DONE,
+        //   which PACK posts in-loop the instant the first half is packed -> the first-half reduce
+        //   overlaps the second-half pack, recovering the perf the single-token barrier gave up.
+        //   Otherwise run()#1 gates on FPU_SFPU (committed barrier, byte-identical).
+        // run()#2 always gates on FPU_SFPU (posted after pack + in-place mask + cb_push_back).
+        // wait_on_zero is non-consuming, so one token gates all group_size rows; the lone decrements
+        // are the gets in _uninit_ (the phase-1 get is conditional on overlap_first_half).
+        // TTI_SEMWAIT encodes the semaphore as an immediate, so the index must be a compile-time
+        // constant — branch with literals (a runtime sem select fails to compile).
+        if (overlap_first_half)
+        {
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::UNPACK_MATH_DONE);
+        }
+        else
+        {
+            t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
+        }
         ckernel::ckernel_template::run();
-        // Same token still set (non-consuming wait) — gates the second half too.
         t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
-        // Run MOP again for the second half (Z counter continues from where first half stopped)
         ckernel::ckernel_template::run();
     }
     else
@@ -162,7 +175,7 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t add
  * This function should NOT be used as a substitute for native reduce unpacking cleanup.
  * Standard _llk_unpack_AB_reduce_init_ operations typically don't require explicit cleanup.
  */
-inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(bool respect_trigger = false)
+inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(bool respect_trigger = false, bool overlap_first_half = false)
 {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
     TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
@@ -170,5 +183,11 @@ inline void _llk_unpack_AB_reduce_block_max_row_uninit_runtime_(bool respect_tri
     if (respect_trigger)
     {
         t6_semaphore_get(semaphore::FPU_SFPU);
+        if (overlap_first_half)
+        {
+            // Balances the in-loop phase-1 post (UNPACK_MATH_DONE). Conditional so the masked /
+            // non-overlap path leaves this borrowed semaphore untouched at its init value.
+            t6_semaphore_get(semaphore::UNPACK_MATH_DONE);
+        }
     }
 }
