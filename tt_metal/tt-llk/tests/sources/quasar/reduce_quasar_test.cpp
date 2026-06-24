@@ -69,12 +69,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     DataFormat src_format = static_cast<DataFormat>(formats.math);
 
-    ckernel::TensorShape tensor_shape_A = {
-        .face_r_dim      = static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
-        .face_c_dim      = static_cast<std::uint8_t>(params.TEST_FACE_C_DIM),
-        .num_faces_r_dim = static_cast<std::uint8_t>(params.num_faces_r_dim_A),
-        .num_faces_c_dim = static_cast<std::uint8_t>(params.num_faces_c_dim_A),
-    };
+    const auto tensor_shape_A = tensor_shape_from_params(params);
+
     _llk_math_srcAB_hw_configure_<IMPLIED_MATH_FORMAT, is_fp32_dest_acc_en, false /* int32 dest */>(src_format, src_format);
     _llk_math_reduce_init_<POOL_TYPE, REDUCE_DIM, MATH_FIDELITY>(tensor_shape_A);
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
