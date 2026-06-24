@@ -39,6 +39,7 @@ permissions:
   actions: write
   id-token: write
   checks: read
+  workflows: write
 
 # =============================================================================
 # Default commit SHAs to ignore when analyzing version bumps.
