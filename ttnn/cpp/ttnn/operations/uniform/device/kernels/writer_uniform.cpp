@@ -72,4 +72,8 @@ void kernel_main() {
         noc.async_write_barrier();
 #endif
     }
+
+    // dst_cb is reserved once as a conversion-staging region (consumed only by direct NOC
+    // writes, never streamed to a consumer); commit the reservation so the CB is left balanced.
+    cb_dst.push_back(1);
 }
