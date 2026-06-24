@@ -38,7 +38,7 @@ enum class DataType {
     // WARNING: narrowly supported — Blackhole only, ROW-MAJOR only for now, used exclusively
     // by the DeepSeek V3 prefill combine and dispatch ops. Check op support before opting in.
     FP8_E4M3 = 8,
-    BOOL = 10,
+    BOOL = 10,  // 10 (not 9) to keep INVALID = 9 stable for existing serialized/ABI data
     INVALID = 9,
 };
 

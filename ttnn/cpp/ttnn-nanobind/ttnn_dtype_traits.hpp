@@ -123,12 +123,12 @@ struct py_to_ {
     constexpr static auto ttnn_DataType = DataType::INVALID;
 };
 
-// for some reason ttnn maps float16 to bfloat16
 template <>
 struct py_to_<DtypeID::BOOL> {
     constexpr static auto ttnn_DataType = DataType::BOOL;
 };
 
+// for some reason ttnn maps float16 to bfloat16
 template <>
 struct py_to_<DtypeID::FLOAT16> {
     constexpr static auto ttnn_DataType = DataType::BFLOAT16;

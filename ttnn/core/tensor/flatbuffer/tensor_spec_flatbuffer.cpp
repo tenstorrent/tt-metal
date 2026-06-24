@@ -49,6 +49,8 @@ flatbuffer::DataType to_flatbuffer(tt::tt_metal::DataType type) {
         case tt::tt_metal::DataType::UINT32: return flatbuffer::DataType::UInt32;
         case tt::tt_metal::DataType::BFLOAT8_B: return flatbuffer::DataType::BFloat8B;
         case tt::tt_metal::DataType::BFLOAT4_B: return flatbuffer::DataType::BFloat4B;
+        // BOOL shares UInt8 flatbuffer storage; the BOOL tag is not preserved across
+        // a serialize/deserialize round-trip (reads back as UINT8). Known limitation.
         case tt::tt_metal::DataType::BOOL:
         case tt::tt_metal::DataType::UINT8: return flatbuffer::DataType::UInt8;
         case tt::tt_metal::DataType::UINT16: return flatbuffer::DataType::UInt16;
