@@ -132,6 +132,15 @@ void RunTest(
                 DramConfig{.noc = tt_metal::NOC::NOC_0});
             break;
         }
+        case HalProgrammableCoreType::DISPATCH: {
+            const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+                log_info(LogTest, "Skipping: dispatch-engine programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            log_info(LogTest, "Skipping: watcher ringbuf test not yet supported on dispatch-engine cores.");
+            GTEST_SKIP();
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);

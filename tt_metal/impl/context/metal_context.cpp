@@ -243,6 +243,10 @@ void MetalContext::initialize(
         is_galaxy_cluster,
         /*are_fd_kernels_on_same_core=*/false,
         rtoptions());
+    if (get_cluster().arch() == tt::ARCH::QUASAR && hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<DispatchMemMap>(
+            CoreType::DISPATCH, num_hw_cqs, hal(), is_galaxy_cluster, are_fd_kernels_on_same_core, rtoptions());
+    }
     // Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());

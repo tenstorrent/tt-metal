@@ -5,18 +5,23 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+
+namespace tt::tt_metal::experimental::quasar {
+struct QuasarDataMovementConfig;
+}  // namespace tt::tt_metal::experimental::quasar
 
 struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
 class MetalEnvImpl;
+class Program;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::internal {
@@ -49,5 +54,13 @@ CoreType resolve_dispatch_core_type(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     const tt_metal::DispatchCoreConfig& dispatch_core_config);
+
+// Explicit DM pinning for dispatch-engine cq kernels (SD + FD).
+KernelHandle CreateDispatchEngineKernel(
+    Program& program,
+    const std::string& file_name,
+    const CoreCoord& core,
+    DataMovementProcessor dm_processor,
+    const experimental::quasar::QuasarDataMovementConfig& config);
 
 }  // namespace tt::tt_metal::internal

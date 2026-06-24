@@ -18,8 +18,10 @@ struct AllEthMailbox {
     EthFwMailbox mailbox[4];
 };
 
+dev_msgs::Factory create_tensix_dev_msgs_factory();
 HalCoreInfoType create_tensix_mem_map();
 HalCoreInfoType create_active_eth_mem_map();
 HalCoreInfoType create_idle_eth_mem_map();
+HalCoreInfoType create_dispatch_mem_map();
 
 }  // namespace tt::tt_metal::quasar
