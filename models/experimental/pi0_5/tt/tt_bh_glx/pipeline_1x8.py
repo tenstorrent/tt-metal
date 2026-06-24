@@ -345,6 +345,14 @@ class Pi0_5GLX1x8Pipeline:
             em[action_horizon:suffix_padded, :] = _MASK_VAL
         expert_mask_4d = em.unsqueeze(0).unsqueeze(0)
 
+        # PI0_ROPE_TABLES_L1=1 places suffix cos/sin in L1 (saves ~55 µs/denoise
+        # step = 0.27 ms/inference on 1×8 mesh — RoPE kernel reads tables on
+        # every call). SDPA mask MUST stay in DRAM (SDPA kernel hard-asserts).
+        # Tables are tiny: (1, 1, 32, 256) bf16 ≈ 16 KB × 2 = 32 KB / chip.
+        # Mirrors single-chip ttnn_pi0_5_model.py:507 and pipeline.py:253.
+        _rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
+        rope_mc = ttnn.L1_MEMORY_CONFIG if _rope_l1 else ttnn.DRAM_MEMORY_CONFIG
+
         def _up(host_t, mc=ttnn.DRAM_MEMORY_CONFIG):
             return ttnn.from_torch(
                 host_t.to(torch.bfloat16) if host_t.dtype != torch.bfloat16 else host_t,
@@ -354,7 +362,7 @@ class Pi0_5GLX1x8Pipeline:
                 memory_config=mc,
             )
 
-        return _up(suffix_cos_4d), _up(suffix_sin_4d), _up(expert_mask_4d)
+        return _up(suffix_cos_4d, rope_mc), _up(suffix_sin_4d, rope_mc), _up(expert_mask_4d)
 
     # ──────────── TIER A: host-side modulation precompute ──────────────
 
