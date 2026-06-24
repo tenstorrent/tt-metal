@@ -775,7 +775,7 @@ class resnet50:
             stride=[1, 1],
             padding=[0, 0, 0, 0],
             output_layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
 
         grid_size = (8, 4)
@@ -952,7 +952,7 @@ class resnet50:
             stride=[1, 1],
             padding=[0, 0, 0, 0],
             output_layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=ttnn.bfloat16,
         )
 
         grid_size = (8, 4)

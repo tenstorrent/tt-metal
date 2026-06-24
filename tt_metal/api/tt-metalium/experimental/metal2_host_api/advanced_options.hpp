@@ -43,19 +43,6 @@ using DFBSpecName = ttsl::StrongType<std::string, struct DFBSpecNameTag>;
 
 struct KernelAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
-    // Per-node thread count (Gen2)
-    ////////////////////////////////////////////////////////////////////////////////
-
-    // The default kernel threading is specified by KernelSpec::num_threads.
-    // However, you may override this on a per-node basis.
-    //
-    // NOTE: This feature is currently UNSUPPORTED!
-    //       (It's an open question if we EVER want to support it.)
-    //       It is included here just as a placeholder for use case feedback.
-    //       Attempting to use it will trigger a runtime error.
-    Table<Nodes, /* num_threads */ uint32_t> node_specific_thread_counts;
-
-    ////////////////////////////////////////////////////////////////////////////////
     // Enqueue-loop invariant kernel arguments
     ////////////////////////////////////////////////////////////////////////////////
 

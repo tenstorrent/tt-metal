@@ -5,9 +5,9 @@
 """
 DRAM Zero Fill micro op.
 
-Writes zeros to all pages of a DRAM tensor using a kernel on the 12x10 compute
-grid.  Each core zeroes a single L1 tile and then writes it to its assigned
-slice of DRAM pages via noc_async_write_page + TensorAccessor.
+Writes zeros to all pages of a DRAM tensor using a kernel on the device's full
+compute grid.  Each core zeroes a single L1 tile and then writes it to its
+assigned slice of DRAM pages via noc_async_write_page + TensorAccessor.
 
 This replaces the host-side ttnn.from_torch / ttnn.zeros pattern for
 zero-initialization, avoiding the host-to-device transfer entirely.
@@ -20,10 +20,6 @@ from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import UnifiedKernelDescriptor
 
 KERNEL_PATH = "models/demos/deepseek_v3_b1/micro_ops/dram_zero_fill/kernels/dram_zero_fill_kernel.cpp"
-
-GRID_X = 12
-GRID_Y = 10
-NUM_CORES = GRID_X * GRID_Y  # 120
 
 OUTPUT_CB = 0
 TILE_32x32 = ttnn.Tile((32, 32))
@@ -125,12 +121,15 @@ class DRAMZeroFill:
         """
         page_size = TILE_32x32.get_tile_size(output_tensor.dtype)
 
+        # Use the device's full compute grid.  The kernel partitions pages
+        # across whatever rectangle it is given, so this adapts to harvested
+        # parts (e.g. 11x10) without any kernel change.
         device_grid = output_tensor.device().compute_with_storage_grid_size()
-        if device_grid.x < GRID_X or device_grid.y < GRID_Y:
-            raise ValueError(
-                "DRAMZeroFill requires at least a 12x10 compute grid: "
-                f"required=({GRID_X}, {GRID_Y}), actual=({device_grid.x}, {device_grid.y})"
-            )
+        grid_x = device_grid.x
+        grid_y = device_grid.y
+        num_cores = grid_x * grid_y
+        if num_cores == 0:
+            raise ValueError(f"DRAMZeroFill requires a non-empty compute grid: actual=({grid_x}, {grid_y})")
 
         shape = output_tensor.shape
         if shape[-2] % 32 != 0 or shape[-1] % 32 != 0:
@@ -144,9 +143,9 @@ class DRAMZeroFill:
         for d in range(len(shape) - 2):
             batch_tiles *= shape[d]
         total_pages = batch_tiles * tile_rows * tile_cols
-        pages_per_core = math.ceil(total_pages / NUM_CORES)
+        pages_per_core = math.ceil(total_pages / num_cores)
 
-        core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(GRID_X - 1, GRID_Y - 1))])
+        core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))])
 
         tensor_accessor_args = ttnn.TensorAccessorArgs(output_tensor)
         ncrisc_compile_time_args = tensor_accessor_args.get_compile_time_args()
@@ -158,8 +157,8 @@ class DRAMZeroFill:
             ("page_size", page_size),
             ("grid_start_x", 0),
             ("grid_start_y", 0),
-            ("grid_end_x", GRID_X - 1),
-            ("grid_end_y", GRID_Y - 1),
+            ("grid_end_x", grid_x - 1),
+            ("grid_end_y", grid_y - 1),
         ]
 
         cb_format = ttnn.CBFormatDescriptor(
