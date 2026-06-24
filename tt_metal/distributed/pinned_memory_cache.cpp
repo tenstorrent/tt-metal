@@ -32,7 +32,7 @@ std::set<ChipId> PinnedMemoryCache::compute_device_ids(
     const auto& view = mesh_device.get_view();
     std::set<ChipId> device_ids;
     for (const auto& coord : coordinate_range_set.coords()) {
-        if (view.contains(coord)) {
+        if (view.contains(coord) && view.is_local(coord)) {
             // get_device is deprecated but still functional; we only use it to
             // obtain the chip ID, which is not distribution-sensitive.
             if (auto* device = view.impl().get_device(coord)) {
