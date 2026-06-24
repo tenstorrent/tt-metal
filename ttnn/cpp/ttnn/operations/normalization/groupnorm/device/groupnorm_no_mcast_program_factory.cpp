@@ -442,11 +442,27 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
         out_CB_size_group_2 = in0_block_tiles_group_2 * out_single_tile_size;
     }
 
+    // For row-major interleaved input the reader stages each group's per-out_block
+    // tile region into cb_repack (c_26) in row-major form and the compute kernel
+    // tilizes it into cb_in0 (c_0). cb_repack must hold one out_block of the group's
+    // tiles (double-buffered so the reader can prefetch the next pass/out_block).
+    uint32_t repack_in_CB_size = std::max(in0_block_tiles_group_1, in0_block_tiles_group_2) * in_single_tile_size * 2;
+
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
         x_CB_size_group_2 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
         xmm_CB_size_group_2 = single_tile_size * 3;
+        if (tilize_in) {
+            // Row-major welford: the compute kernel tilizes the full per_core_N-wide input row
+            // (cb_repack -> c_29) up front, before the welford DEST-accumulation region, so c_29
+            // must hold a whole batch's tiles (block_ht * per_core_Nt). cb_repack must hold at
+            // least one per_core_Nt-wide block-row (double-buffered for reader prefetch). Unlike
+            // the non-welford path these are full-width (per_core_Nt), not per-group (block_wt).
+            in_CB_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
+            in_CB_size_group_2 = block_ht_group_2 * per_core_Nt * in_single_tile_size;
+            repack_in_CB_size = per_core_Nt * in_single_tile_size * 2;
+        }
     }
 
     // Application Setup
@@ -1106,11 +1122,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormNoMcastProgra
             }}},
         });
     }
-    if (reader_repack_output) {
+    if (reader_repack_output || tilize_in) {
         constexpr uint32_t repack_cb_index = tt::CBIndex::c_26;
         constexpr uint32_t repack_out_cb_index = tt::CBIndex::c_31;
+        uint32_t repack_total_size = 0;
+        if (reader_repack_output) {
+            repack_total_size = std::max(repack_total_size, repack_CB_size);
+        }
+        if (tilize_in) {
+            repack_total_size = std::max(repack_total_size, repack_in_CB_size);
+        }
         desc.cbs.push_back(CBDescriptor{
-            .total_size = repack_CB_size,
+            .total_size = repack_total_size,
             .core_ranges = all_cores,
             .format_descriptors =
                 {{CBFormatDescriptor{

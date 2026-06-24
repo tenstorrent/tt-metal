@@ -146,6 +146,7 @@ void kernel_main() {
 
     constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     constexpr uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
+    constexpr uint32_t datum_size_bytes = src0_tile_bytes / (tile_height * tile_width);
 
     constexpr uint32_t local_stride = 2;
     constexpr uint32_t global_stride = NOC_L1_READ_ALIGNMENT_BYTES / 2;
@@ -154,27 +155,60 @@ void kernel_main() {
 
     const auto src_a = TensorAccessor(src0_args, src_addr);
 
-#if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
-    uint32_t src_addr_in0 = in0_l1_read_addr;
-    UnicastEndpoint self_ep;
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_repack.reserve_back(per_core_N);
-        uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
-        for (uint32_t i = 0; i < tile_height; ++i) {
-            noc.async_read(
-                self_ep,
-                CoreLocalMem<uint32_t>(l1_write_addr_repack),
-                per_core_N_bytes,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0},
-                {});
-            src_addr_in0 += per_core_N_bytes;
-            l1_write_addr_repack += per_core_N_bytes_with_stride;
+    // Stage one out_block (out_block_h_actual tile-rows x per_core_N tiles wide) of input.
+    // For tiled input we read whole tiles straight into cb_in0. For row-major interleaved
+    // input (TILIZE_IN) each DRAM page is one full tensor row; we read the per_core_N-wide
+    // column slice of every datum-row into cb_repack in row-major form, and the compute kernel
+    // tilizes cb_repack -> c_29 before each welford pass.
+    auto read_input_out_block = [&](uint32_t out_block_h_actual, uint32_t& mt_offset, uint32_t index_b_offset_local) {
+#ifdef TILIZE_IN
+        constexpr uint32_t width_datums = per_core_N * tile_width;
+        constexpr uint32_t width_bytes = width_datums * datum_size_bytes;
+        for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+            const uint32_t base_tile = start_id + index_b_offset_local + mt_offset;
+            const uint32_t row_base = (base_tile / num_channels_tiles) * tile_height;
+            const uint32_t col_start_bytes = (base_tile % num_channels_tiles) * tile_width * datum_size_bytes;
+            cb_repack.reserve_back(per_core_N);
+            uint32_t l1_write_addr = cb_repack.get_write_ptr();
+            for (uint32_t r = 0; r < tile_height; ++r) {
+                noc.async_read(
+                    src_a,
+                    CoreLocalMem<uint32_t>(l1_write_addr),
+                    width_bytes,
+                    {.page_id = row_base + r, .offset_bytes = col_start_bytes},
+                    {});
+                l1_write_addr += width_bytes;
+            }
+            noc.async_read_barrier();
+            cb_repack.push_back(per_core_N);
+            mt_offset += num_channels_tiles;
         }
-        noc.async_read_barrier();
-        cb_repack.push_back(per_core_N);
-    }
+#else
+        for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
+            for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+                cb_in0.reserve_back(1);
+                const uint32_t l1_write_addr = cb_in0.get_write_ptr();
+                noc.async_read(
+                    src_a,
+                    CoreLocalMem<uint32_t>(l1_write_addr),
+                    src0_tile_bytes,
+                    {.page_id = start_id + index_b_offset_local + mt_offset + nt},
+                    {});
+                noc.async_read_barrier();
+                cb_in0.push_back(1);
+                if constexpr (welford_fp32_alias) {
+                    // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
+                    // alias) so the noc.async_read above already filled both views; this is
+                    // purely bookkeeping so compute's welford section can wait_front
+                    // on cb_in0_welford independently of cb_in0.
+                    cb_in0_welford.reserve_back(1);
+                    cb_in0_welford.push_back(1);
+                }
+            }
+            mt_offset += num_channels_tiles;
+        }
 #endif
+    };
 
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     constexpr uint32_t out_block_hw_normal = out_block_h_normal * block_w;
@@ -202,31 +236,7 @@ void kernel_main() {
                 out_block_hw_actual = out_block_hw_normal;
             }
 
-#if !defined(READER_REPACK) or !defined(TILIZE_IN)
-            for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    cb_in0.reserve_back(1);
-                    const uint32_t l1_write_addr = cb_in0.get_write_ptr();
-                    noc.async_read(
-                        src_a,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        src0_tile_bytes,
-                        {.page_id = start_id + index_b_offset + mt_offset + nt},
-                        {});
-                    noc.async_read_barrier();
-                    cb_in0.push_back(1);
-                    if constexpr (welford_fp32_alias) {
-                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
-                        // alias) so the noc.async_read above already filled both views; this is
-                        // purely bookkeeping so compute's welford section can wait_front
-                        // on cb_in0_welford independently of cb_in0.
-                        cb_in0_welford.reserve_back(1);
-                        cb_in0_welford.push_back(1);
-                    }
-                }
-                mt_offset += num_channels_tiles;
-            }
-#endif
+            read_input_out_block(out_block_h_actual, mt_offset, index_b_offset);
         }
 
         cb_ex_partial.wait_front(2);
@@ -378,31 +388,7 @@ void kernel_main() {
                 out_block_h_actual = out_block_h_normal;
                 out_block_hw_actual = out_block_hw_normal;
             }
-#if !defined(READER_REPACK) or !defined(TILIZE_IN)
-            for (uint32_t mt = 0; mt < out_block_h_actual; ++mt) {
-                for (uint32_t nt = 0; nt < per_core_N; ++nt) {
-                    cb_in0.reserve_back(1);
-                    const uint32_t l1_write_addr = cb_in0.get_write_ptr();
-                    noc.async_read(
-                        src_a,
-                        CoreLocalMem<uint32_t>(l1_write_addr),
-                        src0_tile_bytes,
-                        {.page_id = start_id + index_b_offset + mt_offset + nt},
-                        {});
-                    noc.async_read_barrier();
-                    cb_in0.push_back(1);
-                    if constexpr (welford_fp32_alias) {
-                        // Mirror the cb_in0 push on the alias. They share SRAM (multi-buffer-index
-                        // alias) so the noc.async_read above already filled both views; this is
-                        // purely bookkeeping so compute's welford section can wait_front
-                        // on cb_in0_welford independently of cb_in0.
-                        cb_in0_welford.reserve_back(1);
-                        cb_in0_welford.push_back(1);
-                    }
-                }
-                mt_offset += num_channels_tiles;
-            }
-#endif
+            read_input_out_block(out_block_h_actual, mt_offset, index_b_offset);
         }
         index_b_offset += num_tiles_per_batch;
     }

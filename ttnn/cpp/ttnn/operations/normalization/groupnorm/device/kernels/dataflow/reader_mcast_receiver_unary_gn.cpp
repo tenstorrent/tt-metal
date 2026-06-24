@@ -97,6 +97,7 @@ void kernel_main() {
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
     constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+    constexpr uint32_t datum_size_bytes = get_named_compile_time_arg_val("datum_size_bytes");
     constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;
@@ -139,23 +140,6 @@ void kernel_main() {
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial_id);
     const DataFormat out_data_format = get_dataformat(cb_out0_id);
 
-#if defined(READER_REPACK) and defined(TILIZE_IN)
-    uint32_t in0_l1_read_addr = cb_in0.get_read_ptr();
-    uint32_t src_addr_in0 = in0_l1_read_addr;
-    UnicastEndpoint self_ep;
-    for (uint32_t m = 0; m < per_core_M; ++m) {
-        cb_repack.reserve_back(per_core_N);
-        uint32_t l1_write_addr_repack = cb_repack.get_write_ptr();
-        for (uint32_t i = 0; i < tile_height; ++i) {
-            noc.async_read(self_ep, CoreLocalMem<uint32_t>(l1_write_addr_repack), per_core_N_bytes, {.noc_x = my_x[0], .noc_y = my_y[0], .addr = src_addr_in0}, {});
-            src_addr_in0 += per_core_N_bytes;
-            l1_write_addr_repack += per_core_N_bytes_with_stride;
-        }
-        noc.async_read_barrier();
-        cb_repack.push_back(per_core_N);
-    }
-#endif
-
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
     uint32_t out_block_hw_normal = out_block_h_normal * block_w;
     uint32_t num_out_blocks_padded = num_out_blocks;
@@ -196,7 +180,46 @@ void kernel_main() {
                         out_block_h_actual = out_block_h_normal;
                         out_block_hw_actual = out_block_hw_normal;
                     }
-#if !defined(READER_REPACK) or !defined(TILIZE_IN)
+#ifdef TILIZE_IN
+                    // Row-major interleaved input: stage this group's out_block region
+                    // (block_w tiles wide x out_block_h tile-rows) into cb_repack in
+                    // row-major form. The compute kernel tilizes it into cb_in0 (c_0).
+                    // Each DRAM page is one full tensor row (num_channels_tiles * tile_width
+                    // datums); read the group's column slice at a byte offset and lay the
+                    // 32 rows of each tile-row out contiguously at a block_w-wide stride so
+                    // tilize<block_w> consumes them directly.
+                    {
+                        const auto src_a = TensorAccessor(src0_args, src_addr);
+                        const uint32_t full_row_datums = num_channels_tiles * tile_width;
+                        const uint32_t col_start_datums = ((start_id % num_channels_tiles) + index_g_offset) * tile_width;
+                        const uint32_t want_datums = block_w * tile_width;
+                        const uint32_t avail_datums =
+                            (col_start_datums < full_row_datums) ? (full_row_datums - col_start_datums) : 0;
+                        const uint32_t read_datums = want_datums < avail_datums ? want_datums : avail_datums;
+                        const uint32_t read_bytes = read_datums * datum_size_bytes;
+                        const uint32_t col_start_bytes = col_start_datums * datum_size_bytes;
+                        const uint32_t repack_row_stride_bytes = want_datums * datum_size_bytes;
+                        const uint32_t tile_row_base =
+                            (start_id + index_b_offset + out_block_start_id_offset) / num_channels_tiles;
+
+                        cb_repack.reserve_back(out_block_hw_normal);
+                        uint32_t l1_write_addr = cb_repack.get_write_ptr();
+                        for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
+                            const uint32_t row_base = (tile_row_base + mt) * tile_height;
+                            for (uint32_t r = 0; r < tile_height; r++) {
+                                noc.async_read(
+                                    src_a,
+                                    CoreLocalMem<uint32_t>(l1_write_addr),
+                                    read_bytes,
+                                    {.page_id = row_base + r, .offset_bytes = col_start_bytes},
+                                    {});
+                                l1_write_addr += repack_row_stride_bytes;
+                            }
+                        }
+                        noc.async_read_barrier();
+                        cb_repack.push_back(out_block_hw_normal);
+                    }
+#else
                     const uint32_t src0_tile_bytes = get_tile_size(cb_in0_id);
                     const auto src_a = TensorAccessor(src0_args, src_addr);
                     uint32_t l1_write_addr;

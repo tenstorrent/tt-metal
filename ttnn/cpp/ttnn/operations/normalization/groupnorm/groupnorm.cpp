@@ -107,7 +107,10 @@ ttnn::Tensor get_mask_tensor(
         // create input mask
         int64_t num_channel = input_tensor.padded_shape()[-1];
         int64_t num_cores_across_channel;
-        if (input_tensor.memory_config().buffer_type() == BufferType::L1) {
+        // Only sharded inputs derive the channel-core count from the shard layout. A non-sharded
+        // (interleaved) input - even when it lives in L1 - splits channels the same way a DRAM
+        // interleaved input does, i.e. via num_virtual_cols, so route it through the else branch.
+        if (input_tensor.is_sharded()) {
             const auto mem_layout = input_tensor.memory_config().memory_layout();
             const auto shard_spec = input_tensor.memory_config().shard_spec();
             std::optional<ShardOrientation> shard_orientation = std::nullopt;

@@ -231,33 +231,12 @@ void kernel_main() {
     CircularBuffer cb_x(cb_x_id);
     CircularBuffer cb_xmm(cb_xmm_id);
 
-// tilize input from RM to tile layout
-#ifdef TILIZE_IN
-    binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
-// Tilize in0 -> in (row-major to tiled)
-#ifdef READER_REPACK
-    constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
-#else
-    constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
-#endif
-    cb_in.wait_front(per_core_MN);
-#else
+    // For row-major interleaved input (TILIZE_IN) the reader stages each group's
+    // out_block into cb_repack (c_26) in row-major form, and we tilize it into cb_in0
+    // (c_0) per out_block inside each of the three passes below. This keeps the
+    // per-group, front-of-CB data flow identical to the tiled-input path, so the rest
+    // of the kernel consumes cb_in0 exactly as it would for tiled input.
     binary_op_init_common(cb_in0_id, cb_input_mask_id, cb_x_id);
-#endif
 
     index_b_offset = 0;
     constexpr uint32_t out_block_h_normal = block_h / num_out_blocks;
@@ -305,6 +284,18 @@ void kernel_main() {
                     out_block_h_actual = out_block_h_normal;
                     out_block_hw_actual = out_block_hw_normal;
                 }
+#ifdef TILIZE_IN
+                // Tilize this group's row-major out_block (cb_repack -> cb_in0) so the
+                // masking below consumes cb_in0 exactly as in the tiled-input path.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_repack_id,
+                    cb_in0_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_actual);
+#endif
                 cb_in0.wait_front(out_block_hw_normal);
 
                 index_h_offset = 0;
@@ -319,11 +310,7 @@ void kernel_main() {
                         for (uint32_t w = 0; w < subblock_w; ++w) {
                             uint32_t index = w + index_subblock_w_offset + index_h_offset;
                             uint32_t index_mask = w + index_subblock_w_offset;
-#ifdef TILIZE_IN
-                            mul_tiles(cb_in_id, cb_input_mask_id, index, index_mask, w);
-#else
                             mul_tiles(cb_in0_id, cb_input_mask_id, index, index_mask, w);
-#endif
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -335,11 +322,7 @@ void kernel_main() {
                     }
                     index_h_offset += block_w;
                 }
-#ifdef TILIZE_IN
-                cb_in.pop_front(out_block_hw_actual);
-#else
                 cb_in0.pop_front(out_block_hw_normal);
-#endif
                 cb_x.push_back(out_block_hw_normal);
                 reconfig_data_format_srcb(cb_input_mask_id, cb_scaler_id);
 
@@ -390,6 +373,19 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+#ifdef TILIZE_IN
+                // Re-tilize this group's row-major out_block (cb_repack -> cb_in0) for the
+                // variance pass; cb_in0 was popped by the average pass and the reader has
+                // re-staged the same region into cb_repack.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_repack_id,
+                    cb_in0_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_actual);
+#endif
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
@@ -544,6 +540,19 @@ void kernel_main() {
                     out_block_hw_actual = out_block_hw_normal;
                 }
 
+#ifdef TILIZE_IN
+                // Re-tilize this group's row-major out_block (cb_repack -> cb_in0) for the
+                // final pass; cb_in0 was popped by the variance pass and the reader has
+                // re-staged the same region into cb_repack.
+                compute_kernel_lib::tilize<
+                    block_w,
+                    cb_repack_id,
+                    cb_in0_id,
+                    compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+                    compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+                    compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+                    out_block_h_actual);
+#endif
                 cb_in0.wait_front(out_block_hw_normal);
                 // x - E[x]
                 sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);

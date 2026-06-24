@@ -301,6 +301,9 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     uint32_t in_mask_CB_size = use_welford ? input_mask.value().physical_volume() * input_mask.value().element_size()
                                            : block_wt * in_mask_single_tile_size * 2;
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;
+    // For row-major interleaved input (TILIZE_IN) the reader stages each out_block region
+    // into cb_repack (c_26) in row-major form; size it to hold one out_block double-buffered.
+    uint32_t repack_in_CB_size = in0_block_tiles_group_1 * in_single_tile_size * 2;
     uint32_t interm_block_tiles_group_1 = in0_block_tiles_group_1;
     uint32_t x_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
     uint32_t xmm_CB_size_group_1 = interm_block_tiles_group_1 * single_tile_size;
@@ -317,6 +320,14 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
     if (use_welford) {
         x_CB_size_group_1 = single_tile_size * 1;
         xmm_CB_size_group_1 = single_tile_size * 3;
+        if (tilize_in) {
+            // Row-major welford: the compute kernel tilizes the full per_core_N-wide input row
+            // (cb_repack -> c_29) up front, before the welford DEST-accumulation region, so c_29
+            // must hold a whole batch's tiles (block_ht * per_core_Nt). cb_repack must hold at
+            // least one per_core_Nt-wide block-row (double-buffered for reader prefetch).
+            in_CB_size_group_1 = block_ht_group_1 * per_core_Nt * in_single_tile_size;
+            repack_in_CB_size = per_core_Nt * in_single_tile_size * 2;
+        }
     }
 
     std::vector<CoreCoord> core_coords = grid_to_cores(num_cores, num_actual_cols, num_actual_rows, row_wise);
@@ -454,6 +465,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
         {"per_core_N", per_core_Nt},
         {"per_core_N_bytes", per_core_N_bytes_padded},
         {"per_core_N_bytes_with_stride", per_core_Nt * tile_width * datum_size_bytes},
+        {"datum_size_bytes", datum_size_bytes},
         {"per_core_M", per_core_Mt_group_1},
         {"TILE_HEIGHT", tile_height},
         {"TILE_WIDTH", tile_width},
@@ -874,11 +886,18 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormMcastProgramF
             }}},
         });
     }
-    if (reader_repack_output) {
+    if (reader_repack_output || tilize_in) {
         constexpr uint32_t repack_cb_index = tt::CBIndex::c_26;
         constexpr uint32_t repack_out_cb_index = tt::CBIndex::c_31;
+        uint32_t repack_total_size = 0;
+        if (reader_repack_output) {
+            repack_total_size = std::max(repack_total_size, repack_CB_size);
+        }
+        if (tilize_in) {
+            repack_total_size = std::max(repack_total_size, repack_in_CB_size);
+        }
         desc.cbs.push_back(CBDescriptor{
-            .total_size = repack_CB_size,
+            .total_size = repack_total_size,
             .core_ranges = all_cores,
             .format_descriptors =
                 {{CBFormatDescriptor{

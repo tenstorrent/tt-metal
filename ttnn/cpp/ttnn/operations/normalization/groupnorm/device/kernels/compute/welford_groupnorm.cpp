@@ -119,6 +119,13 @@ void kernel_main() {
     // input cbs
     constexpr uint32_t cb_in0_id = tt::CBIndex::c_0;
     constexpr uint32_t cb_in_id = tt::CBIndex::c_29;
+    // CB the welford passes consume input from: for row-major interleaved input (TILIZE_IN) we
+    // tilize cb_repack -> c_29 per pass and read c_29; for tiled input the reader fills c_0.
+#ifdef TILIZE_IN
+    constexpr uint32_t cb_welford_input_id = cb_in_id;
+#else
+    constexpr uint32_t cb_welford_input_id = cb_in0_id;
+#endif
     // Welford-fp32 alias for cb_in0 (non-TILIZE_IN path). Shares L1 memory with cb_in0 but has
     // its own buffer index configured with unpack_to_dest_mode=UnpackToDestFp32
     // cb_in0 is in Default mode so the final-stage sub_tiles_bcast_scalar (FPU on SrcA) keeps working.
@@ -193,30 +200,13 @@ void kernel_main() {
     CircularBuffer cb_x(cb_x_id);
     CircularBuffer cb_xmm(cb_xmm_id);
 
-// tilize input from RM to tile layout
+    // Input intake init. For row-major interleaved input (TILIZE_IN) the reader stages each
+    // batch's input into cb_repack (c_26) in row-major form, and we tilize cb_repack -> c_29
+    // once per welford pass below (outside the welford DEST-accumulation region, since tilize
+    // needs its own tile_regs). The welford loops then consume c_29 one tile at a time, exactly
+    // like the tiled-input path consumes c_0. For tiled input the reader fills c_0 directly.
 #ifdef TILIZE_IN
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in_id);
-// Tilize in0 -> in (row-major to tiled)
-#ifdef READER_REPACK
-    constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
-#else
-    constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
-        per_core_N,
-        cb_in_rm_id,
-        cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
-#endif
-    cb_in.wait_front(per_core_MN);
 #else
     binary_op_init_common(cb_in0_id, cb_in0_id, cb_in0_id);
 #endif
@@ -265,6 +255,17 @@ void kernel_main() {
     }
 
     for (uint32_t b = 0; b < num_batches; ++b) {
+#ifdef TILIZE_IN
+        // Tilize this batch's row-major input (cb_repack -> c_29) up front, before the welford
+        // DEST-accumulation region (tilize needs its own tile_regs). c_29 holds the full pass.
+        compute_kernel_lib::tilize<
+            per_core_N,
+            cb_repack_id,
+            cb_in_id,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_h);
+#endif
         cb_ex_partial.reserve_back(2);
         tile_regs_acquire();
         welford_init();
@@ -300,6 +301,11 @@ void kernel_main() {
                 uint32_t curr_xy_coord = block_xy_coord;
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+#ifdef TILIZE_IN
+                    cb_in.wait_front(1);
+                    transpose_wh_init_short(cb_in_id);
+                    transpose_wh_tile(cb_in_id, 0, input_dst);
+#else
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
                         // The reader pushes cb_in0 and cb_in0_welford in separate push_back
@@ -308,10 +314,6 @@ void kernel_main() {
                         // second before transpose_wh_tile reads via the alias below.
                         cb_in0_welford.wait_front(1);
                     }
-#ifdef TILIZE_IN
-                    transpose_wh_init_short(cb_in_id);
-                    transpose_wh_tile(cb_in_id, 0, input_dst);
-#else
                     transpose_wh_init_short(cb_in0_welford_id);
                     transpose_wh_tile(cb_in0_welford_id, 0, input_dst);
 #endif
@@ -365,10 +367,14 @@ void kernel_main() {
                             break;
                         }
                     }
+#ifdef TILIZE_IN
+                    cb_in.pop_front(1);
+#else
                     cb_in0.pop_front(1);
                     if constexpr (welford_fp32_alias) {
                         cb_in0_welford.pop_front(1);
                     }
+#endif
                 }
                 block_xy_coord += num_channels_per_group;
             }
@@ -412,6 +418,18 @@ void kernel_main() {
 
         cb_ex2pe.wait_front(num_groups);
 
+#ifdef TILIZE_IN
+        // Re-tilize this batch's row-major input (cb_repack -> c_29) for the final pass; the
+        // reader re-stages the same region into cb_repack after the welford pass drained c_29.
+        compute_kernel_lib::tilize<
+            per_core_N,
+            cb_repack_id,
+            cb_in_id,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(block_h);
+#endif
+
         // Start Final Normalization
         for (uint32_t out_block_index = 0; out_block_index < num_out_blocks_padded; out_block_index++) {
             uint32_t out_block_h_actual = out_block_h_normal;
@@ -438,6 +456,9 @@ void kernel_main() {
                 uint32_t block_w_index = 0;
 
                 for (uint32_t nt = 0; nt < per_core_N; ++nt) {
+#ifdef TILIZE_IN
+                    cb_in.wait_front(1);
+#else
                     cb_in0.wait_front(1);
                     if constexpr (welford_fp32_alias) {
                         // The reader pushes cb_in0 and cb_in0_welford in lockstep; wait on the
@@ -445,6 +466,7 @@ void kernel_main() {
                         // the reader's wr_ptr advance on the alias.
                         cb_in0_welford.wait_front(1);
                     }
+#endif
 
                     uint32_t group_offset = 0;
                     for (uint32_t g = min_group; g < num_groups; ++g) {
@@ -452,11 +474,11 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
+                        sub_tiles_bcast_scalar_init_short(cb_welford_input_id, cb_ex_global_id);
                         reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
 
                         tile_regs_acquire();
-                        sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
+                        sub_tiles_bcast_scalar(cb_welford_input_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
                         tile_regs_commit();
                         tile_regs_wait();
                         pack_tile(dst0, cb_xmm_id);
@@ -550,10 +572,14 @@ void kernel_main() {
                             break;
                         }
                     }
+#ifdef TILIZE_IN
+                    cb_in.pop_front(1);
+#else
                     cb_in0.pop_front(1);
                     if constexpr (welford_fp32_alias) {
                         cb_in0_welford.pop_front(1);
                     }
+#endif
 
                     if constexpr (do_gamma) {
                         mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);

@@ -1260,7 +1260,7 @@ def test_group_norm_negative_tests(
     device,
 ):
     input_tensor = ttnn.empty(input_shape, device=device)
-    with pytest.raises(RuntimeError, match=msg_pattern):
+    with expect_error(RuntimeError, match=msg_pattern):
         ttnn.group_norm(
             input_tensor,
             num_groups=num_groups,
@@ -1273,7 +1273,7 @@ def test_group_norm_rejects_host_input_mask(device):
     input_tensor = ttnn.empty((1, 1, 32, 320), device=device)
     input_mask = ttnn.create_group_norm_input_mask(320, 32, 1, ttnn.DataType.BFLOAT16)
 
-    with pytest.raises(RuntimeError, match="Input mask must be on device"):
+    with expect_error(RuntimeError, match="Input mask must be on device"):
         ttnn.group_norm(
             input_tensor,
             num_groups=32,
@@ -1306,7 +1306,7 @@ def test_group_norm_rejects_host_negative_mask(device):
     )
     input_tensor = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
 
-    with pytest.raises(RuntimeError, match="Negative mask must be on device"):
+    with expect_error(RuntimeError, match="Negative mask must be on device"):
         ttnn.group_norm(
             input_tensor,
             num_groups=32,
@@ -1494,4 +1494,95 @@ def test_group_norm_optional_weight_bias(
         rtol=rtol,
         atol=atol,
         frobenius_threshold=frobenius_threshold,
+    )
+
+
+# @pytest.mark.parametrize("output_layout", [None, ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("with_affine", [False, True], ids=["no_weight_bias", "weight_bias"])
+@pytest.mark.parametrize("use_welford", [False, True], ids=["no_welford", "welford"])
+@pytest.mark.parametrize(
+    "buffer_type",
+    [ttnn.BufferType.DRAM, ttnn.BufferType.L1],
+    ids=["dram", "l1"],
+)
+@pytest.mark.parametrize(
+    # (grid_x, grid_y): (1, 1) keeps batch >= num_virtual_rows -> no-mcast factory;
+    # (1, 2) splits the height across two core rows -> mcast factory.
+    "core_grid",
+    [(1, 1), (1, 2)],
+    ids=["no_mcast", "mcast"],
+)
+def test_group_norm_row_major_interleaved_input(
+    device, output_layout, with_affine, use_welford, buffer_type, core_grid
+):
+    torch.manual_seed(0)
+
+    N, C, H, W, num_groups = 1, 480, 1, 64, 8
+    epsilon = 1e-5
+
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type)
+
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16) if with_affine else None
+
+    torch_output = torch.nn.functional.group_norm(
+        torch_input.float(),
+        num_groups,
+        weight=torch_weight.float() if torch_weight is not None else None,
+        bias=torch_bias.float() if torch_bias is not None else None,
+        eps=epsilon,
+    )
+    torch_output = torch_output.permute(0, 2, 3, 1).view(N, 1, H * W, C)
+
+    # ROW_MAJOR, interleaved input (deliberately not tilized) - the layout that triggered the hang.
+    tt_input = torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C)
+    input_tensor = ttnn.from_torch(
+        tt_input,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=mem_config,
+    )
+
+    grid_size = ttnn.CoreGrid(y=core_grid[1], x=core_grid[0])
+
+    gamma_t, beta_t = None, None
+    if with_affine:
+        gamma_t, beta_t = ttnn.dram_group_norm_params_from_torch(
+            [torch_weight.float(), torch_bias.float()],
+            C,
+            num_groups,
+            device,
+            core_grid=grid_size,
+            return_mask=False,
+        )
+
+    output_tensor = ttnn.group_norm(
+        input_tensor,
+        num_groups=num_groups,
+        epsilon=epsilon,
+        weight=gamma_t,
+        bias=beta_t,
+        memory_config=mem_config,
+        core_grid=grid_size,
+        inplace=False,
+        output_layout=output_layout,
+        use_welford=use_welford,
+    )
+
+    # When output_layout is unspecified the result should match the input's ROW_MAJOR layout.
+    expected_layout = output_layout if output_layout is not None else ttnn.ROW_MAJOR_LAYOUT
+    assert output_tensor.layout == expected_layout
+
+    output_tensor = ttnn.to_torch(ttnn.from_device(output_tensor))
+
+    assert_numeric_metrics(
+        torch_output,
+        output_tensor,
+        pcc_threshold=0.9999,
+        rtol=0.065,
+        atol=0.065,
+        frobenius_threshold=0.016,
     )
