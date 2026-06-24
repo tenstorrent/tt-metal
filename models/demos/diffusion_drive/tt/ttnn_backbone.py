@@ -31,6 +31,7 @@ _TtnnBackboneAdapter can be assigned as a drop-in for the nn.Module.
 
 from __future__ import annotations
 
+import os
 from typing import List, Optional, Tuple
 
 import torch
@@ -166,8 +167,9 @@ class TtnnTransfuserBackbone:
         self._lidar_stem: Optional[TtnnStem] = None
         self._ttnn_fusion = None  # callable(image_features, lidar_features, layer_idx)
         # Stage 5: keep img/lidar feats on-device across all 4 stages + fusion
-        # (removes the per-stage host round-trips). Off by default; enabled by
-        # enable_consolidated() once stems+fusion+fpn are installed.
+        # (removes the per-stage host round-trips). Enabled by default once
+        # stems+fusion+FPN are all installed (_maybe_enable_consolidated, called
+        # from build_stage3/3_6); set DD_CONSOLIDATE=0 to force the staged path.
         self._consolidated = False
 
     # ------------------------------------------------------------------
@@ -185,8 +187,10 @@ class TtnnTransfuserBackbone:
         self._ttnn_fusion = fusion
 
     def enable_consolidated(self) -> None:
-        """Route __call__ through the device-native consolidated path (Stage 5).
+        """Force __call__ through the device-native consolidated path (Stage 5).
 
+        Explicit primitive: raises if the prerequisites are missing and ignores the
+        DD_CONSOLIDATE escape hatch (use this to opt in regardless of the env).
         Requires on-device stems (install_stems), TTNN fusion (install_fusion), and
         the TTNN FPN (build_stage3). Keeps img/lidar feats on device across all 4
         stage→fusion seams — only the stem input and the FPN-input boundary remain
@@ -194,6 +198,30 @@ class TtnnTransfuserBackbone:
         if self._img_stem is None or self._ttnn_fusion is None or self._ttnn_fpn is None:
             raise RuntimeError("enable_consolidated requires stems + fusion + FPN installed (build_stage3/3_6/3_7)")
         self._consolidated = True
+
+    @staticmethod
+    def _consolidation_disabled() -> bool:
+        """True iff DD_CONSOLIDATE explicitly opts out of the device-native path."""
+        return os.environ.get("DD_CONSOLIDATE", "1").strip().lower() in ("0", "false", "no", "off")
+
+    def _maybe_enable_consolidated(self) -> bool:
+        """Enable the consolidated path once stems+fusion+FPN are all installed.
+
+        Called at the end of build_stage3 and build_stage3_6 so it fires whichever
+        of the two prerequisites lands last (order-independent). Idempotent and
+        non-raising — unlike enable_consolidated it silently no-ops when a piece is
+        still missing, and it honours the DD_CONSOLIDATE=0 escape hatch so the
+        staged path stays reachable for A/B without code edits. Returns whether the
+        consolidated path is now active."""
+        if (
+            not self._consolidated
+            and self._img_stem is not None
+            and self._ttnn_fusion is not None
+            and self._ttnn_fpn is not None
+            and not self._consolidation_disabled()
+        ):
+            self._consolidated = True
+        return self._consolidated
 
     # ------------------------------------------------------------------
     # Internal helpers
