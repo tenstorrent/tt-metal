@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <optional>
 #include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
 #include <common/TracyTTDeviceData.hpp>
@@ -2676,6 +2677,17 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
     }
     const ChipId device_id = device_core.first;
     const CoreCoord worker_core = device_core.second;
+
+    // In accumulate mode the dedicated host-device sync is skipped. Track the realtime
+    // (dispatch-core) profiler's LATEST calibration so the worker contexts (re)calibrate in
+    // lockstep with the RT timeline instead of being pinned to a single early snapshot — the
+    // RT profiler recalibrates continuously, so a stale worker calibration shows up as drift.
+    if (MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
+        auto rt_sync = MetalContext::instance(context_id).profiler_state_manager()->get_realtime_sync_info(device_id);
+        if (rt_sync.has_value() && rt_sync->frequency != 0) {
+            device_sync_info = *rt_sync;
+        }
+    }
 
     if (!core_sync_info.contains(worker_core)) {
         const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);

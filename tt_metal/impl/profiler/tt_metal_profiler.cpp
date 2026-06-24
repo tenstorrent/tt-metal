@@ -135,25 +135,6 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
             .noc = tt_metal::NOC::RISCV_0_default,
             .defines = kernel_defines});
 
-    const auto& hal = MetalContext::instance(context_id).hal();
-    HalProgrammableCoreType core_type = device->get_programmable_core_type(core);
-    auto dev_msgs_factory = hal.get_dev_msgs_factory(core_type);
-    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
-    DeviceAddr control_vector_addr = profiler_msg_addr + dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(
-                                                             dev_msgs::profiler_msg_t::Field::control_vector);
-
-    // In accumulate mode the FW/KERNEL profiler zones live in the optional buffer
-    // region (>= CUSTOM_MARKERS), which the sync kernel writes to directly. Flag
-    // this run via FW_RESET_H so the device skips accumulate profiling and leaves
-    // that region to the sync kernel; cleared after the run below. No effect when
-    // accumulate is off (the device only reads this flag in accumulate mode).
-    const bool accumulate_profiling = MetalContext::instance(context_id).rtoptions().get_profiler_accumulate();
-    DeviceAddr accumulate_flag_addr = control_vector_addr + (kernel_profiler::FW_RESET_H * sizeof(uint32_t));
-    if (accumulate_profiling) {
-        uint32_t flag_on = 1;
-        MetalContext::instance().get_cluster().write_reg(&flag_on, tt_cxy_pair(device_id, core), accumulate_flag_addr);
-    }
-
     // Using MeshDevice APIs if the current device is managed by MeshDevice
     tt_metal::detail::LaunchProgram(
         device, sync_program, false /* wait_until_cores_done */, /* force_slow_dispatch */ true);
@@ -169,6 +150,12 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
     const int64_t hostStartTime = TracyGetCpuTime();
     std::vector<int64_t> writeTimes(sampleCount);
 
+    const auto& hal = MetalContext::instance(context_id).hal();
+    HalProgrammableCoreType core_type = device->get_programmable_core_type(core);
+    auto dev_msgs_factory = hal.get_dev_msgs_factory(core_type);
+    DeviceAddr profiler_msg_addr = hal.get_dev_addr(core_type, HalL1MemAddrType::PROFILER);
+    DeviceAddr control_vector_addr = profiler_msg_addr + dev_msgs_factory.offset_of<dev_msgs::profiler_msg_t>(
+                                                             dev_msgs::profiler_msg_t::Field::control_vector);
     DeviceAddr control_addr = control_vector_addr + (kernel_profiler::FW_RESET_L * sizeof(uint32_t));
     for (int i = 0; i < sampleCount; i++) {
         ZoneScopedC(tracy::Color::Tomato2);
@@ -180,11 +167,6 @@ void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreC
         writeTimes[i] = (TracyGetCpuTime() - writeStart);
     }
     tt_metal::detail::WaitProgramDone(device, sync_program, false);
-    if (accumulate_profiling) {
-        // Clear the sync flag so subsequent (non-sync) runs on this core accumulate normally.
-        uint32_t flag_off = 0;
-        MetalContext::instance().get_cluster().write_reg(&flag_off, tt_cxy_pair(device_id, core), accumulate_flag_addr);
-    }
     std::vector<CoreCoord> cores = {core};
     profiler_state_manager->device_profiler_map.at(device_id).readResults(
         mesh_device, device, cores, ProfilerReadState::NORMAL, ProfilerDataBufferSource::L1);
@@ -608,6 +590,15 @@ void ProfilerSync(ProfilerSyncState state) {
     if (!MetalContext::instance().rtoptions().get_profiler_sync_enabled()) {
         return;
     }
+    // In accumulate mode, skip the dedicated device-host sync. Its kernel runs on
+    // SYNC_CORE (0,0) and overwrites that core's accumulated L1 profiler buffer
+    // (which is only flushed to DRAM when full), destroying its zones. The
+    // realtime (dispatch-core) profiler already provides device-host sync across
+    // all reporting cores, so the dedicated pass is redundant here. This is
+    // equivalent to running with sync disabled, which is a supported path.
+    if (MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+        return;
+    }
     if (!getDeviceProfilerState(DEFAULT_CONTEXT_ID)) {
         return;
     }
@@ -708,6 +699,20 @@ void ProfilerSync(ProfilerSyncState state) {
                 syncAllDevices(root_device->id());
             }
         }
+    }
+#endif
+}
+
+void PublishRealtimeSyncInfo(int device_id, double host_time, double device_time, double frequency) {
+#if defined(TRACY_ENABLE)
+    // Only consumed in accumulate mode, where the dedicated host-device sync is skipped.
+    if (!MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+        return;
+    }
+    const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
+        MetalContext::instance().profiler_state_manager();
+    if (profiler_state_manager) {
+        profiler_state_manager->set_realtime_sync_info(device_id, SyncInfo(host_time, device_time, frequency));
     }
 #endif
 }
