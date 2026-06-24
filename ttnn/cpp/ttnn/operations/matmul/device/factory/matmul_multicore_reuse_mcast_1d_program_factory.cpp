@@ -5,6 +5,7 @@
 #include "ttnn/operations/matmul/device/factory/matmul_multicore_reuse_mcast_1d_program_factory.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include <algorithm>
+#include <set>
 #include <utility>
 
 #include "hostdevcommon/common_values.hpp"
@@ -2391,14 +2392,12 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
     auto all_cores_vec = corerange_to_cores(all_cores, std::nullopt, row_major);
     auto worker_cores_vec = corerange_to_cores(all_worker_cores, std::nullopt, row_major);
     auto hop_cores_vec = corerange_to_cores(hop_cores, std::nullopt, row_major);
+    // Build sets for O(log n) membership tests instead of O(n) std::find per core.
+    const std::set<CoreCoord> worker_cores_set(worker_cores_vec.begin(), worker_cores_vec.end());
+    const std::set<CoreCoord> hop_cores_set(hop_cores_vec.begin(), hop_cores_vec.end());
     for (auto core : all_cores_vec) {
-        auto all_worker_cores_iter = std::find(worker_cores_vec.begin(), worker_cores_vec.end(), core);
-        auto hop_cores_iter = std::find(hop_cores_vec.begin(), hop_cores_vec.end(), core);
-        bool core_is_in_all_worker_cores = all_worker_cores_iter != worker_cores_vec.end();
-        bool core_is_in_hop_cores = hop_cores_iter != hop_cores_vec.end();
-        if (!use_hop_cores) {
-            core_is_in_hop_cores = false;
-        }
+        bool core_is_in_all_worker_cores = worker_cores_set.count(core) > 0;
+        bool core_is_in_hop_cores = use_hop_cores && hop_cores_set.count(core) > 0;
 
         if (!core_is_in_all_worker_cores && !core_is_in_hop_cores) {  // not worker core and not hop core
             auto core_type = CORE_TYPE::IDLE_CORE;                    // idle core

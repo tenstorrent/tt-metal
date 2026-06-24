@@ -1198,10 +1198,11 @@ std::vector<std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_b
 }
 
 std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges() const {
+    std::unordered_set<CoreRange> seen;
     std::vector<CoreRange> core_ranges;
     for (const auto& circular_buffer : circular_buffers_) {
         for (const CoreRange& core_range : circular_buffer->core_ranges().ranges()) {
-            if (std::find(core_ranges.begin(), core_ranges.end(), core_range) == core_ranges.end()) {
+            if (seen.insert(core_range).second) {
                 core_ranges.push_back(core_range);
             }
         }

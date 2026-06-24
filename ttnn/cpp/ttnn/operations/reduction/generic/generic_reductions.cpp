@@ -394,7 +394,8 @@ static Tensor std_var_impl(
         ttnn::SmallVector<int64_t> perm;
         perm.reserve(rank);
         for (uint32_t i = 0; i < rank; ++i) {
-            if (std::find(dim.begin(), dim.end(), static_cast<int>(i)) == dim.end()) {
+            // dim is sorted ascending; use binary_search for O(log k) check.
+            if (!std::binary_search(dim.begin(), dim.end(), static_cast<int>(i))) {
                 perm.push_back(static_cast<int64_t>(i));
             }
         }
