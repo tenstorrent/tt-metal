@@ -53,7 +53,7 @@ public:
     std::vector<CoreCoord> get_metal_dram_cores(tt::CoordSystem coord_system) const;
     CoreCoord get_logical_core_for_dram_view(int dram_view) const;
     size_t get_address_offset(int dram_view) const;
-    size_t get_channel_for_dram_view(int dram_view) const;
+    size_t get_logical_channel_for_dram_view(int dram_view) const;
     size_t get_num_dram_views() const;
 
     int get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const;
@@ -75,6 +75,11 @@ public:
     std::map<CoreCoord, int32_t> physical_routing_to_profiler_flat_id;
 
 private:
+    // Physical DRAM channel (device-descriptor numbering, with harvested-channel gaps) for a dram
+    // view. Internal building block for get_logical_channel_for_dram_view, which compacts it to the
+    // index get_dram_core_for_channel expects; callers want the logical one.
+    size_t get_channel_for_dram_view(int dram_view) const;
+
     // True if `translated_coord` is any DRAM view's NOC0 worker endpoint (the subchannel a NOC0 DRAM
     // access routes to) -- the syseng-owned endpoint excluded by get_metal_dram_cores on Blackhole.
     // Argument must be a TRANSLATED (UMD) coord; a metal-logical {view, subchannel} coord never matches.
