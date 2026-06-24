@@ -502,9 +502,11 @@ inline void calculate_typecast_uint16_to_uint32() {
         // 0 | [v]  |        |     |       |       |
         // 0 | ...  |        |     |       | [v]   |
 
+        constexpr int v = p_sfpu::LREG0;
+
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
-            TTI_SFPLOADMACRO((0 << 2) | 0, InstrModLoadStore::LO16, ADDR_MOD_2, 0);
+            TTI_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::LO16, ADDR_MOD_2, v >> 2);
         }
         TTI_SFPNOP;
     } else {
