@@ -297,12 +297,21 @@ struct PlacedWorkers {
 // with the DRAM-adjacent matmul bbox; on nullopt it retries with the compact matmul bbox, and only
 // raises a hard error if that also fails. The top two rows are reserved for tilize
 // (drain == tilize_cores[0]); combine takes the rows below.
+//
+// `hidden_tiles` guards a subtle correctness constraint: the program factory converts each tilize
+// core's byte subregion back to a tile count via integer division (subtoken_size / tile_width_bytes),
+// so the selected tilize count must divide hidden_tiles exactly. target_tilize_num_cores always does
+// (it comes from compute_moe_compute_tilize_num_cores), but if a user-supplied mux_core_range_set
+// places mux cells in the top rows and blocks the 2x2 block, the fallback can land on a smaller
+// value that is not a divisor. The divisibility check below skips those, ensuring the first
+// accepted count is always a divisor of hidden_tiles. 1 always divides, so the loop always succeeds.
 std::optional<PlacedWorkers> place_combine_and_tilize(
     const CoreCoord& worker_grid,
     const CoreRange& matmul_bounding_box,
     const CoreCoordPairSet& mux_pairs,
     uint32_t num_combine_cores,
-    uint32_t target_tilize_num_cores) {
+    uint32_t target_tilize_num_cores,
+    uint32_t hidden_tiles) {
     CoreCoordPairSet base_avoid = mux_pairs;
     add_bbox_cells(base_avoid, matmul_bounding_box);
 
@@ -334,6 +343,9 @@ std::optional<PlacedWorkers> place_combine_and_tilize(
     add_bbox_cells(tilize_avoid, combine_bounding_box);
 
     for (uint32_t tilize_num_cores = target_tilize_num_cores; tilize_num_cores >= 1; --tilize_num_cores) {
+        if (hidden_tiles % tilize_num_cores != 0) {
+            continue;
+        }
         std::vector<CoreCoord> tilize_cores;
         const auto tilize_block_opt = find_tilize_2x2_block_avoiding(tilize_avoid, worker_grid);
         if (tilize_block_opt.has_value()) {
@@ -443,7 +455,12 @@ MoEComputeCoreSelection select_moe_compute_cores(
     }
     if (dram_ring.size() == ring_size && !dram_ring_hits_mux) {
         placed = place_combine_and_tilize(
-            worker_grid, CoreRangeSet(dram_ring).bounding_box(), mux_pairs, num_combine_cores, target_tilize_num_cores);
+            worker_grid,
+            CoreRangeSet(dram_ring).bounding_box(),
+            mux_pairs,
+            num_combine_cores,
+            target_tilize_num_cores,
+            hidden_tiles);
         if (placed.has_value()) {
             matmul_cores = dram_ring;
         }
@@ -467,7 +484,8 @@ MoEComputeCoreSelection select_moe_compute_cores(
                 CoreRangeSet(candidate).bounding_box(),
                 mux_pairs,
                 num_combine_cores,
-                target_tilize_num_cores);
+                target_tilize_num_cores,
+                hidden_tiles);
             if (candidate_placed.has_value()) {
                 compact_ring = std::move(candidate);
                 placed = std::move(candidate_placed);
