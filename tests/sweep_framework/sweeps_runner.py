@@ -60,6 +60,7 @@ class SweepsConfig:
     arch_name: str | None = None
     main_proc_verbose: bool = False
     trace_params: bool = False
+    fail_on_test_failure: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -85,6 +86,7 @@ def create_config_from_args(args) -> SweepsConfig:
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
         trace_params=args.trace_params,
+        fail_on_test_failure=args.fail_on_test_failure,
     )
 
     # Validate and set ARCH_NAME
@@ -534,6 +536,7 @@ def _set_crash_hang_defaults(result):
     """Populate result fields for a FAIL_CRASH_HANG outcome."""
     result["status"] = TestStatus.FAIL_CRASH_HANG
     result["exception"] = "TEST TIMED OUT (CRASH / HANG)"
+    result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
     result["e2e_perf"] = None
     result["peak_l1_memory_per_core"] = None
     result["peak_cb_per_core"] = None
@@ -599,6 +602,7 @@ def _execute_vector_with_retry(
                 p = None
                 result["status"] = TestStatus.FAIL_CRASH_HANG
                 result["exception"] = str(result.get("message", "DEVICE HANG"))
+                result["end_time_ts"] = dt.datetime.now(dt.timezone.utc)
                 reset_util.reset()
                 if child_mode:
                     p = Process(target=run, args=(module_name, input_queue, output_queue, config))
@@ -1000,6 +1004,25 @@ def run_sweeps(
                     f"\nMaximum test cases per module: {max_test_cases_per_module} (in {max_test_cases_module})"
                 )
 
+    # Derive failure from actual per-test statuses, not from export_results() return value
+    # (export_results unconditionally returns "success" for file-based destinations).
+    if config.fail_on_test_failure and status_counts:
+        from tests.sweep_framework.framework.statuses import TestStatus
+
+        fail_status_names = {
+            TestStatus.FAIL_ASSERT_EXCEPTION.name,
+            TestStatus.FAIL_CRASH_HANG.name,
+            TestStatus.FAIL_L1_OUT_OF_MEM.name,
+            TestStatus.FAIL_WATCHER.name,
+            TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF.name,
+        }
+        failed_count = sum(count for name, count in status_counts.items() if name in fail_status_names)
+        if failed_count > 0:
+            final_status = "failure"
+            logger.error(f"{failed_count} test case(s) failed/crashed/hung")
+
+    return final_status
+
 
 def get_module_names(config: SweepsConfig):
     """Extract module names based on configuration"""
@@ -1067,8 +1090,10 @@ def enable_profiler():
     os.environ["TT_METAL_DEVICE_PROFILER"] = "1"
     os.environ["ENABLE_TRACY"] = "1"
     os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
-    # TT_METAL_PROFILER_SYNC skipped: triggers syncAllDevices() on ETH cores,
-    # which deadlocks on Galaxy due to residual fabric state between test iterations.
+    # C++ post-process exposes per-chip perf in memory via
+    # ttnn._ttnn.profiler.get_latest_programs_perf_data(); required for the
+    # modern (multi-chip-safe) device-perf read in perf_utils.gather_single_test_perf.
+    os.environ["TT_METAL_PROFILER_CPP_POST_PROCESS"] = "1"
 
 
 def disable_profiler():
@@ -1076,7 +1101,7 @@ def disable_profiler():
     os.environ.pop("TT_METAL_DEVICE_PROFILER", None)
     os.environ.pop("ENABLE_TRACY", None)
     os.environ.pop("TT_METAL_PROFILER_MID_RUN_DUMP", None)
-    os.environ.pop("TT_METAL_PROFILER_SYNC", None)
+    os.environ.pop("TT_METAL_PROFILER_CPP_POST_PROCESS", None)
 
 
 if __name__ == "__main__":
@@ -1200,6 +1225,13 @@ if __name__ == "__main__":
         help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). Outputs to generated/ttnn/reports/operation_parameters/",
     )
 
+    parser.add_argument(
+        "--fail-on-test-failure",
+        action="store_true",
+        required=False,
+        help="Exit with non-zero status if any test case fails, crashes, or hangs. Use in CI to mark the job as failed.",
+    )
+
     args = parser.parse_args(sys.argv[1:])
 
     # Argument validation
@@ -1245,7 +1277,7 @@ if __name__ == "__main__":
     # Parse modules for running specific tests
     module_names = get_module_names(config)
 
-    run_sweeps(
+    final_status = run_sweeps(
         module_names,
         config=config,
     )
@@ -1255,3 +1287,7 @@ if __name__ == "__main__":
 
     if config.measure_device_perf:
         disable_profiler()
+
+    if config.fail_on_test_failure and final_status == "failure":
+        logger.error("Exiting with failure: one or more test cases did not pass (--fail-on-test-failure)")
+        sys.exit(1)

@@ -6,6 +6,7 @@ import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     _is_galaxy_env,
+    adjust_margin_for_ddr_speed,
     run_mla_perf_with_approximation,
     run_model_device_perf_test_with_merge,
 )
@@ -43,6 +44,9 @@ def test_deepseek_v3_mla_perf_loudbox():
 def test_deepseek_v3_mla_perf_galaxy():
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    margin = adjust_margin_for_ddr_speed(0.03)
+
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
         expected_device_perf_ns_per_iteration=14_252_829,  # Recalibrated 2026-06-10 on bh-glx-110-c08u02; FABRIC_1D.
@@ -50,7 +54,7 @@ def test_deepseek_v3_mla_perf_galaxy():
         model_name="deepseek_v3_mla_glx_8x4",
         num_iterations=1,
         batch_size=1,
-        margin=0.03,
+        margin=margin,
         comments="seq100k_scaled_glx_8x4_ground_truth",
     )
 
@@ -62,6 +66,9 @@ def test_kimi_mla_chunked_perf_galaxy():
     640 matmul/SDPA configs end to end. Ground-truth 8x4 measurement (no 2x4 approximation)."""
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    margin = adjust_margin_for_ddr_speed(0.03)
+
     run_model_device_perf_test_with_merge(
         command=_CMD_CHUNKED_8X4,
         expected_device_perf_ns_per_iteration=7_118_649,
@@ -69,7 +76,7 @@ def test_kimi_mla_chunked_perf_galaxy():
         model_name="kimi_mla_chunked_glx_8x4",
         num_iterations=1,
         batch_size=1,
-        margin=0.03,
+        margin=margin,
         # Time only the forward: ops between the MLA_START/MLA_END signposts, excluding one-time
         # weight-load tilize/typecast at construction (dispatched before MLA_START).
         between_signposts=("MLA_START", "MLA_END"),

@@ -45,16 +45,16 @@ on:
         required: false
         type: boolean
         default: false
-      run_models_unit_tests:
-        description: "Run models-unit-tests"
-        required: false
-        type: boolean
-        default: false
       run_tt_cnn_unit_tests:
         description: "Run tt-cnn-unit-tests"
         required: false
         type: boolean
         default: false
+      run_triage_tests:
+        description: "Run tt-triage tests"
+        required: false
+        type: boolean
+        default: true
       additional_test_categories:
         description: >
           Additional test categories to run (comma-separated, e.g.,
@@ -307,28 +307,13 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # =============================================================================
-  # Models team
-  # =============================================================================
-  models-unit-tests:
-    needs: [build-artifact, generate-arch-matrix]
-    if: |
-      (github.event_name == 'schedule' || inputs.run_models_unit_tests) &&
-      contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
-    secrets: inherit
-    uses: ./.github/workflows/models-post-commit.yaml
-    with:
-      arch: wormhole_b0
-      runner-label: N150
-      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
-      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-
-  # =============================================================================
   # Triage team
   # =============================================================================
   triage-tests:
     needs: [resolve-docker-pull-refs, build-artifact, generate-arch-matrix]
-    if: ${{ contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150') }}
+    if: |
+      (github.event_name == 'schedule' || inputs.run_triage_tests) &&
+      contains(needs.generate-arch-matrix.outputs.l2-nightly-skus, 'wh_n150')
     secrets: inherit
     uses: ./.github/workflows/triage-tests-impl.yaml
     with:

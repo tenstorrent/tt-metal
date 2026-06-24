@@ -1,0 +1,9 @@
+# Install required dependencies for running tt-triage.
+-r requirements.txt
+
+# Development / type-checking dependencies for tt-triage.
+mypy==2.1.0
+basedpyright==1.39.6
+
+# Type stubs
+types-docopt==0.6.11.20241107

@@ -22,6 +22,9 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "tt-train/sources/ttml/metal/common/sdpa_compute_utils_common.hpp"
+#ifdef TRISC_MATH
+#include "experimental/llk_sfpu/ckernel_sfpu_sdpa_fw.h"
+#endif
 
 constexpr uint32_t onetile = 1U;
 
@@ -39,24 +42,8 @@ inline constexpr uint32_t round_up(uint32_t a, uint32_t b) {
 // so we process 4 SFPU iterations (half-face) instead of the standard 8,
 // saving ~75% of SFPU cycles.
 #ifdef TRISC_MATH
-void calculate_recip_first_column() {
-    constexpr int ITERATIONS_HALF_FACE = 4;
-    for (int d = 0; d < ITERATIONS_HALF_FACE; d++) {
-        sfpi::vFloat in = sfpi::dst_reg[0];
-        sfpi::vFloat out;
-        if constexpr (DST_ACCUM_MODE) {
-            out = ckernel::sfpu::sfpu_reciprocal_iter<2>(in);
-        } else {
-            out = ckernel::sfpu::sfpu_reciprocal_iter<1>(in);
-            out = sfpi::convert<sfpi::vFloat16b>(out, sfpi::RoundMode::Nearest);
-        }
-        sfpi::dst_reg[0] = out;
-        sfpi::dst_reg += 2;
-    }
-}
-
 void recip_tile_first_column(uint32_t idst) {
-    _llk_math_eltwise_unary_sfpu_params_(calculate_recip_first_column, idst, VectorMode::C);
+    SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_recip_first_column, idst, VectorMode::C);
 }
 #endif  // TRISC_MATH
 

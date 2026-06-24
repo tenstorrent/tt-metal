@@ -144,36 +144,6 @@ MorehGroupNormOperation::tensor_return_value_t MorehGroupNormOperation::create_o
     }
     return result;
 }
-
-ttsl::hash::hash_t MorehGroupNormOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    // Hash everything that affects the program: shape/dtype/layout of every tensor + all
-    // operation_attributes. This is more conservative than the framework's default
-    // (which only hashes the descriptor's compile_time_args / CB sizes / kernel paths)
-    // and ensures eps is part of the cache key — required for the BufferBinding fast
-    // cache-hit path to be correctness-safe (cache hit guarantees identical attrs).
-    const auto& input = tensor_args.input;
-    return ttsl::hash::hash_objects_with_default_seed(
-        // Shape/dtype/layout of input — frame these as a tuple for the hasher
-        input.padded_shape(),
-        input.logical_shape(),
-        input.dtype(),
-        input.layout(),
-        input.memory_config(),
-        // Optional inputs — has_value flags + (if present) shape/dtype/layout
-        tensor_args.gamma.has_value(),
-        tensor_args.gamma.has_value() ? tensor_args.gamma->dtype() : tt::tt_metal::DataType::INVALID,
-        tensor_args.beta.has_value(),
-        tensor_args.beta.has_value() ? tensor_args.beta->dtype() : tt::tt_metal::DataType::INVALID,
-        // Attribute knobs
-        operation_attributes.num_groups,
-        operation_attributes.eps,
-        operation_attributes.are_required_outputs,
-        operation_attributes.memory_config,
-        operation_attributes.mean_memory_config,
-        operation_attributes.rstd_memory_config,
-        operation_attributes.compute_kernel_config);
-}
 }  // namespace ttnn::operations::moreh::moreh_group_norm
 
 namespace ttnn::prim {
