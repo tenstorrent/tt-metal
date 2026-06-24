@@ -24,7 +24,7 @@ To setup your workspace:
 Run only one op port per workspace. Trust me, trying to run simultaneous ports within the same workspace will end in tears.
 
 ## Audit step
-The audit step can be done by either Claude Sonnet (max effort) or Opus. The audit produces two outputs:
+The audit step should be done by Claude Opus, as some audits are quite complex. The audit produces two outputs:
  - **METAL2_PREPORT_AUDIT.md** provides the result of the audit.
  - **METAL2_PORT_BRIEF.md** provides information required by the subsequent porting step. It's only produced if the audit was successful.
 
