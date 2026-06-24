@@ -128,6 +128,7 @@ void kernel_main() {
 #endif
 
             cb_scaler_global_obj.wait_front(1);
+            reconfig_data_format(cb_scaler_global, cb_stats);
             reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(cb_stats, cb_scaler_global, cb_var);
             tile_regs_acquire();
             // striding over cb_stats, consisting [E(X), E(X^2)] from all the distributed devices in interleaved order

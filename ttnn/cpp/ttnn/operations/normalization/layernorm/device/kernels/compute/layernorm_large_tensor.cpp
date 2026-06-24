@@ -190,7 +190,7 @@ void kernel_main() {
             cb_xmm2.wait_front(block.full_block_size());
 
             // Accumulate (x-E[x])^2
-            reconfig_data_format(cb_xmm2_id, cb_scaler_id);
+            reconfig_data_format(cb_scaler_id, cb_xmm2_id);
             reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, FLOAT32_REDUCTION>(
                 cb_xmm2_id, cb_scaler_id, cb_accumulate_id);
             for (auto i : block.local()) {

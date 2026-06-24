@@ -63,6 +63,10 @@ void kernel_main() {
 
     // ==================== Initialize reduction ====================
     binary_op_init_common(cb_in0, cb_in0, cb_out);
+    constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+    if constexpr (swap_operands) {
+        reconfig_data_format(cb_scaler, cb_in0);
+    }
     reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_out);
 
     // Wait for scaler to be ready (pushed by dataflow)

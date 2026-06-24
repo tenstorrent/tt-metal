@@ -82,6 +82,7 @@ void kernel_main() {
     pack_untilize_init(cb_in0, cb_out1);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_PACK));
 
+    reconfig_data_format(cb_in0, cb_in1);
     reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_in1, cb_in0, cb_out0);
     ASSERT(TEST_RECONFIG_CALLS(RECONFIG_CHANGED_SRCA | RECONFIG_CHANGED_SRCB | RECONFIG_CHANGED_PACK));
     reduce_uninit();

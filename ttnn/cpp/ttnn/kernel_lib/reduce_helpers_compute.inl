@@ -164,9 +164,13 @@ constexpr bool manages_cb(ReduceInputPolicy p) {
 
 template <PoolType reduce_type, ReduceDim reduce_dim>
 ALWI void reduce_init_short_with_dt(uint32_t old_dfb_id, uint32_t input_dfb_id, uint32_t scaler_dfb_id) {
-    // Reconfigure SRCA data format from old_dfb_id to input_dfb_id (similar to copy_tile_to_dst_init_short_with_dt)
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_dfb_id, input_dfb_id)));
-    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, input_dfb_id)));
+    // REDUCE_ROW SUM/AVG swaps operands: SrcA=scaler, SrcB=data
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+    const uint32_t srca_dfb_id = swap_operands ? scaler_dfb_id : input_dfb_id;
+
+    // Reconfigure SRCA data format from old_dfb_id to the correct SrcA format
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, p_dim_stride_target::IGNORE>(old_dfb_id, srca_dfb_id)));
+    MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_dfb_id, srca_dfb_id)));
 
     // Reconfigure unpacker for reduce operation (SRCA and SRCB)
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim>(input_dfb_id, scaler_dfb_id)));
@@ -199,7 +203,8 @@ ALWI void reload_accumulator_if_needed(
         if (!accumulate.is_first()) {  // Reload on all iterations except first
             constexpr uint32_t onetile = 1;
             accum_dfb.wait_front(onetile);
-            const uint32_t prev_srca_cb = use_matmul ? scaler_dfb_id : input_dfb_id;
+            constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
+            const uint32_t prev_srca_cb = (use_matmul || swap_operands) ? scaler_dfb_id : input_dfb_id;
 
             // For MAX + REDUCE_ROW, GMPOOL's running accumulator lives at row 0 of face 0
             // (max for rows 0-15) and row 0 of face 2 (max for rows 16-31); faces 1 and 3
@@ -351,8 +356,10 @@ ALWI void reduce(
     }());
 
     // Apply reconfig based on mode
+    // REDUCE_ROW SUM/AVG swaps operands (scaler→SrcA, data→SrcB)
+    constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
     if constexpr (reconfig_input(reconfig_mode)) {
-        if constexpr (use_matmul) {
+        if constexpr (use_matmul || swap_operands) {
             reconfig_data_format(scaler_dfb_id, input_dfb_id);
         } else {
             reconfig_data_format(input_dfb_id, scaler_dfb_id);

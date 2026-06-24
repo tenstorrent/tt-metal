@@ -179,6 +179,7 @@ void kernel_main() {
 
     // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
     if constexpr (is_allgather_worker) {
+        reconfig_data_format(cb_scaler_global_id, cb_ex_external_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
             cb_ex_external_id, cb_scaler_global_id, cb_ex_id);
         cb_ex.reserve_back(num_tiles_per_allgather_worker);
@@ -292,6 +293,7 @@ void kernel_main() {
 
     // global reduce, cb_ex_id <-- cb_ex_external_id, cb_ex_partial_id
     if constexpr (is_allgather_worker) {
+        reconfig_data_format(cb_scaler_global_id, cb_ex_external2_id);
         reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW, FP32_DEST_ACC>(
             cb_ex_external2_id, cb_scaler_global_id, cb_ex2_id);
         cb_ex2.reserve_back(num_tiles_per_allgather_worker);

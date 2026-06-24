@@ -67,11 +67,10 @@ ALWI void reduce_init(
     std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     // REDUCE_ROW SUM/AVG uses MVMUL with swapped operands (scaler→SrcA, data→SrcB)
-    // Reconfig formats to match: SrcA=scaler format, SrcB=data
+    // Caller must call reconfig_data_format(icb_scaler, icb) before reduce_init for this path.
     constexpr bool swap_operands = (reduce_dim == ReduceDim::REDUCE_ROW) && (reduce_type != PoolType::MAX);
     if constexpr (swap_operands) {
         state_configure(icb_scaler, icb, ocb, call_line);
-        reconfig_data_format(icb_scaler, icb);
     } else {
         state_configure(icb, icb_scaler, ocb, call_line);
     }

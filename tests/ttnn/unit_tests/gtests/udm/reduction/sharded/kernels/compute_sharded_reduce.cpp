@@ -56,6 +56,10 @@ void kernel_main() {
     // Input: cb_in0 [block_ht x block_wt tiles]
     // Output: cb_partial [block_ht tiles] - one reduced tile per row
 
+    constexpr bool swap_operands = (REDUCE_DIM == ReduceDim::REDUCE_ROW) && (REDUCE_OP != PoolType::MAX);
+    if constexpr (swap_operands) {
+        reconfig_data_format(cb_scaler, cb_in0);
+    }
     reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in0, cb_scaler, cb_partial);
     cb_wait_front(cb_scaler, 1);
     cb_reserve_back(cb_partial, block_ht);
@@ -86,6 +90,9 @@ void kernel_main() {
     // Input: cb_external [num_rows_per_worker * num_blocks tiles]
     // Output: cb_reduced [num_rows_per_worker tiles]
 
+    if constexpr (swap_operands) {
+        reconfig_data_format(cb_scaler, cb_external);
+    }
     reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_external, cb_scaler, cb_reduced);
     cb_reserve_back(cb_reduced, num_rows_per_worker);
 

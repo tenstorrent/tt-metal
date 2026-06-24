@@ -135,6 +135,7 @@ void kernel_main() {
 
     cb_reserve_back(cb_ex_partial2, 1);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
+    reconfig_data_format(cb_scaler, cb_x2);
     reduce_init<PoolType::AVG, ReduceDim::REDUCE_ROW>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     tile_regs_acquire();
