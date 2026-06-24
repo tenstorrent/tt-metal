@@ -355,11 +355,14 @@ class TtMistral4Attention(LightweightModule):
         )
         del _q_b
 
+        # kv_a is the MLA KV down-projection into the *cached* compressed latent that every
+        # future position reads, so its quantization error compounds with context. bf16 (vs
+        # the bf4 used for q_a) lifts full-model prefill PCC ~+0.006 at ~0 perf cost.
         self.kv_a_proj = _load_weight(
             state_dict,
             p + "kv_a_proj_with_mqa.weight",
             transpose=True,
-            dtype=ttnn.bfloat4_b,
+            dtype=ttnn.bfloat16,
             mesh_device=mesh_device,
             transform_fn=_deinterleave_kv_a_proj,
             cache_file_name=_cf(p + "kv_a_proj_with_mqa.weight"),

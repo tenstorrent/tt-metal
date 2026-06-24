@@ -131,9 +131,9 @@ class TtMistral4TextModel:
         )
 
         lm_head_w = state_dict["language_model.lm_head.weight"].to(torch.bfloat16).T.contiguous()
-        # bfloat4_b: ~32 MB per device after sharding across 4 devices (vs 64 MB at bfloat8_b).
-        # Paired with LoFi math (self.lm_head_compute_kernel_config) for ~2x speedup on the
-        # LM head matmul. EXPECTED to regress generation quality — gate behind a PCC test.
+        # bfloat8_b: the lm_head is the single biggest accuracy lever — bf4 -> bf8 lifts
+        # full-model prefill PCC +0.013 at +0.4% device time. ~64 MB per device after
+        # sharding (vs 32 MB at bf4); still LoFi math (self.lm_head_compute_kernel_config).
         TILE = 32
         N_PER_DEVICE = 131072 // mesh_device.get_num_devices()  # 16384 for P150x8
         dram = mesh_device.dram_grid_size()  # P150 → x=8, y=1
@@ -150,12 +150,13 @@ class TtMistral4TextModel:
         )
         self.lm_head_weight = ttnn.as_tensor(
             lm_head_w,
-            dtype=ttnn.bfloat4_b,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=lm_head_in1_memcfg,
             mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
-            cache_file_name=_cf("language_model.lm_head.weight"),  # bump or remove the cache, layout changed!
+            # bump or remove the cache, layout changed!
+            cache_file_name=_cf("language_model.lm_head.weight"),
         )
 
         NT_per_device = N_PER_DEVICE // TILE  # 512
@@ -179,7 +180,7 @@ class TtMistral4TextModel:
         # share the DS tensor — it needs DRAM-interleaved weights + the 1D mcast path.
         self.lm_head_weight_prefill = ttnn.as_tensor(
             lm_head_w,
-            dtype=ttnn.bfloat4_b,
+            dtype=ttnn.bfloat8_b,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
