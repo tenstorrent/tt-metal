@@ -19,10 +19,12 @@ reproduced here for the whole model:
      replay. The attention KV cache needs no rewind: the first replayed step rewrites the same position
      the capture run touched, and the prefill history below it is untouched.
 
-Prefill is captured too (the user asked), but it is idempotent — forward_prefill recomputes from the
-input and overwrites the KV/GDN state wholesale — so it needs no rewind. Note prefill trace buys little
-(prefill is compute-bound, not dispatch-bound); decode is where replay pays off. Reported TTFT / tok/s
-time the REPLAY only; the one-time compile+capture cost is returned separately as capture_s.
+Prefill can be captured too (idempotent — forward_prefill recomputes from the input and overwrites the
+KV/GDN state wholesale — so it needs no rewind), but generate(trace_prefill=False) runs it eager
+instead: prefill is compute-bound, so trace buys it ~nothing, and a captured prefill graph cannot be
+held at all past ~64k (its single trace buffer exceeds the 2 GB limit). Decode is where replay pays off.
+Reported TTFT / tok/s time the replay (or the eager prefill); the one-time compile+capture cost is
+returned separately as capture_s.
 
 This reaches into the model's public pieces (embd / layers / norm / lm_head and each GDN layer's
 conv_state / last_recurrent_state) exactly as the unit tests do, so tt/model.py stays a plain eager
@@ -164,32 +166,50 @@ class TracedRunner:
             ttnn.deallocate(rec)
 
     # ── End-to-end traced greedy generation ───────────────────────────────────────────────────────
-    def generate(self, prompt_ids, max_new_tokens, eos_token_id=None):
-        """Greedy B=1 generation with traced prefill + traced decode.
+    def generate(self, prompt_ids, max_new_tokens, eos_token_id=None, trace_prefill=True):
+        """Greedy B=1 generation: traced decode, with prefill either traced or run eager.
 
         Returns (tokens, ttft_s, prefill_tok_s, decode_tok_s, capture_s). ttft / prefill_tok_s time the
-        prefill REPLAY only (steady state); the one-time compile+capture cost is capture_s.
+        prefill (the replay if traced, the eager forward otherwise); the one-time compile+capture cost
+        is capture_s (decode-only when prefill is eager).
+
+        trace_prefill=False runs prefill EAGER via model.prefill and traces ONLY decode. This is the
+        required path for very long contexts: a captured prefill graph pins every buffer address into a
+        single trace allocation, which exceeds the 2 GB single-trace-buffer limit around 64k (~2.89 GB),
+        so it cannot be captured there at all. Eager prefill seeds the SAME KV + GDN state the decode
+        trace reads and costs ~nothing versus traced prefill (prefill is compute-bound, not
+        dispatch-bound), so it is the recommended long-context mode.
         """
         m = self.m
         prompt, valid_len, seq_len = pad_prompt(prompt_ids, m.args.max_seq_len, max_new_tokens)
         m.reset_state()
 
-        # ── Prefill: capture once, replay (idempotent → no state rewind), read the next-token logit ──
-        cap_t0 = time.time()
-        self._alloc_prefill_io(prompt, seq_len)
-        self._idx = valid_len - 1
-        self._prefill_forward()  # compile (seeds KV + GDN state)
-        p_tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-        p_logits = self._prefill_forward()
-        ttnn.end_trace_capture(self.device, p_tid, cq_id=0)
-        capture_s = time.time() - cap_t0
+        if trace_prefill:
+            # ── Prefill: capture once, replay (idempotent → no state rewind), read the next-token logit ──
+            cap_t0 = time.time()
+            self._alloc_prefill_io(prompt, seq_len)
+            self._idx = valid_len - 1
+            self._prefill_forward()  # compile (seeds KV + GDN state)
+            p_tid = ttnn.begin_trace_capture(self.device, cq_id=0)
+            p_logits = self._prefill_forward()
+            ttnn.end_trace_capture(self.device, p_tid, cq_id=0)
+            capture_s = time.time() - cap_t0
 
-        t0 = time.time()
-        ttnn.execute_trace(self.device, p_tid, cq_id=0, blocking=True)
-        prefill_logits = m._logits_to_torch(p_logits, n_rows=1).reshape(-1)
-        ttft = time.time() - t0
-        prefill_tok_s = seq_len / ttft  # prompt-ingestion rate over the padded length the replay ran
-        ttnn.release_trace(self.device, p_tid)
+            t0 = time.time()
+            ttnn.execute_trace(self.device, p_tid, cq_id=0, blocking=True)
+            prefill_logits = m._logits_to_torch(p_logits, n_rows=1).reshape(-1)
+            ttft = time.time() - t0
+            prefill_tok_s = seq_len / ttft  # prompt-ingestion rate over the padded length the replay ran
+            ttnn.release_trace(self.device, p_tid)
+        else:
+            # ── Eager prefill: model.prefill runs the prompt op-by-op and seeds the same KV + GDN state
+            #    the decode trace reads, allocating NO trace buffer — the only path that fits a 64k
+            #    prefill (see docstring). It already returns host logits [vocab] at the last real position. ──
+            capture_s = 0.0
+            t0 = time.time()
+            prefill_logits = m.prefill(prompt, valid_len=valid_len)
+            ttft = time.time() - t0
+            prefill_tok_s = seq_len / ttft
 
         next_id = int(torch.argmax(prefill_logits).item())
         out = [next_id]

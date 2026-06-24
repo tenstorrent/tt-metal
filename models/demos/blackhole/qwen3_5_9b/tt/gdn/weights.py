@@ -21,18 +21,20 @@ from models.demos.blackhole.qwen3_5_9b.utils.general_utils import get_cache_file
 class Qwen35GDNWeights:
     """Per-device weight shards for one Gated DeltaNet layer (see load_gdn_weights)."""
 
-    dt_bias: ttnn.Tensor  # softplus bias for the gate decay, per value head
+    dt_bias: ttnn.Tensor  # softplus bias for the gate decay, per value head — bf16
     neg_A_log_exp: ttnn.Tensor  # -exp(A_log) decay rates, kept TRUE fp32 (see loader)
-    w_taps: list[ttnn.Tensor]  # depthwise conv1d, one broadcastable tensor per kernel tap
-    w_norm: ttnn.Tensor  # gated-RMSNorm weight, replicated (per-head_v_dim feature)
-    wo: ttnn.Tensor  # out_proj, row-parallel
-    wqkv: ttnn.Tensor  # fused Q|K|V in_proj, column-parallel (per-device head grouping)
-    wz: ttnn.Tensor  # gate (z) in_proj, column-parallel
-    wb: ttnn.Tensor  # beta in_proj, column-parallel
-    wa: ttnn.Tensor  # decay (a) in_proj, column-parallel
+    w_taps: list[ttnn.Tensor]  # depthwise conv1d, one broadcastable tensor per kernel tap — bf16
+    w_norm: ttnn.Tensor  # gated-RMSNorm weight, replicated (per-head_v_dim feature) — bf16
+    wo: ttnn.Tensor  # out_proj, row-parallel — bf8
+    wqkv: ttnn.Tensor  # fused Q|K|V in_proj, column-parallel (per-device head grouping) — bf8
+    wz: ttnn.Tensor  # gate (z) in_proj, column-parallel — bf8
+    wb: ttnn.Tensor  # beta in_proj, column-parallel — bf8
+    wa: ttnn.Tensor  # decay (a) in_proj, column-parallel — bf8
 
 
-def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_cache_path=None) -> Qwen35GDNWeights:
+def load_gdn_weights(
+    mesh_device, state_dict, args, proj_dtype=ttnn.bfloat8_b, tensor_cache_path=None
+) -> Qwen35GDNWeights:
     """Load and per-head-shard one GDN layer's weights across a (1, tp) mesh.
 
     One loader for every device count. At tp=1 it degenerates to the original
@@ -52,8 +54,15 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
     (wqkv / wz / wa / wb) to match the my_gdn forward instead of fusing them, mirroring
     the proven gdn/tp.py loader.
 
+    ``proj_dtype`` is the dtype of the five matmul projection shards (wqkv/wz/wa/wb/wo),
+    bfloat8_b by default to halve their DRAM footprint/bandwidth (the block's dominant
+    cost). The conv taps, dt_bias and norm weight are pinned to bf16 below regardless of
+    this argument, and neg_A_log_exp stays fp32 (see Qwen35GDNWeights).
+
     ``tensor_cache_path`` is only safe with REAL (deterministic) weights — pass None
-    for random-weight tests to avoid a stale cross-run cache.
+    for random-weight tests to avoid a stale cross-run cache. NOTE: a cache predates this
+    dtype split, so an on-disk shard is reloaded at whatever dtype it was first written;
+    clear the weight cache once after this change so the projections re-convert to bf8.
     """
     tp = mesh_device.get_num_devices()
     num_k_heads, head_k_dim = args.linear_num_key_heads, args.linear_key_head_dim
@@ -106,7 +115,12 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
         state_dict["in_proj_qkv.weight"], key_dim, value_dim, num_k_heads, head_k_dim, num_v_heads, head_v_dim, tp
     )
     wqkv = tpc.shard_w(
-        qkv_reorganized_for_sharding, mesh_device, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=cache("wqkv"), dtype=dtype
+        qkv_reorganized_for_sharding,
+        mesh_device,
+        dim=-1,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cache_path=cache("wqkv"),
+        dtype=proj_dtype,
     )
 
     # in_proj_z has [4096, hidden] shape
@@ -123,7 +137,7 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=cache("wz"),
-        dtype=dtype,
+        dtype=proj_dtype,
     )
     #   in_proj_a.weight   [32, hidden]          in_proj_b.weight   [32, hidden]
     #     row 0  │ a head 0  │                      row 0  │ b head 0  │
@@ -136,7 +150,7 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=cache("wa"),
-        dtype=dtype,
+        dtype=proj_dtype,
     )
     wb = tpc.shard_w(
         state_dict["in_proj_b.weight"],
@@ -144,7 +158,7 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
         dim=-1,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=cache("wb"),
-        dtype=dtype,
+        dtype=proj_dtype,
     )
 
     # ── out_proj (row-parallel): shard the INPUT (value) dim so each device multiplies
@@ -156,7 +170,7 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
         dim=0,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_path=cache("wo"),
-        dtype=dtype,
+        dtype=proj_dtype,
     )
 
     # ── Depthwise conv taps: K per-channel taps, reordered to the same per-device
@@ -164,8 +178,11 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
     taps_re = tpc.prepare_conv_taps(
         state_dict["conv1d.weight"], key_dim, num_k_heads, head_k_dim, num_v_heads, head_v_dim, conv_kernel_size, tp
     )
+    # bf16, not proj_dtype: depthwise taps are a tiny per-channel FIR off the matmul
+    # path, so bf8 would buy ~no bandwidth while coarsening the conv directly.
     w_taps = [
-        tpc.shard_small(taps_re[j], mesh_device, cache(f"tap{j}"), dim=-1, dtype=dtype) for j in range(conv_kernel_size)
+        tpc.shard_small(taps_re[j], mesh_device, cache(f"tap{j}"), dim=-1, dtype=ttnn.bfloat16)
+        for j in range(conv_kernel_size)
     ]
 
     # ── Per-V-head scalars: sharded over the value-head dim to match the recurrence's
@@ -174,8 +191,9 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
     # we shard it with a direct as_tensor rather than tpc.shard_small — shard_small
     # rounds its host tensor to bf16 before storing, which would silently drop the fp32
     # precision the single-device load kept. The [1,1,N] shape broadcasts over the
-    # [B,1,seq,N] activations exactly as the original 1-D tensor did. dt_bias is bf16
-    # either way, so it rides tpc.shard_small. ──
+    # [B,1,seq,N] activations exactly as the original 1-D tensor did. dt_bias stays bf16
+    # (not proj_dtype) — it is the softplus bias on that same decay gate, so it rides
+    # tpc.shard_small at bf16. ──
     neg_A_log = -(state_dict["A_log"].float().exp())
     neg_A_log_exp = ttnn.as_tensor(
         neg_A_log.unsqueeze(0).unsqueeze(0),
@@ -186,16 +204,18 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         cache_file_name=cache("neg_A_log_exp"),
     )
-    dt_bias = tpc.shard_small(state_dict["dt_bias"], mesh_device, cache("dt_bias"), dim=-1, dtype=dtype)
+    dt_bias = tpc.shard_small(state_dict["dt_bias"], mesh_device, cache("dt_bias"), dim=-1, dtype=ttnn.bfloat16)
 
     # ── norm.weight is per-(head_v_dim) feature, shared by every head, so it is
     # REPLICATED. as_tensor (not from_torch) so it can use the weight cache; keep its
     # 1-D shape (no unsqueeze) so the gated-RMSNorm broadcast in forward is identical
     # to the single-device path. ──
+    # bf16, not proj_dtype: the gated-RMSNorm scale is one per-feature vector feeding
+    # the precision-sensitive output norm, not a matmul weight on the bandwidth path.
     w_norm = ttnn.as_tensor(
         state_dict["norm.weight"].to(torch.bfloat16),
         device=mesh_device,
-        dtype=dtype,
+        dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,

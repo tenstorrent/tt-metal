@@ -12,6 +12,8 @@ Three execution modes, selectable with --mode:
   * trace  — prefill and the per-token decode step are each captured ONCE as a ttnn trace and then
              replayed with a single device dispatch, the path a real server uses to hide host
              dispatch latency on the (otherwise dispatch-bound) decode. See TracedRunner.
+             Add --eager-prefill to run prefill eager and trace ONLY decode — required past ~32k,
+             where a captured prefill graph exceeds the ~2GB single-trace-buffer limit.
   * both   — run eager then trace and report tokens/s for each (and whether they agree token-for-token).
 
 Run (4xP150, the default mesh):
@@ -58,6 +60,14 @@ def parse_args():
         "--max-seq-len", type=int, default=2048, help="KV-cache / RoPE length; must cover prompt + new tokens"
     )
     p.add_argument("--mode", choices=["eager", "trace", "both"], default="both")
+    p.add_argument(
+        "--eager-prefill",
+        action="store_true",
+        help="trace/both mode: run prefill EAGER and trace ONLY the decode step. Required for long contexts "
+        "whose captured prefill graph exceeds the ~2GB single-trace-buffer limit (≈32k+ tokens); also keeps "
+        "--trace-region-size small since only the one-token decode step is traced. Prefill is compute-bound, "
+        "so tracing it buys ~nothing anyway.",
+    )
     p.add_argument("--n-layers", type=int, default=None, help="truncate the decoder stack (smoke tests only)")
     p.add_argument("--raw", action="store_true", help="encode the prompt verbatim instead of the chat template")
     p.add_argument("--trace-region-size", type=int, default=DEFAULT_TRACE_REGION_SIZE)
@@ -216,12 +226,13 @@ def main():
             from models.demos.blackhole.qwen3_5_9b.demo.trace_runner import TracedRunner
 
             toks, ttft, prefill_tok_s, tok_s, capture_s = TracedRunner(model).generate(
-                input_ids, args.max_new_tokens, eos
+                input_ids, args.max_new_tokens, eos, trace_prefill=not args.eager_prefill
             )
             results["trace"] = toks
+            prefill_kind = "eager" if args.eager_prefill else "traced"
             logger.info(
-                f"[trace]  prefill: TTFT={ttft:.3f}s ({prefill_tok_s:.1f} tok/s)  decode: {tok_s:.2f} tok/s"
-                f"  (one-time capture={capture_s:.2f}s)"
+                f"[trace]  prefill ({prefill_kind}): TTFT={ttft:.3f}s ({prefill_tok_s:.1f} tok/s)  "
+                f"decode (traced): {tok_s:.2f} tok/s  (one-time capture={capture_s:.2f}s)"
             )
             print(f"\n=== TRACE ===\n{tokenizer.decode(toks, skip_special_tokens=True)}\n")
 
