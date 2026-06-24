@@ -114,6 +114,16 @@ jobs:
           - NEVER fall back to `gh pr review --comment` or `gh pr comment` — those post an
             unanchored summary, not a line comment. If an inline post fails, fix the
             command and retry; do not downgrade to a top-level comment.
+
+          Determining the line number — do NOT eyeball it:
+          - Find the exact line with `grep -n "<unique snippet of the code>" <file>`,
+            and use the number of the line that holds the code your finding is about.
+          - Before posting, verify with `sed -n "<line>p" <file>` that it prints the
+            exact code you are commenting on; if it does not, fix the line number.
+          - For a finding that spans several lines, anchor the whole range:
+            `-F start_line=<first> -f start_side="RIGHT" -F line=<last>`.
+          - The line must be a changed/added line shown in the PR diff; if it is not,
+            anchor to the nearest changed line the finding refers to.
           EOF
           } > "$out"
           echo "Assembled $(wc -l < "$out") lines into $out"
@@ -129,7 +139,7 @@ jobs:
           ANTHROPIC_BASE_URL: ${{ secrets.TT_CHAT_URL }}
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.TT_CHAT_API_KEY }}
           # The proxy requires the "anthropic/" model prefix.
-          ANTHROPIC_MODEL: anthropic/claude-opus-4-5-20251101
+          ANTHROPIC_MODEL: anthropic/claude-opus-4-6
           ANTHROPIC_SMALL_FAST_MODEL: anthropic/claude-haiku-4-5-20251001
           # So /code-review --comment can detect the PR and post via gh.
           # GITHUB_TOKEN is the per-run automatic token; its write scope comes
@@ -147,7 +157,7 @@ jobs:
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
           # anthropic/ prefix for the proxy).
           claude_args: |
-            --allowedTools "Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),mcp__deepwiki,mcp__atlassian,mcp__glean_default"
+            --allowedTools "Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),Bash(sed:*),mcp__deepwiki,mcp__atlassian,mcp__glean_default"
             --max-turns 60
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
