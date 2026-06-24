@@ -304,6 +304,9 @@ void kernel_main() {
     const uint32_t band0 = get_arg_val<uint32_t>(3);
     const uint32_t num_bands = get_arg_val<uint32_t>(4);
     const uint32_t max_bands = get_arg_val<uint32_t>(5);  // row's widest column; streaming drains q to this
+    // Valid KV length in tiles: caps each cell's valid columns (the causal mask suffix grows to cover the
+    // unwritten tail). Full k_len_tiles when not set, so the dense path is unchanged. Excluded from the hash.
+    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
@@ -318,6 +321,7 @@ void kernel_main() {
     CircularBuffer q(cb_q);
 
     WorkUnitSpan span;
+    span.set_valid_k_len_tiles(kv_len_tiles);
 
     constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;  // QC x KC accumulator slots
     constexpr uint32_t q_row_tiles = q_group_tiles / q_tiles_per_unit;    // heads_per_group * head_dim_tiles
