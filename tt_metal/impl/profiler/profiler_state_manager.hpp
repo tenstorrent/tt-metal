@@ -10,6 +10,7 @@
 #include <vector>
 #include <set>
 #include <unordered_set>
+#include <optional>
 #include <mutex>
 
 #include <tt-metalium/core_coord.hpp>
@@ -56,6 +57,13 @@ public:
     void mark_trace_replay(ChipId device_id, uint32_t trace_id);
     void add_runtime_id_to_trace(ChipId device_id, uint32_t trace_id, uint32_t runtime_id);
 
+    // Device-host calibration published by the realtime (dispatch-core) profiler. In
+    // accumulate mode the dedicated host-device sync is skipped, so the worker-core
+    // device profiler pulls this to sync its zones. Thread-safe: the realtime profiler
+    // receiver thread writes; the (main-thread) result dump reads.
+    void set_realtime_sync_info(ChipId device_id, const SyncInfo& info);
+    std::optional<SyncInfo> get_realtime_sync_info(ChipId device_id) const;
+
     ProfilerStateManager& operator=(const ProfilerStateManager&) = delete;
     ProfilerStateManager& operator=(ProfilerStateManager&&) = delete;
     ProfilerStateManager(const ProfilerStateManager&) = delete;
@@ -72,6 +80,9 @@ public:
     std::unordered_map<ChipId, std::unordered_map<ChipId, std::vector<std::pair<uint64_t, uint64_t>>>>
         device_device_time_pair;
     std::unordered_map<ChipId, uint64_t> smallest_host_time;
+
+    std::unordered_map<ChipId, SyncInfo> realtime_sync_info_map;
+    mutable std::mutex realtime_sync_info_mutex;
 
     bool do_sync_on_close{};
 

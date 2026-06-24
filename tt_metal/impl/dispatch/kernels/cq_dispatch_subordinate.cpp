@@ -242,13 +242,16 @@ void wait_for_workers(uint32_t wait_count, uint32_t wait_stream) {
     last_wait_stream = wait_stream;
     volatile uint32_t* worker_sem = reinterpret_cast<volatile uint32_t*>(
         static_cast<uintptr_t>(STREAM_REG_ADDR(wait_stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX)));
-    while (stream_wrap_gt(wait_count, *worker_sem)) {
-        if (rt_profiler_enabled) {
-            record_realtime_timestamp(rt_profiler_msg, false);
-        }
+    {
+        // DeviceZoneScopedN("Wait");
+        while (stream_wrap_gt(wait_count, *worker_sem)) {
+            if (rt_profiler_enabled) {
+                record_realtime_timestamp(rt_profiler_msg, false);
+            }
 #if DEVICE_PRINT_DISPATCH_ENABLED
         device_print_dispatcher.execute();
 #endif
+        }
     }
 
     WAYPOINT("WCD");

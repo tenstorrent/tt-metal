@@ -33,6 +33,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
 #include <tt-metalium/tt_align.hpp>
+#include <tt-metalium/tt_metal_profiler.hpp>
 #include <tt_metal.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
@@ -762,6 +763,13 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
             tracy_handler_->CalibrateDevice(
                 dev_state.chip_id, sync_check_host_anchor, device_time, dev_state.sync_frequency);
             tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+            // Hand the same calibration to the worker-core device profiler so its zones sync in
+            // accumulate mode (where the dedicated host-device sync is skipped). No-op otherwise.
+            tt::tt_metal::detail::PublishRealtimeSyncInfo(
+                dev_state.chip_id,
+                static_cast<double>(sync_check_host_anchor),
+                static_cast<double>(device_time),
+                dev_state.sync_frequency);
 
             dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
 
@@ -811,6 +819,11 @@ RealtimeProfilerManager::RealtimeProfilerManager(const std::shared_ptr<MeshDevic
                 tracy_handler_->CalibrateDevice(
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                tt::tt_metal::detail::PublishRealtimeSyncInfo(
+                    dev_state.chip_id,
+                    static_cast<double>(dev_state.sync_host_time_before),
+                    static_cast<double>(device_time),
+                    dev_state.sync_frequency);
                 pages_received++;
                 dev_state.sync_response_received.store(true);
                 return true;
@@ -1254,6 +1267,11 @@ void RealtimeProfilerManager::trigger_sync_check() {
                 tracy_handler_->CalibrateDevice(
                     dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
                 tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                tt::tt_metal::detail::PublishRealtimeSyncInfo(
+                    dev_state.chip_id,
+                    static_cast<double>(dev_state.sync_host_time_before),
+                    static_cast<double>(device_time),
+                    dev_state.sync_frequency);
                 dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
                 dev_state.pending_first_unthrottled_finish_sync = false;
                 got_sync = true;

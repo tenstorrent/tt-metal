@@ -72,7 +72,10 @@ uint32_t _start() {
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #endif
-    wait_for_go_message();
+    {
+        // DeviceZoneScopedN("Wait_GO_BRISCK");
+        wait_for_go_message();
+    }
     {
         DeviceZoneScopedMainChildN("BRISC-KERNEL");
         EARLY_RETURN_FOR_DEBUG
