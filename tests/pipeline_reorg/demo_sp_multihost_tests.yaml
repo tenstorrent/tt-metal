@@ -67,7 +67,7 @@
       timeout: 30
   owner_id: U08E1JCMAJF
   team: scaleout
-  sp_config: sp1-blitz
+  sp_config: sp1-mgd
 
 - name: "Stress Test (DeepSeek V3 B1 Supercluster 4 aka Superpod 1)"
   cmd: |
