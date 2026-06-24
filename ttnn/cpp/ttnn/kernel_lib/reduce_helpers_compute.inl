@@ -287,6 +287,9 @@ ALWI void reduce(
             reduce_dim != ReduceDim::REDUCE_SCALAR || reduce_format != DataFormat::Int32,
         "Int32 MAX/SUM REDUCE_SCALAR is not supported (host decomposes Int32 HW reduce into W-then-H)");
     static_assert(
+        reduce_type != PoolType::AVG || reduce_format != DataFormat::Int32,
+        "Int32 AVG (mean) is not supported");
+    static_assert(
         is_accumulation_type_v<AccumulateT>,
         "AccumulateT must be a valid accumulation type (NoAccumulation or Accumulate)");
     static_assert(
