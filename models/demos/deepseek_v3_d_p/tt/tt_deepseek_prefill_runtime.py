@@ -19,7 +19,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 
 @dataclass
-class TtPrefillPipelineConfig:
+class TtPrefillRuntimeConfig:
     num_layers: int
     max_seq_len: int  # per-user KV-cache length (tokens), e.g. 60 * 1024
     mesh_shape: tuple = (32, 4)
@@ -60,13 +60,13 @@ class TtPrefillPipelineConfig:
         return self.mesh_shape[self.tp_axis]
 
 
-class TtDeepSeekPrefillPipeline:
+class TtDeepSeekPrefillRuntime:
     def __init__(
         self,
         mesh_device: ttnn.MeshDevice,
         hf_config: PretrainedConfig,
         state_dict: dict,
-        config: TtPrefillPipelineConfig,
+        config: TtPrefillRuntimeConfig,
     ):
         self.mesh_device = mesh_device
         self.hf_config = hf_config
@@ -87,7 +87,7 @@ class TtDeepSeekPrefillPipeline:
 
     def _build_model(self, state_dict: dict) -> None:
         logger.info(
-            f"Building TtDeepSeekPrefillPipeline model: "
+            f"Building TtDeepSeekPrefillRuntime model: "
             f"num_layers={self.config.num_layers}, max_seq_len={self.config.max_seq_len}, "
             f"mesh_shape={self.config.mesh_shape}, chunk_size={self.config.chunk_size}, num_users={self.config.num_users}"
         )
@@ -105,7 +105,7 @@ class TtDeepSeekPrefillPipeline:
             else:
                 logger.warning(
                     f"TTNN weight cache not complete at {self.config.weight_cache_path}; "
-                    f"pipeline build will fail without a populated cache. "
+                    f"runtime build will fail without a populated cache. "
                     f"Run the pretrained smoke test once to populate it."
                 )
         self.model = TtPrefillTransformer(
@@ -154,7 +154,7 @@ class TtDeepSeekPrefillPipeline:
     def compile(self) -> None:
         assert self.model_built and self.kv_cache_allocated
         chunk = self.config.chunk_size
-        logger.info(f"TtDeepSeekPrefillPipeline.compile() — warming up one {chunk}-token chunk")
+        logger.info(f"TtDeepSeekPrefillRuntime.compile() — warming up one {chunk}-token chunk")
         t0 = time.perf_counter()
         tt_tokens = prepare_prefill_input_tensor(
             [0] * chunk,
@@ -175,7 +175,7 @@ class TtDeepSeekPrefillPipeline:
         ttnn.deallocate(tt_tokens)
         ttnn.synchronize_device(self.mesh_device)
         warmup_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"[prefill timing] task_id=WARMUP num_tokens={chunk} pipeline.prefill(chunk) = {warmup_ms:.2f} ms")
+        logger.info(f"[prefill timing] task_id=WARMUP num_tokens={chunk} runtime.prefill(chunk) = {warmup_ms:.2f} ms")
         self.compiled = True
 
     def prefill(

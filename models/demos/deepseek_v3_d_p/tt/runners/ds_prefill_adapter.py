@@ -5,7 +5,7 @@
 
 Implements `models.common.prefill_runner.adapter.PrefillModelAdapter` for both the deepseek_v3_d_p
 and kimi_k2_6 variants. It is a thin wrapper: every method delegates to the existing
-`runner_utils` / `integration_setup` helpers and the `TtDeepSeekPrefillPipeline`, so the new common
+`runner_utils` / `integration_setup` helpers and the `TtDeepSeekPrefillRuntime`, so the new common
 runner and the old in-package prefill_runner.py exercise the SAME underlying code (easy to compare).
 
 The variant differences (config class, cache/trace paths, gate-mode default) come from the
@@ -29,10 +29,7 @@ from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     resolve_trace_dir,
     resolve_weight_cache_path,
 )
-from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
-    TtDeepSeekPrefillPipeline,
-    TtPrefillPipelineConfig,
-)
+from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_runtime import TtDeepSeekPrefillRuntime, TtPrefillRuntimeConfig
 
 # Per-iter mesh distribution for the token input. Used by the H2D service's
 # internal mapper; the producer process builds an equivalent mapper from
@@ -45,7 +42,7 @@ _H2D_MAPPER_CONFIG = ttnn.MeshMapperConfig(
 
 
 class DeepSeekPrefillAdapter:
-    """PrefillModelAdapter implementation backed by a RunnerVariant + TtDeepSeekPrefillPipeline."""
+    """PrefillModelAdapter implementation backed by a RunnerVariant + TtDeepSeekPrefillRuntime."""
 
     supports_migration = True
     h2d_mapper_config = _H2D_MAPPER_CONFIG
@@ -87,8 +84,8 @@ class DeepSeekPrefillAdapter:
     def load_trace_token_ids(self, trace_dir, total_len=None) -> list:
         return load_trace_token_ids(trace_dir, total_len)
 
-    # --- pipeline build (owns KV cache creation) ---
-    def build_pipeline(
+    # --- runtime build (owns KV cache creation) ---
+    def build_runtime(
         self,
         *,
         mesh_device,
@@ -103,7 +100,7 @@ class DeepSeekPrefillAdapter:
         weight_cache_path: Optional[Path],
         kv_only_last_layer: bool,
     ):
-        pipeline_config = TtPrefillPipelineConfig(
+        runtime_config = TtPrefillRuntimeConfig(
             num_layers=num_layers,
             max_seq_len=max_seq_len,
             mesh_shape=mesh_shape,
@@ -117,27 +114,27 @@ class DeepSeekPrefillAdapter:
             kv_only_last_layer=kv_only_last_layer,
             routing_use_l1_small_for_semaphores=self.uses_l1_small_semaphores,
         )
-        return TtDeepSeekPrefillPipeline(
+        return TtDeepSeekPrefillRuntime(
             mesh_device=mesh_device,
             hf_config=hf_config,
             state_dict={},
-            config=pipeline_config,
+            config=runtime_config,
         )
 
     # --- token input layout ---
     def prepare_prefill_input_tensor(self, token_ids, mesh_device, sp_factor, is_balanced, mesh_shape, sp_axis):
         return prepare_prefill_input_tensor(token_ids, mesh_device, sp_factor, is_balanced, mesh_shape, sp_axis)
 
-    # --- validation (reaches into the pipeline's own KV cache) ---
-    def kv_cache_pcc_check(self, pipeline, slot_id: int, n_chunks: int, trace_dir=None) -> float:
-        return kv_cache_pcc_check(pipeline, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
+    # --- validation (reaches into the runtime's own KV cache) ---
+    def kv_cache_pcc_check(self, runtime, slot_id: int, n_chunks: int, trace_dir=None) -> float:
+        return kv_cache_pcc_check(runtime, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
 
     # --- disaggregation / migration ---
-    def build_and_serialize_kv_chunk_table(self, pipeline, path: str) -> str:
-        cfg = pipeline.config
+    def build_and_serialize_kv_chunk_table(self, runtime, path: str) -> str:
+        cfg = runtime.config
         return build_and_serialize_kv_chunk_table(
-            mesh_device=pipeline.mesh_device,
-            kvpe_cache=pipeline.kvpe_cache,
+            mesh_device=runtime.mesh_device,
+            kvpe_cache=runtime.kvpe_cache,
             seq_len=cfg.max_seq_len,
             num_layers=cfg.num_layers,
             mesh_shape=cfg.mesh_shape,

@@ -62,14 +62,14 @@ def _handle_sigterm(signum, frame):
     _shutdown = True
 
 
-def run_standalone_loop(pipeline) -> None:
+def run_standalone_loop(runtime) -> None:
     """Standalone chunked prefill: read the input token IDs from this variant's golden trace and drive
-    them through the pipeline in chunk_size chunks (advancing kv_actual per chunk), filling slot_id's
+    them through the runtime in chunk_size chunks (advancing kv_actual per chunk), filling slot_id's
     KV cache. No H2D socket, no SHM, no external producer — single process, for local bring-up / perf.
     Chunked prefill does not sample; the populated KV cache is the output. With PREFILL_STANDALONE_PCC
     the same trace supplies the golden kv_post_transform for validation.
 
-    The pipeline runs the kv-only last layer (no first_token, no LM head); the runner just logs
+    The runtime runs the kv-only last layer (no first_token, no LM head); the runner just logs
     per-iter timing.
 
     Env:
@@ -83,7 +83,7 @@ def run_standalone_loop(pipeline) -> None:
     import json
     import time as _time
 
-    cfg = pipeline.config
+    cfg = runtime.config
     chunk_size = cfg.chunk_size
     trace_dir = ADAPTER.resolve_trace_dir()
     # PREFILL_STANDALONE_INPUT overrides the trace's default token_ids with a user-supplied JSON file
@@ -122,10 +122,10 @@ def run_standalone_loop(pipeline) -> None:
         # prepare_prefill_input_tensor (is_balanced=False) produces the correct chip-major chunk.
         for c in range(n_chunks):
             kv_actual = c * chunk_size
-            pipeline.prefill(
+            runtime.prefill(
                 ADAPTER.prepare_prefill_input_tensor(
                     token_ids[kv_actual : kv_actual + chunk_size],
-                    pipeline.mesh_device,
+                    runtime.mesh_device,
                     cfg.sp_factor,
                     False,  # chunked prefill is block-cyclic (non-balanced)
                     cfg.mesh_shape,
@@ -135,7 +135,7 @@ def run_standalone_loop(pipeline) -> None:
                 actual_start=kv_actual,
                 actual_end=kv_actual + chunk_size,  # standalone drives full chunks (all positions real)
             )
-        ttnn.synchronize_device(pipeline.mesh_device)
+        ttnn.synchronize_device(runtime.mesh_device)
         _dt_ms = (_time.perf_counter() - _t0) * 1000.0
         iter_times_ms.append(_dt_ms)
         logger.info(
@@ -148,10 +148,10 @@ def run_standalone_loop(pipeline) -> None:
     print(f"[standalone] prefill_complete task_id={task_id} slot={slot_id} isl={actual_isl}")
 
     if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
-        ADAPTER.kv_cache_pcc_check(pipeline, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
+        ADAPTER.kv_cache_pcc_check(runtime, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
 
 
-def run_request_loop(pipeline, h2d_service: ttnn.H2DStreamService) -> None:
+def run_request_loop(runtime, h2d_service: ttnn.H2DStreamService) -> None:
     """Request loop: token IDs + per-iter control metadata arrive over the H2D
     socket service, pushed by a separate producer process (prefill_h2d_producer.py
     today; the inference-server / prefill scheduler in production).
@@ -162,7 +162,7 @@ def run_request_loop(pipeline, h2d_service: ttnn.H2DStreamService) -> None:
 
     `h2d_socket_sync` returns (tokens, metadata); we decode the 3×uint32
     PrefillMetadata [slot_id, actual_start, actual_end] and pass them straight to
-    `pipeline.prefill` (actual_start is the chunk's cache write offset; actual_end - actual_start is
+    `runtime.prefill` (actual_start is the chunk's cache write offset; actual_end - actual_start is
     its real-token count). The loop is push-driven: it has no notion of how many chunks a request
     spans — the producer/scheduler decides that.
     """
@@ -196,7 +196,7 @@ def run_request_loop(pipeline, h2d_service: ttnn.H2DStreamService) -> None:
         )
         # Time ONLY the prefill compute, not the idle h2d_socket_sync wait above.
         _t0 = _time.perf_counter()
-        pipeline.prefill(
+        runtime.prefill(
             tt_tokens,
             slot_id=slot_id,
             actual_start=actual_start,
@@ -265,7 +265,7 @@ def main() -> None:
     hf_config = ADAPTER.load_hf_config(MAX_SEQ_LEN)
 
     cache_path = ADAPTER.resolve_weight_cache_path(GLOBAL_MESH_SHAPE)
-    pipeline = ADAPTER.build_pipeline(
+    runtime = ADAPTER.build_runtime(
         mesh_device=mesh_device,
         hf_config=hf_config,
         mesh_shape=GLOBAL_MESH_SHAPE,
@@ -278,7 +278,7 @@ def main() -> None:
         weight_cache_path=cache_path,
         kv_only_last_layer=KV_ONLY_LAST_LAYER,
     )
-    pipeline.compile()
+    runtime.compile()
 
     ack_channel = None
     if enable_migration:
@@ -294,13 +294,13 @@ def main() -> None:
             # MigrationLayerClient.send_kv_chunk_table(path). The runner owns the device,
             # so only it knows the KV cache NoC addresses; it has no IPC with the worker.
             table_path = os.environ.get("PREFILL_MIGRATION_TABLE_PATH", "/tmp/prefill_kv_chunk_table.pb")
-            ADAPTER.build_and_serialize_kv_chunk_table(pipeline, table_path)
+            ADAPTER.build_and_serialize_kv_chunk_table(runtime, table_path)
             send_kv_chunk_table(table_path)
 
     if os.environ.get("PREFILL_STANDALONE", "0") == "1":
         # Truly standalone: file input, no H2D socket service at all.
         logger.info("Setup complete, running standalone loop (file input, no socket)")
-        run_standalone_loop(pipeline)
+        run_standalone_loop(runtime)
     else:
         # Request mode: input arrives over the H2D socket service. Build it,
         # export the descriptor so a producer can connect, then read pushes.
@@ -341,11 +341,11 @@ def main() -> None:
             logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
             os.remove(_stale_ack_shm)
         ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        pipeline.set_layer_ack_channel(ack_channel)
+        runtime.set_layer_ack_channel(ack_channel)
         logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
         logger.info("Setup complete, entering request loop")
-        run_request_loop(pipeline, h2d_service)
+        run_request_loop(runtime, h2d_service)
 
         # Release the H2D service while the mesh + command queues + service core
         # are still alive. Its dtor frees a command queue and the service-core L1;

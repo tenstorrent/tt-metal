@@ -8,12 +8,12 @@ one implementation per variant and registers it (see `registry.py`). The runner 
 these Protocols + `ttnn` — never on a model package.
 
 Design notes:
-  * The KV cache is NOT on this seam. It is created and owned entirely inside the concrete pipeline
+  * The KV cache is NOT on this seam. It is created and owned entirely inside the concrete runtime
     (whatever its layout — merged kv+pe in one tensor, or separate regular K/V; replicated across TP,
     or TP-head-sharded). The runner core never touches it; every cache-touching operation is an
-    adapter method that reaches into its OWN pipeline.
+    adapter method that reaches into its OWN runtime.
   * `gate_fallback_mode` crosses the seam as a plain string — the adapter converts it to whatever
-    enum its pipeline wants, so the core never imports a model's MoE gate enum.
+    enum its runtime wants, so the core never imports a model's MoE gate enum.
   * Token input layout is model-owned (`prepare_prefill_input_tensor` + `h2d_mapper_config`): how
     token IDs shard across the mesh can differ per model.
 """
@@ -25,10 +25,10 @@ import ttnn
 
 
 @runtime_checkable
-class PrefillPipeline(Protocol):
-    """What `PrefillModelAdapter.build_pipeline` returns. `TtDeepSeekPrefillPipeline` already
+class PrefillRuntime(Protocol):
+    """What `PrefillModelAdapter.build_runtime` returns. `TtDeepSeekPrefillRuntime` already
     satisfies this. The KV cache is intentionally absent — it stays an internal detail of the
-    concrete pipeline, reached only by the adapter's own methods."""
+    concrete runtime, reached only by the adapter's own methods."""
 
     mesh_device: ttnn.MeshDevice
     # `config` exposes: sp_factor, sp_axis, tp_factor, chunk_size, num_users,
@@ -61,7 +61,7 @@ class PrefillModelAdapter(Protocol):
     # --- resource resolution ---
     def load_hf_config(self, max_seq_len: int):
         """Load (and unwrap) the HF config and set max_seq_len. Returned object is opaque to the core
-        — it is only handed back to build_pipeline."""
+        — it is only handed back to build_runtime."""
         ...
 
     def resolve_weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
@@ -74,8 +74,8 @@ class PrefillModelAdapter(Protocol):
     def load_trace_token_ids(self, trace_dir, total_len=None) -> list:
         ...
 
-    # --- pipeline build (owns KV cache creation) ---
-    def build_pipeline(
+    # --- runtime build (owns KV cache creation) ---
+    def build_runtime(
         self,
         *,
         mesh_device: ttnn.MeshDevice,
@@ -89,7 +89,7 @@ class PrefillModelAdapter(Protocol):
         gate_fallback_mode: str,
         weight_cache_path: Optional[Path],
         kv_only_last_layer: bool,
-    ) -> PrefillPipeline:
+    ) -> PrefillRuntime:
         ...
 
     # --- token input layout (model-owned) ---
@@ -104,13 +104,13 @@ class PrefillModelAdapter(Protocol):
     ) -> ttnn.Tensor:
         ...
 
-    # --- validation (opaque cache: reaches into the pipeline) ---
-    def kv_cache_pcc_check(self, pipeline: PrefillPipeline, slot_id: int, n_chunks: int, trace_dir=None) -> float:
+    # --- validation (opaque cache: reaches into the runtime) ---
+    def kv_cache_pcc_check(self, runtime: PrefillRuntime, slot_id: int, n_chunks: int, trace_dir=None) -> float:
         ...
 
     # --- disaggregation / migration (optional capability) ---
-    def build_and_serialize_kv_chunk_table(self, pipeline: PrefillPipeline, path: str) -> str:
-        """Build the KV chunk address table from the pipeline's own KV layout and serialize it to
-        `path`. Reads dims off pipeline.config and the cache tensor(s) off the pipeline directly.
+    def build_and_serialize_kv_chunk_table(self, runtime: PrefillRuntime, path: str) -> str:
+        """Build the KV chunk address table from the runtime's own KV layout and serialize it to
+        `path`. Reads dims off runtime.config and the cache tensor(s) off the runtime directly.
         Only called when `supports_migration` is True."""
         ...
