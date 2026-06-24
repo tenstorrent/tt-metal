@@ -904,6 +904,10 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
         code = 'D';
     } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR) {
         code = 'R';
+    } else if (state == dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST) {
+        code = 'H';
+    } else if (state == dev_msgs::RUN_MSG_REPLAY_TRACE) {
+        code = 'T';
     } else if (state == dev_msgs::RUN_SYNC_MSG_LOAD) {
         code = 'L';
     } else if (state == dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET) {
@@ -914,14 +918,19 @@ void WatcherDeviceReader::Core::DumpRunState(uint32_t state) const {
     if (code == 'U') {
         LogRunningKernels();
         TT_THROW(
-            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
+            "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, {}, {}, {}, {}, or "
+            "{})",
             virtual_coord_.str(),
             state,
             dev_msgs::RUN_MSG_INIT,
             dev_msgs::RUN_MSG_GO,
             dev_msgs::RUN_MSG_DONE,
+            dev_msgs::RUN_MSG_RESET_READ_PTR,
+            dev_msgs::RUN_MSG_RESET_READ_PTR_FROM_HOST,
+            dev_msgs::RUN_MSG_REPLAY_TRACE,
             dev_msgs::RUN_SYNC_MSG_LOAD,
-            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET);
+            dev_msgs::RUN_SYNC_MSG_WAITING_FOR_RESET,
+            dev_msgs::RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
     } else {
         fprintf(reader_.f, "%c", code);
     }
