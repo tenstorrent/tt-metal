@@ -79,6 +79,8 @@ When backing out a failed BFP4 trial, restore to BFP8 first unless BFP8 itself i
 
 For every material matmul group tested with BFP4 weights, include a LoFi compute-fidelity candidate for that same group. BFP4 with HiFi2 is allowed as a comparison or fallback, but it is not enough by itself. If a BFP4+LoFi candidate cannot be run, record the exact TTNN/runtime blocker and keep the stage open until the blocker is fixed or `$autofix` fails.
 
+Sweep compute fidelity even when dtype is unchanged. For dominant decode projection groups, include BFP8+LoFi and BFP8+HiFi2 candidates when both are legal. Do not assume HiFi2 is fastest for BFP8, and do not assume LoFi is safe without full-model top-1/top-5 evidence. Record dtype and fidelity together in each candidate id so later stages can construct the exact policy.
+
 Note sometimes different datatypes require small semantic changes to the code. KV cache is a common example of this - `paged_fill_cache` requires tensors that are the same datatype as the cache but `paged_update_cache` requires update tensors in BF16/FLOAT32 even when the destination cache is e.g. BFP8. So when changing datatypes first run a quick one-decoder smoketest to check it works correctly and get that right before using it or rejecting it in a full model pareto sweep.
 
 ## MoE Policy
@@ -104,12 +106,15 @@ Every kept candidate must be validated with full-model accuracy. For each evalua
 - top-1, top-5, top-100, token count, and reference path;
 - TTFT, trace-verified decode t/s/u, and the evidence that the teacher-forcing decode path was traced;
 - compute fidelities used by each material matmul group and evidence that the measured runtime used them;
+- direct comparisons for material same-dtype fidelity choices, especially BFP8+LoFi versus BFP8+HiFi2 on decode-bound projection groups;
 - whether this config passed the user-specified accuracy bar;
 - exact command, branch/commit, hardware, mesh, and environment notes.
 
 Always use trace-verified teacher-forcing decode t/s/u to rank datatype candidates - a non-traced path is not useful. If fully-traced decode is not working, use the $autofix skill until it is.
 
 Teacher-forcing is the selection metric, not necessarily the serving headline. After selecting the winning config, run the same warmed token-out no-readback benchmark used by optimized full model, using the selected config through the normal construction path. Record this separately as post-selection token-out performance. If the model cannot run that benchmark, state why instead of presenting teacher-forcing performance as token-out performance.
+
+If layer-level decode evidence, reduced token-out evidence, or a prior optimized full-model token-out artifact points to a different fastest passing policy than teacher-forcing does, resolve the conflict before selecting. Run the same token-out benchmark for the baseline and the top conflicting candidate through the normal construction path. If token-out cannot run because the generator or trace-feedback path fails, treat that as a bug to fix or a recorded blocker; do not silently use teacher-forcing throughput as the serving-policy answer.
 
 ## Plots
 
@@ -126,7 +131,7 @@ Plot every evaluated full-model config as a point. Fit or draw the non-dominated
 
 Compute fidelity is part of the selected precision policy, not only documentation.
 
-For reduced-precision matmuls, sweep legal compute fidelities in the same candidate matrix as datatypes once the promising dtype groups are known. Use the `tt-perf-report` output from individual decoder or reduced full-model runs and full-model accuracy to guide this decision. BFP4 weights are expected to use LoFi unless measured evidence says otherwise. BFP8 weights usually start with HiFi2. HiFi4 is usually reserved for accuracy-sensitive operations with BF16 weights. FP32 destination accumulation is also an option.
+For reduced-precision matmuls, sweep legal compute fidelities in the same candidate matrix as datatypes once the promising dtype groups are known. Use the `tt-perf-report` output from individual decoder or reduced full-model runs and full-model accuracy to guide this decision. BFP4 weights are expected to use LoFi unless measured evidence says otherwise. BFP8 weights should compare HiFi2 and LoFi for dominant decode projection groups instead of assuming one fidelity is best. HiFi4 is usually reserved for accuracy-sensitive operations with BF16 weights. FP32 destination accumulation is also an option.
 
 Before selecting a config:
 
