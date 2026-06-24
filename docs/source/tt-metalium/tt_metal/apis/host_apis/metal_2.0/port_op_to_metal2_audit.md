@@ -253,11 +253,11 @@ Classify by the pair:
 
 > *Resolution (op owner, pre-port):* convert the borrowed CB to **per-reader `TensorAccessor`s** — each reader reads the resident tensor through its own accessor (no DFB, no SPSC endpoint). A functional change.
 >
-> *Recognition:* a borrowed-memory, sync-free tensor-view CB whose base-pointer read sites span 2+ co-resident kernels.
+> *Recognition:* a borrowed-memory, sync-free tensor-view CB whose base-pointer read sites span 2+ co-resident kernels. **A FIFO producer that also raw-reads its own buffer counts as one of those consumers** — a kernel that `push_back`s then `get_read_ptr`s, alongside a second reader, is a (1 producer, 2 consumers) violation, not a clean (1,1).
 >
 > *Examples:* pool `raw_in` / `in_reader_indices` / `config_cb` (split-reader, two DM readers); conv2d `ACT_SHARDED` / `READER_INDICES` in split-reader / mcast configs (reader + writer-as-2nd-reader); halo `src_cb` ROW_MAJOR (1P + 2C).
 
-**Config-dependence (both faces).** The *same* CB is typically single-endpoint under one config (→ legal, or a port-handled sync-free/single-ended CB) and multi-endpoint under another (split-reader / mcast → SPSC violation). Classify **per instantiation**, and apply [Code-path scope](#output-the-two-documents): RED the violating config-path and name the clean configs as a portable subset (`RED at op level; subset <X> is clear`). The clean subset still gets a brief.
+**Config-dependence (both faces).** The *same* CB is typically single-endpoint under one config (→ legal, or a port-handled sync-free/single-ended CB) and multi-endpoint under another (split-reader / mcast → SPSC violation). Classify **per instantiation**, and apply [Code-path scope](#output-the-two-documents): RED the violating config-path and name the clean configs as a portable subset (`RED at op level; subset <X> is clear`). The clean subset still gets a brief. **But when the multi-endpoint shape is *unconditional* — structural, not one branch among portable siblings (e.g. a split reader that is always on) — say so explicitly: there is no portable subset, the op is RED whole, and the op-owner functional fix is the only path.** Don't leave "no subset" to be inferred from silence.
 
 **Finding role.** **GATE** at config-path granularity — the port is blocked on the violating path until the op owner's pre-port fix lands; route the detail (and the recommended fix) to the **op owner**, and offer the clean subset. Unlike the prereq / feature GATEs, the resolution is an op-owner *functional change*, never framework work and never folded into the port.
 
@@ -385,7 +385,7 @@ If the command prints nothing, the docs aren't from a tracked doc-branch checkou
 
 **Reassuring framing for the human reader.** A RED gates *this specific port attempt* but is **not** a permanent blocker — most REDs mean "Metal 2.0 hasn't implemented this yet," and the port becomes possible once the feature lands; a few (today: just `address_offset`) need a runtime-team consultation about a redesigned API. Surface the future path explicitly for every RED, so a colleague reads the path forward, not just the gate. In particular, a **ProgramDescriptor-prerequisite RED is the expected outcome** for any op still on the legacy imperative API — not an alarm — and the port unblocks once that op's `ProgramDescriptor` migration lands.
 
-**Code-path scope.** Blockers are often confined to specific code paths (e.g. a single factory's `if (use_width_sharding)` branch). When so, identify clean vs. blocked paths explicitly and offer a scoped-subset port — "interleaved-only paths, omitting the sharded path." A partial port that delivers value now may beat waiting for the full gate to clear; reflect it in the Result (`RED at op level; subset <X> is clear`).
+**Code-path scope.** Blockers are often confined to specific code paths (e.g. a single factory's `if (use_width_sharding)` branch). When so, identify clean vs. blocked paths explicitly and offer a scoped-subset port — "interleaved-only paths, omitting the sharded path." A partial port that delivers value now may beat waiting for the full gate to clear; reflect it in the Result (`RED at op level; subset <X> is clear`). **If no clean path exists — the blocking shape is unconditional/structural, not one branch among siblings — say so explicitly (`RED at op level; no portable subset`) rather than leaving it to be inferred from silence.**
 
 #### `METAL2_PREPORT_AUDIT.md` — team-facing (always emitted)
 

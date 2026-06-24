@@ -230,6 +230,8 @@ For larger alias groups (three or more), every member names every other member i
 
 Modeling same-FIFO aliasing with `alias_with` is a **bug**: you would get two independent FIFOs at one address, and the producer/consumer pointer coherence the kernel relies on (produce via one name, consume via the other) is lost silently.
 
+**The converse trap: don't be fooled into the Same-FIFO box by a kernel that manually keeps two views' pointers in lock-step.** If the two views are distinct `buffer_index`es / `CBFormatDescriptor`s — the tell is a different `page_size` or face geometry — they are **Aliased DFBs** (`alias_with`), *even though* the kernel walks them at matching L1 addresses. The buffers are structurally distinct; the pointer-alignment is a kernel convention, not shared FIFO identity. The disambiguator is the **index**, not the runtime pointer values.
+
 **Decision**: Keep **one** `DataflowBufferSpec` and **one** `DFBBinding`. Express the second name as a **kernel-side handle alias** — a `constexpr` alias of the generated token:
 
 ```cpp
