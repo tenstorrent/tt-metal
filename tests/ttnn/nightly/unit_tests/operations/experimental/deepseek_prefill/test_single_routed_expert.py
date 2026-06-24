@@ -166,26 +166,26 @@ SINGLE_EXPERT_MODELS = [
 
 # Currently-failing single-routed-expert cases, keyed by the exact "{model}-{tag}" param id ->
 # xfail reason (with tracking issue), so CI stays green while the linked issues are worked on. The
-# failures are blackhole-specific (gptoss_120b hits a K_gate divisibility error; dsv4_pro overflows
-# L1 only at the larger token counts) and these cases pass on other arches, so _TOKEN_SWEEP_XFAIL is
-# applied (strict) only on blackhole by _xfail_blackhole_token_sweep. Delete an entry once resolved.
+# failures are blackhole-specific (gptoss_120b hits a K_gate divisibility error at 25k; dsv4_pro
+# overflows L1) and these cases pass on other arches, so _TOKEN_SWEEP_XFAIL is applied (strict) only
+# on blackhole by _xfail_blackhole_token_sweep. Delete an entry once resolved.
 _GPTOSS_KGATE_XFAIL = (
     "GPT-OSS 120B single routed expert: K_gate_tiles not divisible by in0_block_w_gu — "
     "https://github.com/tenstorrent/tt-metal/issues/47604"
 )
 _DSV4_PRO_CB_XFAIL = (
-    "DeepSeek V4 Pro single routed expert: circular buffers grow beyond L1 at large token counts — "
+    "DeepSeek V4 Pro single routed expert: circular buffers grow beyond L1 — "
     "https://github.com/tenstorrent/tt-metal/issues/46608"
 )
 
 _TOKEN_SWEEP_XFAIL = {
-    "gptoss_120b-1k": _GPTOSS_KGATE_XFAIL,
     "gptoss_120b-25k": _GPTOSS_KGATE_XFAIL,
+    "dsv4_pro-1k": _DSV4_PRO_CB_XFAIL,
     "dsv4_pro-25k": _DSV4_PRO_CB_XFAIL,
 }
 _FAKED_XFAIL = {
-    "gptoss_120b-1k-alloc-0k-active": _GPTOSS_KGATE_XFAIL,
     "gptoss_120b-25k-alloc-4k-active": _GPTOSS_KGATE_XFAIL,
+    "dsv4_pro-1k-alloc-0k-active": _DSV4_PRO_CB_XFAIL,
     "dsv4_pro-25k-alloc-4k-active": _DSV4_PRO_CB_XFAIL,
 }
 
