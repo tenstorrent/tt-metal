@@ -160,7 +160,7 @@ void kernel_main() {
 
         cb_push_back(cb_stats_reduced, stats_tile_stride);
 
-        reduce_uninit();
+        reduce_uninit<FLOAT32_REDUCTION>();
 
         /*
          * E[x]**2
