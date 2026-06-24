@@ -254,6 +254,9 @@ class RunTimeOptions {
 
     tt_metal::DispatchCoreType dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
 
+    // Quasar interim path: dispatch cores from core descriptor YAML (Tensix grid) instead of soc dispatch-engine tiles.
+    bool use_quasar_tensix_dispatch_cores = false;
+
     std::filesystem::path simulator_path = "";
 
     bool fast_dispatch = true;
@@ -695,6 +698,8 @@ public:
     bool get_fast_dispatch() const { return fast_dispatch; }
 
     void set_fast_dispatch(bool enable) { fast_dispatch = enable; }
+
+    bool get_use_quasar_tensix_dispatch_cores() const { return use_quasar_tensix_dispatch_cores; }
 
     bool get_skip_eth_cores_with_retrain() const { return skip_eth_cores_with_retrain; }
 
