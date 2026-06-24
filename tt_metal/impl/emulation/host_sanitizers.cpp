@@ -2,12 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Emule-only implementation of the host-side sanitizer facade declared in
-// host_sanitizers.hpp. This translation unit is compiled into libtt_metal ONLY
-// when TT_METAL_USE_EMULE is set (see impl/CMakeLists.txt), so it is the single
-// place allowed to reference `__emule_asan_panic` and to pull in MetalContext /
-// Cluster. A non-emule build never compiles this file and therefore never
-// carries an unresolved panic reference.
+// Emule-only implementation of the host-side sanitizer facade (host_sanitizers.hpp).
+// Compiled into libtt_metal ONLY when TT_METAL_USE_EMULE is set, so it is the single
+// place that references __emule_asan_panic / MetalContext — a non-emule build never
+// carries an unresolved panic reference. See SANITIZER_CHECKS.md.
 
 #include "host_sanitizers.hpp"
 
@@ -59,10 +57,8 @@ void check_host_l1_alignment(const IDevice* device, uint32_t address, uint32_t s
     if (!emule_asan_enabled()) {
         return;
     }
-    // The host->L1 data path (Cluster::write_core -> UMD write_to_device) accepts
-    // byte-granular writes and WriteToBuffer applies no separate floor, so a
-    // hardcoded word/NoC alignment here would false-positive legitimate writes.
-    // Register pokes that genuinely need 4-byte alignment go through write_reg.
+    // Query the real requirement (1 on the byte-granular host->L1 path) rather than
+    // hardcoding word/NoC alignment, which would false-positive legitimate writes.
     const uint32_t alignment = host_alignment_requirement(device, size);
     if (alignment > 1 && address % alignment != 0) {
         __emule_asan_panic(

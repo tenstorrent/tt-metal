@@ -2,17 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal-side definition of __emule_asan_panic + its diagnostic-trace facility.
-//
-// This is the single definition emitted into libtt_metal: host-API sanitizer
-// checks call it directly, and JIT'd kernel .so files resolve it at dlopen via
-// -rdynamic (like the other __emule_* symbols). It is a faithful mirror of the
-// definition in tt-emule's src/kernel_runner.cpp — the two libraries are never
-// linked into the same binary, so the duplicate is benign. Keep the two copies
-// in sync. (Previously this was pulled in by #include "jit_hw/emule_asan.h"
-// under EMULE_ASAN_IMPLEMENTATION; defining it here keeps jit_hw out of metal.)
-//
-// What it prints and why is documented in SANITIZER_CHECKS.md ("Diagnostic trace").
+// Metal-side definition of __emule_asan_panic + its diagnostic-trace facility:
+// the single copy emitted into libtt_metal (host-API checks call it directly,
+// JIT kernel .so files resolve it at dlopen via -rdynamic). Faithful mirror of
+// tt-emule's src/kernel_runner.cpp copy — keep the two in sync. See
+// SANITIZER_CHECKS.md "Diagnostic trace".
 
 #include <cstdarg>
 #include <cstddef>
@@ -44,18 +38,15 @@ extern thread_local const char* __emule_kernel_name;
 
 namespace {
 
-// Resolve one instruction address (module + file-relative offset) to a
-// "func at file:line" string via llvm-symbolizer (preferred — reads clang's
-// DWARF5), falling back to addr2line. Inlined frames are flattened to one line
-// joined by " <- ". Returns false if neither tool resolved real debug info.
+// Resolve one (module, file-relative offset) to a "func at file:line" string,
+// flattening inlined frames onto one line with " <- ". Returns false if no real
+// debug info was found.
 bool emule_asan_symbolize(const char* module, uintptr_t file_offset, char* out, size_t out_sz) {
     if (module == nullptr || module[0] == '\0' || out_sz == 0) {
         return false;
     }
-    // The JIT dlopen's the kernel from "<hash>.so.tmp.<pid>", then atomically
-    // renames it to "<hash>.so", so dladdr hands back a path that no longer
-    // exists. If the reported module is gone, strip ".tmp.<pid>" to recover the
-    // real on-disk .so for the symbolizer.
+    // dladdr may report the JIT's transient "<hash>.so.tmp.<pid>" (renamed to
+    // "<hash>.so" right after load); if that path is gone, strip the suffix.
     char modbuf[1024];
     std::snprintf(modbuf, sizeof(modbuf), "%s", module);
     if (access(modbuf, R_OK) != 0) {
@@ -68,8 +59,8 @@ bool emule_asan_symbolize(const char* module, uintptr_t file_offset, char* out, 
         }
     }
     module = modbuf;
-    // Unversioned llvm-symbolizer is often absent, so try toolchain-versioned
-    // names too; addr2line is the last-ditch fallback (only yields "??:?" on DWARF5).
+    // Prefer llvm-symbolizer (reads clang's DWARF5; addr2line only yields "??:?"),
+    // trying versioned names; addr2line is the last-ditch fallback.
     const char* tools[] = {
         "llvm-symbolizer --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx 2>/dev/null",
         "llvm-symbolizer-20 --obj=\"%s\" --pretty-print --inlines --demangle 0x%lx 2>/dev/null",
@@ -217,23 +208,11 @@ void emule_asan_print_trace() {
     std::fflush(stderr);
 }
 
-// Decide what happens to the core dump the imminent abort() would trigger, per the
-// TT_METAL_EMULE_ASAN_ALLOW_CORE env var. Called once, by the thread holding the panic
-// lock, so a multi-core kernel bug never spawns more than one dump.
-//
-// Unset (default): mark the process non-dumpable (PR_SET_DUMPABLE=0). The emulated
-// process maps GB-scale L1+DRAM, so each abort would otherwise dump a ~1.4 GB core; on
-// hosts whose core_pattern pipes to a crash handler (e.g. apport), `ulimit -c 0`/RLIMIT_CORE
-// is IGNORED, but PR_SET_DUMPABLE=0 the kernel honors regardless. So the suite is safe to
-// run anywhere with no LD_PRELOAD shim or external setup, and the trace above already
-// captures what a core would.
-//
-// Set (opt-in debugging): write a real core of this process via gcore, to
-// ./emule_asan_core.<pid> in the CWD. We dump it ourselves rather than rely on the kernel's
-// global core_pattern because that pipe (apport) silently drops cores from non-package
-// binaries. gdb/gcore chatter is silenced so the ASAN report stays readable. Best-effort:
-// if gcore is missing or ptrace is restricted, the process is left dumpable so a plain-file
-// core_pattern still produces a core, and we say so.
+// Decide the fate of the core dump the imminent abort() would trigger, per
+// TT_METAL_EMULE_ASAN_ALLOW_CORE. Unset (default): mark the process non-dumpable
+// (PR_SET_DUMPABLE=0) so the ~1.4 GB L1+DRAM core is suppressed even where
+// `ulimit -c 0` is ignored. Set: self-dump via gcore to ./emule_asan_core.<pid>
+// (best-effort). Called once, under the panic lock. See SANITIZER_CHECKS.md "Core dumps".
 void emule_asan_handle_coredump() {
 #if defined(__linux__)
     if (std::getenv("TT_METAL_EMULE_ASAN_ALLOW_CORE") == nullptr) {
@@ -270,17 +249,12 @@ void emule_asan_handle_coredump() {
 }  // namespace
 
 // Report one [ASAN ERROR] and abort. `fmt`/args are the printf-style error line
-// (printed verbatim, so message text and test regexes are unchanged); the
-// context+backtrace follow. emule runs one thread per core, so a kernel bug
-// trips every core at once: the first thread takes the lock, prints exactly one
-// full report, and aborts (tearing down the process) while every other thread
-// blocks on the lock — so only ONE error is ever emitted. Pass nullptr to print
-// only the context+backtrace.
+// (printed verbatim); the context+backtrace follow. Pass nullptr for those only.
+// Serialized: the winning thread prints one report and aborts while the others
+// block here, so only ONE error is ever emitted under a multi-core kernel bug.
 extern "C" [[noreturn]] void __emule_asan_panic(const char* fmt, ...) {
     static std::mutex panic_mu;
     panic_mu.lock();  // intentionally never unlocked — the winner aborts holding it
-    // Suppress (default) or self-dump (TT_METAL_EMULE_ASAN_ALLOW_CORE) the core that the
-    // abort() below would trigger. Done under the lock so only the winning thread acts.
     emule_asan_handle_coredump();
     if (fmt != nullptr) {
         va_list ap;

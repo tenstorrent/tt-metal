@@ -160,10 +160,8 @@ thread_local uint32_t* __emule_l1_resolved_ranges_count = nullptr;
 thread_local uint32_t __emule_l1_resolved_ranges_capacity = 0;
 thread_local uint32_t __emule_cb_reserved_pages[32] = {};
 thread_local uint32_t __emule_cb_waited_pages[32] = {};
-// Dirty-CB leak signal, decoupled from the window counters above (see cb_api.h):
-// set by reserve/wait, cleared by push/pop. A flag still set at kernel exit means
-// a reserve/wait that no push/pop ever followed — the faithful "forgot to hand
-// off" signal that does NOT false-positive on lookahead producers.
+// Dirty-CB leak flags: set by reserve/wait, cleared by push/pop; still-set at
+// kernel exit is the leak. Decoupled from the window counters. See SANITIZER_CHECKS.md §11.
 thread_local bool __emule_cb_reserve_dangling[32] = {};
 thread_local bool __emule_cb_wait_dangling[32] = {};
 thread_local const char* __emule_cb_reserve_file[32] = {};
@@ -492,10 +490,8 @@ struct PendingKernelInfo {
     uint32_t kernel_config_base = 0;
     uint16_t rta_offset_in_kc = kRtaCrtaNoArgsSentinel;
     uint16_t crta_offset_in_kc = kRtaCrtaNoArgsSentinel;
-    // Flat list of this kernel's runtime-arg values on its core (unique + common).
-    // Buffer L1 addresses handed to the kernel appear here verbatim, so they let
-    // the Object-Intent check discover which tensors are this kernel's I/O. See
-    // ObjectIntentTracker::pre_launch_snapshot.
+    // Runtime-arg values (unique + common); buffer L1 addresses appear verbatim, so
+    // Object-Intent uses them to find this kernel's I/O tensors (§12).
     std::vector<uint32_t> rt_arg_values;
     std::string kernel_name;  // kernel source path, for the ASAN trace
 };
@@ -521,9 +517,8 @@ struct CoreSetup {
     bool has_dfbs = false;
     uint32_t sem_base;
     uint32_t sem_size;
-    // L1 start offsets of globally-allocated (persistent) CB backing buffers on
-    // this core. These are legitimate kernel write targets (the CB *is* the
-    // tensor), so the Object-Intent check must not flag writes to them.
+    // Globally-allocated (persistent) CB starts on this core; Object-Intent exempts
+    // kernel writes to them (§12).
     std::vector<uint32_t> persistent_cb_starts;
 };
 
@@ -673,12 +668,10 @@ static std::string disk_cache_so_path(const std::string& cache_key) {
 //      translation through the per-thread __emule_bridge_l1 base pointer.)
 // Reads from `src_path`, writes the patched source to `out_path`, and throws
 // on any I/O failure.
-// emule_line_preserving_replace that preserves the total line count: each replacement is
-// padded with as many trailing newlines as the match consumed beyond it (our
-// replacements never add newlines, so this only ever pads). Keeping the emitted
-// source line-aligned with the original kernel is what lets the `#line` directive
-// below make debug info — and therefore ASAN backtraces — point at the real
-// kernel file:line instead of the generated temp copy.
+// Regex-replace preserving the total line count (pads each replacement with the
+// newlines its match consumed beyond it). The resulting line-alignment with the
+// original kernel is what lets the `#line` directive below keep debug info — and
+// thus ASAN backtraces — pointing at the real kernel file:line.
 static std::string emule_line_preserving_replace(
     const std::string& input, const std::regex& re, const std::string& fmt) {
     std::string out;
@@ -699,13 +692,10 @@ static std::string emule_line_preserving_replace(
     return out;
 }
 
-// Apply the x86 portability rewrites to one source string in place. These are
-// the constructs that compile on the RISC-V baremetal target but not on the
-// 64-bit host: RISC-V inline asm and L1-pointer/address reinterpret_casts.
-// The line-spanning rewrites go through emule_line_preserving_replace so the
-// patched body stays line-aligned with the original kernel — that alignment is
-// what keeps the `#line` directive emitted in preprocess_tu_recursive (and
-// therefore the ASAN backtraces) pointing at the real kernel file:line.
+// Apply the x86 portability rewrites to one source string in place (RISC-V inline
+// asm and L1-pointer/address reinterpret_casts that don't compile on the host).
+// Line-spanning rewrites go through emule_line_preserving_replace to keep the
+// body line-aligned with the original kernel (see there).
 static void apply_x86_rewrites(std::string& src) {
     static const std::regex mhartid_re(
         R"(asm\s+volatile\s*\(\s*"csrr\s+%0\s*,\s*mhartid"\s*:\s*"=r"\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)\s*\)\s*;)");
@@ -1016,11 +1006,9 @@ static std::function<void()> jit_compile_kernel(
 
     // 7. Compile — output to disk cache path if provided, else temp dir
     std::string so_path = disk_cache_so_path_arg.empty() ? (dir + "/kernel.so") : disk_cache_so_path_arg;
-    // Under ASAN, keep -O2 (so numerics match normal runs) but add debug info +
-    // frame pointers so the unified ASAN backtrace can resolve kernel-source
-    // file:line via llvm-symbolizer/addr2line. The ASAN flag is folded into the
-    // JIT cache key (see compute_cache_key) so these -g .so files never collide
-    // with the lean non-ASAN cache.
+    // Under ASAN, keep -O2 but add debug info + frame pointers so the backtrace can
+    // resolve kernel file:line. Folded into the JIT cache key (see compute_cache_key)
+    // so these .so files don't collide with the non-ASAN cache. See SANITIZER_CHECKS.md.
     std::string opt_flags = " -O2";
     if (tt::tt_metal::emule::emule_asan_enabled()) {
         opt_flags += " -g -fno-omit-frame-pointer -funwind-tables";
@@ -1644,8 +1632,7 @@ static void collect_kernels(
                     key += ":" + k + "=" + v;
                 }
                 key += metal2_key_suffix;
-                // ASAN builds add -g/-fno-omit-frame-pointer; keep their cached
-                // .so distinct from the lean non-ASAN build of the same kernel.
+                // ASAN builds are -g; keep their cache distinct from the lean build.
                 if (emule_asan_enabled()) {
                     key += ":asan_g";
                 }
@@ -1725,12 +1712,9 @@ static void collect_kernels(
                             rta_off = rta.rta_offset();
                             crta_off = rta.crta_offset();
                         }
-                        // Snapshot the runtime-arg values handed to this kernel on
-                        // this core (unique + common). Buffer L1 addresses passed as
-                        // args appear here verbatim; the Object-Intent check matches
-                        // them against live-tensor starts to discover the kernel's I/O
-                        // tensors (see ObjectIntentTracker::pre_launch_snapshot). Shared
-                        // across this kernel's proc_ids, so build once and copy.
+                        // Runtime-arg values (unique + common) for this kernel on this
+                        // core; the Object-Intent check uses them to find its I/O tensors
+                        // (see ObjectIntentTracker::pre_launch_snapshot). Build once, copy.
                         std::vector<uint32_t> rt_arg_values;
                         if (kernel->cores_with_runtime_args().count(logical_core) != 0) {
                             const auto& ra = kernel->runtime_args(logical_core);
@@ -1831,19 +1815,11 @@ static std::unordered_map<uint64_t, tt_emule::Core*>* build_core_map(
                 (*core_map)[key] = core;
             }
         }
-        // Add DRAM cores. Post-uplift (umd "SWEmuleChip: back DRAM by physical
-        // channel via LOGICAL coords"), get_core() is WORKER-ONLY — it lazily
-        // mints a worker core for ANY coord, so passing a DRAM coord yields a
-        // bogus CoreRole::WORKER core. That breaks __emule_noc_addr_is_dram
-        // (role() != DRAM) and aliases DRAM reads into a 2 MB-masked worker slot
-        // in __emule_resolve_noc_addr. DRAM is now backed per physical channel by
-        // get_dram_channel_backing(channel); every NOC endpoint of a channel must
-        // alias onto that single CoreRole::DRAM core so host writes and kernel NOC
-        // reads land in the same memory.
-        //
-        // get_dram_cores() groups cores by channel (outer index == LOGICAL DRAM
-        // channel), matching the "loop index (runner)" resolution the umd backing
-        // API documents.
+        // Add DRAM cores. Post-uplift get_core() is worker-only (mints a bogus
+        // CoreRole::WORKER for a DRAM coord), so back DRAM per physical channel via
+        // get_dram_channel_backing(channel): every NOC endpoint of a channel must
+        // alias onto that one CoreRole::DRAM core so host writes and kernel NOC reads
+        // hit the same memory. get_dram_cores() groups by LOGICAL channel (outer index).
         auto& umd_soc = sw_emu->get_soc_descriptor();
         auto dram_cores = umd_soc.get_dram_cores();
         for (uint32_t ch = 0; ch < dram_cores.size(); ch++) {
@@ -1890,12 +1866,10 @@ static void init_core_cb_sync(
     const CoreCoord& logical_core,
     std::vector<uint32_t>& persistent_cb_starts) {
     core->reset_cb_sync();
-    // A globally-allocated CB is bound to a persistent L1 buffer (its address()
-    // == that buffer's address()). Record CBs on this core so Object-Intent
-    // exempts the kernel's legitimate writes to them. Kept as its own pass over
-    // circular_buffers_on_core (not folded into the configure lambda below, which
-    // also walks remote program CBs in pass 2) so the exempt set stays exactly the
-    // local globally-allocated CBs, recorded once each.
+    // Record this core's globally-allocated (persistent) CBs so Object-Intent exempts
+    // the kernel's writes to them (see §12). Its own pass — not folded into the
+    // configure lambda below, which also walks remote pass-2 CBs — to keep the exempt
+    // set exactly the local ones.
     for (auto& cb_impl : impl.circular_buffers_on_core(logical_core)) {
         if (cb_impl->globally_allocated()) {
             persistent_cb_starts.push_back(cb_impl->address());

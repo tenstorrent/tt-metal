@@ -39,21 +39,12 @@ void ObjectIntentTracker::pre_launch_snapshot(
         return;
     }
     if (num_kernels != 1) {
-        // Per-kernel provenance relies on memcmp-after-exit to attribute byte changes to a
-        // single kernel; with multiple kernels sharing a core in one launch (the normal ttnn
-        // reader+compute+writer pattern) we can't tell which kernel wrote which bytes. The
-        // check is simply not applicable here, so skip it without snapshotting — leaving
-        // snapshots_ empty makes verify_post_launch a no-op — rather than aborting the whole
-        // workload. Other sanitizers continue to run.
+        // Byte changes can't be attributed to one kernel when several share a core,
+        // so skip without snapshotting (verify_post_launch then no-ops). See §12.
         return;
     }
-    // I/O tensors from other kernels: a tensor whose L1 address was handed to
-    // this kernel as a runtime arg is one the kernel was explicitly given to
-    // operate on — even if it "belongs" to another kernel's context, this kernel
-    // is allowed to write to it (in-place ops, fused producers). The base address
-    // passed as a runtime arg equals the buffer's start offset, so any live-tensor
-    // start that appears in the kernel's runtime args is an I/O tensor and must be
-    // exempt from the snapshot.
+    // Exempt I/O tensors handed to this kernel: a live-tensor start that appears in
+    // the runtime args is a buffer the kernel was told to operate on. See §12.
     std::unordered_set<uint32_t> io_arg_starts(single_kernel_rt_args.begin(), single_kernel_rt_args.end());
     snapshots_.reserve(oob.tensor_ranges_count);
     for (uint32_t i = 0; i < oob.tensor_ranges_count; ++i) {
