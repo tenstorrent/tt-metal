@@ -51,6 +51,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 _PROMPT_PATHS = {"abc_1k": ABC_1K_PATH, "prompt_5k": PROMPT_5K_PATH, "prompt_25k": PROMPT_25K_PATH}
 from tests.ttnn.utils_for_testing import comp_pcc
 
+
 @pytest.fixture
 def model_path(variant):
     """Block-test-scoped override of the shared ``model_path`` fixture.
