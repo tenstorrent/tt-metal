@@ -38,6 +38,8 @@ from .gen_image_inputs import (
     prepare_gen_image_inputs,
     prepare_i2i_denoise_bundle,
     prepare_i2i_inputs,
+    prepare_recaption_inputs,
+    print_recaption_inputs_report,
     scatter_gen_timestep_embeds,
     tokenizer_output_from_bundle,
 )
@@ -86,6 +88,8 @@ __all__ = [
     "prepare_gen_image_inputs",
     "prepare_i2i_denoise_bundle",
     "prepare_i2i_inputs",
+    "prepare_recaption_inputs",
+    "print_recaption_inputs_report",
     "scatter_gen_timestep_embeds",
     "tokenizer_output_from_bundle",
     "validate_special_tokens",
