@@ -10,7 +10,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 export TT_METAL_DEVICE_PROFILER=1
-export TT_METAL_DEVICE_PROFILER_DISPATCH=1
+# dispatch-core profiling off (workers only); official op2op uses KERNEL zones, no DISP markers needed
+# export TT_METAL_DEVICE_PROFILER_DISPATCH=1
 BIN="${TT_METAL_HOME}/build_RelWithDebInfo/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency"
 PY="${TT_METAL_HOME}/python_env/bin/python3"
 DEC="${SCRIPT_DIR}/decompose_latency_bw.py"
@@ -38,7 +39,7 @@ for C in ${CORES_LIST}; do
     if grep -q PASSED /tmp/trid_run.log; then
       "${PY}" "${DEC}" --pages-per-core "${PAGES}" --num-cores "${C}" --csv-out "${OUT}" \
         --label "cores=${C};trid=${NF};in_cb=${IN_CB}" 2>/dev/null \
-        | grep -E "agg_total_gbps|read_fill_head_us|math_to_math_us"
+        | grep -E "agg_total_gbps|read_fill_head_us|official_op2op_min_us|m2m_bubble_us"
       echo "  cores=${C} trid=${NF} done"
     else echo "  cores=${C} trid=${NF} FAILED: $(grep -oE 'TT_FATAL: .*' /tmp/trid_run.log | head -1)"; fi
   done

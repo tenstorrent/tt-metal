@@ -333,6 +333,7 @@ void log_realtime_op_to_op_gaps(const std::vector<tt::tt_metal::experimental::Pr
         uint32_t gap_count = 0;
         double min_gap_ns = 0.0;
         double max_gap_ns = 0.0;
+        std::vector<double> gaps_ns;
         for (size_t i = 1; i < chip_records.size(); ++i) {
             const auto& prev = chip_records[i - 1];
             const auto& cur = chip_records[i];
@@ -369,17 +370,26 @@ void log_realtime_op_to_op_gaps(const std::vector<tt::tt_metal::experimental::Pr
             }
             sum_gap_ns += gap_ns;
             ++gap_count;
+            gaps_ns.push_back(gap_ns);
         }
         if (gap_count > 0) {
+            std::sort(gaps_ns.begin(), gaps_ns.end());
+            const double median_ns = gaps_ns[gaps_ns.size() / 2];
             log_info(
                 LogTest,
-                "Real-time profiler chip {}: {} op-to-op gap(s) — min {:.2f} ns, max {:.2f} ns, mean {:.2f} ns "
-                "(next program start − previous program end)",
+                "Real-time profiler chip {}: {} op-to-op gap(s) — min {:.2f} ns, median {:.2f} ns, max {:.2f} ns, "
+                "mean {:.2f} ns (next program start − previous program end)",
                 chip_id,
                 gap_count,
                 min_gap_ns,
+                median_ns,
                 max_gap_ns,
                 sum_gap_ns / gap_count);
+            std::string all = "Real-time profiler chip " + std::to_string(chip_id) + " sorted gaps (ns):";
+            for (double g : gaps_ns) {
+                all += fmt::format(" {:.0f}", g);
+            }
+            log_info(LogTest, "{}", all);
         }
     }
 }

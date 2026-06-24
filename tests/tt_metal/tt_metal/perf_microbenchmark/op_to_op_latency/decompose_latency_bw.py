@@ -8,18 +8,23 @@
 
 Emits one chart-ready CSV row (per config = core count x barrier mode) with:
   agg_read_gbps        aggregate read BW across active cores (device-marker span)
-  op_to_op_us          done/go dispatch hop (DISP_DONE_OBSERVED -> WORKER_GO_OBSERVED)
-  math_to_math_us      last-math(A) -> first-math(B): FINISH_LAST_PUSH(k) -> TILE_IDX0(k+1)
+  official_op2op_us    op2op via official tools/tracy methodology (standard KERNEL zones):
+                       {risc}-KERNEL ZONE_END(k) -> DM-KERNEL ZONE_START(k+1); '_min' == tracy Min
+  device_kernel_dur_us first KERNEL start -> last KERNEL end across riscs (op kernel span)
+  m2m_*                math-to-math brackets: bubble / skew_env / within / finish+start skew
+  read_fill_head_us    READ_BEFORE_BARRIER -> TILE_IDX[0] (reader latency before first math)
   reader_to_writer_us  NCRISC_DONE -> BRISC_DONE (write-side tail after reads finish)
   write_tail_us        WRITE_BEFORE_BARRIER -> WRITE_AFTER_BARRIER (end barrier/flush)
   *_max                worst-core value (NoC-torus starvation tail)
   reader_done_spread_us / writer_done_spread_us
                        max-min completion time across cores per program (late-core skew)
 
+All metrics derive from standard profiler zones + test-side kernel markers only -- no custom
+FW/dispatch markers (those were reverted out of tt_metal/). For absolute (unpolluted) op2op use
+the realtime profiler (--use-realtime-profiler -> profile_log_device_rt.csv gap_to_next_go).
 All latencies are per-core medians over steady-state program transitions unless noted.
 Run the test WITHOUT --read-only (writer must do real DRAM writes), with
-TT_METAL_DEVICE_PROFILER=1 + TT_METAL_DEVICE_PROFILER_DISPATCH=1 and --use-device-profiler.
-See [[goal-reduce-math-to-math-latency]].
+TT_METAL_DEVICE_PROFILER=1 and --use-device-profiler. See [[goal-reduce-math-to-math-latency]].
 """
 
 from __future__ import annotations
@@ -40,7 +45,6 @@ from export_op_to_op_profiler_csv import (  # noqa: E402
     parse_chip_freq_mhz,
     walk_barrier_markers,
     walk_core_markers,
-    walk_done_to_go,
 )
 
 DEFAULT_TILE_BYTES = 2048
@@ -151,6 +155,63 @@ def completion_spread_us(done_d: dict, freq_mhz: float, min_prog: int):
     return [(max(v) - min(v)) / freq_mhz for v in by_prog.values() if len(v) > 1]
 
 
+KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL")
+DM_KERNEL_ZONES = ("BRISC-KERNEL", "NCRISC-KERNEL")
+
+
+def official_kernel_metrics(df, freq_mhz: float, max_gap_us: float = 50.0):
+    """Reproduce the tools/tracy methodology (device_post_proc_config.py) from the standard
+    auto-emitted KERNEL zones -- no custom markers, comparable to process_device_log.py / Tracy.
+
+      op2op              : per core, adjacent ops -> first DM-KERNEL start(k+1) - last KERNEL end(k)
+                           (device_post_proc_config 'op2op'). Steady-state value; the max_gap_us cap
+                           drops trace-instance boundaries that inflate the tool's Average/Max.
+      device_kernel_dur  : per op, last KERNEL end - first KERNEL start across riscs
+                           (device_post_proc_config 'device_kernel_duration').
+
+    Segments ops by the start->end->start transition per core (no PROG_ID needed, so robust to
+    trace capture/replay duplicate program ids). Returns (op2op_us list, kernel_dur_us list)."""
+    z = df[df["zone name"].isin(KERNEL_ZONES) & df["type"].isin(["ZONE_START", "ZONE_END"])]
+    op2op, kdur = [], []
+    cap = max_gap_us * freq_mhz
+    for _key, g in z.groupby(["PCIe slot", "core_x", "core_y"], sort=False):
+        evs = sorted(
+            (
+                int(r["time[cycles since reset]"]),
+                r["type"] == "ZONE_START",
+                r["zone name"] in DM_KERNEL_ZONES,
+            )
+            for _, r in g.iterrows()
+        )
+        ops = []  # each: {start, dm, end}
+        cur = None
+        prev_was_end = False
+        for t, is_start, is_dm in evs:
+            if is_start:
+                if cur is None or prev_was_end:  # first start after a run of ends = new op
+                    if cur is not None:
+                        ops.append(cur)
+                    cur = {"start": t, "dm": t if is_dm else None, "end": None}
+                elif is_dm and cur["dm"] is None:
+                    cur["dm"] = t
+                prev_was_end = False
+            else:
+                if cur is not None:
+                    cur["end"] = t
+                prev_was_end = True
+        if cur is not None:
+            ops.append(cur)
+        for o in ops:
+            if o["end"] is not None:
+                kdur.append((o["end"] - o["start"]) / freq_mhz)
+        for a, b in zip(ops, ops[1:]):
+            if a["end"] is not None and b["dm"] is not None:
+                gap = b["dm"] - a["end"]
+                if 0 < gap < cap:
+                    op2op.append(gap / freq_mhz)
+    return op2op, kdur
+
+
 def m2m_brackets(pack: dict, unp0: dict, freq_mhz: float, min_prog: int):
     """Decompose the math-to-math interval per consecutive op pair (k -> k+1).
 
@@ -215,7 +276,6 @@ def main() -> int:
 
     pack_finish, unpack0, _ = walk_core_markers(df)
     barriers = walk_barrier_markers(df)
-    dg = walk_done_to_go(df, freq, args.min_prog_id)
     spans = walk_spans(df, READ_RISC_TYPES, "READ_BEFORE_BARRIER", "READ_LAST_BARRIER", args.min_prog_id)
     wspans = walk_spans(df, WRITE_RISC_TYPES, "WRITE_BEFORE_BARRIER", "WRITE_AFTER_BARRIER", args.min_prog_id)
 
@@ -262,8 +322,11 @@ def main() -> int:
     wtail = per_core_diff_us(barriers["write_after"], barriers["write_before"], freq, args.min_prog_id)
     rd_spread = completion_spread_us(barriers["ncrisc_done"], freq, args.min_prog_id)
     wr_spread = completion_spread_us(barriers["brisc_done"], freq, args.min_prog_id)
-    o2o_med = float(dg["dg_median_ns"].median()) / 1000.0 if not dg.empty else float("nan")
-    o2o_last = float(dg["dg_last_ns"].median()) / 1000.0 if not dg.empty else float("nan")
+    # Op2op + kernel duration via the OFFICIAL tools/tracy methodology from the standard
+    # auto-emitted KERNEL zones (comparable to process_device_log.py / Tracy). No custom FW or
+    # dispatch markers -- those were reverted out of tt_metal/; the realtime profiler
+    # (--use-realtime-profiler -> profile_log_device_rt.csv) gives the unpolluted absolute op2op.
+    off_op2op, off_kdur = official_kernel_metrics(df, freq, max_gap_us=50.0)
     # Per-core op duration (reader start NCRISC_GO -> writer done BRISC_DONE) to normalize
     # the spread: absolute spread (us) scales with per-core work, so report it as a % of
     # the typical core's op time for comparability across work sizes / NOP counts.
@@ -282,8 +345,11 @@ def main() -> int:
         "per_core_gbps_median": round(median(per_core_bw), 3),
         "per_core_gbps_max": round(pc_max, 3),
         "starvation_ratio": round(starv, 3),
-        "op_to_op_us": round(o2o_med, 4),
-        "op_to_op_last_us": round(o2o_last, 4),
+        # OFFICIAL tools/tracy methodology (standard KERNEL zones; Tracy / process_device_log.py
+        # comparable) -- canonical op2op + kernel duration, no custom markers:
+        "official_op2op_us": round(median(off_op2op), 4),  # steady-state median
+        "official_op2op_min_us": round(min(off_op2op) if off_op2op else float("nan"), 4),  # == tracy 'Min'
+        "device_kernel_dur_us": round(median(off_kdur), 4),
         # math-to-math, three brackets (all per-pair medians):
         "m2m_bubble_us": round(median(mb["bubble"]), 4),  # global idle window (== old math_to_math_us)
         "m2m_skew_env_us": round(median(mb["skew_env"]), 4),  # first-finish -> last-start (cross-core)

@@ -68,7 +68,8 @@ export TT_METAL_HOME
 export TT_METAL_DEVICE_PROFILER=1
 # Enable dispatch-core profiling so DISP_DONE_OBSERVED / DISP_GO_ISSUED markers
 # show up in profile_log_device.csv (required for the dg_* columns).
-export TT_METAL_DEVICE_PROFILER_DISPATCH=1
+# dispatch-core profiling off (workers only); official op2op uses KERNEL zones, no DISP markers needed
+# export TT_METAL_DEVICE_PROFILER_DISPATCH=1
 
 BUILD_DIR="${BUILD_DIR:-${TT_METAL_HOME}/build_Release}"
 TEST_BIN="${BUILD_DIR}/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency"

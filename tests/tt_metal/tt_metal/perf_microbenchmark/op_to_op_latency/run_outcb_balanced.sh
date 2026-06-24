@@ -9,7 +9,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 export TT_METAL_DEVICE_PROFILER=1
-export TT_METAL_DEVICE_PROFILER_DISPATCH=1
+# dispatch-core profiling off (workers only); official op2op uses KERNEL zones, no DISP markers needed
+# export TT_METAL_DEVICE_PROFILER_DISPATCH=1
 BIN="${TT_METAL_HOME}/build_RelWithDebInfo/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency"
 PY="${TT_METAL_HOME}/python_env/bin/python3"
 DEC="${SCRIPT_DIR}/decompose_latency_bw.py"
@@ -57,7 +58,7 @@ for C in ${CORES_LIST}; do
     if run "${C}" "${o}" "${knee}"; then
       "${PY}" "${DEC}" --pages-per-core "${PAGES}" --num-cores "${C}" --csv-out "${OUT}" \
         --label "cores=${C};nops=${knee};out_cb=${o}" 2>/dev/null \
-        | grep -E "agg_total_gbps|math_to_math_us|reader_to_writer_us"
+        | grep -E "agg_total_gbps|official_op2op_min_us|m2m_bubble_us|reader_to_writer_us"
       echo "  cores=${C} out_cb=${o} done"
     else echo "  cores=${C} out_cb=${o} FAILED"; fi
   done

@@ -16,7 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 export TT_METAL_HOME
 export TT_METAL_DEVICE_PROFILER=1
-export TT_METAL_DEVICE_PROFILER_DISPATCH=1
+# dispatch-core profiling off (workers only); official op2op uses KERNEL zones, no DISP markers needed
+# export TT_METAL_DEVICE_PROFILER_DISPATCH=1
 
 CORE_COUNTS="${CORE_COUNTS:-48 60 70 72 84 90 100}" \
 NUM_RUNS="${NUM_RUNS:-3}" \

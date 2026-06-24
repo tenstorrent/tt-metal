@@ -10,7 +10,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 export TT_METAL_DEVICE_PROFILER=1
-export TT_METAL_DEVICE_PROFILER_DISPATCH=1
+# dispatch-core profiling off (workers only); official op2op uses KERNEL zones, no DISP markers needed
+# export TT_METAL_DEVICE_PROFILER_DISPATCH=1
 BIN="${TT_METAL_HOME}/build_RelWithDebInfo/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency"
 PY="${TT_METAL_HOME}/python_env/bin/python3"
 DEC="${SCRIPT_DIR}/decompose_latency_bw.py"

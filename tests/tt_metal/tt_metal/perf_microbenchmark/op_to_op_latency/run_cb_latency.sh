@@ -12,7 +12,8 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export TT_METAL_HOME="${TT_METAL_HOME:-$(cd "${SCRIPT_DIR}/../../../../.." && pwd)}"
 export TT_METAL_DEVICE_PROFILER=1
-export TT_METAL_DEVICE_PROFILER_DISPATCH=1
+# dispatch-core profiling off (workers only); official op2op uses KERNEL zones, no DISP markers needed
+# export TT_METAL_DEVICE_PROFILER_DISPATCH=1
 BIN="${TT_METAL_HOME}/build_RelWithDebInfo/test/tt_metal/perf_microbenchmark/op_to_op_latency/test_op_to_op_latency"
 PY="${TT_METAL_HOME}/python_env/bin/python3"
 DEC="${SCRIPT_DIR}/decompose_latency_bw.py"
@@ -42,7 +43,7 @@ for d in 16 32 64 128 256; do
   if run "${d}" 8; then
     "${PY}" "${DEC}" --pages-per-core "${PAGES}" --num-cores "${CORES}" --csv-out "${A}" \
       --label "sweep=input;in_cb=${d};out_cb=8" 2>/dev/null \
-      | grep -E "agg_total_gbps|math_to_math_us|reader_to_writer_us|write_tail_us|op_duration_us"
+      | grep -E "agg_total_gbps|official_op2op_min_us|m2m_bubble_us|reader_to_writer_us|write_tail_us|op_duration_us"
     echo "  in_cb=${d} done"
   else echo "  in_cb=${d} FAILED"; fi
 done
@@ -53,7 +54,7 @@ for d in 2 4 8 16 32 64; do
   if run 64 "${d}"; then
     "${PY}" "${DEC}" --pages-per-core "${PAGES}" --num-cores "${CORES}" --csv-out "${B}" \
       --label "sweep=output;in_cb=64;out_cb=${d}" 2>/dev/null \
-      | grep -E "agg_total_gbps|math_to_math_us|reader_to_writer_us|write_tail_us|op_duration_us"
+      | grep -E "agg_total_gbps|official_op2op_min_us|m2m_bubble_us|reader_to_writer_us|write_tail_us|op_duration_us"
     echo "  out_cb=${d} done"
   else echo "  out_cb=${d} FAILED"; fi
 done
