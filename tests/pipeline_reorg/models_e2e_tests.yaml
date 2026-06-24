@@ -216,7 +216,7 @@
     wh_galaxy_perf:
       timeout: 10
       tier: 1
-    bh_galaxy_perf:
+    bh_galaxy:
       timeout: 15
       tier: 1
   owner_id: U053W15B6JF # Djordje Ivanovic
