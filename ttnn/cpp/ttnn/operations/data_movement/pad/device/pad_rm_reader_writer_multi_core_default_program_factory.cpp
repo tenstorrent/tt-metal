@@ -83,7 +83,7 @@ ProgramDescriptor PadRmReaderWriterMultiCoreDefaultProgramFactory::create_descri
         const auto& output_mc = output.memory_config();
         if (output_mc.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
             output_mc.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
-            output_accessor_page_size = output_shard_width * a.element_size();
+            output_accessor_page_size = output_shard_width * output.element_size();
         }
     }
 

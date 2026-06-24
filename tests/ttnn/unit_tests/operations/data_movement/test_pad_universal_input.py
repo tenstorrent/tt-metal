@@ -5,8 +5,7 @@
 """Universal input support tests for ttnn.pad (issue #40407).
 
 Tests all 5 memory configs (DRAM, L1, HEIGHT_SHARDED, WIDTH_SHARDED, BLOCK_SHARDED)
-and both layouts (TILE, ROW_MAJOR) as inputs — mirroring the thoroughness of
-test_reshape_universal_input.py.
+and both layouts (TILE, ROW_MAJOR) as inputs
 
 Goal: ttnn.pad should accept any input memory config and produce correct results.
 No xfail/skip decorators — failures indicate real gaps to be fixed.
@@ -30,21 +29,20 @@ All padding amounts are tile-aligned (multiples of 32).
 All output widths are multiples of 64 elements (L1-aligned for bfloat16 on Wormhole)
 so sharded output configs are valid for both TILE and ROW_MAJOR layouts.
 
-Five test categories (matching test_reshape_universal_input.py structure):
+Six test categories (matching test_reshape_universal_input.py structure):
   1. Interleaved inputs → DRAM output         (baseline, should always pass)
   2. Sharded inputs → DRAM output             (isolates reading from sharded input)
   3. DRAM input → sharded output              (isolates writing to sharded output)
   4. Sharded input → sharded output           (full sharded path, production use-case)
   5. Non-4D sharded inputs (rank-2, rank-3)
+  6. RM W/B sharded width front-padding
+  7. DRAM W/B sharded input (S2I composite fallback)
 """
 
 import pytest
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
-from tests.ttnn.nightly.unit_tests.operations.data_movement.test_universal_input_tm_reshape import (
-    make_sharded_memory_config,
-)
+from tests.ttnn.utils_for_testing import assert_with_pcc, make_sharded_memory_config
 
 
 # ---------------------------------------------------------------------------
@@ -358,3 +356,34 @@ def test_pad_rm_wb_sharded_front_pad_to_sharded(
     _run_pad(
         device, input_shape, padding_spec, output_shape, in_cfg, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=out_cfg
     )
+
+
+# ---------------------------------------------------------------------------
+# Category 7: DRAM WIDTH/BLOCK sharded input (S2I composite fallback)
+#
+# needs_pad_composite_fallback routes DRAM-sharded W/B inputs through
+# to_memory_config → pad. L1 sharded tests above exercise the native path.
+# WIDTH sharded DRAM is used here; BLOCK DRAM requires dram-bank grid mapping
+# that differs from the L1 compute grid helper.
+# ---------------------------------------------------------------------------
+
+DRAM_WB_FALLBACK_CASES = [
+    ([(0, 0), (0, 0), (0, 0), (0, 64)], [1, 1, 64, 128], [1, 1, 64, 192], "pad_w_small"),
+]
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    DRAM_WB_FALLBACK_CASES,
+    ids=[c[3] for c in DRAM_WB_FALLBACK_CASES],
+)
+def test_pad_dram_wb_sharded_input_composite_fallback(device, padding_spec, input_shape, output_shape, case_id):
+    """DRAM WIDTH sharded input → DRAM output via to_memory_config composite fallback."""
+    in_cfg = make_sharded_memory_config(
+        device,
+        input_shape,
+        ttnn.ShardStrategy.WIDTH,
+        ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    _run_pad(device, input_shape, padding_spec, output_shape, in_cfg, ttnn.ROW_MAJOR_LAYOUT)
