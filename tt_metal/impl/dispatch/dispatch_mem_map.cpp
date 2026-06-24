@@ -57,6 +57,10 @@ DispatchMemMap::DispatchMemMap(
         l1_base = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         l1_size = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::BASE);
         dispatch_stream_base_ = 16u;  // 32 streams
+    } else if (core_type == CoreType::DISPATCH) {
+        l1_base = hal.get_dev_addr(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::DEFAULT_UNRESERVED);
+        l1_size = hal.get_dev_size(HalProgrammableCoreType::DISPATCH, HalL1MemAddrType::BASE);
+        dispatch_stream_base_ = 48u;
     } else {
         TT_THROW("DispatchMemMap not implemented for core type");
     }

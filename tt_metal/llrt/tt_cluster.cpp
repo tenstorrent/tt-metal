@@ -587,6 +587,11 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
              get_soc_desc(chip_id).get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
             this->virtual_worker_cores_[chip_id].insert({core.x, core.y});
         }
+        this->virtual_dispatch_cores_[chip_id] = {};
+        for (const tt::umd::CoreCoord& core :
+             get_soc_desc(chip_id).get_cores(CoreType::DISPATCH, CoordSystem::TRANSLATED)) {
+            this->virtual_dispatch_cores_[chip_id].insert({core.x, core.y});
+        }
         this->virtual_eth_cores_[chip_id] = {};
         for (const tt::umd::CoreCoord& core : get_soc_desc(chip_id).get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
             this->virtual_eth_cores_[chip_id].insert({core.x, core.y});
@@ -652,6 +657,10 @@ bool Cluster::is_ethernet_core(const CoreCoord& core, ChipId chip_id) const {
 
 bool Cluster::is_dram_core(const CoreCoord& core, ChipId chip_id) const {
     return this->virtual_dram_hw_cores_.contains(chip_id) and this->virtual_dram_hw_cores_.at(chip_id).contains(core);
+}
+
+bool Cluster::is_dispatch_core(const CoreCoord& core, ChipId chip_id) const {
+    return this->virtual_dispatch_cores_.contains(chip_id) and this->virtual_dispatch_cores_.at(chip_id).contains(core);
 }
 
 const std::unordered_set<CoreCoord>& Cluster::get_virtual_worker_cores(ChipId chip_id) const {

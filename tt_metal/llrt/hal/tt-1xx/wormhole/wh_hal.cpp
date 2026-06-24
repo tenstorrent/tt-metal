@@ -253,6 +253,8 @@ void Hal::initialize_wh(
     HalCoreInfoType idle_eth_mem_map = wormhole::create_idle_eth_mem_map();
     this->core_info_.push_back(idle_eth_mem_map);
 
+    ensure_hal_core_info_slots(this->core_info_, tensix_mem_map);
+
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_bases_[static_cast<std::size_t>(HalDramMemAddrType::BARRIER)] = DRAM_BARRIER_BASE;
