@@ -123,7 +123,7 @@ struct KernelSpec {
 
     // DFB bindings
     // Declares that this kernel requires a DFB resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via DataflowBufferAccessor(dfb::<accessor_name>)
+    // The kernel constructs the accessor via DataflowBuffer(dfb::<accessor_name>)
     struct DFBBinding {
         // Endpoint role this binding plays for the DFB.
         enum class EndpointType { PRODUCER, CONSUMER };
@@ -144,7 +144,7 @@ struct KernelSpec {
 
     // Semaphore bindings
     // Declares that this kernel accesses a semaphore resource (declared at the ProgramSpec level)
-    // The kernel constructs the accessor via SemaphoreAccessor(sem::<accessor_name>)
+    // The kernel constructs the accessor via Semaphore(sem::<accessor_name>)
     struct SemaphoreBinding {
         SemaphoreSpecName semaphore_spec_name;  // identify the semaphore within the ProgramSpec
         std::string accessor_name;              // semaphore accessor name (used in the kernel source code)
