@@ -8,18 +8,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 --timeout=60 \
-      --junitxml=pytest-report-wormhole-1-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-1-run.xml .
-    junitparser merge pytest-report-wormhole-1-compile.xml pytest-report-wormhole-1-run.xml pytest-report-wormhole-1.xml
+      --junitxml=pytest-report-wormhole-1.xml .
   skus:
     wh_n150_civ2:
       timeout: 40
@@ -32,18 +24,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 --timeout=60 \
-      --junitxml=pytest-report-wormhole-2-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-2-run.xml .
-    junitparser merge pytest-report-wormhole-2-compile.xml pytest-report-wormhole-2-run.xml pytest-report-wormhole-2.xml
+      --junitxml=pytest-report-wormhole-2.xml .
   skus:
     wh_n150_civ2:
       timeout: 40
@@ -56,18 +40,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 --timeout=60 \
-      --junitxml=pytest-report-wormhole-3-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 3 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-3-run.xml .
-    junitparser merge pytest-report-wormhole-3-compile.xml pytest-report-wormhole-3-run.xml pytest-report-wormhole-3.xml
+      --junitxml=pytest-report-wormhole-3.xml .
   skus:
     wh_n150_civ2:
       timeout: 40
@@ -80,18 +56,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 --timeout=60 \
-      --junitxml=pytest-report-wormhole-4-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 4 \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-4-run.xml .
-    junitparser merge pytest-report-wormhole-4-compile.xml pytest-report-wormhole-4-run.xml pytest-report-wormhole-4.xml
+      --junitxml=pytest-report-wormhole-4.xml .
   skus:
     wh_n150_civ2:
       timeout: 40
@@ -104,18 +72,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 1 --timeout=60 \
-      --junitxml=pytest-report-blackhole-1-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 1 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-1-run.xml .
-    junitparser merge pytest-report-blackhole-1-compile.xml pytest-report-blackhole-1-run.xml pytest-report-blackhole-1.xml
+      --junitxml=pytest-report-blackhole-1.xml .
   skus:
     bh_p150b_civ2:
       timeout: 40
@@ -128,18 +88,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 2 --timeout=60 \
-      --junitxml=pytest-report-blackhole-2-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 2 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-2-run.xml .
-    junitparser merge pytest-report-blackhole-2-compile.xml pytest-report-blackhole-2-run.xml pytest-report-blackhole-2.xml
+      --junitxml=pytest-report-blackhole-2.xml .
   skus:
     bh_p150b_civ2:
       timeout: 40
@@ -152,18 +104,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 3 --timeout=60 \
-      --junitxml=pytest-report-blackhole-3-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 3 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-3-run.xml .
-    junitparser merge pytest-report-blackhole-3-compile.xml pytest-report-blackhole-3-run.xml pytest-report-blackhole-3.xml
+      --junitxml=pytest-report-blackhole-3.xml .
   skus:
     bh_p150b_civ2:
       timeout: 40
@@ -176,18 +120,10 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto \
       -m "$PYTEST_MARKERS" \
       --splits 4 --group 4 --timeout=60 \
-      --junitxml=pytest-report-blackhole-4-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --splits 4 --group 4 \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-4-run.xml .
-    junitparser merge pytest-report-blackhole-4-compile.xml pytest-report-blackhole-4-run.xml pytest-report-blackhole-4.xml
+      --junitxml=pytest-report-blackhole-4.xml .
   skus:
     bh_p150b_civ2:
       timeout: 40
