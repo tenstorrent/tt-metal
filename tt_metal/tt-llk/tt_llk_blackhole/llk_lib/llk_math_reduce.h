@@ -42,37 +42,58 @@ inline void reduce_row_perform_transpose()
     math::_configure_mov_ops_zero_flag_state_();
     if (enforce_fp32_accumulation)
     {
-        // needs to be disabled for MOVD2B/B2D on BH (Issue ##449)
-        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
-        // move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+        // Transpose 32-bit dest data by splitting into hi16 and lo16, ported from the
+        // (deterministic, self-contained) Wormhole path. The previous BH code wrote BOTH halves
+        // with MOVB2D(DEST_NORM)/MOVB2D(DEST_32B_LOW) and relied on the implied SrcA format left by
+        // the unpacker — racing a following FPU op (mul/sub_tiles) non-deterministically on the
+        // SrcB-bank/format handoff (tt-metal#47952). Instead, cache lo16 in SrcA and write it back
+        // with MOVA2D (never MOVB2D(DEST_32B_LOW)), and drive the SrcA format explicitly. This both
+        // sidesteps the BH "MOVB2D(DEST_32B_LOW) ignored under Fp32" bug and leaves no dangling state.
+        //
+        // SrcA format selects MOVB2D/MOVA2D hi16/lo16 addressing: Tf32 -> hi16 (DEST_NORM),
+        // Float32 -> lo16 (DEST_32B_LOW). Disable implied-SrcA-format inference so these take effect.
+        TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 1);
 
-        // move hi16 bits D2B
-        // we avoid clobbering weights in src B by moving to rows 16 - 31
-        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // note: transpose on src B on works on rows 16 - 31
+        // Step 1: read lo16 from dest into SrcB rows 16-31 and transpose.
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // note: transpose on src B only works on rows 16 - 31
         TTI_TRNSPSRCB;
         // move row D2B again for cases of reducing across multiple tiles
+        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        // Step 2: cache the transposed lo16 from SrcB rows 16-31 into SrcA rows 0-15, before the
+        // hi16 MOVB2D(Tf32) below clobbers lo16 in dest.
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 0, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 0);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 4, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 4);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 8, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 8);
+        TTI_MOVB2A(p_movb2a::SRCA_ZERO_OFFSET + 12, ADDR_MOD_0, p_movb2a::MOV_4_ROWS, p_movb2a::SRCB_ROW16_OFFSET + 12);
+
+        // Step 3: read hi16 from dest into SrcB rows 16-31 and transpose.
+        TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        TTI_TRNSPSRCB;
         TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
 
-        // move hi16 bits B2D
+        // Step 4: write transposed hi16 back to dest. SrcA=Tf32 targets the hi16 (DEST_NORM) space.
+        // This clobbers lo16, which is why it was cached in SrcA.
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Tf32));
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
         TTI_MOVB2D(p_mov::DEST_NORM, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
 
-        // move lo16 bits D2B
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-        // transpose face
-        TTI_TRNSPSRCB;
-        // move row again for cases of reducing multiple tiles
-        TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-        // move lo16 bits B2D
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-        TTI_MOVB2D(p_mov::DEST_32B_LOW, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+        // Step 5: write cached lo16 from SrcA back to dest via MOVA2D. Disable Fp32 dest mode and
+        // set SrcA=Float32 so MOVA2D targets the lo16 (DEST_32B_LOW) space, restoring the mantissa
+        // bits. Matches llk_math_transpose_dest.h: Fp32_enabled is set to 0 once here (not toggled
+        // back inside this sequence — toggling it mid-transpose races the following FPU op,
+        // tt-metal#47952); the next op's init re-establishes dest accumulation mode.
+        cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
+        cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG0_SrcA_RMW>(to_underlying(DataFormat::Float32));
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 0, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 0);
+        TTI_MOVA2D(p_mov::DEST_32B_LOW, 8, ADDR_MOD_0, p_mova2d::MOV_8_ROWS, 8);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(1);
+
+        // Restore implied-SrcA-format inference for the ops that follow.
+        TTI_SETC16(DISABLE_IMPLIED_SRCA_FMT_Base_ADDR32, 0);
     }
     else
     {
