@@ -387,8 +387,7 @@ private:
             }
 
             // Start NOC read to copy device_print buffer from remote L1 to local L1 for processing.
-            noc_read_with_state<DM_DEDICATED_NOC, NCRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
-                NOC_INDEX,
+            buffer_read_chunked(
                 remote_noc_xy,
                 remote_buffer_address,
                 current_l1_buffer_address + buffer_l1_alignment,
@@ -449,6 +448,40 @@ private:
         }
     }
 
+    // Write `size` bytes from local L1 `src_addr` to DRAM at (`dram_noc_xy`, `dst_addr`), split into
+    // <= NOC_MAX_BURST_SIZE packets. A single noc_wwrite_with_state with size > NOC_MAX_BURST_SIZE is
+    // fragmented by the NIU into multiple packets (each bumping the hardware NIU_MST_NONPOSTED_WR_REQ_SENT
+    // / NIU_MST_WR_ACK_RECEIVED counters) while the software counters are incremented only once. That
+    // desync makes noc_async_write_barrier (exact HW==SW) unsatisfiable. Issuing each burst-sized packet
+    // explicitly keeps the software counters in step with the NIU. (Device-print DRAM buffers can reach
+    // tens of KB, far above the 8 KB burst, so this matters here; the 4-byte rw-pointer writes do not.)
+    FORCE_INLINE void dram_write_chunked(uint32_t src_addr, uint64_t dst_addr, uint32_t size) {
+        while (size > NOC_MAX_BURST_SIZE) {
+            noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
+                NOC_INDEX, src_addr, dram_noc_xy, dst_addr, NOC_MAX_BURST_SIZE);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dst_addr += NOC_MAX_BURST_SIZE;
+            size -= NOC_MAX_BURST_SIZE;
+        }
+        noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
+            NOC_INDEX, src_addr, dram_noc_xy, dst_addr, size);
+    }
+
+    // Read `size` bytes from remote L1 (`noc_xy` + `src_addr`) into local L1 `dst_addr`, split into
+    // <= NOC_MAX_BURST_SIZE packets — same reasoning as dram_write_chunked, but for the read counters
+    // (NIU_MST_RD_RESP_RECEIVED vs noc_reads_num_issued) that noc_async_read_barrier checks.
+    FORCE_INLINE void buffer_read_chunked(uint32_t noc_xy, uint64_t src_addr, uint32_t dst_addr, uint32_t size) {
+        while (size > NOC_MAX_BURST_SIZE) {
+            noc_read_with_state<DM_DEDICATED_NOC, NCRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
+                NOC_INDEX, noc_xy, src_addr, dst_addr, NOC_MAX_BURST_SIZE);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dst_addr += NOC_MAX_BURST_SIZE;
+            size -= NOC_MAX_BURST_SIZE;
+        }
+        noc_read_with_state<DM_DEDICATED_NOC, NCRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
+            NOC_INDEX, noc_xy, src_addr, dst_addr, size);
+    }
+
     void push_data_to_dram(uint32_t buffer_size) {
         // All buffers and pointers are DRAM aligned. We don't need to think about that.
         // We just need to align local buffer size.
@@ -460,20 +493,13 @@ private:
         if (dram_write_pointer >= dram_read_pointer) {
             // Check if we can write whole buffer without wrapping around.
             if (buffer_size <= dram_buffer_size - dram_write_pointer) {
-                noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-                    NOC_INDEX, buffer_address, dram_noc_xy, dram_buffer_start_addr + dram_write_pointer, buffer_size);
+                dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, buffer_size);
                 dram_write_pointer += buffer_size;
                 buffer_size = 0;
             } else {
                 // We need to split buffer into two parts and write them separately.
                 uint32_t first_part_size = dram_buffer_size - dram_write_pointer;
-
-                noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-                    NOC_INDEX,
-                    buffer_address,
-                    dram_noc_xy,
-                    dram_buffer_start_addr + dram_write_pointer,
-                    first_part_size);
+                dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, first_part_size);
                 buffer_size -= first_part_size;
                 buffer_address += first_part_size;
                 dram_write_pointer = 0;
@@ -487,7 +513,7 @@ private:
         if (buffer_size > 0) {
             // We know that buffer is overflowing.
             // Wait until there is enough space in the buffer.
-            while (buffer_size > dram_read_pointer - dram_write_pointer) {
+            while (dram_read_pointer != dram_write_pointer && buffer_size > dram_read_pointer - dram_write_pointer) {
                 // Read updated read pointer from DRAM.
                 noc_read_with_state<DM_DEDICATED_NOC, NCRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
                     NOC_INDEX,
@@ -499,8 +525,7 @@ private:
                 dram_read_pointer = dram_rw_pointers[1];
             }
 
-            noc_wwrite_with_state<DM_DEDICATED_NOC, NCRISC_WR_CMD_BUF, CQ_NOC_SNDL>(
-                NOC_INDEX, buffer_address, dram_noc_xy, dram_buffer_start_addr + dram_write_pointer, buffer_size);
+            dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, buffer_size);
             dram_write_pointer += buffer_size;
         }
 
