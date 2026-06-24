@@ -30,6 +30,7 @@
 #include "api/debug/device_print.h"
 
 uint8_t noc_index;
+uint8_t noc_mode = DM_DEDICATED_NOC;
 // Renamed to kg_noc_mode to avoid conflict with noc_mode in dataflow_api_comon
 // noc_mode is the same for all erisc kernels in the program
 uint8_t kg_noc_mode;

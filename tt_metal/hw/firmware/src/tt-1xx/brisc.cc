@@ -419,7 +419,7 @@ int main() {
                     mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
                     // Notify dispatcher that this has been done
                     DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                    notify_dispatch_core_done(dispatch_addr, noc_index);
+                    notify_dispatch_core_done(dispatch_addr, noc_index, noc_mode);
                 }
             }
         }
@@ -466,10 +466,8 @@ int main() {
                 if (prev_noc_mode != noc_mode) {
                     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
                 }
-#ifdef ARCH_BLACKHOLE
                 // Need to add this to allow adding barrier after setup_remote_cb_interfaces
                 noc_local_state_init(noc_index);
-#endif
                 cmd_buf = BRISC_AT_CMD_BUF;
             } else {
                 if (prev_noc_mode != noc_mode) {
@@ -587,7 +585,8 @@ int main() {
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
                 // message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+
+                notify_dispatch_core_done(dispatch_addr, noc_index, noc_mode);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

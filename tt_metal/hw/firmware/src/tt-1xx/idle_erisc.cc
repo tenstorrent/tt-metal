@@ -28,6 +28,7 @@
 #include "internal/debug/stack_usage.h"
 
 uint8_t noc_index;
+uint8_t noc_mode = DM_DEDICATED_NOC;
 
 uint32_t noc_reads_num_issued[NUM_NOCS] __attribute__((used));
 uint32_t noc_nonposted_writes_num_issued[NUM_NOCS] __attribute__((used));
@@ -198,7 +199,7 @@ int main() {
                 uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[0]);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
-                notify_dispatch_core_done(dispatch_addr, noc_index);
+                notify_dispatch_core_done(dispatch_addr, noc_index, noc_mode);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

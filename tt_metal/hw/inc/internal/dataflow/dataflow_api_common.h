@@ -10,9 +10,8 @@
 constexpr uint8_t noc_index = NOC_INDEX;
 constexpr uint8_t noc_mode = NOC_MODE;
 #else
-
 extern uint8_t noc_index;
-// noc_mode may switch dynamically while in the firmware, so we can't define it here.
+extern uint8_t noc_mode;
 #endif
 // Use uint32_t entries when uint16_t array sizes would be unaligned (not a multiple of 4 bytes),
 // which would cause l1_to_local_mem_copy to read from misaligned L1 addresses.

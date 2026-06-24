@@ -215,19 +215,32 @@ FORCE_INLINE uint64_t calculate_dispatch_addr(volatile go_msg_t* go_message_in) 
     return addr;
 }
 
-FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index) {
+FORCE_INLINE void notify_dispatch_core_done(uint64_t dispatch_addr, uint8_t noc_index, uint8_t noc_mode) {
     // Workaround for BH inline writes does not apply here because this writes to a stream register.
     // See comment in `noc_get_interim_inline_value_addr` for more details.
-    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
-        noc_index,
-        NCRISC_AT_CMD_BUF,
-        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
-        dispatch_addr,
-        0xF,  // byte-enable
-        NOC_UNICAST_WRITE_VC,
-        false,  // mcast
-        true    // posted
-    );
+    if (noc_mode == DM_DEDICATED_NOC) {
+        noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
+            noc_index,
+            NCRISC_AT_CMD_BUF,
+            1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
+            dispatch_addr,
+            0xF,  // byte-enable
+            NOC_UNICAST_WRITE_VC,
+            false,  // mcast
+            true    // posted
+        );
+    } else {
+        noc_fast_write_dw_inline<DM_DYNAMIC_NOC>(
+            noc_index,
+            NCRISC_AT_CMD_BUF,
+            1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
+            dispatch_addr,
+            0xF,  // byte-enable
+            NOC_UNICAST_WRITE_VC,
+            false,  // mcast
+            true    // posted
+        );
+    }
 }
 #endif
 

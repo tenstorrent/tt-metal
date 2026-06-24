@@ -253,19 +253,48 @@ struct NocRegisterStateSave {
 inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
-#if !defined(KERNEL_BUILD)
-    constexpr uint8_t noc_mode = DM_DEDICATED_NOC;
-#endif
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
-    ncrisc_noc_fast_write_any_len<noc_mode>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
+    if (noc_mode == DM_DYNAMIC_NOC) {
+        ncrisc_noc_fast_write_any_len<DM_DYNAMIC_NOC>(
+            noc,
+            write_cmd_buf,
+            src_local_l1_addr,
+            dst_noc_addr,
+            size,
+            NOC_UNICAST_WRITE_VC,
+            false,
+            false,
+            1,
+            true,
+            true);
+    } else {
+        ncrisc_noc_fast_write_any_len<DM_DEDICATED_NOC>(
+            noc,
+            write_cmd_buf,
+            src_local_l1_addr,
+            dst_noc_addr,
+            size,
+            NOC_UNICAST_WRITE_VC,
+            false,
+            false,
+            1,
+            true,
+            true);
+    }
     WAYPOINT("NAWD");
 }
 
 FORCE_INLINE
 void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
     WAYPOINT("NPPW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
+    if (noc_mode == DM_DYNAMIC_NOC) {
+        do {
+            invalidate_l1_cache();
+        } while (!ncrisc_dynamic_noc_posted_writes_sent(noc));
+    } else {
+        while (!ncrisc_noc_posted_writes_sent(noc));
+    }
+    invalidate_l1_cache();
     WAYPOINT("NPPD");
 }
 
