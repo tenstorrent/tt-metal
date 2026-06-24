@@ -269,6 +269,8 @@ def main():
         print(f"resolved defaults: {defaults}")
         for t in topologies:
             print(f"\n  {t['name']}  (arch={t['arch']}, required={t['required']}, ops={t['applies_to_ops']})")
+            print(f"    mesh_shape      = {t.get('mesh_shape', '<unset>')}   fabric_config = {t.get('fabric_config', '<unset>')}")
+            print(f"      ^ the op's acceptance test MUST open a mesh_device of this shape + fabric_config (else fabric init hangs)")
             print(f"    sim_so          = {t['sim_so']}")
             print(f"    cluster_desc    = {t['cluster_desc']}")
             print(f"    mesh_graph_desc = {t['mesh_graph_desc']}")

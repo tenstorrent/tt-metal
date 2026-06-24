@@ -45,6 +45,11 @@ topologies:
     sim_so: "{sim_bh_so}"
     cluster_desc: "{craqsim_data}/bh/blackhole_8xP150.yaml"
     mesh_graph_desc: "{craqsim_data}/bh/blackhole_8xP150_torus_x_mesh_graph_descriptor.textproto"
+    # The mesh-graph descriptor fixes the mesh shape. A test/op that opens a DIFFERENT
+    # mesh_device shape will hang fabric init ("Fabric Router Sync: Timeout") — so the
+    # generated op's acceptance test MUST open this shape with this fabric_config.
+    mesh_shape: [2, 4]
+    fabric_config: FABRIC_1D
     applies_to_ops: [point_to_point]
     required: true        # failure of a required topology => non-zero aggregate exit
     extra_env: {}
@@ -58,6 +63,8 @@ topologies:
     sim_so: "{sim_wh_so}"
     cluster_desc: "{craqsim_data}/wh/wormhole_t3k_all_mmio.yaml"
     mesh_graph_desc: "{craqsim_data}/wh/wormhole_t3k_mesh_graph_descriptor.textproto"
+    mesh_shape: [2, 4]    # Phase 2 — confirm against the descriptor when WH all_gather is wired
+    fabric_config: FABRIC_1D
     applies_to_ops: [all_gather]
     required: false       # Phase 2 — informational until WH all_gather is wired
     extra_env: {}
