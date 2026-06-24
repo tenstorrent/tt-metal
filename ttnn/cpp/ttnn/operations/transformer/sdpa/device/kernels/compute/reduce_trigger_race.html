@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>SDPA reduce_trigger race &amp; fix (#47911)</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#181b22; --panel2:#1f232c; --ink:#e6e9ef; --mut:#8b93a3;
+    --line:#2b303b; --t0:#4aa3ff; --t1:#c08bff; --t2:#ffb454; --ok:#39d98a;
+    --bad:#ff5d5d; --warn:#ffd34d; --read:#36c5f0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+  .wrap{max-width:980px;margin:0 auto;padding:20px}
+  h1{font-size:18px;margin:0 0 2px}
+  .sub{color:var(--mut);font-size:12px;margin-bottom:16px}
+  code{background:#0c0e13;padding:1px 5px;border-radius:4px;font-size:.92em;color:#ffd9a8}
+  b.t0{color:var(--t0)} b.t2{color:var(--t2)}
+
+  .tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:18px;flex-wrap:wrap}
+  .tabs button{background:transparent;border:0;border-bottom:2px solid transparent;color:var(--mut);
+    padding:10px 14px;cursor:pointer;font-weight:600;font-size:13px;margin-bottom:-1px}
+  .tabs button:hover{color:var(--ink)}
+  .tabs button.on{color:var(--ink);border-bottom-color:var(--t0)}
+  .tabs button.on[data-tab="fix"]{border-bottom-color:var(--ok)}
+  .tabs button.on[data-tab="race"]{border-bottom-color:var(--bad)}
+  .tabs button.on[data-tab="sema"]{border-bottom-color:var(--warn)}
+
+  .story h2{font-size:15px;margin:22px 0 8px} .story h2:first-child{margin-top:0}
+  .story p{margin:0 0 10px;color:#cdd3de}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 14px}
+  .threads3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin:6px 0 4px}
+  .tcard{border:1px solid var(--line);border-top-width:3px;border-radius:8px;padding:9px 11px;background:var(--panel2)}
+  .tcard.t0{border-top-color:var(--t0)} .tcard.t1{border-top-color:var(--t1)} .tcard.t2{border-top-color:var(--t2)}
+  .tcard b{font-size:12px} .tcard span{display:block;color:var(--mut);font-size:11.5px;margin-top:2px}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12.5px;color:#cdd3de;margin:6px 0}
+  .flow .b{background:var(--panel2);border:1px solid var(--line);border-radius:7px;padding:6px 10px;white-space:nowrap}
+  .flow .b.hot{border-color:var(--bad);color:#ffd9d9}
+  .call{border-left:3px solid var(--t0);background:rgba(74,163,255,.06);border-radius:8px;padding:10px 14px;margin-top:16px}
+  .call b{color:#bfe0ff}
+
+  /* walkthrough */
+  .pill{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+  .pill .phase{padding:4px 10px;border:1px solid var(--line);border-radius:999px;color:var(--mut);font-size:12px}
+  .pill .phase b{color:var(--ink)}
+  .threads{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px}
+  .th{background:var(--panel);border:1px solid var(--line);border-top-width:3px;border-radius:10px;padding:10px;min-height:74px}
+  .th.t0{border-top-color:var(--t0)} .th.t1{border-top-color:var(--t1)} .th.t2{border-top-color:var(--t2)}
+  .th h3{margin:0 0 6px;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--mut)}
+  .th .act{font-size:13px;min-height:34px;color:var(--ink)}
+  .th.idle{opacity:.4}
+  .th.active{box-shadow:0 0 0 2px rgba(255,255,255,.05), 0 0 16px -4px currentColor}
+  .th.t0.active{color:var(--t0)} .th.t1.active{color:var(--t1)} .th.t2.active{color:var(--t2)}
+  .hw{display:grid;grid-template-columns:1fr 1fr 60px 1fr;gap:10px;align-items:center;margin-bottom:12px}
+  .reg{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:8px 10px;min-height:56px}
+  .reg .lbl{font-size:11px;color:var(--mut)} .reg .val{font-size:13px;margin-top:3px;font-family:ui-monospace,Menlo,Consolas,monospace}
+  .fpu{justify-self:center;text-align:center;color:var(--mut);font-size:11px}
+  .fpu .box{width:52px;height:38px;border:1px dashed var(--line);border-radius:8px;display:flex;align-items:center;justify-content:center;font-weight:700;color:var(--t1)}
+  .fpu.active .box{border-style:solid;border-color:var(--t1);box-shadow:0 0 16px -4px var(--t1)}
+  .reg.bad{border-color:var(--bad);box-shadow:0 0 0 1px var(--bad) inset}
+  .reg.good{border-color:var(--ok);box-shadow:0 0 0 1px var(--ok) inset}
+  .l1{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:12px}
+  .l1 .cap{display:flex;justify-content:space-between;color:var(--mut);font-size:12px;margin-bottom:8px}
+  .tiles{display:flex;gap:6px}
+  .tile{flex:1;height:44px;border:1px solid var(--line);border-radius:7px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--panel2);transition:all .12s}
+  .tile .ci{font-size:10px;color:var(--mut)} .tile .st{font-size:10px;margin-top:2px;color:var(--mut)}
+  .tile.empty{background:#15171d;border-style:dashed}
+  .tile.packed{background:rgba(57,217,138,.14);border-color:var(--ok)} .tile.packed .st{color:var(--ok)}
+  .tile.reading{border-color:var(--read);box-shadow:0 0 12px -3px var(--read)} .tile.reading .st{color:var(--read)}
+  .tile.stale{background:rgba(255,93,93,.18);border-color:var(--bad);box-shadow:0 0 16px -2px var(--bad);animation:flash .8s infinite}
+  .tile.stale .st{color:var(--bad);font-weight:700}
+  .tile.validread{background:rgba(57,217,138,.14);border-color:var(--read);box-shadow:0 0 10px -3px var(--read)}
+  @keyframes flash{0%,100%{filter:brightness(1)}50%{filter:brightness(1.55)}}
+  .divider{width:2px;background:var(--line);margin:0 2px;border-radius:2px}
+  .sync{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px}
+  .sbox{background:var(--panel2);border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+  .sbox .lbl{font-size:11px;color:var(--mut)} .sbox .v{font-size:14px;font-weight:700;margin-top:3px;font-family:ui-monospace,monospace}
+  .sbox.skip{border-color:var(--bad)} .sbox.skip .v{color:var(--bad)}
+  .sbox.waiting{border-color:var(--warn)} .sbox.waiting .v{color:var(--warn)}
+  .sbox.released{border-color:var(--ok)} .sbox.released .v{color:var(--ok)}
+  .note{background:var(--panel);border:1px solid var(--line);border-left:3px solid var(--t0);border-radius:10px;padding:12px 14px;min-height:84px}
+  .note.race{border-left-color:var(--bad);background:rgba(255,93,93,.06)}
+  .note.fix{border-left-color:var(--ok);background:rgba(57,217,138,.05)}
+  .note h4{margin:0 0 6px;font-size:13px} .note p{margin:0;color:#cdd3de}
+  .nav{display:flex;gap:10px;align-items:center;margin-top:14px}
+  .nav button{background:var(--panel2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:9px 18px;cursor:pointer;font-weight:600}
+  .nav button:hover:not(:disabled){border-color:var(--t0)} .nav button:disabled{opacity:.35;cursor:default}
+  .nav .count{color:var(--mut);font-variant-numeric:tabular-nums}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;color:var(--mut);font-size:11px;margin-top:10px}
+  .legend span{display:inline-flex;align-items:center;gap:5px}
+  .dot{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .progress{height:3px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:12px}
+  .progress > i{display:block;height:100%;background:var(--bad);transition:width .15s}
+  .fixmode .progress > i{background:var(--ok)}
+  .hidden{display:none}
+
+  /* ---- semaphore tab ---- */
+  .ops{display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:8px;margin:6px 0 4px}
+  .op{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:9px 10px}
+  .op b{font-family:ui-monospace,monospace;font-size:12px;color:#ffd9a8} .op span{display:block;color:var(--mut);font-size:11.5px;margin-top:3px}
+  .keynote{background:rgba(255,211,77,.07);border:1px solid var(--warn);border-radius:10px;padding:11px 14px;margin:12px 0;color:#f1e6c4}
+  .keynote b{color:var(--warn)}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin:6px 0 14px}
+  .seg button{background:var(--panel);color:var(--mut);border:0;padding:7px 16px;cursor:pointer;font-weight:600;font-size:12.5px}
+  .seg button.on[data-v="before"]{background:var(--bad);color:#1a0606}
+  .seg button.on[data-v="after"]{background:var(--ok);color:#06160e}
+  .ladder{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:6px}
+  .ladder th{text-align:left;color:var(--mut);font-weight:600;font-size:11px;padding:6px 8px;border-bottom:1px solid var(--line)}
+  .ladder td{padding:7px 8px;border-bottom:1px solid #232833;vertical-align:top}
+  .ladder td.pk{color:#ffe1bd} .ladder td.up{color:#cfe6ff}
+  .ladder td.sem{font-family:ui-monospace,monospace;text-align:center;color:var(--ink);width:54px}
+  .ladder tr.race{background:rgba(255,93,93,.12)} .ladder tr.race td{border-color:rgba(255,93,93,.3)}
+  .ladder tr.guard{background:rgba(57,217,138,.10)}
+  .ladder td .tag{display:inline-block;font-size:10px;padding:1px 6px;border-radius:999px;margin-left:6px;vertical-align:middle}
+  .tag.bad{background:rgba(255,93,93,.2);color:#ffb3b3} .tag.ok{background:rgba(57,217,138,.2);color:#a7f0cf}
+  .tag.wait{background:rgba(255,211,77,.18);color:#f0dd9a}
+  .changed{width:100%;border-collapse:collapse;margin-top:14px;font-size:13px}
+  .changed th,.changed td{padding:8px 10px;border:1px solid var(--line);text-align:left}
+  .changed th{background:var(--panel2);color:var(--mut);font-size:11px}
+  .changed td.b4{color:#ffb3b3} .changed td.af{color:#a7f0cf}
+  .changed code{font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>SDPA <code style="font-size:15px">reduce_trigger</code> — the race &amp; the fix (#47911)</h1>
+  <div class="sub">A producer→consumer (T2→T0) shared-L1 race in the ring-MLA SDPA compute kernel, and the one-semaphore fix.</div>
+
+  <div class="tabs">
+    <button data-tab="story" class="on">1 · Back story</button>
+    <button data-tab="race">2 · The race</button>
+    <button data-tab="sema">3 · Semaphore: before → after</button>
+    <button data-tab="fix">4 · The fix (step-through)</button>
+  </div>
+
+  <!-- ============ TAB 1: BACK STORY ============ -->
+  <div id="tab-story" class="story">
+    <h2>What this kernel does (in one breath)</h2>
+    <p>It computes <b>attention</b> on Tenstorrent hardware: score every key (<code>QK&#7488;</code>), softmax, blend the values (<code>&middot;V</code>) — a <b>chunk of keys at a time</b> (flash-attention), with the keys/values rotated around a <b>ring</b> of devices.</p>
+
+    <h2>Fact 1 — one core, three threads running at once</h2>
+    <div class="threads3">
+      <div class="tcard t0"><b>T0 · Unpack</b><span>L1 → <code>SrcA</code>/<code>SrcB</code> registers</span></div>
+      <div class="tcard t1"><b>T1 · Math</b><span>FPU/vector → <code>DST</code> registers</span></div>
+      <div class="tcard t2"><b>T2 · Pack</b><span><code>DST</code> → L1</span></div>
+    </div>
+    <p style="font-size:12.5px;color:var(--mut)">Data flows <b>T0 → T1 → T2</b>, so <b>Pack (T2) is always the last stage</b>. They only stay in step when code <b>explicitly</b> makes one wait for another.</p>
+
+    <h2>Fact 2 — the inner loop, per key-chunk</h2>
+    <div class="card"><div class="flow">
+      <span class="b">1. QK&#7488; → scores</span><span>→</span>
+      <span class="b hot">2. row-max (reduce)</span><span>→</span>
+      <span class="b">3. exp = softmax num.</span><span>→</span>
+      <span class="b">4. &middot;V</span><span>→</span>
+      <span class="b">5. accumulate</span>
+    </div></div>
+
+    <h2>Where the bug lives</h2>
+    <p>The scores from step 1 are packed by <b class="t2">T2</b> into an L1 buffer <code>cb_qkt_im</code>; the row-max in step 2 reads them back through <b class="t0">T0</b>. So <code>cb_qkt_im</code> is a <b>producer→consumer handoff: T2 writes, T0 reads</b> — and the <code>reduce_trigger</code> optimization removed the wait that ordered them.</p>
+
+    <div class="call"><b>Tabs →</b> <b>2</b> steps through the race; <b>3</b> is the part you asked about — the <b>semaphore protocol before vs after</b>, and why the fix keeps <b>one</b> semaphore; <b>4</b> steps through the fixed run.</div>
+  </div>
+
+  <!-- ============ TAB 3: SEMAPHORE BEFORE/AFTER ============ -->
+  <div id="tab-sema" class="hidden story">
+    <h2>The one semaphore: <code>FPU_SFPU</code></h2>
+    <p>The reduce_trigger handshake uses a single hardware semaphore. Three operations act on it, plus init:</p>
+    <div class="ops">
+      <div class="op"><b>init(min=0, max=1)</b><span>creates it; starts at 0, saturates at 1</span></div>
+      <div class="op"><b>post</b><span><b class="t2">T2</b> does it: value <b>+1</b> (&ldquo;data ready&rdquo;). <code>STALL_PACK</code> = wait for pack's L1 writes to land first</span></div>
+      <div class="op"><b>wait_on_zero</b><span><b class="t0">T0</b> does it: <b>stall while value == 0</b>, proceed when nonzero. Does <b>NOT</b> change the value</span></div>
+      <div class="op"><b>get</b><span><b class="t0">T0</b> does it: value <b>−1</b> (consume)</span></div>
+    </div>
+    <div class="keynote"><b>The key property:</b> <code>wait_on_zero</code> is <b>non-consuming</b> — it only looks. So a single &ldquo;sticky&rdquo; token (value 1) can be observed by <b>many waits</b>; only <b>one</b> <code>get</code> clears it. <b>This is why the fix needs two waits but still only one post and one get — and only one semaphore.</b></p></div>
+
+    <div class="seg" id="semSeg">
+      <button data-v="before" class="on">Before (buggy)</button>
+      <button data-v="after">After (fix)</button>
+    </div>
+
+    <!-- BEFORE -->
+    <div id="ladder-before">
+      <table class="ladder">
+        <thead><tr><th style="width:42%"><b class="t2">T2 · Pack</b> (producer, program order)</th><th style="width:42%"><b class="t0">T0 · Unpack</b> (consumer, program order)</th><th class="sem">FPU_SFPU</th></tr></thead>
+        <tbody>
+          <tr><td class="pk">pack QK&#7488; cols 0–1 (subblock 0)</td><td class="up">…still feeding the matmul…</td><td class="sem">0</td></tr>
+          <tr><td class="pk">pack cols 2–9 (subblocks 1–4) — <i>trailing</i></td><td class="up">reduce: <b>skip <code>cb_wait_front</code></b><span class="tag bad">barrier removed</span></td><td class="sem">0</td></tr>
+          <tr class="race"><td class="pk">(cols 2–4 not packed yet)</td><td class="up"><b>run #1 → read cols 0–4</b> &nbsp;— no wait<span class="tag bad">RACE: stale read</span></td><td class="sem">0</td></tr>
+          <tr><td class="pk"><b>post</b> (NONE) — after last QK pack,<br/><i>but BEFORE the mask</i><span class="tag bad">wrong anchor</span></td><td class="up"><b>wait_on_zero</b> — only guards run #2<span class="tag wait">1 wait</span></td><td class="sem">0→1</td></tr>
+          <tr><td class="pk">mask stamp cols (in place) — <i>after the post!</i></td><td class="up">run #2 → read cols 5–9</td><td class="sem">1</td></tr>
+          <tr><td class="pk"><code>cb_push_back</code></td><td class="up"><b>get</b> (−1)</td><td class="sem">1→0</td></tr>
+        </tbody>
+      </table>
+      <div class="note race"><h4>Two defects, visible in the ladder</h4><p>(1) <b>run #1 reads cols 0–4 with no preceding wait</b> — and T2 hasn't packed them yet (it trails) → stale row-max. (2) the single <b>post is anchored before the mask</b>, so even the guarded second half can observe pre-mask data. The lone <code>wait_on_zero</code> sits <i>between</i> the halves, guarding only the second.</p></div>
+    </div>
+
+    <!-- AFTER -->
+    <div id="ladder-after" class="hidden">
+      <table class="ladder">
+        <thead><tr><th style="width:42%"><b class="t2">T2 · Pack</b> (producer, program order)</th><th style="width:42%"><b class="t0">T0 · Unpack</b> (consumer, program order)</th><th class="sem">FPU_SFPU</th></tr></thead>
+        <tbody>
+          <tr><td class="pk">pack QK&#7488; cols 0–9</td><td class="up">reduce reached</td><td class="sem">0</td></tr>
+          <tr><td class="pk">mask stamp cols (in place)</td><td class="up"><b>wait_on_zero</b> (before run #1)<span class="tag wait">wait #1</span></td><td class="sem">0</td></tr>
+          <tr><td class="pk"><code>cb_push_back</code></td><td class="up"><b>BLOCKED</b> (value 0)</td><td class="sem">0</td></tr>
+          <tr class="guard"><td class="pk"><b>post &lt;STALL_PACK&gt;</b> — after QK + mask + push<span class="tag ok">right anchor + data committed</span></td><td class="up">wait #1 released</td><td class="sem">0→1</td></tr>
+          <tr class="guard"><td class="pk">—</td><td class="up"><b>run #1 → read cols 0–4 ✓</b></td><td class="sem">1</td></tr>
+          <tr class="guard"><td class="pk">—</td><td class="up"><b>wait_on_zero</b> (before run #2) — sticky, passes<span class="tag wait">wait #2</span></td><td class="sem">1</td></tr>
+          <tr class="guard"><td class="pk">—</td><td class="up"><b>run #2 → read cols 5–9 ✓</b></td><td class="sem">1</td></tr>
+          <tr><td class="pk">—</td><td class="up"><b>get</b> (−1)</td><td class="sem">1→0</td></tr>
+        </tbody>
+      </table>
+      <div class="note fix"><h4>Both halves are now ordered after every writer</h4><p>The post moved to <b>after the QK pack, the mask, and the push</b>, and carries <code>STALL_PACK</code> so the L1 writes are committed before the token appears. T0 now <b>waits before run #1 too</b>. Because <code>wait_on_zero</code> is non-consuming, the <b>same single token</b> satisfies both waits; the one <code>get</code> clears it. Delaying T2 (the repro) just makes T0 wait longer — it can no longer read ahead.</p></div>
+    </div>
+
+    <h2>So, &ldquo;did we remove one semaphore and add two?&rdquo;</h2>
+    <p>No — there is still exactly <b>one</b> semaphore (<code>FPU_SFPU</code>). Here is everything that actually changed:</p>
+    <table class="changed">
+      <thead><tr><th>thing</th><th>before (buggy)</th><th>after (fix)</th></tr></thead>
+      <tbody>
+        <tr><td>semaphores</td><td class="b4">1 (<code>FPU_SFPU</code>)</td><td class="af">1 (<code>FPU_SFPU</code>) — unchanged, <code>max=1</code></td></tr>
+        <tr><td><b>posts</b> (T2)</td><td class="b4">1, after last QK pack, <code>&lt;NONE&gt;</code>, <i>before the mask</i></td><td class="af">1, after QK + mask + push, <code>&lt;STALL_PACK&gt;</code> — <b>moved + stalled</b></td></tr>
+        <tr><td><b>waits</b> (T0)</td><td class="b4">1 — only between the halves (first half unguarded)</td><td class="af"><b>2</b> — before each half (same token, non-consuming)</td></tr>
+        <tr><td><b>gets</b> (T0)</td><td class="b4">1 (in uninit)</td><td class="af">1 (in uninit) — unchanged</td></tr>
+        <tr><td>token balance</td><td class="b4">1 post / 1 get</td><td class="af">1 post / 1 get → still balanced for any group_size</td></tr>
+      </tbody>
+    </table>
+    <div class="keynote" style="margin-top:14px">The &ldquo;2&rdquo; is <b>two waits</b>, not two semaphores. We <b>moved the single post</b> (to after the mask, with <code>STALL_PACK</code>) and made the consumer <b>wait before both halves</b>. One post still balances one get because <code>wait_on_zero</code> never consumes the token. <span style="color:var(--mut)">(The panel first tried a real two-<i>token</i> scheme with <code>max=2</code> and a second post+get — adversarial review showed it deadlocks for group_size&gt;1, so it was dropped in favor of this single-token form.)</span></div>
+  </div>
+
+  <!-- ============ TABS 2/4: WALKTHROUGH ============ -->
+  <div id="tab-walk" class="hidden">
+    <div class="pill"><div class="phase">Phase: <b id="phase">&mdash;</b></div></div>
+    <div class="threads">
+      <div class="th t0" id="th0"><h3>T0 · Unpack</h3><div class="act" id="a0"></div></div>
+      <div class="th t1" id="th1"><h3>T1 · Math / FPU</h3><div class="act" id="a1"></div></div>
+      <div class="th t2" id="th2"><h3>T2 · Pack</h3><div class="act" id="a2"></div></div>
+    </div>
+    <div class="hw">
+      <div class="reg" id="rsrca"><div class="lbl">SrcA (operand)</div><div class="val" id="vsrca">&mdash;</div></div>
+      <div class="reg" id="rsrcb"><div class="lbl">SrcB (scaler)</div><div class="val" id="vsrcb">&mdash;</div></div>
+      <div class="fpu" id="fpu"><div class="box">FPU</div>matmul / max</div>
+      <div class="reg" id="rdst"><div class="lbl">DST (accumulator)</div><div class="val" id="vdst">&mdash;</div></div>
+    </div>
+    <div class="l1">
+      <div class="cap"><span>L1 buffer <b>cb_qkt_im</b> — QK&#7488; scores (10 column-tiles)</span><span><b style="color:var(--t2)">T2 writes</b> → <b style="color:var(--t0)">T0 reads</b></span></div>
+      <div class="tiles" id="tiles"></div>
+      <div class="cap" style="margin-top:6px;margin-bottom:0"><span style="flex:1;text-align:center">first half (0–4) = run #1</span><span style="flex:1;text-align:center">second half (5–9) = run #2</span></div>
+    </div>
+    <div class="sync">
+      <div class="sbox" id="semBox"><div class="lbl">HW semaphore <code style="font-size:11px">FPU_SFPU</code></div><div class="v" id="semV">&mdash;</div></div>
+      <div class="sbox" id="barBox"><div class="lbl">Barrier <code style="font-size:11px">cb_wait_front</code></div><div class="v" id="barV">&mdash;</div></div>
+    </div>
+    <div class="note" id="note"><h4 id="ntitle"></h4><p id="ntext"></p></div>
+    <div class="progress"><i id="prog"></i></div>
+    <div class="nav">
+      <button id="prev">&#9664; Prev</button><button id="next">Next &#9654;</button><span class="count" id="count"></span>
+    </div>
+    <div class="legend">
+      <span><i class="dot" style="background:#15171d;border:1px dashed var(--line)"></i> not yet packed</span>
+      <span><i class="dot" style="background:rgba(57,217,138,.5);border:1px solid var(--ok)"></i> packed by T2</span>
+      <span><i class="dot" style="background:transparent;border:1px solid var(--read)"></i> read by T0</span>
+      <span><i class="dot" style="background:rgba(255,93,93,.6);border:1px solid var(--bad)"></i> STALE read — the race</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const N=10;
+function cb(s){return s.split('').map(c=>c==='P'?'packed':'empty');}
+function overlay(base,idxs,st){const a=base.slice();idxs.forEach(i=>a[i]=st);return a;}
+
+const race=[
+  {phase:"QK&#7488; matmul",t0:["Unpack Q → SrcA, K&#7488; → SrcB",1],t1:["idle",0],t2:["idle",0],srcA:"Q tile",srcB:"K&#7488; tile",dst:"&mdash;",fpu:0,cb:cb(".........."),sem:0,bar:"n/a",nt:"Setup",nx:"cb_qkt_im is written by T2 (pack) and read by T0 (unpack). Separate threads — only an explicit wait orders T2's writes before T0's reads."},
+  {phase:"QK&#7488; matmul",t0:["feeding matmul subblocks (runs ahead)",1],t1:["FPU: SrcA×SrcB → DST",1],t2:["idle (waiting for DST)",0],srcA:"Q tile",srcB:"K&#7488; tile",dst:"QK&#7488; sb0",fpu:1,cb:cb(".........."),sem:0,bar:"n/a",nt:"Pack is the last stage",nx:"Data flows T0→T1→T2, so T2 (pack) always trails. Nothing in cb_qkt_im yet."},
+  {phase:"QK&#7488; matmul",t0:["done feeding; advancing to the reduce",1],t1:["draining later subblocks",1],t2:["pack → cb_qkt_im cols 0–1",1],srcA:"Q tile",srcB:"K&#7488; tile",dst:"QK&#7488; sb1",fpu:1,cb:cb("PP........"),sem:0,bar:"n/a",nt:"T2 starts writing — slowly",nx:"Cols 0–1 valid, but T0 finished feeding the matmul and races ahead. T2 still owes cols 2–9."},
+  {phase:"QK&#7488; matmul",t0:["reached the row-max reduce",1],t1:["idle",0],t2:["pack cols 2–3 — still behind",1],srcA:"&mdash;",srcB:"&mdash;",dst:"&mdash;",fpu:0,cb:cb("PPPP......"),sem:0,bar:"n/a",nt:"Consumer arrives before producer is done",nx:"T2 has packed only cols 0–3; cols 4–9 still empty."},
+  {phase:"Reduce",t0:["reduce_trigger ON → SKIP cb_wait_front",1],t1:["idle",0],t2:["pack cols 4–5… in flight",1],srcA:"&mdash;",srcB:"scaler 1.0",dst:"&mdash;",fpu:0,cb:cb("PPPP......"),sem:0,bar:"skip",nt:"The deleted barrier",nx:"The trigger path skips cb_wait_front. It trusts FPU_SFPU instead, which T2 posts only after the last subblock."},
+  {phase:"Reduce",t0:["run #1: read cols 0–4 → SrcA — no wait",1],t1:["idle",0],t2:["still packing col 4… not in L1",1],srcA:"cols 0–4 ← col 4 STALE",srcB:"scaler 1.0",dst:"&mdash;",fpu:0,cb:overlay(cb("PPPP......"),[0,1,2,3],"reading").map((v,k)=>k===4?"stale":v),sem:0,bar:"skip",race:1,srcaBad:1,nt:"⚠ THE RACE",nx:"T0's first-half read pulls cols 0–4, but col 4 isn't written yet → stale memory. No wait guarded it."},
+  {phase:"Reduce",t0:["feed first-half tiles into the max",1],t1:["FPU: row-max over 0–4 → DST",1],t2:["pack cols 6–7",1],srcA:"cols 0–4 (col 4 stale)",srcB:"scaler 1.0",dst:"partial max (CORRUPT)",fpu:1,cb:cb("PPPPPP...."),sem:0,bar:"skip",dstBad:1,nt:"Corruption enters the row-max",nx:"Which garbage col 4 held depends on T0/T2 timing → different every run."},
+  {phase:"Reduce",t0:["run #1 done → wait on FPU_SFPU",1],t1:["idle",0],t2:["pack cols 8–9 (last subblock)",1],srcA:"&mdash;",srcB:"&mdash;",dst:"partial max (CORRUPT)",fpu:0,cb:cb("PPPPPPPP.."),sem:0,bar:"skip",dstBad:1,nt:"T0 waits now — too late",nx:"The lone wait only guards the second half; the first half was already read."},
+  {phase:"Reduce",t0:["stalled (FPU_SFPU==0)",0],t1:["idle",0],t2:["last pack done → post FPU_SFPU",1],srcA:"&mdash;",srcB:"&mdash;",dst:"partial max (CORRUPT)",fpu:0,cb:cb("PPPPPPPPPP"),sem:1,bar:"skip",dstBad:1,nt:"T2 posts — second half safe",nx:"All cols valid now; correctly orders the second-half read — the half that was never the problem."},
+  {phase:"Reduce",t0:["wait released → run #2: read cols 5–9",1],t1:["FPU: max over 5–9, combine",1],t2:["idle",0],srcA:"cols 5–9 (valid)",srcB:"scaler 1.0",dst:"row-max (WRONG)",fpu:1,cb:overlay(cb("PPPPPPPPPP"),[5,6,7,8,9],"validread"),sem:1,bar:"skip",dstBad:1,nt:"Second half fine — result still wrong",nx:"The final row-max still carries the corrupted first-half value. One stale tile poisons it."},
+  {phase:"Reduce",t0:["idle",0],t1:["idle",0],t2:["pack DST → cur.max",1],srcA:"&mdash;",srcB:"&mdash;",dst:"row-max (WRONG)",fpu:0,cb:cb("PPPPPPPPPP"),sem:0,bar:"skip",dstBad:1,nt:"Wrong max → wrong softmax",nx:"Run again, timing differs, a different tile is stale → a different wrong answer. iter 1 ≠ iter 0."},
+];
+const fixed=[
+  {phase:"QK&#7488; matmul",t0:["done feeding; advancing to the reduce",1],t1:["draining subblocks",1],t2:["pack cols 0–3 — still behind",1],srcA:"&mdash;",srcB:"&mdash;",dst:"&mdash;",fpu:0,cb:cb("PPPP......"),sem:0,bar:"n/a",nt:"Same start: producer trails",nx:"Identical situation — T0 reaches the reduce while T2 has packed only cols 0–3."},
+  {phase:"Reduce",t0:["reduce_trigger ON, but wait FIRST",1],t1:["idle",0],t2:["pack + mask + push (in progress)",1],srcA:"&mdash;",srcB:"scaler 1.0",dst:"&mdash;",fpu:0,cb:cb("PPPPPP...."),sem:0,bar:"wait",nt:"Fix: wait before run #1",nx:"The LLK now does wait_on_zero(FPU_SFPU) BEFORE the first half. The token is still 0, so T0 blocks."},
+  {phase:"Reduce",t0:["BLOCKED on FPU_SFPU (value 0)",0],t1:["idle",0],t2:["mask stamp, then cb_push_back",1],srcA:"&mdash;",srcB:"&mdash;",dst:"&mdash;",fpu:0,cb:cb("PPPPPPPPPP"),sem:0,bar:"wait",nt:"T0 waits for ALL writers",nx:"T2 finishes the QK pack AND the in-place mask, then cb_push_back. The token is posted only after all of that."},
+  {phase:"Reduce",t0:["wait #1 released",1],t1:["idle",0],t2:["post FPU_SFPU <STALL_PACK>",1],srcA:"&mdash;",srcB:"&mdash;",dst:"&mdash;",fpu:0,cb:cb("PPPPPPPPPP"),sem:1,bar:"rel",nt:"Post after QK + mask + push, STALL_PACK",nx:"STALL_PACK drains the L1 writes before the post retires. Token 0→1. Only now is T0 released."},
+  {phase:"Reduce",t0:["run #1: read cols 0–4 ✓",1],t1:["FPU: row-max over 0–4",1],t2:["idle",0],srcA:"cols 0–4 (valid)",srcB:"scaler 1.0",dst:"partial max (correct)",fpu:1,cb:overlay(cb("PPPPPPPPPP"),[0,1,2,3,4],"validread"),sem:1,bar:"rel",dstGood:1,nt:"First half now guarded",nx:"Every tile run #1 reads is committed. No stale read possible regardless of timing."},
+  {phase:"Reduce",t0:["wait #2 (same sticky token) → passes",1],t1:["idle",0],t2:["idle",0],srcA:"&mdash;",srcB:"&mdash;",dst:"partial max (correct)",fpu:1,cb:cb("PPPPPPPPPP"),sem:1,bar:"rel",dstGood:1,nt:"Second wait is free",nx:"wait_on_zero is non-consuming, so the SAME token (still 1) satisfies wait #2. No second post needed."},
+  {phase:"Reduce",t0:["run #2: read cols 5–9 ✓ → get(−1)",1],t1:["FPU: max over 5–9, combine",1],t2:["pack DST → cur.max",1],srcA:"cols 5–9 (valid)",srcB:"scaler 1.0",dst:"row-max (CORRECT)",fpu:1,cb:overlay(cb("PPPPPPPPPP"),[5,6,7,8,9],"validread"),sem:0,bar:"rel",dstGood:1,nt:"Correct & deterministic",nx:"Both halves read committed data. The single get clears the token (1→0). 1 post / 1 get — balanced for any group_size. PCC 0.9996, bit-exact across iterations."},
+];
+
+let tab="story", view="before", i=0;
+const data=()=> tab==="fix"? fixed : race;
+
+const tilesEl=document.getElementById('tiles');
+for(let c=0;c<N;c++){
+  if(c===5){const d=document.createElement('div');d.className='divider';tilesEl.appendChild(d);}
+  const t=document.createElement('div');t.className='tile empty';t.id='tile'+c;
+  t.innerHTML='<span class="ci">col '+c+'</span><span class="st">&mdash;</span>';tilesEl.appendChild(t);
+}
+const stLabel={empty:'empty',packed:'packed',reading:'reading',stale:'STALE',validread:'read'};
+function render(){
+  const s=data()[i];
+  document.body.classList.toggle('fixmode',tab==='fix');
+  document.getElementById('phase').innerHTML=s.phase;
+  [['0',s.t0],['1',s.t1],['2',s.t2]].forEach(([n,info])=>{document.getElementById('a'+n).innerHTML=info[0];const th=document.getElementById('th'+n);th.classList.toggle('active',!!info[1]);th.classList.toggle('idle',!info[1]);});
+  document.getElementById('vsrca').innerHTML=s.srcA;document.getElementById('vsrcb').innerHTML=s.srcB;document.getElementById('vdst').innerHTML=s.dst;
+  document.getElementById('rsrca').className='reg'+(s.srcaBad?' bad':(s.srcA&&s.srcA.indexOf('valid')>-1?' good':''));
+  document.getElementById('rdst').className='reg'+(s.dstBad?' bad':(s.dstGood?' good':''));
+  document.getElementById('fpu').className='fpu'+(s.fpu?' active':'');
+  for(let c=0;c<N;c++){const st=s.cb[c],el=document.getElementById('tile'+c);el.className='tile '+st;el.querySelector('.st').innerHTML=stLabel[st];}
+  const semBox=document.getElementById('semBox');document.getElementById('semV').textContent=s.sem;semBox.className='sbox'+(s.sem===0?' waiting':' released');
+  const bmap={skip:['SKIPPED (trigger path)','skip'],wait:['WAITING (blocks T0)','waiting'],rel:['released','released'],'n/a':['&mdash;','']};
+  document.getElementById('barV').innerHTML=bmap[s.bar][0];document.getElementById('barBox').className='sbox'+(bmap[s.bar][1]?' '+bmap[s.bar][1]:'');
+  const note=document.getElementById('note');note.className='note'+(s.race?' race':(tab==='fix'?' fix':''));
+  document.getElementById('ntitle').innerHTML=s.nt;document.getElementById('ntext').innerHTML=s.nx;
+  document.getElementById('prev').disabled=i===0;document.getElementById('next').disabled=i===data().length-1;
+  document.getElementById('count').textContent='Step '+(i+1)+' / '+data().length;
+  document.getElementById('prog').style.width=(i/(data().length-1)*100)+'%';
+}
+function setTab(t){
+  tab=t;i=0;
+  document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
+  document.getElementById('tab-story').classList.toggle('hidden',t!=='story');
+  document.getElementById('tab-sema').classList.toggle('hidden',t!=='sema');
+  document.getElementById('tab-walk').classList.toggle('hidden',t!=='race'&&t!=='fix');
+  if(t==='race'||t==='fix') render();
+}
+function setView(v){view=v;document.querySelectorAll('#semSeg button').forEach(b=>b.classList.toggle('on',b.dataset.v===v));document.getElementById('ladder-before').classList.toggle('hidden',v!=='before');document.getElementById('ladder-after').classList.toggle('hidden',v!=='after');}
+document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
+document.querySelectorAll('#semSeg button').forEach(b=>b.onclick=()=>setView(b.dataset.v));
+document.getElementById('prev').onclick=()=>{if(i>0){i--;render();}};
+document.getElementById('next').onclick=()=>{if(i<data().length-1){i++;render();}};
+document.addEventListener('keydown',e=>{if(tab!=='race'&&tab!=='fix')return;if(e.key==='ArrowRight')document.getElementById('next').click();if(e.key==='ArrowLeft')document.getElementById('prev').click();});
+setTab('story');setView('before');
+</script>
+</body>
+</html>

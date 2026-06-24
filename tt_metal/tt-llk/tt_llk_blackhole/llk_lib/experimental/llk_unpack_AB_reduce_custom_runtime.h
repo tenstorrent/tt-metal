@@ -126,9 +126,16 @@ inline void _llk_unpack_AB_reduce_block_max_row_runtime_(const std::uint32_t add
 
     if (respect_trigger)
     {
-        // MOP is programmed for half of block_ct_dim; run first half immediately
+        // #47911: wait before BOTH MOP halves on a single sticky FPU_SFPU token. The producer now
+        // posts it once, after the QK pack + in-place mask + cb_push_back (see compute_streaming.hpp),
+        // so the token dominates every write to the columns this MOP reads. wait_on_zero is
+        // non-consuming, so one token gates both halves and every per-row reduce iteration; the lone
+        // decrement is the get in _uninit_. Previously the first half ran with no wait at all, which
+        // let the unpacker read score tiles the packer had not yet written (the race).
+        t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
+        // MOP is programmed for half of block_ct_dim; run the first half.
         ckernel::ckernel_template::run();
-        // Wait for blocked_matmul_and_pack to signal that second-half data is ready
+        // Same token still set (non-consuming wait) — gates the second half too.
         t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(semaphore::FPU_SFPU);
         // Run MOP again for the second half (Z counter continues from where first half stopped)
         ckernel::ckernel_template::run();

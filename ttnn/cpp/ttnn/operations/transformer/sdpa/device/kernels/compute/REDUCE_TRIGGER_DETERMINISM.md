@@ -1,359 +1,331 @@
-# SDPA streaming `reduce_trigger`: determinism findings
+# SDPA `reduce_trigger` determinism — root cause, repro, and fix (#47911)
 
-Notes on the non-determinism behind issue
+Everything known about the nondeterminism behind issue
 [#47911](https://github.com/tenstorrent/tt-metal/issues/47911)
-(`ring_mla` / ring-joint SDPA on Blackhole), and why `can_reduce_trigger` is
-disabled in `sdpa_ring_v2` in `compute_streaming.hpp`.
+(`ring_mla` / ring-joint SDPA on Blackhole): what `reduce_trigger` is, the producer→consumer
+race it introduced, how to reproduce it with **and without** LLK asserts, the evidence, and
+the implemented fix.
 
-## Symptom
+An interactive walkthrough of all of this lives next to this file:
+**`reduce_trigger_race.html`** (open in a browser — tabs: back story, the race, the
+semaphore before→after, the fix).
 
-`test_ring_mla_determinism[ring_mla-mla_100k-q160-k320]` runs the op 10× with
-identical inputs and a reused `persistent_output_buffer_kv`, and asserts the
-outputs are **bit-exact** across iterations. It fails with iteration 1 differing
-from iteration 0 by a small amount (`max diff ~0.02–0.06`).
+---
 
-## Reproduction
+## TL;DR
 
-Two ways: **(A)** LLK asserts (below), the original CI repro; **(B)** a tactical NOP
-delay that reproduces the ND on a *plain* build with no asserts — see
-"Tactical NOP-delay repro" below, the recommended way to iterate.
+- **Symptom:** `test_ring_mla_determinism[ring_mla-mla_100k-q160-k320]` runs the op 10× with
+  identical inputs and asserts bit-exact outputs; it fails iter 1 ≠ iter 0.
+- **Root cause:** the `reduce_trigger` optimization lets the row-max reduce read the QK^T
+  scores in `cb_qkt_im` **before the packer has written them**, with no producer→consumer
+  barrier on the first half. It's a classic two-thread shared-L1 race (**T2 pack → T0 unpack**).
+- **Fix (implemented):** keep `reduce_trigger` enabled, but re-anchor its single `FPU_SFPU`
+  semaphore — post it **after** the QK pack + mask + push (with `STALL_PACK`), and make the
+  reduce **wait before both MOP halves** (not just the second). One semaphore, 1 post / 1 get,
+  group_size-safe.
+- **Status:** validated on Blackhole — race repro (asserts and NOP) now PASS, accuracy
+  unchanged (PCC 0.9996 / RMSE 0.0082), 7/7 broader determinism configs PASS, no hang under
+  producer- or consumer-lead perturbation. WH mirrored (needs CI). Perf A/B still owed.
 
-### A — LLK asserts
+---
+
+## 1. Background — the scope (for someone new to this kernel)
+
+The kernel computes **attention** (transformer SDPA) on Tenstorrent hardware, **streaming**
+the keys/values a chunk at a time (flash-attention online softmax) and **ring**-rotating them
+across devices.
+
+**One Tensix core, three concurrent threads**, data flowing T0→T1→T2:
+
+- **T0 · Unpack** — moves tiles from L1 into the `SrcA`/`SrcB` register files.
+- **T1 · Math** — FPU (matmul) / SFPU (vector) compute into `DST`.
+- **T2 · Pack** — moves `DST` results back out to L1.
+
+They run independently and only stay ordered where code **explicitly** makes one wait for
+another (a circular-buffer flag or a hardware semaphore). **Pack (T2) is the last pipeline
+stage**, so it structurally *trails* the others — remember this; it's the crux.
+
+**The attention inner loop, per key-chunk:**
+
+```
+1. QK^T  -> scores        (written to cb_qkt_im in L1)
+2. row-max (reduce)       <-- the buggy step
+3. exp = softmax numerators  (in place in cb_qkt_im)
+4. ·V                     (QK^T @ V)
+5. accumulate output      (online-softmax rescale)
+```
+
+Step 2 needs the **maximum score per query row** before `exp(score − max)` (numerically
+stable softmax). The scores are produced by **T2 (pack)** into `cb_qkt_im` and read back by
+**T0 (unpack)** for the reduce — so `cb_qkt_im` is a **producer→consumer handoff** that needs
+synchronization.
+
+### `cb_qkt_im` is an in-place scratchpad, not a classic FIFO
+
+`cb_qkt_im` is read by **three** passes within a q-chunk (row-max reduce, in-place `sub_exp`,
+then QK^T@V). So it's not produce-once/consume-once:
+
+- Producer publishes with `cb_push_back_hold_wr_ptr` (advances the front/available count but
+  **holds the write pointer**, so the three passes address the same region).
+- The reduce's classic `cb_wait_front` exists only on the **non-trigger** branch
+  (`reduce_c_row_group`, `if (!respect_trigger)`).
+- A single `pop_front` frees it at the **end of the whole q-chunk**.
+
+---
+
+## 2. What `reduce_trigger` is (the optimization)
+
+A **latency-hiding** optimization for the row-max reduce. Normally the reduce stalls on
+`cb_wait_front(cb_qkt_im)` until *all* scores are packed, then reduces. `reduce_trigger`
+instead **starts the reduce early and overlaps it with the tail of packing**:
+
+1. **Splits the reduce's unpack MOP into two halves.** The LLK `mop_config` is programmed for
+   `block_ct_dim/2` iterations, so one `ckernel_template::run()` walks the first half of the
+   score columns and a second `run()` walks the rest.
+2. **Drops `cb_wait_front`** and substitutes a cheap **hardware semaphore** handshake
+   (`FPU_SFPU`): the packer posts it after the last subblock; the unpacker waits on it
+   *between* the two halves.
+
+Intended win: the first-half row-max unpack runs while the packer is still finishing the last
+columns, instead of the unpack engine sitting idle. (Small — the reduce is unpack-bound and
+dwarfed by the two matmuls — but it is a hot path.)
+
+The columns are packed **in order** (subblock 0 → cols 0..sbw−1, …, last subblock → highest
+cols), and the reduce reads them in order, which is what makes an early first-half read
+*seem* safe.
+
+---
+
+## 3. The `FPU_SFPU` hardware semaphore (how the handshake works)
+
+`FPU_SFPU` is one of the core's **T6 thread-semaphores** — a small counter visible to all
+three threads. Defined in `tt_llk_*/common/inc/ckernel.h`:
+
+| Compute call | HW op | Effect |
+|---|---|---|
+| `t6_semaphore_init(FPU_SFPU, 0, 1)` | `TTI_SEMINIT` | start at **0**, saturate at **1** |
+| `t6_semaphore_post(FPU_SFPU)` | `TTI_SEMPOST` | **+1** (the signal). `<STALL_PACK>` first stalls until the pack engine's L1 writes drain, *then* posts |
+| `t6_semaphore_wait_on_zero(FPU_SFPU)` | `TTI_SEMWAIT(…, STALL_ON_ZERO)` | **stall while value == 0**, proceed when nonzero. **Non-consuming** (does not change the value) |
+| `t6_semaphore_get(FPU_SFPU)` | `TTI_SEMGET` | **−1** (consume) |
+
+Signaling is cross-thread through this counter: T0's `wait_on_zero` holds the unpack unit
+while the counter is 0; the instant **T2's `post`** makes it nonzero, the hardware releases
+T0. No polling, no L1 traffic.
+
+**The property the fix relies on:** `wait_on_zero` is non-consuming, so a single "sticky"
+token (value 1) can satisfy **many** waits; only one `get` clears it. (Name is backwards:
+"wait_on_zero" = *wait while zero, go when nonzero*.)
+
+---
+
+## 4. Root cause — the race (confirmed)
+
+**The first half of the split reduce MOP reads `cb_qkt_im` with no producer→consumer barrier.**
+
+In `_llk_unpack_AB_reduce_block_max_row_runtime_`
+(`tt_metal/tt-llk/tt_llk_{blackhole,wormhole_b0}/llk_lib/experimental/llk_unpack_AB_reduce_custom_runtime.h`),
+the original trigger path was:
+
+```cpp
+ckernel::ckernel_template::run();         // FIRST half: cols [0, block_ct_dim/2)  <-- NO WAIT
+t6_semaphore_wait_on_zero(FPU_SFPU);      // the only sync — sits BETWEEN halves
+ckernel::ckernel_template::run();         // SECOND half: cols [block_ct_dim/2, block_ct_dim)
+```
+
+So the unpacker **consumes the first part without waiting, and only waits for the second part**.
+The single `FPU_SFPU` post (in `blocked_matmul_and_pack`, after the *last* QK subblock) guards
+only the second half, and `reduce_c_row_group` skips `cb_wait_front` on the trigger path.
+
+**Why the early read goes stale:** the design bet that the packer is always ahead, so the
+early (first-half) columns are surely written by the time the reduce starts. But **T2 (pack)
+is the last pipeline stage and trails** T0. When T0 finishes feeding the QK matmul and jumps
+straight into the first-half read, T2 may still be packing those very columns → T0 latches
+stale L1 → wrong row-max. Whether it wins or loses the race is decided by the cycle-level
+T0/T2 interleaving, which shifts with any timing pressure → **nondeterministic**.
+
+For the failing config: `block_ct_dim = Sk_chunk_t = 10`, `qkt_subblock_w = 2` (5 subblocks);
+the first `run()` reads cols 0–4, written by subblocks 0–2, but the only post is after
+subblock 4 — so cols 0–4 are read with no guarantee they're packed.
+
+**A second, related defect:** the post was also anchored to the **wrong producer event**. The
+reduce reads `cb_qkt_im` *after* an in-place mask stamp (causal/padding,
+`begin/apply/end_mask_l1_accumulate`), but `FPU_SFPU` is posted **before** the mask. The only
+event that dominates *all* writers (QK pack **and** mask) is the `cb_push_back_hold_wr_ptr`.
+
+**It can only be a compute-side race:** inputs are identical each iteration, so the ring
+all-gather reproduces identical bytes; a data-movement/semaphore/buffer race could only ever
+reproduce identical reads.
+
+---
+
+## 5. Reproduction
+
+### A — LLK asserts (the original CI repro)
 
 ```bash
 TT_METAL_LLK_ASSERTS=1 scripts/run_safe_pytest.sh \
   tests/nightly/blackhole/sdpa/test_ring_joint_sdpa.py::test_ring_mla_determinism
 ```
 
-- The failing CI job is the **nightly debug run "with LLK asserts"**
-  (`TT_METAL_LLK_ASSERTS=1`; kernels build at runtime so no host rebuild needed).
-- With LLK asserts it fails at iteration 1 within ~11 s, reliably.
-- **A single run is enough to reproduce** — no need to loop. The test itself runs
-  the op 10× internally and asserts bit-exactness, so one invocation
-  (~11 s test time, ~24 s wall incl. device setup/reset) deterministically
-  surfaces the failure. Observed 11/11 runs fail at iteration 1 (max diff varied
-  ~0.02–0.14 run-to-run — the magnitude is nondeterministic, but the failure
-  itself is reliable).
-- **Without LLK asserts the behaviour was not observed** (a plain release build
-  passed 200 iterations; a 1500-iteration run only hit the pytest timeout, never
-  a determinism failure). LLK asserts insert instruction-level checks that shift
-  the math/pack/unpack pipeline timing; QB2 hardware timing reaches the same
-  window on its own.
+- The failing CI job is the nightly debug run "with LLK asserts". One test run is enough (it
+  loops the op 10× internally). Observed **11/11 fail** at iter 1, ~11 s; max-diff magnitude
+  varied run-to-run (~0.02–0.14) — varying magnitude is the nondeterminism signature.
+- Without asserts a plain release build passed 200+ iters — asserts are one timing
+  perturbation that reaches the race window; QB2 hardware timing can too.
 
-## What `reduce_trigger` does
+### B — Tactical NOP delay (no asserts) — kept in tree, OFF by default
 
-`reduce_trigger` (gated by `can_reduce_trigger`) is a utilization optimization
-for the QK row-max reduce. The unpack MOP is split into two halves with a
-PACK→UNPACK hardware-semaphore handshake (`semaphore::FPU_SFPU`):
+Proves it is a real race, not an asserts artifact: inject a delay on the **PACK** thread to
+widen the window on a plain build. Helper `sdpa_nops<N,riscv>()` / `sdpa_nop_perturb()` in
+`compute_streaming.hpp`, called in `blocked_matmul_and_pack` right before the QK pack (gated
+`transpose==true`); knobs `SDPA_NOP_{PERTURB,U,M,P,RISCV}` at the top of `ring_joint_sdpa.cpp`.
 
-- **Packer** (`blocked_matmul_and_pack`, `trigger_reduce=true`): after packing
-  the **last** QK subblock, posts `FPU_SFPU`.
-- **Unpacker** (`_llk_unpack_AB_reduce_block_max_row_runtime_`,
-  `respect_trigger=true`): runs the **first-half** MOP immediately, then
-  `t6_semaphore_wait_on_zero(FPU_SFPU)`, then runs the **second-half** MOP.
-- Because the split is supposed to cover synchronization, `reduce_c_row_group`
-  **skips** the `cb_wait_front` producer barrier when `respect_trigger` is true.
+To use: uncomment `#define SDPA_NOP_PERTURB 1`, run the determinism test (no asserts). When
+`SDPA_NOP_PERTURB` is undefined it compiles to nothing. Gotchas learned the hard way:
 
-## The problem
+- Use a **loop**, not unrolled `.rept` — thousands of inline nops overflow the kernel config
+  buffer ("Program size too large"), which looks like a failure but is a build error.
+- **No DPRINT** in the inserter — DPRINT on the compute threads of this ring-fabric op
+  deadlocks it (CCL semaphore "device unrecoverable" timeout).
 
-The `FPU_SFPU` handshake only sits **between** the two MOP halves, so it can only
-guard the **second half**. The **first half** is read by the unpacker with **no
-producer→consumer synchronization at all** — the code implicitly relies on the
-packer always running ahead of the unpacker.
-
-That assumption holds for most pipeline timings (so release builds pass), but it
-is not guaranteed. Under adverse pack/unpack timing (LLK asserts, or QB2's
-timing) the unpacker reads the first half of `cb_qkt_im` before the packer has
-written it to L1 → stale tiles → corrupted row-max → small, non-deterministic
-softmax/output differences.
-
-Note this can *only* be a compute-side issue: the inputs are identical every
-iteration, so the ring all-gather reproduces identical bytes — a data-movement /
-semaphore / persistent-buffer race could only ever produce identical reads.
-
-## Root cause (confirmed, LLK-level)
-
-**The first half of the split reduce MOP reads `cb_qkt_im` with no producer→consumer
-barrier against the QK packer's writes.**
-
-Exact location — `_llk_unpack_AB_reduce_block_max_row_runtime_`
-(`tt_metal/tt-llk/tt_llk_{blackhole,wormhole_b0}/llk_lib/experimental/llk_unpack_AB_reduce_custom_runtime.h`):
-
-```
-TTI_SETADCZW(...);                       // reset Z counter
-TTI_UNPACR(SrcB, ...);                   // scaler
-if (respect_trigger) {
-    ckernel::ckernel_template::run();    // FIRST HALF: reads cols 0..block_ct_dim/2-1  <-- NO WAIT
-    t6_semaphore_wait_on_zero(FPU_SFPU); // the only producer sync — sits BETWEEN halves
-    ckernel::ckernel_template::run();     // SECOND HALF: cols block_ct_dim/2..end
-}
-```
-
-The MOP is programmed for `block_ct_dim/2` iterations per `run()`
-(`_llk_unpack_AB_reduce_block_max_row_mop_config_runtime_`, `outerloop = block_ct_dim/2`
-when `respect_trigger`). The producer (`blocked_matmul_and_pack`, `trigger_reduce`)
-posts `FPU_SFPU` **only after the last QK subblock pack**, so it gates only the second
-half. Combined with `reduce_c_row_group` **skipping `cb_wait_front`** on the trigger
-path, the first `run()` reads the first-half columns with nothing ensuring the
-subblock packs that wrote them have landed in L1.
-
-**Why those columns can be unwritten when read:** the reduce's unpacker (T0) finishes
-feeding the QK matmul and proceeds straight into the first-half reduce read; the QK
-**packer (T2) is the last pipeline stage and trails** — its early-subblock packs (the
-first-half columns) may still be in flight. Whether the first `run()` beats them is a
-pure T0-vs-T2 timing race ⇒ iteration-to-iteration nondeterminism. (Normally T2 leads
-by a wide margin, so release builds pass.)
-
-For the failing config: `block_ct_dim = Sk_chunk_t = 10`, `qkt_subblock_w = 2`
-(5 subblocks). First `run()` reads columns 0–4; `FPU_SFPU` is posted after subblock 4.
-So columns 0–4 (written by subblocks 0–2) are read with no guarantee subblocks 0–2 packed.
-
-Proven by: hash bisection (input bit-stable, post-reduce diverges), the NOP repro
-(producer-side delay triggers, consumer-side never does), and the isolation run
-(restoring only `wait_front`, with all split-MOP/`FPU_SFPU` instructions still running,
-flips FAIL→PASS).
-
-### Fix direction (keep the feature + the overlap)
-
-The optimization overlaps the first-half *read* with packing of the second half. To
-keep that overlap **and** be correct, the producer must publish the first half before
-the consumer reads it — a **two-signal handshake**:
-
-- Packer posts after the subblock that completes the **first half**
-  (`(block_ct_dim/2 - 1) / qkt_subblock_w`), *and* after the last subblock.
-- Unpacker: `wait → run(first half) → wait → run(second half)`.
-
-Overlap is preserved (the first-half read still runs while the packer finishes the
-second half), but the first-half read now waits for its data. A single all-at-once
-`push_back`/`FPU_SFPU` post at the end is why a partial first-half `wait_front` gives no
-overlap today — the producer must signal the first-half columns separately.
-
-## Findings (controlled experiments)
-
-All under `TT_METAL_LLK_ASSERTS=1`, everything else equal:
-
-| Change | Result |
-|---|---|
-| baseline (`reduce_trigger` on) | **FAIL** at iter 1, ~11 s, every run |
-| post `t6_semaphore_post<NONE>` → `<STALL_PACK>` (guards 2nd half harder) | **FAIL** — not the post/second half |
-| un-skip `cb_wait_front` in `reduce_c_row_group` (keep split MOP on) | **PASS** (30 iters) |
-| disable `can_reduce_trigger` | **PASS** (100 iters) |
-| baseline, no LLK asserts | PASS (200 iters) |
-
-Post-fix: ring_mla determinism 100 iters PASS; `test_ring_mla_accuracy`
-PCC 0.9996 / RMSE 0.0082 (unchanged); `test_ring_joint_attention_sdpa_determinism`
-7/7 configs PASS — all under LLK asserts.
-
-## Tactical NOP-delay repro (no LLK asserts) — the decisive proof
-
-To settle "is this a real race or just an LLK-asserts timing artifact?", reproduce it
-on a **plain build** by injecting a tactical delay with NOP instructions on the
-compute threads (RISC-V `nop` and Tensix `TTI_NOP`), via a loop-based per-thread
-inserter placed at the QK packer (right before the `cb_qkt_im` pack in
-`blocked_matmul_and_pack`, gated to `transpose==true`). Use a **loop**, not unrolled
-`.rept` — unrolling thousands of nops overflows the kernel config buffer ("Program
-size too large"). No DPRINT in the inserter (DPRINT in the reduce hot path deadlocks
-the ring-fabric op).
-
-Delaying the **packer** (producer) widens the window for the unpacker's unguarded
-first-half read. Results (`TT_METAL_LLK_ASSERTS` unset):
+Results on the **buggy** code (`TT_METAL_LLK_ASSERTS` unset):
 
 | Config | Result |
 |---|---|
-| buggy, **pack** TTI nops 1024 / 8192 / 65536 | **FAIL** — ND, max diff 2.75 → 3.97 |
-| buggy, **pack** RISC nops 4096 | **FAIL** — ND, max diff 3.17 |
-| buggy, **unpack** nops 8192 (consumer side, wrong direction) | PASS (suppresses) |
-| **`can_reduce_trigger=false`** (fix) + pack nops 1024 | PASS |
-| buggy, no nops (baseline, no asserts) | PASS |
+| **pack** TTI nops 1024 / 8192 / 65536 | FAIL — ND, max diff 2.75 → 3.97 |
+| **pack** RISC nops 4096 | FAIL — ND, max diff 3.17 |
+| **unpack** nops 8192 (consumer side, wrong direction) | PASS (suppresses) |
+| no nops (baseline, no asserts) | PASS |
 
-This is conclusive:
-- The ND reproduces on a plain build with *no asserts* — asserts were only ever one
-  way to perturb timing into the window; a pack-thread delay is another.
-- **Direction matches the root cause exactly:** only delaying the *producer* (pack)
-  triggers it; delaying the *consumer* (unpack) never does. That is precisely a
-  missing producer→consumer ordering.
-- **The fix is not "just moving timing":** under a pack delay that *deterministically*
-  breaks the buggy code, the fixed code (wait_front restored) stays correct, because
-  `cb_wait_front` blocks until the data lands no matter how long the packer is delayed.
+Only delaying the **producer** (pack) triggers it; delaying the **consumer** (unpack) never
+does — exactly a missing producer→consumer ordering.
 
-### Kept-in-tree repro (how to use it — no asserts)
+---
 
-The NOP perturbation is left in the source so the ND can be reproduced/iterated on a
-plain build (no LLK asserts). It is **off** unless `SDPA_NOP_PERTURB` is defined.
+## 6. Evidence chain (all consistent)
 
-- **Knobs** — top of `ring_joint_sdpa.cpp`:
-  ```c
-  #define SDPA_NOP_PERTURB 1   // comment out to disable the whole repro
-  #define SDPA_NOP_U 0         // unpack nops (consumer side — does NOT trigger)
-  #define SDPA_NOP_M 0         // math nops
-  #define SDPA_NOP_P 4096      // pack nops  <-- this is the trigger
-  #define SDPA_NOP_RISCV 0     // 0 = Tensix TTI_NOP, 1 = RISC-V nop
-  ```
-- **Mechanism / placement** — `sdpa_nops<N,riscv>()` + `sdpa_nop_perturb()` live in
-  `compute_streaming.hpp`; the perturbation is called inside `blocked_matmul_and_pack`
-  right before the QK `cb_qkt_im` pack, gated to `transpose==true` (QK only). It is a
-  **loop** (not unrolled `.rept`) and emits **no DPRINT** — both matter (see below).
-- **Run** (plain build): `scripts/run_safe_pytest.sh <test>` — fails 3/3 with
-  `iteration 1 differs from iteration 0, max diff=2.75…3.97` (varying magnitude =
-  genuine ND). Kernels rebuild at runtime, so just edit the `#define`s and re-run.
-- **Threshold:** ~1024 TTI pack-nops (loop) is the knife-edge; 4096 has margin. Dial
-  `SDPA_NOP_P` down toward ~1024 for smaller, more "natural-looking" diffs.
-- **Gotchas (cost real device runs to learn):**
-  - Use a **loop**, never unrolled `.rept N` — thousands of inline nops overflow the
-    kernel config buffer ("Program size too large"), which looks like a failure but is
-    a build error, not ND.
-  - **No DPRINT** in the inserter — DPRINT on the compute threads of this ring-fabric
-    op deadlocks it (CCL semaphore timeout, "device unrecoverable").
-  - A *fixed* delay can also land in a stable-but-wrong regime (passes the determinism
-    check while being numerically wrong); the failing magnitudes above are genuinely
-    nondeterministic (iter1 ≠ iter0, varying run-to-run).
+1. **CB-hash bisection** (PR #43041 `hash_cb_trisc`, in-tree). Fold a per-core FNV hash of
+   `cb_qkt_im` at the reduce-input point and post-softmax, emit one line per dispatch (DPRINT
+   in the hot path deadlocks the fabric — accumulate, print once). Result: reduce **input**
+   bytes are **bit-identical** across iters (0/400 cores), but the **post-softmax**
+   `exp(score − max)` numerators **diverge** (70/400). ⇒ ND is born at the reduce, not its
+   input. (The stale read isn't visible in *settled* input bytes — the packer's write lands
+   eventually; the race is purely *when* the MOP samples L1 — so the probe catches the
+   **effect**, not the read.)
+2. **NOP repro direction** — producer-delay triggers, consumer-delay doesn't (§5B).
+3. **Barrier-restore isolation** — with all the split-MOP/`FPU_SFPU` instructions still
+   running, restoring *only* the `cb_wait_front` flips reliable-fail → PASS.
 
-## Is disabling `can_reduce_trigger` "just changing timing"?
+---
 
-This was the key question — disabling the optimization changes a lot
-(removes the split MOP, the `FPU_SFPU` post/wait, instruction counts), so on its
-own it can't distinguish "fixed a real sync gap" from "perturbed timing into a
-lucky window."
+## 7. The fix (implemented) — single re-anchored `FPU_SFPU` token
 
-**No, it is not just timing — it restores a real barrier.** Two reasons:
+**Design:** keep `reduce_trigger` enabled and keep the split MOP; fix only the
+synchronization. There is still **exactly one** semaphore.
 
-1. **Code path.** `can_reduce_trigger=false` ⇒ `respect_trigger=false` ⇒
-   `reduce_c_row_group` executes `CircularBuffer(in0_cb).wait_front(...)`. So
-   disabling the optimization routes through the branch that contains the proper
-   producer→consumer barrier.
+1. **Remove** the post from `blocked_matmul_and_pack` (it predated the mask and only ordered
+   the QK pack).
+2. **Add** one `t6_semaphore_post<p_stall::STALL_PACK>(FPU_SFPU)` immediately after
+   `cb_push_back_hold_wr_ptr` (gated `if (reduce_trigger)`), so the token dominates the QK
+   pack **and** the in-place mask **and** the push; `STALL_PACK` guarantees those L1 writes
+   are committed before the token appears.
+3. In the LLK runtime, **wait before both halves** on the one sticky token; no `get` in
+   runtime; keep the single `get` in `_uninit_`:
+   ```cpp
+   t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(FPU_SFPU);   // NEW: guard the first half
+   ckernel::ckernel_template::run();                            // first half
+   t6_semaphore_wait_on_zero<p_stall::STALL_UNPACK>(FPU_SFPU);   // same sticky token (non-consuming)
+   ckernel::ckernel_template::run();                            // second half
+   ```
+4. `t6_semaphore_init(FPU_SFPU, 0, 1)` unchanged (`max=1`). Mirror the LLK edit BH↔WH.
 
-2. **Isolation experiment.** The "un-skip `cb_wait_front`" run keeps
-   `respect_trigger=true` — the split MOP, the `FPU_SFPU` handshake, and all of
-   its timing-changing instructions still execute (and the asserts still run) —
-   and only **adds back the barrier**. It passes. So with the split-MOP timing
-   held constant, the barrier alone is what flips reliable-fail → pass.
+### "Did we remove one semaphore and add two?" — no
 
-`cb_wait_front` is **not a fixed delay**: it blocks on the producer's
-`push_back` count, so its only effect is to enforce *producer-before-consumer*
-ordering (a happens-before guarantee). If the data is already present it returns
-immediately; if not, it blocks exactly until the data lands. A pure timing
-perturbation has no such ordering guarantee. Therefore the failure is caused by a
-genuine missing synchronization, i.e. a real (latent) race — not by the
-optimization merely shifting timing.
+| | before (buggy) | after (fix) |
+|---|---|---|
+| semaphores | 1 (`FPU_SFPU`) | 1 — unchanged, `max=1` |
+| **posts** (T2) | 1, after last QK pack, `<NONE>`, *before the mask* | 1, after QK + mask + push, `<STALL_PACK>` — **moved + stalled** |
+| **waits** (T0) | 1 — only between the halves (first half unguarded) | **2** — before each half (same token, non-consuming) |
+| **gets** (T0) | 1 (in uninit) | 1 (in uninit) — unchanged |
+| token balance | 1 post / 1 get | 1 post / 1 get → balanced for any `group_size` |
 
-## What is and isn't proven
+The "2" is **two waits**, not two semaphores. Because `wait_on_zero` is non-consuming, one
+post (token=1) satisfies both waits and the single `get` clears it.
 
-- **Proven — real missing synchronization:** the first-half read has no producer
-  barrier (structural fact in the source); restoring that barrier (two independent
-  ways) deterministically fixes the failure while the split-reduce still computes
-  correctly given synchronized input.
-- **Proven — reachable without LLK asserts:** the tactical pack-thread NOP delay
-  reproduces the ND on a plain build (no asserts), and a *producer*-side delay is what
-  triggers it while a *consumer*-side delay never does — i.e. the window is reachable
-  by ordinary pipeline-timing pressure, not only by assert instrumentation. (Earlier
-  this was the one open gap; the NOP repro closed it.)
-- **Proven — first divergence is the reduce, not its input:** the CB-hash probe shows
-  the raw QK^T score bytes feeding the reduce are bit-identical across iterations
-  (0/400 cores), while the post-reduce `exp(score − max)` numerators diverge (70/400).
-- **Still open (probability, not mechanism):** how *often* QB2 production timing lands
-  in the window on its own without any perturbation. The mechanism and reachability are
-  settled; only the natural hit-rate is unquantified.
+### Why correct
 
-## Direct measurement: CB-hash ND-bisection probe (PR #43041) — done
+Every region the reduce reads is now preceded by a wait on a token posted only after
+`cb_push_back` — program-ordered after the last QK pack and the entire mask, with `STALL_PACK`
+ensuring L1 visibility. Closes both missing edges (first-half→producer, both-halves→mask).
+Bit-exact (only ordering added). Under the NOP/pack-delay repro, delaying T2 just delays the
+post, so T0 stalls instead of reading stale L1.
 
-Beyond the inference (structural source fact + barrier-restore isolation), the root
-cause was **directly measured** with the CB-hash ND-bisection tool from
-[PR #43041](https://github.com/tenstorrent/tt-metal/pull/43041) ("HASH LLK and Compute
-API for ND Bisection"), merged to main 2026-06-05 and already in-tree:
+### Why NOT a two-token (`max=2`) handshake
 
-- `tt_metal/hw/inc/api/compute/debug/cb_hash.h` — `hash_cb_trisc()` / `hash_cb_sfpu()`
-- gated on the `DEBUG_CB_HASH` kernel define (zero overhead when off).
+A multi-agent design pass first proposed two posts + a `get` inside the per-row runtime.
+Adversarial review found it **deadlocks for `group_size = qkt_subblock_h ≥ 2`**: the reduce
+runtime runs per row (`group_size×`) but uninit once; a consuming `get` in the per-row path
+makes gets = `group_size+1` vs 2 posts → the semaphore underflows mid-loop → `wait_on_zero`
+stalls forever → device hang. (It also violates the `reduce_custom.h` "posts must equal uninit
+calls" contract, and `max=2` can saturate-and-lose a token when PACK leads.) The single-token
+form above keeps the original 1-post/1-get counting (which is `group_size`-safe because the
+waits don't consume) and avoids all of that.
 
-**Use `hash_cb_trisc(cb, n, label)`** — it runs as pure scalar RISC-V on the **UNPACK
-thread** (the exact thread doing the racy read) and FNV-1a-32-hashes `n` tiles from the
-CB's front (`fifo_rd_ptr`), DPRINTing `hash[label] cb=N tiles=n = 0x…`. It touches no
-DEST/SFPU, so it doesn't disturb the part of the pipeline we trust.
+### Files touched
 
-Plan:
-1. Build the SDPA compute kernel with `DEBUG_CB_HASH` (kernel define in the program
-   factory — kernels build at runtime, no host rebuild).
-2. Drop `hash_cb_trisc(cb_qkt_im, …)` immediately before the reduce's first-half MOP
-   read in the `reduce_trigger` path (buggy `.hpp`), and hash the upstream QK-matmul
-   output CB too.
-3. Run the determinism test (one run = 10 internal iterations) and diff the hash lines.
-   **A hash that changes across iterations for `cb_qkt_im` at the consumption point =
-   the bytes feeding the row-max reduce are nondeterministic** — direct proof of the
-   stale first-half read, and it localizes the ND to that specific CB + line rather than
-   inferring it.
+- `ttnn/.../compute/compute_streaming.hpp` — remove post in `blocked_matmul_and_pack`; add the
+  re-anchored `STALL_PACK` post after `cb_push_back_hold_wr_ptr`.
+- `tt_metal/tt-llk/tt_llk_blackhole/llk_lib/experimental/llk_unpack_AB_reduce_custom_runtime.h`
+  — leading `wait_on_zero` before the first half.
+- `tt_metal/tt-llk/tt_llk_wormhole_b0/.../llk_unpack_AB_reduce_custom_runtime.h` — same (parity).
 
-Caveats:
-- **Heisenbug risk (most important):** the probe adds UNPACK scalar work + a heavy,
-  serializing DPRINT — same class of timing perturbation as the LLK asserts but pushing
-  the *opposite* way (it slows the unpacker, so it can stop it running ahead and **mask**
-  the race). So a *changing* hash is strong positive evidence; a *stable* hash is **not**
-  exoneration.
-- **`hash_cb_sfpu` does not apply here:** it requires INT32 input, but `cb_qkt_im` holds
-  float scores. Use the scalar `hash_cb_trisc` only (which is the right choice anyway —
-  DEST/SFPU are not the suspect; L1 producer ordering is).
+Signatures unchanged (`respect_trigger` stays a bool), so the llk_api / Compute API wrappers
+need no signature changes.
 
-### Result (ran it — first divergence localized)
+---
 
-Practical notes from actually running the probe on this op:
+## 8. Validation (Blackhole)
 
-- **DPRINT in the reduce hot path deadlocks the ring-fabric op** (CCL semaphore
-  timeout, "device unrecoverable"). Workaround that worked: fold each firing's FNV
-  hash into a per-core accumulator (scalar L1 read, **no print**) and emit **one**
-  DPRINT line per dispatch at `kernel_main` exit. Filter `TT_METAL_DPRINT_RISCVS=TR0`
-  (probe is UNPACK) to drop dispatch-core noise.
-- **`TT_METAL_LLK_ASSERTS=1` is mandatory** — the probe must run under the same
-  repro trigger; without asserts the op is deterministic and the whole comparison
-  is meaningless.
+All with `can_reduce_trigger` **enabled**:
 
-With that, comparing the per-core accumulators across the test's reuse iterations:
+| Test | Before fix | After fix |
+|---|---|---|
+| NOP pack-delay repro (no asserts) | 3/3 FAIL | **3/3 PASS** |
+| LLK asserts — `mla` determinism (CI repro) | 11/11 FAIL | **2/2 PASS** |
+| Packer-lead stress (unpack nops 8192) | — | **PASS, no hang** |
+| Accuracy (`mla`) | — | **PASS, PCC 0.9996 / RMSE 0.0082** (= baseline) |
+| Broader determinism, 7 configs, asserts (incl. group_size>1) | — | **7/7 PASS** |
 
-| Probe point (settled L1 bytes, iter 0 vs iter 1) | Diverging cores |
-|---|---|
-| reduce **INPUT** — raw QK^T scores at the consumption point | **0 / 400** |
-| **post-softmax** — `exp(score − max)` numerators in `cb_qkt_im` | **70 / 400** |
+Determinism alone only proves bit-exactness; the accuracy PCC confirms the output is *correct*,
+not deterministically-wrong.
 
-(bug still reproduced with the probe in place: output max diff ~0.04–0.06.)
+---
 
-**Interpretation — the first divergence is the row-max reduce, not its input.**
-The raw QK^T score *bytes* feeding the reduce are bit-identical across iterations on
-every core (independently re-confirms "inputs/all-gather reproduce identical bytes").
-The divergence first appears *after* the reduce + `sub_exp`: the row-max is
-nondeterministic, so `exp(score − max)` differs on 70 cores. This directly localizes
-the ND to the `reduce_trigger` split-MOP read — matching the structural argument above.
+## 9. Performance note (honest)
 
-Note the stale read is **not observable in settled input bytes**: a separate scalar
-read sees deterministic data because the packer's write *does* land eventually — the
-race is purely *when* the unpacker's first-half MOP samples L1, which no separate read
-can reproduce. The probe therefore can't snapshot the stale read directly; it catches
-the **effect** (a corrupted row-max) in the post-softmax numerators. This is the
-strongest direct evidence short of the barrier-restore experiment, and is consistent
-with it.
+For **masked** configs (all production ring-MLA: causal/padding) the fix does **not** recover
+the original first-half/packing overlap — the mask is a monolithic in-place pass between the
+pack and the reduce over the same columns, so no early signal can honestly release the
+first-half read before the mask completes. **That overlap was never actually safe with a mask
+present.** The reduce now effectively starts at `push_back`. Estimated loss is low-single-digit
+% (reduce is unpack-bound, dwarfed by the two matmuls). **A perf A/B is still owed** (perf
+harness: `tests/nightly/sdpa_perf_utils.py`) to confirm it's within run-to-run noise.
 
-## Fix
+Recovering true overlap would need a **column-phased mask split** (apply/signal the first-half
+columns independently) — high effort/risk, low reward; deferred. For a genuine no-mask config
+(`uses_lightweight_mask == false`) the overlap is still safe and could be kept as a follow-up.
 
-Two options:
+---
 
-1. **Known-good mitigation:** disable `can_reduce_trigger` in `sdpa_ring_v2` (set to
-   `false && …`, keeping the conditions so intent is documented and re-enabling is one
-   edit). The non-trigger path already has the correct `cb_wait_front` barrier, so
-   correctness is restored; the only cost is losing the first-half/second-half overlap
-   on the reduce (small — the reduce is minor vs. the two matmuls). Verified above
-   (100 iters PASS under asserts; pack-NOP delay also PASS; accuracy unchanged).
+## 10. Residual risks / follow-ups
 
-2. **Proper fix (preferred, in progress):** keep the optimization but make the packer
-   publish the **first half** before the unpacker reads it — a separate `push_back` /
-   handshake after the first-half subblocks, not a single all-at-once `push_back` after
-   every subblock (which is why a partial first-half wait gives no overlap today).
-
-**Current branch state:** the `false &&` mitigation is **not** applied; instead the
-tree carries the kept-in-tree NOP repro (see above) so option 2 can be developed and
-validated against an asserts-free reproduction. A correct option-2 fix should flip the
-NOP repro from FAIL → PASS (same as the mitigation does), since the restored ordering
-makes the pack delay harmless.
-
-## Still latent elsewhere
-
-The same pattern exists in the **non-ring** streaming path in
-`compute_streaming.hpp` (`can_reduce_trigger` ~L1879 and
-`can_reduce_trigger_padded` ~L1890). Left untouched: no determinism test covers
-it and it is a hot path with perf risk. Worth the same treatment if bit-exact
-determinism is required there.
+- **Wormhole** edit is mirrored but unvalidated here (BH-only device) — needs CI coverage.
+- Confirm `STALL_PACK` fully drains the mask's in-place L1-accumulate (validated empirically:
+  passes the strongest repro; matches the existing `PACK_DONE` idiom at lines ~1518/1582/1611).
+- **Non-ring + padded paths** (`sdpa_standard_v2`, `can_reduce_trigger` ~L1879 /
+  `can_reduce_trigger_padded` ~L1890) share `reduce_c_row_group` / `blocked_matmul_and_pack` /
+  `init_sdpa_streaming_semaphores`, so the LLK + post + init changes cover them — verify each
+  post site sits after its own `push_back`.
+- Perf A/B (§9), and the optional no-mask fast path that keeps the overlap.
+- The NOP repro scaffolding is kept (gated off) for regression — remove it before final merge
+  if undesired.

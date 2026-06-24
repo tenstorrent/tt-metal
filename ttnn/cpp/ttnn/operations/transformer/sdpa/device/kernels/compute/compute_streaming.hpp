@@ -392,9 +392,11 @@ void blocked_matmul_and_pack(
 #endif
     pack_contiguous_rows_nocfg(
         out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
-    if (trigger_reduce) {
-        PACK((t6_semaphore_post<p_stall::NONE>(semaphore::FPU_SFPU)));
-    }
+    // #47911: the reduce_trigger FPU_SFPU post is NOT emitted here anymore. Posting after the
+    // last QK subblock pack ordered only the QK writes — it predated the in-place mask stamp and
+    // the cb_push_back, so it left the reduce's first-half read unsynchronized. The post now lives
+    // after cb_push_back_hold_wr_ptr (see sdpa_inner_loop_step), where it dominates QK + mask.
+    (void)trigger_reduce;
     tile_regs_release();
 }
 
@@ -1418,6 +1420,17 @@ static void sdpa_inner_loop_step(
 
         // Push row (visible for UNPACK reads) but keep wr_ptr stable
         cb_push_back_hold_wr_ptr(cb_qkt_im, row_tiles);
+
+        // #47911: single re-anchored reduce_trigger handshake. Post FPU_SFPU here — after the QK
+        // pack AND the in-place mask stamp AND the push — so the token dominates every cb_qkt_im
+        // writer of this row group. STALL_PACK drains those L1 writes before the post retires, so
+        // when UNPACK observes the token the data is committed. The reduce's split MOP waits on this
+        // one sticky token before BOTH halves (see _llk_unpack_AB_reduce_block_max_row_runtime_),
+        // closing the first-half race. One post + one uninit get keeps the count balanced for any
+        // group_size (wait_on_zero is non-consuming).
+        if (reduce_trigger) {
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::FPU_SFPU)));
+        }
 
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {

@@ -4,12 +4,14 @@
 
 #include <cstdint>
 
-// #47911 reduce_trigger ND repro WITHOUT LLK asserts. Tactical NOP delay on the PACK
-// thread (producer) widens the unguarded first-half reduce read window -> determinism
-// test fails iter1 != iter0 on a plain build. To turn OFF, comment out SDPA_NOP_PERTURB.
-// Knobs: U/M/P = unpack/math/pack nop counts; RISCV: 0=Tensix TTI_NOP, 1=RISC-V nop.
-// Only PACK (P) delay reproduces the ND; UNPACK/MATH do not (wrong direction).
-#define SDPA_NOP_PERTURB 1
+// #47911 reduce_trigger ND repro WITHOUT LLK asserts (regression tool, OFF by default).
+// Uncomment SDPA_NOP_PERTURB to compile it in, then set a PACK nop count to widen the
+// (now-fixed) first-half reduce read window: with the fix in place it must stay PASS;
+// revert the fix and it fails iter1 != iter0 on a plain build. Knobs: U/M/P = unpack/math/
+// pack nop counts; RISCV: 0=Tensix TTI_NOP, 1=RISC-V nop. Only PACK (P) delay reproduced
+// the ND; UNPACK/MATH do not (wrong direction). When SDPA_NOP_PERTURB is undefined the
+// helper + insertion compile to nothing (zero overhead). See REDUCE_TRIGGER_DETERMINISM.md.
+// #define SDPA_NOP_PERTURB 1
 #define SDPA_NOP_U 0
 #define SDPA_NOP_M 0
 #define SDPA_NOP_P 4096
