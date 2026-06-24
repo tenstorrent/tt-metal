@@ -484,6 +484,62 @@ private:
     std::string config_hash() const override;
 };
 
+namespace experimental::quasar {
+
+class DispatchEngineKernel : public Kernel {
+public:
+    DispatchEngineKernel(
+        const KernelSource& kernel_src,
+        const CoreRangeSet& cr_set,
+        const QuasarDataMovementConfig& config,
+        DataMovementProcessor dm_processor) :
+        Kernel(
+            HalProgrammableCoreType::DISPATCH,
+            HalProcessorClassType::DM,
+            kernel_src,
+            cr_set,
+            config.compile_args,
+            config.defines,
+            config.named_compile_args),
+        config_(config),
+        dm_processor_(dm_processor) {
+        TT_FATAL(
+            MetalContext::instance().get_cluster().arch() == ARCH::QUASAR,
+            "DispatchEngineKernel is only supported on Quasar");
+        TT_FATAL(
+            config.num_threads_per_cluster == 1,
+            "DispatchEngineKernel requires num_threads_per_cluster=1 for explicit DM pinning");
+        this->set_compiler_include_paths(config_.compiler_include_paths);
+    }
+
+    ~DispatchEngineKernel() override = default;
+
+    uint32_t get_kernel_processor_type(int index) const override;
+    void generate_binaries(IDevice* device, JitBuildOptions& build_options) const override;
+    void read_binaries(IDevice* device, const std::string& binary_root) override;
+
+    bool configure(
+        IDevice* device, const CoreCoord& logical_core, uint32_t base_address, const uint32_t offsets[]) const override;
+
+    Config config() const override { return this->config_; }
+
+    void process_defines(std::function<void(const std::string& define, const std::string& value)> callback) const override;
+
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
+    const QuasarDataMovementConfig config_;
+    const DataMovementProcessor dm_processor_;
+
+    uint8_t expected_num_binaries() const override;
+
+    std::string config_hash() const override;
+};
+
+}  // namespace experimental::quasar
+
 class ComputeKernel : public Kernel {
 public:
     ComputeKernel(

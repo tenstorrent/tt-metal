@@ -179,6 +179,14 @@ static void RunTest(
             risc = "drisc";
             break;
         }
+        case HalProgrammableCoreType::DISPATCH: {
+            if (!hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+                log_info(LogTest, "Skipping: dispatch-engine programmable cores not available on this architecture.");
+                GTEST_SKIP();
+            }
+            log_info(LogTest, "Skipping: watcher assert test not yet supported on dispatch-engine cores.");
+            GTEST_SKIP();
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("Unsupported programmable core type");
     }
     log_info(LogTest, "Running test on device {} core {}[{}]...", device->id(), logical_core, virtual_core);

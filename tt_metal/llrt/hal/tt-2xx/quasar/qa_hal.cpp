@@ -288,6 +288,12 @@ public:
                 break;
             }
             case HalProgrammableCoreType::IDLE_ETH: break;
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: break;
+                    case HalProcessorClassType::COMPUTE: TT_THROW("DISPATCH cores do not have compute processors");
+                }
+                break;
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query includes", enchantum::to_string(params.core_type));
@@ -355,6 +361,16 @@ public:
                                             : "runtime/hw/toolchain/quasar/kernel_subordinate_ierisc.ld";
                     default: TT_THROW("Invalid processor id {}", params.processor_id);
                 }
+            case HalProgrammableCoreType::DISPATCH:
+                switch (params.processor_class) {
+                    case HalProcessorClassType::DM: {
+                        return fmt::format(
+                            "runtime/hw/toolchain/quasar/{}_dm.ld",
+                            params.is_fw ? "firmware" : "kernel");
+                    }
+                    case HalProcessorClassType::COMPUTE:
+                        TT_THROW("DISPATCH cores do not have compute processors");
+                }
             default:
                 TT_THROW(
                     "Unsupported programmable core type {} to query linker script",
@@ -385,15 +401,14 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
         static_cast<int>(HalProgrammableCoreType::ACTIVE_ETH) == static_cast<int>(ProgrammableCoreType::ACTIVE_ETH));
     static_assert(
         static_cast<int>(HalProgrammableCoreType::IDLE_ETH) == static_cast<int>(ProgrammableCoreType::IDLE_ETH));
+    static_assert(
+        static_cast<int>(HalProgrammableCoreType::DISPATCH) == static_cast<int>(ProgrammableCoreType::DISPATCH));
 
-    HalCoreInfoType tensix_mem_map = quasar::create_tensix_mem_map();
-    this->core_info_.push_back(tensix_mem_map);
-
-    HalCoreInfoType active_eth_mem_map = quasar::create_active_eth_mem_map();
-    this->core_info_.push_back(active_eth_mem_map);
-
-    HalCoreInfoType idle_eth_mem_map = quasar::create_idle_eth_mem_map();
-    this->core_info_.push_back(idle_eth_mem_map);
+    this->core_info_.push_back(quasar::create_tensix_mem_map());
+    this->core_info_.push_back(quasar::create_active_eth_mem_map());
+    this->core_info_.push_back(quasar::create_idle_eth_mem_map());
+    ensure_hal_core_info_slots(this->core_info_, this->core_info_.front());
+    this->core_info_[static_cast<std::size_t>(HalProgrammableCoreType::DISPATCH)] = quasar::create_dispatch_mem_map();
 
     this->dram_bases_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));
     this->dram_sizes_.resize(static_cast<std::size_t>(HalDramMemAddrType::COUNT));

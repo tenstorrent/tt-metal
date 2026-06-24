@@ -236,9 +236,13 @@ void MetalContext::initialize(
     for (CoreType core_type : {CoreType::WORKER, CoreType::ETH}) {
         const CommandQueueDispatchLayout& cq_dispatch_layout = dispatch_query_manager_->cq_dispatch_layout(core_type);
         dispatch_mem_map_[enchantum::to_underlying(core_type)] = std::make_unique<DispatchMemMap>(
-            core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
+        core_type, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
     }
-    // Initialize debug servers. Attaching individual devices done below
+    if (get_cluster().arch() == tt::ARCH::QUASAR && hal().has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        dispatch_mem_map_[enchantum::to_underlying(CoreType::DISPATCH)] = std::make_unique<DispatchMemMap>(
+            CoreType::DISPATCH, num_hw_cqs, hal(), is_galaxy_cluster, cq_dispatch_layout, rtoptions());
+    }
+// Initialize debug servers. Attaching individual devices done below
     rtoptions().resolve_fabric_node_ids_to_chip_ids(this->get_control_plane());
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
