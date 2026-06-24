@@ -737,7 +737,8 @@ bool DPrintServer::Impl::poll_device_print_data(
             const uint32_t first = data.buffer_size - rpos;
             payload_vector.resize((first + wpos + sizeof(uint32_t) - 1) / sizeof(uint32_t));
             cluster.read_dram_vec(payload_vector.data(), first, device_id, data.dram_view, data.buffer_address + rpos);
-            cluster.read_dram_vec(payload_vector.data() + first, wpos, device_id, data.dram_view, data.buffer_address);
+            cluster.read_dram_vec(
+                payload_vector.data() + first / sizeof(uint32_t), wpos, device_id, data.dram_view, data.buffer_address);
         }
 
         // Walk the payload as a sequence of {DramStreamMessageHeader, padding, payload}.
