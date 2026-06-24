@@ -7,8 +7,7 @@ import pytest
 import torch
 
 import ttnn
-
-from models.common.utility_functions import skip_for_slow_dispatch
+from models.common.utility_functions import skip_for_slow_dispatch, skip_with_llk_assert
 
 # D2HStreamService claims FD dispatch-column service cores, which the runtime only permits when
 # BOTH conditions hold (see tt_metal/impl/internal/service/service_core_manager.cpp):
@@ -37,6 +36,7 @@ _D2H_SUPPORTED_CLUSTER_TYPES = frozenset(
 )
 pytestmark = [
     skip_for_slow_dispatch(),
+    skip_with_llk_assert("D2HStreamService fails to pin host DMA buffers. Issue: #47909"),
     pytest.mark.skipif(
         ttnn.cluster.get_cluster_type() not in _D2H_SUPPORTED_CLUSTER_TYPES,
         reason="D2HStreamService is only supported on Blackhole and UBB Galaxy clusters",
