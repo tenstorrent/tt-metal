@@ -862,6 +862,10 @@ def test_demo_text(
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
 
     test_id = request.node.callspec.id
+
+    # Temporarily skip ci-eval-32 on Blackhole due to trace replay crash, refs #47124
+    if "ci-eval-32" in test_id and is_blackhole():
+        pytest.skip("ci-eval-32 is temporarily disabled on Blackhole due to trace replay crash (refs #47124)")
     if is_ci_env:
         if not ci_only:
             pytest.skip("CI only runs the CI-only tests")
