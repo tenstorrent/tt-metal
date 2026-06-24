@@ -154,6 +154,18 @@ MatmulDecodeDeviceOperation::spec_return_value_t MatmulDecodeDeviceOperation::co
     // rather than being split into multiple matmul_decode calls. The compute kernel
     // already iterates Nc_tiles per core. When B is not sharded (skeleton/multicore
     // path) fall back to one 32-wide tile per core (legacy behaviour).
+    // Interleaved-output fold: hand back an interleaved L1 tensor directly (the writer
+    // NoC-scatters each base core's N-slice into it), so the caller needs no separate
+    // sharded->interleaved reshard after the matmul.
+    if (operation_attributes.interleaved_output) {
+        return TensorSpec(
+            output_shape,
+            tt::tt_metal::TensorLayout(
+                dtype,
+                tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE, input_tensor_a.tensor_spec().tile()),
+                MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1, std::nullopt)));
+    }
+
     int per_core_output_width = tt::constants::TILE_WIDTH;
     const auto& b_mem = tensor_args.input_tensor_b.memory_config();
     if (b_mem.is_sharded() && b_mem.shard_spec().has_value()) {
@@ -190,7 +202,9 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
     std::optional<const DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    bool fused_gelu,
+    bool interleaved_output) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -221,6 +235,8 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         dtype.has_value() ? std::optional<DataType>(*dtype) : std::nullopt,
         partial_width_sharded,
         compute_kernel_config,
+        fused_gelu,
+        interleaved_output,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

@@ -7,6 +7,7 @@
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/gelu.h"
 
 using std::uint32_t;
 
@@ -52,6 +53,7 @@ void kernel_main() {
     constexpr uint32_t Nc_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t K_blocks = get_compile_time_arg_val(4);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(5);
+    constexpr uint32_t fused_gelu = get_compile_time_arg_val(6);
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t is_base = get_arg_val<uint32_t>(1);
@@ -115,6 +117,9 @@ void kernel_main() {
 
     binary_op_init_common(reduce_cb_id, reduce_cb_id, out_cb_id);
     add_tiles_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
+    if (fused_gelu) {
+        gelu_tile_init<false /* fast_and_approx */>();
+    }
 
     cb_reserve_back(out_cb_id, block_num_tiles);
     for (uint32_t mt = 0; mt < M_tiles; ++mt) {
@@ -128,6 +133,11 @@ void kernel_main() {
                     block * block_num_tiles + tile_in_block,
                     (block + 1) * block_num_tiles + tile_in_block,
                     0);
+            }
+            // Fuse the GeGLU gate activation directly onto the reduced output tile in DST,
+            // so the gate projection needs no separate elementwise gelu op afterwards.
+            if (fused_gelu) {
+                gelu_tile<false /* fast_and_approx */>(0);
             }
             tile_regs_commit();
             tile_regs_wait();

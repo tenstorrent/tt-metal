@@ -13,9 +13,17 @@ Tensor matmul_decode(
     const Tensor& input_tensor_b,
     bool partial_width_sharded,
     std::optional<const DataType> dtype,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    bool fused_gelu,
+    bool interleaved_output) {
     return ttnn::prim::matmul_decode(
-        input_tensor_a, input_tensor_b, partial_width_sharded, dtype, compute_kernel_config);
+        input_tensor_a,
+        input_tensor_b,
+        partial_width_sharded,
+        dtype,
+        compute_kernel_config,
+        fused_gelu,
+        interleaved_output);
 }
 
 }  // namespace ttnn

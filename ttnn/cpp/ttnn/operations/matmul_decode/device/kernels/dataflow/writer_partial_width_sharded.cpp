@@ -28,11 +28,19 @@ void kernel_main() {
     constexpr uint32_t tile_size_bytes = get_compile_time_arg_val(3);
     constexpr uint32_t K_blocks = get_compile_time_arg_val(4);
     constexpr uint32_t reduce_sem_id = get_compile_time_arg_val(5);
+    constexpr uint32_t interleaved_output = get_compile_time_arg_val(6);
+    constexpr uint32_t out_cb_index = get_compile_time_arg_val(7);
+    constexpr uint32_t M_tiles = get_compile_time_arg_val(8);
+    constexpr uint32_t Nc_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t N_tiles = get_compile_time_arg_val(10);
+    constexpr auto out_args = TensorAccessorArgs<11>();
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t base_noc_x = get_arg_val<uint32_t>(1);
     const uint32_t base_noc_y = get_arg_val<uint32_t>(2);
     const uint32_t is_base = get_arg_val<uint32_t>(3);
+    const uint32_t n_idx = get_arg_val<uint32_t>(4);
+    const uint32_t out_buffer_addr = get_arg_val<uint32_t>(5);
 
     constexpr uint32_t block_size_bytes = block_num_tiles * tile_size_bytes;
 
@@ -70,5 +78,24 @@ void kernel_main() {
     if (is_base) {
         reduce_sem.wait(K_blocks);
         reduce_cb.push_back(K_blocks * block_num_tiles);
+
+        // Interleaved-output fold: compute packs the reduced (+gelu) output into out_cb;
+        // NoC-scatter this base core's [M_tiles x Nc_tiles] N-slice into the interleaved
+        // output buffer (tile (mt, nc) -> page mt*N_tiles + n_idx*Nc_tiles + nc). This
+        // replaces the caller's separate sharded->interleaved reshard.
+        if (interleaved_output) {
+            const auto out_acc = TensorAccessor(out_args, out_buffer_addr, tile_size_bytes);
+            cb_wait_front(out_cb_index, block_num_tiles);
+            uint32_t l1_read_addr = get_read_ptr(out_cb_index);
+            for (uint32_t mt = 0; mt < M_tiles; ++mt) {
+                for (uint32_t nc = 0; nc < Nc_tiles; ++nc) {
+                    const uint32_t page = mt * N_tiles + n_idx * Nc_tiles + nc;
+                    noc_async_write_page(page, out_acc, l1_read_addr);
+                    l1_read_addr += tile_size_bytes;
+                }
+            }
+            noc_async_write_barrier();
+            cb_pop_front(out_cb_index, block_num_tiles);
+        }
     }
 }

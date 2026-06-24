@@ -43,7 +43,9 @@ void bind_matmul_decode_operation(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("partial_width_sharded") = false,
         nb::arg("dtype") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("fused_gelu") = false,
+        nb::arg("interleaved_output") = false);
 }
 
 }  // namespace ttnn::operations::matmul_decode

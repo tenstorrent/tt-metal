@@ -40,6 +40,16 @@ struct MatmulDecodeDeviceOperation {
         // Optional compute-kernel config (math fidelity, fp32 dest acc, approx mode).
         // When unset the factories default to HiFi4 (the op's original hardcoded value).
         std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt;
+        // When true, fuse an (erf) GELU activation into the output pack of the partial
+        // width-sharded compute kernel -- the gate projection of a GeGLU MLP gets its
+        // activation for free in the matmul's phase-2 pack, eliminating a separate
+        // elementwise gelu op (which would otherwise run on only N_blocks output cores).
+        bool fused_gelu = false;
+        // When true, the partial width-sharded factory writes its result to an
+        // INTERLEAVED L1 output (each base core NoC-scatters its N-slice to the
+        // interleaved buffer) instead of a width-sharded output -- folding the
+        // sharded->interleaved reshard the caller would otherwise do into the op.
+        bool interleaved_output = false;
     };
 
     // Tensors passed in/out of the operation.
@@ -108,5 +118,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     const Tensor& input_tensor_b,
     bool partial_width_sharded = false,
     std::optional<const DataType> dtype = std::nullopt,
-    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+    bool fused_gelu = false,
+    bool interleaved_output = false);
 }  // namespace ttnn::prim

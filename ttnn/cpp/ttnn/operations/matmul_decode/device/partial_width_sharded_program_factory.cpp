@@ -142,7 +142,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
 
     const auto inputA_core_range_set = input_tensor_a.memory_config().shard_spec().value().grid;
     const auto inputB_core_range_set = input_tensor_b.memory_config().shard_spec().value().grid;
-    const auto output_core_range_set = output_tensor.memory_config().shard_spec().value().grid;
 
     const uint32_t num_B_cores = inputB_core_range_set.num_cores();
     const uint32_t num_B_cores_along_N = N_tiles / Nc_tiles;
@@ -159,11 +158,28 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         num_B_cores_along_K,
         K_blocks);
     const uint32_t N_blocks = num_B_cores / K_blocks;
-    TT_FATAL(
-        output_core_range_set.num_cores() == N_blocks,
-        "Output must be sharded across N_blocks {} cores, but got {}",
-        N_blocks,
-        output_core_range_set.num_cores());
+
+    // Base (output-owning) cores are the k_idx==0 cores = the first N_blocks of the
+    // k-major B cores. When the output is width-sharded they coincide with the output
+    // shard grid; for the interleaved-output fold there is no output shard spec, so we
+    // derive the base cores directly from B's core ordering.
+    const std::vector<CoreCoord> b_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
+    std::vector<CoreRange> base_core_ranges;
+    base_core_ranges.reserve(N_blocks);
+    for (uint32_t i = 0; i < N_blocks; ++i) {
+        base_core_ranges.emplace_back(b_cores[i], b_cores[i]);
+    }
+    const CoreRangeSet base_core_range_set(base_core_ranges);
+    const auto output_core_range_set = operation_attributes.interleaved_output
+                                           ? base_core_range_set
+                                           : output_tensor.memory_config().shard_spec().value().grid;
+    if (!operation_attributes.interleaved_output) {
+        TT_FATAL(
+            output_core_range_set.num_cores() == N_blocks,
+            "Output must be sharded across N_blocks {} cores, but got {}",
+            N_blocks,
+            output_core_range_set.num_cores());
+    }
 
     // A is multicast onto every B core; senders are the A-holding cores.
     log_debug(
@@ -229,8 +245,10 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         }}},
         .buffer = input_tensor_b.buffer(),
     });
-    // out: final output shard (buffer-backed, base cores only).
-    desc.cbs.push_back(CBDescriptor{
+    // out: final output shard (base cores only). For a width-sharded output the CB is
+    // buffer-backed (it IS the output shard). For the interleaved-output fold it is a
+    // plain staging CB the writer NoC-scatters into the interleaved output buffer.
+    CBDescriptor out_cb_desc{
         .total_size = block_num_tiles * out_tile_size,
         .core_ranges = output_core_range_set,
         .format_descriptors = {{CBFormatDescriptor{
@@ -239,8 +257,11 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             .page_size = out_tile_size,
             .tile = out_tile_desc,
         }}},
-        .buffer = output_tensor.buffer(),
-    });
+    };
+    if (!operation_attributes.interleaved_output) {
+        out_cb_desc.buffer = output_tensor.buffer();
+    }
+    desc.cbs.push_back(out_cb_desc);
     // full_in0: gathered full A (multicast destination).
     desc.cbs.push_back(CBDescriptor{
         .total_size = M_tiles * K_tiles * in0_tile_size,
@@ -391,7 +412,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
     // Runs on every B core. Each core ships its partial to slot `k_idx` of the base
     // core's reduce CB and bumps that core's reduce semaphore. Base cores additionally
     // wait for all K_blocks partials and publish the reduce CB to the compute kernel.
-    const std::vector<CoreCoord> b_cores = corerange_to_cores(inputB_core_range_set, std::nullopt, true);
     log_debug(tt::LogOp, "b_cores: {}", b_cores);
     log_debug(tt::LogOp, "output_core_range_set: {}", output_core_range_set);
     log_debug(tt::LogOp, "inputB_core_range_set: {}", inputB_core_range_set);
@@ -420,7 +440,15 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
             out_tile_size,
             K_blocks,
             reduce_sem_id,
+            static_cast<uint32_t>(operation_attributes.interleaved_output),  // 6: fold S->I reshard
+            out_cb_index,                                                    // 7
+            M_tiles,                                                         // 8
+            Nc_tiles,                                                        // 9
+            N_tiles,                                                         // 10
         };
+        // 11+: TensorAccessor args for the interleaved output buffer (base cores scatter
+        // their N-slice into it when interleaved_output). Harmless when unused.
+        tt::tt_metal::TensorAccessorArgs(*output_tensor.buffer()).append_to(writer_kernel_desc.compile_time_args);
         writer_kernel_desc.config = DataMovementConfigDescriptor{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = noc,
@@ -442,13 +470,16 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
                 base_logical,
                 base_phys,
                 is_base);
-            writer_kernel_desc.runtime_args.emplace_back(
+            // n_idx (this base core's output N-slice) + output buffer base address
+            // (Buffer* -> patched by the framework) for the interleaved-output scatter.
+            writer_kernel_desc.emplace_runtime_args(
                 b_cores[idx],
-                KernelDescriptor::CoreRuntimeArgs{
-                    k_idx,
-                    static_cast<uint32_t>(base_phys.x),
-                    static_cast<uint32_t>(base_phys.y),
-                    static_cast<uint32_t>(is_base)});
+                {k_idx,
+                 static_cast<uint32_t>(base_phys.x),
+                 static_cast<uint32_t>(base_phys.y),
+                 static_cast<uint32_t>(is_base),
+                 n_idx,
+                 output_tensor.buffer()});
         }
         return writer_kernel_desc;
     };
@@ -492,6 +523,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks,
         inA_K_tiles_per_core,  // needed to translate global K-tile -> sender-major full_in0 slot (M_tiles>1)
+        static_cast<uint32_t>(operation_attributes.fused_gelu),  // fuse (erf) gelu into phase-2 output pack
     };
     log_debug(
         tt::LogOp,

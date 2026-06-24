@@ -2,32 +2,37 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Standalone GeGLU MLP test: baseline (ttnn.linear) vs optimized (matmul_decode).
+"""Single-layer GeGLU MLP: WITH vs WITHOUT matmul_decode.
 
 The MLP is the pi0.5 Gemma-300M action-expert block:
 
     out = down_proj( gelu(gate_proj(x)) * up_proj(x) )
 
-with width=1024, mlp_dim=4096 (so gate/up are 1024->4096, down is 4096->1024),
-bfloat8_b weights and bfloat16 activations. M (sequence) defaults to 32 (a 32x32
-tile; e.g. a 10-action decode chunk padded to one tile).
+with width=1024, mlp_dim=4096 (gate/up: 1024->4096, down: 4096->1024), bfloat8_b weights
+and bfloat16 activations. M (sequence) = 32 -- one 32x32 tile, e.g. a 10-action decode
+chunk padded to a tile.
 
-Two implementations, both checked against the same torch reference with PCC:
+One parametrized test runs the layer's MLP three ways and asserts each against the SAME
+torch reference (PCC >= 0.99), then prints each path's warm latency so with/without is
+directly comparable:
 
-  * test_mlp_baseline         -- ttnn.linear for all three projections.
-  * test_mlp_matmul_decode    -- OPTIMIZED: gate/up via matmul_decode partial-WS
-      with N-packing (single call each, Nc=128, 32 output cores); gelu + multiply;
-      then RESHARD the (M, mlp_dim) activation from 32 cores -> 2 cores before the
-      `down` matmul_decode. The reshard is the key step: matmul_decode multicasts
-      the full activation to every output core, so feeding `down` a few-core
-      activation (2 cores) instead of the 32-core gate/up output cuts `down` from
-      ~35us to ~9us -- bringing it near gate/up parity. (matmul_decode output is
-      hardcoded to N/Nc cores, which is why gate/up land on 32 cores and the
-      reshard is needed before the K-heavy `down`.)
+  * ``linear``        -- WITHOUT matmul_decode: ttnn.linear for all three projections
+                         (the production default, interleaved).
+  * ``decode``        -- WITH matmul_decode: partial-width-sharded gate/up/down with
+                         N-packing (Nc=128, 32 output cores) and the reshard-before-down
+                         recipe; separate ttnn.gelu. matmul_decode multicasts the full
+                         activation to every output core, so feeding ``down`` a 2-core
+                         activation (vs the 32-core gate/up output) cuts ``down`` from
+                         ~35us to ~9us.
+  * ``decode_fused``  -- WITH matmul_decode + ``fused_gelu=True``: the gate activation is
+                         applied inside the matmul's output pack, so the gate projection
+                         needs no separate elementwise gelu op.
 
 Run:
     pytest tests/ttnn/unit_tests/operations/matmul/test_mlp_matmul_decode.py -x -s
 """
+
+import time
 
 import pytest
 import torch
@@ -38,7 +43,10 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 WIDTH = 1024
 MLP_DIM = 4096
+M = 32
 K_BLOCKS = 2  # partial-width-sharded K split (>=2 required for the cross-core K reduction)
+N_BLOCKS = 32  # gate/up N split -> Nc=128 (4 tiles), output width-sharded on 32 cores
+RESHARD_CORES = 2  # feed `down` a 2-core activation (cheap multicast gather) -- the key recipe
 PCC = 0.99
 
 # Weights are bfloat8_b, activations bfloat16 -- the production dtype policy.
@@ -48,6 +56,7 @@ _HIFI2 = ttnn.WormholeComputeKernelConfig(
 _LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
 )
+_L1 = ttnn.L1_MEMORY_CONFIG
 
 
 def _make_weights(seed=0):
@@ -105,60 +114,93 @@ def _partial_width_sharded_B(device, w_kn, n_blocks):
     return ttnn.from_torch(br, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mc, dtype=ttnn.bfloat8_b)
 
 
-# --------------------------------------------------------------------------- MLPs
-def mlp_baseline(device, x_torch, w):
-    """ttnn.linear GeGLU MLP (bf8_b weights, bf16 activations)."""
-    x = ttnn.from_torch(x_torch, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+# --------------------------------------------------------------------------- MLP builders
+# Each builder uploads weights ONCE and returns a `run()` closure that does only the
+# forward, so the latency measurement excludes weight upload.
+def _build_linear(device, x_torch, w):
+    """WITHOUT matmul_decode -- ttnn.linear GeGLU (bf8_b weights, bf16 activations)."""
+    x = ttnn.from_torch(x_torch, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16, memory_config=_L1)
     gw = ttnn.from_torch(w["gate"].t().contiguous(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat8_b)
     uw = ttnn.from_torch(w["up"].t().contiguous(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat8_b)
     dw = ttnn.from_torch(w["down"].t().contiguous(), layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat8_b)
-    gate = ttnn.linear(x, gw, compute_kernel_config=_HIFI2)
-    gate = ttnn.gelu(gate, fast_and_approximate_mode=False)
-    up = ttnn.linear(x, uw, compute_kernel_config=_HIFI2)
-    hidden = ttnn.multiply(gate, up)
-    return ttnn.linear(hidden, dw, compute_kernel_config=_LOFI)
+
+    def run():
+        # bf16 activations (matmul_decode also outputs bf16) for a fair, equal-precision compare.
+        gate = ttnn.linear(x, gw, memory_config=_L1, compute_kernel_config=_HIFI2)
+        up = ttnn.linear(x, uw, memory_config=_L1, compute_kernel_config=_HIFI2)
+        gate = ttnn.gelu(gate, fast_and_approximate_mode=False)
+        hidden = ttnn.multiply(gate, up, memory_config=_L1)
+        out = ttnn.linear(hidden, dw, memory_config=_L1, compute_kernel_config=_LOFI)
+        for t in (gate, up, hidden):
+            ttnn.deallocate(t)
+        return out
+
+    return run
 
 
-def mlp_matmul_decode(device, x_torch, w):
-    """Optimized matmul_decode GeGLU MLP with the reshard-before-down recipe."""
-    m = x_torch.shape[0]
+def _build_matmul_decode(device, x_torch, w, fused_gelu):
+    """WITH matmul_decode -- partial-width-sharded gate/up/down + reshard-before-down.
+    fused_gelu=True folds the gate activation into the gate matmul (no separate gelu op)."""
     tile = ttnn.Tile((32, 32))
-    x = _width_sharded_A(device, x_torch, WIDTH, 2, tile)
-    gate_b = _partial_width_sharded_B(device, w["gate"].t().contiguous(), 32)  # K=1024,N=4096 -> Nc=128
-    up_b = _partial_width_sharded_B(device, w["up"].t().contiguous(), 32)
-    down_b = _partial_width_sharded_B(device, w["down"].t().contiguous(), 32)  # K=4096,N=1024 -> Nc=32
-
-    gate = ttnn.matmul_decode(x, gate_b, partial_width_sharded=True, compute_kernel_config=_HIFI2)
-    up = ttnn.matmul_decode(x, up_b, partial_width_sharded=True, compute_kernel_config=_HIFI2)
-    gate = ttnn.gelu(gate, fast_and_approximate_mode=False)
-    hidden = ttnn.multiply(gate, up, memory_config=gate.memory_config())  # (M, mlp_dim) width-sharded on 32 cores
-
-    # RESHARD 32 -> 2 cores: give `down` a few-core activation (the key optimization).
+    x = _width_sharded_A(device, x_torch, WIDTH, RESHARD_CORES, tile)
+    gate_b = _partial_width_sharded_B(device, w["gate"].t().contiguous(), N_BLOCKS)  # K=1024,N=4096 -> Nc=128
+    up_b = _partial_width_sharded_B(device, w["up"].t().contiguous(), N_BLOCKS)
+    down_b = _partial_width_sharded_B(device, w["down"].t().contiguous(), N_BLOCKS)  # K=4096,N=1024
     mc2 = ttnn.create_sharded_memory_config(
-        (m, MLP_DIM // 2),
-        core_grid=_crs(device, 2),
+        (M, MLP_DIM // RESHARD_CORES),
+        core_grid=_crs(device, RESHARD_CORES),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
-    hidden_2c = ttnn.to_memory_config(hidden, mc2)
-    return ttnn.matmul_decode(hidden_2c, down_b, partial_width_sharded=True, compute_kernel_config=_LOFI)
+
+    def run():
+        gate = ttnn.matmul_decode(
+            x, gate_b, partial_width_sharded=True, compute_kernel_config=_HIFI2, fused_gelu=fused_gelu
+        )
+        up = ttnn.matmul_decode(x, up_b, partial_width_sharded=True, compute_kernel_config=_HIFI2)
+        if not fused_gelu:
+            gate = ttnn.gelu(gate, fast_and_approximate_mode=False)
+        hidden = ttnn.multiply(gate, up, memory_config=gate.memory_config())  # (M, mlp_dim) sharded on 32 cores
+        # RESHARD 32 -> 2 cores: give `down` a few-core activation (the key optimization).
+        hidden_2c = ttnn.to_memory_config(hidden, mc2)
+        out = ttnn.matmul_decode(hidden_2c, down_b, partial_width_sharded=True, compute_kernel_config=_LOFI)
+        for t in (gate, up, hidden, hidden_2c):
+            ttnn.deallocate(t)
+        return out
+
+    return run
 
 
-# --------------------------------------------------------------------------- tests
-@pytest.mark.parametrize("m", [32], ids=["m32"])
-def test_mlp_baseline(device, m):
+def _latency_ms(device, run, reps=20):
+    for _ in range(5):  # warm-up / kernel compile
+        ttnn.deallocate(run())
+        ttnn.synchronize_device(device)
+    ts = []
+    for _ in range(reps):
+        t0 = time.perf_counter()
+        o = run()
+        ttnn.synchronize_device(device)
+        ts.append((time.perf_counter() - t0) * 1e3)
+        ttnn.deallocate(o)
+    ts.sort()
+    return ts[len(ts) // 2]
+
+
+# --------------------------------------------------------------------------- test
+@pytest.mark.parametrize("mode", ["linear", "decode", "decode_fused"])
+def test_mlp_with_without_matmul_decode(device, mode):
+    """One denoise-layer MLP, with vs without matmul_decode; each must match torch (PCC >= 0.99)."""
     w = _make_weights()
-    x = torch.randn(m, WIDTH, dtype=torch.float32)
+    x = torch.randn(M, WIDTH, dtype=torch.float32)
     ref = _reference(x, w)
-    out = ttnn.to_torch(mlp_baseline(device, x.to(torch.bfloat16), w)).float()
-    assert_with_pcc(ref, out, PCC)
 
+    if mode == "linear":
+        run = _build_linear(device, x.to(torch.bfloat16), w)
+    else:
+        run = _build_matmul_decode(device, x.to(torch.bfloat16), w, fused_gelu=(mode == "decode_fused"))
 
-@pytest.mark.parametrize("m", [32], ids=["m32"])
-def test_mlp_matmul_decode(device, m):
-    w = _make_weights()
-    x = torch.randn(m, WIDTH, dtype=torch.float32)
-    ref = _reference(x, w)
-    out = ttnn.to_torch(mlp_matmul_decode(device, x.to(torch.bfloat16), w)).float()
+    out = ttnn.to_torch(run()).float()
+    lat = _latency_ms(device, run)
+    print(f"\n[MLP {mode:13s}] latency median = {lat:.3f} ms  (PCC asserted >= {PCC})")
     assert_with_pcc(ref, out, PCC)
