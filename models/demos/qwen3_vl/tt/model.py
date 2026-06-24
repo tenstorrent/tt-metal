@@ -456,6 +456,10 @@ class DropInVisionTransformer(torch.nn.Module):
 
 
 class Transformer(TTTransformer):
+    # EXPERIMENT: mirror gemma4 — decode re-stages host tokens each step, so don't feed the
+    # device token buffer (device_inputs[0]) back into ttnn.sampling (testing the #45166 regression).
+    _tt_vllm_always_refresh_decode_trace_inputs = True
+
     def __init__(
         self,
         args,
