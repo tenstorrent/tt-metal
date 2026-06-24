@@ -1,0 +1,63 @@
+# Topology matrix for the deterministic multi-device (craq-sim) pytest runner.
+#
+# Consumed by scripts/run_multidevice_sim_pytest.py. Each entry is one simulated
+# multi-chip topology: a sim backend (.so) + a mock cluster descriptor (which chips)
+# + a mesh-graph descriptor (mesh dims, ring-vs-linear). One process = one topology,
+# so the runner iterates these serially, each in its own process.
+#
+# WHY a config matrix (not agent judgment): verification determinism must come from a
+# script + declarative config, so the same op always runs against the same topology env.
+#
+# ── Machine config ──────────────────────────────────────────────────────────────────
+# The sim .so + craq-sim descriptors live OUTSIDE the repo (they are built/staged per
+# ~/ccl_op_gen/SETUP.md, and are host-specific). `defaults` below resolves each from an
+# env var if set, else the documented staged path. On a differently-laid-out host, set
+# TT_SIM_BH_SO / TT_SIM_WH_SO / CRAQSIM_DATA and nothing else changes.
+#
+# Topology path fields use Python str.format placeholders ({sim_bh_so}, {craqsim_data}, ...)
+# resolved against the `defaults` below.
+
+defaults:
+  sim_bh_so:
+    env: TT_SIM_BH_SO
+    default: /localdev/wransom/sim-bh/libttsim.so
+  sim_wh_so:
+    env: TT_SIM_WH_SO
+    default: /localdev/wransom/sim-wh/libttsim.so
+  craqsim_data:
+    env: CRAQSIM_DATA
+    default: /localdev/wransom/craq-sim/data
+  # Sim clock the device CQ waits before re-checking (consumed inside libttsim.so).
+  cq_wait_clocks: 200
+  # Sim hang watchdog: abort after N simulated clocks with NO progress on any chip
+  # (libttsim.cpp hang_watchdog; resets on progress, so it only fires on a real deadlock).
+  hang_watchdog_clocks: 2000000
+  # Wall-clock backstop per topology (an 8-chip sim run is ~30-90s; this catches a
+  # livelock the clock-watchdog can't, since a livelock still "makes progress").
+  wall_clock_timeout_s: 900
+
+topologies:
+  # ── Phase 1: the proven topology ────────────────────────────────────────────────────
+  # Blackhole 8x P150, all-MMIO, torus-x mesh. point_to_point has no BH skip and is
+  # verified working on this sim (SETUP.md). FABRIC_1D is set by the test, not here.
+  - name: bh_8xP150_p2p
+    arch: blackhole
+    sim_so: "{sim_bh_so}"
+    cluster_desc: "{craqsim_data}/bh/blackhole_8xP150.yaml"
+    mesh_graph_desc: "{craqsim_data}/bh/blackhole_8xP150_torus_x_mesh_graph_descriptor.textproto"
+    applies_to_ops: [point_to_point]
+    required: true        # failure of a required topology => non-zero aggregate exit
+    extra_env: {}
+
+  # ── Phase 2 (declared, not yet exercised here): WH T3K all-MMIO for all_gather ───────
+  # all_gather is @skip_for_blackhole, so it needs the WH sim. Uses Nachiket's shipped
+  # all-MMIO descriptor (fixes the remote-chip CQ-drain hang). sim-wh must be rebuilt
+  # from the current craq-sim before use (see SETUP.md / project notes).
+  - name: wh_t3k_allmmio_all_gather
+    arch: wormhole_b0
+    sim_so: "{sim_wh_so}"
+    cluster_desc: "{craqsim_data}/wh/wormhole_t3k_all_mmio.yaml"
+    mesh_graph_desc: "{craqsim_data}/wh/wormhole_t3k_mesh_graph_descriptor.textproto"
+    applies_to_ops: [all_gather]
+    required: false       # Phase 2 — informational until WH all_gather is wired
+    extra_env: {}
