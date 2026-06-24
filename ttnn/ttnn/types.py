@@ -42,13 +42,7 @@ DEVICE_STORAGE_TYPE = StorageType.DEVICE
 TILE_SIZE = 32
 
 Tile = ttnn._ttnn.tensor.Tile
-try:
-    OverlappedTensor = ttnn._ttnn.tensor.OverlappedTensor
-except AttributeError:
-    # Binary predates OverlappedTensor; provide a stub
-    class OverlappedTensor:  # type: ignore[no-redef]
-        """Stub: not supported by this binary."""
-
+OverlappedTensor = ttnn._ttnn.tensor.OverlappedTensor
 
 Shape = ttnn._ttnn.types.Shape
 TensorSpec = ttnn._ttnn.tensor.TensorSpec
@@ -89,13 +83,7 @@ CoreRangeSet = ttnn._ttnn.tensor.CoreRangeSet
 CoreRange = ttnn._ttnn.tensor.CoreRange
 CoreCoord = ttnn._ttnn.tensor.CoreCoord
 corerange_to_cores = ttnn._ttnn.tensor.corerange_to_cores
-try:
-    get_optimal_worker_cores_for_sharded_tensor = ttnn._ttnn.tensor.get_optimal_worker_cores_for_sharded_tensor
-except AttributeError:
-    # Binary predates this function; provide a stub
-    def get_optimal_worker_cores_for_sharded_tensor(*args, **kwargs):  # type: ignore[misc]
-        raise NotImplementedError("get_optimal_worker_cores_for_sharded_tensor not supported by this binary")
-
+get_optimal_worker_cores_for_sharded_tensor = ttnn._ttnn.tensor.get_optimal_worker_cores_for_sharded_tensor
 
 QueueId = ttnn._ttnn.types.QueueId
 
