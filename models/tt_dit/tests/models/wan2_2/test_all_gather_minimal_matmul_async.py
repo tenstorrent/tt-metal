@@ -567,6 +567,22 @@ def run_test_linear(
             9,
             0,
         ],
+        [
+            (2, 8),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(4096),
+                "trace_region_size": 90112,
+            },
+            ttnn.Topology.Ring,
+            2,
+            6,
+            1,
+            0,
+            12,
+            9,
+            0,
+        ],
     ],
     ids=[
         "2x4links1",
@@ -575,6 +591,7 @@ def run_test_linear(
         "wh4x8links4_ring",
         "wh4x8links4_linear",
         "bh4x8links2",
+        "bh2x8links2",
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -607,9 +624,26 @@ def run_test_linear(
         (3072, 3456, 5120, True, True, None, 1, False, 8, 9, 8, 2, 2),
         (4864, 4096, 1024, True, True, None, 1, False, 16, 8, 4, 2, 2),
         (4864, 4096, 4096, True, True, None, 1, False, 16, 8, 4, 2, 2),
-        (4864, 4096, 1024, True, True, None, 1, False, 8, 8, 4, 2, 2),  # this is straight up faster than the OG
+        (
+            4864,
+            4096,
+            1024,
+            True,
+            True,
+            None,
+            1,
+            False,
+            8,
+            8,
+            4,
+            2,
+            2,
+        ),  # this is straight up faster than the OG, is the sweetspot
         (32768, 4096, 1024, True, False, None, 1, False, 8, 8, 8, 2, 2),
         (4864, 4096, 1024, True, True, None, 1, False, 4, 8, 4, 2, 2),  # this is straight up faster than the OG
+        (4864, 4096, 1024, True, True, None, 1, False, 4, 8, 8, 2, 2),  # this is straight up faster than the OG
+        (4864, 4096, 1024, True, True, None, 1, False, 8, 4, 8, 2, 2),  # this is straight up faster than the OG
+        (4864, 4096, 1024, True, True, None, 1, False, 16, 4, 8, 2, 2),  # this is straight up faster than the OG
     ],
     ids=[
         "4k4k4k",
@@ -639,6 +673,9 @@ def run_test_linear(
         "running-ex-8x8",
         "4k4k1k",
         "running-ex-4x8x4",
+        "running-ex-4x8x8",
+        "running-ex-8x4x8",
+        "running-ex-16x4x8",
     ],
 )
 @pytest.mark.parametrize(

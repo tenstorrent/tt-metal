@@ -705,6 +705,20 @@ all_gather_minimal_matmul_async_factory_helper(
         defines["MATMUL_ISOLATION_MODE"] = "1";
         matmul_isolation = true;
     }
+    // Multicast-broadcast for in0: the injector reads each K-block once and broadcasts it to the whole
+    // in0-sharing core rectangle, replacing the O(chain_length) intra-device store-and-forward relay with
+    // an O(1) broadcast. Off by default (store-and-forward); enable for the experiment via TT_AGMM_MCAST.
+    // The inter-device fabric ring (USE_MUX) is untouched: fabric senders sit inside the rectangle and
+    // still receive each block via mcast before forwarding device-to-device. Set on the shared `defines`
+    // map before in0_defines/in0_fabric_defines derive, so all three in0 kernels compile the same arg layout.
+    // TODO: auto-gate on small-N (min(M_tiles_per_core, N_tiles_per_core) <= 2) once validated.
+    const char* env_mcast = std::getenv("TT_AGMM_MCAST");
+    const bool enable_mcast = (env_mcast != nullptr && std::string(env_mcast) == "1");
+    if (enable_mcast) {
+        TT_FATAL(double_buffer_factor >= 2, "MCAST_BROADCAST requires in0 CB depth >= 2 for slot reuse safety");
+        defines["MCAST_BROADCAST"] = "1";
+    }
+
     in0_defines = defines;
     in0_defines["READ_FROM_LOCAL_INPUT"] = "1";
     in0_defines["IS_IN0"] = "1";
@@ -1331,6 +1345,38 @@ all_gather_minimal_matmul_async_factory_helper(
             in0_core_order.size(),
             in0_fwd_idx,
             in0_bwd_idx};
+        if (enable_mcast) {
+            // in0 broadcast rectangle: the whole in0-sharing axis minus the injector (the low-coordinate
+            // endpoint at axis index 0). Defined by physical axis extent, never chain-tail order — the
+            // fabric-sender cores sit at the axis far end and must stay inside the rect to keep receiving
+            // each block, else the all-gather hangs. transpose flips which axis: x when not transposed, y
+            // when transposed (mirrors in0_noc / the chain axis above). Appended after the fixed block and
+            // before the variable-length mux args, matching the kernel's idx-after-bwd read order.
+            CoreCoord in0_rf_l, in0_rl_l;
+            uint32_t num_in0_recv = 0;
+            if (!transpose_core_grid) {
+                in0_rf_l = {std::min<std::size_t>(1, grid_size.x - 1), (std::size_t)core.y};
+                in0_rl_l = {(std::size_t)grid_size.x - 1, (std::size_t)core.y};
+                num_in0_recv = grid_size.x - 1;
+            } else {
+                in0_rf_l = {(std::size_t)core.x, std::min<std::size_t>(1, grid_size.y - 1)};
+                in0_rl_l = {(std::size_t)core.x, (std::size_t)grid_size.y - 1};
+                num_in0_recv = grid_size.y - 1;
+            }
+            auto in0_mc_s = device->worker_core_from_logical_core(in0_rf_l);
+            auto in0_mc_e = device->worker_core_from_logical_core(in0_rl_l);
+            // Multicast rect corner ordering must match the mcast NoC (swap iff NOC_1).
+            if (in0_noc == tt::tt_metal::NOC::NOC_1) {
+                std::swap(in0_mc_s, in0_mc_e);
+            }
+            in0_args.push_back((std::uint32_t)in0_mc_s.x);
+            in0_args.push_back((std::uint32_t)in0_mc_s.y);
+            in0_args.push_back((std::uint32_t)in0_mc_e.x);
+            in0_args.push_back((std::uint32_t)in0_mc_e.y);
+            in0_args.push_back(num_in0_recv);
+            in0_args.push_back((std::uint32_t)in0_injector_virtual_core.x);
+            in0_args.push_back((std::uint32_t)in0_injector_virtual_core.y);
+        }
         if (in0_is_fabric_core) {
             uint32_t worker_idx = in0_idx % num_workers_per_link;
             auto last_in0_core = in0_core_order.back();

@@ -153,6 +153,21 @@ void kernel_main() {
     const uint32_t forward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_in0_core_order_index = get_arg_val<uint32_t>(argidx++);
 
+#ifdef MCAST_BROADCAST
+    // Multicast-broadcast args. Read with argidx++ here, before the variable-length mux block below, so
+    // argidx lands at the same offset for the mux parser on every in0 kernel variant. Host appends these
+    // on all in0 cores iff MCAST_BROADCAST is set, so the offset stays consistent. (start,end) define the
+    // physical receiver rectangle (whole in0 axis minus the injector); the injector reads/recvs and
+    // broadcasts to it. Receivers signal slot-free to the injector at in0_inj_noc.
+    const uint32_t in0_mc_start_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_mc_start_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_mc_end_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_mc_end_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_num_recv = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_inj_noc_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_inj_noc_y = get_arg_val<uint32_t>(argidx++);
+#endif
+
     // Tensor accessor for input tensor
     constexpr auto in0_args = TensorAccessorArgs<ct_arg_count>();
     const auto in0_reader = TensorAccessor(in0_args, in0_addr);
@@ -261,6 +276,20 @@ void kernel_main() {
 #endif
 
     in0_valid_sem.set(VALID);
+    volatile tt_l1_ptr uint32_t* in0_valid_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_valid_semaphore_addr);
+    *(in0_valid_semaphore_addr_ptr) = VALID;
+    volatile tt_l1_ptr uint32_t* in0_receiver_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_receiver_semaphore_addr);
+    volatile tt_l1_ptr uint32_t* in0_sender_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_sender_semaphore_addr);
+    const uint64_t in0_sender_semaphore_noc_addr =
+        get_noc_addr(in0_sender_noc_x, in0_sender_noc_y, in0_sender_semaphore_addr);
+#ifdef MCAST_BROADCAST
+    // Same L1 offset on every core, so receivers increment the injector's sender semaphore directly.
+    const uint64_t in0_injector_sender_sem_noc_addr =
+        get_noc_addr(in0_inj_noc_x, in0_inj_noc_y, in0_sender_semaphore_addr);
+#endif
 
     const uint64_t in0_receiver_semaphore_noc_addr =
         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_receiver_semaphore_addr);
@@ -435,17 +464,51 @@ void kernel_main() {
                         k_right_tiles);
                 } else {
                     // Get from previous device
-                    in0_receiver_sem.set(INVALID);
-                    in0_sender_sem.up(noc_obj, in0_sender_noc_x, in0_sender_noc_y, 1);
-                    in0_receiver_sem.wait(VALID);
+#ifdef MCAST_BROADCAST
+                    // Signal slot-free to the injector, then wait for its broadcast.
+                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(in0_injector_sender_sem_noc_addr, 1);
+                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+#else
+                    noc_semaphore_set(in0_receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(in0_sender_semaphore_noc_addr, 1);
+                    noc_semaphore_wait(in0_receiver_semaphore_addr_ptr, VALID);
+#endif
                 }
 
-                // Critical to performance for sender to push data to compute before mcasting
-                // This frees sender to start next read earlier
-                cb_in0.push_back(in0_block_num_tiles);
-                if (!is_sink_core) {
-                    in0_sender_sem.wait(1);
-                    in0_sender_sem.set(0);
+                    // Critical to performance for sender to push data to compute before mcasting
+                    // This frees sender to start next read earlier
+                    cb_push_back(cb_id_in0, in0_block_num_tiles);
+#ifdef MCAST_BROADCAST
+                    // Only the injector broadcasts: wait until every receiver signaled a free slot, then
+                    // one multicast write of the block followed by one multicast set of their valid sems.
+                    if constexpr (is_injector_core) {
+                        if (in0_num_recv > 0) {  // single-core in0 group => no receivers, skip mcast
+                            DeviceZoneScopedN("MCAST-SEND");
+                            noc_semaphore_wait(in0_sender_semaphore_addr_ptr, in0_num_recv);
+                            noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
+
+                            uint64_t mcast_data_addr = get_noc_multicast_addr(
+                                in0_mc_start_x, in0_mc_start_y, in0_mc_end_x, in0_mc_end_y, in0_start_address);
+                            noc_async_write_multicast(
+                                in0_start_address, mcast_data_addr, current_block_bytes, in0_num_recv);
+                            // Barrier on the source L1 read before the k-loop reuses this CB slot.
+                            noc_async_writes_flushed();
+
+                            uint64_t mcast_valid_addr = get_noc_multicast_addr(
+                                in0_mc_start_x,
+                                in0_mc_start_y,
+                                in0_mc_end_x,
+                                in0_mc_end_y,
+                                in0_receiver_semaphore_addr);
+                            noc_semaphore_set_multicast(in0_valid_semaphore_addr, mcast_valid_addr, in0_num_recv);
+                        }
+                    }
+#else
+                    if (!is_sink_core) {
+                        DeviceZoneScopedN("NOC-LATENCY");
+                        noc_semaphore_wait(in0_sender_semaphore_addr_ptr, 1);
+                        noc_semaphore_set(in0_sender_semaphore_addr_ptr, 0);
 
                     uint64_t in0_unicast_data_addr =
                         get_noc_addr(in0_dest_noc_x, in0_dest_noc_y, in0_start_address);
@@ -462,6 +525,7 @@ void kernel_main() {
 
                         noc_semaphore_set_remote(in0_valid_semaphore_addr, in0_receiver_semaphore_noc_addr);
                     }
+#endif
                 }  // end of IN0-SNF-CHAIN
 #if MATMUL_ISOLATION_MODE == 0
 #ifdef USE_MUX
