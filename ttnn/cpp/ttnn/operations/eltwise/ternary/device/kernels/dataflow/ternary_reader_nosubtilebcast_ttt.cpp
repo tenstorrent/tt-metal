@@ -48,8 +48,10 @@ void kernel_main() {
     constexpr auto src0_args = TensorAccessorArgs<3, 0>();
     constexpr auto src1_args =
         TensorAccessorArgs<src0_args.next_compile_time_args_offset(), src0_args.next_common_runtime_args_offset()>();
+#if !SRC_SHARDED
     constexpr auto src2_args =
         TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
+#endif
 
     Noc noc;
     CircularBuffer cb0(cb_id_src0);

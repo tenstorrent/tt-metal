@@ -26,7 +26,6 @@ void kernel_main() {
     // ublocks size defined in pages
     constexpr uint32_t ublock_size_pages = 1;
 
-    uint32_t num_pages_per_block[num_tensors];
     uint32_t page_id_per_tensor[num_tensors];
     constexpr uint32_t src_addr_base_idx = 3;
     constexpr uint32_t num_pages_per_block_base_offset = num_tensors;
@@ -35,11 +34,14 @@ void kernel_main() {
     auto tensor_accessors_tuple = make_tensor_accessor_tuple(tensor_accessor_args, src_addr_base_idx);
     auto abstract_tensor_accessor_wrappers = make_abstract_tensor_accessor_wrappers(tensor_accessors_tuple);
 
+#ifndef WIDTH_CONCAT
+    uint32_t num_pages_per_block[num_tensors];
     tt_l1_ptr uint32_t* arg_ptr = (tt_l1_ptr uint32_t*)get_arg_addr(src_addr_base_idx);
     for (uint32_t i = 0; i < num_tensors; ++i) {
         num_pages_per_block[i] = arg_ptr[num_pages_per_block_base_offset + i];
         page_id_per_tensor[i] = arg_ptr[page_id_per_tensor_offset + i];
     }
+#endif
 
     CircularBuffer cb_in(cb_id_in);
     Noc noc;
