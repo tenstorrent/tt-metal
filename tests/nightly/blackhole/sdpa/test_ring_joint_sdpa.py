@@ -19,26 +19,28 @@ Model Configurations:
 BH adaptation: uses init_device_compute_kernel_config instead of WormholeComputeKernelConfig.
 """
 
-import os
 import math
-from unittest import mock
-
-import torch
+import os
 from dataclasses import dataclass, replace
 from itertools import product
-from typing import List, Dict, Sequence, Tuple
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
-    comp_pcc,
-)
-import ttnn
-from ttnn.operations.ccl import Topology
-from loguru import logger
+from typing import Dict, List, Sequence, Tuple
+from unittest import mock
+
 import pytest
+import torch
+from loguru import logger
+from ttnn.operations.ccl import Topology
+
+import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 
 # ============================================================================
 # CONFIGURATION CONSTANTS
 # ============================================================================
 from tests.nightly.sdpa_perf_utils import MeshConfig
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
+    comp_pcc,
+)
 
 MESH_CONFIG = MeshConfig.detect()
 
@@ -247,10 +249,12 @@ NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK = 32
 
 from tests.nightly.sdpa_perf_utils import (
     ARCH_CONSTANTS,
-    post_process_ops_log,
+)
+from tests.nightly.sdpa_perf_utils import compute_math_utilization as compute_ring_joint_utilization
+from tests.nightly.sdpa_perf_utils import (
     compute_sdpa_flops,
-    compute_math_utilization as compute_ring_joint_utilization,
     create_balanced_chunk_order,
+    post_process_ops_log,
     reorder_tensor_chunks,
     reverse_reorder_tensor_chunks,
 )
@@ -3064,6 +3068,7 @@ def test_ring_joint_attention_sdpa_determinism(model_names):
     RING_MLA_TEST_CONFIGS,
     ids=RING_MLA_TEST_CONFIG_IDS,
 )
+@skip_with_llk_assert("ring_mla deterministic replay is timing-sensitive with LLK asserts enabled.")
 def test_ring_mla_determinism(
     b,
     sq,
@@ -3342,6 +3347,7 @@ else:
     RING_JOINT_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_JOINT_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 def test_ring_joint_attention_perf_check(
     model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util, margin
 ):
@@ -3863,6 +3869,7 @@ else:
     RING_MLA_CHUNKED_PERF_CHECK_CONFIGS,
     ids=[f"{cfg[0]}-q{cfg[1]}-k{cfg[2]}-ring{cfg[3]}" for cfg in RING_MLA_CHUNKED_PERF_CHECK_CONFIGS],
 )
+@skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 def test_ring_mla_chunked_perf_check(model_name, q_chunk_size, k_chunk_size, ring_size_expected, expected_util):
     """Measure ring_mla chunked-prefill math utilization for the kimi 50k+5k galaxy chunk (a 5k Q
     chunk against a 50k K/V prefix), simulated on the 4-device QuietBox, via tracy and assert
