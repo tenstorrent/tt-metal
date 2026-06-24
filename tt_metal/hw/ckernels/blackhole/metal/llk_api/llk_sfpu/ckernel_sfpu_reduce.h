@@ -1498,17 +1498,16 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs. Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates on
-    // two's-complement values (on Blackhole the load/store conversion is a no-op, so the reduce code casts
-    // sign-magnitude<->two's-complement explicitly). Int32 MAX/MIN keep plain INT32 (sign-magnitude):
-    // SFPSWAP(VEC_MIN_MAX) is a float/sign-magnitude comparator that orders sign-magnitude integers
-    // correctly, whereas two's-complement negatives would be mis-ordered.
-    // Option A (issue #47647): Int32 MAX/MIN revert to INT32_2S_COMP to match the column-reduce calculate
-    // path. init_reduce has no reduce_dim template arg; the row-MAX path re-records its own replay buffer
-    // and ignores this LOADMACRO setup, so selecting INT32_2S_COMP for all Int32 MAX/MIN is safe here.
+    // Int32 SUM loads with plain INT32. The dest word is already two's-complement and SFPIADD adds in
+    // two's-complement. The explicit sign-magnitude<->two's-complement cast in the reduce code only runs
+    // under INT32_2S_COMP, so plain INT32 skips it; otherwise the cast would mangle the already-two's-
+    // complement operand and break negatives. AVG keeps INT32_2S_COMP (its divide-by-32 step relies on it),
+    // and MAX/MIN keep INT32_2S_COMP to match the column-reduce path. init_reduce has no reduce_dim, but the
+    // row-MAX path re-records its own replay buffer, so picking INT32_2S_COMP for every Int32 MAX/MIN here
+    // does no harm.
     constexpr bool int32_2s_comp =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG ||
-                                         pool_type == PoolType::MAX || pool_type == PoolType::MIN));
+        (format == DataFormat::Int32 &&
+         (pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN));
     constexpr InstrModLoadStore INSTRUCTION_MODE =
         int32_2s_comp ? InstrModLoadStore::INT32_2S_COMP : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
 
@@ -1577,21 +1576,20 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs.
-    // Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates on two's-complement values (on Blackhole the
-    // load/store conversion is a no-op, so the reduce code casts sign-magnitude<->two's-complement
-    // explicitly). Int32 MAX/MIN (both dims) keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX) is a
-    // float/sign-magnitude comparator that orders sign-magnitude integers correctly; two's-complement
-    // negatives are mis-ordered (min of negatives would return the least-negative value).
-    // Option A (issue #47647): Int32 MAX/MIN column reduce reverts to INT32_2S_COMP (pre-#46231). Scoped
-    // to REDUCE_COL so the row-MAX path keeps plain sign-magnitude INT32 (its static_assert below requires
-    // FP32/INT32/FP16B). On Blackhole the mode-12 load/store conversion is a no-op, so this is benign here.
-    constexpr bool int32_sum_avg =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
+    // Pick the load/store mode for each Int32 reduction:
+    //   * SUM uses plain INT32. The dest word is already two's-complement and SFPIADD adds in two's-complement,
+    //     so it has to reach the adder untouched. The explicit sign-magnitude<->two's-complement cast in the
+    //     reduce code only runs under INT32_2S_COMP, so plain INT32 skips it; otherwise it would mangle the
+    //     already-two's-complement operand and break negatives.
+    //   * AVG uses INT32_2S_COMP, which its divide-by-32 step depends on.
+    //   * MAX/MIN column reduce uses INT32_2S_COMP. On Blackhole the load/store conversion is a no-op, so the
+    //     column path casts explicitly around a sign-magnitude SFPSWAP. Scoped to REDUCE_COL so the row-MAX
+    //     path stays on plain sign-magnitude INT32.
+    constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
     constexpr bool int32_max_min_col =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
          reduce_dim == ReduceDim::REDUCE_COL);
-    constexpr InstrModLoadStore INSTRUCTION_MODE = (int32_sum_avg || int32_max_min_col)
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (int32_avg || int32_max_min_col)
                                                        ? InstrModLoadStore::INT32_2S_COMP
                                                        : GetSfpLoadStoreInstrMod<format, is_fp32_dest_acc_en>();
 

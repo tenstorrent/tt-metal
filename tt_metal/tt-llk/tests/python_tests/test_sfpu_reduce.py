@@ -75,12 +75,18 @@ def use_int32_twos_complement(
     comparator. This is exactly how the ttnn op feeds the path, so the test must encode
     Int32 MAX/MIN operands as two's-complement to match the shipped (ttnn-green) kernel.
 
-    SUM/AVG keep sign-magnitude: there mode ``INT32_2S_COMP`` feeds genuine two's-complement
-    into ``SFPIADD`` (which needs it), so the standard sign-magnitude L1 contract is correct.
+    SUM is two's-complement as well. Int32 is stored in two's-complement and ``SFPIADD`` adds in
+    two's-complement, so the SUM kernel loads with plain ``INT32`` and the word reaches the adder
+    untouched. Feeding sign-magnitude here would mask the i32 SUM bug where ``INT32_2S_COMP``
+    corrupts negative operands, so SUM operands must be two's-complement too.
+
+    AVG is left out: it still loads with ``INT32_2S_COMP`` (its divide-by-32 step depends on that
+    mode), so its sign-magnitude contract is still the right match.
     """
     return formats.input_format == DataFormat.Int32 and reduce_pool in (
         ReducePool.Max,
         ReducePool.Min,
+        ReducePool.Sum,
     )
 
 

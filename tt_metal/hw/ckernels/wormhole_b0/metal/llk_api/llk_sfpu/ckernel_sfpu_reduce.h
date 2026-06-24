@@ -1219,14 +1219,15 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs. Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates on
-    // two's-complement values. Option A (issue #47647): Int32 MAX/MIN also use INT32_2S_COMP to match the
-    // column-reduce calculate path. init_reduce has no reduce_dim template arg; the row-MAX path re-records
-    // its own replay buffer and ignores this LOADMACRO setup, so selecting INT32_2S_COMP for all Int32
-    // MAX/MIN is safe here.
+    // Int32 SUM loads with plain INT32. The dest word is already two's-complement and SFPIADD is a
+    // two's-complement adder, so it has to reach the adder untouched; INT32_2S_COMP would convert it on
+    // load and mangle negative values. AVG and MAX/MIN stay on INT32_2S_COMP: AVG's divide-by-32 relies on
+    // it, and MAX/MIN's SFPSWAP needs sign-magnitude operands. init_reduce has no reduce_dim, but the
+    // row-MAX path re-records its own replay buffer, so picking INT32_2S_COMP for every Int32 MAX/MIN here
+    // does no harm.
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG ||
-                                         pool_type == PoolType::MAX || pool_type == PoolType::MIN))
+        (format == DataFormat::Int32 &&
+         (pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN))
             ? InstrModLoadStore::INT32_2S_COMP
         : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
                                             : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
@@ -1292,22 +1293,21 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs.
-    //   * SUM/AVG use SFPIADD (two's-complement adder) -> INT32_2S_COMP (mode 12) converts on load.
-    //   * Int32 MAX/MIN column reduce (REDUCE_COL) also uses INT32_2S_COMP (Option A, issue #47647):
-    //     this is the pre-#46231 behavior. The dim=0/dim=1 path (reduce_nd_loop) feeds the column reduce
-    //     transpose-padded tiles whose sentinel pad value assumes the two's-complement interpretation, so
-    //     plain sign-magnitude INT32 (mode 4) mis-handles those lanes. Scoped to REDUCE_COL so the row-MAX
-    //     path keeps plain sign-magnitude INT32.
-    constexpr bool int32_sum_avg =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
+    // Pick the load/store mode for each Int32 reduction:
+    //   * SUM uses plain INT32. The dest word is already two's-complement and SFPIADD adds in two's-complement,
+    //     so it has to reach the adder untouched; INT32_2S_COMP would convert it on load and mangle negatives.
+    //   * AVG uses INT32_2S_COMP, which its divide-by-32 step (perform_int_average) depends on.
+    //   * MAX/MIN column reduce uses INT32_2S_COMP: the column path is fed transpose-padded tiles whose pad
+    //     sentinel assumes two's-complement, while SFPSWAP orders operands as sign-magnitude. Scoped to
+    //     REDUCE_COL so the row-MAX path stays on plain sign-magnitude INT32.
+    constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
     constexpr bool int32_max_min_col =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
          reduce_dim == ReduceDim::REDUCE_COL);
-    constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (int32_sum_avg || int32_max_min_col) ? InstrModLoadStore::INT32_2S_COMP
-        : (format == DataFormat::Float16_b)  ? InstrModLoadStore::DEFAULT
-                                             : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (int32_avg || int32_max_min_col) ? InstrModLoadStore::INT32_2S_COMP
+                                                   : (format == DataFormat::Float16_b)
+                                                       ? InstrModLoadStore::DEFAULT
+                                                       : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
 
     // Garbage high bits need to be cleared when loading UInt16 data from a 32-bit (fp32) dest word
     // (driven by INPUT format).
