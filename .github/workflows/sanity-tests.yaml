@@ -358,7 +358,7 @@ jobs:
     if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-tests == 'true' }}
     strategy:
       fail-fast: false
-    uses: ./.github/workflows/ttsim-integration.yaml
+    uses: ./.github/workflows/ttsim-integration-tests-impl.yaml
     secrets: inherit
     with:
       basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
