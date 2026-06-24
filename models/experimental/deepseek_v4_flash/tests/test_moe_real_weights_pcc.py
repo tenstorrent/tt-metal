@@ -38,7 +38,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tt.deepseek_v4_flash import (
+from models.experimental.deepseek_v4_flash.tt.moe import (
     DeepSeekV4PreloadedExperts,
     DeepSeekV4SparseMoeBlock,
 )

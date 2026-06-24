@@ -20,7 +20,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.experimental.deepseek_v4_flash.tt.deepseek_v4_flash import DeepSeekV4Flash
+from models.experimental.deepseek_v4_flash.tt.embedding import DeepSeekV4Flash
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (
     DeepseekV4WeightLoader,
     resolve_snapshot_dir,

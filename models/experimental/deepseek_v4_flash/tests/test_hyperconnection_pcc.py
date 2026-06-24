@@ -145,7 +145,7 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.deepseek_v4_flash import (  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.hyperconnection import (  # noqa: E402
     DeepSeekV4HyperConnection,
 )
 
