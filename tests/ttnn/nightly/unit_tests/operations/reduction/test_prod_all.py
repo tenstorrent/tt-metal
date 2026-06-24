@@ -69,3 +69,34 @@ def test_prod(shapes, npu_dtype, device):
         frobenius_threshold=1e-09,
         check_frobenius=check_frobenius,
     )
+
+
+def _block_float_input(shape):
+    # Block-float (bfp8_b / bfp4_b) shares one exponent per 16 elements. A full tile of random values
+    # would overflow the product, so use a mostly-ones input with a handful of 2.0s: every value is
+    # exactly representable in bfp8_b/bfp4_b and the product is a small, exact power of two.
+    torch_input = torch.ones(shape, dtype=torch.float32)
+    flat = torch_input.view(-1)
+    num_twos = 5
+    flat[: num_twos * 7 : 7] = 2.0
+    return torch_input, torch.prod(torch_input)
+
+
+@pytest.mark.parametrize("npu_dtype", (ttnn.bfloat8_b, ttnn.bfloat4_b), ids=["bfloat8_b", "bfloat4_b"])
+@pytest.mark.parametrize(
+    "shapes",
+    (
+        ([1, 1, 32, 32]),
+        ([1, 4, 32, 32]),
+        ([2, 2, 32, 32]),
+    ),
+)
+def test_prod_all_block_float(shapes, npu_dtype, device):
+    # Full product (no dim) supports block-float: the result tile is unpacked to FLOAT32 on host.
+    torch_input, torch_output = _block_float_input(shapes)
+    tt_input = ttnn.Tensor(torch_input, npu_dtype).to(ttnn.TILE_LAYOUT).to(device)
+
+    tt_output = ttnn.prod(tt_input).cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch().flatten()[0]
+
+    logger.info(f"{npu_dtype} full-product: expected={torch_output.item()} got={tt_output.item()}")
+    assert torch.isclose(tt_output, torch_output, atol=1e-2), f"expected {torch_output.item()}, got {tt_output.item()}"
