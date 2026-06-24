@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstddef>
+#include <optional>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -32,6 +33,16 @@ struct operation_attributes_t {
     // Resolved (not optional) so it is part of the reflected program-cache key; the public callable
     // fills it from the user's optional config, defaulting math_fidelity to the dtype-derived choice.
     DeviceComputeKernelConfig compute_kernel_config{};
+    // Indexed KV cache: selects the batch slot of a shared [B,1,T,D] k (page ids offset by
+    // cache_batch_idx * Tt * Dt). k may then also be ND-sharded across DRAM banks. Value is NOT hashed and
+    // is re-applied in override_runtime_arguments, so switching slots does NOT recompile.
+    std::optional<uint32_t> cache_batch_idx{std::nullopt};
+    bool has_indexed_kv_cache() const { return cache_batch_idx.has_value(); }
+    // Runtime KV length: the valid prefix this dispatch of a k allocated at its full T; the rest is
+    // masked out. Value is NOT hashed (re-applied per dispatch), so growing kv_len <= T reuses ONE program.
+    // grid/work-split/output width stay keyed on the hashed T. nullopt == T.
+    std::optional<uint32_t> kv_len{std::nullopt};
+    bool has_runtime_kv_len() const { return kv_len.has_value(); }
 };
 
 struct tensor_args_t {

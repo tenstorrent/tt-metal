@@ -20,37 +20,37 @@
 #endif
 #endif
 
-constexpr uint32_t FACE_ELEMS = 256;
-constexpr uint16_t BF16_ONE = 0x3F80;
-constexpr uint32_t ELEMS_PER_FACE_ROW = 16;
+constexpr std::uint32_t FACE_ELEMS = 256;
+constexpr std::uint16_t BF16_ONE = 0x3F80;
+constexpr std::uint32_t ELEMS_PER_FACE_ROW = 16;
 
-static inline uint32_t float_to_bits(float x) {
-    uint32_t u;
+static inline std::uint32_t float_to_bits(float x) {
+    std::uint32_t u;
     std::memcpy(&u, &x, sizeof(u));
     return u;
 }
 
-static inline float bits_to_float(uint32_t u) {
+static inline float bits_to_float(std::uint32_t u) {
     float x;
     std::memcpy(&x, &u, sizeof(x));
     return x;
 }
 
 // Convert bf16 bit-pattern to float32 exactly
-static inline float bf16_to_float(uint16_t bf) {
-    uint32_t u32 = static_cast<uint32_t>(bf) << 16;
+static inline float bf16_to_float(std::uint16_t bf) {
+    std::uint32_t u32 = static_cast<std::uint32_t>(bf) << 16;
     return bits_to_float(u32);
 }
 
 // Convert float32 to bf16 bit-pattern using round-to-nearest
-static inline uint16_t float_to_bf16_rne(float x) {
-    uint32_t u = float_to_bits(x);
+static inline std::uint16_t float_to_bf16_rne(float x) {
+    std::uint32_t u = float_to_bits(x);
 
     // Preserve NaNs as NaNs. Make sure result mantissa is nonzero.
-    const uint32_t exp_mask = 0x7F800000u;
-    const uint32_t frac_mask = 0x007FFFFFu;
+    const std::uint32_t exp_mask = 0x7F800000u;
+    const std::uint32_t frac_mask = 0x007FFFFFu;
     if ((u & exp_mask) == exp_mask && (u & frac_mask) != 0) {
-        uint16_t upper = static_cast<uint16_t>(u >> 16);
+        std::uint16_t upper = static_cast<std::uint16_t>(u >> 16);
         // Ensure NaN payload remains NaN after truncation
         if ((upper & 0x007Fu) == 0) {
             upper |= 0x0001u;
@@ -60,25 +60,26 @@ static inline uint16_t float_to_bf16_rne(float x) {
 
     // Round-to-nearest-even when truncating low 16 bits
     // bias = 0x7FFF + lsb_of_upper
-    uint32_t lsb = (u >> 16) & 1u;
+    std::uint32_t lsb = (u >> 16) & 1u;
     u += 0x7FFFu + lsb;
 
-    return static_cast<uint16_t>(u >> 16);
+    return static_cast<std::uint16_t>(u >> 16);
 }
 
 // Pack a single bf16 bit-pattern into a uint32 with two copies (low and high
 // 16 bits both set to the same bf16 value).  This matches the packed scalar
 // layout expected by `generate_bcast_unary_scalar`, and is the runtime
 // equivalent of `float_to_bfloat16_packed` in utils.py.
-static inline uint32_t bf16_pack_to_uint32(uint16_t bf16_val) {
-    return (static_cast<uint32_t>(bf16_val) << 16) | static_cast<uint32_t>(bf16_val);
+static inline std::uint32_t bf16_pack_to_uint32(std::uint16_t bf16_val) {
+    return (static_cast<std::uint32_t>(bf16_val) << 16) | static_cast<std::uint32_t>(bf16_val);
 }
 
 // Convenience: convert fp32 -> bf16 (RNE) and pack two copies into a uint32.
-static inline uint32_t float_to_bf16_packed(float x) { return bf16_pack_to_uint32(float_to_bf16_rne(x)); }
+static inline std::uint32_t float_to_bf16_packed(float x) { return bf16_pack_to_uint32(float_to_bf16_rne(x)); }
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
 #include <type_traits>
+#include <cstdint>
 #include "api/debug/dprint.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
@@ -90,17 +91,17 @@ static inline uint32_t float_to_bf16_packed(float x) { return bf16_pack_to_uint3
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../kernel_includes/tt_metal/dm_utils.hpp"
 
-FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
+FORCE_INLINE void generate_row0_bcast(const std::uint32_t cb_id, std::uint16_t bf16_val) {
     cb_reserve_back(cb_id, 1);
-    auto* tile_u32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
-    const uint32_t packed = bf16_pack_to_uint32(bf16_val);
+    auto* tile_u32 = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(get_write_ptr(cb_id));
+    const std::uint32_t packed = bf16_pack_to_uint32(bf16_val);
     // Face 0 row 0: 16 bf16 lanes = 8 u32 words.
-    for (uint32_t i = 0; i < 8; ++i) {
+    for (std::uint32_t i = 0; i < 8; ++i) {
         tile_u32[i] = packed;
     }
     // Face 1 row 0: same, offset by one face (256 bf16 = 128 u32 words).
-    constexpr uint32_t FACE_U32 = 128;
-    for (uint32_t i = 0; i < 8; ++i) {
+    constexpr std::uint32_t FACE_U32 = 128;
+    for (std::uint32_t i = 0; i < 8; ++i) {
         tile_u32[FACE_U32 + i] = packed;
     }
     cb_push_back(cb_id, 1);
@@ -136,17 +137,17 @@ FORCE_INLINE void generate_row0_bcast(const uint32_t cb_id, uint16_t bf16_val) {
 #include "../kernel_includes/tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_math_top32_rm_api.h"
 #include "../kernel_includes/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_deepseek_top32_rm.h"
 template <bool legacy_compat = true>
-ALWI void sampling_recip_tile_scalar(uint32_t idst) {
+ALWI void sampling_recip_tile_scalar(std::uint32_t idst) {
     SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_recip_scalar, (legacy_compat), idst, VectorMode::None);
 }
 
-ALWI void sampling_clamp_max_tile_scalar(uint32_t idst, uint32_t param) {
+ALWI void sampling_clamp_max_tile_scalar(std::uint32_t idst, std::uint32_t param) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_clamp_max_scalar, idst, VectorMode::None, param);
 }
 
-ALWI void sampling_le_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void sampling_le_binary_tile_first_column(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -158,7 +159,7 @@ ALWI void sampling_le_binary_tile_first_column(uint32_t idst0, uint32_t idst1, u
         VectorMode::C);
 }
 
-ALWI void sampling_lt_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void sampling_lt_binary_tile_first_column(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -170,7 +171,7 @@ ALWI void sampling_lt_binary_tile_first_column(uint32_t idst0, uint32_t idst1, u
         VectorMode::C);
 }
 
-ALWI void sampling_ge_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void sampling_ge_binary_tile_first_column(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     SFPU_BINARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -182,12 +183,12 @@ ALWI void sampling_ge_binary_tile_first_column(uint32_t idst0, uint32_t idst1, u
         VectorMode::C);
 }
 
-ALWI void sampling_mul_unary_tile_first_column(uint32_t idst, uint32_t param) {
+ALWI void sampling_mul_unary_tile_first_column(std::uint32_t idst, std::uint32_t param) {
     SFPU_UNARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_mul_unary_scalar_first_column, idst, VectorMode::C, param);
 }
 
-ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+ALWI void sampling_add_binary_tile_first_column(std::uint32_t idst0, std::uint32_t idst1, std::uint32_t odst) {
     SFPU_BINARY_CALL_NO_TEMPLATE_ARGS(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sampling_add_binary_first_column, idst0, idst1, odst, VectorMode::C);
 }
@@ -198,7 +199,8 @@ ALWI void sampling_add_binary_tile_first_column(uint32_t idst0, uint32_t idst1, 
 // MATH_FIDELITY macro, while sampling can force HiFi4 in only the softmax
 // normalization path.
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
-ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
+ALWI void sampling_reduce_init(
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t ocb, std::uint32_t call_line = __builtin_LINE()) {
     state_configure(icb, icb_scaler, ocb, call_line);
 #ifndef ARCH_QUASAR
     UNPACK((llk_unpack_AB_reduce_init<reduce_type, reduce_dim, enforce_fp32_accumulation>(icb, icb_scaler)));
@@ -216,7 +218,7 @@ ALWI void sampling_reduce_init(uint32_t icb, uint32_t icb_scaler, uint32_t ocb, 
 
 template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation, MathFidelity math_fidelity>
 ALWI void sampling_reduce_tile(
-    uint32_t icb, uint32_t icb_scaler, uint32_t itile, uint32_t itile_scaler, uint32_t idst) {
+    std::uint32_t icb, std::uint32_t icb_scaler, std::uint32_t itile, std::uint32_t itile_scaler, std::uint32_t idst) {
 #ifndef ARCH_QUASAR
     MATH((llk_math_reduce<reduce_type, reduce_dim, DST_ACCUM_MODE, math_fidelity, false, enforce_fp32_accumulation>(
         icb, icb_scaler, idst)));
@@ -227,23 +229,23 @@ ALWI void sampling_reduce_tile(
 #endif
 }
 
-void generate_rand_tile(const uint32_t cb_id);
+void generate_rand_tile(const std::uint32_t cb_id);
 
 template <
-    uint32_t in_cb,
-    uint32_t out_cb,
-    uint32_t exp_cb,
-    uint32_t probs_cb,
-    uint32_t probs_out_cb,
-    uint32_t scaler_cb,
-    uint32_t p_cb,
-    uint32_t rand_cb,
-    uint32_t rand_bcast_cb,
-    uint32_t mask_cb,
-    uint32_t num_tiles,
+    std::uint32_t in_cb,
+    std::uint32_t out_cb,
+    std::uint32_t exp_cb,
+    std::uint32_t probs_cb,
+    std::uint32_t probs_out_cb,
+    std::uint32_t scaler_cb,
+    std::uint32_t p_cb,
+    std::uint32_t rand_cb,
+    std::uint32_t rand_bcast_cb,
+    std::uint32_t mask_cb,
+    std::uint32_t num_tiles,
     bool enable_metadata = false,
-    uint32_t metadata_output_l1_addr = 0,
-    uint32_t inv_temp_bf16_ct = 0>
+    std::uint32_t metadata_output_l1_addr = 0,
+    std::uint32_t inv_temp_bf16_ct = 0>
 void trisc_fused_softmax_top_p_sampling_block() {
     DeviceZoneScopedN("SP-TOPP-TRISC");
 
@@ -251,14 +253,14 @@ void trisc_fused_softmax_top_p_sampling_block() {
     cb_wait_front(in_cb, num_tiles);
     cb_wait_front(scaler_cb, 1);
 
-    uint16_t temp_bf16;
+    std::uint16_t temp_bf16;
     if constexpr (enable_metadata) {
         auto* metadata_ptr =
             reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(metadata_output_l1_addr);
         const float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.01f);
         temp_bf16 = float_to_bf16_rne(1.0f / temperature);
     } else {
-        temp_bf16 = static_cast<uint16_t>(inv_temp_bf16_ct);
+        temp_bf16 = static_cast<std::uint16_t>(inv_temp_bf16_ct);
     }
     // Step 1: Compute DST[0, 0, 0] = max(x_i, dim=0), x_i = in_cb
     {
@@ -377,7 +379,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         MATH((sampling_lt_binary_tile_first_column(0, 1, 2)));
         // Step 13: DST[2] *= BIG. Below-cutoff lanes blow up to ~BIG so the
         // upcoming Pass 4 MIN-reduce skips them; above-cutoff lanes stay at 0.
-        constexpr uint32_t BIG_VAL_FP32_U32 = 0x42C80000u;  // 100.0f
+        constexpr std::uint32_t BIG_VAL_FP32_U32 = 0x42C80000u;  // 100.0f
         binop_with_scalar_tile_init();
         MATH((sampling_mul_unary_tile_first_column(2, BIG_VAL_FP32_U32)));
         // Step 14: DST[3] = cumsum + (mask * BIG) = filtered cumsum.
@@ -419,7 +421,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
     {
         DeviceZoneScopedN("SP-TOPP-TRISC-13");
         // Step 17.5: Clamp cum_kept <= 1.0. The MIN-reduce sentinel trick
-        constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
+        constexpr std::uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
         MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
         // Step 18: Compute DST[0] = 1/cum_kept
         recip_tile_init();
@@ -448,7 +450,7 @@ void trisc_fused_softmax_top_p_sampling_block() {
         sfpu_reduce_init<PoolType::MIN, DataFormat::Float32>();
         sfpu_reduce<PoolType::MIN, DataFormat::Float32, ReduceDim::REDUCE_COL>(0);
         // Same clamp as Step 17.5: see comment above.
-        constexpr uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
+        constexpr std::uint32_t SP_ONE_FP32 = 0x3F800000u;  // 1.0f
         MATH((sampling_clamp_max_tile_scalar(0, SP_ONE_FP32)));
         recip_tile_init();
         MATH((sampling_recip_tile_scalar(0)));
@@ -507,11 +509,11 @@ void trisc_fused_softmax_top_p_sampling_block() {
     }
 }
 
-void generate_rand_tile(const uint32_t cb_id) {
-    uint32_t rand_scale = 0;
+void generate_rand_tile(const std::uint32_t cb_id) {
+    std::uint32_t rand_scale = 0;
     const float one_f = 1.0f;
-    std::memcpy(&rand_scale, &one_f, sizeof(uint32_t));
-    uint32_t rand_from = 0;
+    std::memcpy(&rand_scale, &one_f, sizeof(std::uint32_t));
+    std::uint32_t rand_from = 0;
     cb_reserve_back(cb_id, 1);
     tile_regs_acquire();
     rand_tile(0, rand_from, rand_scale);
@@ -524,16 +526,16 @@ void generate_rand_tile(const uint32_t cb_id) {
 }
 
 template <
-    uint32_t in_scores_cb,
-    uint32_t in_indices_cb,
-    uint32_t out_scores_cb,
-    uint32_t out_indices_cb,
+    std::uint32_t in_scores_cb,
+    std::uint32_t in_indices_cb,
+    std::uint32_t out_scores_cb,
+    std::uint32_t out_indices_cb,
     bool presorted = false>
-void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t phase_number) {
-    constexpr uint32_t value_offset_tiles = 0;
-    constexpr uint32_t index_offset_tiles = 2;
-    constexpr uint32_t decreasing = 0;
-    constexpr uint32_t increasing = 1;
+void run_top32_llk(std::uint32_t row_elements, std::uint32_t num_input_tiles, std::uint32_t phase_number) {
+    constexpr std::uint32_t value_offset_tiles = 0;
+    constexpr std::uint32_t index_offset_tiles = 2;
+    constexpr std::uint32_t decreasing = 0;
+    constexpr std::uint32_t increasing = 1;
 
     cb_wait_front(in_scores_cb, num_input_tiles);
     cb_wait_front(in_indices_cb, num_input_tiles);
@@ -542,7 +544,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
 
     tile_regs_acquire();
 
-    uint32_t num_faces = 4;
+    std::uint32_t num_faces = 4;
     reconfig_data_format_srca(in_scores_cb);
     UNPACK((llk_unpack_A_top32_rm_init(in_scores_cb)));
     UNPACK((llk_unpack_A_top32_rm(in_scores_cb, 0, num_faces)));
@@ -594,7 +596,7 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
         decreasing,
         true /*skip_second*/));
 
-    for (uint32_t i = 64; i < row_elements; i += 64) {
+    for (std::uint32_t i = 64; i < row_elements; i += 64) {
         if (i + 64 > row_elements) {
             num_faces = 2;
         } else {
@@ -703,13 +705,18 @@ void run_top32_llk(uint32_t row_elements, uint32_t num_input_tiles, uint32_t pha
     cb_push_back(out_indices_cb, 1);
 }
 
-template <uint32_t in_scores_cb, uint32_t in_indices_cb, uint32_t out_scores_cb, uint32_t out_indices_cb>
-void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_tiles, uint32_t phase_number) {
-    constexpr uint32_t value_offset_tiles = 0;
-    constexpr uint32_t index_offset_tiles = 2;
-    constexpr uint32_t decreasing = 0;
-    constexpr uint32_t increasing = 1;
-    constexpr uint32_t chunk_size = 1024;
+template <
+    std::uint32_t in_scores_cb,
+    std::uint32_t in_indices_cb,
+    std::uint32_t out_scores_cb,
+    std::uint32_t out_indices_cb>
+void run_top32_llk_presorted_1024_opt(
+    std::uint32_t row_elements, std::uint32_t num_input_tiles, std::uint32_t phase_number) {
+    constexpr std::uint32_t value_offset_tiles = 0;
+    constexpr std::uint32_t index_offset_tiles = 2;
+    constexpr std::uint32_t decreasing = 0;
+    constexpr std::uint32_t increasing = 1;
+    constexpr std::uint32_t chunk_size = 1024;
 
     // deepseek_compute_kernel_hw_startup<true>(
     //     in_scores_cb,
@@ -723,7 +730,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
     tile_regs_acquire();
 
-    const uint32_t num_chunks = row_elements / chunk_size;
+    const std::uint32_t num_chunks = row_elements / chunk_size;
 
     // Step 1: load first 1024 values/indices chunk with transpose.
     reconfig_data_format_srca(in_scores_cb);
@@ -746,7 +753,7 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         value_offset_tiles));
 
     // Steps 3-5: ingest remaining full 1024 chunks and combine.
-    for (uint32_t i = 1; i < num_chunks; ++i) {
+    for (std::uint32_t i = 1; i < num_chunks; ++i) {
         reconfig_data_format_srca(in_scores_cb);
         transpose_init(in_scores_cb);
         transpose_tile(in_scores_cb, i, value_offset_tiles + 1);
@@ -784,8 +791,8 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
         value_offset_tiles));
 
     // Steps 7-9: handle trailing (<1024) values in 64-element chunks.
-    uint32_t num_faces = 4;
-    for (uint32_t i = num_chunks * chunk_size; i < row_elements; i += 64) {
+    std::uint32_t num_faces = 4;
+    for (std::uint32_t i = num_chunks * chunk_size; i < row_elements; i += 64) {
         num_faces = (i + 64 > row_elements) ? 2 : 4;
 
         reconfig_data_format_srca(in_scores_cb);
@@ -879,169 +886,170 @@ void run_top32_llk_presorted_1024_opt(uint32_t row_elements, uint32_t num_input_
 
 #endif  // COMPILE_FOR_TRISC
 
-constexpr uint32_t MIN_TOPK_ALIGNMENT = 32;
+constexpr std::uint32_t MIN_TOPK_ALIGNMENT = 32;
 
 namespace deepseek_b1_ops {
 
 struct TopKSampling {
     template <
-        uint32_t NumValues,
-        uint32_t TopK,
-        uint32_t WinnerPageBytes,
-        uint32_t NumSenders,
-        uint32_t ExpectedRemoteIncs,
-        uint32_t ReceiverSemaphoreAddr,
-        uint32_t LocalReadySemaphoreAddr,
-        uint32_t MeshMode,
-        uint32_t Stage1Sender,
-        uint32_t Stage1Receiver,
-        uint32_t Stage2Sender,
-        uint32_t Stage2Receiver,
-        uint32_t Stage1SlotBaseOffset,
-        uint32_t Stage1NumSlots,
-        uint32_t Stage1ExpectedRemoteIncs,
-        uint32_t Stage1LocalSlotOffset,
-        uint32_t Stage2SlotBaseOffset,
-        uint32_t Stage2NumSlots,
-        uint32_t Stage2ExpectedRemoteIncs,
-        uint32_t Stage2LocalSlotOffset,
-        uint32_t MeshLocalSendSlotOffset,
-        uint32_t SenderIdx,
-        uint32_t SocketMode = 0,
-        uint32_t SocketCBId = 0xFFFFFFFF,
-        uint32_t SocketPageSizeBytes = 0,
-        uint32_t ScoresCBId = 0xFFFFFFFF,
-        uint32_t ScoresNumPages = 0,
-        uint32_t WinnerCBId = 0xFFFFFFFF,
-        uint32_t SoftmaxInCBId = 0xFFFFFFFF,
-        uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
-        uint32_t SoftmaxExpCBId = 0xFFFFFFFF,
-        uint32_t ScalerCBId = 0xFFFFFFFF,
-        uint32_t TempCBId = 0xFFFFFFFF,
-        uint32_t InvTempBF16 = 1,
-        uint32_t TopKInScoresCBId = 0xFFFFFFFF,
-        uint32_t TopKInIndicesCBId = 0xFFFFFFFF,
-        uint32_t TopKOutScoresCBId = 0xFFFFFFFF,
-        uint32_t TopKOutIndicesCBId = 0xFFFFFFFF,
-        uint32_t Phase2ScoresByteOffset = 0,
-        uint32_t Phase2IndicesByteOffset = 0,
-        uint32_t MeshStageScoresCBId = 0xFFFFFFFF,
-        uint32_t MeshStageIndicesCBId = 0xFFFFFFFF,
-        uint32_t ScoresScratchStage2Offset = 0,
-        uint32_t IndicesScratchStage2Offset = 0,
-        uint32_t ScoresScratchAddr = 0,
-        uint32_t IndicesScratchAddr = 0>
+        std::uint32_t NumValues,
+        std::uint32_t TopK,
+        std::uint32_t WinnerPageBytes,
+        std::uint32_t NumSenders,
+        std::uint32_t ExpectedRemoteIncs,
+        std::uint32_t ReceiverSemaphoreAddr,
+        std::uint32_t LocalReadySemaphoreAddr,
+        std::uint32_t MeshMode,
+        std::uint32_t Stage1Sender,
+        std::uint32_t Stage1Receiver,
+        std::uint32_t Stage2Sender,
+        std::uint32_t Stage2Receiver,
+        std::uint32_t Stage1SlotBaseOffset,
+        std::uint32_t Stage1NumSlots,
+        std::uint32_t Stage1ExpectedRemoteIncs,
+        std::uint32_t Stage1LocalSlotOffset,
+        std::uint32_t Stage2SlotBaseOffset,
+        std::uint32_t Stage2NumSlots,
+        std::uint32_t Stage2ExpectedRemoteIncs,
+        std::uint32_t Stage2LocalSlotOffset,
+        std::uint32_t MeshLocalSendSlotOffset,
+        std::uint32_t SenderIdx,
+        std::uint32_t SocketMode = 0,
+        std::uint32_t SocketCBId = 0xFFFFFFFF,
+        std::uint32_t SocketPageSizeBytes = 0,
+        std::uint32_t ScoresCBId = 0xFFFFFFFF,
+        std::uint32_t ScoresNumPages = 0,
+        std::uint32_t WinnerCBId = 0xFFFFFFFF,
+        std::uint32_t SoftmaxInCBId = 0xFFFFFFFF,
+        std::uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
+        std::uint32_t SoftmaxExpCBId = 0xFFFFFFFF,
+        std::uint32_t ScalerCBId = 0xFFFFFFFF,
+        std::uint32_t TempCBId = 0xFFFFFFFF,
+        std::uint32_t InvTempBF16 = 1,
+        std::uint32_t TopKInScoresCBId = 0xFFFFFFFF,
+        std::uint32_t TopKInIndicesCBId = 0xFFFFFFFF,
+        std::uint32_t TopKOutScoresCBId = 0xFFFFFFFF,
+        std::uint32_t TopKOutIndicesCBId = 0xFFFFFFFF,
+        std::uint32_t Phase2ScoresByteOffset = 0,
+        std::uint32_t Phase2IndicesByteOffset = 0,
+        std::uint32_t MeshStageScoresCBId = 0xFFFFFFFF,
+        std::uint32_t MeshStageIndicesCBId = 0xFFFFFFFF,
+        std::uint32_t ScoresScratchStage2Offset = 0,
+        std::uint32_t IndicesScratchStage2Offset = 0,
+        std::uint32_t ScoresScratchAddr = 0,
+        std::uint32_t IndicesScratchAddr = 0>
     struct ReaderCTArgs {
-        static constexpr uint32_t num_values = NumValues;
-        static constexpr uint32_t topk_k = TopK;
-        static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
-        static constexpr uint32_t num_senders = NumSenders;
-        static constexpr uint32_t expected_remote_incs = ExpectedRemoteIncs;
-        static constexpr uint32_t receiver_semaphore_addr = ReceiverSemaphoreAddr;
-        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
+        static constexpr std::uint32_t num_values = NumValues;
+        static constexpr std::uint32_t topk_k = TopK;
+        static constexpr std::uint32_t winner_page_bytes = WinnerPageBytes;
+        static constexpr std::uint32_t num_senders = NumSenders;
+        static constexpr std::uint32_t expected_remote_incs = ExpectedRemoteIncs;
+        static constexpr std::uint32_t receiver_semaphore_addr = ReceiverSemaphoreAddr;
+        static constexpr std::uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage1_sender = Stage1Sender == 1;
         static constexpr bool stage1_receiver = Stage1Receiver == 1;
         static constexpr bool stage2_sender = Stage2Sender == 1;
         static constexpr bool stage2_receiver = Stage2Receiver == 1;
-        static constexpr uint32_t stage1_slot_base_offset = Stage1SlotBaseOffset;
-        static constexpr uint32_t stage1_num_slots = Stage1NumSlots;
-        static constexpr uint32_t stage1_expected_remote_incs = Stage1ExpectedRemoteIncs;
-        static constexpr uint32_t stage1_local_slot_idx = Stage1LocalSlotOffset;
-        static constexpr uint32_t stage2_slot_base_offset = Stage2SlotBaseOffset;
-        static constexpr uint32_t stage2_num_slots = Stage2NumSlots;
-        static constexpr uint32_t stage2_expected_remote_incs = Stage2ExpectedRemoteIncs;
-        static constexpr uint32_t stage2_local_slot_idx = Stage2LocalSlotOffset;
-        static constexpr uint32_t mesh_local_send_slot_offset = MeshLocalSendSlotOffset;
-        static constexpr uint32_t sender_idx = SenderIdx;
-        static constexpr uint32_t socket_mode = SocketMode;
-        static constexpr uint32_t socket_cb_id = SocketCBId;
-        static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
-        static constexpr uint32_t scores_cb_id = ScoresCBId;
-        static constexpr uint32_t scores_num_pages = ScoresNumPages;
-        static constexpr uint32_t winner_cb_id = WinnerCBId;
-        static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
-        static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
-        static constexpr uint32_t softmax_exp_cb = SoftmaxExpCBId;
-        static constexpr uint32_t scaler_cb = ScalerCBId;
-        static constexpr uint32_t temp_cb = TempCBId;
-        static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
-        static constexpr uint32_t topk_in_scores_cb = TopKInScoresCBId;
-        static constexpr uint32_t topk_in_indices_cb = TopKInIndicesCBId;
-        static constexpr uint32_t topk_out_scores_cb = TopKOutScoresCBId;
-        static constexpr uint32_t topk_out_indices_cb = TopKOutIndicesCBId;
-        static constexpr uint32_t phase1_num_input_tiles = (NumValues + 1023) / 1024;
-        static constexpr uint32_t phase2_scores_byte_offset = Phase2ScoresByteOffset;
-        static constexpr uint32_t phase2_indices_byte_offset = Phase2IndicesByteOffset;
-        static constexpr uint32_t phase2_num_input_tiles = TopK <= MIN_TOPK_ALIGNMENT
-                                                               ? (NumSenders * MIN_TOPK_ALIGNMENT + 1023) / 1024
-                                                               : (NumSenders * TopK + 1023) / 1024;
-        static constexpr uint32_t topk_effective_k = TopK <= MIN_TOPK_ALIGNMENT ? MIN_TOPK_ALIGNMENT : TopK;
-        static constexpr uint32_t topk_scores_slot_bytes = (topk_effective_k * sizeof(uint16_t) + 31u) & ~31u;
-        static constexpr uint32_t topk_indices_slot_bytes = (topk_effective_k * sizeof(uint32_t) + 31u) & ~31u;
-        static constexpr uint32_t mesh_stage_scores_cb = MeshStageScoresCBId;
-        static constexpr uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
-        static constexpr uint32_t scores_scratch_stage2_offset = ScoresScratchStage2Offset;
-        static constexpr uint32_t indices_scratch_stage2_offset = IndicesScratchStage2Offset;
-        static constexpr uint32_t scores_scratch_addr = ScoresScratchAddr;
-        static constexpr uint32_t indices_scratch_addr = IndicesScratchAddr;
+        static constexpr std::uint32_t stage1_slot_base_offset = Stage1SlotBaseOffset;
+        static constexpr std::uint32_t stage1_num_slots = Stage1NumSlots;
+        static constexpr std::uint32_t stage1_expected_remote_incs = Stage1ExpectedRemoteIncs;
+        static constexpr std::uint32_t stage1_local_slot_idx = Stage1LocalSlotOffset;
+        static constexpr std::uint32_t stage2_slot_base_offset = Stage2SlotBaseOffset;
+        static constexpr std::uint32_t stage2_num_slots = Stage2NumSlots;
+        static constexpr std::uint32_t stage2_expected_remote_incs = Stage2ExpectedRemoteIncs;
+        static constexpr std::uint32_t stage2_local_slot_idx = Stage2LocalSlotOffset;
+        static constexpr std::uint32_t mesh_local_send_slot_offset = MeshLocalSendSlotOffset;
+        static constexpr std::uint32_t sender_idx = SenderIdx;
+        static constexpr std::uint32_t socket_mode = SocketMode;
+        static constexpr std::uint32_t socket_cb_id = SocketCBId;
+        static constexpr std::uint32_t socket_page_size_bytes = SocketPageSizeBytes;
+        static constexpr std::uint32_t scores_cb_id = ScoresCBId;
+        static constexpr std::uint32_t scores_num_pages = ScoresNumPages;
+        static constexpr std::uint32_t winner_cb_id = WinnerCBId;
+        static constexpr std::uint32_t softmax_in_cb = SoftmaxInCBId;
+        static constexpr std::uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr std::uint32_t softmax_exp_cb = SoftmaxExpCBId;
+        static constexpr std::uint32_t scaler_cb = ScalerCBId;
+        static constexpr std::uint32_t temp_cb = TempCBId;
+        static constexpr std::uint32_t inv_temp_bf16 = InvTempBF16;
+        static constexpr std::uint32_t topk_in_scores_cb = TopKInScoresCBId;
+        static constexpr std::uint32_t topk_in_indices_cb = TopKInIndicesCBId;
+        static constexpr std::uint32_t topk_out_scores_cb = TopKOutScoresCBId;
+        static constexpr std::uint32_t topk_out_indices_cb = TopKOutIndicesCBId;
+        static constexpr std::uint32_t phase1_num_input_tiles = (NumValues + 1023) / 1024;
+        static constexpr std::uint32_t phase2_scores_byte_offset = Phase2ScoresByteOffset;
+        static constexpr std::uint32_t phase2_indices_byte_offset = Phase2IndicesByteOffset;
+        static constexpr std::uint32_t phase2_num_input_tiles = TopK <= MIN_TOPK_ALIGNMENT
+                                                                    ? (NumSenders * MIN_TOPK_ALIGNMENT + 1023) / 1024
+                                                                    : (NumSenders * TopK + 1023) / 1024;
+        static constexpr std::uint32_t topk_effective_k = TopK <= MIN_TOPK_ALIGNMENT ? MIN_TOPK_ALIGNMENT : TopK;
+        static constexpr std::uint32_t topk_scores_slot_bytes = (topk_effective_k * sizeof(std::uint16_t) + 31u) & ~31u;
+        static constexpr std::uint32_t topk_indices_slot_bytes =
+            (topk_effective_k * sizeof(std::uint32_t) + 31u) & ~31u;
+        static constexpr std::uint32_t mesh_stage_scores_cb = MeshStageScoresCBId;
+        static constexpr std::uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
+        static constexpr std::uint32_t scores_scratch_stage2_offset = ScoresScratchStage2Offset;
+        static constexpr std::uint32_t indices_scratch_stage2_offset = IndicesScratchStage2Offset;
+        static constexpr std::uint32_t scores_scratch_addr = ScoresScratchAddr;
+        static constexpr std::uint32_t indices_scratch_addr = IndicesScratchAddr;
     };
 
     template <
-        uint32_t WinnerPageBytes,
-        uint32_t LocalReadySemaphoreAddr,
-        uint32_t SocketMode = 0,
-        uint32_t SocketCBId = 0,
-        uint32_t SocketPageSizeBytes = 0,
-        uint32_t TopK = 32,
-        uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
-        uint32_t RandCBId = 0xFFFFFFFF,
-        uint32_t WinnerCBId = 0xFFFFFFFF,
-        uint32_t PBF16 = 0,
-        uint32_t TopKScoresSlotBytes = 0,
-        uint32_t MeshMode = 0,
-        uint32_t Stage2Receiver = 0,
-        uint32_t OutputAddr = 0,
-        uint32_t RandOutputAddr = 0,
-        uint32_t InvTempBF16 = 0,
-        uint32_t SoftmaxInCBId = 0xFFFFFFF,
-        uint32_t TempCBId = 0xFFFFFFFF,
-        uint32_t DeferSocketOutput = 0,
-        uint32_t EnableMetadata = 0,
-        uint32_t CopyProbabilities = 0,
-        uint32_t MetadataOutputL1Addr = 0,
-        uint32_t CopyProbabilitiesToQ = 0,
-        uint32_t PBcastCBId = 0xFFFFFFFF,
-        uint32_t RandBcastCBId = 0xFFFFFFFF,
-        uint32_t ProbsOutCBId = 0xFFFFFFFF,
-        uint32_t MaskCBId = 0xFFFFFFFF,
-        uint32_t MaskAliasesScaler = 0>
+        std::uint32_t WinnerPageBytes,
+        std::uint32_t LocalReadySemaphoreAddr,
+        std::uint32_t SocketMode = 0,
+        std::uint32_t SocketCBId = 0,
+        std::uint32_t SocketPageSizeBytes = 0,
+        std::uint32_t TopK = 32,
+        std::uint32_t SoftmaxOutCBId = 0xFFFFFFFF,
+        std::uint32_t RandCBId = 0xFFFFFFFF,
+        std::uint32_t WinnerCBId = 0xFFFFFFFF,
+        std::uint32_t PBF16 = 0,
+        std::uint32_t TopKScoresSlotBytes = 0,
+        std::uint32_t MeshMode = 0,
+        std::uint32_t Stage2Receiver = 0,
+        std::uint32_t OutputAddr = 0,
+        std::uint32_t RandOutputAddr = 0,
+        std::uint32_t InvTempBF16 = 0,
+        std::uint32_t SoftmaxInCBId = 0xFFFFFFF,
+        std::uint32_t TempCBId = 0xFFFFFFFF,
+        std::uint32_t DeferSocketOutput = 0,
+        std::uint32_t EnableMetadata = 0,
+        std::uint32_t CopyProbabilities = 0,
+        std::uint32_t MetadataOutputL1Addr = 0,
+        std::uint32_t CopyProbabilitiesToQ = 0,
+        std::uint32_t PBcastCBId = 0xFFFFFFFF,
+        std::uint32_t RandBcastCBId = 0xFFFFFFFF,
+        std::uint32_t ProbsOutCBId = 0xFFFFFFFF,
+        std::uint32_t MaskCBId = 0xFFFFFFFF,
+        std::uint32_t MaskAliasesScaler = 0>
     struct WriterCTArgs {
-        static constexpr uint32_t winner_page_bytes = WinnerPageBytes;
-        static constexpr uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
-        static constexpr uint32_t socket_mode = SocketMode;
-        static constexpr uint32_t socket_cb_id = SocketCBId;
-        static constexpr uint32_t socket_page_size_bytes = SocketPageSizeBytes;
-        static constexpr uint32_t topk_k = TopK;
-        static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
-        static constexpr uint32_t rand_cb = RandCBId;
-        static constexpr uint32_t winner_cb_id = WinnerCBId;
+        static constexpr std::uint32_t winner_page_bytes = WinnerPageBytes;
+        static constexpr std::uint32_t local_ready_semaphore_addr = LocalReadySemaphoreAddr;
+        static constexpr std::uint32_t socket_mode = SocketMode;
+        static constexpr std::uint32_t socket_cb_id = SocketCBId;
+        static constexpr std::uint32_t socket_page_size_bytes = SocketPageSizeBytes;
+        static constexpr std::uint32_t topk_k = TopK;
+        static constexpr std::uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr std::uint32_t rand_cb = RandCBId;
+        static constexpr std::uint32_t winner_cb_id = WinnerCBId;
         static constexpr float p = __builtin_bit_cast(float, PBF16);
-        static constexpr uint32_t topk_scores_slot_bytes = TopKScoresSlotBytes;
+        static constexpr std::uint32_t topk_scores_slot_bytes = TopKScoresSlotBytes;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage2_receiver = Stage2Receiver == 1;
-        static constexpr uint32_t output_addr = OutputAddr;
-        static constexpr uint32_t rand_output_addr = RandOutputAddr;
-        static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
+        static constexpr std::uint32_t output_addr = OutputAddr;
+        static constexpr std::uint32_t rand_output_addr = RandOutputAddr;
+        static constexpr std::uint32_t softmax_in_cb = SoftmaxInCBId;
         static constexpr bool defer_socket_output = DeferSocketOutput == 1;
         static constexpr bool enable_metadata = EnableMetadata == 1;
         static constexpr bool copy_probabilities = CopyProbabilities == 1;
         static constexpr bool copy_probabilities_to_q = CopyProbabilitiesToQ == 1;
-        static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
-        static constexpr uint32_t p_bcast_cb = PBcastCBId;
-        static constexpr uint32_t rand_bcast_cb = RandBcastCBId;
-        static constexpr uint32_t probs_out_cb = ProbsOutCBId;
-        static constexpr uint32_t mask_cb = MaskCBId;
+        static constexpr std::uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
+        static constexpr std::uint32_t p_bcast_cb = PBcastCBId;
+        static constexpr std::uint32_t rand_bcast_cb = RandBcastCBId;
+        static constexpr std::uint32_t probs_out_cb = ProbsOutCBId;
+        static constexpr std::uint32_t mask_cb = MaskCBId;
         static constexpr bool mask_aliases_scaler = MaskAliasesScaler == 1;
         static_assert(
             !CopyProbabilities || EnableMetadata,
@@ -1052,98 +1060,98 @@ struct TopKSampling {
     };
 
     template <
-        uint32_t SoftmaxInCBId,
-        uint32_t SoftmaxOutCBId,
-        uint32_t SoftmaxExpCBId,
-        uint32_t SoftmaxSubCBId,
-        uint32_t MaxCBId,
-        uint32_t SumCBId,
-        uint32_t ScalerCBId,
-        uint32_t ProbsOutCBId,
-        uint32_t RandCBId = 0xFFFFFFFF,
-        uint32_t Seed = 520,
-        uint32_t TopK = 32,
-        uint32_t MeshMode = 0,
-        uint32_t Stage1Receiver = 0,
-        uint32_t Stage2Receiver = 0,
-        uint32_t NumValues = 0,
-        uint32_t NumSenders = 0,
-        uint32_t TopKInScoresCBId = 0xFFFFFFFF,
-        uint32_t TopKInIndicesCBId = 0xFFFFFFFF,
-        uint32_t TopKOutScoresCBId = 0xFFFFFFFF,
-        uint32_t TopKOutIndicesCBId = 0xFFFFFFFF,
-        uint32_t MeshStageScoresCBId = 0xFFFFFFFF,
-        uint32_t MeshStageIndicesCBId = 0xFFFFFFFF,
-        uint32_t Stage1RowElements = 0,
-        uint32_t Stage1NumInputTiles = 0,
-        uint32_t Stage2RowElements = 0,
-        uint32_t Stage2NumInputTiles = 0,
-        uint32_t MaskCBId = 0xFFFFFFFF,
-        uint32_t MaskAliasesScaler = 0,
-        uint32_t EnableMetadata = 0,
-        uint32_t MetadataOutputL1Addr = 0,
-        uint32_t InvTempBF16 = 0>
+        std::uint32_t SoftmaxInCBId,
+        std::uint32_t SoftmaxOutCBId,
+        std::uint32_t SoftmaxExpCBId,
+        std::uint32_t SoftmaxSubCBId,
+        std::uint32_t MaxCBId,
+        std::uint32_t SumCBId,
+        std::uint32_t ScalerCBId,
+        std::uint32_t ProbsOutCBId,
+        std::uint32_t RandCBId = 0xFFFFFFFF,
+        std::uint32_t Seed = 520,
+        std::uint32_t TopK = 32,
+        std::uint32_t MeshMode = 0,
+        std::uint32_t Stage1Receiver = 0,
+        std::uint32_t Stage2Receiver = 0,
+        std::uint32_t NumValues = 0,
+        std::uint32_t NumSenders = 0,
+        std::uint32_t TopKInScoresCBId = 0xFFFFFFFF,
+        std::uint32_t TopKInIndicesCBId = 0xFFFFFFFF,
+        std::uint32_t TopKOutScoresCBId = 0xFFFFFFFF,
+        std::uint32_t TopKOutIndicesCBId = 0xFFFFFFFF,
+        std::uint32_t MeshStageScoresCBId = 0xFFFFFFFF,
+        std::uint32_t MeshStageIndicesCBId = 0xFFFFFFFF,
+        std::uint32_t Stage1RowElements = 0,
+        std::uint32_t Stage1NumInputTiles = 0,
+        std::uint32_t Stage2RowElements = 0,
+        std::uint32_t Stage2NumInputTiles = 0,
+        std::uint32_t MaskCBId = 0xFFFFFFFF,
+        std::uint32_t MaskAliasesScaler = 0,
+        std::uint32_t EnableMetadata = 0,
+        std::uint32_t MetadataOutputL1Addr = 0,
+        std::uint32_t InvTempBF16 = 0>
     struct ComputeCTArgs {
-        static constexpr uint32_t softmax_in_cb = SoftmaxInCBId;
-        static constexpr uint32_t softmax_out_cb = SoftmaxOutCBId;
-        static constexpr uint32_t softmax_exp_cb = SoftmaxExpCBId;
-        static constexpr uint32_t softmax_sub_cb = SoftmaxSubCBId;
-        static constexpr uint32_t max_cb = MaxCBId;
-        static constexpr uint32_t sum_cb = SumCBId;
-        static constexpr uint32_t p_bcast_cb = SoftmaxSubCBId;
-        static constexpr uint32_t rand_bcast_cb = SumCBId;
-        static constexpr uint32_t scaler_cb = ScalerCBId;
-        static constexpr uint32_t probs_out_cb = ProbsOutCBId;
-        static constexpr uint32_t rand_cb = RandCBId;
-        static constexpr uint32_t seed = Seed;
-        static constexpr uint32_t topk_k = TopK;
+        static constexpr std::uint32_t softmax_in_cb = SoftmaxInCBId;
+        static constexpr std::uint32_t softmax_out_cb = SoftmaxOutCBId;
+        static constexpr std::uint32_t softmax_exp_cb = SoftmaxExpCBId;
+        static constexpr std::uint32_t softmax_sub_cb = SoftmaxSubCBId;
+        static constexpr std::uint32_t max_cb = MaxCBId;
+        static constexpr std::uint32_t sum_cb = SumCBId;
+        static constexpr std::uint32_t p_bcast_cb = SoftmaxSubCBId;
+        static constexpr std::uint32_t rand_bcast_cb = SumCBId;
+        static constexpr std::uint32_t scaler_cb = ScalerCBId;
+        static constexpr std::uint32_t probs_out_cb = ProbsOutCBId;
+        static constexpr std::uint32_t rand_cb = RandCBId;
+        static constexpr std::uint32_t seed = Seed;
+        static constexpr std::uint32_t topk_k = TopK;
         static constexpr bool mesh_mode = MeshMode == 1;
         static constexpr bool stage1_receiver = Stage1Receiver == 1;
         static constexpr bool stage2_receiver = Stage2Receiver == 1;
-        static constexpr uint32_t num_values = NumValues;
-        static constexpr uint32_t num_senders = NumSenders;
-        static constexpr uint32_t phase2_row_elements =
+        static constexpr std::uint32_t num_values = NumValues;
+        static constexpr std::uint32_t num_senders = NumSenders;
+        static constexpr std::uint32_t phase2_row_elements =
             NumSenders * (TopK <= MIN_TOPK_ALIGNMENT ? MIN_TOPK_ALIGNMENT : TopK);
-        static constexpr uint32_t phase2_num_input_tiles = (phase2_row_elements + 1023) / 1024;
-        static constexpr uint32_t topk_in_scores_cb = TopKInScoresCBId;
-        static constexpr uint32_t topk_in_indices_cb = TopKInIndicesCBId;
-        static constexpr uint32_t topk_out_scores_cb = TopKOutScoresCBId;
-        static constexpr uint32_t topk_out_indices_cb = TopKOutIndicesCBId;
-        static constexpr uint32_t phase1_num_input_tiles = (NumValues + 1023) / 1024;
-        static constexpr uint32_t mesh_stage_scores_cb = MeshStageScoresCBId;
-        static constexpr uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
-        static constexpr uint32_t stage1_row_elements = Stage1RowElements;
-        static constexpr uint32_t stage1_num_input_tiles = Stage1NumInputTiles;
-        static constexpr uint32_t stage2_row_elements = Stage2RowElements;
-        static constexpr uint32_t stage2_num_input_tiles = Stage2NumInputTiles;
-        static constexpr uint32_t mask_cb = MaskCBId;
+        static constexpr std::uint32_t phase2_num_input_tiles = (phase2_row_elements + 1023) / 1024;
+        static constexpr std::uint32_t topk_in_scores_cb = TopKInScoresCBId;
+        static constexpr std::uint32_t topk_in_indices_cb = TopKInIndicesCBId;
+        static constexpr std::uint32_t topk_out_scores_cb = TopKOutScoresCBId;
+        static constexpr std::uint32_t topk_out_indices_cb = TopKOutIndicesCBId;
+        static constexpr std::uint32_t phase1_num_input_tiles = (NumValues + 1023) / 1024;
+        static constexpr std::uint32_t mesh_stage_scores_cb = MeshStageScoresCBId;
+        static constexpr std::uint32_t mesh_stage_indices_cb = MeshStageIndicesCBId;
+        static constexpr std::uint32_t stage1_row_elements = Stage1RowElements;
+        static constexpr std::uint32_t stage1_num_input_tiles = Stage1NumInputTiles;
+        static constexpr std::uint32_t stage2_row_elements = Stage2RowElements;
+        static constexpr std::uint32_t stage2_num_input_tiles = Stage2NumInputTiles;
+        static constexpr std::uint32_t mask_cb = MaskCBId;
         static constexpr bool mask_aliases_scaler = MaskAliasesScaler == 1;
         static constexpr bool enable_metadata = EnableMetadata == 1;
-        static constexpr uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
-        static constexpr uint32_t inv_temp_bf16 = InvTempBF16;
+        static constexpr std::uint32_t metadata_output_l1_addr = MetadataOutputL1Addr;
+        static constexpr std::uint32_t inv_temp_bf16 = InvTempBF16;
     };
 
     struct ReaderArgs {
-        uint32_t scores_addr;
-        uint32_t indices_addr;
-        uint32_t output_addr;
-        uint32_t final_noc_x;
-        uint32_t final_noc_y;
-        uint32_t global_sem_addr;
-        uint32_t global_stage2_sem_addr;
+        std::uint32_t scores_addr;
+        std::uint32_t indices_addr;
+        std::uint32_t output_addr;
+        std::uint32_t final_noc_x;
+        std::uint32_t final_noc_y;
+        std::uint32_t global_sem_addr;
+        std::uint32_t global_stage2_sem_addr;
     };
 
     struct WriterArgs {
-        uint32_t final_noc_x;
-        uint32_t final_noc_y;
-        uint32_t socket_config_addr = 0;
+        std::uint32_t final_noc_x;
+        std::uint32_t final_noc_y;
+        std::uint32_t socket_config_addr = 0;
         // Optional persistent-mode next-iteration signal routing (BRISC path).
-        uint32_t persistent_enable = 0;
-        uint32_t persistent_dst_noc_x = 0;
-        uint32_t persistent_dst_noc_y = 0;
-        uint32_t persistent_dst_mesh_id = 0;
-        uint32_t persistent_dst_chip_id = 0;
-        uint32_t persistent_dst_sem_addr = 0;
+        std::uint32_t persistent_enable = 0;
+        std::uint32_t persistent_dst_noc_x = 0;
+        std::uint32_t persistent_dst_noc_y = 0;
+        std::uint32_t persistent_dst_mesh_id = 0;
+        std::uint32_t persistent_dst_chip_id = 0;
+        std::uint32_t persistent_dst_sem_addr = 0;
     };
 
     struct ComputeArgs {};
@@ -1152,11 +1160,11 @@ struct TopKSampling {
 
 #if defined(COMPILE_FOR_BRISC)
     struct BriscMeshSendMetadata {
-        uint32_t dst_mesh_id;
-        uint32_t dst_chip_id;
-        uint32_t dst_scores_addr;
-        uint32_t dst_indices_addr;
-        uint32_t dst_sem_addr;
+        std::uint32_t dst_mesh_id;
+        std::uint32_t dst_chip_id;
+        std::uint32_t dst_scores_addr;
+        std::uint32_t dst_indices_addr;
+        std::uint32_t dst_sem_addr;
     };
 
 #endif
@@ -1167,7 +1175,7 @@ struct TopKSampling {
         size_t persistent_fabric_arg_idx = 0;
         void operator()(const RTArgs& args) { impl(args); }
 
-        void set_seed(uint32_t seed = 0xFFFFFFFF) {
+        void set_seed(std::uint32_t seed = 0xFFFFFFFF) {
 #if defined(COMPILE_FOR_TRISC)
             if (seed != 0xFFFFFFFF) {
                 rand_tile_init(seed);
@@ -1180,13 +1188,13 @@ struct TopKSampling {
             if (args.persistent_enable == 0) {
                 return;
             }
-            constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+            constexpr std::uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
             set_unicast_route(
                 packet_header,
-                static_cast<uint16_t>(args.persistent_dst_chip_id),
-                static_cast<uint16_t>(args.persistent_dst_mesh_id),
+                static_cast<std::uint16_t>(args.persistent_dst_chip_id),
+                static_cast<std::uint16_t>(args.persistent_dst_mesh_id),
                 1);
             packet_header->to_noc_unicast_atomic_inc(tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
                 get_noc_addr(args.persistent_dst_noc_x, args.persistent_dst_noc_y, args.persistent_dst_sem_addr), 1});
@@ -1196,30 +1204,30 @@ struct TopKSampling {
             fabric_sender.open();
             fabric_sender.wait_for_empty_write_slot();
             fabric_sender.send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
+                reinterpret_cast<std::uint32_t>(packet_header), packet_header_size_bytes);
             fabric_sender.close();
             noc_async_full_barrier();
         }
 
         FORCE_INLINE void send_d2h_token_from_cb_brisc(const WriterArgs& args) {
-            const uint32_t socket_config_addr = args.socket_config_addr;
+            const std::uint32_t socket_config_addr = args.socket_config_addr;
             SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
-            const uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
-            const uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
+            const std::uint32_t write_addr_hi = sender_socket.d2h.data_addr_hi;
+            const std::uint32_t pcie_xy_enc = sender_socket.d2h.pcie_xy_enc;
 
             socket_reserve_pages(sender_socket, 1);
             cb_wait_front(CTArgs::socket_cb_id, 1);
-            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
+            const std::uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
 
             noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
                 read_addr,
                 pcie_xy_enc,
-                ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
+                ((static_cast<std::uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
-                sizeof(uint32_t));
+                sizeof(std::uint32_t));
             noc_async_writes_flushed();
 
             cb_pop_front(CTArgs::socket_cb_id, 1);
@@ -1230,14 +1238,14 @@ struct TopKSampling {
         }
 
         FORCE_INLINE void send_d2d_token_from_cb_brisc(const WriterArgs& args) {
-            const uint32_t socket_config_addr = args.socket_config_addr;
+            const std::uint32_t socket_config_addr = args.socket_config_addr;
             SocketSenderInterface sender_socket = create_sender_socket_interface(socket_config_addr);
             set_sender_socket_page_size(sender_socket, CTArgs::socket_page_size_bytes);
 
             socket_reserve_pages(sender_socket, 1);
             cb_wait_front(CTArgs::socket_cb_id, 1);
-            const uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
-            for (uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
+            const std::uint32_t read_addr = get_read_ptr(CTArgs::socket_cb_id);
+            for (std::uint32_t i = 0; i < sender_socket.num_downstreams; i++) {
                 sender_downstream_encoding downstream_enc = get_downstream_encoding(sender_socket, i);
                 noc_async_write(
                     read_addr,
@@ -1267,7 +1275,10 @@ struct TopKSampling {
     private:
 #if defined(COMPILE_FOR_NCRISC)
         FORCE_INLINE bool is_better_candidate(
-            uint16_t candidate_score, uint32_t candidate_index, uint16_t best_score, uint32_t best_index) {
+            std::uint16_t candidate_score,
+            std::uint32_t candidate_index,
+            std::uint16_t best_score,
+            std::uint32_t best_index) {
             return bfloat16_greater(candidate_score, best_score) ||
                    ((candidate_score == best_score) && (candidate_index < best_index));
         }
@@ -1276,31 +1287,31 @@ struct TopKSampling {
         // in two separate output arrays.  After iterating over all num_values elements,
         // out_scores[0..K-1] and out_indices[0..K-1] contain the top-K in descending order.
         FORCE_INLINE void phase1_reduce_local_topk(
-            volatile tt_l1_ptr uint16_t* scores_ptr,
-            volatile tt_l1_ptr uint32_t* indices_ptr,
-            volatile tt_l1_ptr uint16_t* out_scores,
-            volatile tt_l1_ptr uint32_t* out_indices) {
-            constexpr uint32_t K = CTArgs::topk_k;
+            volatile tt_l1_ptr std::uint16_t* scores_ptr,
+            volatile tt_l1_ptr std::uint32_t* indices_ptr,
+            volatile tt_l1_ptr std::uint16_t* out_scores,
+            volatile tt_l1_ptr std::uint32_t* out_indices) {
+            constexpr std::uint32_t K = CTArgs::topk_k;
 
-            for (uint32_t j = 0; j < K; ++j) {
+            for (std::uint32_t j = 0; j < K; ++j) {
                 out_scores[j] = NEG_INF_BFLOAT16;
                 out_indices[j] = 0xFFFFFFFF;
             }
 
-            for (uint32_t i = 0; i < CTArgs::num_values; ++i) {
-                const uint16_t score = scores_ptr[i];
-                const uint32_t index = indices_ptr[i];
+            for (std::uint32_t i = 0; i < CTArgs::num_values; ++i) {
+                const std::uint16_t score = scores_ptr[i];
+                const std::uint32_t index = indices_ptr[i];
 
                 if (!is_better_candidate(score, index, out_scores[K - 1], out_indices[K - 1])) {
                     continue;
                 }
 
-                uint32_t pos = K - 1;
+                std::uint32_t pos = K - 1;
                 while (pos > 0 && is_better_candidate(score, index, out_scores[pos - 1], out_indices[pos - 1])) {
                     --pos;
                 }
 
-                for (uint32_t j = K - 1; j > pos; --j) {
+                for (std::uint32_t j = K - 1; j > pos; --j) {
                     out_scores[j] = out_scores[j - 1];
                     out_indices[j] = out_indices[j - 1];
                 }
@@ -1311,14 +1322,15 @@ struct TopKSampling {
         }
 
         FORCE_INLINE void phase1_send_topk_to_final(
-            uint32_t local_scores_addr,
-            uint32_t local_indices_addr,
-            uint32_t dst_scores_l1_addr,
-            uint32_t dst_indices_l1_addr,
-            uint32_t final_noc_x,
-            uint32_t final_noc_y) {
-            const uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
-            const uint64_t dst_sem_noc_addr = final_noc_base | static_cast<uint64_t>(CTArgs::receiver_semaphore_addr);
+            std::uint32_t local_scores_addr,
+            std::uint32_t local_indices_addr,
+            std::uint32_t dst_scores_l1_addr,
+            std::uint32_t dst_indices_l1_addr,
+            std::uint32_t final_noc_x,
+            std::uint32_t final_noc_y) {
+            const std::uint64_t final_noc_base = get_noc_addr(final_noc_x, final_noc_y, 0);
+            const std::uint64_t dst_sem_noc_addr =
+                final_noc_base | static_cast<std::uint64_t>(CTArgs::receiver_semaphore_addr);
             noc_async_write_one_packet<true, true>(
                 local_scores_addr, final_noc_base | dst_scores_l1_addr, CTArgs::topk_scores_slot_bytes);
             noc_async_write_one_packet<true, true>(
@@ -1328,7 +1340,8 @@ struct TopKSampling {
             noc_async_atomic_barrier();
         }
 
-        FORCE_INLINE void wait_and_reset_semaphore(volatile tt_l1_ptr uint32_t* sem_ptr, uint32_t expected_count) {
+        FORCE_INLINE void wait_and_reset_semaphore(
+            volatile tt_l1_ptr std::uint32_t* sem_ptr, std::uint32_t expected_count) {
             noc_semaphore_wait(sem_ptr, expected_count);
             noc_semaphore_set(sem_ptr, 0);
         }
@@ -1338,30 +1351,30 @@ struct TopKSampling {
         // we maintain one head pointer per core and greedily pick the best head
         // K times.  O(K * N) comparisons -- for K=32, N~100 that is ~3200.
         FORCE_INLINE void phase2_merge_global_topk(
-            uint32_t scores_base,
-            uint32_t indices_base,
-            volatile tt_l1_ptr uint16_t* global_scores,
-            volatile tt_l1_ptr uint32_t* global_indices) {
-            constexpr uint32_t K = CTArgs::topk_k;
-            constexpr uint32_t N = CTArgs::num_senders;
+            std::uint32_t scores_base,
+            std::uint32_t indices_base,
+            volatile tt_l1_ptr std::uint16_t* global_scores,
+            volatile tt_l1_ptr std::uint32_t* global_indices) {
+            constexpr std::uint32_t K = CTArgs::topk_k;
+            constexpr std::uint32_t N = CTArgs::num_senders;
 
-            uint8_t heads[N];
-            for (uint32_t c = 0; c < N; ++c) {
+            std::uint8_t heads[N];
+            for (std::uint32_t c = 0; c < N; ++c) {
                 heads[c] = 0;
             }
 
-            for (uint32_t out = 0; out < K; ++out) {
-                uint16_t best_score = NEG_INF_BFLOAT16;
-                uint32_t best_index = 0xFFFFFFFF;
-                uint32_t best_core = 0;
+            for (std::uint32_t out = 0; out < K; ++out) {
+                std::uint16_t best_score = NEG_INF_BFLOAT16;
+                std::uint32_t best_index = 0xFFFFFFFF;
+                std::uint32_t best_core = 0;
 
-                for (uint32_t c = 0; c < N; ++c) {
+                for (std::uint32_t c = 0; c < N; ++c) {
                     if (heads[c] >= K) {
                         continue;
                     }
-                    auto s = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    auto s = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(
                         scores_base + c * CTArgs::topk_scores_slot_bytes);
-                    auto idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    auto idx = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
                         indices_base + c * CTArgs::topk_indices_slot_bytes);
                     if (is_better_candidate(s[heads[c]], idx[heads[c]], best_score, best_index)) {
                         best_score = s[heads[c]];
@@ -1379,8 +1392,11 @@ struct TopKSampling {
         // Write top-K scores and indices to contiguous scratch regions.
         // Layout: [all scores contiguous] [all indices contiguous]
         FORCE_INLINE void write_topk_slot(
-            uint32_t scores_slot_addr, uint32_t indices_slot_addr, uint32_t scores_base, uint32_t indices_base) {
-            constexpr uint32_t K = CTArgs::topk_k;
+            std::uint32_t scores_slot_addr,
+            std::uint32_t indices_slot_addr,
+            std::uint32_t scores_base,
+            std::uint32_t indices_base) {
+            constexpr std::uint32_t K = CTArgs::topk_k;
             // auto dst_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_slot_addr);
             // auto dst_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_slot_addr);
             // for (uint32_t i = 0; i < K; ++i) {
@@ -1399,30 +1415,30 @@ struct TopKSampling {
         //   [scores_0 | scores_1 | ... | scores_N-1]
         //   [indices_0 | indices_1 | ... | indices_N-1]
         FORCE_INLINE void phase3_merge_mesh_stage_topk_slots(
-            uint32_t stage_scores_base,
-            uint32_t stage_indices_base,
-            uint32_t stage_num_slots,
-            volatile tt_l1_ptr uint16_t* out_scores,
-            volatile tt_l1_ptr uint32_t* out_indices) {
-            constexpr uint32_t K = CTArgs::topk_k;
+            std::uint32_t stage_scores_base,
+            std::uint32_t stage_indices_base,
+            std::uint32_t stage_num_slots,
+            volatile tt_l1_ptr std::uint16_t* out_scores,
+            volatile tt_l1_ptr std::uint32_t* out_indices) {
+            constexpr std::uint32_t K = CTArgs::topk_k;
 
-            uint8_t heads[16];  // max mesh dimension
-            for (uint32_t s = 0; s < stage_num_slots; ++s) {
+            std::uint8_t heads[16];  // max mesh dimension
+            for (std::uint32_t s = 0; s < stage_num_slots; ++s) {
                 heads[s] = 0;
             }
 
-            for (uint32_t out = 0; out < K; ++out) {
-                uint16_t best_score = NEG_INF_BFLOAT16;
-                uint32_t best_index = 0xFFFFFFFF;
-                uint32_t best_slot = 0;
+            for (std::uint32_t out = 0; out < K; ++out) {
+                std::uint16_t best_score = NEG_INF_BFLOAT16;
+                std::uint32_t best_index = 0xFFFFFFFF;
+                std::uint32_t best_slot = 0;
 
-                for (uint32_t s = 0; s < stage_num_slots; ++s) {
+                for (std::uint32_t s = 0; s < stage_num_slots; ++s) {
                     if (heads[s] >= K) {
                         continue;
                     }
-                    auto s_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    auto s_scores = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(
                         stage_scores_base + s * CTArgs::topk_scores_slot_bytes);
-                    auto s_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    auto s_indices = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
                         stage_indices_base + s * CTArgs::topk_indices_slot_bytes);
                     if (is_better_candidate(s_scores[heads[s]], s_indices[heads[s]], best_score, best_index)) {
                         best_score = s_scores[heads[s]];
@@ -1441,7 +1457,10 @@ struct TopKSampling {
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC)
         template <typename packet_header_t>
         FORCE_INLINE void set_unicast_route(
-            volatile tt_l1_ptr packet_header_t* header, uint16_t dst_dev_id, uint16_t dst_mesh_id, uint16_t num_hops) {
+            volatile tt_l1_ptr packet_header_t* header,
+            std::uint16_t dst_dev_id,
+            std::uint16_t dst_mesh_id,
+            std::uint16_t num_hops) {
             if constexpr (std::is_same_v<packet_header_t, tt::tt_fabric::HybridMeshPacketHeader>) {
                 fabric_set_unicast_route(header, dst_dev_id, dst_mesh_id);
             } else {
@@ -1449,9 +1468,9 @@ struct TopKSampling {
             }
         }
 
-        FORCE_INLINE void write_winner_slot(uint32_t slot_addr, uint16_t score, uint32_t index) {
-            auto slot_u16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(slot_addr);
-            auto slot_u32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slot_addr);
+        FORCE_INLINE void write_winner_slot(std::uint32_t slot_addr, std::uint16_t score, std::uint32_t index) {
+            auto slot_u16_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(slot_addr);
+            auto slot_u32_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(slot_addr);
             slot_u16_ptr[0] = score;
             slot_u32_ptr[1] = index;
         }
@@ -1460,36 +1479,36 @@ struct TopKSampling {
 #if defined(COMPILE_FOR_BRISC)
         FORCE_INLINE BriscMeshSendMetadata load_mesh_send_metadata(size_t& arg_idx) {
             BriscMeshSendMetadata metadata{};
-            metadata.dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
-            metadata.dst_chip_id = get_arg_val<uint32_t>(arg_idx++);
-            metadata.dst_scores_addr = get_arg_val<uint32_t>(arg_idx++);
-            metadata.dst_indices_addr = get_arg_val<uint32_t>(arg_idx++);
-            metadata.dst_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+            metadata.dst_mesh_id = get_arg_val<std::uint32_t>(arg_idx++);
+            metadata.dst_chip_id = get_arg_val<std::uint32_t>(arg_idx++);
+            metadata.dst_scores_addr = get_arg_val<std::uint32_t>(arg_idx++);
+            metadata.dst_indices_addr = get_arg_val<std::uint32_t>(arg_idx++);
+            metadata.dst_sem_addr = get_arg_val<std::uint32_t>(arg_idx++);
             return metadata;
         }
 
         // Send top-K [scores | indices] from winner CB via fused fabric scatter write
         // + atomic increment.  Chunk 0 → remote scores slot, chunk 1 → remote indices slot.
         FORCE_INLINE void send_mesh_topk_via_fabric_brisc(
-            uint32_t final_noc_x,
-            uint32_t final_noc_y,
-            uint32_t local_src_addr,
+            std::uint32_t final_noc_x,
+            std::uint32_t final_noc_y,
+            std::uint32_t local_src_addr,
             const BriscMeshSendMetadata& metadata,
             size_t& arg_idx) {
-            constexpr uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
+            constexpr std::uint32_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
             auto route_id = PacketHeaderPool::allocate_header_n(1);
             volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::header_table[route_id].first;
             set_unicast_route(
                 packet_header,
-                static_cast<uint16_t>(metadata.dst_chip_id),
-                static_cast<uint16_t>(metadata.dst_mesh_id),
+                static_cast<std::uint16_t>(metadata.dst_chip_id),
+                static_cast<std::uint16_t>(metadata.dst_mesh_id),
                 1);
             packet_header->to_noc_fused_unicast_scatter_write_atomic_inc(
                 tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader{
                     {get_noc_addr(final_noc_x, final_noc_y, metadata.dst_scores_addr),
                      get_noc_addr(final_noc_x, final_noc_y, metadata.dst_indices_addr)},
                     get_noc_addr(final_noc_x, final_noc_y, metadata.dst_sem_addr),
-                    {static_cast<uint16_t>(CTArgs::topk_scores_slot_bytes)},
+                    {static_cast<std::uint16_t>(CTArgs::topk_scores_slot_bytes)},
                     1,
                     true},
                 CTArgs::winner_page_bytes);
@@ -1500,7 +1519,7 @@ struct TopKSampling {
             fabric_sender.send_payload_without_header_non_blocking_from_address(
                 local_src_addr, CTArgs::winner_page_bytes);
             fabric_sender.send_payload_flush_blocking_from_address(
-                reinterpret_cast<uint32_t>(packet_header), packet_header_size_bytes);
+                reinterpret_cast<std::uint32_t>(packet_header), packet_header_size_bytes);
             fabric_sender.close();
             noc_async_full_barrier();
         }
@@ -1508,10 +1527,10 @@ struct TopKSampling {
 
         void impl(const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
-            const uint32_t scores_cb_base = get_write_ptr(CTArgs::topk_in_scores_cb);
-            const uint32_t indices_cb_base = get_write_ptr(CTArgs::topk_in_indices_cb);
+            const std::uint32_t scores_cb_base = get_write_ptr(CTArgs::topk_in_scores_cb);
+            const std::uint32_t indices_cb_base = get_write_ptr(CTArgs::topk_in_indices_cb);
 
-            uint32_t scores_addr = args.scores_addr;
+            std::uint32_t scores_addr = args.scores_addr;
             if constexpr (IsActiveCore && (CTArgs::scores_cb_id != 0xFFFFFFFF)) {
                 cb_wait_front(CTArgs::scores_cb_id, CTArgs::scores_num_pages);
                 scores_addr = get_read_ptr(CTArgs::scores_cb_id);
@@ -1520,13 +1539,13 @@ struct TopKSampling {
 
             // Phase 1: per-core local top-K and delivery to the final core.
             if constexpr (IsActiveCore) {
-                const uint32_t dst_scores_l1 = scores_cb_base + CTArgs::phase2_scores_byte_offset +
-                                               CTArgs::sender_idx * CTArgs::topk_scores_slot_bytes;
-                const uint32_t dst_indices_l1 = indices_cb_base + CTArgs::phase2_indices_byte_offset +
-                                                CTArgs::sender_idx * CTArgs::topk_indices_slot_bytes;
+                const std::uint32_t dst_scores_l1 = scores_cb_base + CTArgs::phase2_scores_byte_offset +
+                                                    CTArgs::sender_idx * CTArgs::topk_scores_slot_bytes;
+                const std::uint32_t dst_indices_l1 = indices_cb_base + CTArgs::phase2_indices_byte_offset +
+                                                     CTArgs::sender_idx * CTArgs::topk_indices_slot_bytes;
 
                 if constexpr (CTArgs::topk_k <= 32) {
-                    constexpr uint32_t num_input_tiles = CTArgs::phase1_num_input_tiles;
+                    constexpr std::uint32_t num_input_tiles = CTArgs::phase1_num_input_tiles;
 
                     auto scores_src = scores_addr;
                     auto indices_src = args.indices_addr;
@@ -1535,10 +1554,10 @@ struct TopKSampling {
                     cb_reserve_back(CTArgs::topk_in_indices_cb, num_input_tiles);
                     auto scores_dst = get_write_ptr(CTArgs::topk_in_scores_cb);
                     auto indices_dst = get_write_ptr(CTArgs::topk_in_indices_cb);
-                    auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scores_dst);
-                    auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(indices_dst);
-                    noc_async_read(get_noc_addr(scores_src), scores_dst, CTArgs::num_values * sizeof(uint16_t));
-                    noc_async_read(get_noc_addr(indices_src), indices_dst, CTArgs::num_values * sizeof(uint32_t));
+                    auto scores_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(scores_dst);
+                    auto indices_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(indices_dst);
+                    noc_async_read(get_noc_addr(scores_src), scores_dst, CTArgs::num_values * sizeof(std::uint16_t));
+                    noc_async_read(get_noc_addr(indices_src), indices_dst, CTArgs::num_values * sizeof(std::uint32_t));
 
                     noc_async_read_barrier();
 
@@ -1568,21 +1587,22 @@ struct TopKSampling {
             // Output goes to the winner CB in split layout [K scores | K indices].
             // The argmax is global_scores[0] / global_indices[0] (descending order).
             if constexpr (IsFinalCore) {
-                auto recv_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::receiver_semaphore_addr);
+                auto recv_sem_ptr =
+                    reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(CTArgs::receiver_semaphore_addr);
                 {
                     DeviceZoneScopedN("SP-PHASE2WAIT");
                     wait_and_reset_semaphore(recv_sem_ptr, CTArgs::expected_remote_incs + 1);
                 }
                 cb_reserve_back(CTArgs::winner_cb_id, 1);
-                const uint32_t global_scores = get_write_ptr(CTArgs::winner_cb_id);
-                const uint32_t global_indices = global_scores + CTArgs::topk_scores_slot_bytes;
+                const std::uint32_t global_scores = get_write_ptr(CTArgs::winner_cb_id);
+                const std::uint32_t global_indices = global_scores + CTArgs::topk_scores_slot_bytes;
 
                 if constexpr (CTArgs::topk_k <= 32) {
-                    constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
+                    constexpr std::uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
 
-                    auto all_cores_scores = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                    auto all_cores_scores = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(
                         scores_cb_base + CTArgs::phase2_scores_byte_offset);
-                    auto all_cores_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    auto all_cores_indices = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
                         indices_cb_base + CTArgs::phase2_indices_byte_offset);
 
                     cb_reserve_back(CTArgs::topk_in_scores_cb, p2_tiles);
@@ -1606,10 +1626,10 @@ struct TopKSampling {
                     cb_pop_front(CTArgs::topk_out_scores_cb, 1);
                     cb_pop_front(CTArgs::topk_out_indices_cb, 1);
                 } else {
-                    auto global_scores_addr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(global_scores);
-                    auto global_indices_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_indices);
-                    const uint32_t p2_scores_base = scores_cb_base + CTArgs::phase2_scores_byte_offset;
-                    const uint32_t p2_indices_base = indices_cb_base + CTArgs::phase2_indices_byte_offset;
+                    auto global_scores_addr = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(global_scores);
+                    auto global_indices_addr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(global_indices);
+                    const std::uint32_t p2_scores_base = scores_cb_base + CTArgs::phase2_scores_byte_offset;
+                    const std::uint32_t p2_indices_base = indices_cb_base + CTArgs::phase2_indices_byte_offset;
                     phase2_merge_global_topk(p2_scores_base, p2_indices_base, global_scores_addr, global_indices_addr);
                 }
 
@@ -1623,7 +1643,7 @@ struct TopKSampling {
                                 CTArgs::stage1_local_slot_idx * CTArgs::topk_indices_slot_bytes,
                             global_scores,
                             global_indices);
-                        auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_sem_addr);
+                        auto global_sem_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.global_sem_addr);
 
                         {
                             DeviceZoneScopedN("SP-MESH1WAIT");
@@ -1631,8 +1651,8 @@ struct TopKSampling {
                         }
 
                         if constexpr (CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
-                            constexpr uint32_t s1_tiles = CTArgs::stage1_num_slots * CTArgs::topk_k;
-                            constexpr uint32_t s1_input_tiles = (s1_tiles + 1023) / 1024;
+                            constexpr std::uint32_t s1_tiles = CTArgs::stage1_num_slots * CTArgs::topk_k;
+                            constexpr std::uint32_t s1_input_tiles = (s1_tiles + 1023) / 1024;
                             cb_reserve_back(CTArgs::mesh_stage_scores_cb, s1_input_tiles);
                             cb_push_back(CTArgs::mesh_stage_scores_cb, s1_input_tiles);
                             cb_reserve_back(CTArgs::mesh_stage_indices_cb, s1_input_tiles);
@@ -1664,14 +1684,14 @@ struct TopKSampling {
                             global_indices);
 
                         auto global_stage2_sem_ptr =
-                            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.global_stage2_sem_addr);
+                            reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(args.global_stage2_sem_addr);
                         {
                             DeviceZoneScopedN("SP-MESH2WAIT");
                             wait_and_reset_semaphore(global_stage2_sem_ptr, CTArgs::stage2_expected_remote_incs);
                         }
                         if constexpr (CTArgs::topk_k <= 32 && CTArgs::mesh_stage_scores_cb != 0xFFFFFFFF) {
-                            constexpr uint32_t s2_tiles = CTArgs::stage2_num_slots * CTArgs::topk_k;
-                            constexpr uint32_t s2_input_tiles = (s2_tiles + 1023) / 1024;
+                            constexpr std::uint32_t s2_tiles = CTArgs::stage2_num_slots * CTArgs::topk_k;
+                            constexpr std::uint32_t s2_input_tiles = (s2_tiles + 1023) / 1024;
                             cb_reserve_back(CTArgs::mesh_stage_scores_cb, s2_input_tiles);
                             cb_push_back(CTArgs::mesh_stage_scores_cb, s2_input_tiles);
                             cb_reserve_back(CTArgs::mesh_stage_indices_cb, s2_input_tiles);
@@ -1699,7 +1719,7 @@ struct TopKSampling {
                 }
                 cb_push_back(CTArgs::winner_cb_id, 1);
             } else if constexpr (IsActiveCore && !IsFinalCore) {
-                constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
+                constexpr std::uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
                 cb_reserve_back(CTArgs::topk_in_scores_cb, p2_tiles);
                 cb_push_back(CTArgs::topk_in_scores_cb, p2_tiles);
 
@@ -1713,7 +1733,7 @@ struct TopKSampling {
 
             if constexpr (IsFinalCore) {
                 cb_wait_front(CTArgs::winner_cb_id, 1);
-                const uint32_t global_scores = get_read_ptr(CTArgs::winner_cb_id);
+                const std::uint32_t global_scores = get_read_ptr(CTArgs::winner_cb_id);
                 if constexpr (IsMeshSenderCore) {
                     // Mesh sender: wait for NCRISC to finish, then send via fabric
                     const BriscMeshSendMetadata fabric_meta = load_mesh_send_metadata(arg_idx);
@@ -1726,14 +1746,14 @@ struct TopKSampling {
                     DeviceZoneScopedN("SP-FINALCORE");
                     // Top-P filtering + random categorical selection.
                     if constexpr (!CTArgs::mesh_mode || CTArgs::stage2_receiver) {
-                        uint32_t K = CTArgs::topk_k;
+                        std::uint32_t K = CTArgs::topk_k;
                         float p = CTArgs::p;
                         if constexpr (CTArgs::enable_metadata) {
                             auto metadata_ptr = reinterpret_cast<volatile tt_l1_ptr deepseek_b1_ops::DeepseekMetadata*>(
                                 CTArgs::metadata_output_l1_addr);
                             K = std::min(
-                                std::max(static_cast<uint32_t>(metadata_ptr->k), static_cast<uint32_t>(1)),
-                                static_cast<uint32_t>(32));
+                                std::max(static_cast<std::uint32_t>(metadata_ptr->k), static_cast<std::uint32_t>(1)),
+                                static_cast<std::uint32_t>(32));
                             p = std::min(std::max(static_cast<float>(metadata_ptr->p), 0.0f), 1.0f);
                             float temperature = std::max(static_cast<float>(metadata_ptr->temperature), 0.01f);
                             if (temperature == 0.0f) {
@@ -1745,41 +1765,42 @@ struct TopKSampling {
                         {
                             DeviceZoneScopedN("SP-FC-STAGE");
 
-                            generate_bcast_col_scalar(CTArgs::p_bcast_cb, bf16_pack_to_uint32(float_to_bf16_rne(p)));
+                            generate_bcast_col_scalar(
+                                CircularBuffer(CTArgs::p_bcast_cb), bf16_pack_to_uint32(float_to_bf16_rne(p)));
 
                             cb_reserve_back(CTArgs::softmax_in_cb, 1);
-                            auto tile_u32 =
-                                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::softmax_in_cb));
-                            constexpr uint32_t NEG_INF_BF16_PAIR = 0xFF80FF80;
-                            constexpr uint32_t FACE_U32 = 128;  // 256 bf16 per face / 2
-                            for (uint32_t i = 0; i < 8; ++i) {
+                            auto tile_u32 = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+                                get_write_ptr(CTArgs::softmax_in_cb));
+                            constexpr std::uint32_t NEG_INF_BF16_PAIR = 0xFF80FF80;
+                            constexpr std::uint32_t FACE_U32 = 128;  // 256 bf16 per face / 2
+                            for (std::uint32_t i = 0; i < 8; ++i) {
                                 tile_u32[i] = NEG_INF_BF16_PAIR;
                             }
-                            for (uint32_t i = 0; i < 8; ++i) {
+                            for (std::uint32_t i = 0; i < 8; ++i) {
                                 tile_u32[FACE_U32 + i] = NEG_INF_BF16_PAIR;
                             }
 
                             noc_async_read(
                                 get_noc_addr(global_scores),
                                 get_write_ptr(CTArgs::softmax_in_cb),
-                                std::min(K, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
+                                std::min(K, ELEMS_PER_FACE_ROW) * sizeof(std::uint16_t));
                             if (K > ELEMS_PER_FACE_ROW) {
                                 noc_async_read(
-                                    get_noc_addr(global_scores + ELEMS_PER_FACE_ROW * sizeof(uint16_t)),
-                                    get_write_ptr(CTArgs::softmax_in_cb) + FACE_ELEMS * sizeof(uint16_t),
-                                    std::min(K - ELEMS_PER_FACE_ROW, ELEMS_PER_FACE_ROW) * sizeof(uint16_t));
+                                    get_noc_addr(global_scores + ELEMS_PER_FACE_ROW * sizeof(std::uint16_t)),
+                                    get_write_ptr(CTArgs::softmax_in_cb) + FACE_ELEMS * sizeof(std::uint16_t),
+                                    std::min(K - ELEMS_PER_FACE_ROW, ELEMS_PER_FACE_ROW) * sizeof(std::uint16_t));
                             }
                             noc_async_read_barrier();
                             cb_push_back(CTArgs::softmax_in_cb, 1);
                         }
-                        uint16_t rand;
+                        std::uint16_t rand;
                         {
                             DeviceZoneScopedN("SP-FC-RAND-STAGE");
                             cb_wait_front(CTArgs::rand_cb, 1);
                             auto rand_u16 =
-                                reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::rand_cb));
+                                reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(get_read_ptr(CTArgs::rand_cb));
                             rand = rand_u16[0];
-                            generate_bcast_col_scalar(CTArgs::rand_bcast_cb, bf16_pack_to_uint32(rand));
+                            generate_bcast_col_scalar(CircularBuffer(CTArgs::rand_bcast_cb), bf16_pack_to_uint32(rand));
                         }
 
                         {
@@ -1792,19 +1813,20 @@ struct TopKSampling {
                             }
                         }
 
-                        auto mask_u16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::mask_cb));
-                        auto global_indices = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        auto mask_u16 =
+                            reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(get_read_ptr(CTArgs::mask_cb));
+                        auto global_indices = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
                             get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes);
 
-                        uint32_t selected_index;
+                        std::uint32_t selected_index;
                         {
                             DeviceZoneScopedN("SP-FC-LOOKUP");
                             if (K == 1) {
                                 selected_index = global_indices[0];
                             } else {
                                 selected_index = global_indices[K - 1];
-                                for (uint32_t i = 0; i < K; ++i) {
-                                    const uint32_t tile_idx =
+                                for (std::uint32_t i = 0; i < K; ++i) {
+                                    const std::uint32_t tile_idx =
                                         (i < ELEMS_PER_FACE_ROW)
                                             ? (i * ELEMS_PER_FACE_ROW)
                                             : (2 * FACE_ELEMS + (i - ELEMS_PER_FACE_ROW) * ELEMS_PER_FACE_ROW);
@@ -1818,20 +1840,20 @@ struct TopKSampling {
 
                         {
                             DeviceZoneScopedN("SP-FC-FINISH");
-                            auto output_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(CTArgs::output_addr);
+                            auto output_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(CTArgs::output_addr);
                             output_ptr[0] = selected_index;
 
                             if constexpr (CTArgs::socket_mode != 0) {
                                 cb_reserve_back(CTArgs::socket_cb_id, 1);
-                                auto d2h_ptr =
-                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CTArgs::socket_cb_id));
+                                auto d2h_ptr = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
+                                    get_write_ptr(CTArgs::socket_cb_id));
                                 d2h_ptr[0] = selected_index;
                                 cb_push_back(CTArgs::socket_cb_id, 1);
                             }
 
                             if constexpr (CTArgs::rand_output_addr != 0) {
                                 auto rand_out =
-                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(CTArgs::rand_output_addr);
+                                    reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(CTArgs::rand_output_addr);
                                 rand_out[0] = rand;
                             }
                         }
@@ -1849,28 +1871,28 @@ struct TopKSampling {
                             // Reuse rand_cb's tile slot as a tiny gather scratch -- it's
                             // already popped above and the slot stays reserved for one
                             // more iteration. 32 bf16 lanes = 64 bytes, well under one tile.
-                            const uint32_t scratch_l1 = get_read_ptr(CTArgs::rand_cb);
-                            auto scratch = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(scratch_l1);
+                            const std::uint32_t scratch_l1 = get_read_ptr(CTArgs::rand_cb);
+                            auto scratch = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(scratch_l1);
 
                             if (K == 1) {
                                 scratch[0] = float_to_bf16_rne(1.0f);
-                                for (uint32_t i = 1; i < 2 * ELEMS_PER_FACE_ROW; ++i) {
+                                for (std::uint32_t i = 1; i < 2 * ELEMS_PER_FACE_ROW; ++i) {
                                     scratch[i] = 0;
                                 }
                             } else {
-                                const auto probs_l1 =
-                                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::probs_out_cb));
-                                for (uint32_t i = 0; i < ELEMS_PER_FACE_ROW; ++i) {
+                                const auto probs_l1 = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(
+                                    get_read_ptr(CTArgs::probs_out_cb));
+                                for (std::uint32_t i = 0; i < ELEMS_PER_FACE_ROW; ++i) {
                                     scratch[i] = probs_l1[i * ELEMS_PER_FACE_ROW];
                                     scratch[ELEMS_PER_FACE_ROW + i] = probs_l1[2 * FACE_ELEMS + i * ELEMS_PER_FACE_ROW];
                                 }
 
-                                const auto cum_l1 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                                const auto cum_l1 = reinterpret_cast<volatile tt_l1_ptr std::uint16_t*>(
                                     get_read_ptr(CTArgs::softmax_out_cb));
-                                const uint16_t p_bf16 = float_to_bf16_rne(p);
-                                uint32_t num_kept = K;
-                                for (uint32_t i = 0; i < K; ++i) {
-                                    const uint32_t cum_idx =
+                                const std::uint16_t p_bf16 = float_to_bf16_rne(p);
+                                std::uint32_t num_kept = K;
+                                for (std::uint32_t i = 0; i < K; ++i) {
+                                    const std::uint32_t cum_idx =
                                         (i < ELEMS_PER_FACE_ROW)
                                             ? (i * ELEMS_PER_FACE_ROW)
                                             : (2 * FACE_ELEMS + (i - ELEMS_PER_FACE_ROW) * ELEMS_PER_FACE_ROW);
@@ -1885,19 +1907,20 @@ struct TopKSampling {
                                 if (num_kept > K) {
                                     num_kept = K;
                                 }
-                                for (uint32_t i = num_kept; i < K; ++i) {
+                                for (std::uint32_t i = num_kept; i < K; ++i) {
                                     scratch[i] = 0;
                                 }
                             }
 
-                            const uint32_t scores_dst = CTArgs::metadata_output_l1_addr + scores_field;
-                            noc_async_write_one_packet(scratch_l1, get_noc_addr(scores_dst), 32 * sizeof(uint16_t));
-
-                            const uint32_t indices_src_l1 =
-                                get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes;
-                            const uint32_t indices_dst_l1 = CTArgs::metadata_output_l1_addr + indices_field;
+                            const std::uint32_t scores_dst = CTArgs::metadata_output_l1_addr + scores_field;
                             noc_async_write_one_packet(
-                                indices_src_l1, get_noc_addr(indices_dst_l1), 32 * sizeof(uint32_t));
+                                scratch_l1, get_noc_addr(scores_dst), 32 * sizeof(std::uint16_t));
+
+                            const std::uint32_t indices_src_l1 =
+                                get_read_ptr(CTArgs::winner_cb_id) + CTArgs::topk_scores_slot_bytes;
+                            const std::uint32_t indices_dst_l1 = CTArgs::metadata_output_l1_addr + indices_field;
+                            noc_async_write_one_packet(
+                                indices_src_l1, get_noc_addr(indices_dst_l1), 32 * sizeof(std::uint32_t));
 
                             noc_async_write_barrier();
                         }
@@ -1943,7 +1966,7 @@ struct TopKSampling {
             // Non-final cores: consume dummy pages pushed by NCRISC to keep
             // the topk_in CB write pointer synchronized with the final core.
             if constexpr (IsActiveCore && !IsFinalCore && CTArgs::topk_k <= 32) {
-                constexpr uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
+                constexpr std::uint32_t p2_tiles = CTArgs::phase2_num_input_tiles;
                 cb_wait_front(CTArgs::topk_in_scores_cb, p2_tiles);
                 cb_pop_front(CTArgs::topk_in_scores_cb, p2_tiles);
 

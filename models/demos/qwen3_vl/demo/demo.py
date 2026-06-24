@@ -27,6 +27,7 @@ from models.demos.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -231,7 +232,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": 28467200, "num_command_queues": 1}],
+    [{"fabric_config": True, TRACE_MODEL_KEY_PARAM: "qwen3-vl", "num_command_queues": 1}],
     indirect=True,
 )
 @pytest.mark.parametrize(
