@@ -224,6 +224,9 @@ skus:
   cpu_medium:
     runs_on:
       - tt-ubuntu-2204-medium-stable
+  cpu_medium_prio:
+    runs_on:
+      - tt-ubuntu-2204-medium-prio-stable
 
   # Synthetic CPU SKUs for ttsim simulator jobs. Tests using these SKUs run on
   # ubuntu-latest; the impl is expected to invoke .github/actions/setup-ttsim

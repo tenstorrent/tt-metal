@@ -8,6 +8,11 @@ on:
         type: string
         default: cpu_medium
         description: "SKU from sku_config.yaml selecting the CPU runner pool (e.g. cpu_medium)."
+      tests-yaml-path:
+        required: false
+        type: string
+        default: ./tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml
+        description: "Pipeline reorg test matrix YAML (e.g. fabric_cpu_only_smoke_merge_gate_tests.yaml for merge gate)."
       test-category:
         required: false
         type: string
@@ -29,7 +34,7 @@ jobs:
     outputs:
       matrix: ${{ steps.build-matrix.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml
+      TESTS_YAML_PATH: ${{ inputs.tests-yaml-path }}
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
