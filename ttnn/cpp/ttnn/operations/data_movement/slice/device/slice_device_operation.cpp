@@ -27,9 +27,10 @@ inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const t
 inline __attribute__((always_inline)) uint32_t
 get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shape& slice_start) {
     // offset for every dim except last 2
-    uint32_t start_offset = 0;
+    // 64-bit: shape.volume() (element count) overflows uint32 for tensors > 4 GB.
+    uint64_t start_offset = 0;
 
-    uint32_t num_pages = shape.volume();
+    uint64_t num_pages = shape.volume();
     if (layout == Layout::TILE) {
         num_pages /= tt::constants::TILE_HW;
     } else {
@@ -38,13 +39,13 @@ get_upper_start_offset(const ttnn::Shape& shape, Layout layout, const ttnn::Shap
     }
 
     for (uint32_t dim_outer = 0; dim_outer < shape.rank() - 2; dim_outer++) {
-        uint32_t compressed_dims = 1;
+        uint64_t compressed_dims = 1;
         for (uint32_t dim_inner = 0; dim_inner <= dim_outer; dim_inner++) {
             compressed_dims *= shape[dim_inner];
         }
         start_offset += (num_pages / compressed_dims) * slice_start[dim_outer];
     }
-    return start_offset;
+    return static_cast<uint32_t>(start_offset);  // page index, fits uint32
 }
 
 inline __attribute__((always_inline)) uint32_t

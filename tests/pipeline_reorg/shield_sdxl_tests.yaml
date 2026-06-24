@@ -1,12 +1,5 @@
-# Test matrix for the L2 nightly pipeline — non-ttnn-team residual entries.
-#
-# After the ttnn-team reorg, the 22 ttnn ops entries that used to live here
-# moved to ops_unit_tests.yaml / ops_integration_tests.yaml /
-# ttnn_integration_tests.yaml / tt_cnn_unit_tests.yaml. The ttsim
-# compute-fused entry moved to ttsim_unit_tests.yaml. This file retains the
-# models (sdxl) entries that still need an l2-budgeted home
-# until those teams reorg their own buckets.
-#
+# This file defines the test matrix for the shield sdxl tests pipeline.
+
 # Each entry represents a parallel job with the following keys:
 #   name: The display name for the job in GitHub Actions.
 #   cmd: The exact command to run for the test.
@@ -15,16 +8,12 @@
 #       timeout: The maximum allowed runtime for this job in minutes on that SKU.
 #   owner_id: The Slack user ID to notify on failure.
 #   team: The team that owns the test.
-#   category: Selector used by tt-metal-l2-nightly.yaml's additional_test_categories
+#   category: Selector used by shield_sdxl_tests.yaml's additional_test_categories
 #     dispatch input. On dispatch the impl filters this matrix to entries whose
 #     category appears in the comma-separated list; on schedule the filter is
 #     bypassed and every entry runs.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
-
-# =============================================================================
-# Model demos
-# =============================================================================
 
 - name: ttnn nightly sdxl tests (wormhole)
   cmd: |
@@ -36,8 +25,8 @@
       timeout: 90
     wh_n300_civ2:
       timeout: 90
-  owner_id: U0837MYG788 # Marko Radosavljevic
-  team: models
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
   category: sdxl
 
 - name: ttnn nightly sdxl tests (blackhole P150b)
@@ -47,8 +36,8 @@
   skus:
     bh_p150b_civ2:
       timeout: 70
-  owner_id: U0837MYG788 # Marko Radosavljevic
-  team: models
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
   category: sdxl
 
 - name: ttnn nightly sdxl demo cfg parallel test (N300)
@@ -56,6 +45,6 @@
   skus:
     wh_n300_civ2:
       timeout: 25
-  owner_id: U0837MYG788 # Marko Radosavljevic
-  team: models
+  owner_id: U0ACLAM77PS # Kosta Grujcic
+  team: shield
   category: sdxl
