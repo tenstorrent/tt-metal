@@ -384,7 +384,6 @@ def _run_token_accuracy(model: Llama32_1BTransformer1D, mesh_device, expected):
     """Teacher-forcing token accuracy vs ``.refpt``."""
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
     reference_tokens, top5_tokens, prompt_len, metadata = load_reference_data(hf_model)
-    tokenizer = AutoTokenizer.from_pretrained(hf_model)
 
     if reference_tokens.dim() > 1:
         reference_tokens = reference_tokens.squeeze()
@@ -465,6 +464,7 @@ def _run_perf_benchmark(
     ``max_prefill_len`` is an optional clip cap for over-long prompts, never a pad-up target.
     """
     hf_model = os.environ.get("HF_MODEL", "meta-llama/Llama-3.2-1B-Instruct")
+    tokenizer = AutoTokenizer.from_pretrained(hf_model)
 
     traced_executor = TracedLlama32_1BExecutor(model, mesh_device)
     try:
