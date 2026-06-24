@@ -87,6 +87,15 @@ class DecoderLayer:
         attn_types = getattr(hf_config, "attn_type_list", None) or getattr(hf_config, "layer_types", None)
         self.attention_type = attn_types[layer_idx] if attn_types is not None else 1
 
+        # M3 MSA: layers with sparse_attention_freq[layer_idx]==1 (layers 3-59) run block-sparse
+        # attention; layers 0-2 (==0) stay dense. sparse_attention_config may be a dict or an object.
+        sparse_cfg = getattr(hf_config, "sparse_attention_config", None)
+        if isinstance(sparse_cfg, dict):
+            freq = sparse_cfg.get("sparse_attention_freq") if sparse_cfg.get("use_sparse_attention") else None
+        else:
+            freq = getattr(sparse_cfg, "sparse_attention_freq", None) if sparse_cfg is not None else None
+        is_sparse = bool(freq[layer_idx]) if freq is not None and layer_idx < len(freq) else False
+
         # Create attention configuration
         attention_config = AttentionConfig(
             hidden_size=hf_config.hidden_size,
@@ -101,6 +110,7 @@ class DecoderLayer:
             max_seq_len=max_seq_len,
             max_local_batch_size=max_local_batch_size,
             users_row_sharded=users_row_sharded,
+            is_sparse=is_sparse,
         )
 
         # Create attention program config

@@ -24,6 +24,7 @@ from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 from models.demos.minimax_m3.config import MeshConfig, ModeConfig
+from models.demos.minimax_m3.tt.attention.dense_sp import dense_sp_attention
 from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
 
@@ -80,18 +81,22 @@ def test_ring_joint_cache_read_sp(mesh_device, device_params, n_chunks, chunk_lo
         pos = rotated_chip_positions(kv_actual, sp, C)
         return torch.tensor([pos[c][r] for c in range(sp) for r in range(C)], dtype=torch.long)
 
-    def write(cache, src, kv_actual):
+    def make_chunk(src, kv_actual):
         chunk = src[:, bc_index(kv_actual), :].reshape(1, NKV, chunk_global, HEAD_DIM)
-        tt_in = ttnn.from_torch(
+        return ttnn.from_torch(
             chunk, device=mesh_device, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=wr_dims),
         )
+
+    def write(cache, src, kv_actual):
         ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
-            cache, tt_in, slot_idx=0, layer_idx=0, num_layers=1, kv_actual_global=kv_actual, cluster_axis=sp_axis
+            cache, make_chunk(src, kv_actual), slot_idx=0, layer_idx=0, num_layers=1,
+            kv_actual_global=kv_actual, cluster_axis=sp_axis,
         )
 
-    for c in range(n_chunks):
+    # Write the PRIOR chunks into the cache; the LAST chunk is written by dense_sp_attention below.
+    for c in range(n_chunks - 1):
         kv_actual = c * chunk_global
         write(cache_k, k[0], kv_actual)
         write(cache_v, v[0], kv_actual)
@@ -110,43 +115,22 @@ def test_ring_joint_cache_read_sp(mesh_device, device_params, n_chunks, chunk_lo
     grid = mesh_device.compute_with_storage_grid_size()
     prog = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(grid.x - 1, grid.y),
-        q_chunk_size=128, k_chunk_size=128, exp_approx_mode=False,
+        q_chunk_size=128, k_chunk_size=512, exp_approx_mode=False,  # Pavle's minimax3_gqa_causal_perf tuning
     )
     kcfg = ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=False, packer_l1_acc=False
     )
 
-    def pbuf(n):
-        # Gather buffer: full cached prefix, dtype must match the KV cache (bf8).
-        return ttnn.from_torch(
-            torch.zeros(1, n, cache_global, HEAD_DIM), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=(rows, cols), dims=[None, 1]),
-        )
-
-    # cache-read: K/V come from the cache (kv_cache_batch_idx selects slot 0); kv_actual_isl = prefix
-    # length before the last chunk, logical_n = full valid prefix (so Q attends causally over [0:logical_n]).
-    out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+    # dense_sp_attention writes the LAST chunk into the cache, then ring_joint cache-read: K/V come
+    # from the cache (kv_cache_batch_idx=slot 0); kv_actual_isl = prefix before the last chunk,
+    # logical_n = full valid prefix (Q attends causally over [0:logical_n]).
+    out = dense_sp_attention(
         tt_q, cache_k, cache_v,
-        None, None, None,
-        persistent_output_buffer_k=pbuf(NKV),
-        persistent_output_buffer_v=pbuf(NKV),
-        joint_strategy="rear",
-        logical_n=cache_global,
-        program_config=prog,
-        compute_kernel_config=kcfg,
-        dim=2,
-        multi_device_global_semaphore=ccl.ring_attention_ccl_semaphore_handles,
-        num_links=ccl.num_links,
-        cluster_axis=sp_axis,
-        mesh_device=mesh_device,
-        topology=ttnn.Topology.Linear,
-        ccl_core_grid_offset=ccl.ring_attention_ccl_core_grid_offset,
-        use_column_major_ccl=True,
-        is_causal=True,
-        scale=HEAD_DIM**-0.5,
-        is_balanced=False,
-        kv_cache_batch_idx=0,
-        kv_actual_isl=kv_actual_last,
+        make_chunk(k[0], kv_actual_last), make_chunk(v[0], kv_actual_last),
+        kv_actual=kv_actual_last, logical_n=cache_global,
+        n_kv=NKV, cache_global=cache_global, head_dim=HEAD_DIM,
+        mesh_device=mesh_device, ccl_manager=ccl, program_config=prog, compute_kernel_config=kcfg,
+        scale=HEAD_DIM**-0.5, cluster_axis=sp_axis,
     )
 
     # out per chip [1, NQ/tp, C, HD], block-cyclic over the LAST chunk. Gather heads (cols) + seq (rows).

@@ -246,7 +246,13 @@ HF config `sparse_num_index_heads=4 == num_key_value_heads=4` (one index head/gr
 (`MiniMax-AI/MSA` `api.py`) `sparse_topk_select → [total_qo_len, num_qo_heads, topk]` and
 `kv_block_indexes [.., num_kv_heads|num_qo_heads, ..]` (per-head axis). So the earlier `Σ_h`
 single-list formula (DeepSeek-DSA convention) was WRONG for M3; index list is **[4, S, topk]**.
-Still to confirm vs modeling code: the `w` gating term, whether RoPE applies to the index heads.
+Index branch order = `index_q/k_proj → per-head norm (index_q/k_norm) → RoPE`, then `indexer_score_msa`
+(takes pre-roped q/k). Confidence: **norm HIGH** (index_q_norm/index_k_norm ship in the checkpoint, so
+they're applied); **rope MEDIUM** — from a WebFetch *summary* of transformers-main `MiniMaxM3VLIndexer`
+(`apply_rotary_pos_emb(idx_q, idx_k, cos[..,:head_dim], sin[..,:head_dim])`), matches DeepSeek-DSA but
+NOT verified against the actual source. **TODO(REVISIT)** before trusting end-to-end output: confirm
+rope is on both index_q AND index_k, the rotary width (partial-64 like main vs full-128), and ordering.
+Also still to confirm: the `w` gating term. (Mirrored as a TODO in tt/attention/msa.py index_branch_forward.)
 
 ---
 

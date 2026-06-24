@@ -1,0 +1,153 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""MiniMax-M3 MSA (sparse) attention — the real model forward for the sparse layers (3-59).
+
+Unlike the dense path (ring_joint, which reads the KV cache + gathers across SP *internally*),
+``sparse_sdpa_msa`` is a pure dense-context kernel: it takes full-length K/V tensors and has no
+cache-read. So the cache + cross-device gather live in THIS wrapper:
+
+  each SP device holds a sequence shard of K / V / index_k (from the chunked-KV cache read).
+  We AllGather those across the SP axis so every device materialises the full context, then:
+
+    indexer_score_msa(index_q, index_k_full, chunk_start_idx=cached_len)  -> block scores
+    inject sink (block 0) + topk_large_indices(topk_blocks)              -> block-ids   (the op
+                                              already force-locals the current block, +inf)
+    sparse_sdpa_msa(q, k_full, v_full, block-ids)                        -> attention out
+
+SP sharding is CONTIGUOUS, no zigzag/balancing (per the op authors: chunked prefill needs no causal
+load-balancing — MSA work per query is a fixed top-k, not the dense causal triangle).
+
+``chunk_start_idx`` is the global position of query row 0. Because the indexer scores over the
+gathered full context and the current chunk's queries all begin at ``cached_len``, this scalar is
+uniform across SP devices (no per-device offset needed). Causality is encoded entirely by the block
+selection; sparse_sdpa_msa applies no token mask.
+"""
+
+import torch
+
+import ttnn
+
+from .operations import apply_qk_norm_per_head, apply_rope
+
+# M3 sparse_attention_config (configs/MiniMax-M3/config.json).
+BLOCK_SIZE = 128
+TOPK_BLOCKS = 16
+SINK_BLOCK = 0  # sparse_init_block — the attention sink, always selected
+NUM_INDEX_HEADS = 4  # sparse_num_index_heads (1 per GQA group; 1 per device at TP=4)
+INDEX_DIM = 128  # sparse_index_dim
+
+
+def _split_index_heads(t):
+    """[1, 1, S, n*INDEX_DIM] -> [1, n, S, INDEX_DIM] (head-major split, like the main QKV split)."""
+    s = t.shape[2]
+    n = t.shape[-1] // INDEX_DIM
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    t = ttnn.reshape(t, [1, s, n, INDEX_DIM])
+    t = ttnn.permute(t, (0, 2, 1, 3))  # [1, n, S, INDEX_DIM]
+    return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
+
+
+def index_branch_forward(hidden_states, weights, rope_mats, transformation_mat, *, rms_norm_eps):
+    """The MSA index branch: pre-roped index_q (n index heads, 1/TP col) + index_k (single shared head).
+
+    proj -> split heads -> per-head RMSNorm -> RoPE. index_q_proj is column-parallel (4 index heads ->
+    1/TP col); index_k_proj is replicated (shared head). Per device this yields index_q [1, n_idx_local,
+    S, INDEX_DIM] (n_idx_local=1 at TP=4) and index_k [1, 1, S, INDEX_DIM] -> msa_sp_attention's indexer.
+
+    TODO(REVISIT) — confidence on the norm+rope here is uneven:
+      * norm: HIGH — index_q_norm/index_k_norm weights ship in the checkpoint, so they are applied.
+      * rope: MEDIUM — taken from a WebFetch *summary* of transformers-main MiniMaxM3VLIndexer
+        (proj->norm->apply_rotary_pos_emb(cos/sin[..,:head_dim])), matches DeepSeek-DSA. NOT yet
+        verified against the actual modeling source: confirm rope is on BOTH index_q AND index_k, the
+        rotary width (partial-64 like main, via cos[..,:head_dim] on a 64-wide cos, vs full-128), and
+        the order. Re-check before trusting the end-to-end token output. See PREFILL_PROPOSAL.md.
+    """
+    iq = _split_index_heads(ttnn.linear(hidden_states, weights.index_q_proj))  # [1, n_idx_local, S, IDX_DIM]
+    iq = apply_qk_norm_per_head(iq, weights.index_q_norm, rms_norm_eps)
+    iq = apply_rope(iq, rope_mats, transformation_mat, is_decode_mode=False)
+
+    ik = _split_index_heads(ttnn.linear(hidden_states, weights.index_k_proj))  # [1, 1, S, IDX_DIM] (shared)
+    ik = apply_qk_norm_per_head(ik, weights.index_k_norm, rms_norm_eps)
+    ik = apply_rope(ik, rope_mats, transformation_mat, is_decode_mode=False)
+    return iq, ik
+
+
+def _sink_mask(num_groups, nblk, device):
+    """A [1, num_groups, 1, nblk] additive mask with +inf at the sink block (broadcast over queries)."""
+    m = torch.zeros(1, num_groups, 1, nblk, dtype=torch.float32)
+    m[:, :, :, SINK_BLOCK] = float("inf")
+    kwargs = {}
+    if isinstance(device, ttnn.MeshDevice):
+        kwargs["mesh_mapper"] = ttnn.ReplicateTensorToMesh(device)
+    return ttnn.from_torch(
+        m.to(torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, **kwargs
+    )
+
+
+def msa_indexer_sparse(index_q, index_k, q, k, v, *, chunk_start_idx, scale, num_groups, device, return_block_ids=False):
+    """The MSA op chain over a FULL-context (already-gathered) K/V/index_k. All tensors per-device.
+
+    index_q [1, num_groups, Sq, INDEX_DIM]   index_k [1, 1, T, INDEX_DIM]   (1 shared index-k head)
+    q       [1, Hq, Sq, head_dim]            k, v    [1, n_kv, T, head_dim]  (TILE layout)
+    -> out  [1, Hq, Sq, head_dim]
+    """
+    # Block scores: scaled dot, causal -inf for future, group-sum, block-max-pool. bf16 row-major out.
+    block_scores = ttnn.experimental.indexer_score_msa(
+        index_q,
+        index_k,
+        chunk_start_idx=chunk_start_idx,
+        scale=scale,
+        num_groups=num_groups,
+        block_size=BLOCK_SIZE,
+        program_config=ttnn.IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=1024, head_group_size=0),
+    )
+
+    # Force the attention sink (block 0) to always be selected: +inf at block 0 before top-k. The op
+    # already force-locals the current block (+inf), so we only add the sink here.
+    nblk = block_scores.shape[-1]
+    block_scores = ttnn.add(block_scores, _sink_mask(num_groups, nblk, device))
+
+    # Top-k block ids (uint32 row-major) — the block selection that encodes causality.
+    block_ids = ttnn.experimental.topk_large_indices(block_scores, k=TOPK_BLOCKS)
+
+    # sparse_sdpa_msa: q + block-ids row-major, K/V tiled; expands blocks->tokens internally.
+    out = ttnn.transformer.sparse_sdpa_msa(
+        ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT),
+        k,
+        v,
+        block_ids,
+        scale=scale,
+        block_size=BLOCK_SIZE,
+    )
+    return (out, block_ids) if return_block_ids else out
+
+
+def msa_sp_attention(q, k, v, index_q, index_k, *, mesh_config, ccl_manager, cached_len, scale, num_groups=1):
+    """MSA sparse attention under SP: AllGather K/V/index_k across the SP axis, then indexer + sparse.
+
+    Inputs are per-device CONTIGUOUS sequence shards on the mesh:
+      q        [1, Hq_local, S_local, head_dim]    (TP slices heads; SP slices the query seq)
+      k, v     [1, n_kv_local, S_local, head_dim]  (this device's KV-cache sequence shard, TILE)
+      index_q  [1, num_groups, S_local, INDEX_DIM]
+      index_k  [1, 1, S_local, INDEX_DIM]          (the single shared index-k head, SP-sharded, TILE)
+
+    The AllGather assembles the full context [.., T, ..] (T = S_local * SP) on every device from the
+    other SP devices' shards — that gather is how a query reaches cached / other-device tokens.
+    """
+    sp_axis = mesh_config.sp_axis
+    device = ccl_manager.mesh_device
+
+    # AllGather the KEYS across SP (seq dim=2): each device now holds the full context locally.
+    k_full = mesh_config.allgather(k, ccl_manager, axis=sp_axis, dim=2)
+    v_full = mesh_config.allgather(v, ccl_manager, axis=sp_axis, dim=2)
+    index_k_full = mesh_config.allgather(index_k, ccl_manager, axis=sp_axis, dim=2)
+    # Gather index-q + q too so the (lightweight) indexer scores the whole chunk under one uniform
+    # chunk_start; the local-shard sparse decomposition is applied in the prefill wiring step.
+    index_q_full = mesh_config.allgather(index_q, ccl_manager, axis=sp_axis, dim=2)
+    q_full = mesh_config.allgather(q, ccl_manager, axis=sp_axis, dim=2)
+
+    return msa_indexer_sparse(
+        index_q_full, index_k_full, q_full, k_full, v_full,
+        chunk_start_idx=cached_len, scale=scale, num_groups=num_groups, device=device,
+    )

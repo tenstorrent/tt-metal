@@ -4,6 +4,7 @@
 import ttnn
 
 from .config import AttentionConfig, ProgramConfig
+from .msa import index_branch_forward, msa_sp_attention
 from .operations import (
     apply_allgather_and_slice,
     apply_allreduce,
@@ -70,7 +71,9 @@ def prefill_forward(
 
     # QKV projection
     xqkv_fused = apply_qkv_projection(hidden_states, weights)
-    hidden_states.deallocate(True)  # Free input activations after projection
+    # MSA layers need hidden_states again for the index branch (index_q/k proj); free it only for dense.
+    if not config.is_sparse:
+        hidden_states.deallocate(True)  # Free input activations after projection
 
     # NOTE (M3): QK-norm moved AFTER the head split — M3 uses per-head RMSNorm over
     # head_dim (qk_norm_type="per_head"), not M2's full-width norm on the flat projection.
@@ -110,25 +113,33 @@ def prefill_forward(
     tt_q_orig.deallocate(True)
     tt_k_orig.deallocate(True)
 
-    # M3 BASELINE: full non-cached causal GQA prefill — SDPA attends over THIS call's own Q/K/V
-    # (plain causal, no sliding window / no attention sinks). The whole sequence lives on one chip,
-    # so this is exact for S <= ~2048 (the regime the real-weights bring-up runs in).
-    #
-    # PLANNED (SP=8 + chunked-KV rearchitecture, NOT wired in yet): shard the sequence across the
-    # SP/rows axis, write K/V into a chunked-KV cache, and run
-    # ttnn.transformer.ring_joint_scaled_dot_product_attention (GQA grouped-V) over the accumulated
-    # prefix (kv_cache_batch_idx + kv_actual_isl). The ring op and the GQA chunked-KV cache are each
-    # validated standalone (tests/unit/test_ring_joint_sp_vs_ref.py, test_kv_cache_gqa_sp_vs_ref.py)
-    # but not yet integrated here. See PREFILL_PROPOSAL.md §6/§6.6. kv_cache/page_table are unused
-    # in this baseline.
-    tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
-        tt_q,
-        tt_k,
-        tt_v,
-        is_causal=True,
-        program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len),
-        compute_kernel_config=program_config.get_compute_kernel_config(),
-    )
+    # Attention core — per-layer gate (config.is_sparse from M3 sparse_attention_freq):
+    #   MSA layers (3-59): index branch (index_q/k proj -> norm -> RoPE) + block-sparse attention
+    #     (msa_sp_attention: AllGather K/V/index_k across SP -> indexer -> top-k -> sparse_sdpa_msa).
+    #     num_groups = local KV heads (1 GQA group per KV head; 1 at TP=4, 4 at TP=1).
+    #   Dense layers (0-2): plain causal GQA SDPA over THIS call's Q/K/V (exact when the whole
+    #     sequence is on one chip — the sp=1 regime). The SP dense ring_joint path (dense_sp.py) +
+    #     the multi-chunk K/V/index_k cache lifecycle + the SP output re-shard are the remaining
+    #     wiring (msa_sp_attention currently returns the full-seq output, a no-op re-shard at sp=1).
+    if config.is_sparse:
+        tt_iq, tt_ik = index_branch_forward(
+            hidden_states, weights, rope_mats_sliced, transformation_mat, rms_norm_eps=config.rms_norm_eps
+        )
+        hidden_states.deallocate(True)
+        tt_sdpa_out = msa_sp_attention(
+            tt_q, tt_k, tt_v, tt_iq, tt_ik,
+            mesh_config=mesh_config, ccl_manager=ccl_manager, cached_len=0,
+            scale=config.head_dim**-0.5, num_groups=num_local_kv_heads,
+        )
+    else:
+        tt_sdpa_out = ttnn.transformer.scaled_dot_product_attention(
+            tt_q,
+            tt_k,
+            tt_v,
+            is_causal=True,
+            program_config=program_config.get_prefill_sdpa_config(mesh_device, seq_len),
+            compute_kernel_config=program_config.get_compute_kernel_config(),
+        )
     tt_q.deallocate(True)
     tt_k.deallocate(True)
     tt_v.deallocate(True)

@@ -27,6 +27,13 @@ class AttentionWeights:
     # the Q/K projection sharding. None when use_qk_norm is False / no state_dict.
     q_norm: ttnn.Tensor | None = None
     k_norm: ttnn.Tensor | None = None
+    # MSA index branch (sparse layers 3-59 only; None for dense layers 0-2). index_q_proj is
+    # column-parallel (4 index heads -> 1 per TP col); index_k_proj + both index norms are
+    # REPLICATED (index_k is the single shared head, present on every TP col). See tt/attention/msa.py.
+    index_q_proj: ttnn.Tensor | None = None
+    index_k_proj: ttnn.Tensor | None = None
+    index_q_norm: ttnn.Tensor | None = None
+    index_k_norm: ttnn.Tensor | None = None
 
 
 def load_attention_weights(
@@ -87,6 +94,20 @@ def load_attention_weights(
         q_norm_w = _prep_qk_norm_gain(q_norm_w)
         k_norm_w = _prep_qk_norm_gain(k_norm_w)
 
+        # MSA index branch (only present on sparse layers): index_q_proj [n_index*idx_dim, hidden],
+        # index_k_proj [idx_dim, hidden] (1 shared head). Transpose for matmul; index_q is sharded
+        # col-parallel (dim -1), index_k replicated. index_*_norm are per-head gains like q/k_norm.
+        has_index = "index_q_proj.weight" in state_dict
+        if has_index:
+            index_q_proj_w = substate(state_dict, "index_q_proj")["weight"].transpose(-1, -2)
+            index_q_proj_w = index_q_proj_w.unsqueeze(0).unsqueeze(0)  # [1,1,hidden, n_index*idx_dim]
+            index_k_proj_w = substate(state_dict, "index_k_proj")["weight"].transpose(-1, -2)
+            index_k_proj_w = index_k_proj_w.unsqueeze(0).unsqueeze(0)  # [1,1,hidden, idx_dim]
+            index_q_norm_w = _prep_qk_norm_gain(substate(state_dict, "index_q_norm")["weight"])
+            index_k_norm_w = _prep_qk_norm_gain(substate(state_dict, "index_k_norm")["weight"])
+        else:
+            index_q_proj_w = index_k_proj_w = index_q_norm_w = index_k_norm_w = None
+
         # Create fused QKV weight
         # Split Q, K, V across devices, then concatenate per device
         qkv_list = []
@@ -125,6 +146,7 @@ def load_attention_weights(
         o_proj = None
         q_norm_w = None
         k_norm_w = None
+        index_q_proj_w = index_k_proj_w = index_q_norm_w = index_k_norm_w = None
 
     # Clean mesh mapping using MeshConfig
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
@@ -182,9 +204,28 @@ def load_attention_weights(
         else None
     )
 
+    # MSA index branch (sparse layers only): index_q_proj column-parallel (4 heads -> 1/col),
+    # index_k_proj + norms replicated (index_k is the single shared head). Kept bf16.
+    def _as_index(w, mapper, layout, name, dtype=ttnn.bfloat16):
+        if w is None:
+            return None
+        return ttnn.as_tensor(
+            w, device=mesh_device, layout=layout, dtype=dtype, mesh_mapper=mapper,
+            cache_file_name=get_cache_file_name(tensor_cache_path, name), memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    index_q_proj_tt = _as_index(index_q_proj_w, col_mesh_mapper, ttnn.TILE_LAYOUT, "index_q_proj", weight_dtype)
+    index_k_proj_tt = _as_index(index_k_proj_w, replicate_mapper, ttnn.TILE_LAYOUT, "index_k_proj", weight_dtype)
+    index_q_norm_tt = _as_index(index_q_norm_w, replicate_mapper, ttnn.ROW_MAJOR_LAYOUT, "index_q_norm")
+    index_k_norm_tt = _as_index(index_k_norm_w, replicate_mapper, ttnn.ROW_MAJOR_LAYOUT, "index_k_norm")
+
     return AttentionWeights(
         wqkv=wqkv,
         o_proj=o_proj_tt,
         q_norm=q_norm_tt,
         k_norm=k_norm_tt,
+        index_q_proj=index_q_proj_tt,
+        index_k_proj=index_k_proj_tt,
+        index_q_norm=index_q_norm_tt,
+        index_k_norm=index_k_norm_tt,
     )
