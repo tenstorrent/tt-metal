@@ -263,15 +263,19 @@ def prefill_forward(
         )
 
     TILE_SIZE = 32
-    if seq_len_global % TILE_SIZE != 0:
-        raise ValueError(
-            f"Prefill seq_len must be divisible by {TILE_SIZE} (TILE_SIZE), "
-            f"got {seq_len_global}. Please pad your sequence."
-        )
 
-    # Get parallelization config
+    # Get parallelization config before the divisibility check so we can validate
+    # the per-device sequence length (after inner SP scatter) as well as the global one.
     mode_config = mesh_config.get_config(Mode.PREFILL)
     ep, sp, tp = mode_config.ep, mode_config.sp, mode_config.tp
+
+    required_alignment = TILE_SIZE * sp  # per-device seq must also be tile-aligned
+    if seq_len_global % required_alignment != 0:
+        raise ValueError(
+            f"Prefill seq_len must be divisible by {required_alignment} "
+            f"(TILE_SIZE={TILE_SIZE} × SP={sp}), got {seq_len_global}. "
+            f"Please pad your sequence to a multiple of {required_alignment}."
+        )
 
     # Reshard for sequence parallelism if needed
     if sp > 1:

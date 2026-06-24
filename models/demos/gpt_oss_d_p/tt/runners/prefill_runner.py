@@ -68,10 +68,17 @@ def build_pipeline(mesh_device: ttnn.MeshDevice):
             "Example: export DEEPSEEK_V3_HF_MODEL=/path/to/gpt-oss-120b"
         )
 
-    # Prefill MeshConfig: SP=rows (sequence parallel), TP=cols, EP=1
+    # Prefill MeshConfig: TP=cols, EP=1, SP=1.
+    # The pipeline itself handles outer sequence parallelism (splitting tokens across mesh
+    # rows in _prepare_input_tensor), so each row already receives a *different* shard of
+    # the sequence — hidden states are NOT replicated across rows.  The expert's inner
+    # _reshard_for_sequence_parallel assumes replicated inputs (reduce_scatter + 1/sp
+    # rescale), so it would corrupt values if sp > 1.  Setting sp=1 skips that path and
+    # lets each row process its own token shard independently through the experts.
     mesh_config = MeshConfig(
         mesh_shape=mesh_device.shape,
         decode=ModeConfig(tp=PREFILL_TP, ep=mesh_device.shape[0]),
+        prefill=ModeConfig(tp=PREFILL_TP, sp=1, ep=1),
     )
 
     logger.info(
