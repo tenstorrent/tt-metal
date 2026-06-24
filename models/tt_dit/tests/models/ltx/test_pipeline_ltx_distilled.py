@@ -344,8 +344,13 @@ def _temporal_seam_score(path):
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
         [(2, 4), (2, 4), 1, 0, 2, True, line_trace_params, ttnn.Topology.Linear, False],
+        # 4x8 Galaxy (ring): the full-res 1088x1920 latent shards unevenly on the 4x8 mesh
+        # (s1 cond latent 17x30, full 34x60), unlike the 2x4 loudbox — the non-mesh-aligned
+        # i2v case guarded by 08267f8 (VAE encoder space-to-depth fold under H/W sharding) +
+        # 1eb0ff1 (pad VAE conv shards even). Mirrors the validated bh_4x8sp1tp0_ring config.
+        [(4, 8), (4, 8), 1, 0, 2, False, ring_trace_params, ttnn.Topology.Ring, False],
     ],
-    ids=["bh_2x4sp1tp0"],
+    ids=["bh_2x4sp1tp0", "bh_4x8sp1tp0_ring"],
     indirect=["mesh_device", "device_params"],
 )
 def test_pipeline_distilled_i2v(
@@ -395,15 +400,21 @@ def test_pipeline_distilled_i2v(
             prompt, output_path=str(out), images=images, num_frames=num_frames, height=height, width=width, seed=seed
         )
 
-    # 1) t2v e2e clip -> its first frame is the conditioning image
-    t2v = tmp_path / "t2v.mp4"
-    _gen(t2v, None)
-    cond = tmp_path / "cond_frame0.png"
-    subprocess.run([_ffmpeg(), "-v", "error", "-i", str(t2v), "-vframes", "1", "-y", str(cond)], check=True)
+    # Conditioning image: an explicit LTX_I2V_IMAGE (condition directly on it and SKIP the t2v
+    # pre-gen — faster, and tests an external/user image), else the FIRST FRAME of a fresh t2v clip.
+    cond_override = os.environ.get("LTX_I2V_IMAGE")
+    strength = float(os.environ.get("LTX_I2V_STRENGTH", "1.0"))
+    if cond_override:
+        cond = cond_override
+    else:
+        t2v = tmp_path / "t2v.mp4"
+        _gen(t2v, None)
+        cond = tmp_path / "cond_frame0.png"
+        subprocess.run([_ffmpeg(), "-v", "error", "-i", str(t2v), "-vframes", "1", "-y", str(cond)], check=True)
 
-    # 2) i2v conditioned on that frame
+    # i2v conditioned on that frame
     i2v = tmp_path / "i2v.mp4"
-    _gen(i2v, [(str(cond), 0, 1.0)])
+    _gen(i2v, [(str(cond), 0, strength)])
 
     # (a) conditioning works: i2v frame-0 reproduces the conditioning frame (VAE roundtrip + CRF,
     # so not identity — but a far tighter correlation than an unconditioned gen of the same prompt).
@@ -412,11 +423,32 @@ def test_pipeline_distilled_i2v(
             [_ffmpeg(), "-v", "error", "-i", path, "-vframes", "1", "-f", "image2pipe", "-vcodec", "png", "-"],
             capture_output=True,
         ).stdout
-        return torch.from_numpy(
-            np.asarray(Image.open(__import__("io").BytesIO(raw)).convert("L")).astype("float32")
-        ).flatten()
+        return Image.open(__import__("io").BytesIO(raw)).convert("L")
 
-    c, f0 = _luma0(str(cond)), _luma0(str(i2v))
+    def _vec(im):
+        return torch.from_numpy(np.asarray(im).astype("float32")).flatten()
+
+    f0_img = _luma0(str(i2v))
+    cond_img = _luma0(str(cond))
+    # Compare a matched field of view: an external LTX_I2V_IMAGE can differ in resolution/aspect
+    # from the generated frame (the pipeline center-crops the conditioning image to the target
+    # aspect before encoding). Mirror that — center-crop cond to the frame's aspect, then resize.
+    # No-op when cond is a same-size/same-aspect frame (the self-conditioned t2v-first-frame case).
+    fw, fh = f0_img.size
+    cw, ch = cond_img.size
+    aspect = fw / fh
+    if cw / ch > aspect:
+        nw = round(ch * aspect)
+        x0 = (cw - nw) // 2
+        cond_img = cond_img.crop((x0, 0, x0 + nw, ch))
+    elif cw / ch < aspect:
+        nh = round(cw / aspect)
+        y0 = (ch - nh) // 2
+        cond_img = cond_img.crop((0, y0, cw, y0 + nh))
+    if cond_img.size != f0_img.size:
+        cond_img = cond_img.resize(f0_img.size)
+
+    c, f0 = _vec(cond_img), _vec(f0_img)
     pcc = torch.corrcoef(torch.stack([c, f0]))[0, 1].item()
     print(f"\nI2V_E2E frame0-vs-cond PCC={pcc:.4f}", flush=True)
 
