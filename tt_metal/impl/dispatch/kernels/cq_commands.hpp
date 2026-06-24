@@ -358,10 +358,12 @@ constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER = 0x01;
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_NOTIFY_PREFETCH = 0x02;
 // Wait for a count value on memory.
 constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_MEMORY = 0x04;
-// Wait for a count value on a stream
-constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x08;
+// Clear a count value in memory.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_MEMORY = 0x08;
+// Wait for a count value on a stream.
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM = 0x10;
 // Clear a count value on a stream.
-constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x10;
+constexpr uint32_t CQ_DISPATCH_CMD_WAIT_FLAG_CLEAR_STREAM = 0x20;
 
 struct CQDispatchWaitCmd {
     uint8_t flags;    // see above
