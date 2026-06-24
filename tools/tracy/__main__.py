@@ -89,6 +89,13 @@ def main():
         default=False,
     )
     parser.add_option(
+        "--enable-accumulate-profiling",
+        dest="do_accumulate",
+        action="store_true",
+        help="Accumulate multiple kernel invocations in the L1 profiler buffer and only push to DRAM when full (worker cores only)",
+        default=False,
+    )
+    parser.add_option(
         "--no-runtime-analysis",
         dest="no_runtime_analysis",
         action="store_true",
@@ -228,6 +235,9 @@ def main():
 
     if options.do_sum:
         os.environ["TT_METAL_PROFILER_SUM"] = "1"
+
+    if options.do_accumulate:
+        os.environ["TT_METAL_PROFILER_ACCUMULATE"] = "1"
 
     if options.mid_run_device_data:
         os.environ["TT_METAL_PROFILER_MID_RUN_DUMP"] = "1"
