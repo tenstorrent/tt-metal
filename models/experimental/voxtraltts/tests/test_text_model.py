@@ -22,6 +22,7 @@ from models.common.utility_functions import comp_pcc
 from models.experimental.voxtraltts.reference.voxtral_config import DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
 from models.experimental.voxtraltts.tt.voxtral_tt_args import voxtral_text_logits_pcc_optimizations
 from models.experimental.voxtraltts.utils.common import (
+    build_voxtral_text_page_table_host,
     build_voxtral_text_page_table_tt,
     create_real_voxtral_text_model_or_skip,
     hf_voxtral_text_reference_or_skip,
@@ -31,12 +32,13 @@ from models.experimental.voxtraltts.utils.common import (
 
 _MAX_SEQ_LEN = DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
 # Mirrors devstral2 / tt_transformers bringup: sweep ISLs + tail prefill at 65504 (65536 budget).
-_PREFILL_LOGIT_PCC_ISLS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65504)
+_PREFILL_LOGIT_PCC_ISLS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65280)
 _DECODE_32STEP_ISLS = (128, 256, 384, 512)
 _DECODE_32STEP_TAIL_ISL = _MAX_SEQ_LEN - 32  # 65504 + 32 → full KV timeline
 _DECODE_256STEP_TAIL_ISL = _MAX_SEQ_LEN - 256  # 65280 + 256 → positions through 65535
 _PREFILL_LOGIT_PCC_THRESHOLD = 0.99
 _DECODE_LOGIT_PCC_THRESHOLD = 0.98
+_PREFILL_CHUNK_SIZE = 2048
 
 
 def _is_ci() -> bool:
@@ -106,18 +108,110 @@ def _fill_tt_kv_cache(
         _tt_decode_step_logits(model, tokens[:, i], i, page_table_tt=page_table_tt)
 
 
+def _run_tt_prefill_fill_kv(
+    model,
+    tokens: torch.Tensor,
+    *,
+    page_table_tt: ttnn.Tensor | None = None,
+) -> None:
+    """Fill TT KV cache via chunked prefill (fast O(n) path); falls back for non-paged."""
+    if page_table_tt is None:
+        _fill_tt_kv_cache(model, tokens, page_table_tt=None)
+        return
+    seq_len = tokens.shape[1]
+    padded_len = ((seq_len + _PREFILL_CHUNK_SIZE - 1) // _PREFILL_CHUNK_SIZE) * _PREFILL_CHUNK_SIZE
+    if padded_len > seq_len:
+        tokens = torch.nn.functional.pad(tokens, (0, padded_len - seq_len))
+    page_table_host = build_voxtral_text_page_table_host(max_seq_len=_MAX_SEQ_LEN)
+    for chunk_start in range(0, padded_len, _PREFILL_CHUNK_SIZE):
+        chunk_end = chunk_start + _PREFILL_CHUNK_SIZE
+        chunk_tokens = tokens[:, chunk_start:chunk_end]
+        tt_x, rot_mats_global, rot_mats_local, tt_page_table, _, _ = model.prepare_inputs_prefill(
+            chunk_tokens,
+            start_pos=chunk_start,
+            page_table=page_table_host,
+        )
+        chunk_page_table_host = page_table_host[:, chunk_start // 32 : chunk_end // 32]
+        tt_chunk_page_table = ttnn.from_torch(
+            chunk_page_table_host,
+            device=model.inner.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(model.inner.mesh_device),
+        )
+        tt_logits = model.inner.ttnn_prefill_forward(
+            tt_x,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
+            page_table=tt_page_table,
+            chunk_page_table=tt_chunk_page_table,
+            chunk_start_idx=chunk_start,
+            get_last_token=-1,
+            kv_cache=None,
+        )
+        if tt_logits.is_allocated():
+            ttnn.deallocate(tt_logits)
+        if tt_chunk_page_table.is_allocated():
+            ttnn.deallocate(tt_chunk_page_table)
+
+
 def _tt_last_logit_from_prefill_tokens(
     model,
     tokens: torch.Tensor,
     *,
     page_table_tt: ttnn.Tensor | None = None,
 ) -> torch.Tensor:
-    """Run token-by-token prefill on device; return logits at the final position."""
+    """Run chunked TT prefill and return logits at the final prompt position."""
     seq_len = tokens.shape[1]
     if seq_len == 1:
         return _tt_decode_step_logits(model, tokens[:, 0], 0, page_table_tt=page_table_tt)
-    _fill_tt_kv_cache(model, tokens[:, :-1], page_table_tt=page_table_tt)
-    return _tt_decode_step_logits(model, tokens[:, -1], seq_len - 1, page_table_tt=page_table_tt)
+    last_token_idx = seq_len - 1
+    padded_len = ((seq_len + _PREFILL_CHUNK_SIZE - 1) // _PREFILL_CHUNK_SIZE) * _PREFILL_CHUNK_SIZE
+    if padded_len > seq_len:
+        tokens = torch.nn.functional.pad(tokens, (0, padded_len - seq_len))
+    page_table_host = build_voxtral_text_page_table_host(max_seq_len=_MAX_SEQ_LEN)
+    last_chunk_start = (last_token_idx // _PREFILL_CHUNK_SIZE) * _PREFILL_CHUNK_SIZE
+    last_logits = None
+    for chunk_start in range(0, padded_len, _PREFILL_CHUNK_SIZE):
+        chunk_end = chunk_start + _PREFILL_CHUNK_SIZE
+        chunk_tokens = tokens[:, chunk_start:chunk_end]
+        tt_x, rot_mats_global, rot_mats_local, tt_page_table, _, _ = model.prepare_inputs_prefill(
+            chunk_tokens,
+            start_pos=chunk_start,
+            page_table=page_table_host,
+        )
+        chunk_page_table_host = page_table_host[:, chunk_start // 32 : chunk_end // 32]
+        tt_chunk_page_table = ttnn.from_torch(
+            chunk_page_table_host,
+            device=model.inner.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(model.inner.mesh_device),
+        )
+        is_last_chunk = chunk_start == last_chunk_start
+        last_token_idx_in_chunk = last_token_idx - chunk_start
+        get_last_token = (last_token_idx_in_chunk // 32) * 32 if is_last_chunk else -1
+        tt_logits = model.inner.ttnn_prefill_forward(
+            tt_x,
+            rot_mats_global=rot_mats_global,
+            rot_mats_local=rot_mats_local,
+            page_table=tt_page_table,
+            chunk_page_table=tt_chunk_page_table,
+            chunk_start_idx=chunk_start,
+            get_last_token=get_last_token,
+            kv_cache=None,
+        )
+        if is_last_chunk:
+            tt_logits = ttnn.to_layout(tt_logits, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            last_logits = model.inner.process_output_prefill(
+                tt_logits.cpu(), last_token_idx=(last_token_idx_in_chunk % 32)
+            ).float()
+        if tt_logits.is_allocated():
+            ttnn.deallocate(tt_logits)
+        if tt_chunk_page_table.is_allocated():
+            ttnn.deallocate(tt_chunk_page_table)
+    assert last_logits is not None
+    return last_logits
 
 
 def _assert_prefill_last_logit_pcc(model, seq_len: int, *, pcc_threshold: float) -> None:
@@ -154,7 +248,7 @@ def _assert_decode_multistep_logits_pcc(
     """
     seq_len = prompt_tokens.shape[1]
     decode_steps = decode_tokens.shape[1]
-    _fill_tt_kv_cache(model, prompt_tokens, page_table_tt=page_table_tt)
+    _run_tt_prefill_fill_kv(model, prompt_tokens, page_table_tt=page_table_tt)
 
     hf_ref = hf_voxtral_text_reference_or_skip()
     hf_past = hf_ref(input_ids=prompt_tokens, use_cache=True).past_key_values
