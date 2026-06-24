@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Tuple, Union
 
 from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
@@ -16,6 +16,12 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
+
+# Per-axis CCL topology. A scalar applies to both mesh axes; a 2-tuple (row = SP-axis-0,
+# col = TP-axis-1) configures each axis independently — e.g. (Ring, Linear) for
+# FABRIC_2D_TORUS_Y, where only the SP axis is wrapped into a ring.
+PerAxisTopology = Tuple[ttnn.Topology, ttnn.Topology]
+TopologyArg = Union[ttnn.Topology, PerAxisTopology]
 
 
 class TtPrefillBlock(LightweightModule):
@@ -70,7 +76,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int = 1024,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 2,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
@@ -182,7 +188,7 @@ class TtPrefillBlock(LightweightModule):
         seq_len: int,
         dispatch_buffer_capacity_factor: int = 2,
         num_links: int = 1,
-        topology: ttnn.Topology = ttnn.Topology.Linear,
+        topology: TopologyArg = ttnn.Topology.Linear,
         sp_axis: int = 0,
         tp_axis: int = 1,
         is_balanced: bool = False,
@@ -213,6 +219,9 @@ class TtPrefillBlock(LightweightModule):
         # run Ring. Applying Ring to the unwrapped TP axis deadlocks: get_usable_topology keeps
         # Ring (the coords span the axis) and the all-gather waits forever on a wrap link that
         # has no physical fabric edge. MoE receives the full `topology` and splits row/col itself.
+        assert (
+            not isinstance(topology, tuple) or len(topology) == 2
+        ), f"per-axis topology must be a 2-tuple (sp_axis_0, tp_axis_1), got {topology!r}"
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         self.topology = tp_topology  # forward()'s dense-FFN all-gather is on the TP axis (cluster_axis=1)
         self.kv_only = kv_only
@@ -317,7 +326,7 @@ class TtPrefillBlock(LightweightModule):
         sp_axis,
         emb_dim,
         num_links,
-        topology,
+        topology: TopologyArg,
         gate_fallback_mode,
         routed_expert_activations_dtype,
         routed_expert_weights_dtype,
