@@ -1,9 +1,14 @@
-# Fully-pinned variant of single_bh_galaxy_subtorus_xy4 (Ring-4 on BOTH axes, [4,4] [RING,RING]).
+# Single Blackhole galaxy carved to a 4x4 sub-torus, Ring-4 on both axes, with all 16 chips pinned.
 #
-# Same 16-chip inner green tile and same chip_id -> physical (tray,asic) pinning as
-# single_bh_galaxy_subtorus_y4_pinned, but dim_types are [RING, RING] (full 4x4 2D torus).
-# Placement is deterministic and portable across Rev-C BH galaxies (tray_id/asic_location come
-# from the PCIe-bus UBB id). Pair with FabricConfig.FABRIC_2D_TORUS_XY and Topology.Ring.
+# device_topology [4,4] [RING,RING]: dim 0 (rows / Y) and dim 1 (cols / X) are each a closed ring of
+# 4, forming a full 4x4 2D torus. The pinnings below map each logical chip_id to a fixed physical
+# (tray_id, asic_location), so placement is deterministic and portable across Rev-C Blackhole
+# galaxies (tray_id / asic_location come from the PCIe-bus UBB id). The 16 chips are ASICs
+# 3, 4, 7, 8 of trays 1-4.
+#
+# Usage: select with TT_MESH_GRAPH_DESC_PATH, pair with FabricConfig.FABRIC_2D_TORUS_XY and
+# Topology.Ring on both cluster axes, with TT_VISIBLE_DEVICES restricted to those 16 chips. Single
+# host / single rank.
 
 mesh_descriptors {
   name: "M0"
@@ -13,7 +18,7 @@ mesh_descriptors {
   channels { count: 2 policy: RELAXED }
 }
 
-# --- Pinnings (chip_id -> tray/asic), inner green 4x4 tile -------------------
+# --- Pinnings (chip_id -> tray/asic): ASICs 3,4,7,8 of trays 1-4 -------------
 pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 0  } physical_asic_position { tray_id: 1 asic_location: 7 } }
 pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 1  } physical_asic_position { tray_id: 1 asic_location: 3 } }
 pinnings { logical_fabric_node_id { mesh_id: 0 chip_id: 2  } physical_asic_position { tray_id: 2 asic_location: 3 } }

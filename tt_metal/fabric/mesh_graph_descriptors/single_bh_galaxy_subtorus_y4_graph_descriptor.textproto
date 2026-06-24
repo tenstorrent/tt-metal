@@ -1,14 +1,13 @@
-# Single BH galaxy, carved to a single 4x4 subtorus with a Ring-4 on the Y axis.
+# Single Blackhole galaxy carved to a 4x4 sub-torus: Ring-4 on the Y axis.
 #
-# Analog of single_bh_galaxy_torus_y (which is [8,4] [RING,LINE], a Ring-8 down the
-# column axis), but [4,4] [RING,LINE]: dim 0 (rows / Y / the vertical "column" axis)
-# is a closed Ring of 4, dim 1 (cols / X) stays a LINE. Uses 16 of the galaxy's 32
-# chips (one GREEN 1x4-ring 4x4 torus tile from the galaxy wiring); the dim-0 wrap
-# closes on the physical green vertical-ring cables.
+# device_topology [4,4] [RING,LINE]: dim 0 (rows / Y) is a closed ring of 4; dim 1 (cols / X) is a
+# line. Uses 16 of the galaxy's 32 chips; the dim-0 wrap closes on the physical vertical ring cables.
+# The chip_id -> physical mapping is chosen by the placement solver (any valid 16-chip embedding).
 #
-# Select via TT_MESH_GRAPH_DESC_PATH (override) paired with FabricConfig.FABRIC_2D_TORUS_Y
-# (FabricType TORUS_Y = dim-0 ring, consistent with [RING,LINE]). Open a (4,4) mesh_device
-# and run Topology.Ring on cluster_axis=0. Single host / single rank.
+# Usage: select with TT_MESH_GRAPH_DESC_PATH, pair with FabricConfig.FABRIC_2D_TORUS_Y, open a (4,4)
+# mesh_device, run Topology.Ring on cluster_axis=0, and restrict TT_VISIBLE_DEVICES to the 16 chips
+# whose wiring forms the ring (ASICs 3, 4, 7, 8 of trays 1-4). Single host / single rank. RELAXED
+# tolerates the 16-chip slice mapping onto a partial 32-chip UBB board.
 
 mesh_descriptors {
   name: "M0"
