@@ -209,6 +209,16 @@ def test_dots_ocr_dp4_tp2_mesh_resolution(monkeypatch):
     assert is_tp2_hybrid_parallelism()
 
 
+def test_dots_ocr_dp2_tp2_n300_mesh_resolution(monkeypatch):
+    """N300 DP2_TP2 uses (1, 2) TP2 / batch 1 (no device required)."""
+    monkeypatch.setenv("MESH_DEVICE", "N300")
+    monkeypatch.setenv("DOTS_OCR_PARALLELISM", "DP2_TP2")
+    assert _resolve_mesh_device_shape() == (1, 2)
+    assert _dots_ocr_mesh_dp_degree() == 1
+    assert _dots_ocr_pipeline_batch_size() == 1
+    assert is_tp2_hybrid_parallelism()
+
+
 @pytest.mark.parametrize(
     "device_params",
     [_dots_ocr_device_params()],
@@ -300,7 +310,8 @@ def test_dots_ocr_vision(mesh_device, image_link):
     Default mesh comes from ``MESH_DEVICE``. Plain T3K is the hybrid ``(2, 4)``
     shape and ``T3K_DP8`` is the working ``(8, 1)`` DP8/TP1 shape.
     ``DOTS_OCR_PARALLELISM`` selects DP×TP hybrids: ``DP2_TP4`` ``(2,4)``,
-    ``DP2_TP2`` ``(2,2)``, ``DP4_TP2`` ``(4,2)``; plain ``DP`` is DP8/TP1.
+    ``DP2_TP2`` ``(2,2)`` on T3K or ``(1,2)`` on N300, ``DP4_TP2`` ``(4,2)``;
+    plain ``DP`` is DP8/TP1 on T3K and DP2/TP1 on N300.
     For TP decode scheme comparisons, set
     ``DOTS_OCR_TP_DECODE_SCHEME=row``; otherwise ``col_parallel`` is used.
     """
@@ -1496,8 +1507,8 @@ def test_dots_ocr_vision(mesh_device, image_link):
     ],
 )
 @pytest.mark.skipif(
-    os.environ.get("MESH_DEVICE", "").upper() != "T3K" or not is_tp2_hybrid_parallelism(),
-    reason="head_parallel TP2 OCR regression requires MESH_DEVICE=T3K DOTS_OCR_PARALLELISM=DP2_TP2|DP4_TP2",
+    os.environ.get("MESH_DEVICE", "").upper() not in {"T3K", "N300", "P300"} or not is_tp2_hybrid_parallelism(),
+    reason=("head_parallel TP2 OCR regression requires MESH_DEVICE=T3K|N300 " "DOTS_OCR_PARALLELISM=DP2_TP2|DP4_TP2"),
 )
 def test_dots_ocr_vision_head_parallel_tp2_ocr_regression(mesh_device, image_link, monkeypatch):
     """Full-pipeline OCR/table regression for tp4_prefill + head_parallel on DP2_TP2 / DP4_TP2."""

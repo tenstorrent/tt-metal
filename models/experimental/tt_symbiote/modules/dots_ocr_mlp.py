@@ -618,12 +618,9 @@ class TTNNDotsOCRFusedGateUpColParallel(TTNNLinearLLamaIReplicatedWColSharded):
         is_decode = int(input_shape[-2]) <= ttnn.TILE_SIZE
         if is_decode and program_config is not None:
             input_4d = ttnn.reshape(input_tensor, input_shape)
-            # Downcast the activation to BFP8 *inside* the reshard that already runs
-            # (the dtype= arg), so there is no separate typecast op. The DRAM-sharded
-            # matmul is weight-bound, so a standalone typecast would be pure decode
-            # overhead; folding it into the existing to_memory_config is free. BFP8
-            # activation is accuracy-neutral here (output text stays byte-identical).
-            input_4d = ttnn.to_memory_config(input_4d, self._gate_up_col_dram_input_cfg, dtype=ttnn.bfloat8_b)
+            # Keep the post-attention layernorm output in BF16 through the reshard
+            # into the DRAM-sharded gate_up kernel (BF16 x BFP4 => BFP8, matching o_proj).
+            input_4d = ttnn.to_memory_config(input_4d, self._gate_up_col_dram_input_cfg)
             tt_output = ttnn.linear(
                 input_4d,
                 self._gate_up_col_dram_weight,

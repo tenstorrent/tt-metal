@@ -377,12 +377,17 @@ class TTNNDotsOCRDecoderLayer(TTNNModule):
             new_layer.mlp_prefill = TTNNDotsOCRMLP.from_torch(torch_layer.mlp)
         else:
             raise ValueError(f"Unsupported dots.ocr decoder TP decode scheme: {tp_decode_scheme}")
-        if tp_decode_scheme in {"col_parallel", "head_parallel"} or _use_bfp8_decoder_weights(
-            getattr(new_layer.self_attn, "layer_idx", None)
-        ):
+        # Column/head-parallel decode gate_up: BF16 activation x BFP4 weight => BFP8
+        # (see fused_gate_up_col DRAM-sharded path). Row-parallel may still promote
+        # gate_up to BFP8 on deeper layers for OCR quality.
+        if tp_decode_scheme in {"col_parallel", "head_parallel"}:
+            new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat4_b)
+        elif _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)):
             new_layer.mlp.fused_gate_up_proj.set_weight_dtype(ttnn.bfloat8_b)
-            if hasattr(new_layer, "mlp_prefill"):
-                new_layer.mlp_prefill.set_weight_dtype(ttnn.bfloat8_b)
+        if _use_bfp8_decoder_weights(getattr(new_layer.self_attn, "layer_idx", None)) and hasattr(
+            new_layer, "mlp_prefill"
+        ):
+            new_layer.mlp_prefill.set_weight_dtype(ttnn.bfloat8_b)
         return new_layer
 
     def call(self, *args, **kwds):

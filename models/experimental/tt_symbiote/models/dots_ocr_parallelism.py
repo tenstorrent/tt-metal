@@ -8,8 +8,15 @@ Supported hybrid modes on T3K (8 devices):
   - ``DP2_TP2`` -> mesh ``(2, 2)``  batch 2, TP 2  (4 devices)
   - ``DP4_TP2`` -> mesh ``(4, 2)``  batch 4, TP 2  (8 devices)
 
-Set ``DOTS_OCR_PARALLELISM`` to one of the above with ``MESH_DEVICE=T3K``.
-Plain ``DOTS_OCR_PARALLELISM=DP`` uses ``(8, 1)`` DP8/TP1 on T3K.
+On N300 / P300 (2 devices), ``DP2_TP2`` maps to mesh ``(1, 2)`` (TP2, batch 1).
+The 2-device board cannot run batch-2 and TP-2 concurrently; this mode selects
+the TP2 hybrid body (``tp4_prefill`` + ``head_parallel`` decode tuning) on the
+default N300 tensor-parallel mesh. Use plain ``DOTS_OCR_PARALLELISM=DP`` for
+``(2, 1)`` batch-2 / TP1 on N300.
+
+Set ``DOTS_OCR_PARALLELISM`` to one of the above with ``MESH_DEVICE=T3K`` or
+``MESH_DEVICE=N300`` (``DP2_TP2`` only on N300). Plain ``DOTS_OCR_PARALLELISM=DP``
+uses ``(8, 1)`` DP8/TP1 on T3K and ``(2, 1)`` DP2/TP1 on N300.
 """
 
 from __future__ import annotations
@@ -44,6 +51,8 @@ DOTS_OCR_DP2_TP4_MESH_DEVICE_MAP = {
 
 DOTS_OCR_DP2_TP2_MESH_DEVICE_MAP = {
     "T3K": (2, 2),
+    "N300": (1, 2),
+    "P300": (1, 2),
 }
 
 DOTS_OCR_DP4_TP2_MESH_DEVICE_MAP = {
@@ -82,7 +91,7 @@ def resolve_mesh_device_shape(mesh_device: str | None = None):
     if mode == "DP2_TP2":
         shape = _mesh_device_map_get(DOTS_OCR_DP2_TP2_MESH_DEVICE_MAP, mesh_device)
         if shape is None:
-            raise ValueError("DOTS_OCR_PARALLELISM=DP2_TP2 is only supported for MESH_DEVICE=T3K")
+            raise ValueError("DOTS_OCR_PARALLELISM=DP2_TP2 is only supported for MESH_DEVICE=T3K or MESH_DEVICE=N300")
         return shape
     if mode == "DP4_TP2":
         shape = _mesh_device_map_get(DOTS_OCR_DP4_TP2_MESH_DEVICE_MAP, mesh_device)

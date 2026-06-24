@@ -1084,7 +1084,12 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 # run before move_weights so the weight loads at the chosen dtype.
                 fgu = getattr(getattr(layer, "mlp", None), "fused_gate_up_proj", None)
                 if fgu is not None and hasattr(fgu, "set_weight_dtype"):
-                    gate_up_dtype = ttnn.bfloat4_b if i < DOTS_OCR_GATE_UP_BF4_LAYERS else ttnn.bfloat8_b
+                    if tp_decode_scheme in {"col_parallel", "head_parallel"}:
+                        # Decode col/head-parallel: keep BFP4 gate_up weights so the
+                        # DRAM-sharded matmul runs BF16 x BFP4 => BFP8 after LN.
+                        gate_up_dtype = ttnn.bfloat4_b
+                    else:
+                        gate_up_dtype = ttnn.bfloat4_b if i < DOTS_OCR_GATE_UP_BF4_LAYERS else ttnn.bfloat8_b
                     fgu.set_weight_dtype(gate_up_dtype)
                 decoder_layers.append(layer)
             stack = TTNNDotsOCRLayerStack(decoder_layers)
@@ -1424,9 +1429,15 @@ class TTNNDotsOCRPipeline(TTNNModule):
             )
 
         # --- Multimodal vision: patch_embed outside; vision trunk + scatter + decoder in one trace ---
-        # Set when the dual multimodal path scatter-fuses + gathers EAGER and hands
-        # the captured graph a plain full-H hidden (no in-trace scatter/CCL).
+        # Set when embed + scatter-fuse (and optional full-H gather) run EAGER and hand
+        # the captured graph a plain hidden tensor (no in-trace scatter/CCL).
         prefused_multimodal = False
+        # In-graph scatter/all_gather issue illegal host writes during trace capture on
+        # TP meshes. T3K DP dual-stream always prefuses; tp4_prefill also needs an eager
+        # all_gather; symbiote TP (e.g. N300 batch 1) still needs eager scatter only.
+        _eager_prefuse_multimodal = (
+            dual or self.graph_prefill._gather_hidden_for_full_body or _tp_degree(self.device) > 1
+        )
         if pixel_values is not None:
             if image_grid_thw is None:
                 raise ValueError("image_grid_thw is required when pixel_values is set")
@@ -1498,7 +1509,7 @@ class TTNNDotsOCRPipeline(TTNNModule):
             self.graph_prefill._ensure_scatter_zero_row(
                 _tp_degree(self.device), self.graph_prefill._hidden_size, int(vision_tt.shape[3])
             )
-            if dual:
+            if _eager_prefuse_multimodal:
                 with _profile_stage(self.device, "prefill.text_embedding"):
                     # Run the @trace_enabled embedding EAGER (disable_trace) so it
                     # does not capture its own sub-trace. A resident embedding trace
@@ -1511,13 +1522,12 @@ class TTNNDotsOCRPipeline(TTNNModule):
                 if self._batch_input_mapper is not None and int(text_embeds.shape[0]) > 1:
                     with _profile_stage(self.device, "prefill.dp_repack_hidden"):
                         text_embeds = self._dp_repack_batch_sharded_hidden(text_embeds)
-                # Scatter-fuse vision into the text embeds and gather to full width
-                # EAGER, OUTSIDE the captured trace. The scatter's gather/all_gather
-                # are plain CCL ops that do per-device host writes (semaphore setup)
-                # which are illegal during trace capture (bisected: scatter alone
-                # captures clean, +all_gather_hidden FATALs). Producing the full-H
-                # fused hidden here lets the captured graph record ONLY the decoder
-                # body, fed a plain replicated tensor (no mm_args / scatter / CCL).
+                # Scatter-fuse vision into the text embeds EAGER, OUTSIDE the captured
+                # trace. On tp4_prefill also all_gather to full-H here: plain CCL ops
+                # do per-device host writes (semaphore setup) illegal during capture
+                # (bisected: scatter alone captures clean, +all_gather_hidden FATALs).
+                # Producing the fused hidden here lets the captured graph record ONLY
+                # the decoder body (no mm_args / in-trace scatter / CCL).
                 with _profile_stage(self.device, "prefill.scatter_fuse"):
                     fused = self.graph_prefill._scatter_fuse_text_and_vision(text_embeds, vision_tt, tt_idx, tt_mask)
                     if self.graph_prefill._gather_hidden_for_full_body:
