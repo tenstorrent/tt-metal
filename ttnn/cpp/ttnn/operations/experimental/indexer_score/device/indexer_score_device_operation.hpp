@@ -24,13 +24,13 @@ struct IndexerScoreDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Custom hash so the cache_batch_idx / kv_len values do NOT recompile (only their has_value() is hashed);
-    // everything else keys as usual. See the definition for details.
+    // Custom hash: the runtime values (cache_batch_idx / kv_len / chunk_start_idx) are excluded so they reuse
+    // one compiled program; cluster_axis IS hashed. See the definition for the full rationale.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    // Only re-checks the runtime values (slot < B, kv_len bounds) that can change on a hit; the hash pins
-    // everything else. See validate_runtime_values.
+    // Re-checks the runtime values that can change on a hit: persistent-cache values (slot < B, kv_len bounds)
+    // and the hash-excluded chunk_start window/alignment (mirrors ring_joint_sdpa's runtime revalidation).
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
@@ -49,7 +49,8 @@ struct IndexerScoreDeviceOperation {
         const IndexerScoreProgramConfig& program_config,
         const DeviceComputeKernelConfig& compute_kernel_config,
         std::optional<uint32_t> cache_batch_idx,
-        std::optional<uint32_t> kv_len);
+        std::optional<uint32_t> kv_len,
+        std::optional<uint32_t> cluster_axis);
 };
 
 }  // namespace ttnn::operations::experimental::indexer_score
@@ -66,16 +67,22 @@ namespace ttnn::experimental {
 // kv_len: when set, only the first kv_len key positions of k are valid this dispatch (rest masked out);
 // must be tile-aligned, in (0, T], with chunk_start_idx + Sq <= kv_len. Output is still [B, 1, Sq, T] with
 // only columns [0, kv_len) written.
-// Both values are re-applied each dispatch and excluded from the program hash, so switching slot or growing
-// kv_len reuses ONE program -- no recompile.
+// chunk_start_idx is the ABSOLUTE chunk_start of rank 0 (lowest cluster_axis coord); rank r uses
+// chunk_start_idx + r*Sq, so one dispatch gives each SP rank its own chunk_start. OMIT it on multichip: the
+// base is deduced as T - sp_ring*Sq (sp_ring = mesh extent along cluster_axis, whole mesh if unset -- a 2D
+// SP x TP mesh uses the SP-axis length, not total devices). On single chip (one device = rank 0) set it to
+// history + rank*Sq to simulate any rank. cluster_axis selects the SP ring axis.
+// All of cache_batch_idx / kv_len / chunk_start are re-applied each dispatch and excluded from the program
+// hash, so switching slot, growing kv_len, or changing chunk_start reuses ONE program -- no recompile.
 ttnn::Tensor indexer_score(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
-    uint32_t chunk_start_idx = 0,
+    std::optional<uint32_t> chunk_start_idx = std::nullopt,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     std::optional<uint32_t> cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_len = std::nullopt);
+    std::optional<uint32_t> kv_len = std::nullopt,
+    std::optional<uint32_t> cluster_axis = std::nullopt);
 
 }  // namespace ttnn::experimental
