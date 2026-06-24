@@ -368,22 +368,6 @@ jobs:
       ${{ needs.parse-platform.outputs.distro }}
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
-    # Cross-workflow compile mutex: if two workflows (e.g. pr-gate + merge-gate) trigger
-    # builds for the same commit + config simultaneously, queue them so the second run
-    # gets a fully warm ccache instead of both racing with cold caches.
-    # Keyed purely on SHA + compile inputs — no branch/PR special-casing.
-    concurrency:
-      group: >-
-        cmake-build-
-        ${{ github.sha }}-
-        ${{ inputs.platform }}-
-        ${{ inputs.build-type }}-
-        ${{ inputs.toolchain }}-
-        ${{ inputs.architecture }}-
-        tracy:${{ inputs.tracy }}-
-        dist:${{ inputs.distributed }}-
-        lto:${{ inputs.enable-lto }}
-      queue: max
     timeout-minutes: 100
     runs-on: ${{ inputs['runs-on'] }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
