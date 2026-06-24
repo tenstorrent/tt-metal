@@ -387,6 +387,10 @@ class MoEGate(nn.Module):
         import torch.nn.init as init
 
         init.kaiming_uniform_(self.weight, a=math.sqrt(5))
+        if self.topk_method == "noaux_tc":
+            # Without this the bias stays uninitialized (torch.empty), making gate routing —
+            # and therefore the whole layer — non-deterministic across runs with random weights.
+            init.zeros_(self.e_score_correction_bias)
 
     def forward(self, hidden_states):
         bsz, seq_len, h = hidden_states.shape

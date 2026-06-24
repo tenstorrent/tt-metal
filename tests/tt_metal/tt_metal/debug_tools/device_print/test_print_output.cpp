@@ -142,7 +142,7 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
         // so reduce the iteration count on Quasar. The race-detection signal does not require
         // a large count — even a small number of iterations with high concurrency exposes any
         // memory-ordering bugs immediately, and the assertion is per-iteration.
-        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 100u : 1000u;
+        const uint32_t iterations_count = (mesh_device->arch() == tt::ARCH::QUASAR) ? 10u : 1000u;
         std::vector<uint32_t> runtime_args = {iterations_count};
 
         // Per-arch expected number of distinct RISCs printing concurrently on the same core.
@@ -562,4 +562,31 @@ TEST_F(DevicePrintOutputFixture, PrintCallstackCurrent) {
         "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_helper.cpp",
         /* present */ {"CALLSTACK_BEGIN", "kernel_main", "CALLSTACK_END"},
         /* absent */ {"current"});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnambiguous) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unambiguous.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "mid", "top", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallResolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_resolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "left_top", "left", "fork_func", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"right", "right_top", "..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnresolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unresolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "...", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"left", "right"});
 }

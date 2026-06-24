@@ -1,4 +1,4 @@
-name: "[internal] tt-metal L2 tests impl"
+name: "[internal] shield sdxl tests impl"
 
 on:
   workflow_call:
@@ -33,7 +33,7 @@ jobs:
     outputs:
       matrix: ${{ steps.filter-categories.outputs.matrix }}
     env:
-      TESTS_YAML_PATH: ./tests/pipeline_reorg/tt_metal_l2_tests.yaml
+      TESTS_YAML_PATH: ./tests/pipeline_reorg/shield_sdxl_tests.yaml
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -52,7 +52,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "l2"
+            "unit"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
@@ -72,7 +72,7 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-  l2-tests:
+  shield-sdxl-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
     strategy:

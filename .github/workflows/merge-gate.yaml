@@ -66,6 +66,10 @@ jobs:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/build-all-docker-images.yaml
     secrets: inherit
+    with:
+      runs-on-large: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
+      runs-on-medium: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
+      check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
   # TODO: Duplicate check-harbor call. build-all-docker-images.yaml (called by
   # docker-images above) also calls check-harbor internally, but does not expose
@@ -76,6 +80,8 @@ jobs:
   check-harbor:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
 
   find-changes:
@@ -134,6 +140,7 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2204-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
 
   build-tsan:
@@ -161,6 +168,7 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
 
   build-sweeps:
@@ -182,7 +190,7 @@ jobs:
       ubuntu-2404-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
       ubuntu-2404-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2404-dev-tag }}
       ubuntu-2404-manylinux-tag: ${{ needs.docker-images.outputs.manylinux-tag }}
-      runs-on: tt-ubuntu-2204-medium-stable
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
       fetch-depth: 1
 
   resolve-docker-pull-refs-tsan:
@@ -250,6 +258,7 @@ jobs:
       basic-dev-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-dev-tag }}
       basic-ttnn-runtime-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-basic-ttnn-runtime-tag }}
       manylinux-docker-image: ${{ needs.docker-images.outputs.manylinux-tag }}
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       fetch-depth: 1
 
   resolve-docker-pull-refs-asan:
@@ -380,6 +389,7 @@ jobs:
     uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
       docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}

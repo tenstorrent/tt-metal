@@ -4,8 +4,14 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/noc.h"
+#include "api/dataflow/circular_buffer.h"
+#include "api/core_local_mem.h"
+#include "api/tensor/noc_traits.h"
 
 void kernel_main() {
+    Noc noc;
+
     uint32_t cos_addr = get_arg_val<uint32_t>(0);
     uint32_t sin_addr = get_arg_val<uint32_t>(1);
     uint32_t num_rows = get_arg_val<uint32_t>(2);
@@ -27,9 +33,16 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
 
-    cb_reserve_back(input_cb_id, num_rows * Wt);
-    cb_push_back(input_cb_id, num_rows * Wt);
-    uint64_t input_l1_read_addr = get_noc_addr(get_read_ptr(input_cb_id));
+    CircularBuffer cb_input(input_cb_id);
+    CircularBuffer cb_rotated_input(rotated_input_cb_id);
+    CircularBuffer cb_cos(cos_cb_id);
+    CircularBuffer cb_sin(sin_cb_id);
+    CircularBuffer cb_scalar(scalar_cb_id);
+
+    cb_input.reserve_back(num_rows * Wt);
+    cb_input.push_back(num_rows * Wt);
+    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
+    uint64_t input_l1_read_addr = get_noc_addr(cb_input.get_read_ptr());
 
     const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
     const auto s1 = TensorAccessor(cos_args, cos_addr);
@@ -39,30 +52,30 @@ void kernel_main() {
 
     // Fill tile with zeros
     const uint32_t scalar_tile_bytes = get_tile_size(scalar_cb_id);
-    cb_reserve_back(scalar_cb_id, onetile);
-    uint32_t l1_zeros_addr_in_scalar = get_write_ptr(scalar_cb_id);
+    cb_scalar.reserve_back(onetile);
+    uint32_t l1_zeros_addr_in_scalar = cb_scalar.get_write_ptr();
     volatile tt_l1_ptr uint16_t* scalar_buffer =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_zeros_addr_in_scalar);
     scalar_buffer[0] = scalar_value;
-    cb_push_back(scalar_cb_id, onetile);
+    cb_scalar.push_back(onetile);
 
     uint32_t cos_sin_curr_id = cos_sin_start_id;
 
 #ifdef DECODE_MODE
-    cb_reserve_back(sin_cb_id, Wt);
-    cb_reserve_back(cos_cb_id, Wt);
-    uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
-    uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
+    cb_sin.reserve_back(Wt);
+    cb_cos.reserve_back(Wt);
+    uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
+    uint32_t cos_l1_write_addr = cb_cos.get_write_ptr();
     for (uint32_t i = 0; i < Wt; i++) {
-        noc_async_read_page(cos_sin_curr_id, s2, sin_l1_write_addr);
-        noc_async_read_page(cos_sin_curr_id, s1, cos_l1_write_addr);
+        noc.async_read(s2, CoreLocalMem<uint32_t>(sin_l1_write_addr), sin_tile_bytes, {.page_id = cos_sin_curr_id}, {});
+        noc.async_read(s1, CoreLocalMem<uint32_t>(cos_l1_write_addr), cos_tile_bytes, {.page_id = cos_sin_curr_id}, {});
         cos_sin_curr_id++;
         sin_l1_write_addr += sin_tile_bytes;
         cos_l1_write_addr += cos_tile_bytes;
     }
-    noc_async_read_barrier();
-    cb_push_back(sin_cb_id, Wt);
-    cb_push_back(cos_cb_id, Wt);
+    noc.async_read_barrier();
+    cb_sin.push_back(Wt);
+    cb_cos.push_back(Wt);
 #else
     uint32_t ht = start_row_id;
 #endif
@@ -70,27 +83,31 @@ void kernel_main() {
     uint32_t Wt_size = half_Wt_size + half_Wt_size;
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     for (uint32_t i = 0; i < num_rows; ++i) {
-        cb_reserve_back(rotated_input_cb_id, Wt);
-        uint32_t rotated_input_l1_write_addr = get_write_ptr(rotated_input_cb_id);
+        cb_rotated_input.reserve_back(Wt);
+        uint32_t rotated_input_l1_write_addr = cb_rotated_input.get_write_ptr();
+        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
         noc_async_read(input_l1_read_addr + half_Wt_size, rotated_input_l1_write_addr, half_Wt_size);
+        // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address.
         noc_async_read(input_l1_read_addr, rotated_input_l1_write_addr + half_Wt_size, half_Wt_size);
         input_l1_read_addr += Wt_size;
-        noc_async_read_barrier();
-        cb_push_back(rotated_input_cb_id, Wt);
+        noc.async_read_barrier();
+        cb_rotated_input.push_back(Wt);
 
 #ifndef DECODE_MODE
         for (uint32_t j = 0; j < Wt; ++j) {
-            cb_reserve_back(sin_cb_id, onetile);
-            uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
-            noc_async_read_page(cos_sin_curr_id, s2, sin_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(sin_cb_id, onetile);
+            cb_sin.reserve_back(onetile);
+            uint32_t sin_l1_write_addr = cb_sin.get_write_ptr();
+            noc.async_read(
+                s2, CoreLocalMem<uint32_t>(sin_l1_write_addr), sin_tile_bytes, {.page_id = cos_sin_curr_id}, {});
+            noc.async_read_barrier();
+            cb_sin.push_back(onetile);
 
-            cb_reserve_back(cos_cb_id, onetile);
-            uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
-            noc_async_read_page(cos_sin_curr_id, s1, cos_l1_write_addr);
-            noc_async_read_barrier();
-            cb_push_back(cos_cb_id, onetile);
+            cb_cos.reserve_back(onetile);
+            uint32_t cos_l1_write_addr = cb_cos.get_write_ptr();
+            noc.async_read(
+                s1, CoreLocalMem<uint32_t>(cos_l1_write_addr), cos_tile_bytes, {.page_id = cos_sin_curr_id}, {});
+            noc.async_read_barrier();
+            cb_cos.push_back(onetile);
             cos_sin_curr_id++;
         }
         ht++;
