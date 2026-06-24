@@ -312,7 +312,7 @@ get_packed_write_max_multicast_sub_cmds(uint32_t packed_write_max_unicast_sub_cm
     uint32_t packed_write_max_multicast_sub_cmds = packed_write_max_unicast_sub_cmds *
                                                    sizeof(CQDispatchWritePackedUnicastSubCmd) /
                                                    sizeof(CQDispatchWritePackedMulticastSubCmd);
-    return packed_write_max_multicast_sub_cmds;
+    return packed_write_max_multicast_sub_cmds < 1 ? 1 : packed_write_max_multicast_sub_cmds;
 }
 
 // Current implementation limit is based on size of the l1_cache which stores the sub_cmds
