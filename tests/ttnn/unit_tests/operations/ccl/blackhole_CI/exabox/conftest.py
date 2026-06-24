@@ -23,10 +23,16 @@ def pytest_configure(config):
 
 def pytest_collection_modifyitems(config, items):
     mesh_device_env = os.getenv("MESH_DEVICE", "").upper()
-    if not mesh_device_env:
-        return
+    exabox_dir = os.path.dirname(os.path.abspath(__file__)) + os.sep
 
     for item in items:
+        if not str(item.path).startswith(exabox_dir):
+            continue
+
+        if not mesh_device_env:
+            item.add_marker(pytest.mark.skip(reason="Exabox tests require MESH_DEVICE to be set"))
+            continue
+
         marker = item.get_closest_marker("requires_device")
         if marker:
             device_types = marker.args[0] if marker.args else []

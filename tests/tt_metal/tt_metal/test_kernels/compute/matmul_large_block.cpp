@@ -5,11 +5,40 @@
 #include <cstdint>
 
 #include "api/compute/tilize.h"
-#include "api/compute/untilize.h"
+#include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/matmul.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 
 #include "internal/mod_div_lib.h"
+
+// Largest pack_untilize block width (<= DEST tile capacity) dividing full_ct_dim.
+constexpr uint32_t untilize_pack_block_ct(uint32_t full_ct_dim) {
+    const uint32_t max_bct = DST_ACCUM_MODE ? 4 : 8;
+    for (uint32_t bct = max_bct; bct >= 1; --bct) {
+        if (full_ct_dim % bct == 0) {
+            return bct;
+        }
+    }
+    return 1;
+}
+
+// Untilize `full_ct_dim` tiles from icb to ocb using pack_untilize (replaces the removed
+// unpack-based untilize op). Handles the full cb hand-off (wait/reserve/pop/push).
+template <uint32_t full_ct_dim>
+ALWI void untilize_to_cb(uint32_t icb, uint32_t ocb) {
+    constexpr uint32_t block_ct = untilize_pack_block_ct(full_ct_dim);
+    constexpr uint32_t num_blocks = full_ct_dim / block_ct;
+    pack_untilize_init<block_ct, full_ct_dim>(icb, ocb);
+    cb_wait_front(icb, full_ct_dim);
+    cb_reserve_back(ocb, full_ct_dim);
+    for (uint32_t b = 0; b < num_blocks; ++b) {
+        pack_untilize_block<block_ct, full_ct_dim>(icb, 1, ocb, b);
+        cb_pop_front(icb, block_ct);
+    }
+    cb_push_back(ocb, full_ct_dim);
+    pack_untilize_uninit(ocb);
+}
 
 inline void tilize_activation(
     uint32_t in0_cb, uint32_t in0_subblock_h, uint32_t in0_block_w, uint32_t in0_num_subblocks, uint32_t out_cb) {
@@ -28,12 +57,12 @@ inline void tilize_activation(
     tilize_uninit(in0_cb, out_cb);
 }
 
+template <uint32_t out_block_w>
 inline void reblock_and_untilize(
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
-    uint32_t out_block_w,
     uint32_t interm_cb_id,
     uint32_t reblock_cb_id,
     uint32_t out_cb_id) {
@@ -50,23 +79,19 @@ inline void reblock_and_untilize(
         for (uint32_t n = 0; n < num_out_subblocks_in_col; n++) {
             for (uint32_t w = 0; w < out_subblock_w; w++) {
                 uint32_t tile_index = block_offset + within_block_index + w;
-                acquire_dst();
+                tile_regs_acquire();
                 copy_tile(interm_cb_id, tile_index, 0);
+                tile_regs_commit();
+                tile_regs_wait();
                 pack_tile(0, reblock_cb_id);
-                release_dst();
+                tile_regs_release();
             }
             block_offset += out_subblock_num_tiles;
         }
         cb_push_back(reblock_cb_id, out_block_w);
 
         // Untilize
-        untilize_init(reblock_cb_id);
-        cb_wait_front(reblock_cb_id, out_block_w);
-        cb_reserve_back(out_cb_id, out_block_w);
-        untilize_block(reblock_cb_id, out_block_w, out_cb_id);
-        cb_pop_front(reblock_cb_id, out_block_w);
-        cb_push_back(out_cb_id, out_block_w);
-        untilize_uninit(reblock_cb_id);
+        untilize_to_cb<out_block_w>(reblock_cb_id, out_cb_id);
 
         within_block_index += out_subblock_w;
     }
@@ -98,7 +123,7 @@ void kernel_main() {
     uint32_t out_subblock_w = get_compile_time_arg_val(10);          // inner column block size in tiles
     uint32_t out_subblock_num_tiles = get_compile_time_arg_val(11);  // out_subblock_h * out_subblock_w;
 
-    uint32_t out_block_w = in1_per_core_w;
+    constexpr uint32_t out_block_w = get_compile_time_arg_val(7);  // == in1_per_core_w
 
     // If true, this assumes data coming in RM
     bool tilize_in = get_compile_time_arg_val(12);
@@ -134,12 +159,13 @@ void kernel_main() {
     uint32_t untilize_mode_reblock_cb = tt::CBIndex::c_27;
     uint32_t out0_cb = tt::CBIndex::c_16;
 
-    mm_init(in0_cb, tt::CBIndex::c_1, out0_cb);
+    compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, tt::CBIndex::c_1, out0_cb);
+    matmul_init(in0_cb, tt::CBIndex::c_1);
     for (uint32_t block = 0; block < num_blocks; block++) {
         bool last_out = block == (num_blocks - 1);
         if (tilize_in) {
             tilize_activation(in0_cb, in0_subblock_h, in0_block_w, in0_num_subblocks, tilize_mode_tilized_in0_cb);
-            mm_init_short(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
+            matmul_init(tilize_mode_tilized_in0_cb, tt::CBIndex::c_1);
             cb_wait_front(tilize_mode_tilized_in0_cb, in0_block_num_tiles);
         } else {
             cb_wait_front(in0_cb, in0_block_num_tiles);
@@ -150,7 +176,7 @@ void kernel_main() {
         for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
             int in1_index_subblock_offset = 0;
             for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks; in1_subblock++) {
-                acquire_dst();
+                tile_regs_acquire();
 
                 if (enable_reload) {
                     copy_tile_to_dst_init_short(matmul_partials_cb);
@@ -159,7 +185,7 @@ void kernel_main() {
                         copy_tile(matmul_partials_cb, i, i);
                     }
                     cb_pop_front(matmul_partials_cb, out_subblock_num_tiles);
-                    mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                    matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                 }
 
                 // Compute output sub-block from in0_subblock x in1_subblock
@@ -184,6 +210,9 @@ void kernel_main() {
                     in0_index_h_offset += in0_block_w;
                 }
 
+                tile_regs_commit();
+                tile_regs_wait();
+
                 if (last_out) {
                     if (not untilize_out) {
                         pack_matmul_subblock(out0_cb, out_subblock_num_tiles);
@@ -194,23 +223,22 @@ void kernel_main() {
                     pack_matmul_subblock(matmul_partials_cb, out_subblock_num_tiles);
                 }
 
-                release_dst();
+                tile_regs_release();
 
                 in1_index_subblock_offset += out_subblock_w;
             }
 
             if (untilize_out) {
                 if (last_out) {
-                    reblock_and_untilize(
+                    reblock_and_untilize<out_block_w>(
                         in1_num_subblocks,
                         out_subblock_num_tiles,
                         out_subblock_h,
                         out_subblock_w,
-                        out_block_w,
                         untilize_mode_final_matmul_partials_cb,
                         untilize_mode_reblock_cb,
                         out0_cb);
-                    mm_init_short(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
+                    matmul_init(tilize_in ? tilize_mode_tilized_in0_cb : in0_cb, tt::CBIndex::c_1);
                 }
             }
 

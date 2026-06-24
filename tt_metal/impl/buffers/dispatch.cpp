@@ -604,8 +604,8 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                     data_size_bytes);
             }
         }
-        command_sequence.align_write_offset();
     }
+    command_sequence.align_write_offset();
 }
 
 void populate_sharded_buffer_write_dispatch_cmds(
@@ -699,6 +699,7 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
     // Build sub-commands on the fly with coalescing
     std::vector<CQDispatchWritePackedLargeUnicastSubCmd> write_sub_cmds;
     std::vector<CQPrefetchRelayLinearPackedSubCmd> relay_sub_cmds;
+    uint32_t relay_stream_offset = 0;
 
     const CoreCoord virtual_core = buffer.device()->virtual_core_from_logical_core(core, buffer.core_type());
     const uint32_t noc_xy_addr = buffer.device()->get_noc_unicast_encoding(k_dispatch_downstream_noc, virtual_core);
@@ -810,6 +811,13 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
         // Clear for next batch
         write_sub_cmds.clear();
         relay_sub_cmds.clear();
+        relay_stream_offset = 0;
+    };
+
+    auto calculate_aligned_src = [&](uint64_t src_pinned_addr) {
+        const uint32_t relay_alignment_offset = relay_stream_offset % pcie_alignment;
+        const uint32_t padding_bytes = (src_pinned_addr + pcie_alignment - relay_alignment_offset) % pcie_alignment;
+        return std::pair<uint64_t, uint32_t>{src_pinned_addr - padding_bytes, padding_bytes};
     };
 
     // Iterate through host ranges and build sub-commands
@@ -834,14 +842,9 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             dst_addr,
             l1_alignment);
 
-        // Align source address to PCIe alignment if needed
-        uint64_t aligned_src_addr = src_pinned_addr;
-        uint32_t padding_bytes = 0;
-        if (src_pinned_addr % pcie_alignment != 0) {
-            padding_bytes = src_pinned_addr % pcie_alignment;
-            aligned_src_addr = src_pinned_addr - padding_bytes;
-        }
-
+        // Align each read to the scratch stream position. Packed reads concatenate into scratch, so re-aligning every
+        // host range to address 0 mod PCIe alignment can violate NoC source/destination congruence after a prefix.
+        auto [aligned_src_addr, padding_bytes] = calculate_aligned_src(src_pinned_addr);
         uint32_t total_read_length = padding_bytes + data_length;
 
         // Determine if relay or write can be coalesced
@@ -876,6 +879,10 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             // After emitting, we can't coalesce with previous commands (vectors are now empty)
             can_coalesce_relay = false;
             can_coalesce_write = false;
+            const auto aligned_src_info = calculate_aligned_src(src_pinned_addr);
+            aligned_src_addr = aligned_src_info.first;
+            padding_bytes = aligned_src_info.second;
+            total_read_length = padding_bytes + data_length;
         }
 
         // Add or coalesce relay sub-command
@@ -909,6 +916,8 @@ void issue_sharded_buffer_pinned_dispatch_command_sequence(
             write_sub_cmd.length = data_length;
             write_sub_cmds.push_back(write_sub_cmd);
         }
+
+        relay_stream_offset += total_read_length;
     }
 
     // Emit final command pair with remaining sub-commands

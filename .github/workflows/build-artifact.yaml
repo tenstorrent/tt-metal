@@ -1,8 +1,7 @@
 name: "Build tt-metal artifacts"
-
 permissions:
+  contents: read
   packages: write
-
 on:
   workflow_call:
     inputs:
@@ -10,6 +9,11 @@ on:
         required: false
         type: string
         default: "Release"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for the build-artifact job"
       tracy:
         required: false
         type: boolean
@@ -125,6 +129,11 @@ on:
         type: string
         default: ""
         description: "Pre-built ManyLinux Docker image tag"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
     outputs:
       ci-build-docker-image:
         description: >-
@@ -167,7 +176,6 @@ on:
               jobs.build-wheel.outputs.artifact-name ||
               (jobs.download-artifacts.result == 'success' &&
                jobs.download-artifacts.outputs.wheel_artifact_name || '') }}
-
   workflow_dispatch:
     inputs:
       tracy:
@@ -216,11 +224,21 @@ on:
         required: false
         type: string
         default: "Release"
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-large-stable"
+        description: "Runner label for the build-artifact job"
       enable-lto:
         required: false
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      harbor-prefix:
+        required: false
+        type: string
+        default: ""
+        description: "Harbor prefix to use (empty for direct GHCR)"
       fetch-depth:
         required: false
         type: number
@@ -260,8 +278,10 @@ jobs:
       version: ${{ steps.parse.outputs.version }}
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
+      python-version: ${{ steps.parse.outputs.python-version }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -270,7 +290,6 @@ jobs:
         with:
           platform: ${{ inputs.platform }}
           enable-lto: ${{ inputs.enable-lto || false }}
-
   # =============================================================================
   # ARCHITECTURE NOTE: Docker Image Caching
   # =============================================================================
@@ -294,7 +313,7 @@ jobs:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
       ref: ${{ inputs.ref }}
-
+      harbor-prefix: ${{ inputs.harbor-prefix }}
   download-artifacts:
     if: ${{ inputs.use-artifacts-from-run != '' }}
     runs-on: ubuntu-latest
@@ -305,10 +324,10 @@ jobs:
     steps:
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
-
       - name: Download artifacts from workflow run
         id: download
         env:
@@ -318,7 +337,6 @@ jobs:
           workflow_run_id: ${{ inputs.use-artifacts-from-run }}
           working-directory: ${{ github.workspace }}/artifacts
           tracy: ${{ inputs.tracy }}
-
       - name: Upload build artifact for downstream jobs
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
@@ -326,7 +344,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
           if-no-files-found: error
           retention-days: 1
-
       - name: Upload wheel artifact
         if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -335,7 +352,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.whl
           if-no-files-found: ignore
           retention-days: 1
-
       - name: Upload packages artifact
         if: ${{ steps.download.outputs.packages-artifact-name != '' }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -344,7 +360,6 @@ jobs:
           path: ${{ github.workspace }}/artifacts/*.deb
           if-no-files-found: ignore
           retention-days: 1
-
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
@@ -353,8 +368,24 @@ jobs:
       ${{ needs.parse-platform.outputs.distro }}
       ${{ needs.parse-platform.outputs.version }}
     needs: [parse-platform, build-docker-image]
+    # Cross-workflow compile mutex: if two workflows (e.g. pr-gate + merge-gate) trigger
+    # builds for the same commit + config simultaneously, queue them so the second run
+    # gets a fully warm ccache instead of both racing with cold caches.
+    # Keyed purely on SHA + compile inputs — no branch/PR special-casing.
+    concurrency:
+      group: >-
+        cmake-build-
+        ${{ github.sha }}-
+        ${{ inputs.platform }}-
+        ${{ inputs.build-type }}-
+        ${{ inputs.toolchain }}-
+        ${{ inputs.architecture }}-
+        tracy:${{ inputs.tracy }}-
+        dist:${{ inputs.distributed }}-
+        lto:${{ inputs.enable-lto }}
+      queue: max
     timeout-minutes: 100
-    runs-on: tt-ubuntu-2204-large-stable
+    runs-on: ${{ inputs['runs-on'] }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     outputs:
       packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
@@ -365,14 +396,27 @@ jobs:
       VERSION: ${{ needs.parse-platform.outputs.version }}
       TOOLCHAIN: ${{ inputs.toolchain || needs.parse-platform.outputs.toolchain }}
     container:
+      # Callers that pre-resolve via resolve-docker-pull-refs pass already-prefixed
+      # tags with harbor-prefix=''; callers with raw GHCR tags pass harbor-prefix
+      # from check-harbor. Either way format(prefix, tag) produces the right ref.
       image: >-
-        harbor.ci.tenstorrent.net/${{
-          inputs.ci-build-docker-image ||
-          needs.build-docker-image.outputs.ci-build-tag ||
-          'docker-image-unresolved!' }}
+        ${{
+          (inputs.ci-build-docker-image != '' &&
+            format('{0}{1}', inputs.harbor-prefix, inputs.ci-build-docker-image)) ||
+          format('{0}{1}', inputs.harbor-prefix,
+            needs.build-docker-image.outputs.ci-build-tag || 'docker-image-unresolved!')
+        }}
       env:
         CCACHE_REMOTE_ONLY: "true"
         CCACHE_TEMPDIR: /tmp/ccache
+        CCACHE_COMPRESS: "true"
+        CCACHE_COMPRESSLEVEL: "3"
+        # Log ccache operations to a file so remote storage errors are visible in CI.
+        # Errors (storage helper failures, Redis timeouts) would otherwise be silent.
+        CCACHE_LOGFILE: /tmp/ccache.log
+        # Strip the working directory prefix from hashed paths so cache entries
+        # are reusable across machines even if the checkout path differs.
+        CCACHE_BASEDIR: /work
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -406,13 +450,14 @@ jobs:
           REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
           REDIS_HOST="${{ vars.REDIS_HOST }}"
           REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
-          CCACHE_PARTS=(
-            "redis://${REDIS_USER}:${REDIS_PASSWORD}"
-            "@${REDIS_HOST}:${REDIS_PORT}"
-            "|read-only=${REDIS_READONLY}"
-          )
-          CCACHE_REMOTE_STORAGE=$(IFS=''; echo "${CCACHE_PARTS[*]}")
+          # ccache 4.13 bug: read-only is std::optional<bool>; the write gate checks
+          # `if (entry.config.read_only)` which is true whenever the optional HAS a value —
+          # including when that value is false.  Omit the property entirely unless we
+          # actually want read-only mode; ccache's default when absent is writable.
+          CCACHE_REMOTE_STORAGE="redis://${REDIS_USER}:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+          if [ "${{ vars.REDIS_IS_READONLY }}" = "true" ]; then
+            CCACHE_REMOTE_STORAGE="${CCACHE_REMOTE_STORAGE}|read-only=true"
+          fi
           echo "CCACHE_REMOTE_STORAGE=${CCACHE_REMOTE_STORAGE}" >> $GITHUB_ENV
           echo "CCACHE_REMOTE_STORAGE: ${CCACHE_REMOTE_STORAGE}"
 
@@ -448,6 +493,7 @@ jobs:
 
       - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
@@ -473,10 +519,14 @@ jobs:
 
       - name: 📦 Restore CPM source cache
         id: cpm-cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
-          key: cpm-z22-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          key: >-
+            cpm-z22-${{ hashFiles(
+              'third_party/CMakeLists.txt',
+              'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+              'tt-train/cmake/dependencies.cmake') }}
           restore-keys: cpm-z22-
 
       - name: 📦 Unpack CPM cache
@@ -531,7 +581,7 @@ jobs:
 
       - name: 📦 Save CPM source cache
         if: steps.cpm-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: .cpmcache.tar.zst
           key: ${{ steps.cpm-cache.outputs.cache-primary-key }}
@@ -540,7 +590,11 @@ jobs:
         timeout-minutes: 90
         run: |
           # --target install is for the tarball that should get replaced by proper packaging later
-          cmake --build build --target install
+          "$GITHUB_WORKSPACE/.github/scripts/utils/host-load-sidecar.sh" \
+            --interval 1 \
+            --label "cmake build (install target)" \
+            --output "$GITHUB_STEP_SUMMARY" \
+            -- cmake --build build --target install
 
       - name: 🛠️ Profile
         if: ${{ inputs.profile }}
@@ -567,6 +621,15 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
+          # Surface remote storage stats and errors from the ccache log.
+          # Uses a filter script to avoid overflowing the 1024k step summary limit.
+          if [ -f /tmp/ccache.log ]; then
+            echo '## CCache Remote Storage' >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
@@ -579,10 +642,14 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-      - name: 'Tar files'
+      - name: "Tar files"
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime tt_metal/pre-compiled"
+          WASM_ROOT="build/profiler/build_wasm"
+          mkdir -p "${WASM_ROOT}/traces"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples"
+          ARTIFACT_PATHS+=" build/test build/tools runtime tt_metal/pre-compiled ${WASM_ROOT}"
+
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
@@ -624,42 +691,22 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
-  # Determine Python version based on platform
-  determine-python-version:
-    needs: parse-platform
-    runs-on: ubuntu-latest
-    outputs:
-      python-version: ${{ steps.set-python-version.outputs.version }}
-    steps:
-      - id: set-python-version
-        run: |
-          # Get distro and version from parse-platform outputs (which handles both workflow_dispatch and workflow_call)
-          DISTRO="${{ needs.parse-platform.outputs.distro }}"
-          VERSION="${{ needs.parse-platform.outputs.version }}"
-
-          # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
-          if [ "$VERSION" = "24.04" ]; then
-            PYTHON_VERSION="3.12"
-          else
-            PYTHON_VERSION="3.10"
-          fi
-
-          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
-          echo "Determined Python version: $PYTHON_VERSION for distro=$DISTRO, version=$VERSION"
-
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
     if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
+    name: 🐍 Build wheel (Python ${{ needs.parse-platform.outputs.python-version }})
     uses: ./.github/workflows/wheels.yaml
-    needs: [parse-platform, build-docker-image, determine-python-version]
+    needs: [parse-platform, build-docker-image]
     secrets: inherit
     with:
-      python-version: ${{ needs.determine-python-version.outputs.python-version }}
+      python-version: ${{ needs.parse-platform.outputs.python-version }}
       docker-image: >-
-        ${{ inputs.manylinux-docker-image ||
-            needs.build-docker-image.outputs.manylinux-tag ||
-            'docker-image-unresolved!' }}
+        ${{
+          (inputs.manylinux-docker-image != '' &&
+            format('{0}{1}', inputs.harbor-prefix, inputs.manylinux-docker-image)) ||
+          format('{0}{1}', inputs.harbor-prefix,
+            needs.build-docker-image.outputs.manylinux-tag || 'docker-image-unresolved!')
+        }}
       ref: ${{ inputs.wheel-ref || inputs.ref || '' }}
       tracy: ${{ inputs.tracy }}
       enable-lto: ${{ inputs.enable-lto || false }}

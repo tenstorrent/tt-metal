@@ -4,13 +4,17 @@
 
 #include "dprint_parser.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
-#include <fstream>
-#include <functional>
-#include <iomanip>
+#include <limits>
+#include <map>
+#include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <enchantum/enchantum.hpp>
 #include <enchantum/scoped.hpp>
@@ -20,173 +24,23 @@
 
 #include "fmt/base.h"
 #include "hostdevcommon/dprint_common.h"
-#include "hostdevcommon/kernel_structs.h"
 #include "hostdev/device_print_structures.h"
 #include "tt_backend_api_types.hpp"
 
-#include "llrt/tt_elffile.hpp"
+#include "elf_file.hpp"
+#include "dwarf_die.hpp"
+#include "callstack.hpp"
 
-#include "dwarf.h"
-#include "libdwarf.h"
-
-using std::setw;
 using std::string;
-using std::to_string;
 using namespace std::literals;
 
 namespace tt::tt_metal {
-
-DPrintParser::DPrintParser(std::string line_prefix) : line_prefix_(std::move(line_prefix)) {}
-
-// Helper function implementations (from dprint_server.cpp anonymous namespace)
 
 inline float bfloat16_to_float(uint16_t bfloat_val) {
     uint32_t uint32_data = ((uint32_t)bfloat_val) << 16;
     float f;
     std::memcpy(&f, &uint32_data, sizeof(f));
     return f;
-}
-
-void DPrintParser::AssertSize(uint8_t sz, uint8_t expected_sz) {
-    TT_ASSERT(
-        sz == expected_sz,
-        "DPrint token size ({}) did not match expected ({}), potential data corruption in the DPrint buffer.",
-        sz,
-        expected_sz);
-}
-
-void DPrintParser::ResetStream(std::ostringstream* stream) {
-    stream->str("");
-    stream->clear();
-}
-
-bool DPrintParser::StreamEndsWithNewlineChar(const std::ostringstream* stream) {
-    const string stream_str = stream->str();
-    return !stream_str.empty() && stream_str.back() == '\n';
-}
-
-void DPrintParser::PrintTileSlice(const uint8_t* ptr) {
-    TileSliceHostDev<0> ts_copy{};  // Make a copy since ptr might not be properly aligned
-    std::memcpy(&ts_copy, ptr, sizeof(TileSliceHostDev<0>));
-    TileSliceHostDev<0>* ts = &ts_copy;
-    TT_ASSERT(
-        offsetof(TileSliceHostDev<0>, data) % sizeof(uint32_t) == 0,
-        "TileSliceHostDev<0> data field is not properly aligned");
-    const uint8_t* data = ptr + offsetof(TileSliceHostDev<0>, data);
-
-    // Read any error codes and handle accordingly
-    tt::CBIndex cb = static_cast<tt::CBIndex>(ts->cb_id);
-    switch (ts->return_code) {
-        case DPrintOK: break;  // Continue to print the tile slice
-        case DPrintErrorBadPointer: {
-            uint32_t cb_ptr_val = ts->cb_ptr;
-            uint8_t count = ts->data_count;
-            intermediate_stream_ << fmt::format(
-                "Tried printing {}: BAD TILE POINTER (ptr={}, count={})\n",
-                enchantum::scoped::to_string(cb),
-                cb_ptr_val,
-                count);
-            return;
-        }
-        case DPrintErrorUnsupportedFormat: {
-            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
-            intermediate_stream_ << fmt::format(
-                "Tried printing {}: Unsupported data format ({})\n",
-                enchantum::scoped::to_string(cb),
-                data_format);
-            return;
-        }
-        case DPrintErrorMath:
-            intermediate_stream_ << "Warning: MATH core does not support TileSlice printing, omitting print...\n";
-            return;
-        case DPrintErrorEthernet:
-            intermediate_stream_ << "Warning: Ethernet core does not support TileSlice printing, omitting print...\n";
-            return;
-        default:
-            intermediate_stream_ << fmt::format(
-                "Warning: TileSlice printing failed with unknown return code {}, omitting print...\n", ts->return_code);
-            return;
-    }
-
-    // No error codes, print the TileSlice
-    uint32_t i = 0;
-    bool count_exceeded = false;
-    for (int h = ts->slice_range.h0; h < ts->slice_range.h1; h += ts->slice_range.hs) {
-        for (int w = ts->slice_range.w0; w < ts->slice_range.w1; w += ts->slice_range.ws) {
-            // If the number of data specified by the SliceRange exceeds the number that was
-            // saved in the print buffer (set by the MAX_COUNT template parameter in the
-            // TileSlice), then break early.
-            if (i >= ts->data_count) {
-                count_exceeded = true;
-                break;
-            }
-            tt::DataFormat data_format = static_cast<tt::DataFormat>(ts->data_format);
-            switch (data_format) {
-                case tt::DataFormat::Float16_b: {
-                    const uint16_t* float16_b_ptr = reinterpret_cast<const uint16_t*>(data);
-                    intermediate_stream_ << bfloat16_to_float(float16_b_ptr[i]);
-                    break;
-                }
-                case tt::DataFormat::Float32: {
-                    const float* float32_ptr = reinterpret_cast<const float*>(data);
-                    intermediate_stream_ << float32_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::Bfp4_b:
-                case tt::DataFormat::Bfp8_b: {
-                    // Saved the exponent and data together
-                    const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
-                    uint8_t val = (data_ptr[i] >> 8) & 0xFF;
-                    uint8_t exponent = data_ptr[i] & 0xFF;
-                    uint32_t bit_val = convert_bfp_to_u32(data_format, val, exponent, false);
-                    intermediate_stream_ << *reinterpret_cast<float*>(&bit_val);
-                    break;
-                }
-                case tt::DataFormat::Int8: {
-                    const int8_t* data_ptr = reinterpret_cast<const int8_t*>(data);
-                    intermediate_stream_ << (int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::UInt8: {
-                    const uint8_t* data_ptr = reinterpret_cast<const uint8_t*>(data);
-                    intermediate_stream_ << (unsigned int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::UInt16: {
-                    const uint16_t* data_ptr = reinterpret_cast<const uint16_t*>(data);
-                    intermediate_stream_ << (unsigned int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::Int32: {
-                    const int32_t* data_ptr = reinterpret_cast<const int32_t*>(data);
-                    intermediate_stream_ << (int)data_ptr[i];
-                    break;
-                }
-                case tt::DataFormat::UInt32: {
-                    const uint32_t* data_ptr = reinterpret_cast<const uint32_t*>(data);
-                    intermediate_stream_ << (unsigned int)data_ptr[i];
-                    break;
-                }
-                default: break;
-            }
-            if (w + ts->slice_range.ws < ts->slice_range.w1) {
-                intermediate_stream_ << " ";
-            }
-            i++;
-        }
-
-        // Break outer loop as well if MAX COUNT exceeded, also print a message to let the user
-        // know that the slice has been truncated.
-        if (count_exceeded) {
-            intermediate_stream_ << "<TileSlice data truncated due to exceeding max count ("
-                                 << to_string(ts->data_count) << ")>\n";
-            break;
-        }
-
-        if (ts->endl_rows) {
-            intermediate_stream_ << "\n";
-        }
-    }
 }
 
 // Create a float from a given bit pattern, given the number of bits for the exponent and mantissa.
@@ -211,281 +65,6 @@ inline float make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint3
     return result;
 }
 
-float DPrintParser::make_float(uint8_t exp_bit_count, uint8_t mantissa_bit_count, uint32_t data) {
-    return ::tt::tt_metal::make_float(exp_bit_count, mantissa_bit_count, data);
-}
-
-// Prints a given datum in the array, given the data_format
-void DPrintParser::PrintTensixRegisterData(int setwidth, uint32_t datum, uint16_t data_format) {
-    switch (data_format) {
-        case static_cast<std::uint8_t>(tt::DataFormat::Float16):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2):
-        case static_cast<std::uint8_t>(tt::DataFormat::Lf8):
-            intermediate_stream_ << setw(setwidth) << make_float(5, 10, datum & 0xffff) << " ";
-            intermediate_stream_ << setw(setwidth) << make_float(5, 10, (datum >> 16) & 0xffff) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp8_b):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp4_b):
-        case static_cast<std::uint8_t>(tt::DataFormat::Bfp2_b):
-        case static_cast<std::uint8_t>(tt::DataFormat::Float16_b):
-            intermediate_stream_ << setw(setwidth) << make_float(8, 7, datum & 0xffff) << " ";
-            intermediate_stream_ << setw(setwidth) << make_float(8, 7, (datum >> 16) & 0xffff) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Tf32):
-            intermediate_stream_ << setw(setwidth) << make_float(8, 10, datum) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Float32): {
-            float value;
-            memcpy(&value, &datum, sizeof(float));
-            intermediate_stream_ << setw(setwidth) << value << " ";
-        } break;
-        case static_cast<std::uint8_t>(tt::DataFormat::UInt32):
-            intermediate_stream_ << setw(setwidth) << datum << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::UInt16):
-            intermediate_stream_ << setw(setwidth) << (datum & 0xffff) << " ";
-            intermediate_stream_ << setw(setwidth) << (datum >> 16) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Int32):
-            intermediate_stream_ << setw(setwidth) << static_cast<int32_t>(datum) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::Int8):
-            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>(datum & 0xff)) << " ";
-            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 8) & 0xff)) << " ";
-            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 16) & 0xff)) << " ";
-            intermediate_stream_ << setw(setwidth) << static_cast<int>(static_cast<int8_t>((datum >> 24) & 0xff)) << " ";
-            break;
-        case static_cast<std::uint8_t>(tt::DataFormat::UInt8):
-            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>(datum & 0xff) << " ";
-            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 8) & 0xff) << " ";
-            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 16) & 0xff) << " ";
-            intermediate_stream_ << setw(setwidth) << static_cast<unsigned int>((datum >> 24) & 0xff) << " ";
-            break;
-        default: intermediate_stream_ << "Unknown data format " << data_format << " "; break;
-    }
-}
-
-// Prints a typed uint32 array given the number of elements including the type.
-// If force_element_type is set to a valid type, it is assumed that the type is not included in the
-// data array, and the type is forced to be the given type.
-void DPrintParser::PrintTypedUint32Array(
-    int setwidth, uint32_t raw_element_count, const uint32_t* data, TypedU32_ARRAY_Format force_array_type) {
-    uint16_t array_type = data[raw_element_count - 1] >> 16;
-    uint16_t array_subtype = data[raw_element_count - 1] & 0xffff;
-
-    raw_element_count = (force_array_type == TypedU32_ARRAY_Format_INVALID) ? raw_element_count : raw_element_count + 1;
-
-    for (uint32_t i = 0; i < raw_element_count - 1; i++) {
-        switch (array_type) {
-            case TypedU32_ARRAY_Format_Raw: intermediate_stream_ << std::hex << "0x" << data[i] << " "; break;
-            case TypedU32_ARRAY_Format_Tensix_Config_Register_Data_Format_Type:
-                PrintTensixRegisterData(setwidth, data[i], array_subtype);
-                break;
-            default: intermediate_stream_ << "Unknown type " << array_type; break;
-        }
-    }
-}
-
-// Helper to collect a completed line with prefix
-std::string DPrintParser::get_completed_line() {
-    std::string line;
-    if (!line_prefix_.empty()) {
-        line += line_prefix_;
-    }
-    if (!intermediate_stream_.str().empty()) {
-        line += intermediate_stream_.str();
-    }
-    ResetStream(&intermediate_stream_);
-    return line;
-}
-
-DPrintParser::ParseResult DPrintParser::parse(const uint8_t* data, size_t len) {
-    ParseResult result;
-    result.bytes_consumed = 0;
-
-    // Parse the input codes
-    size_t pos = 0;
-    while (pos < len) {
-        DPrintTypeID code = static_cast<DPrintTypeID>(data[pos++]);
-        TT_ASSERT(pos <= len);
-        uint8_t sz = data[pos++];
-        TT_ASSERT(pos <= len);
-        const uint8_t* ptr = data + pos;
-
-        // Possible to break before pos == len due to waiting on another core's raise.
-        bool break_due_to_wait = false;
-
-        // we are sharing the same output file between debug print threads for multiple cores
-        switch (code) {
-            case DPrintCSTR:  // const char*
-            {
-                // null terminating char was included in size and should be present in the buffer
-                const char* cptr = reinterpret_cast<const char*>(ptr);
-                const size_t cptr_len = strnlen(cptr, len - 2);
-                if (cptr_len == len - 2) {
-                    intermediate_stream_ << "STRING BUFFER OVERFLOW DETECTED\n";
-                    result.completed_lines.push_back(get_completed_line());
-                } else {
-                    // if we come across a newline char, we should transfer the data up to the newline to the output
-                    // stream and flush it
-                    const char* newline_pos = strchr(cptr, '\n');
-                    bool contains_newline = newline_pos != nullptr;
-                    while (contains_newline) {
-                        const char* pos_after_newline = newline_pos + 1;
-                        const uint32_t substr_len = pos_after_newline - cptr;
-
-                        // strchr returns nullptr if it encounters a null terminator,
-                        // so we can guarantee that this is valid data since it was
-                        // already checked. We don't need to append a '\0' because
-                        // the stream operator only takes upto '\0' when passed
-                        // a char* (wrt the previous impl)
-                        const std::string_view substr_upto_newline(cptr, substr_len);
-
-                        intermediate_stream_ << substr_upto_newline;
-                        result.completed_lines.push_back(get_completed_line());
-                        cptr = pos_after_newline;
-                        newline_pos = strchr(cptr, '\n');
-                        contains_newline = newline_pos != nullptr;
-                    }
-                    intermediate_stream_ << cptr;
-                }
-                AssertSize(sz, cptr_len + 1);
-                break;
-            }
-            case DPrintTILESLICE: PrintTileSlice(ptr); break;
-
-            case DPrintENDL:
-                if (prev_type_ != DPrintTILESLICE || !StreamEndsWithNewlineChar(&intermediate_stream_)) {
-                    intermediate_stream_ << '\n';
-                }
-                result.completed_lines.push_back(get_completed_line());
-                AssertSize(sz, 1);
-                break;
-            case DPrintSETW: {
-                char val = ptr[0];
-                intermediate_stream_ << setw(val);
-                most_recent_setw_ = val;
-                AssertSize(sz, 1);
-                break;
-            }
-            case DPrintSETPRECISION:
-                intermediate_stream_ << std::setprecision(*ptr);
-                AssertSize(sz, 1);
-                break;
-            case DPrintFIXED:
-                intermediate_stream_ << std::fixed;
-                AssertSize(sz, 1);
-                break;
-            case DPrintDEFAULTFLOAT:
-                intermediate_stream_ << std::defaultfloat;
-                AssertSize(sz, 1);
-                break;
-            case DPrintHEX:
-                intermediate_stream_ << std::hex;
-                AssertSize(sz, 1);
-                break;
-            case DPrintOCT:
-                intermediate_stream_ << std::oct;
-                AssertSize(sz, 1);
-                break;
-            case DPrintDEC:
-                intermediate_stream_ << std::dec;
-                AssertSize(sz, 1);
-                break;
-            case DPrintUINT8: {
-                uint8_t value;
-                memcpy(&value, ptr, sizeof(uint8_t));
-                intermediate_stream_ << static_cast<uint32_t>(value);  // uint8_t is unsigned char; widen to print as number
-                AssertSize(sz, 1);
-            } break;
-            case DPrintUINT16: {
-                uint16_t value;
-                memcpy(&value, ptr, sizeof(uint16_t));
-                intermediate_stream_ << value;
-                AssertSize(sz, 2);
-            } break;
-            case DPrintUINT32: {
-                uint32_t value;
-                memcpy(&value, ptr, sizeof(uint32_t));
-                intermediate_stream_ << value;
-                AssertSize(sz, 4);
-            } break;
-            case DPrintUINT64: {
-                uint64_t value;
-                memcpy(&value, ptr, sizeof(uint64_t));
-                intermediate_stream_ << value;
-                AssertSize(sz, 8);
-            } break;
-            case DPrintINT8: {
-                int8_t value;
-                memcpy(&value, ptr, sizeof(int8_t));
-                intermediate_stream_ << (int)value;  // Cast to int to ensure it prints as a number, not a char
-                AssertSize(sz, 1);
-            } break;
-            case DPrintINT16: {
-                int16_t value;
-                memcpy(&value, ptr, sizeof(int16_t));
-                intermediate_stream_ << value;
-                AssertSize(sz, 2);
-            } break;
-            case DPrintINT32: {
-                int32_t value;
-                memcpy(&value, ptr, sizeof(int32_t));
-                intermediate_stream_ << value;
-                AssertSize(sz, 4);
-            } break;
-            case DPrintINT64: {
-                int64_t value;
-                memcpy(&value, ptr, sizeof(int64_t));
-                intermediate_stream_ << value;
-                AssertSize(sz, 8);
-            } break;
-            case DPrintFLOAT32: {
-                float value;
-                memcpy(&value, ptr, sizeof(float));
-                intermediate_stream_ << value;
-                AssertSize(sz, 4);
-            } break;
-            case DPrintBFLOAT16: {
-                uint16_t rawValue;
-                memcpy(&rawValue, ptr, sizeof(uint16_t));
-                float value = bfloat16_to_float(rawValue);
-                intermediate_stream_ << value;
-                AssertSize(sz, 2);
-            } break;
-            case DPrintCHAR:
-                intermediate_stream_ << *reinterpret_cast<const char*>(ptr);
-                AssertSize(sz, 1);
-                break;
-            case DPrintU32_ARRAY:
-                PrintTypedUint32Array(
-                    most_recent_setw_, sz / 4, reinterpret_cast<const uint32_t*>(ptr), TypedU32_ARRAY_Format_Raw);
-                break;
-            case DPrintTYPED_U32_ARRAY:
-                PrintTypedUint32Array(most_recent_setw_, sz / 4, reinterpret_cast<const uint32_t*>(ptr));
-                break;
-            default: TT_THROW("Unexpected debug print type pos {:#x} len {:#x} code {}", pos, len, (uint32_t)code);
-        }
-
-        prev_type_ = code;
-
-        pos += sz;  // parse the payload size
-        TT_ASSERT(pos <= len);
-
-        // Break due to wait (we'll get the rest of the print buffer after the raise).
-        if (break_due_to_wait) {
-            break;
-        }
-    }
-
-    result.bytes_consumed = pos;
-    return result;
-}
-
-std::string DPrintParser::flush() { return get_completed_line(); }
-
 std::map<std::string, std::weak_ptr<DevicePrintParser>> DevicePrintParser::parser_cache;
 
 template <uint8_t PointerSize>
@@ -497,7 +76,7 @@ public:
         device_print_detail::structures::DevicePrintStringInfo32,
         device_print_detail::structures::DevicePrintStringInfo64>;
 
-    explicit DevicePrintParserImpl(const std::string& elf_path);
+    explicit DevicePrintParserImpl(const std::string& elf_path, ttexalens::native_elf::ElfFile elf);
 
     std::string_view format_message(
         uint32_t info_id, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer) override;
@@ -554,34 +133,42 @@ private:
         ParsedStringInfo& string_info, std::span<const std::byte> payload_bytes, FormatMessageBuffer& buffer);
 
     const EnumInfo* get_enum_info(std::string_view type_name);
-    void load_enum_info_from_dwarf();
+
+    auto resolve_top_callstack(const TopCallstackInfo& info);
+    void format_top_callstack(fmt::memory_buffer& out, const TopCallstackInfo& info);
 
     std::string elf_path;
-    ll_api::ElfFile elf_file;
-    std::span<std::byte> format_strings_info_bytes;
+    ttexalens::native_elf::ElfFile elf_file;
+    std::span<const std::byte> format_strings_info_bytes;
     uint64_t format_strings_info_address{};
-    std::span<std::byte> format_strings_bytes;
+    std::span<const std::byte> format_strings_bytes;
     uint64_t format_strings_address{};
-    DevicePrintStringInfo* string_info_ptr{};
+    const DevicePrintStringInfo* string_info_ptr{};
     size_t string_info_size{};
     std::vector<ParsedStringInfo> parsed_string_info;
     std::map<std::string, EnumInfo, std::less<>> enum_info_cache_;
-    bool enum_info_loaded_{};
 };
 
 template <uint8_t PointerSize>
-DevicePrintParserImpl<PointerSize>::DevicePrintParserImpl(const std::string& elf_path) : elf_path(elf_path) {
+DevicePrintParserImpl<PointerSize>::DevicePrintParserImpl(
+    const std::string& elf_path, ttexalens::native_elf::ElfFile elf) :
+    elf_path(elf_path), elf_file(std::move(elf)) {
     try {
-        elf_file.ReadImage(elf_path);
-        format_strings_info_bytes =
-            elf_file.GetSectionContents(".device_print_strings_info", format_strings_info_address);
-        format_strings_bytes = elf_file.GetSectionContents(".device_print_strings", format_strings_address);
-        string_info_ptr = reinterpret_cast<DevicePrintStringInfo*>(format_strings_info_bytes.data());
+        const auto* info_section = elf_file.get_section_by_name(".device_print_strings_info");
+        const auto* strings_section = elf_file.get_section_by_name(".device_print_strings");
+        if (info_section == nullptr || strings_section == nullptr) {
+            throw std::runtime_error("ELF is missing the DEVICE_PRINT string sections");
+        }
+        format_strings_info_bytes = info_section->data();
+        format_strings_info_address = info_section->address();
+        format_strings_bytes = strings_section->data();
+        format_strings_address = strings_section->address();
+        string_info_ptr = reinterpret_cast<const DevicePrintStringInfo*>(format_strings_info_bytes.data());
         string_info_size = format_strings_info_bytes.size() / sizeof(DevicePrintStringInfo);
         parsed_string_info.resize(string_info_size);
     } catch (...) {
-        // Failed to load ELF file
-        log_warning(tt::LogMetal, "Failed to load ELF file {}", elf_path);
+        // ELF loaded but its DEVICE_PRINT sections are missing/unreadable — degrade to a no-op parser.
+        log_warning(tt::LogMetal, "Failed to parse DEVICE_PRINT info from ELF file {}", elf_path);
     }
 }
 
@@ -592,19 +179,6 @@ struct DevicePrintParserDeleter {
     }
 };
 
-static uint8_t read_elf_pointer_size(const std::string& path) {
-    std::ifstream elf_stream(path, std::ios::binary);
-    uint8_t ei_class = 0;
-    if (elf_stream.seekg(4) && elf_stream.read(reinterpret_cast<char*>(&ei_class), 1)) {
-        switch (ei_class) {
-            case 1: return 4;  // 32-bit ELF
-            case 2: return 8;  // 64-bit ELF
-            default: TT_THROW("Unknown ELF class {} in file {}", ei_class, path);
-        }
-    }
-    TT_THROW("Failed to read ELF class from file {}", path);
-}
-
 std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const std::string& elf_path) {
     auto cached_parser_it = parser_cache.find(elf_path);
     if (cached_parser_it != parser_cache.end()) {
@@ -612,14 +186,16 @@ std::shared_ptr<DevicePrintParser> DevicePrintParser::get_parser_for_elf(const s
             return cached_parser;
         }
     }
-    uint8_t ptr_size = read_elf_pointer_size(elf_path);
+    // Parse the ELF once here; ttexalens_elf reports the pointer size, which selects the 32-/64-bit
+    // parser, and the parsed ElfFile is then handed off to it so the file isn't opened a second time.
+    ttexalens::native_elf::ElfFile elf_file(elf_path);
     std::shared_ptr<DevicePrintParser> new_parser;
-    if (ptr_size == 8) {
-        new_parser =
-            std::shared_ptr<DevicePrintParser>(new DevicePrintParserImpl<8>(elf_path), DevicePrintParserDeleter());
+    if (elf_file.get_pointer_size() == 8) {
+        new_parser = std::shared_ptr<DevicePrintParser>(
+            new DevicePrintParserImpl<8>(elf_path, std::move(elf_file)), DevicePrintParserDeleter());
     } else {
-        new_parser =
-            std::shared_ptr<DevicePrintParser>(new DevicePrintParserImpl<4>(elf_path), DevicePrintParserDeleter());
+        new_parser = std::shared_ptr<DevicePrintParser>(
+            new DevicePrintParserImpl<4>(elf_path, std::move(elf_file)), DevicePrintParserDeleter());
     }
     parser_cache[elf_path] = new_parser;
     return new_parser;
@@ -1311,6 +887,11 @@ std::string_view DevicePrintParserImpl<PointerSize>::format_message(
                 fmt::format_to(std::back_inserter(buffer.buffer), "0x{:x}", ptr_val);
                 break;
             }
+            case 'c': {
+                const auto& info = std::get<TopCallstackInfo>(buffer.argument_values[placeholder.arg_id]);
+                format_top_callstack(buffer.buffer, info);
+                break;
+            }
             default: TT_THROW("Unsupported type_id in format placeholder (format_message): {}", placeholder.type_id);
         }
     }
@@ -1389,6 +970,21 @@ DevicePrintParser::ArgumentValue DevicePrintParserImpl<PointerSize>::read_argume
             }
             return arr;
         }
+        case 'c': {
+            // The device encodes pc/ra/skip_frames as its own pointer width (pointer_t, selected from
+            // the ELF). It marks an unknown pc/ra with the all-ones sentinel for that width, so on a
+            // 32-bit device that sentinel is UINT32_MAX; widen it to the 64-bit sentinel that
+            // TopCallstackInfo uses. On a 64-bit device pointer_t == uint64_t and this is a no-op.
+            constexpr pointer_t sentinel = std::numeric_limits<pointer_t>::max();
+            const pointer_t pc = read_value_from_payload<pointer_t>(payload_bytes, offset);
+            const pointer_t ra = read_value_from_payload<pointer_t>(payload_bytes, offset);
+
+            TopCallstackInfo info;
+            info.pc = pc != sentinel ? pc : std::numeric_limits<uint64_t>::max();
+            info.ra = ra != sentinel ? ra : std::numeric_limits<uint64_t>::max();
+            info.skip_frames = read_value_from_payload<pointer_t>(payload_bytes, offset);
+            return info;
+        }
         case 's':  // string pointer (resolved from ELF section if possible, else hex)
         case 'p':  // generic pointer
             return read_value_from_payload<pointer_t>(payload_bytes, offset);
@@ -1399,175 +995,154 @@ DevicePrintParser::ArgumentValue DevicePrintParserImpl<PointerSize>::read_argume
 template <uint8_t PointerSize>
 const typename DevicePrintParserImpl<PointerSize>::EnumInfo* DevicePrintParserImpl<PointerSize>::get_enum_info(
     std::string_view type_name) {
-    if (!enum_info_loaded_) {
-        load_enum_info_from_dwarf();
-        enum_info_loaded_ = true;
-    }
-    auto it = enum_info_cache_.find(type_name);
-    if (it != enum_info_cache_.end()) {
+    if (auto it = enum_info_cache_.find(type_name); it != enum_info_cache_.end()) {
         return &it->second;
     }
-    return nullptr;
+    using ttexalens::native_elf::DwarfDieTag;
+    const auto* dwarf_info = elf_file.get_dwarf_info();
+    if (dwarf_info == nullptr) {
+        // No DWARF info available (stripped binary, etc.)
+        return nullptr;
+    }
+
+    // Resolve the (possibly qualified, e.g. "ns::Class::Enum") enum type name to
+    // its DIE, then collect its DW_TAG_enumerator children as (value, name) pairs.
+    auto enum_die = dwarf_info->get_die_by_name(type_name);
+    if (!enum_die || enum_die->get_tag() != DwarfDieTag::enumeration_type) {
+        return nullptr;
+    }
+
+    EnumInfo info;
+    info.type_name = std::string(type_name);
+    for (auto child = enum_die->get_first_child(); child; child = child->get_next_sibling()) {
+        if (child->get_tag() != DwarfDieTag::enumerator) {
+            continue;
+        }
+        std::string_view enumerator_name = child->get_name();
+        if (enumerator_name.empty()) {
+            continue;
+        }
+        // ConstantValue is variant<monostate, bool, int64_t, uint64_t, float, double>;
+        // an enumerator carries an integral (or bool) value — anything else is skipped.
+        std::optional<int64_t> enum_val = std::visit(
+            [](auto&& v) -> std::optional<int64_t> {
+                using T = std::decay_t<decltype(v)>;
+                if constexpr (std::is_same_v<T, int64_t> || std::is_same_v<T, uint64_t> || std::is_same_v<T, bool>) {
+                    return static_cast<int64_t>(v);
+                } else {
+                    return std::nullopt;
+                }
+            },
+            child->get_constant_value());
+        if (enum_val) {
+            info.enumerators.emplace_back(*enum_val, std::string(enumerator_name));
+        }
+    }
+
+    if (info.enumerators.empty()) {
+        return nullptr;
+    }
+    auto inserted = enum_info_cache_.emplace(std::string(type_name), std::move(info));
+    return &inserted.first->second;
 }
 
 template <uint8_t PointerSize>
-void DevicePrintParserImpl<PointerSize>::load_enum_info_from_dwarf() {
-    Dwarf_Debug dbg = nullptr;
-    Dwarf_Error err = nullptr;
+auto DevicePrintParserImpl<PointerSize>::resolve_top_callstack(const TopCallstackInfo& info) {
+    using ttexalens::native_elf::CallstackEntry;
 
-    // libdwarf can open ELF files directly by path
-    int res = dwarf_init_path(
-        elf_path.c_str(),
-        nullptr,  // true_pathbuf
-        0,        // true_pathlen
-        DW_GROUPNUMBER_ANY,
-        nullptr,  // errhand
-        nullptr,  // errarg
-        &dbg,
-        &err);
+    std::vector<CallstackEntry> callstack;
+    callstack.push_back({});
 
-    if (res != DW_DLV_OK) {
-        // No DWARF info available
-        return;
+    if (elf_file.get_dwarf_info() == nullptr) {
+        return callstack;
     }
 
-    // Traverse all compilation units
-    Dwarf_Unsigned cu_header_length = 0;
-    Dwarf_Half version_stamp = 0;
-    Dwarf_Off abbrev_offset = 0;
-    Dwarf_Half address_size = 0;
-    Dwarf_Half offset_size = 0;
-    Dwarf_Half extension_size = 0;
-    Dwarf_Sig8 type_signature;
-    Dwarf_Unsigned typeoffset = 0;
-    Dwarf_Unsigned next_cu_header = 0;
-    Dwarf_Half header_cu_type = 0;
-    Dwarf_Bool is_info = true;
+    // Device sends offset from start of .text
+    // We also need the section offset for DWARF lookup
+    const uint64_t text_start = elf_file.get_code_load_address();
 
-    while (dwarf_next_cu_header_d(
-               dbg,
-               is_info,
-               &cu_header_length,
-               &version_stamp,
-               &abbrev_offset,
-               &address_size,
-               &offset_size,
-               &extension_size,
-               &type_signature,
-               &typeoffset,
-               &next_cu_header,
-               &header_cu_type,
-               &err) == DW_DLV_OK) {
-        Dwarf_Die cu_die = nullptr;
-        if (dwarf_siblingof_b(dbg, nullptr, is_info, &cu_die, &err) != DW_DLV_OK) {
-            continue;
+    const std::vector<ttexalens::native_elf::ElfFile> elfs = {elf_file};
+
+    // The device leaves the UINT64 MAX sentinel when PC/RA wasn't captured
+    const auto is_invalid_address = [](uint64_t addr) { return addr == std::numeric_limits<uint64_t>::max(); };
+
+    // Unwinding past kernel boundary is currently unsupported
+    // Stop if you reach a known terminal frame
+    const auto is_terminal = [](const CallstackEntry& entry) {
+        const auto& f = entry.function_name;
+        return f == "kernel_main" || f == "run_kernel" || f == "main" || f == "_start";
+    };
+
+    // Resolves inline callstack with given text offset
+    // Trims anything past first terminal
+    const auto resolve = [&](uint64_t offset) -> std::vector<CallstackEntry> {
+        const uint64_t address = text_start + offset;
+        return ttexalens::native_elf::get_frame_callstack(elfs, address, /*extract_variables=*/false);
+    };
+
+    if (is_invalid_address(info.pc) || is_invalid_address(info.ra)) {
+        return callstack;
+    }
+
+    auto pc_frames = resolve(info.pc);
+    callstack.assign(std::make_move_iterator(pc_frames.begin()), std::make_move_iterator(pc_frames.end()));
+
+    auto ra_frames = resolve(info.ra);
+    callstack.insert(
+        callstack.end(), std::make_move_iterator(ra_frames.begin()), std::make_move_iterator(ra_frames.end()));
+
+    // Continuation sentinel, if we didn't terminate
+    callstack.push_back({});
+
+    // Slice [skip_frames, first_terminal]
+    const auto terminal = std::find_if(callstack.begin(), callstack.end(), is_terminal);
+    const auto end = terminal == callstack.end() ? terminal : std::next(terminal);
+    const auto begin = callstack.begin() + std::min(info.skip_frames, callstack.size());
+
+    // If the terminal is skipped, we have no valid frames to show
+    if (begin >= end) {
+        return std::vector<CallstackEntry>{{}};
+    }
+
+    callstack.erase(end, callstack.end());
+    callstack.erase(callstack.begin(), begin);
+    return callstack;
+}
+
+template <uint8_t PointerSize>
+void DevicePrintParserImpl<PointerSize>::format_top_callstack(fmt::memory_buffer& out, const TopCallstackInfo& info) {
+    auto sink = std::back_inserter(out);
+
+    // Renders the resolved callstack as a tree, innermost frame first. Every real frame
+    // contributes two lines — the function name, then its source location:
+    //   "│  ├──┬ FUNC\r"
+    //   "│  │  └ FILE:LINE\r"
+    // The outermost real frame uses the └ connector and drops the trailing │. When the stack
+    // couldn't be fully unwound, resolve_top_callstack appends a sentinel frame (always last),
+    // which renders as a closing leaf:
+    //   "│  └ ...\r"
+    const auto stack = resolve_top_callstack(info);
+
+    for (size_t idx = 0; idx < stack.size(); ++idx) {
+        const auto& frame = stack[idx];
+        const bool last = (idx + 1 == stack.size());
+
+        if (last && !frame.function_name) {
+            fmt::format_to(sink, "│  └ ...\r");
+            break;
         }
 
-        // Recursive lambda to walk the DIE tree and collect enum types with qualified names
-        std::function<void(Dwarf_Die, const std::string&)> walk_die;
-        walk_die = [&](Dwarf_Die die, const std::string& parent_scope) {
-            Dwarf_Half tag = 0;
-            if (dwarf_tag(die, &tag, &err) != DW_DLV_OK) {
-                return;
-            }
-
-            // Build the current scope name
-            std::string current_scope = parent_scope;
-            char* die_name = nullptr;
-            bool has_name = (dwarf_diename(die, &die_name, &err) == DW_DLV_OK && die_name);
-
-            if (tag == DW_TAG_namespace || tag == DW_TAG_class_type || tag == DW_TAG_structure_type) {
-                if (has_name) {
-                    if (!current_scope.empty()) {
-                        current_scope += "::";
-                    }
-                    current_scope += die_name;
-                }
-            }
-
-            if (tag == DW_TAG_enumeration_type && has_name) {
-                std::string enum_qualified_name = current_scope;
-                if (!enum_qualified_name.empty()) {
-                    enum_qualified_name += "::";
-                }
-                enum_qualified_name += die_name;
-
-                // Extract enumerator children
-                EnumInfo info;
-                info.type_name = enum_qualified_name;
-
-                Dwarf_Die child = nullptr;
-                if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
-                    while (child) {
-                        Dwarf_Half child_tag = 0;
-                        if (dwarf_tag(child, &child_tag, &err) == DW_DLV_OK && child_tag == DW_TAG_enumerator) {
-                            char* enumerator_name = nullptr;
-                            Dwarf_Signed sval = 0;
-                            Dwarf_Unsigned uval = 0;
-                            bool got_value = false;
-                            int64_t enum_val = 0;
-
-                            if (dwarf_diename(child, &enumerator_name, &err) == DW_DLV_OK && enumerator_name) {
-                                // Try to get const_value as signed first, then unsigned
-                                Dwarf_Attribute attr = nullptr;
-                                if (dwarf_attr(child, DW_AT_const_value, &attr, &err) == DW_DLV_OK) {
-                                    Dwarf_Half form = 0;
-                                    dwarf_whatform(attr, &form, &err);
-                                    if (dwarf_formsdata(attr, &sval, &err) == DW_DLV_OK) {
-                                        enum_val = sval;
-                                        got_value = true;
-                                    } else if (dwarf_formudata(attr, &uval, &err) == DW_DLV_OK) {
-                                        enum_val = static_cast<int64_t>(uval);
-                                        got_value = true;
-                                    }
-                                    dwarf_dealloc_attribute(attr);
-                                }
-
-                                if (got_value) {
-                                    info.enumerators.emplace_back(enum_val, std::string(enumerator_name));
-                                }
-
-                                dwarf_dealloc(dbg, enumerator_name, DW_DLA_STRING);
-                            }
-                        }
-
-                        Dwarf_Die sibling = nullptr;
-                        if (dwarf_siblingof_b(dbg, child, is_info, &sibling, &err) != DW_DLV_OK) {
-                            dwarf_dealloc_die(child);
-                            break;
-                        }
-                        dwarf_dealloc_die(child);
-                        child = sibling;
-                    }
-                }
-
-                if (!info.enumerators.empty()) {
-                    enum_info_cache_[enum_qualified_name] = std::move(info);
-                }
-            }
-            dwarf_dealloc(dbg, die_name, DW_DLA_STRING);
-
-            // Recurse into children
-            Dwarf_Die child = nullptr;
-            if (dwarf_child(die, &child, &err) == DW_DLV_OK) {
-                while (child) {
-                    walk_die(child, (tag == DW_TAG_enumeration_type) ? parent_scope : current_scope);
-                    Dwarf_Die sibling = nullptr;
-                    if (dwarf_siblingof_b(dbg, child, is_info, &sibling, &err) != DW_DLV_OK) {
-                        dwarf_dealloc_die(child);
-                        break;
-                    }
-                    dwarf_dealloc_die(child);
-                    child = sibling;
-                }
-            }
-        };
-
-        walk_die(cu_die, "");
-        dwarf_dealloc_die(cu_die);
+        fmt::format_to(sink, "│  {}──┬ {}\r", last ? "└" : "├", frame.function_name.value_or("<unknown>"));
+        // The file:line continuation column drops the │ on the last (outermost) frame.
+        const char* cont = last ? "   " : "│  ";
+        if (!frame.file_info) {
+            fmt::format_to(sink, "│  {}└ <unknown>\r", cont);
+        } else {
+            fmt::format_to(sink, "│  {}└ {}:{}\r", cont, frame.file_info->file, frame.file_info->line);
+        }
     }
 
-    dwarf_finish(dbg);
+    fmt::format_to(sink, "│");
 }
 
 }  // namespace tt::tt_metal

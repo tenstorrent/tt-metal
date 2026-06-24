@@ -22,8 +22,9 @@ Layout mapping from the legacy rotary tests (``[W, Z, Y, X]`` with cos/sin ``[1,
   (different users at different cached steps) are what ``is_decode_mode=True`` and ``[1, batch, …]`` cos/sin fix
   relative to the legacy op (see ``test_rotary_embedding_hf_decode_per_batch_position``).
 
-The HF op requires TILE layout and ``head_dim`` divisible by ``2 * ttnn.TILE_SIZE``; ``test_rotary_embedding_hf_row_major`` skips
-because row-major inputs are rejected by validation.
+The HF op requires TILE layout and padded ``head_dim`` equal to ``ttnn.TILE_SIZE`` or divisible by
+``2 * ttnn.TILE_SIZE``; ``test_rotary_embedding_hf_row_major`` skips because row-major inputs are
+rejected by validation.
 
 See ``ttnn/cpp/.../rotary_embedding_hf/device/rotary_embedding_hf_device_operation.cpp`` for shape rules.
 """
@@ -183,7 +184,7 @@ def _decode_hf_cos_sin_sharded(device, batch: int, head_dim: int, cos_torch, sin
 
 @pytest.mark.parametrize(
     "W, Z, Y, X",
-    ([1, 1, 128, 64], [1, 71, 128, 64], [32, 1, 32, 64], [32, 71, 32, 64]),
+    ([1, 1, 128, 64], [1, 71, 128, 64], [32, 1, 32, 64], [32, 71, 32, 64], [1, 1, 128, 32], [1, 32, 32, 32]),
 )
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True, False])
@@ -264,7 +265,8 @@ def test_rotary_embedding_hf_prefill(
     assert p
 
 
-def test_rotary_embedding_hf_decode_per_batch_position(device):
+@pytest.mark.parametrize("head_dim", [32, 128])
+def test_rotary_embedding_hf_decode_per_batch_position(device, head_dim):
     """Decode mode: each batch row uses a different cached position (legacy op could not do this).
 
     ``cos_cache`` / ``sin_cache`` are ``[1, batch, 1, head_dim]`` with one row per user; positions are taken
@@ -276,7 +278,6 @@ def test_rotary_embedding_hf_decode_per_batch_position(device):
 
     batch = 32
     num_heads = 8
-    head_dim = 128
     cache_size = 2048
     dtype = ttnn.bfloat16
 
@@ -340,7 +341,8 @@ def test_rotary_embedding_hf_decode_per_batch_position(device):
     ttnn.deallocate(sin_tt)
 
 
-def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
+@pytest.mark.parametrize("head_dim", [32, 128])
+def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device, head_dim):
     """Decode mode regression: force ``batch_per_core > 1`` and verify per-batch cos/sin rows are honored."""
     torch.manual_seed(0)
 
@@ -348,7 +350,6 @@ def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
     num_cores = core_grid.x * core_grid.y
     batch = num_cores * 2  # Forces batch_per_core = 2 with exact height-shard packing.
     num_heads = 8
-    head_dim = 128
     cache_size = max(2048, batch * 4)
     dtype = ttnn.bfloat16
 
@@ -443,7 +444,16 @@ def test_rotary_embedding_hf_decode_batch_per_core_gt_one(device):
 
 @pytest.mark.parametrize(
     "W, Z, Y, X",
-    ([1, 1, 32, 64], [1, 71, 32, 64], [1, 1, 64, 64], [1, 71, 64, 64], [1, 32, 32, 64], [1, 2, 32, 64]),
+    (
+        [1, 1, 32, 64],
+        [1, 71, 32, 64],
+        [1, 1, 64, 64],
+        [1, 71, 64, 64],
+        [1, 32, 32, 64],
+        [1, 2, 32, 64],
+        [1, 1, 32, 32],
+        [1, 2, 32, 32],
+    ),
 )
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("token_idx", [0, 128, 129, 1024, 1025])
@@ -528,7 +538,7 @@ def test_rotary_embedding_hf_decode(
     assert p
 
 
-@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 128, 64)])
+@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 128, 32), (1, 1, 128, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("in_sharded", [True])
 @pytest.mark.parametrize("out_sharded", [True])
@@ -608,7 +618,7 @@ def test_rotary_embedding_hf_prefill_fp32(
     assert p
 
 
-@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 64)])
+@pytest.mark.parametrize("W, Z, Y, X", [(1, 1, 32, 32), (1, 1, 32, 64)])
 @pytest.mark.parametrize("cache_size", [2048])
 @pytest.mark.parametrize("token_idx", [0, 128])
 @pytest.mark.parametrize("in_sharded", [True])

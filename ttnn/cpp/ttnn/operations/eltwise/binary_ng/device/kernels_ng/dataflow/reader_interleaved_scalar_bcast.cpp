@@ -45,20 +45,20 @@ void kernel_main() {
 
 #if SRC_SHARDED
 #if !SRC_BCAST
-    cb_reserve_back(cb_id_src, src_num_tiles);
-    cb_push_back(cb_id_src, src_num_tiles);
+    cb_src.reserve_back(src_num_tiles);
+    cb_src.push_back(src_num_tiles);
 #endif
 #else
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
+    const uint32_t src_tile_bytes = cb_src.get_tile_size();
     const auto src = TensorAccessor(src_args, src_addr);
 #endif
 #if SRC_SHARDED_B
 #if !SRC_BCAST_B
-    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
-    cb_push_back(cb_id_src_b, src_num_tiles_b);
+    cb_src_b.reserve_back(src_num_tiles_b);
+    cb_src_b.push_back(src_num_tiles_b);
 #endif
 #else
-    const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
+    const uint32_t src_tile_bytes_b = cb_src_b.get_tile_size();
     const auto src_b = TensorAccessor(src_b_args, src_addr_b);
 #endif
     constexpr uint32_t onetile = 1;
@@ -112,7 +112,7 @@ void kernel_main() {
                     noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
+                    FILL_TILE_WITH_FIRST_ELEMENT(cb_src.get_write_ptr());
 #endif
                     cb_src.push_back(onetile);
 #endif
@@ -123,7 +123,7 @@ void kernel_main() {
                     noc.async_read_barrier();
 #endif
 #if !BCAST_LLK
-                    FILL_TILE_WITH_FIRST_ELEMENT_B(cb_id_src_b);
+                    FILL_TILE_WITH_FIRST_ELEMENT_B(cb_src_b.get_write_ptr());
 #endif
                     cb_src_b.push_back(onetile);
 #endif

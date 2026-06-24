@@ -43,6 +43,7 @@ jobs:
     steps:
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           sparse-checkout: |
             .github
@@ -57,14 +58,16 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "e2e"
+            "e2e" \
+            "${{ inputs.tier }}"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
             "${{ inputs.enabled-skus }}" \
-            ./.github/sku_config.yaml
+            ./.github/sku_config.yaml \
+            ./.github/blackhole_demo_systems.yaml
       - name: Apply tier and model filters
         id: apply-filters
         run: |
@@ -99,21 +102,33 @@ jobs:
         TT_METAL_HOME: /work
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
-        HF_HUB_OFFLINE: 1
+        # Only the per-runner BH cache modes (local-disk, lfc) need HF online
+        # so first-use can populate the cache. Shared NFS modes (cloud-mlperf
+        # for BH and the implicit WH mount) keep HF offline — those are :ro
+        # and HF would try to write metadata (refs/main, .no_exist markers)
+        # on every HEAD call even when the cache already has the model,
+        # crashing with `OSError [Errno 30] Read-only file system`.
+        HF_HUB_OFFLINE: ${{ (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '0' || '1' }}
         HF_HUB_CACHE: /mnt/MLPerf/huggingface/hub
+        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
+        MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-        # bh_p150 / bh_loudbox / bh_galaxy[_perf] and the WH SKUs run on machines
-        # that host the canonical HF / tt_cache layout under /mnt/MLPerf, so the
-        # standard mount works as-is. bh_quietbox_2 is a local-disk BH runner
-        # whose equivalent layout lives at /localdev/blackhole_demos/huggingface_data
-        # — map that host path onto /mnt/MLPerf/huggingface inside the container
-        # so a single test cmd referencing /mnt/MLPerf/... resolves on both
-        # cache modes.
-        - ${{ matrix.test-group.sku == 'bh_quietbox_2' && format('/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
+        # Mount the HF / tt_cache root so it always appears inside the container
+        # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
+        # runner uses. Host source comes from matrix.test-group['weights-cache-mode']
+        # (populated from .github/blackhole_demo_systems.yaml by prepare_test_matrix.py):
+        #   cloud-mlperf            → host /mnt/MLPerf/huggingface (shared NFS)
+        #   local-disk / lfc        → host /localdev/blackhole_demos/huggingface_data (per-runner)
+        #   yyz4-mnt-models         → host /mnt/models/huggingface (YYZ4 Exabox nfs storage mount)
+        #   (no mode → WH SKU)      → host /mnt/MLPerf (whole tree; preserves access to
+        #                             /mnt/MLPerf/tt_dnn-models still used by one WH entry)
+        # rw-ness: per-runner caches are :rw so first-use HF downloads can populate them;
+        # shared NFS honors mlperf-read-only.
+        - ${{ matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && format('/mnt/MLPerf/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw') || (matrix.test-group['weights-cache-mode'] == 'yyz4-mnt-models' && format('/mnt/models/huggingface:/mnt/MLPerf/huggingface{0}', inputs.mlperf-read-only && ':ro' || ':rw')) || (matrix.test-group['weights-cache-mode'] == 'local-disk' || matrix.test-group['weights-cache-mode'] == 'lfc') && '/localdev/blackhole_demos/huggingface_data:/mnt/MLPerf/huggingface:rw' || format('/mnt/MLPerf:/mnt/MLPerf{0}', inputs.mlperf-read-only && ':ro' || ':rw') }}
       options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
     defaults:
       run:
@@ -122,6 +137,7 @@ jobs:
     steps:
       - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        timeout-minutes: 20
         with:
           submodules: recursive
           path: docker-job
@@ -133,20 +149,15 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
-        run: |
-          mkdir -p generated/test_reports generated/test_logs
-
-          # Mirror the matrix command's combined stdout+stderr to a per-leg
-          # log file so ai-summary can read it later. The brace group lets
-          # the cmd be multiple statements; PIPESTATUS forwards the real
-          # exit code that piping through tee would otherwise mask.
-          SAFE_NAME=$(echo "${{ matrix.test-group.name }}" | tr ' /' '__')
-          LOG_FILE="generated/test_logs/${SAFE_NAME}_${{ job.check_run_id }}.log"
-
-          {
+        uses: ./docker-job/.github/actions/run-with-log
+        with:
+          log-file: generated/test_logs/${{ matrix.test-group.name }}.log
+          run: |
+            mkdir -p generated/test_reports
+            # Perf/accuracy are enforced by the "Validate perf and accuracy targets"
+            # step below; the in-test checks are warning-only, so the tests write
+            # complete benchmark JSON before validation runs.
             ${{ matrix.test-group.cmd }}
-          } 2>&1 | tee "$LOG_FILE"
-          exit "${PIPESTATUS[0]}"
       - name: Save environment data
         id: save-environment-data
         if: ${{ !cancelled() }}

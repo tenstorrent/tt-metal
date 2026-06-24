@@ -258,7 +258,7 @@ SuperPod testing goes beyond single-pod validation: it exercises the fabric acro
 The following artifacts are provided for minimal multi-pod (SuperPod) fabric testing:
 
 - **Fabric test config (2D torus, multi-mesh):**
-  `tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml`
+  `tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_multi_mesh.yaml`
   Defines fabric tests (e.g. RandomPairingMesh, AllToAllMesh, and 2D Torus XY variants) for Mesh and Torus topologies.
 
 - **Minimal 4-mesh (e.g. 4× SuperPod, each pod 32×4) Mesh Graph Descriptor:**
@@ -347,7 +347,7 @@ In this example: rank 0 → (0,0), rank 1 → (0,1), rank 4 → (1,0), etc. The 
 
 ### Running Fabric Tests with tt-run
 
-The test binary is `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`. Pass the fabric test config with **`--test_config`**.
+The test binary is `./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric`. Pass the fabric test config with **`--test_config`**.
 
 **Preferred — auto allocation:** Provide the **Mesh Graph Descriptor** and **`--hosts`**; `tt-run` runs Phase 1 (or uses `generated/ttrun/…` cache), then launches with the generated rankfile and host binding. Set **`--tcp-interface`** to your MPI NIC (equivalent to wiring `btl_tcp_if_include`); `tt-run` also applies its usual multihost defaults, **`--bind-to none`**, and **`--tag-output`** unless you pass **`--bare`**.
 
@@ -356,8 +356,8 @@ tt-run \
   --mesh-graph-descriptor tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto \
   --hosts <host0>,<host1>,... \
   --tcp-interface <nic> \
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
-  --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
+  --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_multi_mesh.yaml
 ```
 
 Fix the MGD path if your file lives under a different name; the mainlined SP4 descriptor is `tt_metal/fabric/mesh_graph_descriptors/bh_galaxy_sp4_torus_xy_graph_descriptor.textproto`.
@@ -368,13 +368,13 @@ Fix the MGD path if your file lives under a different name; the mainlined SP4 de
 tt-run \
   --rank-binding tests/tt_metal/distributed/config/bh_galaxy_sp4_rank_bindings.yaml \
   --mpi-args "--host <host0>,<host1>,... --map-by rankfile:file=<your_rankfile> --mca btl self,tcp --mca btl_tcp_if_include <nic> --bind-to none --tag-output" \
-  ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
-  --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml
+  ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric \
+  --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_multi_mesh.yaml
 ```
 
 After a successful **auto allocation** run, `tt-run` logs a **Phase 2–only** command using paths under `generated/ttrun/<cache_id>/` so you can re-run without Phase 1 when the cache still matches.
 
-For mock / single-machine 16-rank runs, use **`--mock-cluster-rank-binding`** with auto allocation (no `--hosts`); see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) and [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
+For mock / single-machine 16-rank runs, use **`--mock-cluster-rank-binding`** with auto allocation (no `--hosts`); see [README_ttrun.md](../../../ttnn/ttnn/distributed/README_ttrun.md) and [tt-cluster-descriptors/README.md](../../../tt_metal/third_party/tt-cluster-descriptors/README.md).
 
 For rankfiles and generating cluster descriptors from multiple hosts, see [README_generate_cluster_descriptors.md](../../../scripts/scaleout/README_generate_cluster_descriptors.md).
 
@@ -382,13 +382,13 @@ For rankfiles and generating cluster descriptors from multiple hosts, see [READM
 
 You can sanity-check the mainlined artifacts before running on real hardware. All commands below assume you run from the **repository root** (paths are relative to repo root).
 
-1. **Build the test binary** (from repo root): `./build_metal.sh --build-tests` builds all tests; the fabric test binary is at `./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric`.
+1. **Build the test binary** (from repo root): `./build_metal.sh --build-tests` builds all tests; the fabric test binary is at `./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric`.
 
 2. **Validate the fabric test config YAML** (parses and has expected structure):
    ```bash
    python3 -c "
    import yaml
-   with open('tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_bh_glx_2d_torus_multi_mesh.yaml') as f:
+   with open('tests/tt_metal/tt_fabric/test_infra/test_yamls/test_bh_glx_2d_torus_multi_mesh.yaml') as f:
        d = yaml.safe_load(f)
    assert 'Tests' in d and len(d['Tests']) >= 1
    print('YAML OK:', len(d['Tests']), 'test(s)')
@@ -412,7 +412,7 @@ You can sanity-check the mainlined artifacts before running on real hardware. Al
    "
    ```
 
-**Full end-to-end** validation requires either a 16-host SuperPod (run the **auto allocation** `tt-run` example above) or a mock cluster: use **`tt-run --mesh-graph-descriptor … --mock-cluster-rank-binding <mapping>`** so Phase 1 generates rank bindings and the rankfile (add **`--mpi-args "--allow-run-as-root"`** if your OpenMPI setup requires it), or use **legacy** mode with an explicit `--rank-binding` and rankfile. See [custom_mock_cluster_descriptors/README.md](../../../tests/tt_metal/tt_fabric/custom_mock_cluster_descriptors/README.md).
+**Full end-to-end** validation requires either a 16-host SuperPod (run the **auto allocation** `tt-run` example above) or a mock cluster: use **`tt-run --mesh-graph-descriptor … --mock-cluster-rank-binding <mapping>`** so Phase 1 generates rank bindings and the rankfile (add **`--mpi-args "--allow-run-as-root"`** if your OpenMPI setup requires it), or use **legacy** mode with an explicit `--rank-binding` and rankfile. See [tt-cluster-descriptors/README.md](../../../tt_metal/third_party/tt-cluster-descriptors/README.md).
 
 ## Directed Link Retrains (Wormhole Only)
 

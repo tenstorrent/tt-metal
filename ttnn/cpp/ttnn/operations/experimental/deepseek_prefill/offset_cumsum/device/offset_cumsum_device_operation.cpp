@@ -65,14 +65,6 @@ OffsetCumsumDeviceOperation::topology_return_value_t OffsetCumsumDeviceOperation
     return {offsets_topology, totals_topology, expert_region_topology};
 }
 
-tt::stl::hash::hash_t OffsetCumsumDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
-    tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<OffsetCumsumDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape);
-    return hash;
-}
-
 OffsetCumsumDeviceOperation::tensor_return_value_t OffsetCumsumDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& input_tensor) {
     auto output_specs = compute_output_specs(args, input_tensor);

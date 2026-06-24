@@ -47,18 +47,122 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
 
 def scaled_dot_product_attention_reference_prefill(Q, K, V, scale, is_causal=True):
     """
-    Full-sequence causal SDPA reference.
+    Memory-efficient full-sequence causal SDPA reference.
     Q: (B, nh, S, d_qk), K/V: (B, nkv, S, d)
+
+    Chunks over heads (and, only for very long sequences, the Q sequence) so
+    the [B, nh, S, S] attention matrix never materializes at full size — CPU
+    SDPA's math kernel otherwise allocates it in fp32 and OOMs on large
+    nh/batch/seq configs. GQA heads are gathered per head-chunk (HEAD_CHUNK at
+    a time) rather than expanding the whole KV tensor up front via
+    repeat_interleave (a copy).
+
+    Within a head-chunk we keep the fast fused/flash SDPA kernel via the
+    is_causal flag whenever the Q-chunk spans the whole sequence; an explicit
+    causal mask (which forces the slow O(S^2) math kernel) is only built for
+    offset Q-chunks, i.e. when S > SEQ_CHUNK.
     """
-    _, nh, _, _ = Q.shape
+    SEQ_CHUNK = 4096
+    HEAD_CHUNK = 16
+
+    B, nh, S, _ = Q.shape
     _, nkv, _, _ = V.shape
-    # Expand KV to match Q heads
+    Dv = V.shape[-1]
     head_rep = nh // nkv
-    K_exp = K.repeat_interleave(head_rep, dim=1)
-    V_exp = V.repeat_interleave(head_rep, dim=1)
-    return torch.nn.functional.scaled_dot_product_attention(
-        Q, K_exp, V_exp, attn_mask=None, scale=scale, is_causal=is_causal
-    )
+
+    attn_out = torch.empty(B, nh, S, Dv, dtype=Q.dtype)
+    for h_start in range(0, nh, HEAD_CHUNK):
+        h_end = min(h_start + HEAD_CHUNK, nh)
+        # Map each Q head in the chunk to its KV head (GQA broadcast) without
+        # copying the full KV tensor — gather is limited to HEAD_CHUNK heads.
+        kv_idx = torch.arange(h_start, h_end) // head_rep
+        k_heads = K[:, kv_idx]
+        v_heads = V[:, kv_idx]
+        q_heads = Q[:, h_start:h_end]
+        for seq_start in range(0, S, SEQ_CHUNK):
+            seq_end = min(seq_start + SEQ_CHUNK, S)
+            q_chunk = q_heads[:, :, seq_start:seq_end]
+            if is_causal and seq_start == 0 and seq_end == S:
+                # Full-sequence chunk: the square is_causal flag is exactly
+                # correct and lets PyTorch pick the fast fused kernel.
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    q_chunk, k_heads, v_heads, scale=scale, is_causal=True
+                )
+            elif is_causal:
+                # Offset Q-chunk: the square is_causal flag doesn't apply, so
+                # build the explicit causal mask for this chunk's positions.
+                q_pos = torch.arange(seq_start, seq_end).unsqueeze(1)
+                k_pos = torch.arange(seq_end).unsqueeze(0)
+                mask = (k_pos <= q_pos).unsqueeze(0).unsqueeze(0)
+                out = torch.nn.functional.scaled_dot_product_attention(
+                    q_chunk, k_heads[:, :, :seq_end], v_heads[:, :, :seq_end], attn_mask=mask, scale=scale
+                )
+            else:
+                out = torch.nn.functional.scaled_dot_product_attention(q_chunk, k_heads, v_heads, scale=scale)
+            attn_out[:, h_start:h_end, seq_start:seq_end] = out
+
+    return attn_out
+
+
+def comp_pcc_lowmem(golden, calculated, pcc=0.99, chunk=1 << 23):
+    """
+    Memory-frugal drop-in for comp_pcc on very large tensors.
+
+    Computes the same Pearson correlation coefficient as comp_pcc, but in a
+    chunked two-pass scan instead of np.ma.corrcoef (which flattens to float64
+    and allocates several full-size temporaries, ~16x the input — enough to
+    OOM-kill the CI host on the largest prefill outputs). Non-finite elements
+    are excluded pairwise, matching np.ma.masked_invalid. Returns
+    (passing, output_str) so it can substitute for comp_pcc directly.
+    """
+    if golden.dtype != calculated.dtype:
+        calculated = calculated.type(golden.dtype)
+
+    g = golden.detach().reshape(-1)
+    c = calculated.detach().reshape(-1)
+    n = g.numel()
+
+    # Pass 1: means over jointly-finite elements.
+    sum_g = sum_c = 0.0
+    count = 0
+    for i in range(0, n, chunk):
+        gc = g[i : i + chunk].float()
+        cc = c[i : i + chunk].float()
+        m = torch.isfinite(gc) & torch.isfinite(cc)
+        gc, cc = gc[m], cc[m]
+        sum_g += gc.sum().item()
+        sum_c += cc.sum().item()
+        count += gc.numel()
+
+    if count == 0:
+        return True, "PCC: 1.0 (no finite elements)"
+
+    mean_g = sum_g / count
+    mean_c = sum_c / count
+
+    # Pass 2: covariance and per-tensor variance from the centered values.
+    cov = var_g = var_c = 0.0
+    for i in range(0, n, chunk):
+        gc = g[i : i + chunk].float()
+        cc = c[i : i + chunk].float()
+        m = torch.isfinite(gc) & torch.isfinite(cc)
+        gc = gc[m] - mean_g
+        cc = cc[m] - mean_c
+        cov += torch.dot(gc, cc).item()
+        var_g += torch.dot(gc, gc).item()
+        var_c += torch.dot(cc, cc).item()
+
+    if var_g == 0.0 or var_c == 0.0:
+        # Constant tensor(s): correlated iff both are constant.
+        cal_pcc = 1.0 if (var_g == 0.0 and var_c == 0.0) else 0.0
+    else:
+        cal_pcc = cov / math.sqrt(var_g * var_c)
+
+    passing = cal_pcc >= pcc
+    output_str = f"PCC: {cal_pcc}"
+    if not passing:
+        output_str += ", PCC check failed"
+    return passing, output_str
 
 
 def page_table_setup(batch_size: int, config: PagedAttentionConfig) -> torch.Tensor:
@@ -583,7 +687,12 @@ def run_flash_mla_prefill_impl(
     if dtype == ttnn.bfloat4_b:
         pcc_threshold = 0.98
 
-    out_pass, out_pcc = comp_pcc(tt_out_torch, out_t, pcc_threshold)
+    # The full prefill output is [B, nh, S, d] — up to ~0.5G elements. The
+    # shared comp_pcc routes through np.ma.corrcoef, which flattens to float64
+    # and builds several full-size temporaries (~16x input), OOM-killing the CI
+    # host on the largest configs. comp_pcc_lowmem computes the same Pearson PCC
+    # in a chunked two-pass scan, keeping peak memory at the input size.
+    out_pass, out_pcc = comp_pcc_lowmem(tt_out_torch, out_t, pcc_threshold)
     logger.debug(f"Output PCC: {out_pcc}")
 
     assert out_pass, f"Output mismatch: PCC {out_pcc} < 0.99"

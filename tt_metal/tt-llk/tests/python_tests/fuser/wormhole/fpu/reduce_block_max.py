@@ -12,10 +12,14 @@ from fuser.fused_math import ComputeNode
 from fuser.fused_operation import FusedOperation
 from fuser.fuser_config import GlobalConfig
 from helpers.golden_generators import ReduceBlockMaxRowGolden, get_golden_generator
+from helpers.llk_params import ReduceDimension
 
 
 class ReduceBlockMaxFpu(Fpu):
     loop: FusedLoop = LoopBlockRow()
+    reduce_dim: ReduceDimension = ReduceDimension.Row
+
+    per_block_init = True
 
     def init(
         self,
@@ -46,7 +50,8 @@ class ReduceBlockMaxFpu(Fpu):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        return "_llk_math_reduce_block_max_row_uninit_();\n"
+        dest_acc = config.dest_acc.cpp_enum_value
+        return f"_llk_math_reduce_block_max_row_uninit_<{dest_acc}>();\n"
 
     def golden(
         self,
@@ -57,14 +62,18 @@ class ReduceBlockMaxFpu(Fpu):
         config: GlobalConfig,
         compute_unit: ComputeNode,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        output_format = operation.output.data_format
+        output_format = config.sentinel.golden_math_format
 
         golden_tensor = torch.zeros_like(tensor_dst)
         src_a_reduced_tensor = torch.zeros_like(tensor_a)
         dest_golden_tensor = torch.zeros_like(tensor_dst)
 
-        tile_count_x = operation.output.tile_count_x
-        tile_count_y = operation.output.tile_count_y
+        tile_count_x = (
+            operation.max_output_dimensions[1] // operation.tile_shape.total_col_dim()
+        )
+        tile_count_y = (
+            operation.max_output_dimensions[0] // operation.tile_shape.total_row_dim()
+        )
         block_tiles_x = operation.block_tiles_x
         block_tiles_y = operation.block_tiles_y
 
@@ -79,13 +88,15 @@ class ReduceBlockMaxFpu(Fpu):
         generate_golden = get_golden_generator(ReduceBlockMaxRowGolden)
 
         def process_block(block_x, block_y, block_tiles_x_eff, block_tiles_y_eff):
-            src_start_row = block_y * 32
-            src_end_row = (block_y + block_tiles_y_eff) * 32
-            start_col = block_x * 32
-            end_col = (block_x + block_tiles_x_eff) * 32
-            dst_start_row = block_y * 32
-            dst_end_row = (block_y + block_tiles_y_eff) * 32
-            block_dims = [block_tiles_y_eff * 32, block_tiles_x_eff * 32]
+            tile_r = operation.tile_shape.total_row_dim()
+            tile_c = operation.tile_shape.total_col_dim()
+            src_start_row = block_y * tile_r
+            src_end_row = (block_y + block_tiles_y_eff) * tile_r
+            start_col = block_x * tile_c
+            end_col = (block_x + block_tiles_x_eff) * tile_c
+            dst_start_row = block_y * tile_r
+            dst_end_row = (block_y + block_tiles_y_eff) * tile_r
+            block_dims = [block_tiles_y_eff * tile_r, block_tiles_x_eff * tile_c]
 
             src_a_reduced_tensor[dst_start_row:dst_end_row, start_col:end_col] = (
                 generate_golden(

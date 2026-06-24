@@ -8,14 +8,18 @@ import torch
 
 import ttnn
 
-from math import pi
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc, assert_with_ulp
 from models.common.utility_functions import torch_random
 
 pytestmark = pytest.mark.use_module_device
 
 
-def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, pcc=0.9999):
+def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, *, pcc=0.9999, exact=False):
+    """Run a binary eltwise op on bf16 inputs in [low, high) and assert vs the torch golden.
+
+    Defaults to ``assert_with_pcc(pcc)`` for composite math (ldexp/logaddexp/xlogy/bias_gelu) where
+    the expected error exceeds the ULP <= 5 policy. Callers set ``exact=True`` for ops whose output
+    is a bit-exact selection or boolean (maximum/minimum, logical_and/or/xor)."""
     torch.manual_seed(0)
     low = low
     high = high
@@ -33,7 +37,10 @@ def run_elt_binary_test_range(device, h, w, ttnn_function, low, high, pcc=0.9999
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    if exact:
+        assert_equal(torch_output_tensor.to(output_tensor.dtype), output_tensor)
+    else:
+        assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -57,19 +64,19 @@ def test_logaddexp2(device, h, w):
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_logical_and(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logical_and, -100, 100)
+    run_elt_binary_test_range(device, h, w, ttnn.logical_and, -100, 100, exact=True)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_logical_or(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logical_or, -100, 100)
+    run_elt_binary_test_range(device, h, w, ttnn.logical_or, -100, 100, exact=True)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_logical_xor(device, h, w):
-    run_elt_binary_test_range(device, h, w, ttnn.logical_xor, -100, 100)
+    run_elt_binary_test_range(device, h, w, ttnn.logical_xor, -100, 100, exact=True)
 
 
 @pytest.mark.parametrize("h", [64])
@@ -84,38 +91,16 @@ def test_bias_gelu(device, h, w):
     run_elt_binary_test_range(device, h, w, ttnn.bias_gelu, -100, 100)
 
 
-def run_elt_binary_test_min_max(device, h, w, ttnn_function, low, high, pcc=0.9999):
-    torch.manual_seed(0)
-    low = low
-    high = high
-    torch_input_tensor_a = torch_random((h, w), low, high, dtype=torch.bfloat16)
-    torch.manual_seed(42)
-    torch_input_tensor_b = torch_random((h, w), low, high, dtype=torch.bfloat16)
-
-    golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
-
-    output_tensor = ttnn_function(input_tensor_a, input_tensor_b)
-    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
-    output_tensor = ttnn.from_device(output_tensor)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
-
-
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_maximum(device, h, w):
-    run_elt_binary_test_min_max(device, h, w, ttnn.maximum, -100, 100)
+    run_elt_binary_test_range(device, h, w, ttnn.maximum, -100, 100, exact=True)
 
 
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
 def test_minimum(device, h, w):
-    run_elt_binary_test_min_max(device, h, w, ttnn.minimum, -100, 100)
+    run_elt_binary_test_range(device, h, w, ttnn.minimum, -100, 100, exact=True)
 
 
 def test_arithmetic_operators(device):
@@ -161,3 +146,36 @@ def test_arithmetic_operators(device):
     h_torch = ttnn.to_torch(h)
     expected_scalar_div_tensor = torch.full((32, 32), 2.0, dtype=torch.bfloat16)
     assert torch.equal(h_torch, expected_scalar_div_tensor), "Scalar / tensor result incorrect"
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize(
+    "broadcast_shape",
+    [
+        (1, 1, 1, 64),  # ROW broadcast
+        (1, 1, 32, 1),  # COL broadcast
+        (1, 1, 1, 1),  # SCALAR broadcast
+    ],
+    ids=["row_bcast", "col_bcast", "scalar_bcast"],
+)
+def test_fused_relu_with_broadcast(device, dtype, broadcast_shape):
+    """Regression test for #44823: fused RELU silently dropped on subtile-broadcast paths.
+
+    The PACK_RELU optimization sets ZERO_RELU once at kernel start, but subtile-broadcast
+    kernels clear it via pack_reconfig_data_format mid-iteration. The fix falls through to
+    the SFPU activation path for broadcast cases.
+    """
+    torch.manual_seed(0)
+    a_shape = (1, 1, 32, 64)
+    torch_a = torch.randn(a_shape).to(torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32)
+    torch_b = torch.randn(broadcast_shape).to(torch_a.dtype)
+
+    golden = torch.relu(torch_a + torch_b)
+
+    tt_a = ttnn.from_torch(torch_a, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+    tt_b = ttnn.from_torch(torch_b, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
+
+    tt_out = ttnn.add(tt_a, tt_b, activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+    result = ttnn.to_torch(tt_out)
+
+    assert_with_ulp(golden, result, 1)

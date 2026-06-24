@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
     [
         {
             "fabric_config": get_fabric_config(),
-            "trace_region_size": 135168,
+            "trace_region_size": 0,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],

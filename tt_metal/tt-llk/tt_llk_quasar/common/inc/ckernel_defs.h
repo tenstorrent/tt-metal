@@ -55,6 +55,20 @@ enum ThreadId
     PackThreadId   = 3
 };
 
+enum class BinaryOp : std::uint8_t
+{
+    ADD,
+    SUB,
+    MUL,
+    DIV,
+    GT,
+    LT,
+    LE,
+    GE,
+    MAX,
+    MIN,
+};
+
 // For instructions that address lower/upper 16 bits of a register
 #define LO_16(REG) (2 * (REG))
 #define HI_16(REG) (2 * (REG) + 1)

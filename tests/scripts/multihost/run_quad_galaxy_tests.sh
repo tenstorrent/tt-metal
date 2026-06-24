@@ -1,6 +1,8 @@
 #!/bin/bash
 set -eo pipefail
 
+source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
+
 # Default ARCH_NAME for local runs when not set by CI.
 export ARCH_NAME="${ARCH_NAME:-wormhole_b0}"
 
@@ -22,36 +24,8 @@ tt_run() {
     "${PYTHON:-python3}" "${ttrun_py}" "$@"
 }
 
-# Pick cnx1 when present, else first up non-virtual NIC.
-default_mpi_tcp_interface() {
-    if [[ -d /sys/class/net/cnx1 ]]; then
-        echo "cnx1"
-        return 0
-    fi
-    local n state
-    for n in /sys/class/net/*; do
-        n="${n##*/}"
-        case "${n}" in
-            lo | docker* | br-* | veth* | tailscale* | cali* | flannel*) continue ;;
-        esac
-        state="$(cat "/sys/class/net/${n}/operstate" 2>/dev/null || true)"
-        if [[ "${state}" == "up" ]]; then
-            echo "${n}"
-            return 0
-        fi
-    done
-    echo "cnx1"
-}
-
 export_tcp_interface_for_multihost() {
     export TCP_INTERFACE="${TCP_INTERFACE:-$(default_mpi_tcp_interface)}"
-}
-
-extract_hosts_from_hostfile() {
-    local host_count="$1"
-    local hostfile="${2:-/etc/mpirun/hostfile}"
-
-    awk '!/^#/ && NF {print $1}' "$hostfile" | head -n "$host_count" | paste -sd,
 }
 
 ###############################################################################
@@ -76,16 +50,15 @@ _test_run_summary_init() {
     mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
     mkdir -p "${TT_METAL_HOME}/generated/artifacts"
     : >"$(_test_run_summary_tsv)"
-    # NOTE: This replaces any pre-existing EXIT trap. No other EXIT trap is
-    # expected in this script; add chaining here if that assumption changes.
     trap '_test_run_summary_on_exit' EXIT
 }
 
-# Run the command and capture its exit code without toggling global errexit.
-# Callers must read _TEST_RUN_LAST_EC immediately after this function returns.
-# NOTE: _TEST_RUN_LAST_EC is a global variable; calls must be sequential (no &).
+# Run without errexit killing the script before we record summary (host down, tt-run/MPI failure, etc.).
 _test_run_summary_exec() {
-    "$@" && _TEST_RUN_LAST_EC=0 || _TEST_RUN_LAST_EC=$?
+    set +e
+    "$@"
+    _TEST_RUN_LAST_EC=$?
+    set -e
     return 0
 }
 
@@ -217,7 +190,11 @@ PYexit
 run_quad_galaxy_unit_tests() {
   fail=0
 
+  _ensure_local_tt_metal_cache
   export_tcp_interface_for_multihost
+  mkdir -p logs
+  mkdir -p generated/artifacts
+
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
   local tcp_interface="${TCP_INTERFACE}"
   local hosts="$(extract_hosts_from_hostfile 4)"
@@ -230,29 +207,29 @@ run_quad_galaxy_unit_tests() {
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/quad_galaxy_torus_xy_graph_descriptor.textproto"
 
   # TODO: Currently failing
-  #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
+  #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail=$((fail + $?))
 
   local cv_log="${TT_METAL_HOME}/generated/artifacts/test_summary_junit/cluster_validation_console.log"
   mkdir -p "${TT_METAL_HOME}/generated/artifacts/test_summary_junit"
   set +e
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation 2>&1 | tee "$cv_log"
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib -x TT_METAL_CACHE="${TT_METAL_CACHE}" ./build/tools/scaleout/run_cluster_validation 2>&1 | tee "$cv_log"
   ec="${PIPESTATUS[0]}"
   set -e
-  ((fail += ec)) || true
+  fail=$((fail + ec))
   _test_run_summary_record_native_step "run_cluster_validation" "$ec" "$cv_log"
 
   local j_mesh j_ccl
   j_mesh="$(_test_run_summary_junit_path infra_quad_mesh_device_trace)"
-  _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv --junitxml="${j_mesh}" "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace"
-  ec="${_TEST_RUN_LAST_EC}" ; ((fail += ec)) || true
+  _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" env TT_METAL_CACHE="${TT_METAL_CACHE}" pytest -svv --junitxml="${j_mesh}" "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace"
+  ec="${_TEST_RUN_LAST_EC}" ; fail=$((fail + ec))
   _test_run_summary_append_junit_rows "infra_quad_mesh_device_trace" "${j_mesh}" "$ec"
 
   # TODO: Currently failing on 1D/2D tests
-  #tt_run --tcp-interface $tcp_interface --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
+  #tt_run --tcp-interface "$tcp_interface" --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail=$((fail + $?))
 
   j_ccl="$(_test_run_summary_junit_path infra_quad_ccl_quad_host_mesh)"
-  _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" pytest -svv --junitxml="${j_ccl}" tests/nightly/tg/ccl/ -k "quad_host_mesh"
-  ec="${_TEST_RUN_LAST_EC}" ; ((fail += ec)) || true
+  _test_run_summary_exec tt_run --tcp-interface "$tcp_interface" --rank-binding "$rank_binding_yaml" --mpi-args "$tt_mpi_args" env TT_METAL_CACHE="${TT_METAL_CACHE}" pytest -svv --junitxml="${j_ccl}" tests/nightly/tg/ccl/ -k "quad_host_mesh"
+  ec="${_TEST_RUN_LAST_EC}" ; fail=$((fail + ec))
   _test_run_summary_append_junit_rows "infra_quad_ccl_quad_host_mesh" "${j_ccl}" "$ec"
 
   if [[ $fail -ne 0 ]]; then
@@ -272,19 +249,8 @@ _ensure_local_tt_metal_cache() {
     mkdir -p "${TT_METAL_CACHE}"
 }
 
-# MLPerf weight cache is read-only in CI. Module-test jobs set MULTIHOST_DS_V3_WEIGHT_CACHE=1;
-# demos omit it so DEEPSEEK_V3_CACHE stays unset unless explicitly overridden elsewhere.
-_resolve_deepseekv3_cache() {
+resolve_deepseekv3_cache() {
     local ci_cache="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"
-
-    if [[ "${MULTIHOST_DS_V3_WEIGHT_CACHE:-0}" != "1" ]]; then
-        unset DEEPSEEK_V3_CACHE 2>/dev/null || true
-        unset DEEPSEEK_V3_CACHE_OVERRIDE 2>/dev/null || true
-        return 0
-    fi
-
-    unset DEEPSEEK_V3_CACHE 2>/dev/null || true
-
     if [[ -n "${DEEPSEEK_V3_CACHE_OVERRIDE:-}" ]]; then
         local resolved
         resolved=$(realpath -m "${DEEPSEEK_V3_CACHE_OVERRIDE}")
@@ -295,13 +261,29 @@ _resolve_deepseekv3_cache() {
             exit 1
         fi
         export DEEPSEEK_V3_CACHE="${DEEPSEEK_V3_CACHE_OVERRIDE}"
-    else
+        return 0
+    fi
+
+    if [[ -n "${DEEPSEEK_V3_CACHE:-}" ]]; then
+        return 0
+    fi
+
+    # The default DeepSeek path converts weights directly in memory. Only opt in
+    # to the shared MLPerf cache when a job explicitly wants that legacy cache root;
+    # otherwise module tests use their writable fixture default.
+    if [[ "${MULTIHOST_DS_V3_WEIGHT_CACHE:-0}" == "1" ]]; then
         export DEEPSEEK_V3_CACHE="${ci_cache}"
+    else
+        unset DEEPSEEK_V3_CACHE 2>/dev/null || true
     fi
 }
 
 resolve_deepseekv3_model() {
     local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
+    local local_quad_ring_model="/data/deepseek/DeepSeek-R1-0528-dequantized-stacked-quad-ring"
+    if [[ -z "${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-}" && -z "${DEEPSEEK_V3_HF_MODEL:-}" && ! -d "${default_model}" && -d "${local_quad_ring_model}" ]]; then
+        default_model="${local_quad_ring_model}"
+    fi
     local model_path="${DEEPSEEK_V3_HF_MODEL_OVERRIDE:-${DEEPSEEK_V3_HF_MODEL:-${default_model}}}"
 
     if [[ ! -d "${model_path}" ]]; then
@@ -312,6 +294,37 @@ resolve_deepseekv3_model() {
 
     export DEEPSEEK_V3_HF_MODEL="${model_path}"
     echo "Using DeepSeek V3 model: ${DEEPSEEK_V3_HF_MODEL}"
+}
+
+maybe_use_quad_ring_prepared_model() {
+    local ds_quad_torus="${DS_QUAD_USE_TORUS_MODE:-1}"
+    ds_quad_torus="${ds_quad_torus,,}"
+    case "${ds_quad_torus}" in
+        ""|1|true|yes|on) ;;
+        *) return 0 ;;
+    esac
+
+    local model_path="${DEEPSEEK_V3_HF_MODEL:-}"
+    if [[ -z "${model_path}" ]]; then
+        return 0
+    fi
+    if [[ "${model_path}" == *-quad-ring ]]; then
+        return 0
+    fi
+
+    local quad_ring_candidate="${model_path}-quad-ring"
+    if [[ -d "${quad_ring_candidate}" ]]; then
+        export DEEPSEEK_V3_HF_MODEL="${quad_ring_candidate}"
+        echo "Using quad-ring prepared DeepSeek model: ${DEEPSEEK_V3_HF_MODEL}"
+        return 0
+    fi
+
+    local default_model="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked"
+    local local_quad_ring_model="/data/deepseek/DeepSeek-R1-0528-dequantized-stacked-quad-ring"
+    if [[ "${model_path}" == "${default_model}" && -d "${local_quad_ring_model}" ]]; then
+        export DEEPSEEK_V3_HF_MODEL="${local_quad_ring_model}"
+        echo "Using local quad-ring prepared DeepSeek model: ${DEEPSEEK_V3_HF_MODEL}"
+    fi
 }
 
 setup_dual_galaxy_env() {
@@ -343,7 +356,7 @@ setup_dual_galaxy_env() {
     fi
 
     resolve_deepseekv3_model
-    _resolve_deepseekv3_cache
+    resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
     export USE_TORUS_MODE=0
     echo "Dual Galaxy: USE_TORUS_MODE=0 (torus/ring mode disabled)."
@@ -378,7 +391,7 @@ setup_quad_galaxy_env() {
     echo "Using quad Galaxy rankfile: ${RANKFILE}"
 
     resolve_deepseekv3_model
-    _resolve_deepseekv3_cache
+    resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
 
     # DS_QUAD_USE_TORUS_MODE defaults to 1; set 0 or --no-torus to disable torus mode.
@@ -398,6 +411,8 @@ setup_quad_galaxy_env() {
             exit 1
             ;;
     esac
+
+    maybe_use_quad_ring_prepared_model
 }
 
 # Compute pytest --timeout value.
@@ -482,12 +497,22 @@ _run_deepseekv3_tt() {
 
     local runtime_root="${TT_METAL_RUNTIME_ROOT:-${TT_METAL_HOME:-$(pwd -P)}}"
     local torus_mode="${USE_TORUS_MODE-__UNSET__}"
+    local model_path="${DEEPSEEK_V3_HF_MODEL:-}"
+    local cache_path="${DEEPSEEK_V3_CACHE:-}"
+    local allow_quad_repack="${DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK:-}"
+    local max_seq_len_override="${DEEPSEEK_MAX_SEQ_LEN_OVERRIDE:-}"
+    local tt_metal_cache="${TT_METAL_CACHE:-}"
     local ci_val="${CI-__UNSET__}"
 
     tt_run "${tt_run_args[@]}" env \
         _DS_MESH_DEVICE="${MESH_DEVICE:-}" \
         _DS_USE_TORUS_MODE="${torus_mode}" \
         _DS_RUNTIME_ROOT="${runtime_root}" \
+        _DS_DEEPSEEK_V3_HF_MODEL="${model_path}" \
+        _DS_DEEPSEEK_V3_CACHE="${cache_path}" \
+        _DS_ALLOW_QUAD_REPACK="${allow_quad_repack}" \
+        _DS_MAX_SEQ_LEN_OVERRIDE="${max_seq_len_override}" \
+        _DS_TT_METAL_CACHE="${tt_metal_cache}" \
         _DS_CI="${ci_val}" \
         bash -c '
             if [[ -n "${_DS_MESH_DEVICE}" ]]; then
@@ -500,6 +525,21 @@ _run_deepseekv3_tt() {
             fi
             if [[ -n "${_DS_RUNTIME_ROOT}" ]]; then
                 export TT_METAL_RUNTIME_ROOT="${_DS_RUNTIME_ROOT}"
+            fi
+            if [[ -n "${_DS_DEEPSEEK_V3_HF_MODEL}" ]]; then
+                export DEEPSEEK_V3_HF_MODEL="${_DS_DEEPSEEK_V3_HF_MODEL}"
+            fi
+            if [[ -n "${_DS_DEEPSEEK_V3_CACHE}" ]]; then
+                export DEEPSEEK_V3_CACHE="${_DS_DEEPSEEK_V3_CACHE}"
+            fi
+            if [[ -n "${_DS_ALLOW_QUAD_REPACK}" ]]; then
+                export DEEPSEEK_V3_ALLOW_QUAD_RING_WEIGHT_REPACK="${_DS_ALLOW_QUAD_REPACK}"
+            fi
+            if [[ -n "${_DS_MAX_SEQ_LEN_OVERRIDE}" ]]; then
+                export DEEPSEEK_MAX_SEQ_LEN_OVERRIDE="${_DS_MAX_SEQ_LEN_OVERRIDE}"
+            fi
+            if [[ -n "${_DS_TT_METAL_CACHE}" ]]; then
+                export TT_METAL_CACHE="${_DS_TT_METAL_CACHE}"
             fi
             if [[ "${_DS_CI}" != "__UNSET__" ]]; then
                 export CI="${_DS_CI}"
@@ -519,7 +559,7 @@ run_dual_deepseekv3_unit_tests() {
     local junit_path="$(_test_run_summary_junit_path deepseekv3_unit_dual)"
     _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests/unit
     local ec="${_TEST_RUN_LAST_EC}"
-    ((fail += ec)) || true
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "deepseekv3_unit_dual" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
@@ -534,7 +574,7 @@ run_quad_deepseekv3_unit_tests() {
     local junit_path="$(_test_run_summary_junit_path deepseekv3_unit_quad)"
     _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests/unit
     local ec="${_TEST_RUN_LAST_EC}"
-    ((fail += ec)) || true
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "deepseekv3_unit_quad" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
@@ -546,15 +586,67 @@ run_quad_deepseekv3_unit_tests() {
 # DeepSeek V3 module tests (models/demos/deepseek_v3/tests)
 ###############################################################################
 
+deepseekv3_module_test_files() {
+    find models/demos/deepseek_v3/tests \
+        -maxdepth 1 \
+        -type f \
+        -name 'test_*.py' \
+        ! -name 'test_mtp.py' \
+        | sort
+}
+
+is_deepseekv3_module_local_test_file() {
+    case "$1" in
+        models/demos/deepseek_v3/tests/test_get_weight_config.py)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+run_deepseekv3_module_test_files() {
+    local step_prefix="$1"
+    local fail=0
+    local count=0
+    local test_path stem junit_path ec
+    local -a test_files
+
+    mapfile -t test_files < <(deepseekv3_module_test_files)
+
+    for test_path in "${test_files[@]}"; do
+        count=$((count + 1))
+        stem="$(basename "${test_path}" .py)"
+        junit_path="$(_test_run_summary_junit_path "${step_prefix}_${stem}")"
+        if is_deepseekv3_module_local_test_file "${test_path}"; then
+            # These tests assert single-process filesystem semantics that distributed TTNN intentionally changes.
+            _test_run_summary_exec "${PYTHON:-python3}" -m pytest -svvv --junitxml="${junit_path}" "${test_path}"
+        else
+            _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" "${test_path}"
+        fi
+        ec="${_TEST_RUN_LAST_EC}"
+        fail=$((fail + ec))
+        _test_run_summary_append_junit_rows "${step_prefix}_${stem}" "${junit_path}" "${ec}"
+    done
+
+    if [[ "${count}" -eq 0 ]]; then
+        echo "Error: no DeepSeek V3 module test files found." >&2
+        return 1
+    fi
+    if [[ "${fail}" -ne 0 ]]; then
+        return 1
+    fi
+    return 0
+}
+
 run_dual_deepseekv3_module_tests() {
     fail=0
     setup_dual_galaxy_env
 
-    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_dual)"
-    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests
-    local ec="${_TEST_RUN_LAST_EC}"
-    ((fail += ec)) || true
-    _test_run_summary_append_junit_rows "deepseekv3_module_dual" "${junit_path}" "${ec}"
+    if ! run_deepseekv3_module_test_files "deepseekv3_module_dual"; then
+        fail=$((fail + 1))
+    fi
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -565,11 +657,9 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    local junit_path="$(_test_run_summary_junit_path deepseekv3_module_quad)"
-    _test_run_summary_exec _run_deepseekv3_tt pytest -svvv --junitxml="${junit_path}" models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests
-    local ec="${_TEST_RUN_LAST_EC}"
-    ((fail += ec)) || true
-    _test_run_summary_append_junit_rows "deepseekv3_module_quad" "${junit_path}" "${ec}"
+    if ! run_deepseekv3_module_test_files "deepseekv3_module_quad"; then
+        fail=$((fail + 1))
+    fi
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -591,7 +681,7 @@ run_dual_teacher_forced_test() {
 
     _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} ${tf_args} 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log"
     local ec="${_TEST_RUN_LAST_EC}"
-    ((fail += ec)) || true
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "teacher_forced_dual" "${junit_path}" "${ec}"
 
     # Extract accuracy metrics from logs and save to artifact file
@@ -617,7 +707,7 @@ run_quad_teacher_forced_test() {
 
     _test_run_summary_exec _run_deepseekv3_tt bash -c "set -f -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} ${tf_args} 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log"
     local ec="${_TEST_RUN_LAST_EC}"
-    ((fail += ec)) || true
+    fail=$((fail + ec))
     _test_run_summary_append_junit_rows "teacher_forced_quad" "${junit_path}" "${ec}"
 
     # Extract accuracy metrics from logs and save to artifact file
@@ -626,6 +716,24 @@ run_quad_teacher_forced_test() {
         grep -E "Top-1 accuracy:|Top-5 accuracy:" generated/artifacts/quad_teacher_forced_output.log > generated/artifacts/quad_teacher_forced_accuracy.txt || true
         echo "Accuracy metrics saved to generated/artifacts/quad_teacher_forced_accuracy.txt"
     fi
+
+    if [[ $fail -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+run_quad_test_model_long_prefill_single_galaxy_test() {
+    fail=0
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 1250)
+    local selector="mode_prefill"
+    local junit_path="$(_test_run_summary_junit_path test_model_long_prefill_single_galaxy_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/tests/test_model.py -k '$selector' 2>&1 | tee generated/artifacts/quad_test_model_long_prefill_single_galaxy_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    fail=$((fail + ec))
+    _test_run_summary_append_junit_rows "test_model_long_prefill_single_galaxy_quad" "${junit_path}" "${ec}"
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -721,6 +829,40 @@ run_quad_demo_stress_test() {
 }
 
 ###############################################################################
+# AIME24 eval tests
+###############################################################################
+
+run_quad_aime_fast_test() {
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 3600)
+    local junit_path="$(_test_run_summary_junit_path aime_fast_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo_aime.py -k 'quad_aime_fast' 2>&1 | tee generated/artifacts/quad_aime_fast_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "aime_fast_quad" "${junit_path}" "${ec}"
+
+    if [[ $ec -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+run_quad_aime_full_test() {
+    setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 10800)
+    local junit_path="$(_test_run_summary_junit_path aime_full_quad)"
+    local junit_flag="--junitxml=${junit_path}"
+
+    _test_run_summary_exec _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout ${junit_flag} models/demos/deepseek_v3/demo/test_demo_aime.py -k 'quad_aime_full' 2>&1 | tee generated/artifacts/quad_aime_full_output.log"
+    local ec="${_TEST_RUN_LAST_EC}"
+    _test_run_summary_append_junit_rows "aime_full_quad" "${junit_path}" "${ec}"
+
+    if [[ $ec -ne 0 ]]; then
+        exit 1
+    fi
+}
+
+###############################################################################
 # Composite runners
 ###############################################################################
 
@@ -738,7 +880,6 @@ run_quad_deepseekv3_integration_tests() {
     run_quad_deepseekv3_module_tests
     run_quad_teacher_forced_test
     run_quad_demo_test
-    run_quad_demo_mtp_test
     run_quad_demo_stress_test
 }
 
@@ -746,10 +887,9 @@ run_all_needed_local_tests() {
     local saved_upr_mode="${DEEPSEEK_DEMO_UPR_MODE:-}"
     export DEEPSEEK_DEMO_UPR_MODE="all"
 
-    run_dual_teacher_forced_test
-    run_dual_demo_test
-    run_dual_demo_stress_test
     run_quad_teacher_forced_test
+    run_quad_test_model_long_prefill_single_galaxy_test
+    run_quad_aime_fast_test
     run_quad_demo_test
     run_quad_demo_stress_test
 
@@ -760,12 +900,10 @@ run_all_needed_local_tests() {
     fi
 }
 
-# Run everything
+# Run all supported quad tests. Deprecated dual and explicit MTP tests stay opt-in.
 run_quad_galaxy_tests() {
     run_quad_galaxy_unit_tests
-    run_dual_deepseekv3_unit_tests
     run_quad_deepseekv3_unit_tests
-    run_dual_deepseekv3_integration_tests
     run_quad_deepseekv3_integration_tests
 }
 
@@ -948,6 +1086,15 @@ main() {
         "quad_demo_stress")
             run_quad_demo_stress_test
             ;;
+        "quad_aime_fast")
+            run_quad_aime_fast_test
+            ;;
+        "quad_aime_full")
+            run_quad_aime_full_test
+            ;;
+        "quad_test_model_long_prefill")
+            run_quad_test_model_long_prefill_single_galaxy_test
+            ;;
         "dual_deepseekv3_integration_tests")
             run_dual_deepseekv3_integration_tests
             ;;
@@ -962,7 +1109,7 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
+            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, dual_demo_mtp, quad_demo, quad_demo_mtp, dual_demo_stress, quad_demo_stress, quad_aime_fast, quad_aime_full, quad_test_model_long_prefill, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all_needed_local_tests, all" 1>&2
             echo "Optional second argument: UPR mode (all|32|8)" 1>&2
             echo "Optional flags: --no-torus  --model-path <path>  --cache-path <path>" 1>&2
             echo "Example: $0 quad_demo 32 --no-torus --model-path /data/deepseek/DeepSeek-R1-0528-dequantized-stacked --cache-path /data/deepseek/DeepSeek-R1-0528-Cache/CI" 1>&2

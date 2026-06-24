@@ -62,6 +62,7 @@ namespace tt::tt_metal {
 class SubDeviceManagerTracker;
 class ThreadPool;
 struct TraceDescriptor;
+class DriscL1Arena;
 
 namespace distributed {
 
@@ -72,6 +73,7 @@ struct MeshTraceBuffer;
 class MeshCommandQueueBase;
 class MeshDevice;
 class RealtimeProfilerManager;
+class TensorPrefetcherManager;
 
 namespace multihost {
 class DistributedContext;
@@ -157,6 +159,19 @@ private:
     // handler). Constructed by init_realtime_profiler_socket() and torn down in close_impl()
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
+
+    // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
+    // Constructed eagerly in initialize_impl() when the HAL exposes programmable
+    // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
+    // DriscL1Allocation handles can hold a weak_ptr back and become safe no-ops
+    // if the MeshDevice closes before their owning GCBs are destroyed (mirrors
+    // the MeshBuffer / weak_ptr<MeshDevice> pattern).
+    std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
+
+    // Owns the Tensor prefetcher (DRISC) subsystem. Lazily constructed on first call
+    // to experimental::StartTensorPrefetcher; torn down in close_impl() before the
+    // rest of the mesh shutdown so any in-flight kernel completes against live resources.
+    std::unique_ptr<TensorPrefetcherManager> tensor_prefetcher_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
     // Recursively quiesce all submeshes.
@@ -290,6 +305,33 @@ public:
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void trigger_realtime_profiler_sync_check();
     D2HSocket* get_realtime_profiler_socket() const;
+
+    // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
+    // pages_sent allocations. Constructed eagerly in initialize_impl() when the
+    // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
+    ::tt::tt_metal::DriscL1Arena& drisc_l1_arena();
+
+    // Lazily-constructed Tensor prefetcher (DRISC) subsystem. The first call materializes
+    // the manager bound to this mesh device; subsequent calls return the same instance.
+    // experimental::StartTensorPrefetcher / StopTensorPrefetcher delegate here.
+    TensorPrefetcherManager& tensor_prefetcher(MeshDevice* mesh_device);
+
+    // Returns the logical DRAM core for `bank_id` whose physical NoC coord isn't already
+    // claimed by the SOC descriptor as a worker_endpoint or eth_endpoint — i.e. one
+    // safe for a DRISC kernel to occupy. Throws if no free subchannel exists, or
+    // TT_FATALs if bank_id is out of range. Used by the DRAM-sender GCB factory.
+    CoreCoord pick_unused_dram_logical_core(uint32_t bank_id) const;
+
+    // Returns the ordered list of DRISC logical cores that drive a bank's DRAM-sender
+    // prefetcher: element 0 is the free non-endpoint subchannel
+    // (pick_unused_dram_logical_core), element 1 is the bank's NOC1 worker-endpoint
+    // subchannel (idle for NOC0 during matmul). Both run their kernels on NOC0; the
+    // pair lets two DRISC cores share a bank's receiver set. Indices are derived
+    // per-bank from the SOC descriptor (they are not fixed across banks). Used by both
+    // the DRAM-sender GCB factory and the TensorPrefetcherManager so their sender
+    // cores always agree.
+    std::vector<CoreCoord> dram_sender_logical_cores(uint32_t bank_id) const;
+
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     void enable_program_cache() override;
@@ -396,6 +438,11 @@ public:
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
     // If cq_id is not provided, the current command queue is returned from the current thread
     MeshCommandQueue& mesh_command_queue(std::optional<uint8_t> cq_id = std::nullopt) const;
+
+    // Same queue as mesh_command_queue() but returned as the internal
+    // MeshCommandQueueBase, exposing dispatch-implementation methods (e.g.
+    // enqueue_write_dram_core_counter) without a downcast.
+    MeshCommandQueueBase& mesh_command_queue_base(std::optional<uint8_t> cq_id = std::nullopt) const;
 
     // Currently expose users to the dispatch thread pool through the MeshDevice
     void enqueue_to_thread_pool(std::function<void()>&& f);

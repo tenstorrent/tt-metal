@@ -179,7 +179,7 @@ void DispatchSKernel::GenerateStaticConfigs() {
             const uint32_t l1_cache_size = my_dispatch_constants.dispatch_s_device_print_l1_cache_size();
             TT_FATAL(
                 noc_locations_size <= l1_cache_size,
-                "DEVICE_PRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
+                "DPRINT noc_locations ({} bytes for {} cores) does not fit in the overlaid l1_cache "
                 "({} bytes). Bump TT_METAL_DEVICE_PRINT_DISPATCH_L1_CACHE_BYTES.",
                 noc_locations_size,
                 num_print_cores,
@@ -315,7 +315,7 @@ void DispatchSKernel::CreateKernel() {
         {"DEVICE_PRINT_CYCLES_FOR_FULL",
          std::to_string(static_config_.device_print_cycles_for_full.value_or(0)) + "ULL"},
     };
-    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines, false, false, false);
+    configure_kernel_variant(dispatch_kernel_file_names[DISPATCH_S], {}, defines);
 
     if (GetCoreType() == CoreType::WORKER) {
         const std::string compute_kernel_path = "tt_metal/impl/dispatch/kernels/cq_dispatch_subordinate_compute.cpp";
@@ -366,28 +366,22 @@ void DispatchSKernel::ConfigureCore() {
     }
 
     auto& cluster = descriptor_.cluster();
-    const auto& hal = descriptor_.hal();
     std::vector<device_print_dispatch::NocLocationInputInfo> entries;
     entries.reserve(print_cores.size());
 
     for (const auto& core_desc : print_cores) {
         auto virtual_core =
             cluster.get_virtual_coordinate_from_logical_coordinates(device_->id(), core_desc.coord, core_desc.type);
-        auto programmable_core_type = llrt::get_core_type(device_->id(), virtual_core);
-        const uint64_t rw_ptr_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::DPRINT_BUFFERS);
-        const uint32_t num_processors = hal.get_num_risc_processors(programmable_core_type);
-        const uint32_t risc_state_bytes = ((num_processors + 3) / 4) * 4;
-        const uint32_t buf_offset = 8u + risc_state_bytes + sizeof(uint32_t);
-        const uint32_t buf_size = (DPRINT_BUFFER_SIZE * num_processors) - buf_offset;
-        TT_FATAL(buf_size <= 0xFFFFu, "DPRINT buffer size {} doesn't fit in NocLocationInputInfo::buf_size", buf_size);
-
-        device_print_dispatch::NocLocationInputInfo entry{};
-        entry.x = virtual_core.x;
-        entry.y = virtual_core.y;
-        entry.rw_ptr_addr = rw_ptr_addr;
-        entry.buf_offset = static_cast<uint16_t>(buf_offset);
-        entry.buf_size = static_cast<uint16_t>(buf_size);
-        entries.push_back(entry);
+        for (const auto& buffer_info :
+             descriptor_.metal_context().dprint_server()->get_core_buffers(device_->id(), core_desc)) {
+            device_print_dispatch::NocLocationInputInfo entry{};
+            entry.x = virtual_core.x;
+            entry.y = virtual_core.y;
+            entry.rw_ptr_addr = buffer_info.get_read_write_pointer_address();
+            entry.buf_offset = buffer_info.buffer_offset;
+            entry.buf_size = buffer_info.buffer_size;
+            entries.push_back(entry);
+        }
     }
 
     // Write the packed array bitwise to L1. Each entry is 12 bytes.

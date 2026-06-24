@@ -24,15 +24,16 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.deepseek_v3_d_p.reference.deepseek_v3_config import DeepSeekV3Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import ExpertMapping, get_ep_mesh_mapper
 from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_intermediates import TtMoEIntermediates
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_routing_setup import TtMoERoutingSetup
 from models.demos.deepseek_v3_d_p.tt.moe.tt_reduce import TtReduceModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.tt_ccl import get_tt_ccl
 
 
 class TtMoe(LightweightModule):
@@ -88,10 +89,11 @@ class TtMoe(LightweightModule):
         if gate_weights:
             from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import TtMoEGateConfig, TtMoEGatePrefill
 
-            # Create minimal config for caching
-            gate_config = TtMoEGateConfig()
-            gate_config.dim = emb_dim
-            gate_config.n_routed_experts = gate_weights["weight"].shape[0]
+            # Minimal config for caching
+            gate_config = TtMoEGateConfig(
+                dim=emb_dim,
+                n_routed_experts=gate_weights["weight"].shape[0],
+            )
 
             TtMoEGatePrefill.build_ttnn_cache(
                 torch_weight=gate_weights["weight"],
@@ -138,8 +140,11 @@ class TtMoe(LightweightModule):
         max_dispatch_buffer_token_size: int,
         seq_len_per_chip: int,
         gate_weights: dict,
-        emb_dim: int = DeepSeekV3Config.EMB_SIZE,
-        hidden_dim: int = DeepSeekV3Config.MOE_INTERMEDIATE_SIZE,
+        emb_dim: int,
+        hidden_dim: int,
+        n_expert_groups: int,
+        n_limited_groups: int,
+        route_scale: float,
         num_links: Union[int, tuple[int, int]] = 1,
         topology: Union[ttnn.Topology, tuple[ttnn.Topology, ttnn.Topology]] = ttnn.Topology.Linear,
         routed_expert_weights: list[dict] = None,
@@ -152,6 +157,7 @@ class TtMoe(LightweightModule):
         weight_cache_path: Optional[Path] = None,
         layer_idx: int = 0,
         overlap_shared_expert_with_dispatch: bool = True,
+        routing_use_l1_small_for_semaphores: bool = False,
     ):
         """
         Initialize TtMoe module.
@@ -191,6 +197,9 @@ class TtMoe(LightweightModule):
         """
         super().__init__()
         self.mesh_device = mesh_device
+        # Shared per-mesh CCL singleton: persistent global semaphores for the TP all-gather of x,
+        # so all_gather_async reuses them instead of leaking fresh L1 semaphores every layer.
+        self.tt_ccl = get_tt_ccl(mesh_device)
         self.dispatch_group_size = dispatch_group_size
         self.num_dispatch_groups = num_dispatch_groups
         self.experts_per_chip = experts_per_chip
@@ -218,11 +227,15 @@ class TtMoe(LightweightModule):
         )
 
         # Build gate internally
-        gate_config = TtMoEGateConfig()
-        gate_config.dim = emb_dim
-        gate_config.sp_dim = seq_len_per_chip
-        gate_config.n_routed_experts = num_routed_experts
-        gate_config.n_activated_experts = num_experts_per_tok
+        gate_config = TtMoEGateConfig(
+            dim=emb_dim,
+            sp_dim=seq_len_per_chip,
+            n_routed_experts=num_routed_experts,
+            n_activated_experts=num_experts_per_tok,
+            n_expert_groups=n_expert_groups,
+            n_limited_groups=n_limited_groups,
+            route_scale=route_scale,
+        )
         gate_config.ccl_config["NUM_LINKS"] = self.col_num_links if isinstance(num_links, tuple) else num_links
 
         # Handle cache-only case (gate_weights=None)
@@ -237,13 +250,19 @@ class TtMoe(LightweightModule):
         self.gate = TtMoEGatePrefill(
             gate_config,
             mesh_device,
-            dispatch_table=expert_dispatch_table,
-            experts_per_chip=experts_per_chip,
             weight=gate_weight,
             bias=gate_bias,
             fallback_mode=gate_fallback_mode,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.gate",
+        )
+
+        self.routing_setup = TtMoERoutingSetup(
+            mesh_device,
+            expert_dispatch_table,
+            num_links=gate_config.ccl_config["NUM_LINKS"],
+            experts_per_chip=experts_per_chip,
+            use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
         )
         logger.debug(f"Initializing TtMoe")
         logger.debug(f"  mesh_device.shape={mesh_device.shape}")
@@ -419,9 +438,16 @@ class TtMoe(LightweightModule):
         # ========================================
         # Reshape 3D -> 2D for gate: (batch, seq, emb) -> (batch*seq, emb)
 
-        scores, indices, gate_logits, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets = self.gate(
-            ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2]))
+        scores, indices, gate_logits = self.gate(ttnn.view(x, (x.shape[0] * x.shape[1], x.shape[2])))
+
+        signpost(header="moe_gate_calculate_dispatch_offsets")
+        tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets, _ = self.routing_setup(
+            ttnn_top_k_experts_indices=indices,
+            num_routed_experts=self.num_routed_experts,
+            seq_len_per_chip=self.seq_len_per_chip,
+            num_experts_per_tok=self.num_experts_per_tok,
         )
+        signpost(header="moe_gate_calculate_dispatch_offsets")
         gate_logits = (
             ttnn.to_memory_config(gate_logits, ttnn.DRAM_MEMORY_CONFIG)
             if return_intermediates
@@ -440,17 +466,8 @@ class TtMoe(LightweightModule):
             _offsets_host = ttnn.to_torch(_offsets_4d, mesh_composer=_ep_composer).squeeze(2)
             logger.info(f"[TtMoe.forward] expert_region_offsets: {_offsets_host.flatten().tolist()}")
 
-        # Gate outputs uint16 indices; dispatch requires int32.
-        # this should be aligned in the further PR.
-        # Typecast in TILE_LAYOUT to avoid alignment issues, then convert to ROW_MAJOR.
-        if indices.dtype != ttnn.int32:
-            indices = ttnn.to_layout(indices, ttnn.TILE_LAYOUT)
-            indices = ttnn.typecast(indices, ttnn.int32)
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        else:
-            indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
-        #
         # Ensure ROW_MAJOR layout for dispatch compatibility
+        indices = ttnn.to_layout(indices, ttnn.ROW_MAJOR_LAYOUT)
         scores = ttnn.to_layout(scores, ttnn.ROW_MAJOR_LAYOUT)
 
         # Reshape back to 3D: (batch*seq, topk) -> (batch, seq, topk)
@@ -469,10 +486,12 @@ class TtMoe(LightweightModule):
         # Both shared_expert and dispatch need full emb_dim, so all-gather first
         # Only needed if there are multiple devices in TP axis (axis 1)
         if self.mesh_device.shape[1] > 1:
-            x = ttnn.all_gather(
+            x = ttnn.experimental.all_gather_async(
                 x,
                 dim=-1,  # Gather along emb_dim
                 cluster_axis=1,  # Gather across axis 1 (TP axis)
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=1),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=1),
                 num_links=self.col_num_links,
                 topology=self.col_topology,
             )

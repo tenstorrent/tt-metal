@@ -21,6 +21,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/circular_buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <unordered_map>
@@ -538,8 +539,17 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         // buffer.
         buffer = mesh_buffer.get_backing_buffer();
 
-        // For multi-device tensors, capture per-device addresses and mesh device IDs
+        // For multi-device tensors, capture per-device addresses and mesh device IDs.
+        // In multi-host (SPMD) runs the tensor's coords span the full global mesh, but this
+        // process only owns a local subset of the chips. MeshBuffer::get_device_buffer(coord)
+        // dereferences a MaybeRemote and throws "Attempted to access remote device..." for a
+        // coord owned by another host, so skip non-local coords. Each rank records only its
+        // local shards.
+        auto* const tensor_mesh_device = mesh_buffer.device();
         for (const auto& coord : t.device_storage().get_coords()) {
+            if (tensor_mesh_device != nullptr && !tensor_mesh_device->is_local(coord)) {
+                continue;
+            }
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
                 device_tensors_json.push_back(
@@ -751,6 +761,10 @@ nlohmann::json GraphProcessor::get_report() const {
         metadata[kReportTotalDurationNs] = graph.back().duration_ns;
     }
 
+    // Add distributed context metadata
+    const auto& world_ctx = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    metadata[kReportRank] = *world_ctx->rank();
+    metadata[kReportWorldSize] = *world_ctx->size();
     report[kReportMetadata] = metadata;
 
     // Cluster descriptor (YAML content) - always try, returns empty if unavailable

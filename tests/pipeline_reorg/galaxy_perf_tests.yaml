@@ -16,7 +16,7 @@
   cmd: pytest models/tt_dit/tests/models/sd35/test_performance_sd35.py -k "4x8cfg1sp0tp1" --timeout=480
   model: sd35
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 15
   owner_id: U03FJB5TM5Y # Colman Glagovich
   team: models
@@ -28,7 +28,7 @@
   cmd: HF_HUB_CACHE=/mnt/MLPerf/huggingface/hub pytest models/tt_dit/tests/models/flux1/test_performance_flux1.py -k "wh_4x8sp0tp1" --timeout=500
   model: flux1-dev
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 15
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
@@ -69,7 +69,7 @@
     pytest models/tt_dit/tests/models/mochi/test_performance_mochi.py -k "4x8sp1tp0 " --timeout=1000
   model: mochi
   skus:
-    wh_galaxy_perf_uf:
+    wh_galaxy_perf:
       timeout: 20
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
@@ -77,19 +77,26 @@
   save-perf-data: true
   model-type: mochi
 
-- name: Galaxy DiT Qwen-Image model perf tests
-  cmd: |
-    export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
-    pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
-  model: qwenimage
-  skus:
-    wh_galaxy_perf_uf:
-      timeout: 20
-  owner_id: U08TED0JM9D # Samuel Adesoye
-  team: models
-  arch: wormhole_b0
-  save-perf-data: true
-  model-type: QwenImage
+# TEMPORARILY DISABLED - see https://github.com/tenstorrent/tt-metal/issues/47355
+# The 4x8 Qwen-Image pipeline perf test hangs the device mid-pipeline in an
+# uninterruptible driver call (pytest --timeout does not fire). The hung process is
+# SIGKILLed by the CI action timeout, leaking TLB windows that `tt-smi reset` reports
+# as successfully reset but does not actually reclaim. This bricks the runner so that
+# all subsequent jobs fail with "Failed to allocate TLB window (tt_tlb_alloc -12)".
+# Re-enable once the hang is fixed / the runner reset reliably reclaims TLB windows.
+# - name: Galaxy DiT Qwen-Image model perf tests
+#   cmd: |
+#     export TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE"
+#     pytest models/tt_dit/tests/models/qwenimage/test_performance_qwenimage.py -k "4x8" --timeout=1000
+#   model: qwenimage
+#   skus:
+#     wh_galaxy_perf:
+#       timeout: 20
+#   owner_id: U08TED0JM9D # Samuel Adesoye
+#   team: models
+#   arch: wormhole_b0
+#   save-perf-data: true
+#   model-type: QwenImage
 
 - name: Galaxy DeepSeek V3 decode perf tests
   cmd: export MESH_DEVICE=TG && uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt && pytest models/demos/deepseek_v3/demo/test_decode_demo_perf.py --timeout=1200

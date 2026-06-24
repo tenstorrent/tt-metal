@@ -209,8 +209,8 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        TT_SFPLOAD(a, INT32, ADDR_MOD_7, dst_index_a * dst_tile_size);
-        TT_SFPLOAD(b, INT32, ADDR_MOD_7, dst_index_b * dst_tile_size);
+        TT_SFPLOAD(a, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_a * dst_tile_size);
+        TT_SFPLOAD(b, InstrModLoadStore::INT32, ADDR_MOD_7, dst_index_b * dst_tile_size);
 
         TTI_SFPSETSGN(sign, b, scratch, 1); // SFPSETSGN_MOD1_ARG_IMM
         TTI_SFPIADD(0, a, scratch, sfpi::SFPIADD_MOD1_ARG_2SCOMP_LREG_DST | sfpi::SFPIADD_MOD1_CC_NONE);
@@ -218,7 +218,7 @@ inline void calculate_binary_comp_int32(const uint dst_index_in0, const uint dst
         TTI_SFPOR(0, scratch, tmp, 0);
         TTI_SFPXOR(0, b, a, 0);
         TTI_SFPSHFT((-31) & 0xfff, a, a, 1); // SFPSHFT_MOD1_ARG_IMM
-        TT_SFPSTORE(a, INT32, ADDR_MOD_6, dst_index_out * dst_tile_size);
+        TT_SFPSTORE(a, InstrModLoadStore::INT32, ADDR_MOD_6, dst_index_out * dst_tile_size);
     }
 }
 

@@ -36,18 +36,20 @@ void kernel_main() {
     uint32_t i_stick = start_id;
 
     // this reader will read a NHW tensor in NWH order
+    // Uses tt::data_movement::common::noc_async_read_sharded to restore the multi-page
+    // split that BLOCK/WIDTH-sharded RM buffers need (a logical row can span multiple
+    // shards laterally). PR #42130 had replaced these helpers with the
+    // single-NOC-transfer experimental::Noc::async_read primitive, which silently
+    // dropped the split logic for BLOCK/WIDTH-sharded RM inputs (24+ test cases).
     for (uint32_t n = 0; n < num_hw_blocks_per_core; n++) {
         for (uint32_t h = 0; h < Ht; ++h) {
             cb.reserve_back(Wt);
+            const uint32_t cb_write_ptr = cb.get_write_ptr();
             uint32_t l1_write_offset = 0;
             uint32_t H_curr = h == Ht - 1 ? H_per_tile_last : H_per_tile;
             for (uint32_t h_datum = 0; h_datum < H_curr; ++h_datum) {
-                noc.async_read(
-                    s,
-                    cb,
-                    stick_size_bytes,
-                    {.page_id = i_stick, .offset_bytes = 0},
-                    {.offset_bytes = l1_write_offset});
+                tt::data_movement::common::noc_async_read_sharded(
+                    noc, cb_write_ptr + l1_write_offset, s, i_stick, 0, stick_size_bytes);
                 l1_write_offset += l1_write_offset_bytes;
                 i_stick += 1;
             }

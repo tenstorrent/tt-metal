@@ -79,8 +79,18 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
     uint32_t block_size =
         fp32_dest_acc_en ? tt::tt_metal::find_max_divisor(Wt, 4) : tt::tt_metal::find_max_divisor(Wt, 8);
 
+    // calc_numeric_stable() in softmax.cpp uses indexed access over Wt tiles of its input CB and a
+    // WaitUpfrontNoPop reduce, so whichever CB it consumes must be sized to Wt:
+    //   - no mask, no padding: it consumes cb_in0 directly.
+    //   - fused scale-mask path or mask-padded path: it consumes cb_x (cb_in0 is streamed/popped per block).
+    const bool small_kernel_numeric_stable_uses_cb_in0_at_wt =
+        attributes.numeric_stable && !tensor_args.mask.has_value() && !mask_padded_data;
+    const bool small_kernel_numeric_stable_uses_cb_x_at_wt =
+        attributes.numeric_stable && (tensor_args.mask.has_value() || mask_padded_data);
+
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    uint32_t in0_t = attributes.numeric_stable ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
+    uint32_t in0_t =
+        small_kernel_numeric_stable_uses_cb_in0_at_wt ? tt::div_up(Wt, block_size) * block_size : block_size * 2;
     uint32_t out0_t = block_size * 2;
     uint32_t im1_t = 1;  // 1/sum(exp(x))
     uint32_t in2_t = 1;  // scaler for reduce coming from reader
@@ -106,7 +116,9 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
     constexpr uint32_t single_tile_cb_count = 5;  // approximate
     uint32_t cb_size_sum_bytes = (in0_t * in0_tile_size) + (im0_t * im_tile_size) + (out0_t * out0_tile_size) +
                                  (single_tile_cb_count * im_tile_size);
-    if (attributes.numeric_stable) {
+    if (small_kernel_numeric_stable_uses_cb_x_at_wt) {
+        // cb_x (c_10) is only allocated for the small kernel when calc_numeric_stable consumes it.
+        // In the no-mask numeric_stable path the kernel aliases cb_x to cb_exps, so no extra CB is needed.
         cb_size_sum_bytes += im4_t * im_tile_size;
     }
     if (tensor_args.mask.has_value()) {
@@ -123,7 +135,6 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
         im4_t = large_kernel_cb_size;
         im0_t = large_kernel_cb_size;
         im3_t = large_kernel_cb_size;
-        TT_FATAL(!attributes.inplace, "Tensor is too large to run softmax inplace, please use standard softmax");
     }
     if (!use_large_kernel) {
         TT_FATAL(
@@ -360,8 +371,10 @@ tt::tt_metal::ProgramDescriptor SoftmaxDeviceOperation::SoftmaxProgramFactoryAtt
             }}},
         });
     }
-    // cb_x
-    if (attributes.numeric_stable || use_large_kernel) {
+    // cb_x: only needed when calc_numeric_stable consumes a separate post-mask buffer (mask or
+    // mask-padded path), or when the streaming large kernel is selected. In the no-mask
+    // numeric_stable path softmax.cpp aliases cb_x to cb_exps, so we skip the allocation.
+    if (small_kernel_numeric_stable_uses_cb_x_at_wt || use_large_kernel) {
         desc.cbs.push_back(CBDescriptor{
             .total_size = im4_t * im_tile_size,
             .core_ranges = all_device_cores,

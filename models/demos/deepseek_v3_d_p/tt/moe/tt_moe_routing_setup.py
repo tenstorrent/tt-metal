@@ -120,6 +120,7 @@ class TtMoERoutingSetup(LightweightModule):
         expert_dispatch_table: torch.Tensor,
         num_links: int = 1,
         experts_per_chip: int = 32,
+        use_l1_small_for_semaphores: bool = False,
     ):
         """
         Initialize routing setup with the expert-to-chip mapping.
@@ -140,6 +141,7 @@ class TtMoERoutingSetup(LightweightModule):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.experts_per_chip = experts_per_chip
+        self.use_l1_small_for_semaphores = use_l1_small_for_semaphores
 
         self.experts_in_dispatch_group = ttnn.from_torch(
             expert_dispatch_table,
@@ -251,6 +253,18 @@ class TtMoERoutingSetup(LightweightModule):
             ttnn_top_k_experts_indices, self.experts_in_dispatch_group, num_routed_experts, num_experts_per_tok
         )
 
+        # offset_cumsum outputs are tiny UINT32 vectors placed in DRAM
+        # (downstream ops — ttnn::extract / ttnn::insert in the routed-expert
+        # moe composite, plus ttnn::combine — read them device-side, no perf
+        # impact). DRAM placement was originally needed to keep L1 clear of
+        # the unified routed-expert FFN's static CB region on the
+        # 256-expert / 32-per-chip configuration; the FFN no longer reads
+        # region_offsets directly, but DRAM placement is kept defensively.
+        #
+        # Contract: expert_region_offsets entries are TOKEN rows, tile-aligned
+        # (multiples of TILE_HEIGHT=32). ttnn::extract / ttnn::insert rely
+        # on this alignment when slicing dispatched_buffer into per-expert
+        # token tensors.
         (
             global_dispatch_offsets,
             total_counts_per_expert,
@@ -260,7 +274,11 @@ class TtMoERoutingSetup(LightweightModule):
             cluster_axis=0,
             num_links=self.num_links,
             experts_per_chip=self.experts_per_chip,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # Route the internal all-gather's global semaphores to L1_SMALL so they don't pin the main-L1
+            # floor and clash with the next layer's MLA static CBs. Off by default; enabled only where the
+            # device is opened with l1_small_size > 0 (e.g. the Kimi chunked test).
+            use_l1_small_for_semaphores=self.use_l1_small_for_semaphores,
         )
         signpost(header="moe_gate_calculate_global_dispatch_offsets")
 

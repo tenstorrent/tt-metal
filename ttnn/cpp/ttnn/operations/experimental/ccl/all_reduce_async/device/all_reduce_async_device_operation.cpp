@@ -88,6 +88,20 @@ AllReduceAsyncDeviceOperation::tensor_return_value_t AllReduceAsyncDeviceOperati
     return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
+AllReduceAsyncDeviceOperation::topology_return_value_t AllReduceAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    // after all_reduce, the output is fully replicated across all devices on `cluster_axis`.
+    const auto& input_topology = tensor_args.input_tensor.tensor_topology();
+    auto output_placements = input_topology.placements();
+
+    if (args.cluster_axis < output_placements.size()) {
+        output_placements[args.cluster_axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+    }
+
+    return {tt::tt_metal::TensorTopology(
+        input_topology.distribution_shape(), std::move(output_placements), input_topology.mesh_coords())};
+}
+
 ttsl::hash::hash_t AllReduceAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllReduceAsyncDeviceOperation::compute_program_hash is called");
@@ -127,19 +141,19 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // compute are modeled at the AllReduce level (input→output), not by
     // summing RS and AG independently.
     //
-    // Performance is bounded by:
-    //   ideal_cycles = max(fabric_cycles, dram_bw_cycles, compute_cycles)
-    //                  + pipeline_latency
+    // Performance is the slowest single resource, not the sum: a pipelined
+    // collective overlaps fill/drain with streaming, so the terms compete (max):
+    //   ideal_cycles = max(fabric_bw, dram_bw, compute, pipeline_latency, fabric_fill)
     // =========================================================================
 
     const auto& input_tensor = tensor_args.input_tensor;
 
     // --- Architecture and clock ---
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
-    float clock_rate_ghz = 1.0f;
+    int clock_rate_mhz = 1000;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
-        clock_rate_ghz = input_tensor.device()->get_clock_rate_mhz() / 1000.0f;
+        clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
     }
 
     // --- Data sizes ---
@@ -153,7 +167,7 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     //
     // AllReduce = ReduceScatter + AllGather on the same physical links.
     // Both phases contribute bandwidth time and pipeline-fill latency,
-    // so we call estimate_fabric_transfer_ns separately and sum.
+    // so we call estimate_fabric_transfer_cycles separately and sum.
     //
     // RING topology (bisection argument):
     //   RS phase — bisection link carries (N-1)*S/(2N) bytes.
@@ -165,25 +179,29 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     //   AG phase — edge link carries (N-1)*S bytes.
     //   Hops per phase: N-1 (linear diameter).
     // =========================================================================
-    double fabric_time_ns = 0.0;
+    uint64_t rs_bottleneck_bytes = 0;  // reduce-scatter phase: bytes through the most-loaded link
+    uint64_t ag_bottleneck_bytes = 0;  // all-gather phase: bytes through the most-loaded link
+    uint32_t num_hops = 0;             // collective diameter (hops)
     if (N <= 1) {
-        fabric_time_ns = 0.0;
+        // Single device: no fabric communication
     } else if (tt::tt_fabric::is_ring_or_torus(args.topology)) {
-        const uint64_t rs_bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
-        const uint64_t ag_bottleneck_bytes = tt::div_up((N - 1) * S, 2);
-        const uint32_t num_hops = tt::div_up(N - 1, 2u);
-        double rs_fabric_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, rs_bottleneck_bytes, num_links, num_hops);
-        double ag_fabric_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, ag_bottleneck_bytes, num_links, num_hops);
-        fabric_time_ns = rs_fabric_ns + ag_fabric_ns;
+        rs_bottleneck_bytes = tt::div_up((N - 1) * slice_size, 2);
+        ag_bottleneck_bytes = tt::div_up((N - 1) * S, 2);
+        num_hops = tt::div_up(N - 1, 2u);
     } else {
-        const uint64_t rs_bottleneck_bytes = (N - 1) * slice_size;
-        const uint64_t ag_bottleneck_bytes = (N - 1) * S;
-        const uint32_t num_hops = N - 1;
-        double rs_fabric_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, rs_bottleneck_bytes, num_links, num_hops);
-        double ag_fabric_ns = ttnn::ccl::estimate_fabric_transfer_ns(arch, ag_bottleneck_bytes, num_links, num_hops);
-        fabric_time_ns = rs_fabric_ns + ag_fabric_ns;
+        rs_bottleneck_bytes = (N - 1) * slice_size;
+        ag_bottleneck_bytes = (N - 1) * S;
+        num_hops = N - 1;
     }
-    const int fabric_cycles = static_cast<int>(std::ceil(fabric_time_ns * clock_rate_ghz));
+    // AllReduce = ReduceScatter + AllGather: two sequential fabric phases, so their
+    // bandwidths sum and their fills sum (the totals compete in the final max() below).
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto [rs_bw_cycles, rs_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
+        arch, fabric_config, clock_rate_mhz, rs_bottleneck_bytes, num_links, num_hops);
+    const auto [ag_bw_cycles, ag_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
+        arch, fabric_config, clock_rate_mhz, ag_bottleneck_bytes, num_links, num_hops);
+    const int fabric_bw_cycles = rs_bw_cycles + ag_bw_cycles;
+    const int fabric_fill_cycles = rs_fill_cycles + ag_fill_cycles;
 
     // =========================================================================
     // 2. LOCAL DATA MOVEMENT — first-principles minimum
@@ -230,21 +248,21 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // =========================================================================
     // 4. PIPELINED MODEL
     //
-    // BW terms compete — the slowest resource sets throughput:
-    //   max(fabric, dram_read_bw, dram_write_bw, compute)
-    //
-    // Latencies are additive (pipeline fill/drain):
-    //   read_latency  — first DRAM read before pipeline starts
-    //   compute_latency — last chunk's reduction after all data arrived
-    //   write_latency — last DRAM write after last reduction completes
+    // A pipelined collective overlaps fill/drain latency with steady-state streaming,
+    // so every term — bandwidth AND fill/drain latency — competes:
+    //   max( max(fabric_bw, dram_bw, compute), max(pipeline_latency, fabric_fill) )
+    // pipeline_latency = read_latency (first DRAM read) + compute_latency
+    //   (last chunk's reduction) + write_latency (last DRAM write).
+    // fabric_bw / fabric_fill each already sum the RS + AG phases (sequential).
     // =========================================================================
     const int local_bw_cycles = static_cast<int>(std::max(read_bw_cycles, write_bw_cycles));
     const int compute_latency_cycles =
         static_cast<int>(2ULL * slice_size / (static_cast<uint64_t>(num_cores) * UNPACKER_BW_BYTES_PER_CYCLE));
     const int pipeline_latency_cycles =
         static_cast<int>(read_latency_cycles) + compute_latency_cycles + static_cast<int>(write_latency_cycles);
-    const int ideal_dev_clock_cycles =
-        std::max({local_bw_cycles, fabric_cycles, compute_cycles}) + pipeline_latency_cycles;
+    const int throughput_cycles = std::max({local_bw_cycles, fabric_bw_cycles, compute_cycles});
+    const int fill_cycles = std::max(pipeline_latency_cycles, fabric_fill_cycles);
+    const int ideal_dev_clock_cycles = std::max(throughput_cycles, fill_cycles);
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> result(
         {input_tensor}, {output_tensors}, ideal_dev_clock_cycles);

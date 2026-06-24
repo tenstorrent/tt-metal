@@ -12,6 +12,12 @@ import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal, comp_allclose_and_pcc
 from tests.ttnn.utils_for_testing import assert_equal, assert_numeric_metrics, tt_dtype_to_torch_dtype
+from tests.ttnn.nightly.unit_tests.operations.fused.utility_functions import (
+    ttnn_layer_norm_pre_all_gather,
+    ttnn_rms_norm_pre_all_gather,
+    ttnn_layer_norm_post_all_gather,
+)
+
 
 TEST_PADDING_VALUE = -42
 
@@ -73,9 +79,9 @@ def ln_pre_allgather_op(xs, n_devices, is_rmsnorm, out_dtpe, kernel_config):
     tt_out = []
     for d in range(n_devices):
         if is_rmsnorm:
-            tt_out.append(ttnn.rms_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
+            tt_out.append(ttnn_rms_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
         else:
-            tt_out.append(ttnn.layer_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
+            tt_out.append(ttnn_layer_norm_pre_all_gather(xs[d], compute_kernel_config=kernel_config, dtype=out_dtpe))
     return tt_out
 
 
@@ -252,7 +258,7 @@ def run_layernorm_pre_post_gamma_only_pcc(device, use_pre_all_gather: bool):
         tt_memory_config=dram_memcfg,
     )
 
-    tt_out = ttnn.layer_norm_post_all_gather(
+    tt_out = ttnn_layer_norm_post_all_gather(
         tt_inp,
         tt_stats,
         epsilon=epsilon,
@@ -532,7 +538,7 @@ def test_layernorm_pre_all_gather_residual_padding_zeroed(device, inp_shape):
     # Poison residual's implicit tile padding. A correct op must ignore these values.
     tt_res = ttnn.fill_implicit_tile_padding(tt_res, POISON)
 
-    tt_stats = ttnn.layer_norm_pre_all_gather(
+    tt_stats = ttnn_layer_norm_pre_all_gather(
         tt_inp,
         residual_input_tensor=tt_res,
         dtype=ttnn.bfloat16,
@@ -611,7 +617,7 @@ def test_layernorm_pre_all_gather_residual_mismatched_dtype(device, inp_dtype, r
         torch_res, tt_dtype=res_dtype, tt_device=device, tt_layout=ttnn.TILE_LAYOUT, tt_memory_config=dram_memcfg
     )
 
-    tt_stats = ttnn.layer_norm_pre_all_gather(
+    tt_stats = ttnn_layer_norm_pre_all_gather(
         tt_inp,
         residual_input_tensor=tt_res,
         dtype=ttnn.bfloat16,
@@ -705,14 +711,7 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
     [
         (1, 1, 32, 128),
         (1, 1, 32, 1024),
-        pytest.param(
-            (1, 1, 37, 72),
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="Welford pre-all-gather overflows to inf on non-tile-aligned H shapes; "
-                "torch comparison fails on mean and var. Issue #43935",
-            ),
-        ),
+        (1, 1, 37, 72),
     ],
 )
 @pytest.mark.parametrize(
@@ -726,17 +725,19 @@ def test_residual_logical_shape_mismatch_rejected(device, op_name, inp_shape, re
 def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype, stats_dtype):
     """Welford pre_all_gather, both FUSE_PRE_ADD and no-residual paths.
 
-    Both paths go through LayerNormPreAllGatherWelfordProgramFactory. The fp32 tolerance is
-    tight enough to catch e.g. the welford finalize buffer (cb_x2) being held in bfloat16
-    rather than desired float32; the bf16 tolerance is loosened to the bf16 noise floor.
+    Both paths go through LayerNormPreAllGatherWelfordProgramFactory.
 
-    1. Fused-pre-add output (input, residual) vs torch reference for mean and variance.
-    2. No-residual output (manually-pre-added input) vs the same torch reference. Independently
-       exercises the welford path without FUSE_PRE_ADD set, so a regression isolated to either
-       the residual CB plumbing or the welford-only CBs (e.g., cb_x2 width/format) is caught.
-    3. Fused-pre-add output vs manually-pre-added output, tight against each other. Catches
-       fused-add-specific bugs whose magnitude is below the bf16 torch tolerance, since the
-       shared kernel/quantization noise cancels between the two paths.
+    Two precision regimes are exercised:
+    - The no-residual ("combined") path is pure welford with fp32 unpack-to-dest on the input
+      CB and the scratch CB, so it stays at the fp32 noise floor. The "combined vs torch"
+      tolerance is set tight enough to catch a regression like the scratch CB being held
+      in bf16 or losing UnpackToDestFp32.
+    - The FUSE_PRE_ADD ("fused") path uses add_tiles on the FPU, which routes fp32 through
+      SrcA/SrcB and truncates to TF32 (10 mantissa bits). The "fused vs torch" and
+      "fused vs combined" tolerances are set at TF32 ULP * 2 (looser than the welford floor
+      but still tight enough to catch a fused-add-specific bug that breaks beyond TF32 noise).
+
+    bf16 stats: scratch CB and output are bf16, so the floor is bf16 quantization (~8e-3).
     """
     torch.manual_seed(0)
 
@@ -780,7 +781,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     # Passing residual_input_tensor causes the program factory to set the FUSE_PRE_ADD
     # compile-time define, so the kernel is compiled with the in-kernel add path: it reads
     # tt_inp and tt_res into separate CBs and adds them via add_tiles before the welford pass.
-    stats_fused = ttnn.layer_norm_pre_all_gather(
+    stats_fused = ttnn_layer_norm_pre_all_gather(
         tt_inp,
         residual_input_tensor=tt_res,
         dtype=stats_dtype,
@@ -792,7 +793,7 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     # No residual_input_tensor is passed, so the program factory does not set FUSE_PRE_ADD
     # and the kernel is compiled without the in-kernel add path entirely. The kernel sees
     # a single, already-summed input. Mathematically equivalent to stats_fused.
-    stats_combined = ttnn.layer_norm_pre_all_gather(
+    stats_combined = ttnn_layer_norm_pre_all_gather(
         tt_combined,
         dtype=stats_dtype,
         compute_kernel_config=kernel_config,
@@ -814,40 +815,70 @@ def test_layernorm_pre_all_gather_welford_residual(device, inp_shape, inp_dtype,
     combined_mean = out_combined[..., 0]
     combined_var = out_combined[..., 32]
 
-    # Tolerance is tight enough in fp32 to catch welford CB width/format regressions
-    # (e.g., cb_x2 held in bfloat16 in fp32-dest-acc mode); loosened to the bf16 noise floor
-    # for bf16 stats.
+    # Two tolerance sets:
+    #
+    # - "welford" applies to the no-residual path (FUSE_PRE_ADD unset). The input CB carries
+    #   fp32 with UnpackToDestFp32, the scratch CB is fp32, and the transpose round-trip
+    #   preserves full fp32 precision, so the floor is the welford recurrence's own fp32 noise
+    #   (~sqrt(W) * eps_fp32 ~ a few times 1e-6 --> Set to 1e-5).
+    # - "fused" applies to any comparison involving the FUSE_PRE_ADD output. The in-kernel
+    #   add_tiles consumes the input via SrcA/SrcB which routes fp32 through TF32 (10 mantissa
+    #   bits), so the floor is TF32 ULP at the value magnitude: |mean| ~ 2/sqrt(W), |var| ~ 2
+    #   for randn+randn input, giving atol_mean ~ 2/sqrt(W) * 2^-10 and atol_var ~ 2 * 2^-10.
+    #   For W=128 the larger of the two parametrizations sets the bound:
+    #   atol_mean ~ 1.8e-4 --> Set to 4e-4, atol_var ~ 2e-3. --> Set to 4e-3.
+    # - bf16 stats: scratch CB and output are bf16, floor is bf16 quantization (~8e-3) --> set to 0.01.
     if stats_dtype == ttnn.float32:
-        atol = 0.002
-        rtol = 0.003
-        pcc = 0.9999
+        welford_atol = 1e-5
+        welford_rtol = 1e-5
+        welford_pcc = 0.99999
+        welford_frob = 1e-5
+        # FUSE tolerances: TF32 ULP * 2 at the worst-case magnitude.
+        fused_atol_mean = 4e-4
+        fused_atol_var = 4e-3
+        fused_rtol = 3e-3
+        fused_pcc = 0.99999
+        fused_frob_mean = 1e-3
+        fused_frob_var = 1e-3
     else:
-        atol = 0.01
-        rtol = 0.01
-        pcc = 0.999
-    # Run every check independently and collect results, so a single test report identifies
-    # all failing comparisons instead of stopping at the first one. Each entry is
-    # (label, expected, actual). Labels describe what the comparison covers.
+        welford_atol = 0.01
+        welford_rtol = 0.01
+        welford_pcc = 0.999
+        welford_frob = 0.004
+        fused_atol_mean = 0.01
+        fused_atol_var = 0.01
+        fused_rtol = 0.01
+        fused_pcc = 0.999
+        fused_frob_mean = 0.004
+        fused_frob_var = 0.004
+
+    # Each entry: (label, expected, actual, atol, rtol, pcc_threshold, frobenius_threshold).
     checks = [
-        # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference.
-        ("fused vs torch: mean", torch_mean, fused_mean),
-        ("fused vs torch: var", torch_var, fused_var),
-        # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Independently
-        # exercises the welford path without the in-kernel add, so a regression isolated to
-        # either side is caught.
-        ("combined vs torch: mean", torch_mean, combined_mean),
-        ("combined vs torch: var", torch_var, combined_var),
-        # Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs
-        # whose magnitude is below the bf16 torch tolerance: the shared kernel/quantization
-        # noise that limits that tolerance cancels between the two paths.
-        ("fused vs combined: mean", combined_mean, fused_mean),
-        ("fused vs combined: var", combined_var, fused_var),
+        # Fused-pre-add path (FUSE_PRE_ADD set) vs torch reference. add_tiles is on the FPU
+        # path, so this is at TF32 precision -- expected, not a regression.
+        ("fused vs torch: mean", torch_mean, fused_mean, fused_atol_mean, fused_rtol, fused_pcc, fused_frob_mean),
+        ("fused vs torch: var", torch_var, fused_var, fused_atol_var, fused_rtol, fused_pcc, fused_frob_var),
+        # No-residual path (FUSE_PRE_ADD unset) vs the same torch reference. Pure welford
+        # path; the floor is fp32 noise, so tight tolerances catch any precision regression
+        # (e.g., the scratch CB being held in bf16, missing UnpackToDestFp32 on the input or scratch CB).
+        ("combined vs torch: mean", torch_mean, combined_mean, welford_atol, welford_rtol, welford_pcc, welford_frob),
+        ("combined vs torch: var", torch_var, combined_var, welford_atol, welford_rtol, welford_pcc, welford_frob),
+        # Fused-pre-add output vs manually-pre-added output. Catches fused-add-specific bugs.
+        # The FUSE TF32 floor dominates, so use the same tolerances as fused-vs-torch.
+        ("fused vs combined: mean", combined_mean, fused_mean, fused_atol_mean, fused_rtol, fused_pcc, fused_frob_mean),
+        ("fused vs combined: var", combined_var, fused_var, fused_atol_var, fused_rtol, fused_pcc, fused_frob_var),
     ]
 
     failures = []
-    for label, expected, actual in checks:
+    for label, expected, actual, atol, rtol, pcc, frob in checks:
         passed, message = assert_numeric_metrics(
-            expected, actual, rtol=rtol, atol=atol, pcc_threshold=pcc, assert_on_fail=False
+            expected,
+            actual,
+            rtol=rtol,
+            atol=atol,
+            pcc_threshold=pcc,
+            frobenius_threshold=frob,
+            assert_on_fail=False,
         )
         if not passed:
             failures.append(f"[{label}] {message}")
@@ -875,11 +906,11 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
         device=device,
     )
 
-    stats_from_torch = ttnn.layer_norm_pre_all_gather(
+    stats_from_torch = ttnn_layer_norm_pre_all_gather(
         tt_from_torch,
         dtype=ttnn.bfloat16,
     )
-    stats_from_ones = ttnn.layer_norm_pre_all_gather(
+    stats_from_ones = ttnn_layer_norm_pre_all_gather(
         tt_ones,
         dtype=ttnn.bfloat16,
     )
@@ -889,3 +920,140 @@ def test_pre_allgather_ignores_implicit_tile_padding(device, inp_shape):
 
     # test for equivalance
     assert_equal(out_from_torch, out_from_ones)
+
+
+@pytest.mark.parametrize("use_residual", [False, True])
+@pytest.mark.parametrize("offset", [0.0, 1e6])
+@pytest.mark.parametrize("inp_shape", [(1, 1, 32, 128)])
+def test_layernorm_pre_all_gather_welford_fp32_precision(device, inp_shape, offset, use_residual):
+    """Welford pre_all_gather stats are accurate for Float32 input regardless of mean offset.
+
+    The Welford kernel requires fp32 precision end-to-end: the input CB and the intermediate
+    scratch CB must both use Float32 format, and the unpacker must be configured with
+    unpack_to_dest_mode=UnpackToDestFp32 so that fp32 values are not silently downcast to
+    TF32 (10 mantissa bits) when routed through SrcA. When either of these conditions is
+    violated, the Welford (x - M) subtraction catastrophically loses precision at large offsets
+    because the subtracted values share a large common exponent.
+
+    When use_residual=True, a zero residual is passed to trigger the FUSE_PRE_ADD code path.
+    A zero residual is mathematically a no-op, so a correct end-to-end fp32 pipeline would
+    produce stats identical to the no-residual case. FUSE_PRE_ADD instead routes the input
+    through add_tiles on the FPU, which truncates SrcA/SrcB to TF32. At offset=1e6 the TF32
+    ULP (~512) dwarfs the underlying randn variation (~1), so the variance signal is destroyed
+    inside the add before welford runs.
+    """
+    if use_residual:
+        pytest.xfail(
+            "FUSE_PRE_ADD TF32 floor on add_tiles: variance signal is destroyed inside the add before welford runs. Issue #45231."
+        )
+
+    torch.manual_seed(0)
+    torch_input = torch.randn(inp_shape, dtype=torch.float32) + offset
+
+    kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    width = inp_shape[-1]
+    grid = device.compute_with_storage_grid_size()
+    core_range_set = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+
+    # NOTE: layer_norm_pre_all_gather defaults to a non-Welford program factory; the Welford
+    # path is only taken when LayerNormDefaultProgramConfig(use_welford=True) is passed (and
+    # recip_tensor is supplied). This test exercises that path explicitly.
+    recip_tensor = ttnn.create_layer_norm_reciprocals(device, core_range_set, width)
+
+    tt_inp = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.float32,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    residual_kwargs = {}
+    if use_residual:
+        tt_res = ttnn.from_torch(
+            torch.zeros(inp_shape, dtype=torch.float32),
+            dtype=ttnn.float32,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        residual_kwargs["residual_input_tensor"] = tt_res
+
+    tt_stats = ttnn_layer_norm_pre_all_gather(
+        tt_inp,
+        dtype=ttnn.float32,
+        compute_kernel_config=kernel_config,
+        program_config=ttnn.LayerNormDefaultProgramConfig(use_welford=True),
+        recip_tensor=recip_tensor,
+        **residual_kwargs,
+    )
+
+    actual = ttnn.to_torch(tt_stats)
+    # Welford output layout: column 0 of tile 0 holds the per-row mean; column 0 of tile 1
+    # (offset 32 along the last axis) holds the per-row variance.  Reference is computed in
+    # fp64 so it isn't itself contaminated by fp32 noise.
+    torch_mean = torch_input.to(torch.float64).mean(dim=-1)
+    torch_var = torch_input.to(torch.float64).var(dim=-1, correction=0)
+    tt_mean = actual[..., 0].to(torch.float64).squeeze(-1)
+    tt_var = actual[..., 32].to(torch.float64).squeeze(-1)
+
+    mean_pcc_threshold = 0.99999
+    mean_frob = 1e-5
+    if offset == 0.0:
+        # No catastrophic cancellation: Welford is accurate to fp32 noise (mean≈4e-8, var≈4e-7),
+        # so tolerances can be tight to catch any precision regression.
+        mean_check_pcc = True
+        mean_rtol = 1e-7
+        mean_atol = 1e-7
+        var_pcc_threshold = 0.99999
+        var_frob = 1e-5
+        var_rtol = 1e-5
+        var_atol = 1e-5
+    else:
+        # At large offset, Welford mean stagnates once delta/k < ULP(offset)/2; the final mean
+        # reflects only the first ~32 samples, giving low theoretical PCC (in 0.2–0.8 range,
+        # depending on the inputs).
+        # Intrinsic to stagnation, so PCC check is disabled.
+        mean_check_pcc = False
+        mean_rtol = 6e-7
+        mean_atol = 1e-5
+        # Variance error per row has long tail. The typical error is small, so PCC stays high.
+        # Relative Frobenius is larger here than for the mean: even though the variance's absolute
+        # error is smaller than the mean's, it's divided by ≈1.0 (variance is translation-invariant),
+        # while the mean's larger absolute error is dwarfed when divided by ≈1e6.
+        var_pcc_threshold = 0.95
+        var_frob = 0.05
+        var_rtol = 0.001
+        var_atol = 0.25
+
+    mean_passed, mean_msg = assert_numeric_metrics(
+        torch_mean,
+        tt_mean,
+        rtol=mean_rtol,
+        atol=mean_atol,
+        frobenius_threshold=mean_frob,
+        pcc_threshold=mean_pcc_threshold,
+        check_pcc=mean_check_pcc,
+        assert_on_fail=False,
+    )
+    var_passed, var_msg = assert_numeric_metrics(
+        torch_var,
+        tt_var,
+        rtol=var_rtol,
+        atol=var_atol,
+        frobenius_threshold=var_frob,
+        pcc_threshold=var_pcc_threshold,
+        assert_on_fail=False,
+    )
+    assert mean_passed and var_passed, (
+        f"offset={offset}\n"
+        f"--- MEAN: {'PASSED' if mean_passed else 'FAILED'} ---\n{mean_msg}\n"
+        f"--- VARIANCE: {'PASSED' if var_passed else 'FAILED'} ---\n{var_msg}"
+    )

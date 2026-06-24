@@ -67,17 +67,17 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
             r = r * m + 0x1.274p-3f;
             r = r * m + -0x1.55p-3f;
             r = r * m + 0x1.998p-3f;
-            sfpi::vInt abs_e = sfpi::abs(e);
+            sfpi::vMag abs_e = sfpi::abs(e);
             r = r * m + sfpi::vConstFloatPrgm1;
-            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = r * m + sfpi::vConstFloatPrgm2;
             sfpi::vFloat neg_half = -0.5f;
             r = __builtin_rvtt_sfpmad(r.get(), m.get(), neg_half.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
         } else {
-            sfpi::vInt abs_e = sfpi::abs(e);
+            sfpi::vMag abs_e = sfpi::abs(e);
             sfpi::vFloat neg_quarter = -0.25f;
             r = neg_quarter * m + sfpi::vConstFloatPrgm1;
-            e_float = sfpi::int32_to_float(abs_e, sfpi::RoundMode::NearestEven);
+            e_float = sfpi::convert<sfpi::vFloat>(abs_e, sfpi::RoundMode::Nearest);
             r = r * m + sfpi::vConstFloatPrgm2;
         }
 
@@ -123,7 +123,7 @@ inline void calculate_log(uint log_base_scale_factor) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en>(
             sfpi::dst_reg[0], log_base_scale_factor);
         if constexpr (!is_fp32_dest_acc_en) {
-            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::NearestEven);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
         sfpi::dst_reg[0] = result;
         sfpi::dst_reg++;

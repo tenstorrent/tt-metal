@@ -50,8 +50,9 @@ def create_tt_model(
         gpt_oss_model_args.hf_config.num_hidden_layers = num_layers
         gpt_oss_model_args.n_layers = num_layers
 
-    # Avoid loading state_dict for every DP model
-    if not state_dict:
+    # Avoid loading state_dict for every DP model. An empty dict is intentional
+    # when --skip-model-load is used.
+    if state_dict is None:
         state_dict = gpt_oss_model_args.load_state_dict(
             weights_path=gpt_oss_model_args.model_path,
             dummy_weights=gpt_oss_model_args.dummy_weights,

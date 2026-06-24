@@ -50,6 +50,15 @@ class Gemma4AttentionConfig:
 
         self.num_key_value_groups = self.num_attention_heads // self.num_key_value_heads
 
+        # When set (only on sliding-window layers wired with bounded allocations),
+        # the three paged ops (paged_fill_cache / paged_update_cache /
+        # paged_scaled_dot_product_attention_decode) wrap the absolute position
+        # into a circular buffer of this many tokens before the page_table lookup.
+        # Mirrors vLLM's SlidingWindowSpec: physical cache holds only
+        # cache_position_modulo / block_size blocks per sequence; the per-layer
+        # page_table is zero-padded out to max_model_len / block_size.
+        self.cache_position_modulo = None
+
 
 class Gemma4Attention:
     def __init__(
@@ -66,6 +75,7 @@ class Gemma4Attention:
         max_batch_size=1,
         max_seq_len=131072,
         weight_dtype=ttnn.bfloat16,
+        bounded_sliding_kv_cache: bool = False,
         # Legacy parameter — ignored (no longer needed with HF-style RoPE)
         transformation_mats=None,
     ):
@@ -74,6 +84,18 @@ class Gemma4Attention:
         self.ccl_manager = ccl_manager
         self.mesh_config = mesh_config
         self.layer_idx = layer_idx
+
+        # vLLM-style hybrid kv_cache_groups: SlidingWindowSpec layers allocate only
+        # sliding_window/block_size blocks per sequence and pass cache_position_modulo
+        # to the three paged ops, which wrap absolute positions into the bounded slots.
+        # Full-attention layers leave cache_position_modulo unset and take the legacy
+        # unbounded path. Setting the field here is harmless when paged mode is off:
+        # the call sites only read it inside their ``if page_table is not None`` branch.
+        self.bounded_sliding_kv_cache = (
+            bounded_sliding_kv_cache and config.is_sliding and config.sliding_window is not None
+        )
+        if self.bounded_sliding_kv_cache:
+            config.cache_position_modulo = config.sliding_window
 
         self.weights = load_attention_weights(
             mesh_device=mesh_device,
@@ -108,6 +130,10 @@ class Gemma4Attention:
         keep_kv=False,
         is_kv_shared=False,
         position_idx_cache=None,
+        batch_size=1,
+        user_id=0,
+        valid_seq_len=None,
+        sequential_kv_write=False,
     ):
         """
         Attention forward pass — dispatches to on-device decode or prefill.
@@ -143,6 +169,7 @@ class Gemma4Attention:
                 ccl_manager=self.ccl_manager,
                 is_kv_shared=is_kv_shared,
                 position_idx_cache=position_idx_cache,
+                sequential_kv_write=sequential_kv_write,
             )
         else:
             tt_out, kept_kv = prefill_forward(
@@ -158,6 +185,9 @@ class Gemma4Attention:
                 ccl_manager=self.ccl_manager,
                 shared_kv=shared_kv,
                 keep_kv=keep_kv,
+                batch_size=batch_size,
+                user_id=user_id,
+                valid_seq_len=valid_seq_len,
             )
             self._last_kv = kept_kv
             return tt_out

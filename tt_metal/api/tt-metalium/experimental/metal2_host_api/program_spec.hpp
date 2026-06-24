@@ -15,63 +15,84 @@
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 
-namespace tt::tt_metal::experimental::metal2_host_api {
+namespace tt::tt_metal::experimental {
 
-// A name identifying a ProgramSpec within a MeshWorkload.
+// ============================================================================
+//  ProgramSpec API
+// ============================================================================
 //
-// CONVENTION: define names as `constexpr const char*` constants, e.g.:
-//   constexpr const char* MATMUL_PROGRAM = "matmul";
-//   ProgramSpec{.program_id = MATMUL_PROGRAM, ...};
-// Reusing a single constant helps catch typos and errors at compile time.
-using ProgramSpecName = std::string;
-
-// A name identifying a WorkUnitSpec within a ProgramSpec.
-// CONVENTION: define names as `constexpr const char*` constants (see above).
-using WorkUnitSpecName = std::string;
+// A ProgramSpec is a descriptor object used to create a Metalium Program object.
+// The ProgramSpec describes all the IMMUTABLE properties of a Program:
+//  - compiled kernels
+//  - program-scope resources
+//      o dataflow buffers
+//      o semaphores
+//  - user-managed resources (parameters)
+//      o tensor parameters
+//
+// It also specifies the device nodes (physical location) where kernels will run,
+// and where device resources will be allocated.
+//
+// The ProgramSpec is analogous to a function's signature and body —
+// it is declared once, but can be executed many times.
+//
+// ProgramRunArgs (program_run_args.hpp) is the partner object to ProgramSpec.
+// This descriptor is analogous to the function invocation's arguments.
+// ProgramRunArgs describes the MUTABLE properties of a Program, which are specified
+// anew with each execution (enqueue) of the Program.
+//
+// ============================================================================
 
 //------------------------------------------------
-// ProgramSpec & WorkUnitSpec
+// WorkUnitSpec
 //------------------------------------------------
 
 // A WorkUnitSpec describes a set of kernels that run together on a set of nodes.
 // Each node in the WorkUnitSpec's target_nodes runs an identical set of kernel instances.
 //
 // Placement: The WorkUnitSpec defines the node placement of its kernels.
-// (A kernel may be included in multiple WorkUnitSpecs.)
+//   (A kernel may be included in multiple WorkUnitSpecs.)
+//
 struct WorkUnitSpec {
-    WorkUnitSpecName unique_id;
+    // Human-readable name (debug/messaging only; no uniqueness invariant).
+    std::string name;
 
     // The kernels that run on this WorkUnitSpec's nodes.
-    std::vector<KernelSpecName> kernels;
+    Group<KernelSpecName> kernels;
 
     // The set of nodes configured by this WorkUnitSpec.
-    std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
+    Nodes target_nodes;
 };
 
-// A ProgramSpec describes the immutable properties of a Program:
-// its kernels, DFBs, semaphores, and where they all run.
-// Analogous to a function's signature and body — declared once, executed many times.
-// (Each time with a new ProgramRunParams configuring the mutable execution parameters.)
-struct ProgramSpec {
-    // Program identifier (identifies a Program within a MeshWorkload)
-    ProgramSpecName program_id;
+//------------------------------------------------
+// ProgramSpec
+//------------------------------------------------
 
-    // Kernels, DFBs (local + remote), and semaphores that make up the Program
-    std::vector<KernelSpec> kernels;
-    std::vector<DataflowBufferSpec> dataflow_buffers;
-    std::vector<RemoteDataflowBufferSpec> remote_dataflow_buffers;
-    std::vector<SemaphoreSpec> semaphores;
+// A ProgramSpec describes a complete Program (its immutable properties).
+struct ProgramSpec {
+    // Human-readable name (debug/messaging only; no uniqueness invariant).
+    std::string name;
+
+    // Kernels that make up the Program
+    Group<KernelSpec> kernels;
+
+    // Program-scope resources (allocated for the Program's execution lifetime)
+    // DFBs (local + cross-node), and semaphores
+    Group<DataflowBufferSpec> dataflow_buffers;
+    Group<CrossNodeDataflowBufferSpec> cross_node_dataflow_buffers;
+    Group<SemaphoreSpec> semaphores;
 
     // Tensor parameter declarations
     // Provides ids and layout specs for tensors the Program's kernels will operate on
-    // (The actual MeshTensors are supplied via ProgramRunParams.)
-    std::vector<TensorParameter> tensor_parameters;
+    // (The actual MeshTensors are supplied via ProgramRunArgs.)
+    Group<TensorParameter> tensor_parameters;
 
     // WorkUnit specifications:
     // A valid ProgramSpec has at least one WorkUnitSpec.
     // Each kernel must be referenced by at least one WorkUnitSpec.
-    std::vector<WorkUnitSpec> work_units;
+    Group<WorkUnitSpec> work_units;
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api
+}  // namespace tt::tt_metal::experimental

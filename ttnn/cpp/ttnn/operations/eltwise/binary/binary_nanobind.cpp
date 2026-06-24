@@ -54,7 +54,7 @@ constexpr auto BINARY_BROADCAST_DOC = R"doc(
 // Function pointer types for binary operation overload disambiguation
 using BinaryOpTensorScalarFn = Tensor (*)(
     const Tensor&,
-    float,
+    unary::ScalarVariant,
     const std::optional<const DataType>&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
@@ -77,7 +77,7 @@ using BinaryOpTensorTensorFn = Tensor (*)(
 
 using InplaceScalarFn = Tensor (*)(
     const Tensor&,
-    float,
+    unary::ScalarVariant,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
@@ -115,7 +115,7 @@ using BitwiseTensorFn = Tensor (*)(
     const std::optional<tt::tt_metal::SubDeviceId>&);
 using BinaryUnaryScalarFn = Tensor (*)(
     const Tensor&,
-    float,
+    unary::ScalarVariant,
     const std::optional<const DataType>&,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
@@ -150,10 +150,11 @@ using BinaryUnaryMaxTensorFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>);
 using BinaryCompositeTensorTensorFn = Tensor (*)(const Tensor&, const Tensor&, const std::optional<MemoryConfig>&);
-using BinaryCompositeTensorScalarFn = Tensor (*)(const Tensor&, float, const std::optional<MemoryConfig>&);
+using BinaryCompositeTensorScalarFn =
+    Tensor (*)(const Tensor&, unary::ScalarVariant, const std::optional<MemoryConfig>&);
 using BinaryOverloadScalarFn = Tensor (*)(
     const Tensor&,
-    float,
+    unary::ScalarVariant,
     const std::optional<MemoryConfig>&,
     const std::optional<CoreRangeSet>&,
     const std::optional<tt::tt_metal::SubDeviceId>&);
@@ -166,7 +167,7 @@ using BinaryOverloadTensorFn = Tensor (*)(
 using PreluTensorArrayFn = Tensor (*)(const Tensor&, const std::array<float, 1>&, const std::optional<MemoryConfig>&);
 using InplaceFastApproxScalarFn = Tensor (*)(
     const Tensor&,
-    float,
+    unary::ScalarVariant,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
@@ -1077,7 +1078,7 @@ void bind_div(
 // Free functions for multiply and divide with fast_and_approximate_mode
 Tensor multiply_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
-    float value,
+    unary::ScalarVariant value,
     bool fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
@@ -1133,7 +1134,7 @@ Tensor multiply_fast_approx_tensor_tensor(
 
 Tensor divide_fast_approx_tensor_scalar(
     const Tensor& input_tensor_a,
-    float value,
+    unary::ScalarVariant value,
     bool fast_and_approximate_mode,
     const std::optional<const DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
@@ -1718,7 +1719,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::eq),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::eq),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8 (cast to UINT16))doc");
 
     detail::bind_binary_operation<"ne">(
         mod,
@@ -1727,7 +1728,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ne),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ne),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16, UINT8 (cast to UINT16))doc");
 
     detail::bind_binary_operation<"lt">(
         mod,
@@ -1736,7 +1737,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::lt),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::lt),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"le">(
@@ -1746,7 +1747,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::le),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::le),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"gt">(
@@ -1756,7 +1757,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::gt),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::gt),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"ge">(
@@ -1766,7 +1767,7 @@ void py_module(nb::module_& mod) {
         static_cast<detail::BinaryOpTensorScalarFn>(&ttnn::ge),
         static_cast<detail::BinaryOpTensorTensorFn>(&ttnn::ge),
         ". ",
-        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
+        R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT16, UINT8 (cast to UINT16))doc",
         "INT32 supported only for tensor-tensor.");
 
     detail::bind_binary_operation<"logical_and">(
@@ -2058,7 +2059,7 @@ void py_module(nb::module_& mod) {
             const std::optional<tt::tt_metal::SubDeviceId>&>(&ttnn::div),
         nb::overload_cast<
             const Tensor&,
-            float,
+            unary::ScalarVariant,
             bool,
             const std::optional<std::string>&,
             const std::optional<const DataType>&,

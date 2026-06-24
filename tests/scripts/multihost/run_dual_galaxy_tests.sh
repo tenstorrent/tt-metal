@@ -1,6 +1,9 @@
 #!/bin/bash
 set -eo pipefail
 
+# Source shared utility functions.
+source "$(dirname "${BASH_SOURCE[0]}")/utils.sh"
+
 # Exit immediately if ARCH_NAME is not set or empty
 if [ -z "${ARCH_NAME}" ]; then
   echo "Error: ARCH_NAME is not set. Exiting." >&2
@@ -15,13 +18,12 @@ run_dual_galaxy_unit_tests() {
   echo "LOG_METAL: Running run_dual_galaxy_unit_tests"
 
   local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
-  local tcp_interface="cnx1"
-  # heuristic to extract only 2 first hosts from the hostfile
-  local hosts="$(awk '!/^#/ && NF {print $1}' /etc/mpirun/hostfile | head -n 2 | paste -sd,)"
+  local tcp_interface="$(default_mpi_tcp_interface)"
+  local hosts="$(extract_hosts_from_hostfile 2)"
 
   local mpi_args="--host $hosts $mpi_args_base"
 
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include ${tcp_interface} --tag-output"
   local mpirun_args="--host $hosts $mpirun_args_base"
   local mesh_graph="tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"
 
@@ -30,7 +32,7 @@ run_dual_galaxy_unit_tests() {
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/tt_fabric/test_system_health --gtest_filter="Cluster.ReportIntermeshLinks" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyControlPlaneInit" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="MultiHost.TestDualGalaxyFabric2DSanity" ; fail+=$?
-  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_galaxy_fabric_2d_sanity.yaml ; fail+=$?
+  tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_dual_galaxy_fabric_2d_sanity.yaml ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_2d]" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_dispatch_6U.py::test_all_to_all_dispatch_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-1-s2-7168-8-256-32-1-8x8_grid-False-fabric_1d_line]" ; fail+=$?
   tt-run --tcp-interface ${tcp_interface} --mesh-graph-descriptor "$mesh_graph" --hosts "$hosts" pytest -svv "tests/nightly/tg/ccl/test_all_to_all_combine_6U.py::test_all_to_all_combine_8x8_dual_galaxy[wormhole_b0-dram-dram-DataType.BFLOAT16-None-num_links_1-2-sparse-s2-7168-8-256-32-axis_1-8x8_grid-False-fabric_1d_line]" ; fail+=$?

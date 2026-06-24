@@ -42,6 +42,7 @@ Core
    ttnn.as_tensor
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
+   ttnn.copy_host_to_device_tensor_partial
    ttnn.deallocate
    ttnn.dump_tensor
    ttnn.from_device
@@ -78,6 +79,7 @@ Tensor Creation
    ttnn.ones
    ttnn.ones_like
    ttnn.rand
+   ttnn.randn
    ttnn.uniform
    ttnn.zeros
    ttnn.zeros_like
@@ -317,6 +319,7 @@ Pointwise Ternary
    ttnn.addcmul
    ttnn.lerp
    ttnn.mac
+   ttnn.snake_beta
    ttnn.where
 
 Quantization
@@ -363,6 +366,7 @@ Reduction
    ttnn.sampling
    ttnn.std
    ttnn.sum
+   ttnn.experimental.topk_large_indices
    ttnn.topk
    ttnn.var
 
@@ -391,6 +395,7 @@ Data Movement
    ttnn.moe_expert_token_remap
    ttnn.moe_routing_remap
    ttnn.move
+   ttnn.narrow
    ttnn.nonzero
    ttnn.pad
    ttnn.permute
@@ -473,10 +478,13 @@ Transformer
    ttnn.transformer.paged_scaled_dot_product_attention_decode
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
+   ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_sdpa
    ttnn.transformer.split_query_key_value_and_split_heads
    ttnn.transformer.windowed_scaled_dot_product_attention
+   ttnn.experimental.indexer_score
 
 CCL
 ===

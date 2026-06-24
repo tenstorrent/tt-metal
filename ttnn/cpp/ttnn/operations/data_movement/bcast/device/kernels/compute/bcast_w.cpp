@@ -5,34 +5,46 @@
 #include <cstdint>
 
 #include "api/compute/bcast.h"
+#include "api/dataflow/circular_buffer.h"
 
 void kernel_main() {
     uint32_t w = 0;
     constexpr uint32_t onetile = 1;
+    constexpr uint32_t cb_a_id = tt::CBIndex::c_0;
+    constexpr uint32_t cb_b_id = tt::CBIndex::c_1;
+    constexpr uint32_t cb_out_id = tt::CBIndex::c_16;
+
+    CircularBuffer cb_a(cb_a_id);
+    CircularBuffer cb_b(cb_b_id);
+    CircularBuffer cb_out(cb_out_id);
+
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
     uint32_t Wt = get_arg_val<uint32_t>(2);
 
-    init_bcast<BCAST_LLKOP, BCAST_DIM>(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    init_bcast<BCAST_LLKOP, BCAST_DIM>(cb_a_id, cb_b_id, cb_out_id);
 
     for (uint32_t b = 0; b < B; b++) {
         for (uint32_t h = 0; h < Ht; h++) {
-            cb_wait_front(tt::CBIndex::c_1, onetile);
+            cb_b.wait_front(onetile);
             for (uint32_t w = 0; w < Wt; w++) {
-                cb_reserve_back(tt::CBIndex::c_16, onetile);
+                cb_a.wait_front(onetile);
 
-                acquire_dst();
+                tile_regs_acquire();
+                BCAST_OP<BroadcastType::COL>(cb_a_id, cb_b_id, 0, 0, 0);
+                tile_regs_commit();
 
-                cb_wait_front(tt::CBIndex::c_0, onetile);
-                BCAST_OP<BroadcastType::COL>(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
-                pack_tile(0, tt::CBIndex::c_16);
-                cb_pop_front(tt::CBIndex::c_0, onetile);
+                cb_a.pop_front(onetile);
 
-                release_dst();
+                cb_out.reserve_back(onetile);
 
-                cb_push_back(tt::CBIndex::c_16, onetile);
+                tile_regs_wait();
+                pack_tile(0, cb_out_id);
+                tile_regs_release();
+
+                cb_out.push_back(onetile);
             }
-            cb_pop_front(tt::CBIndex::c_1, onetile);
+            cb_b.pop_front(onetile);
         }
     }
 }

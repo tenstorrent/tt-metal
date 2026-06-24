@@ -7,11 +7,14 @@
 #include <optional>
 #include <variant>
 
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/distributed/types.hpp"
 
 #include "ring_distributed_sdpa_device_operation_types.hpp"
-#include "ring_distributed_sdpa_program_factory.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::prim {
@@ -22,8 +25,15 @@ struct RingDistributedSdpaDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    using program_factory_t = std::variant<RingDistributedSdpaMeshWorkloadFactory>;
-    using shared_variables_t = RingDistributedSdpaMeshWorkloadFactory::shared_variables_t;
+    struct RingDistributedSdpaProgramFactory {
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+    };
+
+    using program_factory_t = std::variant<RingDistributedSdpaProgramFactory>;
 
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);

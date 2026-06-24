@@ -16,6 +16,8 @@ from fuser.fuser_config import GlobalConfig
 class ReduceBlockMaxUnpacker(Unpacker):
     loop: FusedLoop = LoopTileByTile()
 
+    per_block_init = True
+
     def init(
         self,
         operation: FusedOperation,
@@ -52,8 +54,7 @@ class ReduceBlockMaxUnpacker(Unpacker):
         compute_unit: ComputeNode,
         block: BlockData,
     ) -> str:
-        face_r_dim = compute_unit.src_a.tile_shape.face_r_dim
-        return f"_llk_unpack_AB_reduce_block_max_row_uninit_({face_r_dim}, {face_r_dim});\n"
+        return f"_llk_unpack_AB_reduce_block_max_row_uninit_();\n"
 
     def perf_set_valid(
         self,

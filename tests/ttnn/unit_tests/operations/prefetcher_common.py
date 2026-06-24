@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import contextlib
 import pytest
 import torch
 import ttnn
@@ -23,6 +24,80 @@ from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul_1d_gather_in0 i
 )
 from tracy import signpost
 from models.demos.llama3_70b_galaxy.tt.prefetcher_common import get_core_ranges
+
+
+def round_up(n, m):
+    return ((n + m - 1) // m) * m
+
+
+def bytes_per_tile(dtype) -> int:
+    return {ttnn.bfloat16: 2048, ttnn.bfloat8_b: 1088}[dtype]
+
+
+def ring_grid_cols(num_dram_banks: int, ring_size: int) -> int:
+    """Width (columns) of the receiver ring grid: the largest divisor of
+    ``ring_size`` that is <= ``num_dram_banks``."""
+    return max(c for c in range(min(num_dram_banks, ring_size), 0, -1) if ring_size % c == 0)
+
+
+def bank_receivers_strided(bank_idx: int, recv_per_bank: int, num_dram_banks: int, ring_cols: int):
+    """Strided receivers matching BufferDistributionSpec round-robin placement:
+    bank b -> ring positions [b, b + num_dram_banks, b + 2*num_dram_banks, ...].
+
+    Under ROUND_ROBIN_1D shard distribution, shard s lands on bank
+    (s % num_dram_banks) at bank-local slab (s // num_dram_banks). Pairing that
+    with this GCB topology means shard index == ring position, so the caller can
+    store data in ring-position order without a permutation.
+    """
+    cores = []
+    for s in range(recv_per_bank):
+        ring_pos = bank_idx + s * num_dram_banks
+        col = ring_pos % ring_cols
+        row = ring_pos // ring_cols
+        cores.append(ttnn.CoreRange(ttnn.CoreCoord(col, row), ttnn.CoreCoord(col, row)))
+    return ttnn.CoreRangeSet(cores)
+
+
+def make_recv_contig_weight(device, pt_weight, num_dram_banks: int, ring_size: int, dtype):
+    """Allocate ``pt_weight`` ((1, 1, K, N)) as a DRAM-sharded ND tensor in
+    receiver-contiguous layout: ``num_shards = ring_size`` distributed round-robin
+    across ``num_dram_banks`` DRAM cores, each shard ``(K, N // ring_size)``.
+
+    With ``ring_size > num_dram_banks`` (bank b stacks ``ring_size //
+    num_dram_banks`` slabs vertically), the prefetcher manager auto-detects this
+    from ``buffer_distribution_spec().num_shards()`` and takes the recv-contig
+    path. The tensor keeps its (K, N) logical shape; only buffer placement changes.
+    """
+    K = pt_weight.shape[-2]
+    N = pt_weight.shape[-1]
+    assert N % ring_size == 0, f"N={N} must divide ring_size={ring_size}"
+    n_per_recv = N // ring_size
+    dram_core_range_set = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+    )
+    nd_shard = ttnn.NdShardSpec(
+        ttnn.Shape([K, n_per_recv]),
+        dram_core_range_set,
+        ttnn.ShardOrientation.ROW_MAJOR,
+        ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    mem_config = ttnn.MemoryConfig(ttnn.BufferType.DRAM, nd_shard)
+    return ttnn.as_tensor(pt_weight, device=device, dtype=dtype, memory_config=mem_config, layout=ttnn.TILE_LAYOUT)
+
+
+@contextlib.contextmanager
+def tensor_prefetcher_session(device, dual_senders_per_bank: bool = False):
+    """Open a Tensor prefetcher Start/Stop window. Stop (and a device sync)
+    runs even on test failure so the next test sees a clean device, replacing the
+    explicit ``start -> ... -> stop -> synchronize`` callers used to spell out at
+    every test site.
+    """
+    ttnn.experimental.start_tensor_prefetcher(device, dual_senders_per_bank=dual_senders_per_bank)
+    try:
+        yield
+    finally:
+        ttnn.experimental.stop_tensor_prefetcher(device)
+        ttnn.synchronize_device(device)
 
 
 def run_prefetcher_mm(

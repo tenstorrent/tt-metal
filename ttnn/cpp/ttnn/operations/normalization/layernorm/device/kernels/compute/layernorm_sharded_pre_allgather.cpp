@@ -50,29 +50,29 @@ void kernel_main() {
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
 #ifdef FUSE_PRE_ADD
-    constexpr uint32_t cb_in = tt::CBIndex::c_14;
+    constexpr uint32_t cb_in_id = tt::CBIndex::c_14;
 #else
-    constexpr uint32_t cb_in = cb_in0;
+    constexpr uint32_t cb_in_id = cb_in0;
 #endif
-    CircularBuffer cb_in_obj(cb_in);
-    constexpr uint32_t cb_scaler = tt::CBIndex::c_2;
-    constexpr uint32_t cb_scaler_global = tt::CBIndex::c_4;
+    CircularBuffer cb_in(cb_in_id);
+    constexpr uint32_t cb_scaler_id = tt::CBIndex::c_2;
+    constexpr uint32_t cb_scaler_global_id = tt::CBIndex::c_4;
     constexpr uint32_t cb_x = tt::CBIndex::c_24;  // x minus mean
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;  // E[x] global reduce
 
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;  // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_x2 = cb_x;                // x^2
+    constexpr uint32_t cb_x2_id = cb_x;             // x^2
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
-    constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;   // E[x^2] partial reduce
-    constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;  // E[x^2] partials received from other cores
+    constexpr uint32_t cb_ex_partial2_id = tt::CBIndex::c_11;   // E[x^2] partial reduce
+    constexpr uint32_t cb_ex_external2_id = tt::CBIndex::c_13;  // E[x^2] partials received from other cores
     const uint32_t cb_reduction_out = (!use_two_stage_reduce or is_second_stage_reader) ? cb_out : cb_ex2;
 
-    CircularBuffer cb_scaler_obj(cb_scaler);
-    CircularBuffer cb_x2_obj(cb_x2);
-    CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
-    CircularBuffer cb_scaler_global_obj(cb_scaler_global);
-    CircularBuffer cb_ex_external2_obj(cb_ex_external2);
+    CircularBuffer cb_scaler(cb_scaler_id);
+    CircularBuffer cb_x2(cb_x2_id);
+    CircularBuffer cb_ex_partial2(cb_ex_partial2_id);
+    CircularBuffer cb_scaler_global(cb_scaler_global_id);
+    CircularBuffer cb_ex_external2(cb_ex_external2_id);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
     const uint32_t block_h = (block_w == 1) ? block_h_volatile : block_h_const;
@@ -89,9 +89,9 @@ void kernel_main() {
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
-    binary_op_init_common(cb_in0, cb_in1, cb_in);
+    binary_op_init_common(cb_in0, cb_in1, cb_in_id);
     add_tiles_init(cb_in0, cb_in1);
-    cb_in_obj.reserve_back(num_tiles_per_block);
+    cb_in.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -103,93 +103,95 @@ void kernel_main() {
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_in);
+                pack_tile(i, cb_in_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
     }
-    cb_in_obj.push_back(num_tiles_per_block);
-    cb_in_obj.wait_front(num_tiles_per_block);
-    pack_reconfig_data_format(cb_in, cb_x2);
+    cb_in.push_back(num_tiles_per_block);
+    cb_in.wait_front(num_tiles_per_block);
+    pack_reconfig_data_format(cb_in_id, cb_x2_id);
 #else
-    binary_op_init_common(cb_in, cb_in, cb_x2);
+    binary_op_init_common(cb_in_id, cb_in_id, cb_x2_id);
 #endif
 
 #ifndef RMSNORM
-    cb_scaler_obj.wait_front(1);
+    cb_scaler.wait_front(1);
 #ifdef FUSE_PRE_ADD
-    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
+    reconfig_data_format(cb_in0, cb_in_id, cb_in1, cb_scaler_id);
 #else
-    reconfig_data_format_srcb(cb_in, cb_scaler);
+    reconfig_data_format_srcb(cb_in_id, cb_scaler_id);
 #endif
     // E[x],
     compute_kernel_lib::reduce<
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
+        cb_in_id,
+        cb_scaler_id,
+        cb_ex_partial2_id,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-        cb_in,
-        cb_scaler,
-        cb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    reconfig_data_format(cb_in, cb_in);
+    reconfig_data_format(cb_in_id, cb_in_id);
 #else
 #ifdef FUSE_PRE_ADD
-    reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
+    reconfig_data_format(cb_in0, cb_in_id, cb_in1, cb_in_id);
 #endif
 #endif  // not RMSNORM
 
     // X^2
     mul_tiles_init(cb_in0, cb_in0);
     index_h_offset = 0;
-    cb_x2_obj.reserve_back(num_tiles_per_block);
+    cb_x2.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
                 index = w + index_subblock_w_offset + index_h_offset;
-                mul_tiles(cb_in, cb_in, index, index, w);
+                mul_tiles(cb_in_id, cb_in_id, index, index, w);
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < subblock_w; i++) {
-                pack_tile(i, cb_x2);
+                pack_tile(i, cb_x2_id);
             }
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
     }
-    cb_x2_obj.push_back(num_tiles_per_block);
+    cb_x2.push_back(num_tiles_per_block);
 
     // E(x^2)
-    cb_x2_obj.wait_front(num_tiles_per_block);
+    cb_x2.wait_front(num_tiles_per_block);
 #ifdef RMSNORM
-    cb_scaler_obj.wait_front(1);
+    cb_scaler.wait_front(1);
 #endif  // RMSNORM
 
     // RMS E(x2) #Layernorm //E(x) and E(x^2)
-    compute_kernel_lib::
-        reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
-            cb_x2,
-            cb_scaler,
-            cb_ex_partial2,
-            compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
-            compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    reconfig_data_format(cb_x2, cb_scaler);
-    cb_pop_front(cb_x2, num_tiles_per_block);
+    compute_kernel_lib::reduce<
+        PoolType::AVG,
+        ReduceDim::REDUCE_ROW,
+        cb_x2_id,
+        cb_scaler_id,
+        cb_ex_partial2_id,
+        compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+        compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h),
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    reconfig_data_format(cb_x2_id, cb_scaler_id);
+    cb_x2.pop_front(num_tiles_per_block);
 
-    // global reduce, cb_ex <-- cb_ex_external2, cb_ex_partial2
+    // global reduce, cb_ex <-- cb_ex_external2_id, cb_ex_partial2_id
     if constexpr (is_allgather_worker) {
-        cb_scaler_global_obj.wait_front(1);
-        reconfig_data_format_srca(cb_x2, cb_ex_external2);
-        reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
+        cb_scaler_global.wait_front(1);
+        reconfig_data_format_srca(cb_x2_id, cb_ex_external2_id);
+        reconfig_data_format_srcb(cb_scaler_id, cb_scaler_global_id);
         pack_reconfig_data_format(cb_reduction_out);
+        reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(cb_ex_external2_id, cb_scaler_global_id, cb_reduction_out);
         CircularBuffer(cb_reduction_out)
             .reserve_back(num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
@@ -197,15 +199,15 @@ void kernel_main() {
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_tiles_per_partial_result * num_blocks_reduce;
                  w++) {  // Need to read this interleaved now, we have SUM(X) and SUM(X^2) interleaved
-                cb_ex_external2_obj.wait_front(1);
+                cb_ex_external2.wait_front(1);
                 reduce_tile<PoolType::AVG, ReduceDim::REDUCE_ROW>(
-                    cb_ex_external2,
-                    cb_scaler_global,
+                    cb_ex_external2_id,
+                    cb_scaler_global_id,
                     0,
                     scaler0,
                     w % num_tiles_per_partial_result);  // E(x) and E(x^2) interleaved so we reduce each one into
                                                         // different dest reg
-                cb_ex_external2_obj.pop_front(1);
+                cb_ex_external2.pop_front(1);
             }
             tile_regs_commit();
             tile_regs_wait();

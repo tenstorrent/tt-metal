@@ -16,6 +16,15 @@ bool is_cpu_tensor(const Tensor& tensor) { return tensor.storage_type() == Stora
 
 bool is_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
+ttsl::optional_reference<const MeshTensor> as_optional_mesh_tensor(const std::optional<Tensor>& opt) {
+    if (opt.has_value()) {
+        TT_FATAL(
+            is_device_tensor(*opt), "as_optional_mesh_tensor: expected device tensor, got {}", opt->storage_type());
+        return {opt->mesh_tensor()};
+    }
+    return std::nullopt;
+}
+
 CBDescriptor cb_descriptor_from_sharded_tensor(
     uint8_t cb_index,
     const Tensor& tensor,
