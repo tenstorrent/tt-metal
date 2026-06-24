@@ -184,6 +184,7 @@ def main() -> None:
 
     _print_config()
 
+    ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(PREFILL_SP, PREFILL_TP))
     try:
         pipeline = build_pipeline(mesh_device)
@@ -196,6 +197,7 @@ def main() -> None:
             run_request_loop(pipeline)
     finally:
         ttnn.close_mesh_device(mesh_device)
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
         logger.info("Shutdown complete")
 
 
