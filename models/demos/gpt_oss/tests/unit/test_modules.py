@@ -164,19 +164,16 @@ def run_topk_router_component(
 
     # Extract reference TopK router from reference layer
     reference_router = reference_layer.mlp.router
-    router_scores, router_indices = reference_router(hidden_states)
-    if decoder_layer.mlp.use_throughput_experts:
-        # When using throughput experts, we return a dense tensor of router_scores. Convert sparse reference router_scores to dense router_weights (note: this requires reorder the weights to match the order of the indices)
-        dense_router_scores = torch.concat(
-            [
-                torch.tensor(
-                    [router_scores[user, router_indices[user, i]] for i in range(router_indices.shape[1])]
-                ).reshape(1, -1)
-                for user in range(router_scores.shape[0])
-            ],
-            dim=0,
-        )
-        router_scores = dense_router_scores
+    # ISOLATION TEST: only the router-weights comparison fix on top of main (transformers 4.x kept).
+    # Normalise the reference to a sparse [num_tokens, top_k] weight tensor aligned to router_indices.
+    # transformers <5 returns (router_scores_dense [num_tokens, num_experts], router_indices); 5.x returns
+    # (router_logits, router_scores[sparse top_k], router_indices).
+    _router_out = reference_router(hidden_states.reshape(-1, hidden_size))
+    if len(_router_out) == 3:
+        router_scores, router_indices = _router_out[1], _router_out[2]
+    else:
+        router_scores_dense, router_indices = _router_out
+        router_scores = torch.gather(router_scores_dense, 1, router_indices)
 
     # Convert to TTNN tensors
     mesh_mapper = (
@@ -197,8 +194,15 @@ def run_topk_router_component(
     tt_router = decoder_layer.mlp.router
     tt_router_indices, tt_router_weights = tt_router(tt_hidden_states, decoder_layer.mlp.use_throughput_experts)
     mesh_composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, 1), mesh_shape=tuple(mesh_device.shape))
-    tt_router_indices_torch = ttnn.to_torch(tt_router_indices, mesh_composer=mesh_composer)[:batch, :4]
-    tt_router_weights_torch = ttnn.to_torch(tt_router_weights, mesh_composer=mesh_composer)[:batch, :4]
+    top_k = router_indices.shape[1]
+    tt_router_indices_torch = ttnn.to_torch(tt_router_indices, mesh_composer=mesh_composer)[:batch, :top_k]
+    tt_router_weights_full = ttnn.to_torch(tt_router_weights, mesh_composer=mesh_composer)[:batch]
+    if decoder_layer.mlp.use_throughput_experts:
+        tt_router_weights_torch = tt_router_weights_full[:, :top_k]
+    else:
+        # non-throughput path returns DENSE [batch, num_experts] (scatter); gather weights at the
+        # selected indices so both sides are sparse [batch, top_k] aligned to their indices.
+        tt_router_weights_torch = torch.gather(tt_router_weights_full, 1, tt_router_indices_torch.long())
 
     # Compare outputs
     # We will sort the indices here as the order of the indices is not guaranteed to be the same in the reference and TT implementation.
@@ -208,10 +212,8 @@ def run_topk_router_component(
         sorted_tt_indices, sorted_ref_indices, mesh_device, pcc_threshold=pcc_threshold
     )
     weights_passing, weights_output = compare_tensors(
-        tt_router_weights_torch.squeeze()[
-            sorted_tt_indices_order
-        ],  # we have to squeeze here because it breaks the indexing otherwise
-        router_scores.squeeze()[sorted_ref_indices_order],
+        torch.gather(tt_router_weights_torch, -1, sorted_tt_indices_order),
+        torch.gather(router_scores, -1, sorted_ref_indices_order),
         mesh_device,
         pcc_threshold=pcc_threshold,
     )
