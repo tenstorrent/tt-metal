@@ -195,10 +195,19 @@ class TtnnFuseFeatures(nn.Module):
         return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
     # --- forward --------------------------------------------------------
-    def forward(self, image_features: torch.Tensor, lidar_features: torch.Tensor, layer_idx: int):
-        img_rm, (B, Ci, Hi, Wi) = self._to_dev_rm(image_features)
-        lid_rm, (_, Cl, Hl, Wl) = self._to_dev_rm(lidar_features)
+    def forward_dev(self, img_t, img_shape, lid_t, lid_shape, layer_idx: int):
+        """Device core (no host hop): on-device (1,1,B*H*W,C) in → fused (1,1,B*H*W,C) TILE out.
+
+        Shapes are (B, H, W, C).  The input layout is forced to ROW_MAJOR internally,
+        so this accepts a stage's TILE output directly.  Used by the consolidated
+        backbone path to keep the 4 stage→fusion→stage seams on device; ``forward``
+        wraps this with the torch boundary for the staged (Stage-3.6) path.
+        """
+        B, Hi, Wi, Ci = img_shape
+        _, Hl, Wl, Cl = lid_shape
         iv, ih, lv, lh = self._iv, self._ih, self._lv, self._lh
+        img_rm = ttnn.to_layout(ttnn.reshape(img_t, (1, 1, B * Hi * Wi, Ci)), ttnn.ROW_MAJOR_LAYOUT)
+        lid_rm = ttnn.to_layout(ttnn.reshape(lid_t, (1, 1, B * Hl * Wl, Cl)), ttnn.ROW_MAJOR_LAYOUT)
 
         # 1. adaptive avg-pool both branches to the anchor grids
         img_embd = self._avg_pool(img_rm, B, Hi, Wi, Ci, iv, ih)  # (1,1,B*iv*ih,Ci)
@@ -227,9 +236,23 @@ class TtnnFuseFeatures(nn.Module):
         img_up = ttnn.upsample(img_out, [Hi // iv, Wi // ih], mode="bilinear")  # (B,Hi,Wi,Ci)
         lid_up = ttnn.upsample(lid_out, [Hl // lv, Wl // lh], mode="bilinear")  # (B,Hl,Wl,Cl)
 
-        # 6. residual add (in NHWC), back to torch (B,C,H,W)
+        # 6. residual add (in NHWC); keep on device as (1,1,B*H*W,C) for the next stage
         img_res = ttnn.add(self._clean_tile(ttnn.reshape(img_rm, (B, Hi, Wi, Ci))), self._clean_tile(img_up))
         lid_res = ttnn.add(self._clean_tile(ttnn.reshape(lid_rm, (B, Hl, Wl, Cl))), self._clean_tile(lid_up))
-        img_t = ttnn.to_torch(img_res).reshape(B, Hi, Wi, Ci).permute(0, 3, 1, 2).float()
-        lid_t = ttnn.to_torch(lid_res).reshape(B, Hl, Wl, Cl).permute(0, 3, 1, 2).float()
+        return (
+            ttnn.reshape(img_res, (1, 1, B * Hi * Wi, Ci)),
+            (B, Hi, Wi, Ci),
+            ttnn.reshape(lid_res, (1, 1, B * Hl * Wl, Cl)),
+            (B, Hl, Wl, Cl),
+        )
+
+    def forward(self, image_features: torch.Tensor, lidar_features: torch.Tensor, layer_idx: int):
+        """Staged (Stage-3.6) torch→torch path: wraps ``forward_dev`` with host boundaries."""
+        img_rm, (B, Ci, Hi, Wi) = self._to_dev_rm(image_features)
+        lid_rm, (_, Cl, Hl, Wl) = self._to_dev_rm(lidar_features)
+        img_out, (b, hi, wi, ci), lid_out, (_, hl, wl, cl) = self.forward_dev(
+            img_rm, (B, Hi, Wi, Ci), lid_rm, (B, Hl, Wl, Cl), layer_idx
+        )
+        img_t = ttnn.to_torch(img_out).reshape(b, hi, wi, ci).permute(0, 3, 1, 2).float()
+        lid_t = ttnn.to_torch(lid_out).reshape(b, hl, wl, cl).permute(0, 3, 1, 2).float()
         return img_t, lid_t
