@@ -4,7 +4,10 @@
 # Commands are kept in sync with tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh.
 # For max allowed timeout refer to .github/time_budget.yaml (scaleout -> smoke).
 #
-# Example entry disabled until merge gate re-enables fabric CPU tests (see #47987).
+# Empty until merge gate re-enables fabric CPU tests (see #47987). Uncomment the example
+# below before removing `if: false` on the merge-gate job.
+
+[]
 
 # - id: fabric-cpu-unit-smoke
 #   name: fabric cpu unit tests (unit)

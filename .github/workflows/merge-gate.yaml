@@ -378,6 +378,8 @@ jobs:
 
   # Fabric CPU-only tests removed from merge gate — https://github.com/tenstorrent/tt-metal/pull/47987
   # Scaffolding kept for a future smoke subset (fabric_cpu_only_smoke_merge_gate_tests.yaml).
+  # When re-enabling: uncomment tests in that yaml, replace `if: false` with a real trigger,
+  # and add fabric-cpu-only-unit-tests back to workflow-status needs + optional-jobs below.
   fabric-cpu-only-unit-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     if: false
@@ -453,14 +455,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, llk-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, llk-unit-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
