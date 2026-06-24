@@ -60,7 +60,7 @@ def prefill_embed_memory_config(*, seq_tokens: int, hidden_dim: int) -> ttnn.Mem
 
 def _decode_embed_width_sharded_enabled() -> bool:
     """Embed directly into WIDTH_SHARDED L1 matching decode input RMSNorm (requires sharded norm)."""
-    if os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() != "1":
+    if os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "1").strip() != "1":
         return False
     raw = os.environ.get("GLM4_MOE_LITE_DECODE_EMBED_WIDTH_SHARDED", "0").strip().lower()
     return raw in {"1", "true", "yes", "on"}

@@ -18,7 +18,7 @@ from models.experimental.glm4_moe_lite.tt.weights import LazyStateDict
 
 
 def _env_tp_enabled() -> bool:
-    return _env_bool("GLM4_MOE_LITE_TP")
+    return _env_bool("GLM4_MOE_LITE_TP", default=True)
 
 
 def _env_fuse_qkv_a() -> bool:
@@ -119,7 +119,7 @@ def _env_attn_dp() -> bool:
     This removes the per-projection all_reduce calls for w_q_kv_a, w_q_a,
     w_kv_a, w_q_b, and w_kv_b2. w_o remains row-parallel (still needs all_reduce).
     """
-    return _env_bool("GLM4_MOE_LITE_ATTN_DP")
+    return _env_bool("GLM4_MOE_LITE_ATTN_DP", default=True)
 
 
 def _env_dram_sharded_weights() -> bool:
@@ -673,8 +673,8 @@ def convert_decoder_layer_weights(
     # becomes per-head sharded; q-path/FlashMLA/kv_b2/o_proj then run on H/tp_size heads
     # with the single existing post-o_proj all_reduce. Builds on HEAD_PARALLEL_KVB2.
     head_parallel_attn = (
-        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "").strip() == "1"
-        and os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1"
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "1").strip() == "1"
+        and os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "1").strip() == "1"
         and tp_enabled
         and tp_size > 1
     )
@@ -801,7 +801,7 @@ def convert_decoder_layer_weights(
     # Otherwise use attn_proj_mapper (replicated when ATTN_DP=1, TP-sharded on
     # kv_lora dim when ATTN_DP=0).
     head_parallel_kvb2 = (
-        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1" and tp_enabled and tp_size > 1
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "1").strip() == "1" and tp_enabled and tp_size > 1
     )
     if head_parallel_kvb2:
         kvb2_mapper = _tp_mesh_mapper(device, shard_dim=1)  # shard heads across TP
@@ -1000,7 +1000,7 @@ def convert_decoder_layer_weights(
 
         # Optional fused gate+up (w1+w3) tensor for single sparse_matmul.
         w1w3_experts_tt: Optional[ttnn.Tensor] = None
-        fuse_gate_up = os.environ.get("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", "").strip() == "1"
+        fuse_gate_up = os.environ.get("GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP", "1").strip() == "1"
         if fuse_gate_up:
             w1w3_stacked = torch.cat([w1_stacked, w3_stacked], dim=2)  # [E, hidden, 2*moe_intermediate]
             w1w3_experts_tt = _experts_weight_tt(

@@ -42,7 +42,7 @@ from models.experimental.glm4_moe_lite.tt.layer_weights import (
 )
 from models.experimental.glm4_moe_lite.tt.linear_helpers import lm_head_linear, sharded_decode_norm
 
-_SHARDED_DECODE_NORM = os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() == "1"
+_SHARDED_DECODE_NORM = os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "1").strip() == "1"
 from models.experimental.glm4_moe_lite.tt.tt_embedding import (
     convert_embedding_weight_to_tt,
     prefill_embed_memory_config,
@@ -725,7 +725,7 @@ class Glm4MoeLiteDenseOnlyTT:
 
         # Check if batched prefill is enabled and applicable.
         batched_prefill = (
-            os.environ.get("GLM4_MOE_LITE_BATCHED_PREFILL", "").strip() == "1"
+            os.environ.get("GLM4_MOE_LITE_BATCHED_PREFILL", "1").strip() == "1"
             and int(batch) > 1
             and all(int(pl) > 0 for pl in prompt_lens)
         )
@@ -1516,10 +1516,10 @@ class Glm4MoeLiteDenseOnlyTT:
         if _SIGNPOST_ENABLED:
             signpost("embed-start")
         t0 = time.perf_counter() if profile_on else 0.0
-        skip_embed_clone = os.environ.get("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES", "").strip() == "1"
+        skip_embed_clone = os.environ.get("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES", "1").strip() == "1"
         embed_width_sharded = (
             os.environ.get("GLM4_MOE_LITE_DECODE_EMBED_WIDTH_SHARDED", "0").strip() == "1"
-            and os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "").strip() == "1"
+            and os.environ.get("GLM4_MOE_LITE_SHARDED_DECODE_NORM", "1").strip() == "1"
         )
         embed_tokens_tt = prep_state.tokens_tt if prep_state is not None else None
         x = run_tt_decode_embedding(
@@ -2832,9 +2832,9 @@ class Glm4MoeLiteDenseOnlyTT:
 
     def _sampling_allgather_enabled(self) -> bool:
         """All-gather sharded logits then a single argmax, instead of the slow
-        per-shard ttnn.max (~490us). Greedy-equivalent. Default off."""
+        per-shard ttnn.max (~490us). Greedy-equivalent. Default on."""
         return (
-            os.environ.get("GLM4_MOE_LITE_DECODE_SAMPLING_ALLGATHER", "0").strip() == "1"
+            os.environ.get("GLM4_MOE_LITE_DECODE_SAMPLING_ALLGATHER", "1").strip() == "1"
             and self.lm_head_sharded_vocab
             and _is_mesh_device(self.device)
         )

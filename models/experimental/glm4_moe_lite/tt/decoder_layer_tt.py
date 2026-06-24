@@ -724,14 +724,14 @@ def run_decoder_layer_prefill_update_cache_tt(
         return interleaved
 
     tp_axis = _tp_cluster_axis(device)
-    tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "").strip() == "1"
+    tp_enabled = tp_axis is not None and os.environ.get("GLM4_MOE_LITE_TP", "1").strip() == "1"
     mesh_rows, mesh_cols = _mesh_shape(device)
     tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
-    attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP")
-    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "1").strip() or "1")
+    attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP", default=True)
+    ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "2").strip() or "2")
     ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
     ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
-    fuse_mlp_moe_reduce = os.environ.get("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "").strip() == "1"
+    fuse_mlp_moe_reduce = os.environ.get("GLM4_MOE_LITE_FUSE_MLP_MOE_REDUCE", "1").strip() == "1"
     _skip_shared_reduce = fuse_mlp_moe_reduce and tp_enabled
 
     def _tp_row_parallel_linear_from_replicated(a: ttnn.Tensor, b: ttnn.Tensor) -> ttnn.Tensor:
@@ -1072,7 +1072,7 @@ def run_decoder_layer_prefill_update_cache_tt(
     t0 = time.perf_counter() if profile is not None else 0.0
     use_nlp_concat = os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS", "1").strip() != "0"
     head_parallel_kvb2 = (
-        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1" and tp_enabled and tp_size > 1
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "1").strip() == "1" and tp_enabled and tp_size > 1
     )
 
     if head_parallel_kvb2:
@@ -1225,7 +1225,7 @@ def run_decoder_layer_prefill_update_cache_tt(
 
         dense_prefill = _env_bool("GLM4_MOE_LITE_MOE_DENSE_PREFILL", default=False)
         packed_prefill = _env_bool("GLM4_MOE_LITE_MOE_PACKED_PREFILL", default=False)
-        skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES")
+        skip_defensive_clones = _env_bool("GLM4_MOE_LITE_SKIP_DEFENSIVE_CLONES", default=True)
 
         # Pad tokens to the minimum legal sparse multiple for this mesh.
         # Dense/packed prefill paths use ttnn.linear (no block alignment needed), so skip padding.
