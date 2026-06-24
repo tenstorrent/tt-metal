@@ -39,13 +39,23 @@ _SIZE_INDEX_RE = re.compile(r"size_index:(\d+)")
 #   * data_ok / error_*                     -> correctness / status columns.
 #   * bytes_per_second / items_per_second   -> always empty for this benchmark.
 DROP_COLUMNS = {
+    "name",
     "real_time",
     "cpu_time",
+    "time_unit",
+    "label",
+    "family_index",
+    "per_family_instance_index",
+    "repetition_index",
+    "repetitions",
+    "run_name",
+    "run_type",
     "data_ok",
     "error_occurred",
     "error_message",
     "bytes_per_second",
     "items_per_second",
+    "threads",
 }
 
 

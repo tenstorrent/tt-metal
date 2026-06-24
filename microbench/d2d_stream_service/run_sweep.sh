@@ -24,7 +24,7 @@ set -u
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
 
-BIN=${BIN:-./build/test/microbench/d2d_stream_service/d2d_stream_benchmarks}
+BIN=${BIN:-./build_Release/test/tt_metal/distributed/d2d_stream_benchmarks}
 OUTDIR=${OUTDIR:-d2d_sweep_results}
 TIMEOUT=${TIMEOUT:-260}
 MODE=${MODE:-both}
@@ -42,6 +42,43 @@ if [ ! -x "$BIN" ]; then
     echo "ERROR: benchmark binary not found at $BIN (build it first)" >&2
     exit 1
 fi
+
+# Merge per-config JSON files matching $1 glob into a Google-Benchmark CSV,
+# then run format_d2d_csv.py to produce a clean sorted CSV at $2.
+# Silently skips if no JSON files are found or python3 is unavailable.
+format_csv() {
+    local glob_pattern="$1" out_csv="$2"
+    local raw_csv="${out_csv%.csv}_raw.csv"
+    local fmt_script
+    fmt_script="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/format_d2d_csv.py"
+    # shellcheck disable=SC2086  # intentional glob expansion of $glob_pattern
+    python3 - "$raw_csv" $glob_pattern <<'PYEOF'
+import json, csv, glob as _glob, sys
+out = sys.argv[1]
+files = sorted(set(f for a in sys.argv[2:] for f in (_glob.glob(a) or [a] if '*' in a else [a])))
+BASE = ["name","iterations","real_time","cpu_time","time_unit",
+        "bytes_per_second","items_per_second","label","error_occurred","error_message"]
+rows, extra_cols = [], set()
+for f in files:
+    try:
+        data = json.load(open(f))
+        for b in data.get("benchmarks", []):
+            if b.get("run_type") == "iteration":
+                rows.append(b)
+                extra_cols.update(k for k in b if k not in BASE)
+    except Exception:
+        pass
+if not rows:
+    sys.exit(0)
+fns = BASE + sorted(extra_cols)
+w = csv.DictWriter(open(out, "w", newline=""), fieldnames=fns, extrasaction="ignore")
+w.writeheader()
+for r in rows:
+    w.writerow({k: r.get(k, "") for k in fns})
+PYEOF
+    [ -f "$raw_csv" ] || return
+    python3 "$fmt_script" "$raw_csv" "$out_csv" && rm -f "$raw_csv" && echo "  -> $out_csv"
+}
 
 reset_board() {
     echo "  -> resetting board ($RESET_CMD)"
@@ -97,6 +134,7 @@ run_throughput_sweep() {
         echo "${s},${md},${lease},${REPLY_STATUS},${gbps:-NA},${payload:-NA},${dataok:-NA},${REPLY_EC}" >> "$summary"
     done; done; done
     echo "  -> $summary"
+    format_csv "$OUTDIR/tput_*.json" "$OUTDIR/summary_throughput_formatted.csv"
 }
 
 run_latency_sweep() {
@@ -120,6 +158,7 @@ run_latency_sweep() {
         echo "${ns},${md},${lease},${REPLY_STATUS},${ph:-NA},${tavg:-NA},${p50:-NA},${p99:-NA},${REPLY_EC}" >> "$summary"
     done; done; done
     echo "  -> $summary"
+    format_csv "$OUTDIR/lat_*.json" "$OUTDIR/summary_latency_formatted.csv"
 }
 
 case "$MODE" in

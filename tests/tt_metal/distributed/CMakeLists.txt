@@ -112,3 +112,30 @@ set_target_properties(
 )
 
 add_subdirectory(multiprocess)
+
+add_executable(d2d_stream_benchmarks)
+target_sources(d2d_stream_benchmarks PRIVATE benchmark_d2d_stream_service.cpp)
+
+target_link_libraries(
+    d2d_stream_benchmarks
+    PRIVATE
+        TTNN::CPP
+        test_common_libs
+        benchmark::benchmark
+        benchmark::benchmark_main
+)
+
+target_include_directories(
+    d2d_stream_benchmarks
+    PRIVATE
+        "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
+        ${PROJECT_SOURCE_DIR}/tests
+        ${PROJECT_SOURCE_DIR}
+)
+
+set_target_properties(
+    d2d_stream_benchmarks
+    PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY
+            ${PROJECT_BINARY_DIR}/test/tt_metal/distributed
+)
