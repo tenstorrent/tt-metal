@@ -43,11 +43,11 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
-      run-ttsim-integration-tests:
+      run-ttsim-tests:
         required: false
         type: boolean
         default: true
-        description: "Run TTSim integration tests"
+        description: "Run TTSim sanity tests"
       enable-watcher:
         required: false
         type: boolean
