@@ -195,6 +195,16 @@ inline __attribute__((always_inline)) void mark_time_at_index_inlined(uint32_t i
     profiler_data_buffer[myRiscID].data[index + 1] = p_reg[WALL_CLOCK_LOW_INDEX];
 }
 
+// Like mark_time_at_index_inlined but writes a timestamp that was captured
+// earlier (time_h = upper bits of wall clock, time_l = lower 32 bits) instead of
+// sampling the clock now. Used to record an event whose start/end were measured
+// across a span of code (e.g. the finish() DRAM push) into fixed buffer slots.
+inline __attribute__((always_inline)) void mark_time_at_index_with_stamp(
+    uint32_t index, uint32_t timer_id, uint32_t time_h, uint32_t time_l) {
+    profiler_data_buffer[myRiscID].data[index] = 0x80000000 | ((timer_id & 0x7FFFF) << 12) | (time_h & 0xFFF);
+    profiler_data_buffer[myRiscID].data[index + 1] = time_l;
+}
+
 inline __attribute__((always_inline)) void mark_padding() {
     if (wIndex < PROFILER_L1_VECTOR_SIZE) {
         profiler_data_buffer[myRiscID].data[wIndex] = 0x80000000;
@@ -327,6 +337,14 @@ __attribute__((noinline)) void finish_profiler() {
             uint32_t pageSize =
                 PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
 
+            // Time the whole DRAM push event: sample the wall clock just before the
+            // NOC writes begin and again right after the posted-write flush. The
+            // span covers address setup, all per-RISC NOC writes, and the flush.
+            volatile tt_reg_ptr uint32_t* push_clk =
+                reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            uint32_t push_start_h = push_clk[WALL_CLOCK_HIGH_INDEX];
+            uint32_t push_start_l = push_clk[WALL_CLOCK_LOW_INDEX];
+
             NocRegisterStateSave noc_state;
             for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
                 bool do_noc = true;
@@ -386,6 +404,19 @@ __attribute__((noinline)) void finish_profiler() {
             }
 
             profiler_noc_async_flush_posted_write();
+            uint32_t push_end_h = push_clk[WALL_CLOCK_HIGH_INDEX];
+            uint32_t push_end_l = push_clk[WALL_CLOCK_LOW_INDEX];
+
+            // Record the just-completed push as a fixed-slot zone in this RISC's
+            // guaranteed-marker region (unused in accumulate mode). Its START/END
+            // ride out together on the NEXT push, so the pair is never split; the
+            // final push's timing stays in L1 and is recovered by the teardown
+            // DRAM_AND_L1 read.
+            SrcLocNameToHash("PROFILER-FINISH-DRAM-PUSH");
+            mark_time_at_index_with_stamp(
+                GUARANTEED_MARKER_1_H, get_const_id(hash, ZONE_START), push_start_h, push_start_l);
+            mark_time_at_index_with_stamp(GUARANTEED_MARKER_2_H, get_const_id(hash, ZONE_END), push_end_h, push_end_l);
+
             profiler_control_buffer[RUN_COUNTER]++;
         }
         profiler_control_buffer[PROFILER_DONE] = 1;
