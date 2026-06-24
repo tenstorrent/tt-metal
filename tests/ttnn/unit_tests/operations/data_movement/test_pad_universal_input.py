@@ -42,59 +42,9 @@ import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-
-
-# ---------------------------------------------------------------------------
-# Helper: build a shard memory config for a given shape, strategy and layout
-# (identical to the helper in test_reshape_universal_input.py)
-# ---------------------------------------------------------------------------
-
-
-def _divisible_grid_1d(total_dim, max_cores, step):
-    """Find largest n <= max_cores such that total_dim is divisible by n*step."""
-    for n in range(max_cores, 0, -1):
-        if total_dim % (n * step) == 0:
-            return n
-    return 1
-
-
-def make_sharded_memory_config(device, shape, strategy, layout):
-    """Create a valid sharded MemoryConfig for `shape` on `device`.
-
-    For TILE layout shard dims must be tile-aligned (multiples of 32).
-    For ROW_MAJOR the shard width × element_size must satisfy the device L1
-    alignment (128 bytes on Wormhole); for bfloat16 that means shard width
-    must be a multiple of 64 elements.
-    """
-    grid = device.compute_with_storage_grid_size()
-    max_x, max_y = grid.x, grid.y
-    tile_h, tile_w = 32, 32
-
-    total_h = 1
-    for d in shape[:-1]:
-        total_h *= d
-    total_w = shape[-1]
-
-    step_h = tile_h if layout == ttnn.TILE_LAYOUT else 1
-    step_w = tile_w if layout == ttnn.TILE_LAYOUT else 64
-
-    if strategy == ttnn.ShardStrategy.HEIGHT:
-        ny = _divisible_grid_1d(total_h, max_y, step_h)
-        core_grid = ttnn.CoreGrid(y=ny, x=1)
-    elif strategy == ttnn.ShardStrategy.WIDTH:
-        nx = _divisible_grid_1d(total_w, max_x, step_w)
-        core_grid = ttnn.CoreGrid(y=1, x=nx)
-    else:  # BLOCK
-        ny = _divisible_grid_1d(total_h, max_y, step_h)
-        nx = _divisible_grid_1d(total_w, max_x, step_w)
-        core_grid = ttnn.CoreGrid(y=ny, x=nx)
-
-    return ttnn.create_sharded_memory_config(
-        shape=shape,
-        core_grid=core_grid,
-        strategy=strategy,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-    )
+from tests.ttnn.nightly.unit_tests.operations.data_movement.test_universal_input_tm_reshape import (
+    make_sharded_memory_config,
+)
 
 
 # ---------------------------------------------------------------------------

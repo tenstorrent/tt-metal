@@ -36,12 +36,7 @@ inline bool is_bw_sharded(const MemoryConfig& mc) {
 //
 // Only DRAM-sharded W/B inputs are routed through S2I: factory core-grid setup assumes L1
 // buffers and auditing it for DRAM semantics is out of scope.
-inline bool needs_pad_composite_fallback(
-    const ttnn::Tensor& input_tensor,
-    const MemoryConfig& output_memory_config,
-    std::span<const uint32_t> input_tensor_start) {
-    (void)output_memory_config;
-    (void)input_tensor_start;
+inline bool needs_pad_composite_fallback(const ttnn::Tensor& input_tensor) {
     if (!is_bw_sharded(input_tensor.memory_config())) {
         return false;
     }
@@ -136,7 +131,7 @@ ttnn::Tensor pad_impl(
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    if (needs_pad_composite_fallback(input_tensor, output_memory_config, input_tensor_start)) {
+    if (needs_pad_composite_fallback(input_tensor)) {
         return pad_via_interleaved_composite(
             input_tensor,
             output_padded_shape,
