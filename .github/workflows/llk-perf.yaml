@@ -21,6 +21,12 @@ on:
         description: "PR number to review"
         required: true
         type: string
+      effort:
+        description: "Review effort level"
+        required: false
+        default: "max"
+        type: choice
+        options: [low, medium, high, max]
 
 concurrency:
   group: llk-pr-review-test-${{ github.event.inputs.pr_number }}
@@ -137,7 +143,7 @@ jobs:
           anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           show_full_output: true   # TEMP: diagnose whether /code-review found findings + tried to post
-          prompt: "/code-review high --comment"   # TEMP: higher effort to surface ≥1 finding and exercise posting
+          prompt: "/code-review ${{ github.event.inputs.effort || 'max' }} --comment"
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
           # anthropic/ prefix for the proxy).
           claude_args: |

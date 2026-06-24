@@ -28,6 +28,12 @@ on:
         description: "PR number to review"
         required: true
         type: string
+      effort:
+        description: "Review effort level"
+        required: false
+        default: "max"
+        type: choice
+        options: [low, medium, high, max]
 
 # One review at a time per PR; a newer trigger does not kill an in-flight review.
 concurrency:
@@ -160,7 +166,7 @@ jobs:
           anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           trigger_phrase: "@llk-ai review"
-          prompt: "/code-review max --comment"
+          prompt: "/code-review ${{ github.event.inputs.effort || 'max' }} --comment"
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
           # anthropic/ prefix for the proxy).
           claude_args: |
