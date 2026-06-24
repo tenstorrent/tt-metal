@@ -146,7 +146,11 @@ def test_mixtral_moe_inference(mesh_device, reset_seeds, mode, device_params):
         )
         # Reference Model Output
         logger.info(f"Starting Reference MOE {mode}")
-        ref_output, _ = reference_model(pt_decode_input)
+        # transformers 5.x MixtralSparseMoeBlock.forward returns only hidden_states (older
+        # versions also returned router_logits), so tolerate a single value or a tuple.
+        ref_output = reference_model(pt_decode_input)
+        if isinstance(ref_output, (tuple, list)):
+            ref_output = ref_output[0]
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch, pcc)
 
         logger.info(comp_allclose(ref_output, tt_output_torch))
