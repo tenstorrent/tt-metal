@@ -14,7 +14,6 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import Qwen2_5_VLForCond
 
 import ttnn
 from models.common.sampling import SamplingParams
-from models.common.utility_functions import is_blackhole
 from models.demos.qwen25_vl.tt.common import (
     PagedAttentionConfig,
     merge_vision_tokens,
@@ -27,13 +26,28 @@ from models.demos.qwen25_vl.tt.model import DropInVisionTransformer, Transformer
 from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
-# trace_region_size per architecture
-TRACE_REGION_SIZE = 28467200
-if is_blackhole():
-    TRACE_REGION_SIZE = 36000000
+
+def _qwen25_vl_model_key() -> str:
+    hf_model = os.getenv("HF_MODEL", "")
+    hf_lower = hf_model.lower()
+    if "72b" in hf_lower:
+        return "qwen2.5-vl-72b"
+    if "32b" in hf_lower:
+        return "qwen2.5-vl-32b"
+    return "qwen2.5-vl-7b"
+
+
+def _qwen25_vl_device_params():
+    # trace_region_size is resolved by the mesh_device fixture from the logical submesh SKU.
+    return {
+        "fabric_config": True,
+        TRACE_MODEL_KEY_PARAM: _qwen25_vl_model_key(),
+        "num_command_queues": 1,
+    }
 
 
 def create_tt_page_table(paged_attention_config, tt_model_args):
@@ -236,7 +250,7 @@ def create_tt_model(
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": True, "trace_region_size": TRACE_REGION_SIZE, "num_command_queues": 1}],
+    [_qwen25_vl_device_params()],
     indirect=True,
 )
 @pytest.mark.parametrize(
@@ -382,6 +396,8 @@ def test_demo(
     reference_model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
     )
+    # transformers 5.x nests the vision tower under model.model (Qwen2_5_VLModel.visual)
+    reference_visual = reference_model.visual if hasattr(reference_model, "visual") else reference_model.model.visual
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
         vision_model_args = VisionModelArgs(
@@ -391,9 +407,9 @@ def test_demo(
             optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
-        visual_model = DropInVisionTransformer(reference_model.visual, vision_model_args, debug=False)  # show PCC
+        visual_model = DropInVisionTransformer(reference_visual, vision_model_args, debug=False)  # show PCC
     else:
-        visual_model = reference_model.visual
+        visual_model = reference_visual
     processor = AutoProcessor.from_pretrained(ref_model_name)
     num_tokens_generated_decode = []
     num_image_tokens = []

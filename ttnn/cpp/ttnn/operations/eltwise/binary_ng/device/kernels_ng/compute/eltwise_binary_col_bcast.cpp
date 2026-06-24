@@ -28,22 +28,32 @@ ALWI void process_tile(
 #define CB_POST_BCAST cb_post_rhs
 #define CB_PRE_OTHER cb_pre_lhs
 #define CB_POST_OTHER cb_post_lhs
+#define EXP_CB_POST_BCAST exp_cb_post_rhs
+#define EXP_CB_POST_OTHER exp_cb_post_lhs
 #else
 #define CB_PRE_BCAST cb_pre_lhs
 #define CB_POST_BCAST cb_post_lhs
 #define CB_PRE_OTHER cb_pre_rhs
 #define CB_POST_OTHER cb_post_rhs
+#define EXP_CB_POST_BCAST exp_cb_post_lhs
+#define EXP_CB_POST_OTHER exp_cb_post_rhs
 #endif
-    cb_wait_front(cb_bcast, num_tiles_per_cycle);
+    CircularBuffer exp_cb_bcast(cb_bcast);
+    CircularBuffer exp_cb_llk_post(cb_llk_post);
+    CircularBuffer exp_cb_post_lhs(cb_post_lhs);
+    CircularBuffer exp_cb_post_rhs(cb_post_rhs);
+    CircularBuffer exp_cb_out(cb_out);
+
+    exp_cb_bcast.wait_front(num_tiles_per_cycle);
     pack_reconfig_data_format(cb_out, cb_llk_post);
     unary_bcast_init<BroadcastType::COL>(cb_bcast, cb_llk_post);
-    cb_reserve_back(cb_llk_post, num_tiles_per_cycle);
+    exp_cb_llk_post.reserve_back(num_tiles_per_cycle);
     tile_regs_acquire();
     unary_bcast<BroadcastType::COL>(cb_bcast, 0, 0);
     tile_regs_commit();
     tile_regs_wait();
     pack_tile(0, cb_llk_post);
-    cb_push_back(cb_llk_post, num_tiles_per_cycle);
+    exp_cb_llk_post.push_back(num_tiles_per_cycle);
     tile_regs_release();
 
     pack_reconfig_data_format(cb_llk_post, cb_out);
@@ -57,7 +67,7 @@ ALWI void process_tile(
         CircularBuffer(CB_POST_BCAST),
         CircularBuffer(cb_out),
         num_tiles_per_cycle);
-    cb_wait_front(CB_POST_BCAST, num_tiles_per_cycle);
+    EXP_CB_POST_BCAST.wait_front(num_tiles_per_cycle);
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST))
     binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
@@ -70,9 +80,9 @@ ALWI void process_tile(
             CircularBuffer(CB_POST_OTHER),
             CircularBuffer(cb_out),
             num_tiles_per_cycle);
-        cb_wait_front(CB_POST_OTHER, num_tiles_per_cycle);
+        EXP_CB_POST_OTHER.wait_front(num_tiles_per_cycle);
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);
+        exp_cb_out.reserve_back(num_tiles_per_cycle);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS) or HAS_ACTIVATIONS(POST)
         binary_tiles_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
@@ -86,11 +96,11 @@ ALWI void process_tile(
         pack_tile(0, cb_out);
         tile_regs_release();
 
-        cb_push_back(cb_out, num_tiles_per_cycle);
-        cb_pop_front(CB_POST_OTHER, num_tiles_per_cycle);
+        exp_cb_out.push_back(num_tiles_per_cycle);
+        EXP_CB_POST_OTHER.pop_front(num_tiles_per_cycle);
     }
-    cb_pop_front(cb_bcast, num_tiles_per_cycle);
-    cb_pop_front(CB_POST_BCAST, num_tiles_per_cycle);
+    exp_cb_bcast.pop_front(num_tiles_per_cycle);
+    EXP_CB_POST_BCAST.pop_front(num_tiles_per_cycle);
 }
 
 void kernel_main() {

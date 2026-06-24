@@ -96,24 +96,6 @@ std::vector<tt::tt_metal::TensorTopology> AllBroadcastDeviceOperation::compute_o
     return topologies;
 }
 
-ttsl::hash::hash_t AllBroadcastDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllBroadcastDeviceOperation::compute_program_hash is called");
-
-    auto subdevice_id = operation_attributes.sub_device_id;
-    auto* mesh_device = tensor_args.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-    return tt::tt_metal::operation::hash_operation<AllBroadcastDeviceOperation>(
-        operation_attributes.num_links,
-        operation_attributes.ring_size,
-        operation_attributes.output_mem_config,
-        operation_attributes.topology,
-        operation_attributes.cluster_axis,
-        subdevice_core_range_set,
-        tensor_args);
-}
-
 std::vector<ttnn::Tensor> all_broadcast(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
