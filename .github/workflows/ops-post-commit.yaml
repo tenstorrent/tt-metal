@@ -124,11 +124,8 @@ jobs:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
-        # Tracy device-perf tests (e.g. the SDXL group) resolve the profiler
-        # binaries at $TT_METAL_HOME/build/tools/profiler/bin. Pin it to /work to
-        TT_METAL_HOME: /work
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
     defaults:
@@ -142,13 +139,11 @@ jobs:
         with:
           ref: ${{ inputs.ref || github.sha }}
           filter: blob:none
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
-          # Extract the build artifact into the repo checkout (= /work) so the
-          # profiler binaries land under $TT_METAL_HOME/build, where tracy looks.
-          path: .
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
@@ -167,11 +162,6 @@ jobs:
           if [ "${{ matrix.test-group.slow_dispatch }}" = "true" ]; then
             export TT_METAL_SLOW_DISPATCH_MODE=1
           fi
-          # merge_device_perf_results.py calls into gitpython (repo.head.object.hexsha).
-          # Mark both /work and the runner workspace as safe because the container
-          # exposes the repo at both paths; otherwise git reports dubious ownership.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory /work
           python3 tools/tt-power-sidecar/tt_power_sidecar.py \
             --backend sysfs \
             --out /work/power_report.json \
@@ -188,9 +178,10 @@ jobs:
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: power-report-${{ matrix.test-group.name }}
+          # /docker-job/ is the host-side mount of the Docker runner's /work/ directory.
           # The sidecar writes --out /work/power_report.json inside the container;
           # this host path is what the upload-artifact action reads.
-          path: ${{ github.workspace }}/power_report.json
+          path: ${{ github.workspace }}/docker-job/power_report.json
           if-no-files-found: warn
           retention-days: 30
 
@@ -200,9 +191,6 @@ jobs:
         env:
           TRACY_NO_INVARIANT_CHECK: 1
         run: |
-          # See note in the test step: gitpython needs both paths marked safe.
-          git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          git config --global --add safe.directory /work
           export DEVICE_PERF_REPORT_FILENAME=Ops_Perf.csv
           python3 models/perf/merge_device_perf_results.py $DEVICE_PERF_REPORT_FILENAME CHECK
 
@@ -228,5 +216,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

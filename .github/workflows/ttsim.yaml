@@ -229,21 +229,16 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: ⬇️  Setup Job
         uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           path: .
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
@@ -349,21 +344,16 @@ jobs:
       TT_METAL_DISABLE_SFPLOADMACRO: 1
       TT_LOGGER_LEVEL: warn
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Setup Job
         uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           path: .
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
@@ -445,21 +435,16 @@ jobs:
       TT_METAL_MOCK_CLUSTER_DESC_PATH: ${{ matrix.cluster_desc }}
       TT_LOGGER_LEVEL: warn
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
       - name: Setup Job
         uses: ./.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           path: .
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}

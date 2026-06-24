@@ -147,7 +147,7 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work
         - ${{ (!contains(join(matrix.test-group.runs_on, ' '), 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
         - "${{ (matrix.test-group['weights-cache-mode'] == 'cloud-mlperf' && '/mnt/MLPerf/huggingface:/localdev/blackhole_demos/huggingface_data:ro') || (matrix.test-group['weights-cache-mode'] == 'local-disk' && '/localdev/blackhole_demos/huggingface_data:/localdev/blackhole_demos/huggingface_data:ro') || '/no_hf_cache' }}"
         - "${{ (matrix.test-group['model-name'] == 'deepseek_prefill' && '/mnt/MLPerf/deepseek-prefill-cache:/mnt/MLPerf/deepseek-prefill-cache:ro') || '/no_deepseek_traces' }}"
@@ -162,11 +162,12 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
+          path: docker-job
       - name: Mark repository as safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -190,7 +191,7 @@ jobs:
       - name: Check latency/BW results
         id: check-data
         if: ${{ !cancelled() && matrix.test-group.upload_fabric_data == true }}
-        uses: ./.github/actions/check-latency-bw-results
+        uses: ./docker-job/.github/actions/check-latency-bw-results
         with:
           path: /work
           arch: blackhole
@@ -234,7 +235,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries"
             }
@@ -246,5 +247,5 @@ jobs:
         with:
           slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
           owner: ${{ matrix.test-group.owner_id }}
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

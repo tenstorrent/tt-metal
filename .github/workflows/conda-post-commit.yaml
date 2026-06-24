@@ -99,7 +99,7 @@ jobs:
         LOGURU_LEVEL: DEBUG
         PYTHONPATH: /work
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
@@ -113,19 +113,18 @@ jobs:
           yum install -y git wget
           git --version  # Verify installation
 
-      - name: Bootstrap local actions
+      - name: ⬇️ Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: ⬇️ Checkout
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
 
+      - name: Clone private submodule
+        uses: ./docker-job/.github/actions/clone-private-submodule
+        with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+          path: docker-job
       - name: Create conda environment
         run: |
           source /opt/conda/etc/profile.d/conda.sh
@@ -156,5 +155,5 @@ jobs:
         with:
           prefix: "test_reports_"
 
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

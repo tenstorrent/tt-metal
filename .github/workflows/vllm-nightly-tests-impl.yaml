@@ -411,7 +411,7 @@ jobs:
         FILE_MULTIMODAL_TEST_LOG: "./output/vllm_multimodal_test.log"
         FILE_SAMPLING_TESTS_LOG: "./output/vllm_sampling_tests.log"
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         # ``mlperf-read-only`` workflow input toggles ro/rw. Default ro for safety;
         # uncheck the box at dispatch time when a model needs tt_cache first-use
@@ -424,21 +424,17 @@ jobs:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+          path: docker-job
       - name: ⬇️ Setup Metal
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
 
@@ -452,7 +448,7 @@ jobs:
         timeout-minutes: 20
         with:
           repository: tenstorrent/vllm
-          path: vllm
+          path: docker-job/vllm
           ref: ${{ inputs.vllm-commit }}
           fetch-depth: 0
 
@@ -777,7 +773,7 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["output"],
               "output_dir": "ai_summaries"
             }
@@ -797,10 +793,10 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: output/
+          path: docker-job/output/
           prefix: ${{ steps.set-artifact-prefix.outputs.prefix }}
 
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
 
   ai-run-summary:
