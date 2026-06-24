@@ -83,7 +83,7 @@ The **same backbone, shared weights**, runs in three phases per 256-token block,
 | **Functional +** | + BHG, then broader HW | + T+I / T+V · all resolutions · batch>1 | Multimodal e2e; batched decode at PCC parity to batch=1 | t/s/u ~200% |
 | **Complete** | all | everything | — | — |
 
-**Foundation validates the causal backbone on QB2** — 26B-A4B is verified to fit + run on `P150x4` (TP=4, no OOM; experts TP-sharded). #47487 owns the full QB2 memory budget / 256K batch ceiling (and, later, Galaxy 4×8 TP) on top of that.
+**Foundation's #47461 exit = causal backbone logits PCC vs HF on the _DiffusionGemma_ ckpt — NOT yet met.** Keep this distinct from #47487's HW-enablement fact that 26B-A4B *fits + runs* on `P150x4` (TP=4, no OOM, experts TP-sharded): "fits + runs" is a memory/plumbing result measured on the *plain gemma* ckpt and does **not** validate DiffusionGemma (different fine-tuned weights, extra self-cond, bidirectional denoise). #47487 owns the QB2 memory budget / 256K batch ceiling (and, later, Galaxy 4×8 TP); #47461 owns the PCC validation on the DiffusionGemma weights.
 
 ---
 
@@ -164,11 +164,11 @@ Each workstream lists **scope**, **depends-on**, **key code anchors**, **approac
 - **Acceptance:** Causal backbone logits PCC vs HF on QB2 on the DiffusionGemma ckpt; self-cond loader lands so #47468's self-cond module PCC can run.
 
 #### #47487 — HW enablement: QB2 fit + Galaxy 4×8 TP
-- **Scope:** Fit/run the causal backbone on **QB2** (1×4 Blackhole) with a **documented memory budget + batch ceiling**, and wire a **4×8 TP/EP/SP mesh** for Galaxy/BHG. Validate backbone logits PCC on both.
+- **Scope:** Fit/run the causal backbone on **QB2** (1×4 Blackhole) with a **documented memory budget + batch ceiling**, and wire a **4×8 TP/EP/SP mesh** for Galaxy/BHG. (PCC *validation* belongs to #47461; this issue owns fit / budget / ceiling / mesh and consumes #47461's PCC as a gate.)
 - **Depends-on:** #47461 (validated backbone).
 - **Facts:** 26B-A4B fits + runs on QB2 (`P150x4`, TP=4) — verified, no OOM (experts are TP-sharded ≈5.7 GB/chip). `is_galaxy` is currently used only for sampling args (`tt/model.py:407`) — no 4×8 mesh wired in `tt/`. Weight memory ≈ bf16 51.7 GB / bfp8 26 GB.
 - **Approach:** Reuse `gemma4/tt/{config.py,ccl.py}`. **The QB2 budget must additionally account for the per-step canvas K/V scratch (#47474 storage class ii) and the non-causal long-context mask buffers (#47462)** — neither is exercised by the short-prompt causal-backbone run (R3). Size the batch ceiling against weights + 256K KV + canvas scratch + mask.
-- **Acceptance:** Documented QB2 memory budget + batch ceiling at 256K; backbone PCC on QB2 and (later) Galaxy.
+- **Acceptance:** Documented QB2 memory budget + batch ceiling at 256K; model **fits + runs** on QB2 and (later) Galaxy 4×8. (Backbone *PCC* is #47461's acceptance — not duplicated here.)
 
 ### Functional core
 

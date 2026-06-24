@@ -10,14 +10,14 @@ This box is **`bh-qbge-06` — a QB2 (4× Blackhole `p300c`, `/dev/tenstorrent/0
 - **Dedicated env:** `/home/zni/venvs/tt-diffusion-gemma` (Python 3.12, **transformers 5.12.1** — bumped from 5.10.2 on 2026-06-23, torch 2.11+cpu, ttnn editable from the repo) — isolated from the default `python_env` (4.53.0 for LTX). Verified at 5.12.1: `transformers.models.gemma4` imports, `transformers.models.diffusion_gemma` imports, **`ttnn` sees 4 QB2 devices**, **64 reference tests pass**. Use: `source /home/zni/venvs/tt-diffusion-gemma/bin/activate && export PYTHONPATH=/home/zni/tt-metal TT_METAL_HOME=/home/zni/tt-metal`.
 - **`diffusion_gemma` SHIPS since transformers 5.12** (absent in 5.10.2): at **5.12.1 the working env can load the real `DiffusionGemmaForBlockDiffusion` directly** — no separate transformers-main env needed (the `dg-tf-main` 5.13.0.dev0 venv remains as a cross-check). `from_pretrained` takes `dtype=` (primary since 5.12; `torch_dtype` kept for BC). The canonical source is also vendored at `/home/zni/dg_ref_src/` and used to reconcile the `reference/` layer 1:1; `reference/_upstream.py` is the bit-for-bit parity guard.
 - **Checkpoints NOW downloaded (2026-06-22, ungated — `gated=False` on HF):**
-  - `google/gemma-4-26B-A4B-it` — 51.6 GB, the causal backbone oracle for #47461 (runs via transformers `gemma4`). Verified complete + openable.
-  - `google/diffusiongemma-26B-A4B-it` — 51.7 GB, the target ckpt (stage-2 weight mapping + self-cond weight values).
+  - `google/gemma-4-26B-A4B-it` — 51.6 GB, **Stage-1 stepping-stone only** (sanity that the reused gemma4 path runs + reproduces HF gemma4 on QB2). **NOT the #47461 target**: passing on this ckpt does not validate DiffusionGemma. Verified complete + openable.
+  - `google/diffusiongemma-26B-A4B-it` — 51.7 GB, **the #47461 target ckpt** — backbone PCC must be measured on THIS (fine-tuned weights + extra self-cond + bidirectional denoise all differ from plain gemma). Carries the stage-2 weight mapping + self-cond weight values.
   - `google/gemma-4-12B-it` — dense, the QB2 device-flow proof (smaller, no MoE skip).
 - **QB2 is present** (4× Blackhole, this box); fitting 26B-A4B on QB2 (1×4) is itself net-new (#47487), and the in-repo gemma4 **12B** path is QB2-supported and can validate the on-device flow on this exact HW first.
 
 So work proceeds **env-independent-first**: pure-torch reference logic + config
 + tests that run on CPU, with checkpoint/transformers-gated pieces scaffolded
-and marked `TODO(env)`. **HW + env are no longer blockers — QB2 is local and the dedicated transformers-5.12.1 env is built.** The only remaining gate for gemma4-backbone device bring-up is the **gated checkpoint download** (needs `hf auth login` + Gemma license acceptance).
+and marked `TODO(env)`. **HW + env + checkpoints are no longer blockers — QB2 is local, the dedicated transformers-5.12.1 env is built, and all three checkpoints are downloaded (ungated, 2026-06-22).**
 
 ## Status by workstream
 
@@ -31,11 +31,13 @@ and marked `TODO(env)`. **HW + env are no longer blockers — QB2 is local and t
 | **Upstream parity guard (drift oracle)** | #47468 | ✅ **NEW** — `reference/_upstream.py` (verbatim canonical extractions) + `tests/test_upstream_parity.py`; reference matches HF bit-for-bit (temperature / accept / confidence / self-cond) |
 | HF reference adapter seam | #47468 | ✅ done — `reference/hf_reference.py` (real load when transformers-main present; reconciled `reference/` is the env-independent oracle) |
 | **Config reconciliation vs generation_config** | #47468/#47463 | ✅ **NEW** — all TODO(confirm) resolved: `confidence_threshold=0.005`, `stability_threshold=1`, `t_max/t_min`, `entropy_bound`, + `intermediate_size=2112`, `num_global_key_value_heads=2`, `global_head_dim=512` |
-| Causal backbone bring-up (gemma4 reuse) — code | #47461 | ✅ **enabled**: ckpts downloaded; QB2=`MESH_DEVICE=P150x4`; gemma4 path mesh-agnostic. Device PCC run turnkey (recipe in `QB2_MEMORY_BUDGET.md`) |
+| Causal backbone bring-up (gemma4 reuse) — code | #47461 | ✅ **code enabled**: QB2=`MESH_DEVICE=P150x4`; gemma4 path mesh-agnostic; weight-remap keyset validated. Device PCC = the three rows below. |
 | **DiffusionGemma→gemma4 weight remap + self-cond loader** | #47461 (N4) | ✅ **NEW** — `weight_mapping.py` + `SelfConditioning.load_from_state_dict`; **validated vs real ckpts**: remapped backbone == gemma4 keyset exactly; 4 self-cond tensors load with config shapes. `tests/test_weight_mapping.py` |
 | **Self-conditioning gated MLP (reference)** | #47461/#47463 | ✅ **reconciled** — added `pre_norm` + scaleless `post_norm`; forward is `post_norm(emb+gated_mlp(pre_norm(signal)))` (was a bare delta). `reference/self_conditioning.py` |
 | **QB2 memory budget + batch ceiling** | #47487 | ✅ **NEW doc** `QB2_MEMORY_BUDGET.md`: ~32 GB/chip (8×4 GB banks); experts sharded-vs-replicated is the fit gate (code favors sharded → fits); EP is the fallback. Empirical measure pending device |
-| Causal backbone logits PCC on QB2 (device) | #47461/#47487 | ⏳ turnkey; **gated on shared-device availability** (box also used by another user's job) — monitored run queued |
+| QB2 fit + run (no OOM; experts sharded) — **plain gemma ckpt** | **#47487** | ✅ done — `gemma-4-26B-A4B-it` ran on `P150x4` TP=4 (110 s, no OOM). **HW-enablement fact, NOT a DiffusionGemma validation.** |
+| Causal backbone PCC — **Stage-1 (gemma4 ckpt)** | #47461 (stage 1) | ⚠️ 0.8665 vs HF, but the `[blackhole-1x4]` threshold was set to **0.83** (normal gate ≈0.99); 0.87 is low and the precision-loss source is unidentified. |
+| Causal backbone PCC — **Stage-2 (DiffusionGemma ckpt)** — the real #47461 gate | #47461 (stage 2) | ⬜ **NOT done**: only the weight-remap keyset is validated; the fine-tuned diffusiongemma weights have never run on device, and PCC must also cover the **bidirectional** forward. |
 | KV-cache phase state machine | #47474 | ⬜ not started |
 | Canvas mask geometry (reference, pure torch) | #47462 | ✅ done — `reference/attention_mask.py`, 8 tests pass |
 | Bidirectional canvas SDPA on QB2 (device) | #47462 | ✅ **validated on QB2** — 4/4 PCC≥0.99 (full / symmetric-window / prompt-visible / GQA 16-8) on sfpi 7.60.0. ⚠️ device *teardown* re-hangs erisc 29-25 → reset between device runs. NOT a firmware issue: board fw is **19.9.0** (newer than tt-metal's tested 19.5.0); the assert's "min 18.10.0" is a hardcoded boilerplate string, not a version readout. Root cause undiagnosed (possibly fw ahead of the local UMD checkout); treat as an env quirk, work around with reset. |
@@ -92,4 +94,4 @@ environment-gated:
    `diffusion_gemma` (then plug it into the trajectory harness).
 6. ⛔ Device (`tt/`) implementation — backbone reuse (#47461), KV phase machine
    (#47474), bidirectional SDPA (#47462), device decode loop (#47463),
-   on-device sampling (#47472) — **QB2 hardware is present (this box)**; unblocks on transformers-5.x + checkpoint download (no longer waiting on HW).
+   on-device sampling (#47472) — **QB2 hardware is present (this box); env + all checkpoints are in place.** No remaining env/HW/ckpt gate — remaining work is the device implementations themselves (per the rows above).
