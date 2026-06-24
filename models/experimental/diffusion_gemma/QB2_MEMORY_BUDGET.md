@@ -147,6 +147,57 @@ HF_MODEL=/home/zni/dg_models/gemma-4-26B-A4B-it \
 
 ### Still pending (not blockers for the QB2 fit conclusion)
 - Paged full-attn KV footprint + batch ceiling **at 256K** — the 26B run above was a
-  short prompt; the 256K-context KV/scratch sweep is the remaining measurement.
+  short prompt — **now measured 2026-06-24 (see the definitive section below)**.
 - Upstream: relax/remove the `test_full_model` `tp<8` MoE skip for the QB2-fitting case
   (currently conservative), so the QB2 full-model PCC runs without a manual bypass.
+
+## Measured on QB2 — 2026-06-24 (definitive, via `ttnn.get_memory_view`)
+
+Per-chip DRAM measured directly with `ttnn.get_memory_view(mesh_device, BufferType.DRAM)`
+(`tests/test_qb2_memory_budget.py`, env-parameterized, one build/process). QB2
+`P150x4`, 1×4, TP=4, **bf16 weights**. KV is allocated eagerly at build, so the
+weights+KV budget is captured **without a prefill**.
+
+| Quantity | Measured (GiB/chip) | Notes |
+|---|---:|---|
+| **Usable DRAM** | **31.87** | 8 banks × 3.984; allocator hands out ~all of 32 (only ~0.13 reserved). Resolves the earlier ~28–30 estimate. |
+| **Weights (bf16, TP=4-sharded)** | **13.25** | = 52 GB / 4. **Corrects** the bf8-based "~6.5–7 GB/chip" above — the real run loads bf16. |
+| **+ paged KV @256K, batch 1** | **17.25** total (Δ **4.0** KV) | 54% of usable; **headroom 14.6**. Resolves the "paged full-attn KV `MEASURE`". |
+| **+ paged KV @256K, batch 2** | **19.80** total | ⇒ **+2.55 GiB/chip per extra batch** at 256K. |
+
+**Weights+KV batch ceiling @256K (static)** = `(31.87 − 13.25 − 4.0)/2.55 + 1 ≈ batch 6`.
+I.e. the weights + a 256K paged KV cache leave comfortable headroom — the static
+fit is **not** the limiter.
+
+### The real limiter is the prefill-activation regime, not weights/KV
+The generator forces a **single prefill chunk** (`tt/generator.py:76–85` — Gemma4
+ignores the Generator's `chunk_start_idx`, so it rounds `max_prefill_chunk_size`
+up to a power of 2 ≥ the prompt and runs one chunk; the code itself warns "very
+long contexts (>~64k) can OOM"). A single chunk materializes the full
+`[1, L, hidden=2816]` activation (+ per-layer QKV/MoE transients) ∝ L, on top of
+the 17.25 GiB weights+KV. So at **batch 1** the practical context ceiling is set
+by this single-chunk activation fitting in the ~14.6 GiB headroom, **not** by the
+KV cache (which fits to 256K with room to spare).
+
+- **gemma4's own demo validates the fit**: `text_demo_v2.py` notes "single-chunk
+  prefill runs at 128k without OOM" — i.e. 128k long-context prefill is known to fit
+  in DRAM on this path (consistent with the 14.6 GiB headroom above). 256K-token
+  *single-chunk* prefill is the regime the generator's own warning flags as the OOM
+  risk; bounded-memory long prefill is the `chunk_start_idx` follow-up.
+- **Operational gotchas measured while probing the long-context demo** (not budget
+  unknowns — config/infra):
+  - A raw single `ttnn_prefill_forward` of L > `sliding_window` is **not** a valid
+    probe: it writes the whole sequence into the bounded-sliding KV (1024-token pool)
+    and trips `update_cache_device_operation.cpp:106`. Long-context prefill must go
+    through the generator's chunked + bounded-sliding path (`operations.py:210–353`).
+  - The demo's `trace_region_size=200_000_000` (`text_demo_v2.py:143`) is **too small**
+    for long-context prefill traces — a 64k trace needs ~445 MB (`TT_FATAL` at
+    `mesh_trace.cpp:78`). Bump `trace_region_size` (it is carved from DRAM, so subtract
+    it from the headroom) to run the traced long-context demo.
+  - The box intermittently faults (`Bus error` core dump during prefill-trace warmup;
+    board fw 19.9.0 ahead of tt-metal's tested 19.5.0 — see the erisc note above);
+    `tt-smi -r` clears it.
+
+### Bottom line for #47487 (QB2)
+- **Documented budget (measured):** usable **31.87** − weights **13.25** − KV@256K **4.0** ⇒ **14.6 GiB/chip headroom** at 256K batch 1.
+- **Batch ceiling @256K:** **KV-bound ≈ 6**; **prefill-bound ≤ that** (single-chunk activation), so the shippable batch-1 256K config fits with margin, and raising batch at full context is gated by the **single-chunk prefill** (a gemma4 upstream follow-up: real `chunk_start_idx` support for bounded-memory long prefill), not by weights/KV.
