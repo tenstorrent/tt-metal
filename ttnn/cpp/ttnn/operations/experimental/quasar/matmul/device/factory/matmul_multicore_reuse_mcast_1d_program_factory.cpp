@@ -6075,10 +6075,15 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         compute_hw_config));
 
     // ---- Work units ----
+    // WorkUnitSpec target_nodes must be DISJOINT, and each work unit must list ALL kernels that
+    // run on those cores (a kernel's placement is the union of the work units listing it). Cores
+    // that send in0 (or receive it) and also do matmul work therefore carry the in0 kernel together
+    // with in1_sender_writer + compute in a single work unit, rather than splitting them across an
+    // in0 work unit and a separate "wu_work" that would overlap.
     m2::Group<m2::WorkUnitSpec> work_units;
     work_units.push_back(m2::WorkUnitSpec{
-        .name = "wu_in0_sender",
-        .kernels = {RO_IN0_SENDER_KERNEL},
+        .name = "wu_in0_sender_work",
+        .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
         .target_nodes = in0_mcast_cores_with_work_and_in_receiver_grid,
     });
     if (has_no_work_in_recv) {
@@ -6096,17 +6101,25 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
         });
     }
     if (has_in0_receiver) {
-        work_units.push_back(m2::WorkUnitSpec{
-            .name = "wu_in0_receiver",
-            .kernels = {RO_IN0_RECEIVER_KERNEL},
-            .target_nodes = in0_mcast_receivers,
-        });
+        // Non-sharded path: in0 receivers may or may not have matmul work. Partition them so each
+        // group lists exactly the kernels that run on it.
+        CoreRangeSet receivers_with_work = in0_mcast_receivers.intersection(all_cores_with_work);
+        CoreRangeSet receivers_without_work = in0_mcast_receivers.subtract(all_cores_with_work);
+        if (receivers_with_work.num_cores() > 0) {
+            work_units.push_back(m2::WorkUnitSpec{
+                .name = "wu_in0_receiver_work",
+                .kernels = {RO_IN0_RECEIVER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+                .target_nodes = receivers_with_work,
+            });
+        }
+        if (receivers_without_work.num_cores() > 0) {
+            work_units.push_back(m2::WorkUnitSpec{
+                .name = "wu_in0_receiver_no_work",
+                .kernels = {RO_IN0_RECEIVER_KERNEL},
+                .target_nodes = receivers_without_work,
+            });
+        }
     }
-    work_units.push_back(m2::WorkUnitSpec{
-        .name = "wu_work",
-        .kernels = {RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
-        .target_nodes = all_cores_with_work,
-    });
 
     // ---- Per-core runtime args ----
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
