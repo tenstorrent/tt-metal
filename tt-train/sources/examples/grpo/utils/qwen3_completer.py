@@ -514,10 +514,4 @@ class Qwen3GRPOCompleter(GRPOCompleter):
             loss_mask_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16, self._dp_mapper
         )
 
-        # NOTE: do NOT deallocate ``input_tensor`` / ``mask`` here. When this runs
-        # for the *new* log-probs (grad enabled) they are still referenced by the
-        # autograd graph and are needed by ``loss.backward()``; the trainer's
-        # ``reset_graph()`` releases them after the backward pass.
-
-        # awliu: deleted in failed attempt to find crash which was actually in loss.backwards()
         return nlog, loss_mask_tt

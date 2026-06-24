@@ -21,11 +21,6 @@ from utils.llama_completer import LlamaGRPOCompleter
 from utils.qwen3_completer import Qwen3CompletionCtx
 from utils.qwen3_completer import Qwen3GRPOCompleter
 
-import random
-import numpy as np
-import torch
-
-
 try:
     import wandb
 

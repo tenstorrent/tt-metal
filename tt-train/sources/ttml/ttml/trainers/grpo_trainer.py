@@ -561,19 +561,6 @@ class GRPOTrainer:
                     mask.set_requires_grad(False)
                     probs_old_list.append((nlog_old, mask))
 
-            # Clear the autograd graph built by the no-grad old-prob forwards
-            # before the grad pass. ttml's backward() processes every node
-            # accumulated since the last reset; without this, the first
-            # training backward would also traverse the old-prob forwards'
-            # nodes. That is harmless for plain models, but FSDP installs
-            # autograd-callback nodes (backward_pre/backward_post) on every
-            # forward, and firing those stale callbacks on already-resharded
-            # modules reduce-scatters/gathers against freed buffers. The
-            # detached old-prob log-prob values live on their tensor objects
-            # (held in probs_old_list) and survive the reset.
-            # ttml.autograd.AutoContext.get_instance().reset_graph()
-            # awliu: reset_graph added in failed attempt to find crash which was actually in loss.backwards()
-
             for mini_epoch in range(grpo_cfg.num_iterations):
                 tt_model.train()
                 optimizer.zero_grad()
