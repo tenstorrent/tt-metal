@@ -6,15 +6,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <memory>
 #include <numeric>
 #include <optional>
-#include <span>
 #include <sstream>
 #include <string>
-#include <variant>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
@@ -23,7 +22,6 @@
 
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
-#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
@@ -31,7 +29,6 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 #include "impl/context/metal_context.hpp"
@@ -50,9 +47,7 @@ namespace {
 using ::tt::tt_metal::BufferType;
 using ::tt::tt_metal::CoreCoord;
 using ::tt::tt_metal::CoreRange;
-using ::tt::tt_metal::CoreRangeSet;
 using ::tt::tt_metal::DataType;
-using ::tt::tt_metal::DeviceAddr;
 using ::tt::tt_metal::Layout;
 using ::tt::tt_metal::MemoryConfig;
 using ::tt::tt_metal::PageConfig;
@@ -60,7 +55,6 @@ using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
-using ::tt::tt_metal::distributed::MeshCoordinate;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshDevice;
 using ::tt::tt_metal::distributed::MeshMapperConfig;
@@ -70,36 +64,33 @@ constexpr uint32_t kMinWarmupIters = 4;
 constexpr uint32_t kWarmupSettlingIters = 2;
 constexpr uint32_t kPerfIters = 300;
 
-// Tensor element size. The H2D service streams raw bytes, so the transfer is
-// dtype-agnostic: a production per-shard page of 1792 bf16 elems is 3584 B, which
-// equals 896 UINT32 elems. We use UINT32 with per_row=896 so each page is
-// byte-for-byte the production [.,1792] bf16 page (identical page size, chunk plan,
-// and throughput). Switch to bf16/1792 only if you want the literal shape labels.
 constexpr uint32_t kElemBytes = sizeof(uint32_t);
-constexpr uint32_t kProdPerRow = 896;          // tensor page = 896 * 4 = 3584 B
-constexpr uint32_t kProdPerDevicePages = 640;  // per-device page count at production size
+constexpr uint32_t kGenericTensorPageBytes = 4 * 1024;
+constexpr uint32_t kLargeTunePerDeviceBytes = 2 * 1024 * 1024;
+constexpr uint32_t kAutoFifoSocketPages = 8;  // Mirrors H2DStreamService's current auto-FIFO policy.
 
 // One fixed, representative worker grid for the whole sweep (4x4 = 16 drain cores).
 // Worker-grid size barely moved throughput, so it is held constant rather than swept.
 const CoreRange kWorkerCores{CoreCoord{0, 0}, CoreCoord{3, 3}};
 
-// Anchor chunk plan: the baseline (cb, fifo) that each chart's extra lines perturb around, and the
-// held value for whichever chunk-plan axis a family is not sweeping. Kept small so it never
-// constrains the other sweeps (a large cb raises the FIFO floor via fifo >= cb and drops small sizes).
-constexpr uint32_t kDefaultCbPages = 4;
-constexpr uint32_t kDefaultFifoPages = 64;
 constexpr bool kParallelHostPush = true;
 
 std::shared_ptr<MeshDevice> g_mesh_device;
 
-// One benchmark case. Pattern is always FullShard2D, input is always the
-// distributed-tensor path, and the worker grid is fixed (kWorkerCores); the only
-// dimensions that vary are the per-device page count and the chunk plan (cb/fifo).
+enum class PlacementPattern {
+    FullShard2D,
+};
+
 struct BenchmarkCase {
-    std::string label;          // "<family>/p<pages>/cb<cb>/fifo<fifo>"
-    uint32_t per_device_pages;  // tensor pages per device (the "size" axis)
-    uint32_t cb_pages;          // scratch-CB budget in tensor pages; service derives chunking/slots
-    uint32_t fifo_pages;        // socket FIFO size in tensor pages (buffering depth)
+    std::string label;   // "<payload_regime>/<mode>/bytes<...>/page<...>/fifo<...>"
+    std::string regime;  // small_payload / medium_payload / large_payload
+    std::string mode;    // size / tune
+    PlacementPattern placement = PlacementPattern::FullShard2D;
+    uint32_t per_device_pages = 1;
+    uint32_t tensor_page_bytes = 0;
+    uint32_t max_socket_page_size_bytes = 0;  // 0 = service default.
+    uint32_t fifo_size_bytes = 0;             // 0 = service auto.
+    uint32_t metadata_size_bytes = 0;
 };
 
 struct WarmupPlan {
@@ -132,31 +123,13 @@ MeshWorkload build_drain_workload(
     const CoreRange& worker_cores,
     uint32_t total_iters) {
     const Tensor& input_tensor = service.get_backing_tensor();
-    auto* input_buf = input_tensor.buffer();
-    TT_FATAL(input_buf != nullptr, "build_drain_workload: input tensor has no buffer");
-
-    const uint32_t page_size = input_buf->page_size();
-    const uint32_t num_pages = input_buf->num_pages();
     const uint32_t num_workers = worker_count(worker_cores);
     TT_FATAL(num_workers > 0, "build_drain_workload: worker_cores must contain at least one core");
-    TT_FATAL(
-        num_pages % num_workers == 0,
-        "build_drain_workload: tensor page count ({}) must be divisible by num_workers ({})",
-        num_pages,
-        num_workers);
-    const uint32_t pages_per_worker = num_pages / num_workers;
 
     const uint32_t data_ready_sem_addr = static_cast<uint32_t>(service.get_data_ready_sem_addr());
-    const uint32_t input_tensor_addr = static_cast<uint32_t>(input_buf->address());
 
     const auto& coords = input_tensor.tensor_topology().mesh_coords();
     TT_FATAL(!coords.empty(), "build_drain_workload: tensor topology has no coords");
-    const tt::tt_metal::Buffer* sample_dbuf = input_tensor.mesh_buffer().get_device_buffer(coords.front());
-    TT_FATAL(sample_dbuf != nullptr, "build_drain_workload: missing device buffer for sample coord");
-    auto accessor_args = tt::tt_metal::TensorAccessorArgs(*sample_dbuf);
-    auto accessor_compile_args = accessor_args.get_compile_time_args();
-
-    constexpr tt::CBIndex scratch_cb_index = tt::CBIndex::c_0;
 
     MeshWorkload worker_workload;
     for (const auto& coord : coords) {
@@ -167,18 +140,6 @@ MeshWorkload build_drain_workload(
 
         auto program = tt::tt_metal::CreateProgram();
 
-        auto cb_cfg = tt::tt_metal::CircularBufferConfig(page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})
-                          .set_page_size(scratch_cb_index, page_size);
-        tt::tt_metal::CreateCircularBuffer(program, worker_cores, cb_cfg);
-
-        std::vector<uint32_t> ct_args = {
-            data_ready_sem_addr,
-            input_tensor_addr,
-            page_size,
-            static_cast<uint32_t>(scratch_cb_index),
-        };
-        ct_args.insert(ct_args.end(), accessor_compile_args.begin(), accessor_compile_args.end());
-
         auto kernel_handle = tt::tt_metal::CreateKernel(
             program,
             "tests/ttnn/benchmark/cpp/kernels/persistent_h2d_drain_benchmark.cpp",
@@ -186,28 +147,22 @@ MeshWorkload build_drain_workload(
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = tt::tt_metal::NOC::RISCV_0_default,
-                .compile_args = ct_args,
+                .compile_args = {data_ready_sem_addr},
             });
 
-        uint32_t worker_idx = 0;
         for (uint32_t y = worker_cores.start_coord.y; y <= worker_cores.end_coord.y; ++y) {
             for (uint32_t x = worker_cores.start_coord.x; x <= worker_cores.end_coord.x; ++x) {
                 const CoreCoord core{x, y};
-                const uint32_t start_page = worker_idx * pages_per_worker;
-                const uint32_t end_page = start_page + pages_per_worker;
                 tt::tt_metal::SetRuntimeArgs(
                     program,
                     kernel_handle,
                     core,
                     {
-                        start_page,
-                        end_page,
                         consumed_counter_addr,
                         static_cast<uint32_t>(service_phys.x),
                         static_cast<uint32_t>(service_phys.y),
                         total_iters,
                     });
-                ++worker_idx;
             }
         }
 
@@ -256,6 +211,36 @@ bool benchmark_supported(benchmark::State& state) {
     return true;
 }
 
+uint32_t per_device_payload_bytes(const BenchmarkCase& cs) { return cs.per_device_pages * cs.tensor_page_bytes; }
+
+uint32_t tensor_page_elems(const BenchmarkCase& cs) {
+    TT_FATAL(cs.tensor_page_bytes > 0, "tensor_page_bytes must be > 0");
+    TT_FATAL(
+        cs.tensor_page_bytes % kElemBytes == 0,
+        "tensor_page_bytes ({}) must be divisible by element size ({})",
+        cs.tensor_page_bytes,
+        kElemBytes);
+    return cs.tensor_page_bytes / kElemBytes;
+}
+
+ttsl::SmallVector<MeshMapperConfig::Placement> placements_for(const BenchmarkCase& cs) {
+    switch (cs.placement) {
+        case PlacementPattern::FullShard2D: return full_shard_2d_placements();
+    }
+    TT_FATAL(false, "Unhandled placement pattern");
+    return {};
+}
+
+ttnn::Shape global_shape_for(const BenchmarkCase& cs, uint32_t mesh_rows, uint32_t mesh_cols) {
+    const uint32_t elems_per_page = tensor_page_elems(cs);
+    switch (cs.placement) {
+        case PlacementPattern::FullShard2D:
+            return ttnn::Shape({1, 1, cs.per_device_pages * mesh_rows, elems_per_page * mesh_cols});
+    }
+    TT_FATAL(false, "Unhandled placement pattern");
+    return ttnn::Shape({});
+}
+
 void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCase& cs) {
     // The drain kernel is sized to exactly one warmup+perf pass, so the benchmark body must run a
     // single iteration; more would push past the kernel's bounded loop and deadlock the service's
@@ -269,32 +254,33 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     }
     const std::string& case_name = cs.label;
 
-    // FullShard2D needs a 2D mesh with >= 2 devices on each axis (e.g. an 8x4 Galaxy).
+    // The benchmark covers both FullShard2D and SP-shard/TP-replicate cases, so it needs a 2D mesh.
     const auto mesh_shape = g_mesh_device->shape();
     if (mesh_shape.dims() != 2 || mesh_shape[0] < 2 || mesh_shape[1] < 2) {
-        state.SkipWithMessage("FullShard2D requires a 2D mesh with >= 2 devices on each axis");
+        state.SkipWithMessage("H2DStreamService benchmark requires a 2D mesh with >= 2 devices on each axis");
         return;
     }
     const uint32_t mesh_rows = mesh_shape[0];
     const uint32_t mesh_cols = mesh_shape[1];
 
-    // Per-device footprint is [1,1,per_device_pages,kProdPerRow]; FullShard2D scales the global
-    // tensor up by the mesh dims so each device lands on exactly that footprint after sharding.
-    const ttnn::Shape global_shape({1, 1, cs.per_device_pages * mesh_rows, kProdPerRow * mesh_cols});
-    const auto placements = full_shard_2d_placements();
-
-    const uint32_t tensor_page_bytes = kProdPerRow * kElemBytes;
-    const uint32_t max_socket_page_size_bytes = cs.cb_pages * tensor_page_bytes;
-    const uint32_t fifo_size_bytes = cs.fifo_pages * tensor_page_bytes;
+    const ttnn::Shape global_shape = global_shape_for(cs, mesh_rows, mesh_cols);
+    const auto placements = placements_for(cs);
+    const uint32_t max_coalesce_pages =
+        cs.max_socket_page_size_bytes == 0 ? 0 : cs.max_socket_page_size_bytes / cs.tensor_page_bytes;
+    const uint32_t fifo_pages = cs.fifo_size_bytes == 0 ? 0 : cs.fifo_size_bytes / cs.tensor_page_bytes;
     const uint32_t num_workers = worker_count(kWorkerCores);
 
     log_info(
         tt::LogTest,
-        "[{}] Starting: global_shape={}, fifo_size_bytes={}, max_socket_page_size_bytes={}, workers={}, perf_iters={}",
+        "[{}] Starting: global_shape={}, per_device_bytes={}, tensor_page_bytes={}, fifo_size_bytes={}, "
+        "max_socket_page_size_bytes={}, metadata_size_bytes={}, workers={}, perf_iters={}",
         case_name,
         stream_string(global_shape),
-        fifo_size_bytes,
-        max_socket_page_size_bytes,
+        per_device_payload_bytes(cs),
+        cs.tensor_page_bytes,
+        cs.fifo_size_bytes,
+        cs.max_socket_page_size_bytes,
+        cs.metadata_size_bytes,
         num_workers,
         kPerfIters);
 
@@ -308,10 +294,10 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         .global_spec = global_spec,
         .mapper = ttnn::distributed::create_mesh_mapper(*g_mesh_device, MeshMapperConfig{.placements = placements}),
         .socket_buffer_type = BufferType::L1,
-        .fifo_size_bytes = fifo_size_bytes,
-        .max_socket_page_size_bytes = max_socket_page_size_bytes,
+        .fifo_size_bytes = cs.fifo_size_bytes,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
         .worker_cores = kWorkerCores,
-        .metadata_size_bytes = 0,
+        .metadata_size_bytes = cs.metadata_size_bytes,
         .parallel_host_push = kParallelHostPush,
     };
 
@@ -323,30 +309,29 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     auto* backing_buf = backing.buffer();
     TT_FATAL(backing_buf != nullptr, "benchmark backing tensor has no buffer");
 
-    if (backing_buf->num_pages() % num_workers != 0) {
-        state.SkipWithMessage("backing tensor page count is not divisible by worker count");
-        return;
-    }
-
     const auto& coords = backing.tensor_topology().mesh_coords();
     const uint64_t per_shard_payload_bytes =
         static_cast<uint64_t>(backing_buf->page_size()) * static_cast<uint64_t>(backing_buf->num_pages());
     const uint32_t socket_page_size = sockets.front()->get_page_size();
     TT_FATAL(socket_page_size > 0, "socket page size must be initialized");
-    TT_FATAL(per_shard_payload_bytes % socket_page_size == 0, "per-shard payload bytes must divide socket page size");
+    TT_FATAL(per_shard_payload_bytes % socket_page_size == 0, "socket page size must divide per-shard payload bytes");
     const uint32_t num_socket_pages = static_cast<uint32_t>(per_shard_payload_bytes / socket_page_size);
     const uint32_t pages_per_chunk = socket_page_size / backing_buf->page_size();
     // The service auto-sizes slot depth from service-core L1 (no longer max_socket_page_size_bytes /
     // socket_page_size), so read the actual derived value rather than recomputing it.
     const uint32_t slot_count = service.get_slot_count();
+    const uint32_t effective_fifo_size_bytes =
+        cs.fifo_size_bytes > 0 ? cs.fifo_size_bytes : kAutoFifoSocketPages * socket_page_size;
+    const uint64_t fifo_socket_pages = effective_fifo_size_bytes / socket_page_size;
+    const double fifo_transfer_depth = static_cast<double>(fifo_socket_pages) / static_cast<double>(num_socket_pages);
     const WarmupPlan warmup_plan =
-        compute_warmup_plan(fifo_size_bytes, per_shard_payload_bytes, slot_count, num_socket_pages);
+        compute_warmup_plan(effective_fifo_size_bytes, per_shard_payload_bytes, slot_count, num_socket_pages);
     const uint32_t warmup_iters = warmup_plan.warmup_iters;
     log_info(
         tt::LogTest,
         "[{}] Geometry: sockets={}, per_shard_payload_bytes={}, socket_page_size={}, num_socket_pages={}, "
-        "pages_per_chunk={}, slot_count={}, host_fifo_depth_transfers={}, device_cb_depth_transfers={}, "
-        "warmup_iters={}",
+        "pages_per_chunk={}, slot_count={}, fifo_socket_pages={}, fifo_transfer_depth={:.3f}, "
+        "host_fifo_depth_transfers={}, device_cb_depth_transfers={}, warmup_iters={}",
         case_name,
         sockets.size(),
         per_shard_payload_bytes,
@@ -354,6 +339,8 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         num_socket_pages,
         pages_per_chunk,
         slot_count,
+        fifo_socket_pages,
+        fifo_transfer_depth,
         warmup_plan.host_fifo_depth_transfers,
         warmup_plan.device_cb_depth_transfers,
         warmup_iters);
@@ -372,16 +359,19 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     tt::tt_metal::distributed::EnqueueMeshWorkload(
         g_mesh_device->mesh_command_queue(), drain_workload, /*blocking=*/false);
 
-    // Distributed-tensor input path (the production path). Build the distributed host tensor once
-    // and reuse it every push; the values are irrelevant since the benchmark does not verify.
+    // Distributed-tensor input path. Build the distributed host tensor once and reuse it every push;
+    // the values are irrelevant since the benchmark does not verify contents.
     std::vector<uint32_t> source_data(global_shape.volume());
     std::iota(source_data.begin(), source_data.end(), 0u);
     auto host_mapper =
         ttnn::distributed::create_mesh_mapper(*g_mesh_device, MeshMapperConfig{.placements = placements});
     const Tensor tensor_input =
         ttnn::distributed::distribute_tensor(Tensor::from_vector<uint32_t>(source_data, global_spec), *host_mapper);
+    std::vector<std::byte> metadata(cs.metadata_size_bytes);
 
-    auto push_once = [&]() { service.forward_to_tensor(tensor_input); };
+    auto push_once = [&]() {
+        service.forward_to_tensor(tensor_input, ttsl::Span<const std::byte>(metadata.data(), metadata.size()));
+    };
 
     for ([[maybe_unused]] auto _ : state) {
         log_info(tt::LogTest, "[{}] Starting warmup phase with {} iterations", case_name, warmup_iters);
@@ -394,7 +384,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         // "reader staged the page into L1", not "writer committed the transfer to DRAM" and not
         // "workers drained it". The primary metric therefore remains aggregate bytes accepted by the
         // service under its real backpressure, while the untimed tail measurements below show how
-        // much DRAM-completion / worker-drain cleanup remained after the timed push window.
+        // much DRAM-completion / worker-ACK cleanup remained after the timed push window.
         log_info(tt::LogTest, "[{}] Starting timed phase with {} iterations", case_name, kPerfIters);
         const auto t0 = std::chrono::steady_clock::now();
         for (uint32_t iter = 0; iter < kPerfIters; ++iter) {
@@ -429,11 +419,15 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["num_sockets"] = static_cast<double>(sockets.size());
         state.counters["warmup_iters"] = static_cast<double>(warmup_iters);
         state.counters["perf_iters"] = static_cast<double>(kPerfIters);
+        state.counters["per_device_bytes"] = static_cast<double>(per_device_payload_bytes(cs));
         state.counters["per_device_pages"] = static_cast<double>(cs.per_device_pages);
-        state.counters["cb_pages"] = static_cast<double>(cs.cb_pages);
-        state.counters["fifo_pages"] = static_cast<double>(cs.fifo_pages);
-        state.counters["fifo_size_bytes"] = static_cast<double>(fifo_size_bytes);
-        state.counters["max_socket_page_size_bytes"] = static_cast<double>(max_socket_page_size_bytes);
+        state.counters["tensor_page_bytes"] = static_cast<double>(cs.tensor_page_bytes);
+        state.counters["max_coalesce_pages"] = static_cast<double>(max_coalesce_pages);
+        state.counters["fifo_pages"] = static_cast<double>(fifo_pages);
+        state.counters["fifo_size_bytes"] = static_cast<double>(effective_fifo_size_bytes);
+        state.counters["configured_fifo_size_bytes"] = static_cast<double>(cs.fifo_size_bytes);
+        state.counters["max_socket_page_size_bytes"] = static_cast<double>(cs.max_socket_page_size_bytes);
+        state.counters["metadata_size_bytes"] = static_cast<double>(cs.metadata_size_bytes);
         state.counters["worker_count"] = static_cast<double>(num_workers);
         state.counters["parallel_host_push"] = kParallelHostPush ? 1.0 : 0.0;
         state.counters["per_shard_bytes"] = static_cast<double>(per_shard_payload_bytes);
@@ -441,6 +435,8 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["num_socket_pages"] = static_cast<double>(num_socket_pages);
         state.counters["pages_per_chunk"] = static_cast<double>(pages_per_chunk);
         state.counters["slot_count"] = static_cast<double>(slot_count);
+        state.counters["fifo_socket_pages"] = static_cast<double>(fifo_socket_pages);
+        state.counters["fifo_transfer_depth"] = fifo_transfer_depth;
         state.counters["host_fifo_depth_transfers"] = static_cast<double>(warmup_plan.host_fifo_depth_transfers);
         state.counters["device_cb_depth_transfers"] = static_cast<double>(warmup_plan.device_cb_depth_transfers);
         state.counters["pipeline_depth_transfers"] = static_cast<double>(warmup_plan.pipeline_depth_transfers);
@@ -459,7 +455,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     }
 
     // service.barrier() and Finish() are intentionally measured outside the primary timed region:
-    // they are tail diagnostics for hidden DRAM-completion and worker-drain backlog, not part of the
+    // they are tail diagnostics for hidden DRAM-completion and worker-ACK backlog, not part of the
     // aggregate feeder-throughput headline number.
     log_info(tt::LogTest, "[{}] Benchmark case complete", case_name);
 }
@@ -469,76 +465,93 @@ std::vector<BenchmarkCase> make_benchmark_cases(const MeshDevice& mesh_device) {
     if (mesh_shape.dims() != 2 || mesh_shape[0] < 2 || mesh_shape[1] < 2) {
         log_warning(
             tt::LogTest,
-            "H2DStreamService benchmark needs a 2D mesh with >= 2 devices per axis for FullShard2D; "
+            "H2DStreamService benchmark needs a 2D mesh with >= 2 devices per axis; "
             "no cases generated");
         return {};
     }
-    const uint32_t num_workers = worker_count(kWorkerCores);
 
     std::vector<BenchmarkCase> cases;
-    auto add_case = [&](const std::string& family, uint32_t pages, uint32_t cb, uint32_t fifo) {
-        // Keep the historical sweep conservative: pages split evenly across drain workers and the
-        // requested cb budget, and the FIFO can hold that requested budget. The split service may
-        // derive a smaller socket page internally; actual pages_per_chunk/slot_count are counters.
-        if (pages % num_workers != 0 || pages % cb != 0 || fifo < cb) {
+    auto add_case = [&](const std::string& regime,
+                        const std::string& mode,
+                        PlacementPattern placement,
+                        uint32_t per_device_bytes,
+                        uint32_t tensor_page_bytes,
+                        uint32_t max_coalesce_pages,
+                        uint32_t fifo_pages,
+                        uint32_t metadata_size_bytes = 0) {
+        TT_FATAL(tensor_page_bytes > 0, "tensor_page_bytes must be > 0");
+        TT_FATAL(
+            per_device_bytes % tensor_page_bytes == 0,
+            "per_device_bytes ({}) must be an integer number of tensor pages ({})",
+            per_device_bytes,
+            tensor_page_bytes);
+        if (fifo_pages != 0 && max_coalesce_pages != 0 && fifo_pages < max_coalesce_pages) {
             return;
         }
+        const uint32_t per_device_pages = per_device_bytes / tensor_page_bytes;
+        const uint32_t max_socket_page_size_bytes = max_coalesce_pages * tensor_page_bytes;
+        const uint32_t fifo_size_bytes = fifo_pages * tensor_page_bytes;
         cases.push_back(BenchmarkCase{
-            .label =
-                family + "/p" + std::to_string(pages) + "/cb" + std::to_string(cb) + "/fifo" + std::to_string(fifo),
-            .per_device_pages = pages,
-            .cb_pages = cb,
-            .fifo_pages = fifo,
+            .label = regime + "/" + mode + "/bytes" + std::to_string(per_device_bytes) + "/max_coalesce" +
+                     (max_coalesce_pages == 0 ? std::string("auto") : std::to_string(max_coalesce_pages)) + "/fifo" +
+                     (fifo_pages == 0 ? std::string("auto") : std::to_string(fifo_pages)),
+            .regime = regime,
+            .mode = mode,
+            .placement = placement,
+            .per_device_pages = per_device_pages,
+            .tensor_page_bytes = tensor_page_bytes,
+            .max_socket_page_size_bytes = max_socket_page_size_bytes,
+            .fifo_size_bytes = fifo_size_bytes,
+            .metadata_size_bytes = metadata_size_bytes,
         });
     };
 
-    // Each family fixes one axis as the x-axis and draws a few lines that perturb the other knobs,
-    // so a chart shows how that axis's trend shifts with the chunk plan. add_case() drops invalid
-    // combos (pages not divisible by workers/cb, or fifo < cb), so a line simply starts/ends where
-    // the constraints allow.
-
-    // size -- throughput vs per-device pages, at three chunk plans (anchor, coarser reads, shallower
-    // buffer). The chunk-plan effect at a fixed size is studied by the cb/fifo families below.
-    const uint32_t size_pages[] = {16, 32, 64, 128, 256, 512, kProdPerDevicePages, 1024};
-    const uint32_t size_lines[][2] = {
-        {kDefaultCbPages, kDefaultFifoPages},  // anchor
-        {16, kDefaultFifoPages},               // coarser reads (higher cb)
-        {kDefaultCbPages, 16},                 // shallower buffer (lower fifo)
-    };
-    for (const auto& line : size_lines) {
-        for (uint32_t pages : size_pages) {
-            add_case("size", pages, line[0], line[1]);
-        }
+    // Size anchors characterize payload regimes without tying the benchmark to one use case.
+    for (uint32_t bytes : {4u * 1024, 8u * 1024, 16u * 1024, 32u * 1024}) {
+        add_case("small_payload", "size", PlacementPattern::FullShard2D, bytes, kGenericTensorPageBytes, 0, 0);
+    }
+    for (uint32_t bytes : {64u * 1024, 128u * 1024, 256u * 1024, 512u * 1024}) {
+        add_case("medium_payload", "size", PlacementPattern::FullShard2D, bytes, kGenericTensorPageBytes, 0, 0);
+    }
+    for (uint32_t bytes : {1u * 1024 * 1024, 2u * 1024 * 1024, 4u * 1024 * 1024, 8u * 1024 * 1024}) {
+        add_case("large_payload", "size", PlacementPattern::FullShard2D, bytes, kGenericTensorPageBytes, 0, 0);
     }
 
-    // cb -- throughput vs scratch-CB pages (read granularity) at the production size, at three FIFO
-    // depths: shows how coalescing interacts with buffering.
-    const uint32_t cb_sweep[] = {1, 2, 4, 8, 16, 32, 64};
-    const uint32_t cb_line_fifo[] = {16, kDefaultFifoPages, 128};
-    for (uint32_t fifo : cb_line_fifo) {
-        for (uint32_t cb : cb_sweep) {
-            add_case("cb", kProdPerDevicePages, cb, fifo);
+    // Tune rows perturb socket-page cap and FIFO depth within each payload regime.
+    for (uint32_t page_pages : {1u, 2u, 4u, 0u}) {
+        for (uint32_t fifo_pages : {0u, 8u, 32u}) {
+            add_case(
+                "small_payload",
+                "tune",
+                PlacementPattern::FullShard2D,
+                32 * 1024,
+                kGenericTensorPageBytes,
+                page_pages,
+                fifo_pages);
         }
     }
-
-    // fifo -- throughput vs FIFO pages (buffering depth) at the production size, at three read
-    // granularities: shows how buffering interacts with the socket-page size.
-    const uint32_t fifo_sweep[] = {4, 8, 16, 32, 64, 128};
-    const uint32_t fifo_line_cb[] = {1, kDefaultCbPages, 16};
-    for (uint32_t cb : fifo_line_cb) {
-        for (uint32_t fifo : fifo_sweep) {
-            add_case("fifo", kProdPerDevicePages, cb, fifo);
+    for (uint32_t page_pages : {1u, 4u, 16u, 0u}) {
+        for (uint32_t fifo_pages : {0u, 16u, 64u}) {
+            add_case(
+                "medium_payload",
+                "tune",
+                PlacementPattern::FullShard2D,
+                256 * 1024,
+                kGenericTensorPageBytes,
+                page_pages,
+                fifo_pages);
         }
     }
-
-    // prod_tune -- narrow production-shape tuning matrix. The split reader/writer service may derive
-    // a smaller effective pages_per_chunk than the requested cb budget, so this family extends the
-    // production-size cb/fifo search and relies on the derived counters to identify the real geometry.
-    const uint32_t prod_tune_cb_sweep[] = {8, 16, 32, 64, 128};
-    const uint32_t prod_tune_fifo_sweep[] = {kDefaultFifoPages, 128, 256};
-    for (uint32_t fifo : prod_tune_fifo_sweep) {
-        for (uint32_t cb : prod_tune_cb_sweep) {
-            add_case("prod_tune", kProdPerDevicePages, cb, fifo);
+    for (uint32_t page_pages : {8u, 16u, 32u, 64u, 128u, 0u}) {
+        for (uint32_t fifo_pages : {0u, 64u, 128u, 256u}) {
+            add_case(
+                "large_payload",
+                "tune",
+                PlacementPattern::FullShard2D,
+                kLargeTunePerDeviceBytes,
+                kGenericTensorPageBytes,
+                page_pages,
+                fifo_pages);
         }
     }
 

@@ -7,28 +7,27 @@
 Input: Google Benchmark JSON emitted by benchmark_h2d_stream_service
   (--benchmark_out=results.json --benchmark_out_format=json)
 
-The benchmark sweeps independent families (all FullShard2D, distributed-tensor
-input, fixed 4x4 worker grid), each holding or perturbing the other chunk-plan axes:
-  - size: throughput vs per_device_pages   (cb/fifo fixed at the anchor)
-  - cb:   throughput vs cb_pages            (fifo fixed at the anchor)
-  - fifo: throughput vs fifo_pages          (cb fixed at the anchor)
-  - prod_tune: production-size cb/fifo tuning around the high-throughput region
+The benchmark is organized by payload regime and mode:
+  - small_payload / size|tune
+  - medium_payload / size|tune
+  - large_payload / size|tune
 
-Benchmark name grammar: BM_H2DStreamService/<family>/p<pages>/cb<cb>/fifo<fifo>
+Benchmark name grammar:
+  BM_H2DStreamService/<payload_regime>/<mode>/bytes<per_device_bytes>/max_coalesce<pages|auto>/fifo<pages|auto>
 
 Usage:
   python3 analyze_h2d_stream_service.py run results.json
   python3 analyze_h2d_stream_service.py run results.json --out-dir analysis/
   python3 analyze_h2d_stream_service.py compare baseline.json candidate.json
 
-Produces a normalized per-case CSV and one throughput line chart per family (plus
-baseline-vs-candidate overlays and a per-case delta CSV in compare mode).
+Produces a normalized per-case CSV and one throughput line chart per family/mode
+(plus baseline-vs-candidate overlays and a per-case delta CSV in compare mode).
 
 Note on metrics: charts use aggregate_gbps as the primary steady-state feeder
 throughput. The benchmark also records untimed barrier/Finish tails so post-window
-DRAM-completion or worker-drain backlog is visible without changing the headline
-timed loop. These cases are fully sharded (FullShard2D), so aggregate feeder
-throughput equals global payload throughput; the CSV carries both.
+DRAM-completion or worker-ACK backlog is visible without changing the headline
+timed loop. Fully sharded rows have matching aggregate and global payload
+throughput; replicated rows intentionally differ, so the CSV carries both.
 """
 
 from __future__ import annotations
@@ -61,30 +60,63 @@ except ModuleNotFoundError:
 
 BENCHMARK_PREFIX = "BM_H2DStreamService"
 
-# family -> (swept-axis column, human-readable axis label)
-FAMILY_AXIS = {
-    "size": ("per_device_pages", "per-device pages"),
-    "cb": ("cb_pages", "max socket-page (pages)"),
-    "fifo": ("fifo_pages", "FIFO pages"),
-    "prod_tune": ("cb_pages", "max socket-page (pages)"),
+# mode -> (swept-axis column, human-readable axis label)
+MODE_AXIS = {
+    "size": ("per_device_bytes", "per-device payload"),
+    "tune": ("max_coalesce_pages", "max coalesce pages"),
 }
 
-CASE_KEY = ["family", "per_device_pages", "cb_pages", "fifo_pages"]
+CASE_KEY = [
+    "family",
+    "mode",
+    "per_device_bytes",
+    "tensor_page_bytes",
+    "max_coalesce_pages",
+    "fifo_pages",
+    "metadata_size_bytes",
+]
 PRIMARY_METRIC = "aggregate_gbps"
 
 # Short names for the three sweepable axes, used in per-line labels.
-AXIS_SHORT = {"per_device_pages": "pages", "cb_pages": "cb", "fifo_pages": "fifo"}
+AXIS_SHORT = {
+    "per_device_bytes": "size",
+    "tensor_page_bytes": "page_bytes",
+    "max_coalesce_pages": "max_coalesce",
+    "fifo_pages": "fifo",
+    "metadata_size_bytes": "meta",
+}
 
 
 def held_cols(xcol: str) -> list[str]:
     """The two axes a family holds (or perturbs across lines) while sweeping `xcol`."""
-    return [c for c in ("per_device_pages", "cb_pages", "fifo_pages") if c != xcol]
+    return [
+        c
+        for c in ("per_device_bytes", "tensor_page_bytes", "max_coalesce_pages", "fifo_pages", "metadata_size_bytes")
+        if c != xcol
+    ]
+
+
+def format_payload_bytes(value: float | int) -> str:
+    value = int(value)
+    mib = 1024 * 1024
+    kib = 1024
+    if value >= mib and value % mib == 0:
+        return f"{value // mib} MB"
+    if value >= kib and value % kib == 0:
+        return f"{value // kib} KB"
+    return f"{value} B"
+
+
+def axis_value_label(column: str, value: float | int) -> str:
+    if column in ("per_device_bytes", "tensor_page_bytes"):
+        return format_payload_bytes(value)
+    return str(int(value))
 
 
 def line_label(held: list[str], key, varying: list[str]) -> str:
     """Label a line by the held-axis values that actually vary within the family."""
     key = key if isinstance(key, tuple) else (key,)
-    parts = [f"{AXIS_SHORT[c]}={int(v)}" for c, v in zip(held, key) if c in varying]
+    parts = [f"{AXIS_SHORT[c]}={axis_value_label(c, v)}" for c, v in zip(held, key) if c in varying]
     return ", ".join(parts) if parts else "anchor"
 
 
@@ -95,17 +127,24 @@ NUMERIC_COLUMNS = [
     "num_sockets",
     "warmup_iters",
     "perf_iters",
+    "per_device_bytes",
     "per_device_pages",
-    "cb_pages",
+    "tensor_page_bytes",
+    "max_coalesce_pages",
+    "max_socket_page_pages",
     "fifo_pages",
     "fifo_size_bytes",
+    "configured_fifo_size_bytes",
     "max_socket_page_size_bytes",
+    "metadata_size_bytes",
     "worker_count",
     "per_shard_bytes",
     "socket_page_size",
     "num_socket_pages",
     "pages_per_chunk",
     "slot_count",
+    "fifo_socket_pages",
+    "fifo_transfer_depth",
     "host_fifo_depth_transfers",
     "device_cb_depth_transfers",
     "pipeline_depth_transfers",
@@ -118,7 +157,8 @@ NUMERIC_COLUMNS = [
 
 # Tolerates the trailing "/manual_time" that UseManualTime() appends to the name.
 _NAME_RE = re.compile(
-    rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/p(?P<pages>\d+)/cb(?P<cb>\d+)/fifo(?P<fifo>\d+)"
+    rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/bytes(?P<bytes>\d+)/"
+    r"(?:max_coalesce|page)(?P<page>auto|\d+)/fifo(?P<fifo>auto|\d+)"
 )
 
 
@@ -146,9 +186,21 @@ def load_gbench_results(path: str | Path) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def parse_family(name: str) -> str | None:
+def _parse_page_count(value: str) -> int:
+    return 0 if value == "auto" else int(value)
+
+
+def parse_name(name: str) -> dict[str, str | int] | None:
     match = _NAME_RE.match(name)
-    return match.group("family") if match else None
+    if not match:
+        return None
+    return {
+        "family": match.group("family"),
+        "mode": match.group("mode"),
+        "per_device_bytes": int(match.group("bytes")),
+        "max_coalesce_pages": _parse_page_count(match.group("page")),
+        "fifo_pages": _parse_page_count(match.group("fifo")),
+    }
 
 
 def normalize(path: str | Path) -> pd.DataFrame:
@@ -156,10 +208,13 @@ def normalize(path: str | Path) -> pd.DataFrame:
     if raw.empty or "name" not in raw.columns:
         raise ValueError(f"No benchmark rows found in {path}")
     raw = raw.copy()
-    raw["family"] = raw["name"].apply(parse_family)
-    raw = raw[raw["family"].notna()].copy()
+    parsed = raw["name"].apply(parse_name)
+    raw = raw[parsed.notna()].copy()
     if raw.empty:
         raise ValueError(f"No {BENCHMARK_PREFIX} rows found in {path}")
+    parsed_frame = pd.DataFrame(list(parsed.dropna()), index=raw.index)
+    for col in parsed_frame.columns:
+        raw[col] = parsed_frame[col]
     raw["benchmark_name"] = raw["name"]
 
     for col in NUMERIC_COLUMNS:
@@ -183,20 +238,31 @@ def _save_fig(fig, out: Path) -> None:
     print(f"  Saved {out}")
 
 
-def _set_log2_axis(ax, values) -> None:
+def _set_sweep_axis(ax, values, *, xcol: str, integer_ticks: bool = False) -> None:
     vals = sorted({int(v) for v in values if np.isfinite(v)})
-    if len(vals) > 1 and all(v > 0 for v in vals):
+    if len(vals) <= 1:
+        return
+    if all(v > 0 for v in vals):
         ax.set_xscale("log", base=2)
         ax.set_xticks(vals)
-        ax.set_xticklabels([str(v) for v in vals])
+        ax.set_xticklabels([axis_value_label(xcol, v) for v in vals])
+    elif integer_ticks:
+        ax.set_xticks(vals)
+        ax.set_xticklabels([axis_value_label(xcol, v) for v in vals])
+
+
+def tune_anchor_label(sub: pd.DataFrame, mode: str) -> str:
+    if mode != "tune" or "per_device_bytes" not in sub.columns or sub["per_device_bytes"].nunique() != 1:
+        return ""
+    return f" (anchor {format_payload_bytes(sub['per_device_bytes'].iloc[0])}/device)"
 
 
 def plot_family_lines(df: pd.DataFrame, out_dir: Path, prefix: str, metric: str = PRIMARY_METRIC) -> None:
     if not HAS_MATPLOTLIB:
         print("  Skipping plots: matplotlib is not installed")
         return
-    for family, (xcol, xlabel) in FAMILY_AXIS.items():
-        sub = df[df["family"] == family]
+    for (family, mode), sub in df.groupby(["family", "mode"]):
+        xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
         if sub.empty:
             continue
         held = held_cols(xcol)
@@ -205,15 +271,15 @@ def plot_family_lines(df: pd.DataFrame, out_dir: Path, prefix: str, metric: str 
         for key, group in sub.groupby(held):
             group = group.sort_values(xcol)
             ax.plot(group[xcol], group[metric], marker="o", label=line_label(held, key, varying))
-        _set_log2_axis(ax, sub[xcol].values)
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
         ax.set_xlabel(xlabel)
         ax.set_ylabel(metric_label(metric))
         ax.set_ylim(bottom=0)
         ax.grid(True, linestyle=":", alpha=0.5)
-        ax.set_title(f"{family} sweep")
+        ax.set_title(f"{family}/{mode} sweep{tune_anchor_label(sub, mode)}")
         if varying:
             ax.legend(title=", ".join(AXIS_SHORT[c] for c in varying), fontsize=8)
-        _save_fig(fig, out_dir / f"{prefix}{family}_{metric}.png")
+        _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_{metric}.png")
 
 
 def plot_compare_family_lines(merged: pd.DataFrame, out_dir: Path, prefix: str, metric: str = PRIMARY_METRIC) -> None:
@@ -225,8 +291,8 @@ def plot_compare_family_lines(merged: pd.DataFrame, out_dir: Path, prefix: str, 
         return
     shared = merged[merged["_merge"] == "both"]
     cmap = plt.get_cmap("tab10")
-    for family, (xcol, xlabel) in FAMILY_AXIS.items():
-        sub = shared[shared["family"] == family]
+    for (family, mode), sub in shared.groupby(["family", "mode"]):
+        xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
         if sub.empty:
             continue
         held = held_cols(xcol)
@@ -244,14 +310,14 @@ def plot_compare_family_lines(merged: pd.DataFrame, out_dir: Path, prefix: str, 
                 label=line_label(held, key, varying),
             )
             ax.plot(group[xcol], group[cand_col], marker="s", linestyle="--", color=color)
-        _set_log2_axis(ax, sub[xcol].values)
+        _set_sweep_axis(ax, sub[xcol].values, xcol=xcol, integer_ticks=xcol in ("max_coalesce_pages", "fifo_pages"))
         ax.set_xlabel(xlabel)
         ax.set_ylabel(metric_label(metric))
         ax.set_ylim(bottom=0)
         ax.grid(True, linestyle=":", alpha=0.5)
         ax.legend(fontsize=8)
-        ax.set_title(f"{family} sweep: baseline (solid) vs candidate (dashed)")
-        _save_fig(fig, out_dir / f"{prefix}{family}_{metric}.png")
+        ax.set_title(f"{family}/{mode} sweep{tune_anchor_label(sub, mode)}: baseline (solid) vs candidate (dashed)")
+        _save_fig(fig, out_dir / f"{prefix}{family}_{mode}_{metric}.png")
 
 
 def print_run_report(df: pd.DataFrame) -> None:
@@ -259,32 +325,27 @@ def print_run_report(df: pd.DataFrame) -> None:
     print(f"  H2DStreamService benchmark summary ({len(df)} case row(s))")
     print("=" * 72)
     peak = df.sort_values(PRIMARY_METRIC, ascending=False).iloc[0]
-    print(f"  Peak aggregate throughput: {peak[PRIMARY_METRIC]:.3f} GB/s ({peak.benchmark_name})")
+    print(f"  Peak aggregate throughput: {peak[PRIMARY_METRIC]:.3f} GB/s ({_case_id(peak)})")
 
-    for family, (xcol, xlabel) in FAMILY_AXIS.items():
-        sub = df[df["family"] == family]
+    for (family, mode), sub in df.groupby(["family", "mode"]):
+        xcol, xlabel = MODE_AXIS.get(mode, MODE_AXIS["size"])
         if sub.empty:
             continue
         held = held_cols(xcol)
         varying = [c for c in held if sub[c].nunique() > 1]
-        print(f"\n  [{family}] {PRIMARY_METRIC} vs {xlabel} ({len(list(sub.groupby(held)))} line(s)):")
+        print(
+            f"\n  [{family}/{mode}] {PRIMARY_METRIC} vs {xlabel}{tune_anchor_label(sub, mode)} "
+            f"({len(list(sub.groupby(held)))} line(s)):"
+        )
         for key, group in sub.groupby(held):
             group = group.sort_values(xcol)
             lo, hi = group.iloc[0], group.iloc[-1]
             label = line_label(held, key, varying)
             print(
                 f"    {label:<22} {group[PRIMARY_METRIC].min():6.3f}-{group[PRIMARY_METRIC].max():6.3f} GB/s  "
-                f"[{AXIS_SHORT[xcol]} {int(lo[xcol])}->{int(hi[xcol])}: "
+                f"[{AXIS_SHORT[xcol]} {axis_value_label(xcol, lo[xcol])}->{axis_value_label(xcol, hi[xcol])}: "
                 f"{lo[PRIMARY_METRIC]:.3f} -> {hi[PRIMARY_METRIC]:.3f}]"
             )
-
-    # Configs measured under more than one family meet at the shared anchor: a consistency check.
-    multi = df.groupby(["per_device_pages", "cb_pages", "fifo_pages"]).filter(lambda g: g["family"].nunique() > 1)
-    if not multi.empty:
-        print("\n  Cross-check (same config measured under multiple families):")
-        for (pages, cb, fifo), g in multi.groupby(["per_device_pages", "cb_pages", "fifo_pages"]):
-            readings = "  ".join(f"{r.family}={r[PRIMARY_METRIC]:.3f}" for _, r in g.iterrows())
-            print(f"    p{int(pages)}/cb{int(cb)}/fifo{int(fifo)}: {readings} GB/s")
 
     tail_cols = [c for c in ("barrier_tail_ms", "drain_finish_tail_ms") if c in df.columns]
     if tail_cols:
@@ -317,7 +378,11 @@ def compare_runs(baseline_df: pd.DataFrame, candidate_df: pd.DataFrame) -> pd.Da
 
 
 def _case_id(row) -> str:
-    return f"{row.family}/p{int(row.per_device_pages)}/cb{int(row.cb_pages)}/fifo{int(row.fifo_pages)}"
+    return (
+        f"{row.family}/{row.mode}/size={format_payload_bytes(row.per_device_bytes)}/"
+        f"page_bytes={format_payload_bytes(row.tensor_page_bytes)}/"
+        f"max_coalesce{int(row.max_coalesce_pages)}/fifo{int(row.fifo_pages)}/meta{int(row.metadata_size_bytes)}"
+    )
 
 
 def print_compare_report(merged: pd.DataFrame) -> None:
