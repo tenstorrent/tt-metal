@@ -49,7 +49,19 @@ def open_parent_with_retry(n, *, retries=2, l1_small_size=24576, trace_region_si
         if ttnn.get_num_devices() < n:
             pytest.skip(f"need >={n} chips, have {ttnn.get_num_devices()}")
         try:
-            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D)
+            # Full fabric signature with STRICT_INIT (matches the proven tt_symbiote denoise
+            # fixture): STRICT_INIT re-trains the 1D line on every open, so a prior run's leaked
+            # fabric state can't carry a half-trained line into the next open (a proximate cause
+            # of the "active ethernet core timed out" stall on the 2nd run). The short
+            # set_fabric_config(FABRIC_1D) form uses laxer defaults.
+            ttnn.set_fabric_config(
+                ttnn.FabricConfig.FABRIC_1D,
+                ttnn.FabricReliabilityMode.STRICT_INIT,
+                None,
+                ttnn.FabricTensixConfig.DISABLED,
+                ttnn.FabricUDMMode.DISABLED,
+                ttnn.FabricManagerMode.DEFAULT,
+            )
             return ttnn.open_mesh_device(
                 mesh_shape=ttnn.MeshShape(1, n),
                 l1_small_size=l1_small_size,
@@ -66,7 +78,34 @@ def open_parent_with_retry(n, *, retries=2, l1_small_size=24576, trace_region_si
 
 
 def close_parent(parent):
-    """Close the parent mesh and ALWAYS drop the fabric config (hygiene (a))."""
+    """Full multi-chip teardown, mirroring the proven tt_symbiote denoise fixture order:
+
+    1. Pipeline.release_all() -- catch-all release of loop/forward traces + the hop & wrap
+       SocketTransports (idempotent; the package close() paths already release these, but this
+       also covers a test that threw before calling stage.close()/drv.close()). Must run while
+       the devices are still LIVE (release_trace / transport.close need a live device).
+    2. close every carved submesh (parent.get_submeshes()) BEFORE the parent -- the iter-2
+       teardown dropped this; leaving 1x1 submeshes open keeps their ethernet/socket endpoints
+       bound and stalls the next open ("active ethernet core timed out" on the 2nd run). This is
+       the SINGLE submesh closer (owners do NOT close submeshes), so there is no double-close.
+    3. close the parent.
+    4. ALWAYS drop the fabric config (hygiene (a)).
+    """
+    try:
+        from models.experimental.pi0_5.tt.tt_pipeline._d2d_pipeline import Pipeline
+
+        Pipeline.release_all()
+    except Exception:
+        pass
+    try:
+        submeshes = parent.get_submeshes()
+    except Exception:
+        submeshes = []
+    for sm in submeshes or []:
+        try:
+            ttnn.close_mesh_device(sm)
+        except Exception:
+            pass
     try:
         ttnn.close_mesh_device(parent)
     finally:

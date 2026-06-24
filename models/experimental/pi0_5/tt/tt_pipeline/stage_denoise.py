@@ -29,6 +29,7 @@ from .denoise_pipeline import (
     build_expert_only_pipeline,
     perf_suffix_len,
 )
+from ._d2d_pipeline import Pipeline
 from .mesh_carve import carve_n_submeshes
 from .weight_adapt import expert_reference_blocks, final_mod, suffix_reference
 
@@ -348,6 +349,16 @@ class StageDenoise:
             except Exception:
                 pass
             self._expert_pipe = None
+        # Release the inter-stage hop SocketTransports (tracked on the Pipeline class). driver/
+        # expert_pipe close() above only drop their own loop traces + the wrap transport; the hop
+        # sockets stay bound to the submeshes until released, which stalls the next multi-chip open.
+        # The carved submeshes themselves are closed centrally by the test harness close_parent()
+        # (one closer -> no double-close), mirroring the proven tt_symbiote teardown order:
+        # release traces/transports (device still live) -> close submeshes -> close parent.
+        try:
+            Pipeline.release_all()
+        except Exception:
+            pass
 
 
 def _euler_timesteps(num_steps):

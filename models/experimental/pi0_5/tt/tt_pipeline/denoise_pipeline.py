@@ -751,6 +751,14 @@ class TTNNPi05DenoiseStreamedPipeline:
             self._wrap_tp.close()
         except Exception:
             pass
+        # Release the inter-stage hop SocketTransports (tracked on the Pipeline class) so they are
+        # unbound from the submeshes before the next multi-chip open. release_loop drops only the
+        # loop traces; the wrap transport is closed above. Idempotent (re-callers no-op). The carved
+        # submeshes are closed by the caller's harness close_parent() (single closer -> no double-close).
+        try:
+            Pipeline.release_all()
+        except Exception:
+            pass
 
 
 def build_denoise_loop_pipeline(
