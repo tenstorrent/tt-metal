@@ -23,6 +23,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include "device_fixture.hpp"
 #include "jit_build/build.hpp"
+#include "llrt/rtoptions.hpp"
 #include "tt_metal/jit_build/build_cache_telemetry.hpp"
 
 namespace tt::tt_metal {
@@ -33,6 +34,15 @@ namespace fs = std::filesystem;
 
 using BinaryPolicy = experimental::PrecompiledKernelConfig::FallbackPolicy;
 using CBCompileConfig = experimental::OfflineKernelCompileParams::CBCompileConfig;
+
+// CompileKernelOffline builds its own RunTimeOptions from the environment; for a non-Silicon target
+// (simulator/emulation) that disables multi-erisc mode, which shifts the firmware build_key away
+// from the precompiled-firmware bundle. The offline path does not build firmware itself, so for the
+// non-simulated arch (e.g. Wormhole) there is no weakened firmware ELF to link kernels against and
+// the build fails. Mirror that same fresh RunTimeOptions here (rather than the live MetalContext,
+// which a mock fixture forces to Mock) and skip the offline-compile tests until that path can build
+// (or locate) firmware for the simulator build_key.
+bool offline_compile_unsupported_under_simulator() { return llrt::RunTimeOptions{}.is_simulator_or_emulated(); }
 
 struct ScopedTempDir {
     explicit ScopedTempDir(const std::string& tag) {
@@ -201,6 +211,10 @@ bool contains_nonempty_elf(const fs::path& dir) {
 }
 
 TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtreeForReaderKernel) {
+    if (offline_compile_unsupported_under_simulator()) {
+        GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
+                        "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
+    }
     ScopedTempDir output_dir("tt_metal_offline_compile_smoke");
 
     using Params = experimental::OfflineKernelCompileParams;
@@ -227,6 +241,10 @@ TEST_F(OfflineKernelCompileMockFixture, CompileKernelOfflineEmitsExpectedSubtree
 }  // namespace
 
 TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
+    if (offline_compile_unsupported_under_simulator()) {
+        GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
+                        "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
+    }
     auto* device = this->devices_.at(0)->get_devices().at(0);
 
     ScopedTempDir precompiled_root("tt_metal_precompiled_seed_hit");
@@ -242,6 +260,10 @@ TEST_F(MeshDeviceFixture, RuntimePrecompiledHitLoadsWithoutJit) {
 }
 
 TEST_F(MeshDeviceFixture, RuntimePrecompiledHitWithCbMetadataLoadsWithoutJit) {
+    if (offline_compile_unsupported_under_simulator()) {
+        GTEST_SKIP() << "CompileKernelOffline has no precompiled firmware for the simulator build_key "
+                        "(multi-erisc disabled); skipping under TT_METAL_SIMULATOR.";
+    }
     // Verifies the CBCompileConfigsFromProgram + CompileKernelOffline path produces a
     // bucket whose hash inputs (build_key + hlk_desc CB metadata + kernel compute hash)
     // match the runtime-computed hash for an equivalently-configured program. If the
