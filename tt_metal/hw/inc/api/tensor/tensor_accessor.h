@@ -378,7 +378,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
     TensorAccessor(
         const TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>& args,
         const uint32_t bank_base_address_in,
-        const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>::AlignedPageSize) :
+        const uint32_t page_size_in = TensorAccessorArgs<CTA_OFFSET, CRTA_OFFSET>{}.get_aligned_page_size()) :
         InterleavedAddrGen<IsDram>(
             {.bank_base_address = static_cast<uint32_t>(bank_base_address_in), .page_size = page_size_in}),
         aligned_page_size(page_size_in) {}
@@ -392,11 +392,7 @@ struct TensorAccessor<tensor_accessor::DistributionSpec<
             //   (But, add 1 to the token's CRTA offset to jump over the base address slot)
             TensorAccessorArgs<CTA_OFFSET, 1 + (ADDR_CRTA_OFFSET / sizeof(uint32_t))>{},
             // Bank base address: Get the base address from the front of the token's CRTA section.
-            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t))),
-            // Aligned page size: Create the args object again to grab the aligned_page_size from
-            //   the TensorAccessorArgs getter. The aligned page size may be housed either as a CTA
-            //   (static case) or as a CRTA (dynamic case) field. The getter handles resolution for us.
-            TensorAccessorArgs<CTA_OFFSET, 1 + (ADDR_CRTA_OFFSET / sizeof(uint32_t))>{}.get_aligned_page_size()) {
+            static_cast<uint32_t>(get_common_arg_val<uint32_t>(ADDR_CRTA_OFFSET / sizeof(uint32_t)))) {
         static_assert(
             ADDR_CRTA_OFFSET % sizeof(uint32_t) == 0,
             "TensorAccessorBindingToken: ADDR_CRTA_OFFSET must be 4-byte aligned");
