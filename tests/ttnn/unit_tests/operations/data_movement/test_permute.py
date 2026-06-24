@@ -8,7 +8,6 @@ import pytest
 import torch
 
 import ttnn
-from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
@@ -64,16 +63,16 @@ def test_transpose(device, h, w, dtype):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [64])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32])
-def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype, expect_error):
+def test_permute_on_4D_tensor_with_smaller_tuple_size(device, h, w, dtype):
     torch.manual_seed(2005)
     shape = (1, 1, h, w)
     torch_input_tensor = random_torch_tensor(dtype, shape)
     input_tensor = ttnn.from_torch(torch_input_tensor)
     input_tensor = ttnn.to_device(input_tensor, device)
-    with expect_error(
+    with pytest.raises(
         RuntimeError,
-        "The number of dimensions in the tensor input does not match the length of the desired ordering",
-    ):
+        match="The number of dimensions in the tensor input does not match the length of the desired ordering",
+    ) as exception:
         ttnn.permute(input_tensor, (0, 1, 2))
 
 

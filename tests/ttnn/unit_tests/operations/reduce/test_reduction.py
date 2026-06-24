@@ -101,13 +101,10 @@ def test_var(device, batch_size, h, w, dim, keepdim, correction):
 # variance of N consecutive integers is (N^2 - 1) / 12 (population); with N=32 and Bessel's
 # correction, sample variance = 32 * (32^2 - 1) / (12 * 31) = 88.0 exactly. Variance is
 # translation-invariant *and* sign-invariant, so neither adding a large offset to every
-# element nor flipping its sign should change the answer. If the unpacker silently routes
-# fp32 input through SrcA as TF32 (10-bit mantissa instead of 23), values that differ by
-# less than the TF32 ULP collapse to the same representation; at offset=1e6 the TF32 ULP
-# is ~512, so all 32 consecutive integers become identical and the apparent variance drops
-# to 0. The scalar is applied after the reduction as var(s*x) = s^2 * var(x).
-# This test covers all three reduction kernels (H, W, HW) and post-reduction scalar handling.
-@pytest.mark.parametrize("scalar", [1.0, 0.0, -1.0])
+# element nor flipping its sign should change the answer.the scalar is applied after the
+# reduction as var(s*x) = s^2 * var(x).
+# test covers all three reduction kernels (H, W, HW) and both code paths
+@pytest.mark.parametrize("scalar", [1.0, 0, -1.0])
 @pytest.mark.parametrize("offset", [0.0, 1e6])
 @pytest.mark.parametrize("dim", [-1, -2, (-2, -1)])
 def test_var_fp32_translation_invariance(device, dim, offset, scalar):
@@ -146,10 +143,11 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
     )
 
 
-# Regression test for fp32 Welford variance precision with a non-unity scalar and a
-# reduction dimension that crosses a tile boundary (Wt>1).
+# Regression test for fp32 Welford variance precision when do_scale=true (non-unity scalar)
+# AND the reduction dimension crosses a tile boundary (Wt>1).
 # Unlike test_var_fp32_translation_invariance above, which tests whether inputs preserve
-# FP32 precision by using a large offset, this test checks multi-tile scalar handling.
+# FP32 precision by using a large offset, this test checks that the FPU MUL result
+# is preserved in FP32, which requires UnpackToDestFp32 on cb_scaled.
 #
 # Variance of N consecutive integers 0..N-1 is (N^2 - 1) / 12 (population); with Bessel's
 # correction (sample variance) it is N * (N^2 - 1) / (12 * (N - 1)) = N * (N + 1) / 12. The
@@ -158,13 +156,15 @@ def test_var_fp32_translation_invariance(device, dim, offset, scalar):
 # by inspection.
 #
 # Parametrized across two N values to cover two Wt regimes of the wt-inner loop in
-# welford_reduce_w:
+# welford_reduce_w with do_scale=true:
 #   - N=33  -> Wt = ceil(33/32)  = 2   (smallest multi-tile case; original regression target)
-#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop across many iterations rather than
-#                                       just one boundary crossing)
+#   - N=129 -> Wt = ceil(129/32) = 5   (deeper inner loop, exercises the per-iter UNPACK
+#                                       hw_configure flip between cb_in's Default mode and
+#                                       cb_scaled's UnpackToDestFp32 mode across many
+#                                       iterations rather than just one boundary crossing)
 @pytest.mark.parametrize("scalar", [2.0, -2.0, 0.5, 4.0])
 @pytest.mark.parametrize("N", [33, 129], ids=["Wt2", "Wt5"])
-def test_var_fp32_scalar_wt_gt_1(device, scalar, N):
+def test_var_fp32_doscale_wt_gt_1(device, scalar, N):
     correction = True
     seq = torch.arange(N, dtype=torch.float32)
     # Each row of the input tile is the sequence; reducing along W (dim=-1) gives per-row var.
@@ -178,8 +178,9 @@ def test_var_fp32_scalar_wt_gt_1(device, scalar, N):
     tt_out = ttnn.var(tt_in, dim=-1, keepdim=True, correction=correction, scalar=scalar)
     actual = ttnn.to_torch(ttnn.from_device(tt_out))
 
-    # Tolerances tighter than the BF16 floor: post-reduction scalar handling should preserve
-    # enough precision to land well within 0.5 ULP-relative of the exact reference.
+    # Tolerances tighter than the BF16 floor: the FPU mul + cb_scaled UnpackToDest path
+    # should preserve enough precision to land well within 0.5 ULP-relative of the exact
+    # reference at this magnitude.
     assert_numeric_metrics(
         torch_ref,
         actual,
