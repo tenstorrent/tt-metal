@@ -11,6 +11,7 @@
 #include <tt-metalium/dispatch_core_common.hpp>
 #include <umd/device/types/arch.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
+#include <umd/device/types/core_coordinates.hpp>
 
 struct metal_SocDescriptor;
 
@@ -35,6 +36,18 @@ void validate_quasar_dispatch_cores_for_fd(
     tt::tt_metal::MetalEnvImpl& env,
     ChipId device_id,
     uint8_t num_hw_cqs,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config);
+
+// Arch-gated dispatch core type (Quasar: DISPATCH vs interim Tensix WORKER; WH/BH: from DispatchCoreConfig).
+CoreType resolve_dispatch_core_type(
+    tt::ARCH arch,
+    const tt_metal::DispatchCoreConfig& dispatch_core_config,
+    const metal_SocDescriptor& soc_desc,
+    bool use_quasar_tensix_dispatch_cores);
+
+CoreType resolve_dispatch_core_type(
+    tt::tt_metal::MetalEnvImpl& env,
+    ChipId device_id,
     const tt_metal::DispatchCoreConfig& dispatch_core_config);
 
 }  // namespace tt::tt_metal::internal

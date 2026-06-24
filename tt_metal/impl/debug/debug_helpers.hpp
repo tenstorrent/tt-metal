@@ -73,7 +73,7 @@ inline static CoreDescriptorSet GetAllCores(
 [[maybe_unused]] static CoreDescriptorSet GetDispatchCores(
     MetalEnvImpl& env, ChipId device_id, uint8_t num_hw_cqs, const DispatchCoreConfig& dispatch_core_config) {
     CoreDescriptorSet dispatch_cores;
-    CoreType dispatch_core_type = get_core_type_from_config(dispatch_core_config);
+    CoreType dispatch_core_type = resolve_dispatch_core_type(env, device_id, dispatch_core_config);
     log_debug(tt::LogAlways, "Dispatch Core Type = {}", dispatch_core_type);
     for (auto logical_core : tt::get_logical_dispatch_cores(env, device_id, num_hw_cqs, dispatch_core_config)) {
         dispatch_cores.insert({logical_core, dispatch_core_type});
@@ -98,6 +98,7 @@ inline std::string_view get_core_type_name(CoreType ct) {
         case CoreType::ACTIVE_ETH: return "active_eth";
         case CoreType::IDLE_ETH: return "idle_eth";
         case CoreType::TENSIX: return "tensix";
+        case CoreType::DISPATCH: return "dispatch";
         default: return "UNKNOWN";
     }
 }
