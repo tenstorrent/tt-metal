@@ -911,22 +911,22 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
             if (input_tensor.logical_shape()[-1] % input_tensor_sharded_memory_config.shard_spec()->shape[-1] != 0 &&
                 input_tensor.layout() == Layout::ROW_MAJOR &&
                 input_tensor_sharded_memory_config.memory_layout() != TensorMemoryLayout::HEIGHT_SHARDED) {
-                py_log_tensor(input_tensor);
+                // py_log_tensor(input_tensor);
                 const auto& shard_spec = input_tensor_sharded_memory_config.shard_spec().value();
-                py_log_here();
+                // py_log_here();
                 ttnn::MemoryConfig input_tensor_sharded_memory_config_to_layout = input_tensor_sharded_memory_config;
-                py_log_here();
+                // py_log_here();
                 tt::tt_metal::Alignment alignment{shard_spec.shape[0], shard_spec.shape[1]};
-                py_log_here();
+                // py_log_here();
 
-                py_log_tensor(input_tensor);
-                py_log_here();
+                // py_log_tensor(input_tensor);
+                // py_log_here();
                 input_tensor_sharded_memory_config_to_layout = tt::tt_metal::MemoryConfig(
                     input_tensor_sharded_memory_config_to_layout.memory_layout(),
                     input_tensor_sharded_memory_config_to_layout.buffer_type(),
                     tt::tt_metal::ShardSpec(shard_spec.grid, shard_spec.shape, shard_spec.orientation));
                 alignment = tt::tt_metal::Alignment{shard_spec.shape[0], shard_spec.shape[1]};
-                py_log_here();
+                // py_log_here();
 
                 Tensor resharded_input_tensor = tt::tt_metal::create_device_tensor(
                     TensorSpec(
@@ -937,21 +937,21 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                             input_tensor_sharded_memory_config_to_layout,
                             alignment)),
                     device);
-                py_log_tensor(resharded_input_tensor);
+                // py_log_tensor(resharded_input_tensor);
 
                 input_tensor = ttnn::to_device(input_tensor, device, ttnn::DRAM_MEMORY_CONFIG);
-                py_log_here();
-                py_log_tensor(input_tensor);
+                // py_log_here();
+                // py_log_tensor(input_tensor);
 
                 ttnn::to_memory_config(
                     input_tensor, input_tensor_sharded_memory_config_to_layout, std::nullopt, resharded_input_tensor);
                 input_tensor = resharded_input_tensor;
-                py_log_tensor(input_tensor);
+                // py_log_tensor(input_tensor);
 
-                py_log_here();
-                pad_tensor();
-                py_log_tensor(input_tensor);
-                py_log_here();
+                // py_log_here();
+                // pad_tensor();
+                // py_log_tensor(input_tensor);
+                // py_log_here();
             } else {
                 // if the result is height-sharded it is safe to perform the padding before the
                 // sharding operation
@@ -973,10 +973,10 @@ std::tuple<ttnn::Tensor, ParallelConfig, ParallelConfig> shard_or_reshard_tensor
                 }
             }
         }
-        py_log_here();
+        // py_log_here();
     }
 
-    py_log_here();
+    // py_log_here();
     return {input_tensor, parallel_config, output_parallel_config};
 }
 
