@@ -185,6 +185,7 @@ Tensor full_impl(
     };
 
     switch (dtype_value) {
+        case DataType::BOOL:
         case DataType::UINT8: return concrete_full.template operator()<uint8_t>(fill_value);
         case DataType::UINT16: return concrete_full.template operator()<uint16_t>(fill_value);
         case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);

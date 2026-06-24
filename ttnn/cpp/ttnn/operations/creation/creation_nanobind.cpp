@@ -505,6 +505,7 @@ Tensor from_buffer_impl(
     // bind_function releases the GIL across the C++ body; nb::cast requires it, so re-acquire GIL.
     nb::gil_scoped_acquire acquire;
     switch (dtype) {
+        case DataType::BOOL:
         case DataType::UINT8: {
             auto cpp_buffer = nb::cast<std::vector<uint8_t>>(buffer);
             return ttnn::from_buffer(std::move(cpp_buffer), shape, dtype, device, layout, memory_config);

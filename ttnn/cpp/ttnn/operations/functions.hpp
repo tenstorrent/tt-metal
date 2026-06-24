@@ -475,6 +475,7 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
 inline Tensor random(
     const ttnn::Shape& shape, const DataType data_type = DataType::BFLOAT16, const Layout layout = Layout::ROW_MAJOR) {
     switch (data_type) {
+        case DataType::BOOL:
         case DataType::UINT8: return uniform(uint8_t(0), uint8_t(1), shape, layout);
         case DataType::UINT16: return uniform(uint16_t(0), uint16_t(1), shape, layout);
         case DataType::UINT32: return uniform(0u, 1u, shape, layout);

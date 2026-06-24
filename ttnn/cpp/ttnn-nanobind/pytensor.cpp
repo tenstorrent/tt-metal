@@ -128,13 +128,6 @@ struct PreprocessedPyTensor {
 
 PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::optional<DataType> optional_data_type) {
     auto py_tensor_dtype = py_tensor.dtype();
-    // handle bool types by changing them to uint8
-    // TODO: add proper handling for bool types as a DataType
-    if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bool)) {
-        py_tensor_dtype.code = static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
-        py_tensor_dtype.bits = 8;
-        py_tensor_dtype.lanes = 1;
-    }
 
     DataType data_type = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
@@ -224,7 +217,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
     auto convert_to_logical = [&tensor_spec, &dispatch_to_concrete](const HostBuffer& buffer) {
         const auto tt_dtype = tensor_spec.data_type();
         switch (tt_dtype) {
-            case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
+            case DataType::UINT8:
+            case DataType::BOOL: return dispatch_to_concrete.template operator()<uint8_t>(buffer);
             case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 single-device to_torch is not supported");
             case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(buffer);
             case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(buffer);
@@ -277,7 +271,8 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
     };
 
     switch (tt_tensor.dtype()) {
-        case DataType::UINT8: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
+        case DataType::UINT8:
+        case DataType::BOOL: return dispatch_to_concrete.template operator()<uint8_t>(tt_tensor);
         case DataType::FP8_E4M3: return dispatch_to_concrete.template operator()<float8_e4m3>(tt_tensor);
         case DataType::UINT16: return dispatch_to_concrete.template operator()<uint16_t>(tt_tensor);
         case DataType::INT32: return dispatch_to_concrete.template operator()<int32_t>(tt_tensor);
@@ -361,7 +356,8 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
             case DataType::BFLOAT16: return to_host_buffer_impl.operator()<bfloat16>(contiguous_py_tensor);
             case DataType::FLOAT32: return to_host_buffer_impl.operator()<float>(contiguous_py_tensor);
             case DataType::UINT32: return to_host_buffer_impl.operator()<uint32_t>(contiguous_py_tensor);
-            case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
+            case DataType::UINT8:
+            case DataType::BOOL: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
             case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(contiguous_py_tensor);
             case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(contiguous_py_tensor);
             default: TT_THROW("Unsupported target DataType: {}", target_dtype);
@@ -649,14 +645,6 @@ void pytensor_module(nb::module_& mod) {
                bool enable_bfloat_opt) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
-                // handle bool types by changing them to uint8
-                // TODO: add proper handling for bool types as a DataType
-                if (py_tensor_dtype.code == static_cast<uint8_t>(nb::dlpack::dtype_code::Bool)) {
-                    py_tensor_dtype.code = static_cast<uint8_t>(nb::dlpack::dtype_code::UInt);
-                    py_tensor_dtype.bits = 8;
-                    py_tensor_dtype.lanes = 1;
-                }
-
                 auto src_dtype = get_PyDType_from_dtype(py_tensor_dtype);
                 auto dst_dtype = optional_data_type.value_or(get_ttnn_datatype_from_dtype(py_tensor_dtype));
 
@@ -858,6 +846,7 @@ void pytensor_module(nb::module_& mod) {
                         case DataType::UINT32: return self.to_vector<uint32_t>()[0];
                         case DataType::UINT16: return self.to_vector<uint16_t>()[0];
                         case DataType::UINT8: return self.to_vector<uint8_t>()[0];
+                        case DataType::BOOL: return self.to_vector<uint8_t>()[0];
                         case DataType::FP8_E4M3: TT_THROW("FP8_E4M3 item() is not supported");
                         case DataType::INVALID: TT_THROW("Unsupported DataType");
                     }

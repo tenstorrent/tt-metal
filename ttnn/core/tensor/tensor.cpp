@@ -372,7 +372,8 @@ uint32_t Tensor::element_size() const {
         case DataType::UINT32: return sizeof(uint32_t);
         case DataType::UINT16: return sizeof(uint16_t);
         case DataType::FP8_E4M3: return sizeof(float8_e4m3);
-        case DataType::UINT8: return sizeof(uint8_t);
+        case DataType::UINT8:
+        case DataType::BOOL: return sizeof(uint8_t);
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: return sizeof(std::byte);
         default: TT_THROW("Unsupported data type");

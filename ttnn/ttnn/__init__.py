@@ -235,6 +235,7 @@ from ttnn.types import (
     bfloat4_b,
     bfloat16,
     fp8_e4m3,
+    bool,
     float32,
     MathFidelity,
     MemoryConfig,

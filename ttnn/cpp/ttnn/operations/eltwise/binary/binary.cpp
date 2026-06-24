@@ -63,7 +63,7 @@
             a,                                                                                                \
             b,                                                                                                \
             operations::binary::BinaryOpType::OP_TYPE,                                                        \
-            output_dtype,                                                                                     \
+            (output_dtype.has_value() ? output_dtype : std::optional<const DataType>{DataType::BOOL}),        \
             memory_config,                                                                                    \
             output,                                                                                           \
             post_activations,                                                                                 \
@@ -93,7 +93,7 @@
             a,                                                                                                \
             rhs,                                                                                              \
             operations::binary::BinaryOpType::OP_TYPE,                                                        \
-            output_dtype,                                                                                     \
+            (output_dtype.has_value() ? output_dtype : std::optional<const DataType>{DataType::BOOL}),        \
             memory_config,                                                                                    \
             output,                                                                                           \
             post_activations,                                                                                 \

@@ -17,6 +17,7 @@ std::ostream& operator<<(std::ostream& os, const tt::tt_metal::DataType& data_ty
         case DataType::UINT16: return os << "DataType::UINT16";
         case DataType::INT32: return os << "DataType::INT32";
         case DataType::FP8_E4M3: return os << "DataType::FP8_E4M3";
+        case DataType::BOOL: return os << "DataType::BOOL";
         case DataType::INVALID:
         default: return os << "Invalid";
     }
@@ -97,6 +98,7 @@ tt::DataFormat datatype_to_dataformat_converter(tt::tt_metal::DataType datatype)
         case tt::tt_metal::DataType::UINT16: return tt::DataFormat::UInt16;
         case tt::tt_metal::DataType::UINT8: return tt::DataFormat::UInt8;
         case tt::tt_metal::DataType::FP8_E4M3: return tt::DataFormat::Fp8_e4m3;
+        case tt::tt_metal::DataType::BOOL: return tt::DataFormat::UInt8;
         default: TT_THROW("Unsupported DataType"); return tt::DataFormat::Float16_b;  // for clang-tidy
     }
 }
@@ -136,6 +138,7 @@ auto fmt::formatter<tt::tt_metal::DataType>::format(tt::tt_metal::DataType dt, f
         case tt::tt_metal::DataType::UINT16: name = "DataType::UINT16"; break;
         case tt::tt_metal::DataType::INT32: name = "DataType::INT32"; break;
         case tt::tt_metal::DataType::FP8_E4M3: name = "DataType::FP8_E4M3"; break;
+        case tt::tt_metal::DataType::BOOL: name = "DataType::BOOL"; break;
         case tt::tt_metal::DataType::INVALID:
         default: name = "Invalid"; break;
     }

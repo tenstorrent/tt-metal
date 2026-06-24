@@ -62,6 +62,7 @@ Tensor make_borrowed_host_tensor(ttsl::Span<const std::byte> bytes, const Tensor
                 ttsl::Span<int32_t>(reinterpret_cast<int32_t*>(raw), bytes.size() / sizeof(int32_t)),
                 shape,
                 MemoryPin{});
+        case DataType::BOOL:
         case DataType::UINT8:
             return Tensor::from_borrowed_data<uint8_t>(
                 ttsl::Span<uint8_t>(reinterpret_cast<uint8_t*>(raw), bytes.size() / sizeof(uint8_t)),

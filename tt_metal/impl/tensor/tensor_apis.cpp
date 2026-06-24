@@ -1191,6 +1191,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
                     return with_src_and_dst.operator()<SrcType, CMAKE_UNIQUE_NAMESPACE::bfloat8_tag>();
                 case DataType::FLOAT32: return with_src_and_dst.operator()<SrcType, float>();
                 case DataType::BFLOAT16: return with_src_and_dst.operator()<SrcType, bfloat16>();
+                case DataType::BOOL:
                 case DataType::UINT8: return with_src_and_dst.operator()<SrcType, uint8_t>();
                 case DataType::UINT16: return with_src_and_dst.operator()<SrcType, uint16_t>();
                 case DataType::UINT32: return with_src_and_dst.operator()<SrcType, uint32_t>();
@@ -1206,6 +1207,7 @@ HostTensor to_dtype(const HostTensor& input_tensor, DataType dtype) {
             case DataType::BFLOAT8_B:
             case DataType::FLOAT32: return with_src.operator()<float>();
             case DataType::BFLOAT16: return with_src.operator()<bfloat16>();
+            case DataType::BOOL:
             case DataType::UINT8: return with_src.operator()<uint8_t>();
             case DataType::UINT16: return with_src.operator()<uint16_t>();
             case DataType::UINT32: return with_src.operator()<uint32_t>();

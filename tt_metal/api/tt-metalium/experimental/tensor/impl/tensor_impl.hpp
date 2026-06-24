@@ -101,6 +101,7 @@ auto dispatch(DataType dtype, Func&& func, Args&&... args) {
         case DataType::UINT16:
             return (std::forward<Func>(func)).template operator()<uint16_t>(std::forward<Args>(args)...);
         case DataType::UINT8:
+        case DataType::BOOL:
             return (std::forward<Func>(func)).template operator()<uint8_t>(std::forward<Args>(args)...);
         case DataType::BFLOAT8_B:
             return (std::forward<Func>(func)).template operator()<bfloat8_b>(std::forward<Args>(args)...);
