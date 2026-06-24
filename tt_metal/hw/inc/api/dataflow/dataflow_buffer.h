@@ -300,8 +300,8 @@ public:
     //    - Flush on release (producer only).
     [[nodiscard]] auto scoped_lock(uint16_t num_entries = 1) {
 #ifndef COMPILE_FOR_TRISC
-        lock_acquire_impl(num_entries);
-        return Lock([this, num_entries]() { lock_release_impl(num_entries); });
+        const ScopedLockRegion region = lock_acquire_impl(num_entries);
+        return Lock([this, region, num_entries]() { lock_release_impl(region, num_entries); });
 #else
         return Lock([]() {});
 #endif
@@ -318,8 +318,13 @@ private:
 #ifndef COMPILE_FOR_TRISC
     void write_barrier_impl(const Noc &noc) const;
 
-    void lock_acquire_impl(uint16_t num_entries);
-    void lock_release_impl(uint16_t num_entries);
+    struct ScopedLockRegion {
+        uint32_t start;  // first locked address (WH/BH: ring base; Quasar: wr_ptr/rd_ptr at acquire)
+        uint32_t base;   // wrap base  (Quasar tc_slot; == start on WH/BH)
+        uint32_t limit;  // wrap limit (Quasar tc_slot; == fifo_limit on WH/BH)
+    };
+    ScopedLockRegion lock_acquire_impl(uint16_t num_entries);
+    void lock_release_impl(ScopedLockRegion region, uint16_t num_entries);
 #endif
 
 #ifdef ARCH_QUASAR
