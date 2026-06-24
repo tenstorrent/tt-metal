@@ -134,7 +134,7 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # String so we can follow semver-like bumps (was int on an older branch). Bump when the
 # visualizer schema changes; stale DBs are deleted on import (no migration path).
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
-# 3.2 - git 
+# 3.2 - git hash and remote URL in report_metadata (#46376)
 DATABASE_SCHEMA_VERSION = "3.2"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
