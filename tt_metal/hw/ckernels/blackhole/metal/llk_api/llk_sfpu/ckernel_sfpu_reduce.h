@@ -1312,20 +1312,16 @@ inline void calculate_reduce_max_min_int32() {
                 COL_REDUCE_FACE_ADDRS[j][i] + COL_REDUCE_COLUMN_OFFSETS[i]);
         }
 
-        // Reload the partial max/min (top 4 rows) of the two vertically adjacent faces. They were stored
-        // as sign-magnitude, so a raw load keeps them sign-magnitude (no cast needed here).
-        load_and_clear_high_bits<false>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
-        load_and_clear_high_bits<false>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr);
+        // Reload the partial max/min (top 4 rows) of the two vertically adjacent faces straight into
+        // LREG4-7, where the recorded swap buffer reduces them. They were stored as sign-magnitude, so a
+        // raw load keeps them sign-magnitude (no cast needed here). Loading directly into the target
+        // registers (as the inner loop does) avoids the four LREG0-3 -> LREG4-7 moves.
+        load_and_clear_high_bits<false>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
+        load_and_clear_high_bits<false>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr);
         load_and_clear_high_bits<false>(
-            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + COL_REDUCE_ODD_COLUMNS);
+            p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + COL_REDUCE_ODD_COLUMNS);
         load_and_clear_high_bits<false>(
-            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + COL_REDUCE_ODD_COLUMNS);
-
-        // Move into LREG4-7 for the transpose + cross-row reduction.
-        TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG5, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG6, 0);
-        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG7, 0);
+            p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + COL_REDUCE_ODD_COLUMNS);
 
         // Transpose so the 4 partial results of each column sit in one register, reduce, transpose back.
         TTI_SFPTRANSP(0, 0, 0, 0);
