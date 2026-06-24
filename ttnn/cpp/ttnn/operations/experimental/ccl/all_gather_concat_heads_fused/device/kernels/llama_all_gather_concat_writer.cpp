@@ -180,18 +180,8 @@ void kernel_main() {
 
     // Set up for mcasting to concat workers
     if (wait_output_semaphore) {
-        auto* concat_semaphore_send_addr_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_sem.get_l1_addr());
-        auto* concat_semaphore_send_addr_ptr2 =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(concat_sem2.get_l1_addr());
-
         concat_sem.set(1);
         concat_sem2.set(1);
-        if (concat_semaphore_send_addr_ptr[0] != 1) {
-            concat_sem.set(1);
-        }
-        if (concat_semaphore_send_addr_ptr2[0] != 1) {
-            concat_sem2.set(1);
-        }
     }
 
     if (wait_output_semaphore) {

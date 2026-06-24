@@ -209,9 +209,6 @@ void kernel_main() {
 #endif
 
     in1_valid_sem.set(VALID);
-    // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address consumed by raw NoC primitives
-    const uint64_t in1_sender_semaphore_noc_addr =
-        get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, get_semaphore(in1_sender_semaphore_id));
 
     // Device 2.0 migration: legacy primitive retained: precomposed uint64_t NoC address consumed by raw NoC primitives
     const uint64_t in1_receiver_semaphore_noc_addr =
