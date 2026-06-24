@@ -179,7 +179,11 @@ def run_standalone_loop(pipeline: TtDeepSeekPrefillPipeline) -> None:
         kv_cache_pcc_check(pipeline, slot_id=slot_id, n_chunks=n_chunks, trace_dir=trace_dir)
 
 
-def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DStreamService) -> None:
+def run_request_loop(
+    pipeline: TtDeepSeekPrefillPipeline,
+    h2d_service: ttnn.H2DStreamService,
+    request_id_box=None,
+) -> None:
     """Request loop: token IDs + per-iter control metadata arrive over the H2D
     socket service, pushed by a separate producer process (prefill_h2d_producer.py
     today; the inference-server / prefill scheduler in production).
@@ -193,6 +197,10 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
     `pipeline.prefill` (actual_start is the chunk's cache write offset; actual_end - actual_start is
     its real-token count). The loop is push-driven: it has no notion of how many chunks a request
     spans — the producer/scheduler decides that.
+
+    If `request_id_box` is not None (a dict with key "id"), it is updated with the current
+    iteration counter before each prefill, so the layer-completion sink built by
+    build_layer_completion_sink() sees the correct request id.
     """
     import time as _time
 
@@ -216,6 +224,10 @@ def run_request_loop(pipeline: TtDeepSeekPrefillPipeline, h2d_service: ttnn.H2DS
         actual_start = int(meta_host[1])
         actual_end = int(meta_host[2])
         actual_isl = actual_end - actual_start
+        if request_id_box is not None:
+            # Step 1: loop iteration index serves as request_id (chunk index in a push-driven loop
+            # with no multi-chunk request notion); feeds seq = request_id * num_layers + layer_idx.
+            request_id_box["id"] = i
         logger.info(
             f"[request] iter={i} metadata: slot_id={slot_id} "
             f"actual_start={actual_start} actual_end={actual_end} actual_isl={actual_isl}"
@@ -264,6 +276,9 @@ def _print_config() -> None:
         ("PREFILL_MIGRATION_TABLE_QUEUE", os.environ.get("PREFILL_MIGRATION_TABLE_QUEUE", "/prefill_mig_tbl_1")),
         ("PREFILL_MIGRATION_RESP_QUEUE", os.environ.get("PREFILL_MIGRATION_RESP_QUEUE", "/prefill_mig_rsp_1")),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
+        ("PREFILL_PIPELINED", os.environ.get("PREFILL_PIPELINED", "0")),
+        ("PREFILL_MASTER_RANK", os.environ.get("PREFILL_MASTER_RANK", "0")),
+        ("PREFILL_LAYER_COMPLETION_RING", os.environ.get("PREFILL_LAYER_COMPLETION_RING", "<rank-derived default>")),
     ]
 
     sep = "=" * 70
@@ -272,6 +287,36 @@ def _print_config() -> None:
         config_lines.append(f"  {label:<35} = {val}")
     config_lines.append(sep)
     logger.info("\n" + "\n".join(config_lines))
+
+
+def build_layer_completion_sink(producer, *, source_rank, num_layers, get_request_id):
+    """Build the per-layer callback the pipeline fires once per layer.
+
+    Computes a globally-dense ordering key and pushes a full completion
+    into `producer` (a ttnn.layer_completion.LayerCompletionQueue). The
+    master router re-emits completions strictly in ascending `seq`.
+
+    seq = request_id * num_layers + layer_idx — dense across all (request,
+    layer) pairs. For pipelined prefill each host owns a disjoint set of
+    global layer indices per request, so the union of every host's seqs
+    tiles [0, num_requests*num_layers) with no gaps or collisions.
+
+    Args:
+        producer: connected LayerCompletionQueue (the host-local ring).
+        source_rank: this host's world rank (diagnostic in the payload).
+        num_layers: total global layers (the seq stride per request).
+        get_request_id: zero-arg callable returning the current request id.
+    """
+
+    def on_layer_complete(layer_idx: int) -> None:
+        request_id = get_request_id()
+        seq = request_id * num_layers + layer_idx
+        # Ring is sized well above in-flight depth; a full ring means the
+        # router thread has stalled — surface it rather than drop silently.
+        if not producer.try_push(seq=seq, source_rank=source_rank, layer_idx=layer_idx, request_id=request_id):
+            raise RuntimeError(f"layer-completion ring full (seq={seq}); router not draining")
+
+    return on_layer_complete
 
 
 def main() -> None:
@@ -316,6 +361,7 @@ def main() -> None:
     pipeline.compile()
 
     ack_channel = None
+    pipelined = False  # resolved inside the request-mode branch; init here for teardown
     if enable_migration:
         # Standalone-worker model: build the KV chunk address table from the device
         # KV layout and serialize it to a .pb file. The inference server / orchestrator
@@ -371,24 +417,67 @@ def main() -> None:
             f"run prefill_h2d_producer.py (or the scheduler) in another process to drive token pushes."
         )
 
-        # Per-layer LayerAck: the runner bumps a counter once per layer; the scheduler
-        # reads the delta (the ack carries no payload) and drives the migration worker.
-        # ttnn.InterProcessCounterChannel owns a named POSIX shm segment the scheduler
-        # connects to via shm_layer_ack_name(service_id).
+        pipelined = os.environ.get("PREFILL_PIPELINED", "0") == "1"
+        master_rank = int(os.environ.get("PREFILL_MASTER_RANK", "0"))
+
         ack_shm_name = f"/tt_prefill_layer_acks_{service_id}"
-        # A prior run that didn't tear down cleanly leaves this segment behind, so
-        # InterProcessCounterChannel's shm_open(O_CREAT|O_EXCL) fails with EEXIST.
-        # Unlink any stale segment first (POSIX shm lives at /dev/shm/<name minus '/'>).
-        _stale_ack_shm = f"/dev/shm/{ack_shm_name.lstrip('/')}"
-        if os.path.exists(_stale_ack_shm):
-            logger.warning(f"[migration] removing stale LayerAck shm {_stale_ack_shm} from a prior run")
-            os.remove(_stale_ack_shm)
-        ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
-        pipeline.set_layer_ack_channel(ack_channel)
-        logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
+        # Compute rank/world_size up front; guard so non-pipelined single-host runs
+        # (where the distributed context may not be initialized) never call the context.
+        rank = int(ttnn.distributed_context_get_rank()) if pipelined else 0
+        world_size = int(ttnn.distributed_context_get_size()) if pipelined else 1
+        ring_name = os.environ.get("PREFILL_LAYER_COMPLETION_RING", f"/tt_prefill_layer_completion_ring_{rank}")
+        # A prior run that didn't tear down cleanly leaves shm behind, so the
+        # owner-side O_CREAT|O_EXCL fails. Unlink stale segments first.
+        # Always clean the ack channel; clean the ring only in pipelined mode.
+        stale_names = [ack_shm_name] + ([ring_name] if pipelined else [])
+        for stale in stale_names:
+            p = f"/dev/shm/{stale.lstrip('/')}"
+            if os.path.exists(p):
+                logger.warning(f"[migration] removing stale shm {p} from a prior run")
+                os.remove(p)
+
+        request_id_box = None
+        if pipelined:
+            # Multi-host (world_size > 1) requires the rank-sliced model so each host owns a
+            # disjoint set of GLOBAL layer indices — only then do completion seqs tile densely
+            # across hosts instead of colliding. That slicing is provided by the pipeline-parallel
+            # D2D runtime (jjovicic/pipeline-prefill-d2d, #47420); this branch carries only the
+            # layer-completion transport + routing and relies on that runtime being present once
+            # the branches are merged. No guard here — the precondition is the merged model.
+            # Pipelined prefill: push full completions into a host-local ring;
+            # the router forwards them to the master rank, which re-emits them
+            # in order into the scheduler counter channel (named ack_shm_name —
+            # the router owns it on master). See the routing plan doc.
+            router = ttnn.layer_completion.LayerCompletionRouter(
+                rank=rank,
+                world_size=world_size,
+                master_rank=master_rank,
+                ring_shm_name=ring_name,
+                scheduler_channel_shm_name=ack_shm_name if rank == master_rank else "",
+            )
+            producer = ttnn.layer_completion.LayerCompletionQueue.connect(ring_name, connect_timeout_ms=30000)
+            request_id_box = {"id": 0}
+            pipeline.set_layer_completion_sink(
+                build_layer_completion_sink(
+                    producer,
+                    source_rank=rank,
+                    num_layers=NUM_LAYERS,
+                    get_request_id=lambda: request_id_box["id"],
+                )
+            )
+            logger.info(
+                f"[migration] pipelined layer-completion routing: rank={rank}/{world_size} "
+                f"master={master_rank} ring={ring_name} "
+                f"{'(owns scheduler channel ' + ack_shm_name + ')' if rank == master_rank else '(subordinate)'}"
+            )
+        else:
+            # Single-host: keep the direct counter-channel path unchanged.
+            ack_channel = ttnn.InterProcessCounterChannel(ack_shm_name)
+            pipeline.set_layer_ack_channel(ack_channel)
+            logger.info(f"[migration] LayerAck channel ready at {ack_shm_name}; runner emits one ack per layer")
 
         logger.info("Setup complete, entering request loop")
-        run_request_loop(pipeline, h2d_service)
+        run_request_loop(pipeline, h2d_service, request_id_box=request_id_box if pipelined else None)
 
         # Release the H2D service while the mesh + command queues + service core
         # are still alive. Its dtor frees a command queue and the service-core L1;
@@ -399,7 +488,12 @@ def main() -> None:
         del h2d_service
         gc.collect()
 
-    if ack_channel is not None:
+    if pipelined:
+        if "producer" in locals():
+            producer.shutdown()
+        if "router" in locals():
+            router.stop()  # joins listener; owner-side shm unlinked here
+    elif ack_channel is not None:
         # munmap + shm_unlink; doesn't need the mesh, but tear down here for symmetry.
         ack_channel.shutdown()
         del ack_channel

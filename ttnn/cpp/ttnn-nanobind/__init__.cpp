@@ -19,6 +19,7 @@
 #include "ttnn-nanobind/global_semaphore.hpp"
 #include "ttnn-nanobind/hd_socket.hpp"
 #include "ttnn-nanobind/counter_channel.hpp"
+#include "ttnn-nanobind/layer_completion.hpp"
 #include "ttnn-nanobind/h2d_stream_service.hpp"
 #include "ttnn-nanobind/d2h_stream_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
@@ -254,6 +255,7 @@ NB_MODULE(_ttnn, mod) {
     auto m_d2h_stream_service =
         mod.def_submodule("d2h_stream_service", "ttnn persistent device-to-host streaming service");
     auto m_counter_channel = mod.def_submodule("counter_channel", "ttnn cross-process producer-counter channel");
+    auto m_layer_completion = mod.def_submodule("layer_completion", "ttnn pipelined-prefill layer-completion routing");
     auto m_mesh_socket = mod.def_submodule("mesh_socket", "ttnn mesh socket");
     auto m_profiler = mod.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = mod.def_submodule("reports", "ttnn reports");
@@ -281,6 +283,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::h2d_stream_service::py_module_types(m_h2d_stream_service);
     ttnn::d2h_stream_service::py_module_types(m_d2h_stream_service);
     ttnn::counter_channel::py_module_types(m_counter_channel);
+    ttnn::layer_completion::py_module_types(m_layer_completion);
     ttnn::mesh_socket::py_module_types(m_mesh_socket);
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
@@ -321,6 +324,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::h2d_stream_service::py_module(m_h2d_stream_service);
     ttnn::d2h_stream_service::py_module(m_d2h_stream_service);
     ttnn::counter_channel::py_module(m_counter_channel);
+    ttnn::layer_completion::py_module(m_layer_completion);
     ttnn::mesh_socket::py_module(m_mesh_socket);
     ttnn::profiler::py_module(m_profiler);
     ttnn::reports::py_module(m_reports);
