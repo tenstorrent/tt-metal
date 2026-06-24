@@ -162,7 +162,7 @@ jobs:
           ANTHROPIC_BASE_URL: ${{ secrets.TT_CHAT_URL }}
           ANTHROPIC_AUTH_TOKEN: ${{ secrets.TT_CHAT_API_KEY }}
           # The proxy requires the "anthropic/" model prefix.
-          ANTHROPIC_MODEL: anthropic/claude-opus-4-6
+          ANTHROPIC_MODEL: anthropic/claude-opus-4-5-20251101
           ANTHROPIC_SMALL_FAST_MODEL: anthropic/claude-haiku-4-5-20251001
           # So /code-review --comment can detect the PR and post via gh.
           # GITHUB_TOKEN is the per-run automatic token; its write scope comes
