@@ -725,6 +725,21 @@ def test_demo(
     if is_ci_env and "bert-score" in test_id:
         expected_output = load_expected_text(model_args.base_model_name)
         from bert_score import score as bert_score
+        import bert_score.utils as _bert_score_utils
+
+        # transformers 5.x leaves some tokenizers' model_max_length at the VERY_LARGE_INTEGER sentinel
+        # (~1e30); bert_score forwards it straight into the fast tokenizer's truncation, which overflows
+        # the Rust usize ("OverflowError: int too big to convert"). Clamp to the model's real limit so the
+        # metric runs (deberta-xlarge-mnli supports 512 positions; demo outputs are far shorter, so this
+        # never actually truncates).
+        _orig_sent_encode = _bert_score_utils.sent_encode
+
+        def _sent_encode_clamped(tokenizer, sent):
+            if getattr(tokenizer, "model_max_length", 0) and tokenizer.model_max_length > 1_000_000:
+                tokenizer.model_max_length = 512
+            return _orig_sent_encode(tokenizer, sent)
+
+        _bert_score_utils.sent_encode = _sent_encode_clamped
 
         candidates = text_outputs_all_users_all_batches
         references = [expected_output] * len(candidates)
