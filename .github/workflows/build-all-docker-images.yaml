@@ -141,7 +141,7 @@ jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
     with:
-      runs-on: ${{ inputs.check-harbor-runs-on }}
+      runs-on: ${{ inputs.check-harbor-runs-on || 'tt-ubuntu-light' }}
 
   # Preflight: compute tool and platform data on a single runner
   # Outputs raw JSON blobs that downstream workflows parse with fromJson()
