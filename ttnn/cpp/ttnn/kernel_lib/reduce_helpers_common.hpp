@@ -14,12 +14,7 @@
  */
 template <ckernel::PoolType pool_type, ckernel::ReduceDim reduce_dim>
 constexpr bool reduce_uses_matmul() {
-#ifdef ARCH_BLACKHOLE
     return false;
-#else
-    return (pool_type == ckernel::PoolType::SUM || pool_type == ckernel::PoolType::AVG) &&
-           reduce_dim == ckernel::ReduceDim::REDUCE_ROW;
-#endif
 }
 
 /**
