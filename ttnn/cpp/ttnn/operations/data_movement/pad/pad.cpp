@@ -15,8 +15,6 @@
 
 #include "pad.hpp"
 
-#include <tt-metalium/constants.hpp>
-
 namespace ttnn::operations::data_movement::detail {
 
 namespace {
@@ -25,10 +23,6 @@ inline bool is_bw_sharded(const MemoryConfig& mc) {
     const auto layout = mc.memory_layout();
     return mc.is_sharded() &&
            (layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED);
-}
-
-inline bool has_nontile_w(const ttnn::Shape& shape) {
-    return shape.rank() >= 1 && shape[-1] % tt::constants::TILE_WIDTH != 0;
 }
 
 // Route through sharded_to_interleaved only when native kernels cannot handle the input.
@@ -52,14 +46,6 @@ inline bool needs_pad_composite_fallback(
         return false;
     }
     return !input_tensor.memory_config().is_l1();  // DRAM-sharded edge case only
-}
-
-inline bool needs_pad_composite_output(
-    const ttnn::Tensor& /*input_tensor*/,
-    const MemoryConfig& /*output_memory_config*/,
-    const ttnn::Shape& /*output_shape*/) {
-    // RM W/B sharded output is written natively via noc_async_write_sharded; no composite needed.
-    return false;
 }
 
 ttnn::Tensor pad_via_interleaved_composite(
@@ -150,11 +136,7 @@ ttnn::Tensor pad_impl(
 
     auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
 
-    ttnn::Shape output_shape_for_fallback{output_padded_shape};
-    const bool composite_in = needs_pad_composite_fallback(input_tensor, output_memory_config, input_tensor_start);
-    const bool composite_out =
-        needs_pad_composite_output(input_tensor, output_memory_config, output_shape_for_fallback);
-    if (composite_in || composite_out) {
+    if (needs_pad_composite_fallback(input_tensor, output_memory_config, input_tensor_start)) {
         return pad_via_interleaved_composite(
             input_tensor,
             output_padded_shape,
@@ -167,7 +149,6 @@ ttnn::Tensor pad_impl(
 
     if (input_tensor.is_sharded() &&
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED &&
-        output_memory_config.memory_layout() != TensorMemoryLayout::ND_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::ND_SHARDED &&
         output_memory_config.memory_layout() != TensorMemoryLayout::INTERLEAVED) {
         auto total_height = [](const auto& shape) {
