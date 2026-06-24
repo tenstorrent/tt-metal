@@ -417,6 +417,9 @@ jobs:
         # Strip the working directory prefix from hashed paths so cache entries
         # are reusable across machines even if the checkout path differs.
         CCACHE_BASEDIR: /work
+        # Write per-file hash-input debug files so we can compare cache keys across CI systems.
+        CCACHE_DEBUG: "1"
+        CCACHE_DEBUGDIR: /tmp/ccache-debug
         # TODO: Revisit the addition of these env vars https://github.com/tenstorrent/tt-metal/issues/20161
         TRACY_NO_INVARIANT_CHECK: 1
         TRACY_NO_ISA_EXTENSIONS: 1
@@ -502,13 +505,17 @@ jobs:
 
       - name: Create ccache tmpdir
         run: |
-          mkdir -p /tmp/ccache
+          mkdir -p /tmp/ccache /tmp/ccache-debug
 
       - name: Prepare ccache summary
         run: |
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
+          echo '## CCache Config' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ccache --show-config >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: 🔧 Configure git safe.directory
         run: |
@@ -629,6 +636,17 @@ jobs:
             .github/scripts/ccache_log_filter.sh /tmp/ccache.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
           fi
+
+      - name: Upload ccache debug artifacts
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
+        with:
+          name: ccache-debug-${{ github.run_id }}
+          path: |
+            /tmp/ccache.log
+            /tmp/ccache-debug/
+          retention-days: 3
+          if-no-files-found: warn
 
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
