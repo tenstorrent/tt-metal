@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Component PCC: token embedding (the framework ``tt_transformers`` Embedding the
 model actually uses — see tt/model.py) vs a torch reference, with a random table.

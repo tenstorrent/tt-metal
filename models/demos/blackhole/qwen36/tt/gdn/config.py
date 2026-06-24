@@ -1,5 +1,4 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
-#
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 """Static configuration for the Qwen3.5-9B Gated DeltaNet (linear attention) layer."""
 from dataclasses import dataclass
