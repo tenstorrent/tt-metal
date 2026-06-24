@@ -125,7 +125,7 @@ class LoopBlockRow(FusedLoop):
         if config.perf_run_type == PerfRunType.PACK_ISOLATE:
             return code
         code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
-        code += f"std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + {block.block_x};\n"
+        code += f"[[maybe_unused]] std::uint32_t tile_id = {block.tile_count_x} * ({block.block_y} + tile_y) + {block.block_x};\n"
         block.tile_id_global = "tile_id"
         block.tile_id_block = f"tile_y * {block.block_tiles_x}"
         if config.perf_run_type == PerfRunType.MATH_ISOLATE:
@@ -206,7 +206,11 @@ class LoopTileByTile(FusedLoop):
         code += f"for (std::uint32_t tile_x = 0; tile_x < {block.block_tiles_x}; tile_x++) {{\n"
         code += f"for (std::uint32_t tile_y = 0; tile_y < {block.block_tiles_y}; tile_y++) {{\n"
         block.tile_id_global = f"{block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
-        block.tile_id_block = f"tile_y * {block.block_tiles_x} + tile_x"
+        tile_id_block = (
+            "0"
+            if compute_unit.reduce_to_tile
+            else f"tile_y * {block.block_tiles_x} + tile_x"
+        )
         if config.perf_run_type in (
             PerfRunType.UNPACK_ISOLATE,
             PerfRunType.L1_CONGESTION,
@@ -215,9 +219,7 @@ class LoopTileByTile(FusedLoop):
                 operation, config, compute_unit, block
             )
         else:
-            code += (
-                f"std::uint32_t tile_id = tile_y * {block.block_tiles_x} + tile_x;\n"
-            )
+            code += f"std::uint32_t tile_id = {tile_id_block};\n"
             block.tile_id_global = f"{block.tile_count_x} * ({block.block_y} + tile_y) + ({block.block_x} + tile_x)"
             block.tile_id_block = "tile_id"
             code += compute_unit.fpu.calculate(operation, config, compute_unit, block)

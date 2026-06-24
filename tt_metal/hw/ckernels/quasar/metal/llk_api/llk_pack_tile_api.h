@@ -24,6 +24,15 @@ inline void llk_pack_init(const std::uint32_t pack_output) {
     const ckernel::TensorShape tensor_shape = get_output_tensor_shape(output_id);
 
     _llk_pack_init_(output_id, tensor_shape);
+
+    // 32-bit unpack-to-dest path: PACR addresses dest via SEC{pack::TRISC_ID}_Offset.
+    // Initialize the section base to bank 0 for SyncHalf so the first PACR reads bank 0.
+    if (llk_pack_is_unpack_to_dest_32b(output_id)) {
+        if constexpr (DST_SYNC_MODE == DstSync::SyncHalf) {
+            _reset_dest_register_offset_();
+            _set_dest_section_base_<ckernel::pack::TRISC_ID>(_get_dest_buffer_base_());
+        }
+    }
 }
 
 /**

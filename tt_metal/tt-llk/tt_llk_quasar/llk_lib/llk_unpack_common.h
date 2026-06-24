@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "ckernel_trisc_common.h"
+#include "cmath_common.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
 using namespace ckernel;

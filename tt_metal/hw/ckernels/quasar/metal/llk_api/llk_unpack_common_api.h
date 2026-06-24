@@ -150,3 +150,9 @@ inline void llk_unpack_reconfig_data_format(
     llk_unpack_reconfig_data_format_srcb<EN_32BIT_DEST, dim_stride_target, to_from_int8>(
         srcb_old_operand, srcb_new_operand);
 }
+
+/**
+ * @brief Issues a dummy SrcB dvalid so the math thread can satisfy its SRCB_VLD
+ * stall in transpose-dest. Used by the transpose_wh_dest compute API.
+ */
+inline void llk_unpack_set_srcb_dummy_valid() { _llk_unpack_set_srcB_dummy_valid_(); }

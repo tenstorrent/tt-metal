@@ -26,6 +26,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
 )
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
+from models.demos.utils.trace_region_sizes import build_trace_device_params
 
 
 def _prompt_text_for_index(prompts: list[str] | None, random_weights: bool, index: int) -> str:
@@ -536,13 +537,13 @@ def run_demo(
     logger.info(f"Opening mesh device with shape {mesh_shape}")
     if enable_trace:
         logger.info("Enabling trace for decode forward pass")
-        # NOTE: A trace_region_size of 0 lets the runtime/device allocate trace buffers dynamically
-        # instead of reserving a fixed region up front. This avoids overcommitting memory, at the
-        # cost of giving us less explicit control over reserved trace capacity.
-        trace_region_size = 0
-        logger.info(f"Trace region size set to {trace_region_size}")
+        # trace_region_size=0 (deepseek-v3 YAML) lets the runtime allocate trace buffers dynamically.
+        trace_open_params = build_trace_device_params("deepseek-v3")
+        logger.info(f"Trace region size set to {trace_open_params['trace_region_size']}")
         mesh_device = ttnn.open_mesh_device(
-            mesh_shape=mesh_shape, trace_region_size=trace_region_size, dispatch_core_config=dispatch_core_config
+            mesh_shape=mesh_shape,
+            **trace_open_params,
+            dispatch_core_config=dispatch_core_config,
         )
     else:
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, dispatch_core_config=dispatch_core_config)
