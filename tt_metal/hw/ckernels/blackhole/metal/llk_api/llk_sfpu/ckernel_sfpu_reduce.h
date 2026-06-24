@@ -1579,14 +1579,19 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Int32 load/store mode per reduction. Operands are two's-complement in DEST.
-    //   SUM: plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged; the reduce code's
-    //        explicit sign-magnitude<->two's-complement cast only runs under INT32_2S_COMP, so plain INT32
-    //        skips it.
-    //   AVG: INT32_2S_COMP, which its divide-by-32 step assumes.
-    //   MAX/MIN column reduce: INT32_2S_COMP. On Blackhole the load/store conversion is a no-op, so the
-    //        column path casts explicitly around a sign-magnitude SFPSWAP. Scoped to REDUCE_COL so the
-    //        row-MAX path keeps plain INT32.
+    // Int32 DEST representation and load/store mode per reduction. On Blackhole INT32_2S_COMP is a no-op
+    // (tt-isa SFPLOAD.md: MOD0_FMT_INT32_SM is deprecated and performs no conversion), so any
+    // sign-magnitude<->two's-complement change is done explicitly via SFPCAST. The DEST encoding the test
+    // and ttnn feed differs per pool (SUM/MAX/MIN are two's-complement; AVG is sign-magnitude):
+    //   SUM (two's-complement): plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged;
+    //        the explicit cast only runs under INT32_2S_COMP, so plain INT32 skips it.
+    //   MAX/MIN column reduce (two's-complement): INT32_2S_COMP, but the column path casts each operand
+    //        two's-complement->sign-magnitude around the sign-magnitude SFPSWAP and back. Scoped to
+    //        REDUCE_COL so the row-MAX path keeps plain INT32.
+    //   Row MAX (sign-magnitude): plain INT32; SFPSWAP already compares in sign-magnitude, so no cast.
+    //   AVG (sign-magnitude): INT32_2S_COMP. The path casts sign-magnitude->two's-complement for the
+    //        SFPIADD accumulate and back before the store, and perform_int_average's divide-by-32 is wired
+    //        for this mode, so the DEST word stays sign-magnitude (unlike SUM).
     constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
     constexpr bool int32_max_min_col =
         (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
