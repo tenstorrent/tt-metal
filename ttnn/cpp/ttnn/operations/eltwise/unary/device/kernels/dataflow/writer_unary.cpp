@@ -19,6 +19,7 @@ void kernel_main() {
 
 #if DST_SHARDED
     cb_dst.wait_front(num_pages);
+    cb_dst.pop_front(num_pages);
 #else
     constexpr uint32_t onepage = 1;
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
