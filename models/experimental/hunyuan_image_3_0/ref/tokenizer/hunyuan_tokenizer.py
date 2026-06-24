@@ -194,24 +194,34 @@ class HunyuanTokenizer:
         cond_images: CondImage | list[CondImage] | list[list[CondImage]] | None = None,
         system_prompt: str | None = None,
         mode: str = "gen_image",
+        bot_task: str = "auto",
         max_length: int | None = None,
         cfg_factor: int | None = None,
         sequence_template: str | None = None,
+        image_base_size: int | None = None,
     ) -> dict[str, Any]:
-        """Build T2I or I2I token sequence(s) for ``mode='gen_image'``.
+        """Build T2I / I2I token sequence(s) for ``mode='gen_image'`` or recaption prefix for ``mode='gen_text'``.
 
         Pass ``cond_images`` for image-to-image (user cond block before prompt).
         Pass ``system_prompt`` for instruct-style system block (``en_unified``).
+        For ``mode='gen_text'``, set ``bot_task`` to ``'recaption'`` or ``'think'`` to append the
+        assistant prefix that starts autoregressive recaption/think generation.
         Returns ``dict(output=TokenizerEncodeOutput, sections=...)`` matching HF layout.
         ``output.tokens`` shape is ``[B, S]`` or ``[2, S]`` when ``cfg_factor=2``.
         """
         batch_prompt = [prompt] if isinstance(prompt, str) else list(prompt)
         batch_size = len(batch_prompt)
-        gen_infos = [self.build_gen_image_info(image_size) for _ in batch_prompt]
-        if cfg_factor is None:
-            cfg_factor = 1 if self.config.cfg_distilled else 2
+        if mode == "gen_image":
+            gen_infos = [self.build_gen_image_info(image_size) for _ in batch_prompt]
+            if cfg_factor is None:
+                cfg_factor = 1 if self.config.cfg_distilled else 2
+        else:
+            gen_infos = None
+            cfg_factor = 1
         if sequence_template is None:
             sequence_template = self.sequence_template
+        if image_base_size is None:
+            image_base_size = self.config.image_base_size
 
         batch_cond_images = None
         if cond_images is not None:
@@ -235,9 +245,11 @@ class HunyuanTokenizer:
             batch_cond_images=batch_cond_images,
             batch_system_prompt=batch_system_prompt,
             mode=mode,
+            bot_task=bot_task,
             max_length=max_length,
             cfg_factor=cfg_factor,
             sequence_template=sequence_template,
+            image_base_size=image_base_size,
         )
 
     def validate_text(self) -> dict[str, Any]:
