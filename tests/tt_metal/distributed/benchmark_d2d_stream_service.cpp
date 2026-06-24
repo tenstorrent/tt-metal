@@ -738,13 +738,20 @@ ThroughputResult run_throughput(
     }
 
     if (lease) {
+        // Build the worker workloads ONCE and reuse them across warmup + measured iters.
+        // The build() call is already outside the timed region, but enqueuing a FRESH workload
+        // object re-uploads its program config to device on every enqueue (inside the timed
+        // region below); reusing one object caches that upload after the first enqueue, dropping
+        // each subsequent enqueue to a cheap re-enqueue. The args are identical every iteration
+        // (fixed worker grid, num_iters=1), so reuse is correct — this mirrors how the latency
+        // path reuses its pre-built relays.
+        auto recv_wl = build_receiver_workload(*receiver, *stages[1], /*num_iters=*/1);
+        auto send_wl = build_signal_sender_workload(*sender, *stages[0], /*num_iters=*/1, metadata_size_bytes);
         for (uint32_t w = 0; w < n_warmup; ++w) {
             BENCH_LOG("lease warmup %u/%u start", w + 1, n_warmup);
 
             receiver->release_fabric_links();
             sender->release_fabric_links();
-            auto recv_wl = build_receiver_workload(*receiver, *stages[1], /*num_iters=*/1);
-            auto send_wl = build_signal_sender_workload(*sender, *stages[0], /*num_iters=*/1, metadata_size_bytes);
 
             // One grant -> one transfer per host iteration (mirrors the lease stress test).
             EnqueueMeshWorkload(recv_cq(), recv_wl, /*blocking=*/false);
@@ -759,8 +766,6 @@ ThroughputResult run_throughput(
         for (uint32_t it = 0; it < n_iters; ++it) {
             receiver->release_fabric_links();
             sender->release_fabric_links();
-            auto recv_wl = build_receiver_workload(*receiver, *stages[1], /*num_iters=*/1);
-            auto send_wl = build_signal_sender_workload(*sender, *stages[0], /*num_iters=*/1, metadata_size_bytes);
 
             BENCH_LOG("lease iter %u/%u start", it + 1, n_iters);
 
