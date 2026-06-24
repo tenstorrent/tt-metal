@@ -470,6 +470,12 @@ def _populate_result_from_response(result, response, config, suite_name, input_h
                 # PASS with device-perf N/A -- not a failure.
                 result["status"] = TestStatus.PASS
                 result["device_perf"] = None
+            elif device_perf is None and _should_skip_device_profiler(config):
+                # The profiler was intentionally gated off for this run (e.g. conv2d on
+                # a multi-chip mesh, or CCL on FABRIC_2D), so there is no device-perf by
+                # design. PCC passed -> PASS with device-perf N/A, not a failure.
+                result["status"] = TestStatus.PASS
+                result["device_perf"] = None
             elif device_perf is None:
                 result["status"] = TestStatus.FAIL_UNSUPPORTED_DEVICE_PERF
             else:
@@ -1304,22 +1310,47 @@ def _is_multidevice_ccl_module(module_name):
     return any(any(c in m for c in _ccl) for m in str(module_name).split(",") if m)
 
 
-def _should_skip_device_profiler(config):
-    """The device profiler is safe for single-device and FABRIC_1D CCL runs, but it
-    deadlocks a FABRIC_2D mesh open: with the profiler on, the cq_prefetch dispatch
-    kernel that FABRIC_2D pushes onto the idle-erisc cores overflows the idle-erisc
-    code region (idle_erisc.elf segment 0x5544 > 0x5390 limit) and wedges the erisc
-    cores (run_mailbox 0x40) before any op runs. Confirmed on T3K 2x4 FABRIC_2D.
-
-    CCL ops pick their fabric family by mesh dimensionality (1D mesh -> FABRIC_1D/RING,
-    2D mesh -> FABRIC_2D), and the runner already splits the two into separate
-    --mesh-dims jobs. So skip the profiler for a CCL run only when it can touch a 2D
-    mesh: mesh_dims == "2d", or mesh_dims is None (a mixed run that could hit a 2D
-    vector). A 1D-only CCL run keeps device-perf (validated on T3K FABRIC_1D: real
-    per-RISC numbers, no hang). Non-CCL runs never use FABRIC_2D, so always keep it."""
-    if not _is_multidevice_ccl_module(config.module_name):
+def _is_conv2d_module(module_name):
+    """True if the run targets conv2d. conv2d's heavy 1024^2 FABRIC_1D convs hang under
+    the profiler on multi-chip meshes -- see _should_skip_device_profiler."""
+    if not module_name:
         return False
-    return config.mesh_dims != "1d"
+    return any("conv2d" in m for m in str(module_name).split(",") if m)
+
+
+def _is_multichip_mesh():
+    """True when MESH_DEVICE_SHAPE describes more than one chip (rows*cols > 1)."""
+    shape = os.environ.get("MESH_DEVICE_SHAPE", "").strip()
+    nums = re.findall(r"\d+", shape)
+    if len(nums) >= 2:
+        return int(nums[0]) * int(nums[1]) > 1
+    return False
+
+
+def _should_skip_device_profiler(config):
+    """Whether to skip enabling the device profiler for this run. The profiler is a
+    process-global toggle (TT_METAL_DEVICE_PROFILER, read once at startup; kernels are
+    JIT-compiled with instrumentation), so it can't be disabled per-vector -- if it's
+    unsafe for any vector the run will hit, skip it for the whole run.
+
+    1) CCL on a 2D mesh: with the profiler on, the cq_prefetch dispatch kernel that
+       FABRIC_2D pushes onto idle-erisc overflows the idle-erisc code region
+       (idle_erisc.elf 0x5544 > 0x5390) and wedges the erisc cores at mesh open
+       (run_mailbox 0x40). FABRIC_1D CCL (mesh_dims=="1d") profiles fine -> keep it.
+    2) conv2d on a multi-chip mesh: its heavy 1024^2 FABRIC_1D convs run the full conv
+       per chip with long dispatch/sync phases; the profiler INSTRUMENTATION (not just
+       the read) tips the ~25s op over the dispatch hang-detector -> device timeout
+       (system_memory_manager.cpp:757) that aborts the whole conv2d suite. CONFIRMED on
+       T3K 1x8: profiler-off run passes the full suite clean; profiler-on aborts on the
+       first heavy conv. Single-chip conv2d is safe (no remote-ARC, no fabric) -> keep.
+
+    Vectors of a skipped run report device-perf N/A and PASS (not
+    FAIL_UNSUPPORTED_DEVICE_PERF) -- see _populate_result_from_response."""
+    if _is_multidevice_ccl_module(config.module_name) and config.mesh_dims != "1d":
+        return True
+    if _is_conv2d_module(config.module_name) and _is_multichip_mesh():
+        return True
+    return False
 
 
 def enable_profiler():
@@ -1496,11 +1527,13 @@ if __name__ == "__main__":
         enable_profiler()
     elif config.measure_device_perf:
         logger.info(
-            f"Skipping device profiler for CCL module(s) {config.module_name!r} on a 2D/unspecified "
-            f"mesh (mesh_dims={config.mesh_dims!r}): FABRIC_2D pushes the cq_prefetch dispatch kernel "
-            "onto idle-erisc, whose profiler-instrumented build overflows the idle-erisc code region "
-            "at mesh open and wedges the device (idle_erisc.elf 0x5544 > 0x5390; run_mailbox 0x40). "
-            "1D-only CCL runs (--mesh-dims 1d) keep device-perf."
+            f"Skipping device profiler for {config.module_name!r} "
+            f"(mesh_dims={config.mesh_dims!r}, MESH_DEVICE_SHAPE={os.environ.get('MESH_DEVICE_SHAPE')!r}): "
+            "the profiler is process-global and unsafe for this run -- CCL on FABRIC_2D overflows the "
+            "idle-erisc code region at mesh open (idle_erisc.elf 0x5544 > 0x5390; run_mailbox 0x40), and "
+            "conv2d's heavy FABRIC_1D convs hang the dispatch hang-detector on multi-chip meshes "
+            "(system_memory_manager.cpp:757 -> aborts the suite). Such vectors report device-perf N/A and "
+            "PASS. 1D-only CCL and single-chip conv2d keep device-perf."
         )
 
     # Generate run contents description
