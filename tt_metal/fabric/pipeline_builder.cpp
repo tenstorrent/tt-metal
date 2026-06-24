@@ -161,7 +161,9 @@ std::map<std::string, size_t> assign_submeshes(
     const std::vector<std::string>& stage_order,
     const std::vector<EdgeInputTuple>& edges,
     const std::map<ConnectionKey, ConnectionInfo>& connections,
-    size_t num_submeshes) {
+    size_t num_submeshes,
+    const std::map<std::string, uint32_t>& node_chip_counts,
+    const std::vector<std::vector<InternalChip>>& chips) {
     // Build reverse-lookup: dst -> [src] for non-loopback edges
     std::map<std::string, std::vector<std::string>> parents;
     for (const auto& [src, dst, is_lb] : edges) {
@@ -227,6 +229,22 @@ std::map<std::string, size_t> assign_submeshes(
             }
         }
 
+        // Shape constraint: a node may only land on a submesh whose chip count
+        // matches the node's declared shape (rows*cols).  Without this, a stage
+        // declared 4x2 can be placed on a 1x2 submesh of a different mesh whenever
+        // ethernet connectivity allows, silently mis-placing it (e.g. the final-
+        // layer / loopback stage landing on a 1x2 instead of its 4x2 mesh).
+        auto cc_it = node_chip_counts.find(node);
+        if (cc_it != node_chip_counts.end()) {
+            std::set<size_t> filtered;
+            for (size_t s : candidates) {
+                if (chips[s].size() == cc_it->second) {
+                    filtered.insert(s);
+                }
+            }
+            candidates = std::move(filtered);
+        }
+
         for (size_t sub : candidates) {
             node_to_sub[node] = sub;
             used.insert(sub);
@@ -242,7 +260,8 @@ std::map<std::string, size_t> assign_submeshes(
     if (!solve(0)) {
         throw std::runtime_error(
             "resolve_graph_layout: no valid submesh assignment found — "
-            "physical connectivity does not match the graph topology");
+            "physical connectivity (and per-node shape, if constrained) does not "
+            "match the graph topology");
     }
     return node_to_sub;
 }
@@ -250,7 +269,9 @@ std::map<std::string, size_t> assign_submeshes(
 }  // anonymous namespace
 
 GraphLayoutResult resolve_graph_layout(
-    const std::vector<EdgeInputTuple>& edges, const std::vector<std::vector<ChipTuple>>& submesh_chips) {
+    const std::vector<EdgeInputTuple>& edges,
+    const std::vector<std::vector<ChipTuple>>& submesh_chips,
+    const std::map<std::string, uint32_t>& node_chip_counts) {
     // ------------------------------------------------------------------
     // 0. Convert chip tuples to internal representation
     // ------------------------------------------------------------------
@@ -291,7 +312,7 @@ GraphLayoutResult resolve_graph_layout(
     // ------------------------------------------------------------------
     // 4. Assign submeshes to nodes via backtracking
     // ------------------------------------------------------------------
-    auto node_to_sub = assign_submeshes(stage_order, edges, connections, num_submeshes);
+    auto node_to_sub = assign_submeshes(stage_order, edges, connections, num_submeshes, node_chip_counts, chips);
 
     // ------------------------------------------------------------------
     // 5. Resolve physical coords for every edge
