@@ -18,6 +18,8 @@ slog="$D/logs/axis0_fr_seed${SEED}_${TS}.txt"
 hslog="$HOSTD/logs/axis0_fr_seed${SEED}_${TS}.txt"
 tlog="$D/logs/axis0_fr_triage_${TS}.txt"
 htlog="$HOSTD/logs/axis0_fr_triage_${TS}.txt"
+tlog_cs="$D/logs/axis0_fr_triage_callstacks_${TS}.txt"
+htlog_cs="$HOSTD/logs/axis0_fr_triage_callstacks_${TS}.txt"
 log(){ echo "$@" | tee -a "$OUT"; }
 
 log "=== axis0_fullreset seed=$SEED @ $TS (container restart + glx_reset_auto, immediately before) ==="
@@ -52,13 +54,15 @@ fi
 if [ "$state" = "hung" ]; then
   log "  running tt-triage..."
   docker exec "$C" bash -lc "source $D/.env.sh && timeout 200 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check >$tlog 2>&1" 2>/dev/null
+  docker exec "$C" bash -lc "source $D/.env.sh && timeout 300 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check --run=dump_callstacks --all-cores -vv >$tlog_cs 2>&1" 2>/dev/null
   running=$(grep -E 'RUNNING.*MoEComputeDeviceOperation' "$htlog" 2>/dev/null | grep -oE '[0-9]+(, [0-9]+)*' | tail -1)
   halt=$(grep -oE 'Failed to halt .* on device [0-9]+' "$htlog" 2>/dev/null | grep -oE 'device [0-9]+' | sort -u | tr '\n' ' ')
-  n352=$(grep -c 'writer.cpp 352' "$htlog" 2>/dev/null)
+  n352=$(grep -Ec 'writer.cpp[: ]+352' "$htlog_cs" 2>/dev/null)
   log "    RUNNING MoECompute devices : $running"
   log "    Failed-to-halt devices     : $halt"
   log "    cores at writer.cpp:352    : $n352"
   log "    triage log: $htlog"
+  log "    callstack triage log: $htlog_cs"
 fi
 log "  --- smoke tail ---"; tail -10 "$hslog" 2>/dev/null | sed 's/^/    /' | tee -a "$OUT" >/dev/null
 docker exec "$C" bash -lc "p=\$(cat /tmp/smoke_ax0fr.pid 2>/dev/null); [ -n \"\$p\" ] && kill -TERM \$p 2>/dev/null; sleep 4; [ -n \"\$p\" ] && kill -KILL \$p 2>/dev/null" 2>/dev/null

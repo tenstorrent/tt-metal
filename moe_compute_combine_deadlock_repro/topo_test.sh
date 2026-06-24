@@ -16,6 +16,8 @@ slog="$D/logs/topo_${TOPO}_smoke_${TS}.txt"
 hslog="$HOSTD/logs/topo_${TOPO}_smoke_${TS}.txt"
 tlog="$D/logs/topo_${TOPO}_triage_${TS}.txt"
 htlog="$HOSTD/logs/topo_${TOPO}_triage_${TS}.txt"
+tlog_cs="$D/logs/topo_${TOPO}_triage_callstacks_${TS}.txt"
+htlog_cs="$HOSTD/logs/topo_${TOPO}_triage_callstacks_${TS}.txt"
 log(){ echo "$@" | tee -a "$OUT"; }
 
 log "=== topo_test TOPO=$TOPO seed=$SEED @ $TS ==="
@@ -45,12 +47,15 @@ fi
 if [ "$state" = "hung" ]; then
   log "  running tt-triage..."
   docker exec "$C" bash -lc "source $D/.env.sh && timeout 200 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check >$tlog 2>&1" 2>/dev/null
+  docker exec "$C" bash -lc "source $D/.env.sh && timeout 300 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check --run=dump_callstacks --all-cores -vv >$tlog_cs 2>&1" 2>/dev/null
   running=$(grep -E 'RUNNING.*MoEComputeDeviceOperation' "$htlog" 2>/dev/null | head -1 | grep -oE '16, 20, 24, 28|[0-9]+(, [0-9]+){1,}' | head -1)
   halt=$(grep -oE 'Failed to halt .* on device [0-9]+' "$htlog" 2>/dev/null | grep -oE 'device [0-9]+' | sort -u | tr '\n' ' ')
-  n352=$(grep -c 'writer.cpp 352' "$htlog" 2>/dev/null)
+  n352=$(grep -Ec 'writer.cpp[: ]+352' "$htlog_cs" 2>/dev/null)
   log "    RUNNING MoECompute devices : $running"
   log "    Failed-to-halt devices     : $halt"
   log "    cores at writer.cpp:352    : $n352"
+  log "    triage log                 : $htlog"
+  log "    callstack triage log       : $htlog_cs"
 fi
 log "  --- smoke tail ---"; tail -8 "$hslog" 2>/dev/null | sed 's/^/    /' | tee -a "$OUT" >/dev/null
 docker exec "$C" bash -lc "p=\$(cat /tmp/smoke_topo.pid 2>/dev/null); [ -n \"\$p\" ] && kill -TERM \$p 2>/dev/null; sleep 4; [ -n \"\$p\" ] && kill -KILL \$p 2>/dev/null" 2>/dev/null

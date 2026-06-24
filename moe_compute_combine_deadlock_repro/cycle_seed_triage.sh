@@ -10,7 +10,7 @@ set -u
 C=tt-xla-ird-mvasiljev
 D=/home/mvasiljev/tt-metal/moe_compute_combine_deadlock_repro
 HOSTD=/data/mvasiljev/tt-metal/moe_compute_combine_deadlock_repro
-RT=/home/mvasiljev/tt-xla/third_party/tt-mlir/src/tt-mlir/third_party/tt-metal/src/tt-metal
+RT=/home/mvasiljev/tt-metal
 SEEDS="${SEEDS:-1234 7 99}"
 ITERS="${ITERS:-2}"
 DWELL="${DWELL:-50}"            # seconds to confirm the post-moe_compute sync is hung
@@ -33,6 +33,7 @@ run_one(){  # args: seed iter
   local seed="$1" iter="$2"
   local slog="$D/logs/triage_smoke_${seed}_i${iter}_${TS}.txt"
   local tlog="$D/logs/triage_dump_${seed}_i${iter}_${TS}.txt"
+  local tlog_cs="$D/logs/triage_dump_callstacks_${seed}_i${iter}_${TS}.txt"
   log ""
   log "########## seed=$seed iter=$iter / $ITERS ##########"
   # 1) launch seeded smoke in background (NO timeout -> stays alive when hung)
@@ -55,14 +56,17 @@ run_one(){  # args: seed iter
   else
     log "  result: HUNG -> running tt-triage in parallel"
     docker exec "$C" bash -lc "source $D/.env.sh && timeout 200 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check >$tlog 2>&1" 2>/dev/null
+    docker exec "$C" bash -lc "source $D/.env.sh && timeout 300 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check --run=dump_callstacks --all-cores -vv >$tlog_cs 2>&1" 2>/dev/null
     # extract stuck signature
     local running halt n352
     running=$(docker exec "$C" bash -lc "grep -E 'RUNNING.*MoEComputeDeviceOperation' $tlog | grep -oE '[0-9]+(, [0-9]+)*' | tail -1" 2>/dev/null)
     halt=$(docker exec "$C" bash -lc "grep -oE 'Failed to halt .* on device [0-9]+' $tlog | grep -oE 'device [0-9]+' | sort -u | tr '\n' ' '" 2>/dev/null)
-    n352=$(docker exec "$C" bash -lc "grep -c 'writer.cpp 352' $tlog" 2>/dev/null)
+    n352=$(docker exec "$C" bash -lc "grep -Ec 'writer.cpp[: ]+352' $tlog_cs" 2>/dev/null)
     log "    RUNNING MoECompute devices : $running"
     log "    Failed-to-halt devices     : $halt"
     log "    cores at writer.cpp:352    : $n352"
+    log "    triage log                : $HOSTD/logs/triage_dump_${seed}_i${iter}_${TS}.txt"
+    log "    callstack triage log      : $HOSTD/logs/triage_dump_callstacks_${seed}_i${iter}_${TS}.txt"
     SIGN["$seed,$iter"]="RUNNING=[$running] HALT=[$halt] w352=$n352"
   fi
   # 4) kill only our smoke

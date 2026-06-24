@@ -7,6 +7,7 @@
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/common/kernels/moe_utils.hpp"
+#include "api/debug/dprint.h"
 
 using tt::tt_fabric::NocUnicastAtomicIncCommandHeader;
 using tt::tt_fabric::NocUnicastCommandHeader;
@@ -264,13 +265,35 @@ void kernel_main() {
 
         noc_semaphore_wait(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
 
+        bool token_map_desync = false;
         for (uint32_t dt = 0; dt < token_split_counts[e]; ++dt) {
             const uint32_t st = dense_token_maps_l1_ptr
                 [(e * (global_num_tokens + 1) + token_split_offsets[e] + dt) * dense_token_maps_stride_elm];
+            // Bounded token search. Previously the only loop exit was a debug-only
+            // ASSERT (compiled out in release builds), so an incomplete / desynced
+            // dispatch-metadata entry (token id `st` never present in the activations
+            // stream) turned into an unrecoverable multi-device HANG: this combine core
+            // would spin here forever and never reach the cross-device ring barrier
+            // below, wedging every peer and the upstream moe_compute data-mover. Bound
+            // the search, surface the desync, and stop processing this expert instead of
+            // spinning so the failure is diagnosable (and recoverable) rather than silent.
             uint32_t guard = 0;
             while (expert_token_activations_ptr[0] != st) {
                 expert_token_activations_ptr += activations_stride_elm;
-                ASSERT(guard++ < global_num_tokens);
+                if (guard++ >= global_num_tokens) {
+                    token_map_desync = true;
+                    break;
+                }
+            }
+            if (token_map_desync) {
+                DPRINT(
+                    "selective_reduce_combine: token-map desync expert={} dt={} missing_token_id={} -- check "
+                    "all_to_all_dispatch_metadata output\n",
+                    e,
+                    dt,
+                    st);
+                ASSERT(false);
+                break;
             }
             const uint32_t k = expert_token_activations_ptr[1 + e];
 

@@ -10,7 +10,7 @@ set -u
 C=tt-xla-ird-mvasiljev
 D=/home/mvasiljev/tt-metal/moe_compute_combine_deadlock_repro          # container path
 HOSTD=/data/mvasiljev/tt-metal/moe_compute_combine_deadlock_repro      # host path (logs readable here)
-RT=/home/mvasiljev/tt-xla/third_party/tt-mlir/src/tt-mlir/third_party/tt-metal/src/tt-metal
+RT=/home/mvasiljev/tt-metal
 TTSMI=/usr/local/bin/tt-smi
 SEED="${SEED:-4242}"
 DWELL="${DWELL:-60}"            # seconds to confirm the post-combine sync is hung
@@ -35,6 +35,8 @@ run_axis(){
   local slog="$D/logs/axis${axis}_seed${SEED}_${TS}.txt"
   local hslog="$HOSTD/logs/axis${axis}_seed${SEED}_${TS}.txt"
   local tlog="$D/logs/axis${axis}_triage_${TS}.txt"
+  local tlog_cs="$D/logs/axis${axis}_triage_callstacks_${TS}.txt"
+  local htlog_cs="$HOSTD/logs/axis${axis}_triage_callstacks_${TS}.txt"
   log ""
   log "########## cluster_axis=$axis  seed=$SEED  (expect: $expect) ##########"
   log "  smoke log: $hslog"
@@ -67,14 +69,16 @@ run_axis(){
   if [ "$state" = "hung" ]; then
     log "  running tt-triage in parallel..."
     docker exec "$C" bash -lc "source $D/.env.sh && timeout 200 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check >$tlog 2>&1" 2>/dev/null
+    docker exec "$C" bash -lc "source $D/.env.sh && timeout 300 python3 \$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py --skip-version-check --run=dump_callstacks --all-cores -vv >$tlog_cs 2>&1" 2>/dev/null
     local running halt n352
     running=$(grep -E 'RUNNING.*MoEComputeDeviceOperation' "$HOSTD/logs/axis${axis}_triage_${TS}.txt" 2>/dev/null | grep -oE '[0-9]+(, [0-9]+)*' | tail -1)
     halt=$(grep -oE 'Failed to halt .* on device [0-9]+' "$HOSTD/logs/axis${axis}_triage_${TS}.txt" 2>/dev/null | grep -oE 'device [0-9]+' | sort -u | tr '\n' ' ')
-    n352=$(grep -c 'writer.cpp 352' "$HOSTD/logs/axis${axis}_triage_${TS}.txt" 2>/dev/null)
+    n352=$(grep -Ec 'writer.cpp[: ]+352' "$htlog_cs" 2>/dev/null)
     log "    RUNNING MoECompute devices : $running"
     log "    Failed-to-halt devices     : $halt"
     log "    cores at writer.cpp:352    : $n352"
     log "    triage log: $HOSTD/logs/axis${axis}_triage_${TS}.txt"
+    log "    callstack triage log: $htlog_cs"
   fi
 
   # tail the smoke log for context

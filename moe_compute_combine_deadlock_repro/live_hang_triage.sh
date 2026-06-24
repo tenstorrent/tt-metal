@@ -10,10 +10,12 @@ source "$HERE/.env.sh"
 TS=$(date +%Y%m%d_%H%M%S)
 SMOKE_LOG="$HERE/logs/livehang_smoke_$TS.txt"
 TRIAGE_LOG="$HERE/logs/livehang_triage_$TS.txt"
+TRIAGE_CALLSTACK_LOG="$HERE/logs/livehang_triage_callstacks_$TS.txt"
 
 echo "runtime HEAD: $(cd "$TT_METAL_RUNTIME_ROOT" && git rev-parse --short HEAD)"
 echo "smoke log:  $SMOKE_LOG"
 echo "triage log: $TRIAGE_LOG"
+echo "callstack triage log: $TRIAGE_CALLSTACK_LOG"
 
 # 1) Launch the pinpoint smoke in the background (NO timeout -> it parks at the hung
 #    post-moe_compute sync and stays alive so triage can attach).
@@ -38,14 +40,11 @@ if grep -q "SMOKE SYNC after moe_compute combine OK" "$SMOKE_LOG"; then
 fi
 echo ">>> CONFIRMED HUNG (sync did not return, PID $SMOKE_PID still alive). Running tt-triage in parallel."
 
-# 4) tt-triage against the LIVE hung runtime. Full default checks + detailed callstacks.
-{
-  echo "############ tt-triage default (all checks) ############"
-  timeout 300 python3 "$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py" --skip-version-check
-  echo
-  echo "############ tt-triage dump_callstacks --all-cores -vv ############"
-  timeout 300 python3 "$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py" --skip-version-check --run=dump_callstacks --all-cores -vv
-} 2>&1 | tee "$TRIAGE_LOG"
+# 4) tt-triage against the LIVE hung runtime. Write outputs to files.
+echo "running tt-triage default -> $TRIAGE_LOG"
+timeout 300 python3 "$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py" --skip-version-check >"$TRIAGE_LOG" 2>&1
+echo "running tt-triage dump_callstacks -> $TRIAGE_CALLSTACK_LOG"
+timeout 300 python3 "$TT_METAL_RUNTIME_ROOT/tools/tt-triage.py" --skip-version-check --run=dump_callstacks --all-cores -vv >"$TRIAGE_CALLSTACK_LOG" 2>&1
 
 # 5) Clean up ONLY our smoke process (no kill-all). Reset is left to the operator.
 echo ">>> triage captured. Killing smoke PID $SMOKE_PID (SIGTERM, then SIGKILL)."
