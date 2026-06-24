@@ -27,7 +27,7 @@ BUILD := build
 LD_SCRIPT := ld/x280-lim.ld
 
 .PHONY: all clean disasm symbols toolchain
-all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin
+all: $(BUILD)/counter.bin $(BUILD)/poller.bin $(BUILD)/dma_probe.bin $(BUILD)/grid_drain.bin $(BUILD)/grid_drain4.bin $(BUILD)/poll4.bin $(BUILD)/noc1_probe.bin $(BUILD)/poll4n1.bin $(BUILD)/poll6n1.bin
 
 $(BUILD)/entry.o: boot/entry.S | $(BUILD) toolchain
 	$(CC) $(ARCH_FLAGS) -nostdlib -c -o $@ $<
@@ -93,6 +93,36 @@ $(BUILD)/poll4.elf: $(BUILD)/entry.o $(BUILD)/poll4.o $(LD_SCRIPT) | toolchain
 $(BUILD)/poll4.bin: $(BUILD)/poll4.elf
 	$(OBJCOPY) -O binary $< $@
 	@echo "poll4.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/noc1_probe.o: src/noc1_probe.c include/dma_engine.h include/noc.h | $(BUILD) toolchain
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(BUILD)/noc1_probe.elf: $(BUILD)/entry.o $(BUILD)/noc1_probe.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/noc1_probe.o
+
+$(BUILD)/noc1_probe.bin: $(BUILD)/noc1_probe.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "noc1_probe.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/poll4n1.o: src/poll4n1.c include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/poll4n1.elf: $(BUILD)/entry.o $(BUILD)/poll4n1.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/poll4n1.o
+
+$(BUILD)/poll4n1.bin: $(BUILD)/poll4n1.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "poll4n1.bin: $$(wc -c < $@) bytes"
+
+$(BUILD)/poll6n1.o: src/poll6n1.c include/dma_engine.h include/noc.h | $(BUILD) toolchain
+	$(CC) $(VEC_CFLAGS) -c -o $@ $<
+
+$(BUILD)/poll6n1.elf: $(BUILD)/entry.o $(BUILD)/poll6n1.o $(LD_SCRIPT) | toolchain
+	$(CC) -nostdlib -T $(LD_SCRIPT) $(ARCH_FLAGS) -o $@ $(BUILD)/entry.o $(BUILD)/poll6n1.o
+
+$(BUILD)/poll6n1.bin: $(BUILD)/poll6n1.elf
+	$(OBJCOPY) -O binary $< $@
+	@echo "poll6n1.bin: $$(wc -c < $@) bytes"
 
 $(BUILD):
 	mkdir -p $@
