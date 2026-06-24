@@ -5,7 +5,7 @@
 """
 Worker-side handshake for `ttnn.H2DStreamService` exposed as a one-shot ttnn op.
 
-Pairs with `models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_socket_sync.cpp`:
+Pairs with `models/demos/deepseek_v3_d_p/tt/runners/kernels/h2d_socket_sync.cpp`:
 each worker core waits on the service's `data_ready_sem`, copies its slice of
 the backing tensor into a freshly allocated output tensor, then acks the
 service core's `consumed_counter`. Replaces `service.barrier()` for the common
@@ -19,7 +19,7 @@ pipeline pattern
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import get_tensor_accessor_args
 
-_KERNEL_PATH = "models/demos/deepseek_v3_b1/micro_ops/host_io/kernels/h2d_socket_sync.cpp"
+_KERNEL_PATH = "models/demos/deepseek_v3_d_p/tt/runners/kernels/h2d_socket_sync.cpp"
 _SCRATCH_CB_INDEX = 0
 
 
