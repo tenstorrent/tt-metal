@@ -29,6 +29,7 @@ from .operations import (
     causal_conv1d_silu,
     causal_conv1d_silu_update,
     chunk_identity,
+    chunk_solve_masks,
     chunk_triangular_masks,
     l2norm,
     solve_unit_lower_triangular,
@@ -161,6 +162,10 @@ class Qwen35GatedDeltaNet(LightweightModule):
         """
         self.eye = chunk_identity(self.chunk_size, self.mesh_device)
         self.triangular_masks = chunk_triangular_masks(self.chunk_size, self.mesh_device)
+        # Static block-diagonal/off-diagonal masks for the masked forward-substitution inverse
+        # (solve_unit_lower_triangular). Built here, never mid-forward, so the graph stays
+        # trace-capturable; they encode chunk_size + the leaf size for the solve.
+        self.solve_masks = chunk_solve_masks(self.chunk_size, self.mesh_device)
 
         # Persistent zero pads for the prefill path, built once here next to the other
         # per-shape constants so the forward never has to mint them. Allocating a
@@ -341,7 +346,7 @@ class Qwen35GatedDeltaNet(LightweightModule):
         # lower triangular and solve_unit_lower_triangular(L) IS the full (I - attn)^{-1}
         # (the +eye is folded into the k=0 Neumann term). attn is rebound to that inverse.
         L = ttnn.add(eye, ttnn.neg(attn))
-        attn = solve_unit_lower_triangular(L, eye, chunk_size, compute_kernel_config=chunk_math_kernel_config)
+        attn = solve_unit_lower_triangular(L, eye, self.solve_masks, compute_kernel_config=chunk_math_kernel_config)
 
         # torch lines 285-286: rebind `value` to the inverted-transition-applied v_beta
         # (this is what v_i reads in the chunk loop), and the decay-weighted k_cumdecay.
