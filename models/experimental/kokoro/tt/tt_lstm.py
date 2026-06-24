@@ -457,20 +457,49 @@ def tt_bilstm_nlc(
         # elementwise/slice/sigmoid ops are memory-bound, so L1 cuts their device time ~10-15%
         # (matmul is launch-bound, unaffected). L1-interleaved spreads across banks, so it needs
         # NO per-step reshard (unlike width-sharding) — interleaved in/out throughout.
-        # Two guards: (1) only with ``recurrent_program_config`` set — its bounded matmul CBs avoid
-        # the L1 circular-buffer clash that forced DRAM at H>64 with the default config; (2) only
-        # when ``not do_fold`` — the bias-fold recurrent matmul TT_FATALs with L1 in0/out. The
-        # ``[L,B,2H]`` output accumulation is the only L-scaling term, so gate on a sequence-length
-        # budget and fall back to DRAM for long sequences (keeps L1 footprint bounded).
+        # Guard: only with ``recurrent_program_config`` set — its bounded matmul CBs avoid the L1
+        # circular-buffer clash that forced DRAM at H>64 with the default config. The ``[L,B,2H]``
+        # output accumulation is the only L-scaling term, so gate on a sequence-length budget and
+        # fall back to DRAM for long sequences (keeps L1 footprint bounded).
+        #
+        # L1 takes PRIORITY over the B==1 bias-fold (``do_fold``): the fold saves one BinaryNg/step
+        # but its bias-epilogue matmul TT_FATALs with L1 in0/out, whereas L1 cuts the recurrent
+        # matmul (~8->6 us) AND every per-step elementwise/slice. So when L1 is eligible we disable
+        # the fold and run the separate gate-add (the B>1 path) on L1 — net faster even at B==1.
+        # (Drops the fold's "one fp32 epilogue add" rounding edge, fine for the tolerant TextEncoder.)
+        l1_weights: list[ttnn.Tensor] = []
         if (
             recurrent_program_config is not None
-            and not do_fold
+            and not fp32_state
             and step_mc.buffer_type != ttnn.BufferType.L1
             and L * _tensor_nbytes((B, 2 * H), state_dtype) <= _FUSED_L1_ACCUM_BUDGET_BYTES
         ):
+            do_fold = False  # L1 over fold (see above); bias-fold + L1 in0/out is a TT_FATAL
             step_mc = ttnn.L1_MEMORY_CONFIG
+            # Co-locate the gate-projection buffer (gx_comb [L,B,8H]) + its per-step slices/concat on
+            # L1 too (same seq budget bounds both it and the [L,B,2H] state accumulation), and stage
+            # the matmul weights (w_x for the gate precompute, w_h_block for the recurrent step) to
+            # L1 for the duration of this forward. L1 in1 cuts the matmul device time substantially
+            # (gate precompute + recurrent: ~438->343 us). The weight copies are transient (freed at
+            # the end of this call), so no persistent L1 footprint leaks into the kmodel pipeline.
+            gx_mc = ttnn.L1_MEMORY_CONFIG
+            w_h_block = ttnn.to_memory_config(w_h_block, ttnn.L1_MEMORY_CONFIG)
+            l1_weights.append(w_h_block)
+            fwd_wx = ttnn.to_memory_config(fwd.w_x, ttnn.L1_MEMORY_CONFIG)
+            rev_wx = ttnn.to_memory_config(rev.w_x, ttnn.L1_MEMORY_CONFIG)
+            l1_weights += [fwd_wx, rev_wx]
+            fwd = TTLSTMParams(w_x=fwd_wx, w_h=fwd.w_h, b=fwd.b, hidden_size=H)
+            rev = TTLSTMParams(w_x=rev_wx, w_h=rev.w_h, b=rev.b, hidden_size=H)
+            # Stage the LSTM input to L1 too so the gate-precompute (in0=x_nlc) and the reverse-input
+            # reorder (in1=x_nlc) read L1 instead of DRAM — removes the last dram-interleaved matmul.
+            x_nlc = ttnn.to_memory_config(x_nlc, ttnn.L1_MEMORY_CONFIG)
+            l1_weights.append(x_nlc)
+        # Output-assembly tensors (reverse-output reorder + the [B,L,2H] stack/slices) share the
+        # step memory: L1 when the fused L1 path is active, else the caller's config.
+        asm_mc = step_mc if step_mc.buffer_type == ttnn.BufferType.L1 else memory_config
         H2 = 2 * H
         H8 = 8 * H
+
         # Reverse the sequence in time with an anti-identity matmul (each output row is exactly
         # one input row * 1.0, so it is a bit-exact reordering). Then ``gx_rev`` computed from the
         # reversed input is already indexed in the order the reverse pass consumes it, so combined
@@ -541,15 +570,24 @@ def tt_bilstm_nlc(
         cat = ttnn.concat(outs_comb, dim=-1)  # [B, L*2H]
         for o in outs_comb:
             ttnn.deallocate(o)
-        hcomb = ttnn.reshape(cat, [B, L, H2], memory_config=memory_config)  # [B, L, 2H]
+        hcomb = ttnn.reshape(cat, [B, L, H2], memory_config=asm_mc)  # [B, L, 2H]
         ttnn.deallocate(cat)
-        hs_f = ttnn.slice(hcomb, [0, 0, 0], [B, L, H], [1, 1, 1], memory_config=memory_config)
-        hs_b_rev = ttnn.slice(hcomb, [0, 0, H], [B, L, H2], [1, 1, 1], memory_config=memory_config)
+        hs_f = ttnn.slice(hcomb, [0, 0, 0], [B, L, H], [1, 1, 1], memory_config=asm_mc)
+        hs_b_rev = ttnn.slice(hcomb, [0, 0, H], [B, L, H2], [1, 1, 1], memory_config=asm_mc)
         ttnn.deallocate(hcomb)
-        hs_b = ttnn.matmul(anti_tt, hs_b_rev, memory_config=memory_config, compute_kernel_config=compute_kernel_config)
+        # NOTE: no program_config here. This anti-identity reorder is a *batched* matmul (B>1 leading
+        # dim), and ttnn sizes its output blocks as B*ceil(L/32) along the core-grid y; a fixed/derived
+        # config that satisfies ``num_blocks_y <= grid.y`` couples to both B and L (which vary per
+        # input) and TT_FATALs on mismatch. Unlike the recurrent matmul (M=batch -> one tile row, so a
+        # robust config transfers), this 3-6 µs one-shot op stays on the default config.
+        hs_b = ttnn.matmul(anti_tt, hs_b_rev, memory_config=asm_mc, compute_kernel_config=compute_kernel_config)
         ttnn.deallocate(hs_b_rev)
         ttnn.deallocate(anti_tt)
-        return ttnn.concat([hs_f, hs_b], dim=2)
+        # Return in the caller's memory_config (preserve the DRAM contract; assembly stayed L1).
+        out = ttnn.concat([hs_f, hs_b], dim=2, memory_config=memory_config)
+        for _w in l1_weights:  # free the transient L1 weight copies (no persistent L1 footprint)
+            ttnn.deallocate(_w)
+        return out
     # ---- End fused fast path ----------------------------------------------------------------
 
     gx_fwd = _precompute_gates_x(fwd)
