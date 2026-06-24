@@ -9,6 +9,7 @@ Device fixture follows the granite_ttm_r1 pattern (single CQ, default params).
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Generator
 
@@ -59,9 +60,17 @@ def model_config():
     from models.demos.diffusion_drive.tt.config import ModelConfig
 
     cfg = ModelConfig()
-    anchors = _DATA_DIR / "kmeans_navsim_traj_20.npy"
-    if anchors.exists():
-        cfg.plan_anchor_path = str(anchors)
+    # Resolve the kmeans plan-anchor asset to an EXISTING file, else None so tests
+    # that need it skip cleanly. ModelConfig.plan_anchor_path defaults to a path in
+    # the gitignored data/ dir; if that file is absent the default is a stale,
+    # non-None path that would otherwise fail mid-build with FileNotFoundError
+    # (defeating each test's `if plan_anchor_path is None: skip` guard).
+    candidates = [
+        os.environ.get("DD_ANCHOR_PATH"),  # explicit override
+        _DATA_DIR / "kmeans_navsim_traj_20.npy",  # scripts/prepare_assets.py target
+        cfg.plan_anchor_path,  # ModelConfig default
+    ]
+    cfg.plan_anchor_path = next((str(p) for p in candidates if p and Path(p).exists()), None)
     return cfg
 
 
