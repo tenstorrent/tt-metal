@@ -13,6 +13,8 @@ Tests structured data, random data, sparse weights, and non-local expert skippin
 Shape: [1, 3200, 8, 7168] - DeepSeek-V3 dimensions.
 """
 
+import math
+
 import pytest
 import torch
 import ttnn
@@ -26,6 +28,7 @@ EMB_DIM = DeepSeekV3Config.EMB_SIZE
 EXPERT_DIM = 2
 PCC_THRESHOLD = 0.999
 NUM_ROUTED_EXPERTS = DeepSeekV3Config.NUM_ROUTED_EXPERTS
+DEFAULT_STRUCTURED_TILE_WIDTH = 1024
 
 
 def pytorch_reference(combine, weights):
@@ -88,6 +91,29 @@ def assert_pcc(result, expected, threshold=PCC_THRESHOLD, label=""):
     return pcc
 
 
+def structured_tile_width(emb_dim):
+    """Keep the legacy 1024-wide pattern when possible, otherwise pick a clean divisor."""
+    if emb_dim % DEFAULT_STRUCTURED_TILE_WIDTH == 0:
+        return DEFAULT_STRUCTURED_TILE_WIDTH
+
+    width = math.gcd(emb_dim, DEFAULT_STRUCTURED_TILE_WIDTH)
+    assert width > 0, f"emb_dim must be positive, got {emb_dim}"
+    return width
+
+
+@pytest.mark.parametrize(
+    ("emb_dim", "expected_width"),
+    [
+        pytest.param(7168, 1024, id="deepseek_v3"),
+        pytest.param(2880, 64, id="gpt_oss_120b"),
+    ],
+)
+def test_structured_tile_width_contract(emb_dim, expected_width):
+    tile_width = structured_tile_width(emb_dim)
+    assert tile_width == expected_width
+    assert emb_dim % tile_width == 0
+
+
 # ============================================================================
 # Structured data test
 # ============================================================================
@@ -97,7 +123,7 @@ def test_structured_data(device):
     """Constant-per-tile activations with sequential weights [1..8].
     This pattern is easy to verify manually and catches tile ordering bugs."""
     torch.manual_seed(42)
-    tile_width = 1024
+    tile_width = structured_tile_width(EMB_DIM)
     num_tiles = EMB_DIM // tile_width
 
     tile_values = 0.1 * torch.arange(
@@ -267,7 +293,7 @@ def test_output_layout(device):
 @pytest.mark.parametrize("num_tokens", [4096, 6400, 8192])
 def test_multi_chunk_structured(device, num_tokens):
     """Structured data with >100 chunks so some cores get 2+ chunks each."""
-    tile_width = 1024
+    tile_width = structured_tile_width(EMB_DIM)
     num_tiles = EMB_DIM // tile_width
 
     tile_values = 0.1 * torch.arange(
