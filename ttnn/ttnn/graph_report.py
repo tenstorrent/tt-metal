@@ -65,6 +65,7 @@ else:
 
 SUPPORTED_REPORT_VERSION = 1
 
+
 def sanitize_git_remote_url(url: str) -> str:
     """Return a remote URL safe to persist in shared artifacts (no credentials or query parts).
 
