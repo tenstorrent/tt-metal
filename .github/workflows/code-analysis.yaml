@@ -46,6 +46,11 @@ on:
         type: boolean
         default: false
         description: "Post inline clang-tidy fix suggestions on PR diffs"
+      check-harbor-runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-light"
+        description: "Runner label for the Harbor health check job"
   workflow_dispatch:
     inputs:
       architecture:
@@ -134,6 +139,8 @@ jobs:
   # Check Harbor availability first
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ inputs.check-harbor-runs-on }}
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:

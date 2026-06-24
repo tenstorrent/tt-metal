@@ -69,6 +69,7 @@ jobs:
     with:
       runs-on-large: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-large-prio-stable' || 'tt-ubuntu-2204-large-stable' }}
       runs-on-medium: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
+      check-harbor-runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
   # TODO: Duplicate check-harbor call. build-all-docker-images.yaml (called by
   # docker-images above) also calls check-harbor internally, but does not expose
@@ -79,6 +80,8 @@ jobs:
   check-harbor:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/check-harbor.yaml
+    with:
+      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-light-prio' || 'tt-ubuntu-light' }}
 
 
   find-changes:
@@ -373,24 +376,6 @@ jobs:
       build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
 
-  fabric-cpu-only-unit-tests:
-    needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
-    if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
-    secrets: inherit
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [{ arch: wormhole_b0 }]
-    uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runs-on: ${{ github.event_name == 'merge_group' && 'tt-ubuntu-2204-medium-prio-stable' || 'tt-ubuntu-2204-medium-stable' }}
-      docker-image: ${{ needs.resolve-docker-pull-refs.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.build.outputs.wheel-artifact-name }}
-
   triage-tests:
     needs: [build, resolve-docker-pull-refs, find-changes, check-harbor]
     secrets: inherit
@@ -453,14 +438,14 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests]
+    needs: [static-checks, docker-images, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, llk-unit-tests]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests, llk-unit-tests"
+          optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, tt-train-smoke-tests, triage-tests, fabric-unit-tests, llk-unit-tests"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
