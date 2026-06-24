@@ -351,9 +351,7 @@ class TtPrefillTransformer(LightweightModule):
                     logger.debug(f"Skipping reordering for intermediate {key} of type {type(tensor)}")
 
         # Sample token(s) from logits
-        first_token_id, first_token_prob, sweep_results = self._sample(
-            first_token_logits, actual_isl, temperature
-        )
+        first_token_id, first_token_prob, sweep_results = self._sample(first_token_logits, actual_isl, temperature)
 
         if return_intermediates:
             intermediates["first_token"] = sweep_results
