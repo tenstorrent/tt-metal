@@ -545,11 +545,7 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HF_MODEL` | `mistralai/Voxtral-4B-TTS-2603` | Model weights path or HF repo ID (used when `--model` is omitted; same as other models pipelines) |
-| `VOXTRAL_TTS_MODEL` | — | Optional override if `HF_MODEL` is set to a different model in a shared shell |
 | `MESH_DEVICE` | unset → `P150` (1×1) | Compute mesh: `P150` (1×1 submesh on QB2) or `P150x4` (QB2 tensor-parallel text) |
-| `CI` | unset | Set by CI pipelines for other model paths (e.g. `local_files_only` weight load); does not change demo warmup |
-| `VOXTRAL_TRACE_REGION_SIZE` | `200000000` | Trace capture region size in bytes (passed to device open in tests) |
-| `VOXTRAL_OUTPUT_HPF_HZ` | `80` | High-pass filter cutoff (Hz) applied to saved `.wav` to remove sub-speech rumble. Set `0` to disable |
 
 ---
 
@@ -572,31 +568,24 @@ Measured on **P150 (1×1)** with `MESH_DEVICE=P150`, Tale of Two Cities prompt t
 
 **Prefill — last-token logit PCC vs HF**
 
-| Prompt ISL | Measured PCC | Threshold |
-|:-----------|:------------:|:---------:|
-| 128 | 0.996 | 0.99 |
-| 256 | 0.999 | 0.99 |
-| 512 | 0.999 | 0.99 |
-| 1024 | 0.998 | 0.99 |
-| 2048 | 0.998 | 0.99 |
-| 4096 | 0.998 | 0.99 |
-| 8192 | 0.960 | 0.95 |
-| 16384 | 0.943 | 0.94 |
-| 32768 | 0.972 | 0.97 |
-| 65504 | — | 0.94 (local tail; not yet measured) |
+| Prompt ISL | Measured PCC |
+|:-----------|:------------:|
+| 128 | 0.996 |
+| 256 | 0.999 |
+| 512 | 0.999 |
+| 1024 | 0.998 |
+| 2048 | 0.998 |
+| 4096 | 0.998 |
+| 8192 | 0.960 |
+| 16384 | 0.943 |
+| 32768 | 0.972 |
 
 **Decode multistep — min per-step logit PCC over 32 teacher-forced steps**
 
-| Prompt ISL | Min step PCC | Threshold |
-|:-----------|:------------:|:---------:|
-| 128 | — | 0.98 (CI) |
-| 256 | — | 0.98 (CI) |
-| 384 | — | 0.98 (CI) |
-| 512 | — | 0.98 (CI) |
-| 8192 | 0.998 | 0.98 |
-| 16384 | 0.998 | 0.98 |
-| 65504 + 32 | — | 0.98 (local tail) |
-| 65280 + 256 | — | 0.98 (local tail) |
+| Prompt ISL | Min step PCC |
+|:-----------|:------------:|
+| 8192 | 0.998 |
+| 16384 | 0.998 |
 
 ### 6.2 Quality metrics
 
@@ -664,9 +653,6 @@ Verified using `demo/demo.py`
 | 64000            | 514 chars / 458 audio tokens    | 92893.81     | 1.5841 | 5.53                |
 | 65536            | 514 chars / 458 audio tokens    | 94664.92     | 1.6143 | 5.43                |
 
-#### BH QB2 (1×4)
-
-QB2 demo and unit tests run with `MESH_DEVICE=P150x4`; perf sweep rows not yet added here.
 
 #### Sizing `--text-max-seq-len` (why too small produces no output)
 
@@ -749,9 +735,10 @@ A known limitation of this setup is **number formatting**. When the input refere
 
 ## 8. Work in progress
 
-1. **Text 64k logit PCC** — tail prefill/decode rows at max KV length on P150 (see [§6.1.1](#611-text-logit-pcc-p150-11)).
+1. **Text logit PCC** — tail prefill/decode rows at max KV length(64k)(see [§6.1.1](#611-text-logit-pcc-p150-11)). Also, for decode, verify results for 128/256/512/1024/2048/4096/32k ISL.
 2. **Host staging → TTNN** — P150 traced prefill and code→MM-embed staging; device-side code accumulation (trace aliasing); device FM noise RNG; TT mel concat for long audio.
-3. **BH QB2 optimizations** — kernel and memory-config tuning for 1×4 tensor-parallel text.
+3. **BH QB2 demo results** — Demo results for all ISL.
+4. **BH QB2 optimizations** — kernel and memory-config tuning for 1×4 tensor-parallel text.
 
 ## 9. References
 
