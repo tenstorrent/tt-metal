@@ -14,7 +14,7 @@ from models.tt_transformers.tt.decoder import TransformerBlock as TtTransformerB
 from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.rope import RotarySetup
 
-from .utils import load_hf_mixtral_config
+from .utils import fuse_mixtral_experts, load_hf_mixtral_config
 
 # pytest models/tt_transformers/tests/mixtral/test_mixtral_decoder.py
 
@@ -28,6 +28,8 @@ def convert2ref(state_dict):
         ("attention.wo.weight", "self_attn.o_proj.weight"),
         ("attention_norm.weight", "input_layernorm.weight"),
         ("ffn_norm.weight", "post_attention_layernorm.weight"),
+        # transformers 5.x renamed MixtralDecoderLayer.block_sparse_moe -> mlp
+        ("block_sparse_moe.gate.weight", "mlp.gate.weight"),
     ]
 
     out = {}
@@ -73,7 +75,12 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
     state_dict = model_args.load_state_dict()
     partial_state_dict = {k[9:]: v for k, v in state_dict.items() if (k.startswith(f"layers.{layer_idx}."))}
     reference_model = MixtralDecoderLayer(hf_config, layer_idx)
-    reference_model.load_state_dict(convert2ref(partial_state_dict))
+    # transformers 5.x: experts are fused into mlp.experts.{gate_up_proj,down_proj}
+    reference_model.load_state_dict(
+        fuse_mixtral_experts(
+            convert2ref(partial_state_dict), hf_config.num_local_experts, "block_sparse_moe.experts", "mlp.experts"
+        )
+    )
     reference_rotary_emb = MixtralRotaryEmbedding(config=hf_config)
 
     # Initialize TT model
