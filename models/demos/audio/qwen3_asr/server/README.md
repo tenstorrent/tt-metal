@@ -10,6 +10,30 @@ POST /v1/audio/transcriptions   (multipart: file=<wav>, model=<str>, language=<o
 GET  /health -> {"status": "ok"}
 ```
 
+## Checkpoint setup — the decoder checkpoint must be the EXTRACTED one
+The server loads the **text decoder** from `${CKPT}/model.safetensors` with **unprefixed**
+keys (`model.embed_tokens.weight`, `model.layers.*`, `model.norm.weight`, `lm_head.weight`).
+The raw HF `Qwen/Qwen3-ASR-1.7B` stores these under `thinker.model.*` / `thinker.lm_head`
+(the audio encoder is `thinker.audio_tower.*`, loaded separately). So the mounted
+`qwen3_asr_text_decoder/` must be the **extracted** checkpoint, NOT the raw HF model.
+
+`entrypoint.sh` auto-extracts it on first run via `reference/extract_text_decoder.py` —
+**but only when `$CKPT/model.safetensors` and `config.json` are both absent**. If a *wrong*
+`model.safetensors` (e.g. the raw HF model) is already sitting at the mount, extraction is
+**skipped** and startup fails with:
+```
+safetensors_rust.SafetensorError: File does not contain tensor model.embed_tokens.weight
+```
+Fix: clear the bad checkpoint and let the entrypoint re-extract, or extract manually:
+```bash
+# in the eval venv (needs the base Qwen3-ASR-1.7B in the HF cache; QWEN3ASR_SNAP_BASE to override)
+rm -f /home/ttuser/ttwork/qwen3_asr_text_decoder/model.safetensors   # drop the wrong file
+python models/demos/audio/qwen3_asr/reference/extract_text_decoder.py \
+    --ckpt-out /home/ttuser/ttwork/qwen3_asr_text_decoder --skip-golden
+```
+This writes 311 decoder tensors (`thinker.` stripped) + a Qwen3 `config.json` + tokenizer.
+Keep the HF cache mounted too — the audio tower is loaded from the raw snapshot.
+
 ## Dedicated container (recommended) — boots straight into the API server
 ```bash
 # build the image once (build ctx bakes deps + qwen_asr processor + entrypoint):
