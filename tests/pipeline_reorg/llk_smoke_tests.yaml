@@ -7,20 +7,13 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --timeout=60 \
-      --junitxml=pytest-report-wormhole-run.xml .
-    junitparser merge pytest-report-wormhole-compile.xml pytest-report-wormhole-run.xml pytest-report-wormhole.xml
+      --timeout=100 \
+      --junitxml=pytest-report-wormhole.xml .
   skus:
     wh_n150_civ2:
-      timeout: 160
+      timeout: 100
   owner_id: U07J3K6KS1K
 
 - name: llk_smoke_blackhole
@@ -29,18 +22,11 @@
   cmd: |
     set -euo pipefail
     cd tests/python_tests
-    PYTEST_COMPILE_EXTRA="-q --override-ini=log_cli=false"
-    PYTEST_RUN_EXTRA="-q --override-ini=log_cli=false"
-    pytest $PYTEST_COMPILE_EXTRA --compile-producer -n 10 \
+    pytest -q --override-ini=log_cli=false -n auto -x \
       -m "$PYTEST_MARKERS" \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-compile.xml .
-    pytest $PYTEST_RUN_EXTRA --compile-consumer -x \
-      -m "$PYTEST_MARKERS" \
-      --timeout=60 \
-      --junitxml=pytest-report-blackhole-run.xml .
-    junitparser merge pytest-report-blackhole-compile.xml pytest-report-blackhole-run.xml pytest-report-blackhole.xml
+      --timeout=100 \
+      --junitxml=pytest-report-blackhole.xml .
   skus:
     bh_p150b_civ2:
-      timeout: 160
+      timeout: 100
   owner_id: U07J3K6KS1K
