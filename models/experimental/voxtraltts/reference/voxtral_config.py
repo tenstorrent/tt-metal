@@ -142,18 +142,33 @@ def _resolve_params_path(model_name_or_path: str) -> Path:
     if model_path.is_dir():
         return model_path / "params.json"
 
+    override = os.getenv("VOXTRAL_PARAMS_JSON")
+    if override:
+        override_path = Path(override)
+        if override_path.is_file():
+            return override_path
+
+    tt_cache = os.getenv("TT_CACHE_PATH")
+    if tt_cache:
+        for candidate in (Path(tt_cache) / "params.json", Path(tt_cache).parent / "params.json"):
+            if candidate.is_file():
+                return candidate
+
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as exc:
         raise ImportError("huggingface_hub is required to download Voxtral params.json from Hugging Face.") from exc
 
-    return Path(
-        hf_hub_download(
-            repo_id=model_name_or_path,
-            filename="params.json",
-            local_files_only=os.getenv("CI") == "true",
-        )
-    )
+    download_kwargs: dict[str, object] = {
+        "repo_id": model_name_or_path,
+        "filename": "params.json",
+        "local_files_only": os.getenv("CI") == "true",
+    }
+    hf_home = os.getenv("HF_HOME")
+    if hf_home:
+        download_kwargs["cache_dir"] = str(Path(hf_home) / "hub")
+
+    return Path(hf_hub_download(**download_kwargs))
 
 
 def parse_csv_ints(s: str) -> tuple[int, ...]:

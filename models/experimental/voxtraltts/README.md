@@ -281,13 +281,13 @@ Voxtral jobs use the canonical Blackhole cache layout (`HF_HOME`, `HF_MODEL`, `T
 
 | Pipeline | Job | Hardware | Tier |
 |----------|-----|----------|------|
-| `models_unit_tests.yaml` | Voxtral TTS component unit tests | P150 (`bh_p150b_civ2`) | T2 |
+| `models_unit_tests.yaml` | Voxtral TTS component unit tests | P150 (`bh_p150`) | T2 |
 | `models_unit_tests.yaml` | Voxtral TTS component unit tests (TP text) | QB2 (`bh_quietbox_2`, `MESH_DEVICE=P150x4`) | T2 |
 | `models_e2e_tests.yaml` | E2E PCC (teacher-forced + free-run diagnostic) | P150 only | T3 |
 | `models_e2e_tests.yaml` | E2E quality metrics (free-run; `hit_end` gate) | P150 only | T3 |
 | `models_e2e_tests.yaml` | E2E perf (`test_e2e_performant.py -k F128`) | P150 only | T2 |
 | `models_device_perf_tests.yaml` | Device perf | P150 | — |
-| `blackhole_demo_tests.yaml` | Demo smoke WAV | P150 CIv2 + QB2 (`MESH_DEVICE=P150x4`) | T1 |
+| `blackhole_demo_tests.yaml` | Demo smoke WAV | P150 + QB2 (`MESH_DEVICE=P150x4`) | T1 |
 
 E2E PCC command (teacher-forced subset plus free-run diagnostic):
 
