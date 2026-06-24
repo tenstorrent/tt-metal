@@ -130,6 +130,10 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  unit:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 115
+    bh_p150b_civ2: 70
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
@@ -227,10 +231,6 @@ models:
     bh_p150b_civ2_viommu: 110
   stress:
     wh_galaxy_perf: 500
-  l2:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 115
-    bh_p150b_civ2: 70
   e2e:
     wh_llmbox: 198
     bh_p150b_civ2: 63
