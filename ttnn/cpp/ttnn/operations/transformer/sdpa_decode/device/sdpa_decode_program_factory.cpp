@@ -50,13 +50,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const float scale =
         operation_attributes.scale.value_or(1.0f / std::sqrt(static_cast<float>(input_tensor_q.padded_shape()[-1])));
     const uint32_t sliding_window_size = operation_attributes.sliding_window_size.value_or(0);
-    // capacity_t is in TILE rows (= cache_position_modulo / TILE_HEIGHT); 0 = unbounded.
-    // Validator enforces cache_position_modulo % effective_block_size == 0, so the
-    // tile-aligned divide is exact. Sets the kernel's compile-time wrap modulus on
-    // every page_table lookup so a bounded sliding-window cache can be indexed by
-    // absolute positions.
-    const uint32_t cache_position_modulo = operation_attributes.cache_position_modulo.value_or(0);
-    const uint32_t capacity_t = cache_position_modulo / TILE_HEIGHT;
+    const uint32_t capacity_t = 0;
     const bool share_cache = operation_attributes.share_cache.value_or(false);
 
     // V tensor: use K if MLA (V is subset of K), otherwise require explicit V
@@ -97,11 +91,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     uint32_t Bkv = k_shape[0];
     const uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
     // num_kv_heads from the cache view by default, or from the explicit override
-    // when an HMA cross-group caller is reading a buffer allocated for a different
-    // layer's spec (e.g. Gemma4-26B-A4B sliding kv=8 cache read by a full kv=2
-    // layer). The override drives the kernel's per-block stride and head-parallel
-    // reduction grid the same way the legacy cache shape did.
-    uint32_t num_kv_heads = operation_attributes.num_kv_heads_override.value_or(k_shape[1]);
+    uint32_t num_kv_heads = k_shape[1];
     TT_FATAL(num_kv_heads > 0, "num_kv_heads must be > 0");
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;

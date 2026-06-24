@@ -153,40 +153,6 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(not tensor_args.attn_mask.has_value(), "Must not have attn_mask tensor for non-causal attention");
     }
 
-    if (operation_attributes.num_kv_heads_override.has_value()) {
-        TT_FATAL(
-            tensor_args.page_table_tensor.has_value(),
-            "num_kv_heads_override is only supported in paged mode (when page_table is provided)");
-        TT_FATAL(operation_attributes.num_kv_heads_override.value() > 0, "num_kv_heads_override must be > 0");
-    }
-
-    if (operation_attributes.cache_position_modulo.has_value()) {
-        TT_FATAL(
-            tensor_args.page_table_tensor.has_value(),
-            "cache_position_modulo is only supported in paged mode (when page_table is provided)");
-        const uint32_t modulo = operation_attributes.cache_position_modulo.value();
-        TT_FATAL(modulo > 0, "cache_position_modulo must be > 0 when provided");
-        // Wrap must align with block boundaries (otherwise a wrapped position would split
-        // across two physical blocks and the kernel can't address it). Pull
-        // effective_block_size from the same fallback the program factory uses.
-        const uint32_t effective_block_size = operation_attributes.block_size_override.value_or(k_shape[2]);
-        TT_FATAL(
-            modulo % effective_block_size == 0,
-            "cache_position_modulo ({}) must be a multiple of effective block_size ({})",
-            modulo,
-            effective_block_size);
-        if (operation_attributes.sliding_window_size.has_value() &&
-            operation_attributes.sliding_window_size.value() > 0) {
-            TT_FATAL(
-                modulo >= operation_attributes.sliding_window_size.value(),
-                "cache_position_modulo ({}) must be >= sliding_window_size ({}); a tighter "
-                "capacity would let the SDPA attention range wrap multiple times and "
-                "double-count positions.",
-                modulo,
-                operation_attributes.sliding_window_size.value());
-        }
-    }
-
     if (operation_attributes.paged_attention) {
         // Paged attention verification
         TT_FATAL(
