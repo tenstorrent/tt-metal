@@ -37,11 +37,21 @@ struct H2DSocketSyncOperation {
 
 }  // namespace ttnn::experimental::prim
 
+namespace tt::tt_metal {
+class D2DStreamServiceReceiver;
+}  // namespace tt::tt_metal
+
 namespace ttnn::prim {
 
 // Launch helper. Snapshots the per-coord service state out of `service`, then
 // runs the device operation (which builds-once / caches the program).
 // Returns [tokens] or [tokens, metadata] (when metadata_size_bytes > 0).
 std::vector<ttnn::Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes);
+
+// Same op, draining a D2DStreamServiceReceiver's backing tensor (disaggregated-
+// prefill device->device path). The receiver exposes the same getters as
+// H2DStreamService, so it runs the identical device operation.
+std::vector<ttnn::Tensor> h2d_socket_sync(
+    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes);
 
 }  // namespace ttnn::prim
