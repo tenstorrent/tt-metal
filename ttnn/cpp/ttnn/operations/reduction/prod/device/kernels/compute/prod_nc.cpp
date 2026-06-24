@@ -59,4 +59,7 @@ void kernel_main() {
             enable_reload = true;
         }
     }
+    // cb_in1 holds a single broadcast scaler tile waited once and reused across all output
+    // tiles; pop it at the end so the CB is left balanced.
+    cb_in1_obj.pop_front(onetile);
 }

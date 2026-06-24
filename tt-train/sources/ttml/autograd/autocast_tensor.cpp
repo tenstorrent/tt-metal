@@ -16,15 +16,18 @@ void AutocastTensor::set_tensor(const tt::tt_metal::Tensor &tensor) {
     if (tensor.dtype() == ttnn::DataType::FLOAT32) {
         m_full_precision_tensor = tensor;
         m_half_precision_tensor = ttnn::Tensor();
+        m_native_precision = PreferredPrecision::FULL;
     } else if (tensor.dtype() == ttnn::DataType::BFLOAT16) {
         m_half_precision_tensor = tensor;
         m_full_precision_tensor = ttnn::Tensor();
+        m_native_precision = PreferredPrecision::HALF;
     } else {
         // Non-castable types (e.g. UINT32 for embedding indices): store as-is in the
         // full-precision slot and return unchanged from get_tensor() regardless of
         // the requested precision — typecast is not applicable to integer dtypes.
         m_full_precision_tensor = tensor;
         m_half_precision_tensor = ttnn::Tensor();
+        m_native_precision = PreferredPrecision::FULL;
     }
 }
 
@@ -41,6 +44,13 @@ const tt::tt_metal::Tensor &AutocastTensor::get_tensor(PreferredPrecision prefer
     // slot and returned unchanged — they cannot be typecast to half/full float precision.
     if (has_full() && !is_float_dtype(m_full_precision_tensor.dtype())) {
         return m_full_precision_tensor;
+    }
+
+    // NATIVE: return the slot set by set_tensor, with no typecast. Used by serialization (checkpoint
+    // gather) so the stored value is preserved exactly. m_native_precision records which slot is the
+    // source of truth, so a lazily-cached other-precision view (from a prior FULL/HALF read) is ignored.
+    if (preferred_precision == PreferredPrecision::NATIVE) {
+        return m_native_precision == PreferredPrecision::HALF ? m_half_precision_tensor : m_full_precision_tensor;
     }
 
     // TODO: Lazy precision caching can leave the FULL/FLOAT32 view stale

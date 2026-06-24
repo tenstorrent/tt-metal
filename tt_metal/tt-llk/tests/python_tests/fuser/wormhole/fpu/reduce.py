@@ -69,6 +69,17 @@ class ReduceFpu(Fpu):
             tile_shape=operation.tile_shape,
         ).flatten()
 
+        if compute_unit.reduce_to_tile:
+            block_tiles = operation.block_tiles_x * operation.block_tiles_y
+            tiles = src_a_reduced_tensor.view(-1, tile_elements)
+            for b in range(0, tile_cnt, block_tiles):
+                block = tiles[b : b + block_tiles]
+                if pool_type == ReducePool.Max:
+                    tiles[b] = block.max(dim=0).values
+                else:
+                    tiles[b] = block.sum(dim=0)
+                tiles[b + 1 : b + block_tiles] = 0
+
         dest_golden_tensor = tilize_block(
             tensor_dst,
             dimensions,

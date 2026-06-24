@@ -38,9 +38,6 @@ from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.skip(
-    reason="Disabled: device hang; tracked in https://github.com/tenstorrent/tt-metal/issues/45989 (regression from #43840)"
-)
 def test_indexed_slice(seed, B, b, D, tt_dtype, device):
     torch.manual_seed(seed)
 
