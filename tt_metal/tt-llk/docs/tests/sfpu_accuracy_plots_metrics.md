@@ -2,9 +2,10 @@
 
 This page documents how we visualize and quantify SFPU accuracy, and summarizes results for a set of SFPU instructions:
 
-- **reciprocal**
-- **log**
-- **exp**
+- **reciprocal**, **reciprocal (stress)**
+- **atanh**, **atanh (stress)**
+- **elu**, **gelu**, **celu**, **silu**, **hardsigmoid**
+- **log**, **log1p**, **exp**
 
 The same structure can be reused for other SFPU ops.
 
@@ -28,7 +29,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 
     - A stem plot of signed error measured in ULPs:
 
-      $$\text{signed ulp error}(x) = \frac{\text{hw}(x) - \text{golden}(x)}{\text{local ulp}(\text{golden}(x))}$$
+          signed_ulp_error(x) = (hw(x) - golden(x)) / local_ulp(golden(x))
 
     - Positive stems mean HW is above golden.
     - Negative stems mean HW is below golden.
@@ -39,7 +40,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 
     - Scatter plot of
 
-      $$\text{relative error}(x) = \frac{|\text{hw}(x) - \text{golden}(x)|}{|\text{golden}(x)|}$$
+          rel_error(x) = |hw(x) - golden(x)| / |golden(x)|
 
       for points where `golden(x) ≠ 0`.
     - Y-axis is **log scale**.
@@ -94,7 +95,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 
     Examples near 1.0:
 
-    - **bfloat16**
+    - **bfloat16 (Float16_b)**
       `1 ULP ≈ 2^-7 ≈ 7.81e-3`
     - **float16**
       `1 ULP ≈ 2^-10 ≈ 9.77e-4`
@@ -106,7 +107,7 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
 - **Relative error**
   For each x where `golden(x) ≠ 0` we define:
 
-  $$\text{relative error}(x) = \frac{|\text{hw}(x) - \text{golden}(x)|}{|\text{golden}(x)|}$$
+      relative_error = |hw - golden| / |golden|
 
 - **ULP error (error in ULP units)**
   For the signed-ULP **plot** and the CDF, we measure error in units of the **true local ULP** of the golden output.
@@ -114,11 +115,11 @@ Each SFPU test produces one figure with five vertically stacked plots on the lef
     The local ULP is the distance from a value to the next representable floating-point value in the target format.
     For each output value **y**, we define:
 
-    $$\text{local ulp}(y) = \text{nextafter}(|y|, +\infty) - |y|$$
+      local_ulp(y) = nextafter(|y|, +∞) - |y|
 
     Then the signed ULP error is:
 
-    $$\text{signed ulp error}(x) = \frac{\text{hw}(x) - \text{golden}(x)}{\text{local ulp}(\text{golden}(x))}$$
+      signed_ulp_error(x) = (hw(x) - golden(x)) / local_ulp(golden(x))
 
     This tells us how many local floating-point steps the hardware result is away from the golden result.
 
@@ -163,22 +164,22 @@ For all **finite** points:
 
 - **Max absolute error**
 
-  $$\text{max abs error} = \max_x |\text{hw}(x) - \text{golden}(x)|$$
+      max_abs_error = max_x |hw(x) - golden(x)|
 
   This is the largest absolute difference between HW and golden over all sampled x.
 - **Mean absolute error**
 
-  $$\text{mean abs error} = \mathrm{mean}_x |\text{hw}(x) - \text{golden}(x)|$$
+      mean_abs_error = mean_x |hw(x) - golden(x)|
 
   This is the average absolute difference between HW and golden.
 - **Max / median relative error**
     - **Max relative error**:
 
-      $$\text{max relative error} = \max_x \text{relative error}(x)$$
+          max_rel_error = max_x rel_error(x)
 
     - **Median relative error**:
 
-      $$\text{median relative error} = \mathrm{median}(\text{relative error}(x))$$
+          median_rel_error = median(rel_error(x))
 
       (50% of the points have relative error below this value.)
 
@@ -186,7 +187,7 @@ For all **finite** points:
 
 We approximate the effective number of bits of precision as:
 
-$$\text{bits}(x) = -\log_2(\text{relative error}(x))$$
+    bits(x) = -log2(relative_error(x))
 
 and then summarize:
 
@@ -257,19 +258,45 @@ Below we list short summaries for each sfpu operation.
 
 ### Reciprocal
 
-![SFPU Reciprocal — Float16](images/reciprocal_float16.png)
+- **Normal region**
+- **Stress region near 0**
+
+---
+
+### Atanh
+
+- **ULP sweep** (testing all representable values for `Float16_b` format on specified domain)
+- **Stress region including asymptotes**
+
+---
+
+### ELU
+
+---
+
+### GELU
+
+---
+
+### CELU
+
+---
+
+### SILU
+
+---
+
+### Hardsigmoid
 
 ---
 
 ### Log
 
-![SFPU Log — Float16_b](images/log_float16b.png)
-
 ---
 
-### EXP
+### Log1p
 
-![SFPU Exp — Float16_b](images/exp_float16b.png)
+### EXP
 
 ---
 
