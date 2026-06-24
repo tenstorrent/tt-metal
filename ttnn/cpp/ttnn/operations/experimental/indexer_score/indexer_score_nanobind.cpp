@@ -41,6 +41,15 @@ void bind_indexer_score(nb::module_& mod) {
                 math_fidelity is honored (default: HiFi2, or LoFi when q and k
                 are both bfloat8_b); fp32_dest_acc_en / dst_full_sync_en must
                 stay false (the custom LLK is validated for bf16 DEST half-sync).
+            cache_batch_idx: optional int. Selects the batch slot of a shared
+                [B, 1, T, D] k cache (which may then be ND-sharded across DRAM
+                banks). Re-applied each dispatch, so switching slots does not
+                recompile.
+            kv_len: optional int. Valid prefix of a k allocated at its full T;
+                the rest is masked out. Tile-aligned, in (0, T], with
+                chunk_start_idx + Sq <= kv_len. Re-applied each dispatch, so a
+                serving loop growing kv_len (<= T) reuses one program -- no
+                recompile. Only output columns [0, kv_len) are written.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -51,7 +60,9 @@ void bind_indexer_score(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("chunk_start_idx") = 0,
         nb::arg("program_config") = IndexerScoreProgramConfig{},
-        nb::arg("compute_kernel_config") = std::nullopt);
+        nb::arg("compute_kernel_config") = std::nullopt,
+        nb::arg("cache_batch_idx") = std::nullopt,
+        nb::arg("kv_len") = std::nullopt);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail
