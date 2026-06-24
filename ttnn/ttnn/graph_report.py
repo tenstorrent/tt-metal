@@ -88,7 +88,15 @@ def sanitize_git_remote_url(url: str) -> str:
         if "@" in netloc:
             netloc = netloc.rsplit("@", 1)[-1]
         return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        # Non-numeric port token (e.g. ssh://git@github.com:org/repo.git); strip userinfo
+        # from the raw netloc without relying on .port.
+        netloc = parsed.netloc
+        if "@" in netloc:
+            netloc = netloc.rsplit("@", 1)[-1]
+        return urlunparse((parsed.scheme, netloc, parsed.path, "", "", ""))
     if ":" in host and not host.startswith("["):
         host_bracketed = f"[{host}]"
     else:

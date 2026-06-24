@@ -2346,6 +2346,12 @@ class TestSanitizeGitRemoteUrl:
     def test_whitespace_trimmed(self):
         assert graph_report.sanitize_git_remote_url("  https://a@b/c  ") == "https://b/c"
 
+    def test_non_numeric_port_does_not_raise(self):
+        # urlparse parses ':org' as the port token; .port raises ValueError without the guard.
+        result = graph_report.sanitize_git_remote_url("ssh://git@github.com:org/repo.git")
+        assert "git@" not in result
+        assert "github.com" in result
+
 
 class TestReportVersion:
     """Tests for report version handling."""
