@@ -169,6 +169,7 @@ Final optimized evidence checklist - these items MUST be completed:
 -[ ] Fused or packed repeated same-input projections where legal and beneficial, such as Q/K/V-style projections, paired gate/up projections, or other model-specific projection groups. If kept separate, there is measured evidence or a specific unresolved TTNN/runtime blocker after adapting layout, rank, padding, weight packing, and output splitting. If kept packed, it wins against a well-tuned legal separate candidate or the evidence explains why the separate candidate is invalid.
 -[ ] Explicitly configured `memory_config`, `program_config`, and `compute_kernel_config` for important ops.
 -[ ] For any matmul or repeated matmul group that is one of the largest decode-time consumers: swept legal program configs separately for each dominant role, including core grid, `in0_block_w`, output subblocks, output blocks, memory configs, and compute kernel config where applicable. The stage is incomplete without a before/after evidence table or an exact TTNN/runtime blocker.
+-[ ] Decode compute fidelity was swept as a real performance knob for each dominant projection group. Do not assume BFP8 implies HiFi2 is fastest; try legal LoFi and HiFi2 candidates with the same dtype and real traced decode evidence, then keep the fastest policy that passes correctness.
 -[ ] Shard specs and core grids that divide tensor dimensions cleanly into tiles where possible, code grids as large as this and the model/hardware allows.
 -[ ] DRAM-sharded decode matmuls.
 -[ ] Collective topology minimized. Avoidable gather, reshard, all-reduce, reduce-scatter, and all-gather operations have been removed, moved to cheaper boundaries, or justified with before/after evidence.
@@ -218,6 +219,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - When several matmuls consume the same input activation, first ask whether they should be one packed/fused projection. Common examples are Q/K/V-style attention projections, paired gate/up MLP projections, and model-specific groups that are split only for code convenience. Try concatenating or packing weights at load time, running one matmul, then splitting or reshaping the result on device. Compare the packed candidate against a well-tuned separate candidate using the best legal dtype/fidelity for each. Do not keep a packed projection if it loses because it forces worse dtype, fidelity, memory layout, or program configs. Keep separate matmuls with measured evidence, incompatible dtype/fidelity requirements, or a minimal repro showing the fused contract cannot express the model.
 - When a matmul or repeated matmul group dominates decode time, local program-config search is required. Do not rely on one global helper or one conservative config for every role. Tune QKV, output projection, dense MLP gate/up/down, router, shared expert, routed MoE gate/up/down, and LM head separately when they are material costs.
 - For each dominant matmul role, enumerate legal candidates for core grid, `per_core_M`, `per_core_N`, `in0_block_w`, `out_subblock_h`, `out_subblock_w`, `out_block_h`, `out_block_w`, memory configs, and compute kernel config where the op supports them. Measure traced warmed decode with real model shapes, weights, activations, dtypes, sharding, and batch/sequence settings.
+- Treat decode math fidelity as independent from dtype. For each dominant projection group, compare at least the legal LoFi and HiFi2 compute-kernel configs for the same dtype before accepting the policy. This matters on newer architectures too: BFP8+LoFi can be materially faster than BFP8+HiFi2 while still passing model-level accuracy, so a BFP8-only dtype sweep is not enough.
 - For MLP-style gate/up groups, explicitly compare the two important families when both are legal: packed/fused gate-up and separate gate plus up. The packed family reduces launches and input reads, but it can lose if it prevents BFP4/LoFi weights, creates a very wide output, adds slice/layout overhead, or blocks a better program config. The separate family can be faster when each projection can use lower precision or a better tuned shape. Keep the measured winner.
 - For non-DRAM-sharded matmuls, try to use the largest clean core grid the shape and hardware allow. If padding weights enables a better grid or block size, try it. Padding must be mathematically inert: padded hidden/intermediate channels must be sliced, masked, or reduced away before they can affect outputs.
 - `in0_block_w` should be at least 2 when possible and must divide the tiled K dimension. Higher is usually better until L1 pressure or correctness fails. If the only valid `in0_block_w` is 1, try a different shard-spec core count that allows 2, even if it uses fewer cores. For DRAM-sharded matmuls, the compute core count is fixed by the op, so the input/output shard grid may be more flexible than it first appears. Padding weights can be worth trying when it enables a better block size, but changing the shard spec is usually preferable.
@@ -245,7 +247,7 @@ Use this reference while optimizing functional TTNN code. It captures repo-local
 - Try BFP8 KV cache. Keep it if PCC remains above threshold and perf/memory improve. If BFP8 KV fails, inspect the prefill fill-cache dtype path before concluding the dtype is invalid: cache-fill tensors should be explicitly typecast to the cache dtype, while decode `paged_update_cache` inputs should remain BF16/FLOAT32.
 - Try BFP4 for MLP FF1/FF3; these often tolerate BFP4 well.
 - Try BFP4 for FF2/down-projection, but expect it to be more sensitive. Fall back based on PCC evidence, not preference.
-- For BFP8 weights, HiFi2 is the normal starting point. LoFi may work but needs PCC evidence.
+- For BFP8 weights, HiFi2 is a safe starting point, not a default answer. Try LoFi for dominant decode projection groups and keep it when full-model accuracy and qualitative generation still pass. Record BFP8+LoFi versus BFP8+HiFi2 as separate candidates, because the speed difference can be large even when dtype is unchanged.
 - For BFP4 weights, LoFi is expected.
 - For BF16 weights or numerically sensitive operations, use HiFi4 or FP32 accumulation where PCC demands it.
 - Evaluate precision changes one group at a time so regressions can be assigned to the right tensor group.
@@ -282,6 +284,8 @@ compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
 ```
 
 Use the architecture-appropriate config class when optimizing non-Wormhole targets.
+
+For larger-core devices, do not hard-code a Wormhole-shaped 8x4 or 32-core decode layout as the only optimized layout. Sweep legal core grids as a coherent layout: residual/intermediate memory configs, norm program grids, matmul program configs, and shard specs must agree. A first validation error such as a shard grid not fitting an op's program grid means adapt the layout/program-grid contract or use `$autofix`; it is not enough evidence to reject the larger grid.
 
 ## `tt-perf-report`
 
@@ -338,6 +342,8 @@ The `*_perf_report.txt` file is for the human-readable table. Do not redirect th
 `tt-perf-report` runs should keep advice enabled. If you also need a compact no-advice table, run that as a secondary command with a distinct filename and keep the advice-backed table in your work log and final reports.
 
 Check time units before computing latency. Filtered `tt-perf-report` CSVs may expose `Device Time` in microseconds; raw Tracy ops CSVs often expose `DEVICE KERNEL DURATION [ns]`.
+
+Sanity-check profiler durations against the benchmark wall time before computing roofline percentages. If a filtered `tt-perf-report` table claims multi-second device ops inside a sub-millisecond traced decode window, the duration data is invalid. Preserve the raw CSV and report the profiler failure explicitly. When the raw ops CSV has sane performance-model bandwidth columns, you may compute a labeled modeled roofline fallback from `sum(PM BANDWIDTH [ns] for decode matmuls) / measured traced decode window`; otherwise leave DRAM utilization unreported rather than publishing a bogus percentage.
 
 ## Advice Policy
 
