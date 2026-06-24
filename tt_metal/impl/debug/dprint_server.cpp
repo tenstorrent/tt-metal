@@ -51,7 +51,6 @@
 #include "impl/debug/inspector/inspector.hpp"
 #include "jit_build/build_env_manager.hpp"
 
-using std::flush;
 using std::ofstream;
 using std::ostream;
 using std::string;
@@ -504,7 +503,7 @@ void DPrintServer::Impl::print_buffer_data(
                         // multiple new lines in the message or because we want to prepend line prefix to each line?
                         ostream* output_stream = get_output_stream(risc_key);
                         if (newline_pos == buffer.size() - 1) {
-                            *output_stream << line_prefix << buffer << flush;
+                            *output_stream << line_prefix << buffer;
                             buffer.clear();
                         } else {
                             std::size_t newline_start = 0;
@@ -512,7 +511,7 @@ void DPrintServer::Impl::print_buffer_data(
                             while (newline_pos != std::string::npos) {
                                 std::string_view line =
                                     full_message_view.substr(newline_start, newline_pos - newline_start);
-                                *output_stream << line_prefix << line << std::endl;
+                                *output_stream << line_prefix << line << '\n';
                                 newline_start = newline_pos + 1;
                                 newline_pos = full_message_view.find('\n', newline_start);
                             }
@@ -864,6 +863,17 @@ bool DPrintServer::Impl::poll_device_print_data(
 
             // Each chunk is dram-aligned in the kernel; advance accordingly.
             pos += round_up(chunk_end_bytes, dram_align);
+        }
+        // Flush once per drain window instead of per line (see print_buffer_data). This batches the
+        // millions of lines a drain can emit into far fewer write() syscalls, which is what dominated
+        // runtime on a journaled filesystem. Output still appears per drain (every few ms).
+        if (stream_ != nullptr) {
+            stream_->flush();
+        }
+        for (auto& [risc_key, risc_stream] : risc_to_file_stream_) {
+            if (risc_stream != nullptr) {
+                risc_stream->flush();
+            }
         }
 
         // Update read pointer in DRAM.

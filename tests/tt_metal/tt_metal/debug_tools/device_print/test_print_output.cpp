@@ -264,8 +264,11 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
         CoreRange all_cores({0, 0}, {grid.x - 1, grid.y - 1});
         const uint32_t num_cores = grid.x * grid.y;
 
-        // Allow overriding the iteration count to stress the DRAM ring with many wrap-arounds.
-        uint32_t iterations_count = 100u;
+        // 1000 iters x 5 riscs x ~110 cores produces enough output (~11 MB) to wrap the 1 MB DRAM
+        // aggregation ring many times — this is what exercises the ring full/empty boundary and the
+        // backpressure/drain path that previously dropped data. DPRINT_AW_ITERS overrides it for
+        // heavier manual stress.
+        uint32_t iterations_count = 1000u;
         if (const char* env = std::getenv("DPRINT_AW_ITERS")) {
             iterations_count = static_cast<uint32_t>(std::max(1, atoi(env)));
         }
@@ -301,58 +304,20 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
         DebugToolsMeshFixture::RunProgram(mesh_device, workload);
         MetalContext::instance().dprint_server()->await();
 
-        // Count how many times each iteration value appears across the whole grid.
+        // Count how many times each iteration value appears across the whole grid. Each value must
+        // appear exactly risc_count_per_iter * num_cores times: fewer => the DRAM aggregation dropped
+        // data, more => it duplicated data.
         std::fstream log_file;
         ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
         std::vector<int> counts(iterations_count, 0);
         std::string line;
-        int total_lines = 0, matched_lines = 0;
-        std::string first_line, last_line;
-        for (;;) {
-            if (!getline(log_file, line)) {
-                break;
-            }
-            total_lines++;
-            if (total_lines == 1) {
-                first_line = line;
-            }
-            last_line = line;
+        while (getline(log_file, line)) {
             int iter = -1;
             if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < (int)counts.size()) {
                 counts[iter]++;
-                matched_lines++;
             }
         }
-        log_info(
-            tt::LogTest,
-            "AllWorkers FILE: {} total lines, {} matched 'Test iteration:'; first='{}' last='{}'",
-            total_lines,
-            matched_lines,
-            first_line,
-            last_line);
         const int expected_count = risc_count_per_iter * static_cast<int>(num_cores) * static_cast<int>(device_counter);
-        int dup_iters = 0, missing_iters = 0, total_extra = 0, total_missing = 0;
-        for (int i = 0; i < (int)counts.size(); i++) {
-            if (counts[i] > expected_count) {
-                dup_iters++;
-                total_extra += counts[i] - expected_count;
-            } else if (counts[i] < expected_count) {
-                missing_iters++;
-                total_missing += expected_count - counts[i];
-            }
-        }
-        log_info(
-            tt::LogTest,
-            "AllWorkers: {} cores x {} riscs x {} iters; expected {}/iter; {} iters duplicated (+{}), {} iters short "
-            "(-{})",
-            num_cores,
-            risc_count_per_iter,
-            iterations_count,
-            expected_count,
-            dup_iters,
-            total_extra,
-            missing_iters,
-            total_missing);
         for (int i = 0; i < (int)counts.size(); i++) {
             EXPECT_EQ(counts[i], expected_count)
                 << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << ")";
