@@ -8,6 +8,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs, Negative, Mask, MaskPosInf
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // BinaryMax
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"   // UnaryNe
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -44,6 +45,17 @@ void kernel_main() {
         cb_mask_w_obj.wait_front(onetile);
     }
 
+    // p-norm op family via compile-time flags -> constexpr bools (no preprocessor in the chains).
+#ifdef MINUS_INF
+    constexpr bool minus_inf = true;
+#else
+    constexpr bool minus_inf = false;
+#endif
+#ifdef IS_ZERO
+    constexpr bool is_zero = true;
+#else
+    constexpr bool is_zero = false;
+#endif
     for (uint32_t row_idx = 0; row_idx < num_rows_per_core; ++row_idx) {
         for (uint32_t col_idx = 0; col_idx < Wt; ++col_idx) {
             // f(x) prologue — 2-branch dispatch on (do_mask_w && last-col).
@@ -54,32 +66,19 @@ void kernel_main() {
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_x>{},
                     ckl::CopyTile<cb_mask_w, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
-#ifdef MINUS_INF
-                    ckl::MaskPosInf<ckl::Dst::D0>{},
-#else
-                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
-#endif
-#ifdef IS_ZERO
-                    ckl::UnaryNe<ckl::Dst::D0>{0u},
-#else
-                    ckl::Abs<ckl::Dst::D0>{},
-#endif
-#ifdef MINUS_INF
-                    ckl::Negative<ckl::Dst::D0>{},
-#endif
+                    ckl::OptionalChainElement<minus_inf, ckl::MaskPosInf<ckl::Dst::D0>>{},
+                    ckl::OptionalChainElement<!minus_inf, ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>>{},
+                    ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
+                    ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
+                    ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
                     ckl::PackTile<cb_val>{});
             } else {
                 ckl::eltwise_chain(
                     ckl::EltwiseShape::tiles(onetile),
                     ckl::CopyTile<cb_x>{},
-#ifdef IS_ZERO
-                    ckl::UnaryNe<ckl::Dst::D0>{0u},
-#else
-                    ckl::Abs<ckl::Dst::D0>{},
-#endif
-#ifdef MINUS_INF
-                    ckl::Negative<ckl::Dst::D0>{},
-#endif
+                    ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
+                    ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
+                    ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
                     ckl::PackTile<cb_val>{});
             }
 
@@ -102,9 +101,7 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::CopyTile<cb_reduce>{},
-#ifdef MINUS_INF
-            ckl::Negative<ckl::Dst::D0>{},
-#endif
+            ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
             ckl::PackTile<cb_y>{});
     }
 

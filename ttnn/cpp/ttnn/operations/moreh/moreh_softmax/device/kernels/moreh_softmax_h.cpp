@@ -9,6 +9,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"  // Exp
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Mask, Negative
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -106,6 +107,11 @@ void kernel_main() {
         // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input.
         // pack_tile_with_dt -> PackTileReconfig::Output.
         cb_x_m_max_obj.wait_front(Ht);
+#ifdef SOFTMAX
+        constexpr bool is_softmax = true;
+#else
+        constexpr bool is_softmax = false;
+#endif
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(Ht - 1),
             ckl::CopyTile<
@@ -114,9 +120,7 @@ void kernel_main() {
                 ckl::InputLifecycle::CallerManaged,
                 ckl::CopyTileReconfig::Input,
                 ckl::OperandKind::Block>{},
-#ifndef SOFTMAX
-            ckl::Negative<ckl::Dst::D0>{},
-#endif
+            ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::PackTile<cb_exps>{});
 
@@ -129,9 +133,7 @@ void kernel_main() {
                 ckl::CopyTileReconfig::Input,
                 ckl::OperandKind::Block,
                 ckl::TileOffset::Set>{Ht - 1},
-#ifndef SOFTMAX
-            ckl::Negative<ckl::Dst::D0>{},
-#endif
+            ckl::OptionalChainElement<!is_softmax, ckl::Negative<ckl::Dst::D0>>{},
             ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
             ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
             ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},

@@ -14,6 +14,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 
 namespace ckl = compute_kernel_lib;
 
@@ -115,6 +116,11 @@ void kernel_main() {
 #else
     constexpr bool sharded_causal_mask = false;
 #endif
+#ifdef NUMERIC_STABLE
+    constexpr bool numeric_stable = true;
+#else
+    constexpr bool numeric_stable = false;
+#endif
     // CAUSAL -> no broadcast (full mask tile); else broadcast the mask row across rows.
     constexpr auto mask_bcast = causal_mask ? ckl::BroadcastDim::None : ckl::BroadcastDim::Row;
     // cb_fused_attn lifecycle matrix — reproduces the original "#ifndef SHARDED_CAUSAL_MASK wait"
@@ -170,9 +176,10 @@ void kernel_main() {
                 ckl::Dst::D0,
                 ckl::OperandKind::Block,
                 ckl::OperandKind::Block>{},
-#ifndef NUMERIC_STABLE
-            ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
-#endif
+            // Exp dropped when NUMERIC_STABLE (it is fused into calc_numeric_stable below).
+            ckl::OptionalChainElement<
+                !numeric_stable,
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>>{},
             ckl::PackTile<cb_x, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::None>{});
 
 // add numeric_stable

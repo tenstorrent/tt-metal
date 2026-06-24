@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"         // Abs, Negative
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // BinaryMax
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_predicates.hpp"   // UnaryNe
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
@@ -32,6 +33,17 @@ void kernel_main() {
 
     cb_one_obj.wait_front(onetile);
 
+    // p-norm op family via compile-time flags -> constexpr bools (no preprocessor in the chains).
+#ifdef MINUS_INF
+    constexpr bool minus_inf = true;
+#else
+    constexpr bool minus_inf = false;
+#endif
+#ifdef IS_ZERO
+    constexpr bool is_zero = true;
+#else
+    constexpr bool is_zero = false;
+#endif
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
             // f(x): no mask in nc path. IS_ZERO -> unary_ne; default -> abs.
@@ -40,14 +52,9 @@ void kernel_main() {
             ckl::eltwise_chain(
                 ckl::EltwiseShape::tiles(onetile),
                 ckl::CopyTile<cb_x>{},
-#ifdef IS_ZERO
-                ckl::UnaryNe<ckl::Dst::D0>{0u},
-#else
-                ckl::Abs<ckl::Dst::D0>{},
-#endif
-#ifdef MINUS_INF
-                ckl::Negative<ckl::Dst::D0>{},
-#endif
+                ckl::OptionalChainElement<is_zero, ckl::UnaryNe<ckl::Dst::D0>>{0u},
+                ckl::OptionalChainElement<!is_zero, ckl::Abs<ckl::Dst::D0>>{},
+                ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
                 ckl::PackTile<cb_val>{});
 
             // Accumulator over N/C dimension.
@@ -66,9 +73,7 @@ void kernel_main() {
         ckl::eltwise_chain(
             ckl::EltwiseShape::tiles(onetile),
             ckl::CopyTile<cb_cal>{},
-#ifdef MINUS_INF
-            ckl::Negative<ckl::Dst::D0>{},
-#endif
+            ckl::OptionalChainElement<minus_inf, ckl::Negative<ckl::Dst::D0>>{},
             ckl::PackTile<cb_y>{});
     }
     cb_one_obj.pop_front(onetile);

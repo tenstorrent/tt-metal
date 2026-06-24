@@ -7,6 +7,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"         // Log
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"       // Clamp, RsubUnary
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // DivBinary
+#include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
 namespace ckl = compute_kernel_lib;
@@ -40,12 +41,18 @@ void kernel_main() {
     //
     // Reconfig matches original init_sfpu + copy_tile_init at boot —
     // CopyTileReconfig::None + PackTileReconfig::None.
+    // Clamp stage gated on the CLAMP build flag (normalized to a constexpr bool so the chain
+    // carries no preprocessor). OptionalChainElement forwards the {lo, hi} ctor args when enabled
+    // and swallows them (stage dropped from the chain) when not.
+#ifdef CLAMP
+    constexpr bool do_clamp = true;
+#else
+    constexpr bool do_clamp = false;
+#endif
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(num_tiles),
         ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
-#ifdef CLAMP
-        ckl::Clamp<ckl::Dst::D0>{packed_scalar1, packed_scalar2},
-#endif
+        ckl::OptionalChainElement<do_clamp, ckl::Clamp<ckl::Dst::D0>>{packed_scalar1, packed_scalar2},
         ckl::PackTile<cb_tmp0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
     ckl::eltwise_chain(
