@@ -6,17 +6,157 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 
 #include "kernels/indexer_score_work_split.hpp"  // shared banded grid mapping (rows_for_groups / cols_for_bands)
+#include "ttnn/operations/ccl/ccl_common.hpp"    // get_linearized_index_from_physical_coord
 
 namespace ttnn::operations::experimental::indexer_score {
+
+namespace {
+// Largest per-device chunk_start across the mesh = base + max_rank*Sq, where max_rank is the largest
+// linearized index along cluster_axis (0 on a single device). Shared by the worst-case window checks.
+uint32_t max_chunk_start(const operation_attributes_t& attrs, const Tensor& q, uint32_t Sq) {
+    uint32_t max_rank = 0;
+    if (q.device_storage().get_coords().size() > 1) {
+        for (const auto& coord : q.device_storage().get_coords()) {
+            max_rank =
+                std::max(max_rank, ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, attrs.cluster_axis));
+        }
+    }
+    return attrs.chunk_start_idx + max_rank * Sq;
+}
+
+// Miss-only checks: either hash-pinned (placement, non-indexed k batch shape) so they can't differ on a
+// hit, or caller errors the framework rules out anyway (device residency, allocation, same-device) and
+// never checked on a hit pre-PR. The slot/kv_len values that do differ on a hit live in
+// validate_runtime_values.
+void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const auto& q = t.q;
+    const auto& k = t.k;
+    const auto& w = t.weights;
+    // On device + allocated. q/weights interleaved; k may be interleaved OR ND-sharded DRAM (the reader's
+    // TensorAccessor handles both; a sharded k pins its bank mapping via the hashed spec).
+    for (const auto& [tp, name, allow_sharded] :
+         {std::tuple{&q, "q", false}, std::tuple{&k, "k", true}, std::tuple{&w, "weights", false}}) {
+        TT_FATAL(tp->storage_type() == StorageType::DEVICE, "indexer_score {} must be on device", name);
+        TT_FATAL(tp->buffer() != nullptr, "indexer_score {} must have an allocated buffer", name);
+        if (!allow_sharded) {
+            TT_FATAL(!tp->is_sharded(), "indexer_score {} must use interleaved memory", name);
+        }
+    }
+    TT_FATAL(
+        q.device() == k.device() && q.device() == w.device(), "indexer_score q, k, weights must be on the same device");
+
+    // Non-indexed k must be single-slot [1,1,T,D]. has_value() and kB are both hashed, so this only fires on
+    // a miss (the indexed slot < B check is a runtime value -> validate_runtime_values).
+    if (!attrs.cache_batch_idx.has_value()) {
+        const uint32_t kB = k.logical_shape()[0];
+        TT_FATAL(kB == 1, "indexer_score k batch must be 1 unless cache_batch_idx is set (got {})", kB);
+    }
+}
+
+// The slot/kv_len values: hashed only by has_value(), so they can differ on a cache hit and feed kernel
+// addressing (page offset / read width). Cheap integer checks on shape metadata, run on miss AND hit.
+void validate_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    const auto& q = t.q;
+    const auto& k = t.k;
+
+    // Indexed KV cache: k is [B,1,T,D]; cache_batch_idx picks a slot (q/weights are batch 1). An
+    // out-of-range slot offsets every k page id OOB.
+    if (attrs.cache_batch_idx.has_value()) {
+        const uint32_t kB = k.logical_shape()[0];
+        TT_FATAL(
+            attrs.cache_batch_idx.value() < kB,
+            "indexer_score cache_batch_idx ({}) must be < k batch slots ({})",
+            attrs.cache_batch_idx.value(),
+            kB);
+    }
+
+    // Runtime KV length: k is a persistent buffer of (hashed) length T; kv_len <= T is the valid prefix this
+    // dispatch (value not hashed -> re-checked here). chunk_start+Sq <= kv_len keeps the causal window inside
+    // the valid keys, preserving the kernel's "stale-k tail -> -inf overwrite" invariant (no unwritten tile
+    // is ever accumulated).
+    if (attrs.kv_len.has_value()) {
+        const uint32_t T = k.logical_shape()[2];
+        const uint32_t Sq = q.logical_shape()[2];
+        const uint32_t kv_len = attrs.kv_len.value();
+        TT_FATAL(kv_len % tt::constants::TILE_WIDTH == 0, "indexer_score kv_len {} must be tile-aligned", kv_len);
+        TT_FATAL(
+            kv_len > 0 && kv_len <= T,
+            "indexer_score kv_len {} must be in (0, T={}] (the allocated k length)",
+            kv_len,
+            T);
+        // Fullest-device window must stay inside the valid prefix (per-device chunk_start = base + rank*Sq;
+        // reduces to the base on a single device).
+        const uint32_t max_cs = max_chunk_start(attrs, q, Sq);
+        TT_FATAL(
+            max_cs + Sq <= kv_len,
+            "indexer_score fullest-device causal window [{}, {}+{}) exceeds kv_len={} (cannot attend past the "
+            "valid keys; base={}, per-rank stride Sq={})",
+            max_cs,
+            max_cs,
+            Sq,
+            kv_len,
+            attrs.chunk_start_idx,
+            Sq);
+    }
+}
+
+// chunk_start is hash-excluded (runtime), so this runs on BOTH cache miss and hit. Checks the base and
+// the worst (fullest) device's window against T -- so no device can run off the end of K. The per-rank
+// stride is Sq (tile-aligned by the shape check), so only the base needs an alignment check.
+void validate_chunk_start(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    const uint32_t Sq = tensor_args.q.logical_shape()[2];
+    const uint32_t T = tensor_args.k.logical_shape()[2];
+    TT_FATAL(
+        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
+        "chunk_start_idx {} must be tile-aligned",
+        attrs.chunk_start_idx);
+    const uint32_t max_cs = max_chunk_start(attrs, tensor_args.q, Sq);
+    TT_FATAL(
+        max_cs + Sq <= T,
+        "fullest-device chunk window [{}, {}+{}) exceeds T={} (base={}, per-rank stride Sq={})",
+        max_cs,
+        max_cs,
+        Sq,
+        T,
+        attrs.chunk_start_idx,
+        Sq);
+}
+}  // namespace
 
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
     const operation_attributes_t&, const tensor_args_t&) {
     return program::IndexerScoreProgramFactory{};
+}
+
+ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // Everything that shapes the compiled program, but NOT the runtime values: chunk_start_idx (per-device,
+    // derived from the mesh coordinate) is EXCLUDED, and cache_batch_idx / kv_len contribute only has_value()
+    // (whether indexed / runtime-kv_len), not their values -- so distinct slot / kv_len / chunk_start all reuse
+    // one compiled program. cluster_axis IS hashed (it fixes each device's stored linearized index). q/k/w
+    // specs (via tensor_args) cover dtype (bfp8 vs bf16) and shape (Sqt/Tt/Dt CT args). Do NOT add
+    // chunk_start_idx or the slot/kv_len values here or they will recompile.
+    return tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
+        attrs.program_config,
+        attrs.compute_kernel_config,
+        attrs.cluster_axis.has_value(),
+        attrs.cluster_axis.value_or(0u),
+        attrs.has_indexed_kv_cache(),
+        attrs.has_runtime_kv_len(),
+        tensor_args);
+}
+
+void IndexerScoreDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+    // chunk_start, cache slot, and kv_len are all hash-excluded runtime values, so their checks run on hits too.
+    validate_runtime_values(attrs, tensor_args);
+    validate_chunk_start(attrs, tensor_args);
 }
 
 void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
@@ -44,15 +184,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         "indexer_score requires fp32_dest_acc_en=false (bf16 DEST; the custom LLK is not validated for fp32 DEST)");
     TT_FATAL(!dst_full_sync_en, "indexer_score requires dst_full_sync_en=false (the kernel is built half-sync)");
 
-    // On-device, allocated, interleaved, same-device: the factory dereferences each buffer's address
-    // in q's device address space and the kernels assume interleaved DRAM/L1 (mcast deal + TensorAccessor).
-    for (const auto& [t, name] : {std::pair{&q, "q"}, std::pair{&k, "k"}, std::pair{&w, "weights"}}) {
-        TT_FATAL(t->storage_type() == StorageType::DEVICE, "indexer_score {} must be on device", name);
-        TT_FATAL(t->buffer() != nullptr, "indexer_score {} must have an allocated buffer", name);
-        TT_FATAL(!t->is_sharded(), "indexer_score {} must use interleaved memory", name);
-    }
-    TT_FATAL(
-        q.device() == k.device() && q.device() == w.device(), "indexer_score q, k, weights must be on the same device");
+    // Placement, layout, same-device and the non-indexed k batch shape are hash-pinned (miss only). The
+    // slot/kv_len runtime values are re-checked on every dispatch (here and on a cache hit).
+    validate_static(attrs, tensor_args);
+    validate_runtime_values(attrs, tensor_args);
 
     // Shapes: q [B, Hi, Sq, D], k [B, 1, T, D] (single shared head), weights [B, Hi, Sq, 1].
     TT_FATAL(q_shape.rank() == 4 && k_shape.rank() == 4 && w_shape.rank() == 4, "q, k, weights must be rank 4");
@@ -61,8 +196,10 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         w_shape[1] == q_shape[1] && w_shape[2] == q_shape[2] && w_shape[3] == 1,
         "weights must be [B, Hi, Sq, 1] matching q [B, Hi, Sq, D]");
-    TT_FATAL(q_shape[0] == k_shape[0] && q_shape[0] == w_shape[0], "batch mismatch");
-    TT_FATAL(q_shape[0] == 1, "batch 1 only, got {}", q_shape[0]);
+    // q/weights are always batch 1; k's batch is the cache-slot count B (checked in validate_static /
+    // validate_runtime_values), so it is intentionally NOT tied to q's batch here.
+    TT_FATAL(q_shape[0] == w_shape[0], "q/weights batch mismatch ({} vs {})", q_shape[0], w_shape[0]);
+    TT_FATAL(q_shape[0] == 1, "q/weights batch 1 only, got {}", q_shape[0]);
 
     // weights are bf16 tiles. q and k are matmul inputs (q is srcB, k is srcA), neither is ever
     // packed, so each may be bfp8_b (halves its BW). q+k both bfp8 drops the matmul to LoFi (1 phase);
@@ -92,17 +229,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         Sq,
         T,
         D);
-    TT_FATAL(
-        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
-        "chunk_start_idx {} must be tile-aligned",
-        attrs.chunk_start_idx);
-    TT_FATAL(
-        attrs.chunk_start_idx + Sq <= T,
-        "chunk window [{}, {}+{}) exceeds T={}",
-        attrs.chunk_start_idx,
-        attrs.chunk_start_idx,
-        Sq,
-        T);
+    validate_chunk_start(attrs, tensor_args);  // base/stride alignment + worst-device window (also runs on cache hit)
 
     // Work-unit knobs (elements, tile-aligned); see IndexerScoreProgramConfig.
     const auto& cfg = attrs.program_config;
@@ -169,11 +296,13 @@ IndexerScoreDeviceOperation::create_op_performance_model(
     const uint32_t Tt = k_shape[2] / tt::constants::TILE_WIDTH;
     const uint32_t chunk_t = attrs.chunk_start_idx / tt::constants::TILE_WIDTH;
 
-    // Causal-valid output tiles V = sum over q-tile-rows of min(Tt, chunk_t + row + 1) -- the useful
-    // matmul work, masked future tiles excluded (matches the test's sp7_valid_tiles()).
+    // Causal-valid output tiles V = sum over q-tile-rows of min(kv_len_tiles, chunk_t + row + 1) -- useful
+    // matmul work, masked future/unwritten tiles excluded (matches the test's sp7_valid_tiles()). kv_len
+    // caps the per-row valid columns; nullopt == full Tt.
+    const uint32_t kv_len_tiles = attrs.kv_len.has_value() ? attrs.kv_len.value() / tt::constants::TILE_WIDTH : Tt;
     uint64_t valid_tiles = 0;
     for (uint32_t s = 0; s < Sqt; ++s) {
-        valid_tiles += std::min<uint64_t>(Tt, (uint64_t)chunk_t + s + 1);
+        valid_tiles += std::min<uint64_t>(kv_len_tiles, (uint64_t)chunk_t + s + 1);
     }
 
     // Per valid 32x32 output tile, per head: a 32x32 x D matmul = (32*32) outputs x 2*D FLOPs (2/FMA);
@@ -210,12 +339,18 @@ IndexerScoreDeviceOperation::invoke(
     const Tensor& weights,
     uint32_t chunk_start_idx,
     const IndexerScoreProgramConfig& program_config,
-    const DeviceComputeKernelConfig& compute_kernel_config) {
+    const DeviceComputeKernelConfig& compute_kernel_config,
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> kv_len,
+    std::optional<uint32_t> cluster_axis) {
     return {
         operation_attributes_t{
             .chunk_start_idx = chunk_start_idx,
+            .cluster_axis = cluster_axis,
             .program_config = program_config,
-            .compute_kernel_config = compute_kernel_config},
+            .compute_kernel_config = compute_kernel_config,
+            .cache_batch_idx = cache_batch_idx,
+            .kv_len = kv_len},
         tensor_args_t{.q = q, .k = k, .weights = weights}};
 }
 
@@ -227,10 +362,33 @@ ttnn::Tensor indexer_score(
     const ttnn::Tensor& q,
     const ttnn::Tensor& k,
     const ttnn::Tensor& weights,
-    uint32_t chunk_start_idx,
+    std::optional<uint32_t> chunk_start_idx,
     const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<uint32_t> kv_len,
+    std::optional<uint32_t> cluster_axis) {
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
+
+    // Resolve the device-0 base. Multichip: omit chunk_start_idx -> deduce from the chunked-prefill
+    // invariant (K = history + the SP-gathered chunk of num_devices*Sq queries), so base = T - num_devices*Sq.
+    // Single chip (device count != SP ring size, e.g. simulating one rank): the caller passes it.
+    uint32_t base = 0;
+    if (chunk_start_idx.has_value()) {
+        base = *chunk_start_idx;
+    } else {
+        const uint32_t Sq = q.logical_shape()[2];
+        const uint32_t T = k.logical_shape()[2];
+        const uint32_t num_devices = static_cast<uint32_t>(q.device_storage().get_coords().size());
+        TT_FATAL(
+            T >= num_devices * Sq,
+            "indexer_score: cannot deduce chunk_start_idx -- T={} < num_devices({})*Sq({}). Pass chunk_start_idx "
+            "explicitly if K does not equal history + the SP-gathered chunk.",
+            T,
+            num_devices,
+            Sq);
+        base = T - num_devices * Sq;
+    }
     // Default math_fidelity follows the matmul-input dtypes (both bfp8 -> LoFi for the 2x peak, else
     // HiFi2 to keep the bf16 mantissa); a caller-supplied config overrides per field. fp32-dest acc and
     // full-sync default off -- the only modes this op's custom LLK is validated for (see validate).
@@ -245,7 +403,7 @@ ttnn::Tensor indexer_score(
         /*default_dst_full_sync_en=*/false);
     // Reuse invoke() so attribute/tensor packing lives in one place.
     auto [operation_attributes, tensor_args] =
-        OperationType::invoke(q, k, weights, chunk_start_idx, program_config, resolved);
+        OperationType::invoke(q, k, weights, base, program_config, resolved, cache_batch_idx, kv_len, cluster_axis);
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 

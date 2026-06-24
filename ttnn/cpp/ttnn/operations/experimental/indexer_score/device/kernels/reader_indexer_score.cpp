@@ -208,9 +208,15 @@ inline void read_w_group(Noc noc, const WAcc& w_acc, uint32_t q_row_start, const
  *  handshake to minimize startup rendezvous. */
 template <typename KAcc>
 inline void read_k_chunk(
-    Noc noc, const KAcc& k_acc, uint32_t k_tile_start, uint32_t k_tiles_in_unit, const McastDir& k_dir) {
+    Noc noc,
+    const KAcc& k_acc,
+    uint32_t k_tile_start,
+    uint32_t k_tiles_in_unit,
+    const McastDir& k_dir,
+    uint32_t k_batch_page_offset) {
     // Reserves/pushes the full k_chunk_tiles to keep the 2-chunk ring half-aligned, but reads only the
-    // k_tiles_in_unit valid columns (pad slots stay stale; compute masks them).
+    // k_tiles_in_unit valid columns (pad slots stay stale; compute masks them). k_batch_page_offset shifts
+    // every page into the indexed cache slot; 0 when not indexed.
     read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
         noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
             uint32_t ptr = addr;
@@ -220,7 +226,7 @@ inline void read_k_chunk(
                         k_acc,
                         CoreLocalMem<uint32_t>(ptr),
                         k_tile_bytes,
-                        {.page_id = (k_tile_start + k_col) * head_dim_tiles + dim_tile},
+                        {.page_id = k_batch_page_offset + (k_tile_start + k_col) * head_dim_tiles + dim_tile},
                         {});
                     ptr += k_tile_bytes;
                 }
@@ -242,6 +248,10 @@ void kernel_main() {
     const uint32_t max_bands = get_arg_val<uint32_t>(8);  // row's widest column; streaming pads q to this
     const McastDir k_dir = read_mcast_dir(9);             // K column mcast: args [9, 17)
     const McastDir q_dir = read_mcast_dir(17);            // Q/W row mcast: args [17, 25)
+    // Persistent-cache runtime args (excluded from the hash, re-applied each dispatch), after the mcast
+    // tuples so they never perturb the fixed read_mcast_dir() offsets.
+    const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache k page offset; 0 when not indexed
+    const uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);  // valid KV length in tiles (full k_len_tiles when unset)
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -252,6 +262,7 @@ void kernel_main() {
     build_mask_tiles(noc);
 
     WorkUnitSpan span;
+    span.set_valid_k_len_tiles(kv_len_tiles);
 
     // group-OUTER, band-INNER. Resident-heads order within a group: k -> q -> w (w/gates consumed only in
     // the mul phase, so read LAST behind latency-critical q/k). Streaming path reads w FIRST: compute's mul
@@ -275,7 +286,7 @@ void kernel_main() {
                 span.set(group, band0 + band);
                 // k FIRST: compute waits the whole k chunk before any row, so reading k ahead of q lets the
                 // split q-row0 push unblock the first matmul (else the k wait re-serializes it).
-                read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir);
+                read_k_chunk(noc, k_acc, span.k_tile_start(), span.k_tiles(), k_dir, k_batch_page_offset);
                 if (band == 0 && !stream_heads) {
                     read_q_rows(noc, q_acc, q_row_start, q_dir);   // per-row: compute starts on row 0
                     read_w_group(noc, w_acc, q_row_start, q_dir);  // gates deferred behind q/k
