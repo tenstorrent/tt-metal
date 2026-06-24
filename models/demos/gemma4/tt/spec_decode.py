@@ -154,8 +154,10 @@ class SpeculativeDecoder:
     # ── device-tensor builders ────────────────────────────────────────────
     def _pos_tensors(self, positions):
         batch = len(positions)
-        pu = torch.zeros((1, 32), dtype=torch.int32)
-        pu[0, :batch] = torch.tensor(positions, dtype=torch.int32)
+        # int64 host source for the uint32 tensor: ttnn downcasts it host-side, avoiding
+        # the int32->uint32 C++ conversion that emits the #18536 row-major warning.
+        pu = torch.zeros((1, 32), dtype=torch.int64)
+        pu[0, :batch] = torch.tensor(positions, dtype=torch.int64)
         pos_uint32 = ttnn.from_torch(
             pu, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper
         )
@@ -169,7 +171,9 @@ class SpeculativeDecoder:
         return pos_uint32, pos_int32
 
     def _tokens_tensor(self, tokens):
-        t = torch.tensor(tokens, dtype=torch.int32).reshape(1, len(tokens))
+        # int64 host source for the uint32 tensor (see _pos_tensors): avoids the
+        # int32->uint32 conversion that triggers the #18536 row-major warning.
+        t = torch.tensor(tokens, dtype=torch.int64).reshape(1, len(tokens))
         return ttnn.from_torch(
             t, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper
         )
@@ -185,13 +189,17 @@ class SpeculativeDecoder:
 
     # ── host-side input tensors (for copy_host_to_device_tensor into traces) ──
     def _host_tokens(self, tokens):
-        t = torch.tensor(tokens, dtype=torch.int32).reshape(1, len(tokens))
+        # int64 host source for the uint32 tensor (see _pos_tensors): avoids the
+        # int32->uint32 conversion that triggers the #18536 row-major warning.
+        t = torch.tensor(tokens, dtype=torch.int64).reshape(1, len(tokens))
         return ttnn.from_torch(t, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
 
     def _host_pos(self, positions):
         batch = len(positions)
-        pu = torch.zeros((1, 32), dtype=torch.int32)
-        pu[0, :batch] = torch.tensor(positions, dtype=torch.int32)
+        # int64 host source for the uint32 tensor (see _pos_tensors): avoids the
+        # int32->uint32 conversion that triggers the #18536 row-major warning.
+        pu = torch.zeros((1, 32), dtype=torch.int64)
+        pu[0, :batch] = torch.tensor(positions, dtype=torch.int64)
         pos_uint32 = ttnn.from_torch(pu, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.uint32, mesh_mapper=self._mapper)
         pos_int32 = ttnn.from_torch(
             torch.tensor(positions, dtype=torch.int32),
@@ -444,7 +452,9 @@ class SpeculativeDecoder:
         u = ttnn.untilize(src, use_multicore=True)
         if padded is not None:
             padded.deallocate(True)
-        idx = ttnn.argmax(u, dim=-1, keepdim=False, use_multicore=True)  # [1,1,32 or rows] uint32 RM
+        idx = ttnn.argmax(
+            u, dim=-1, keepdim=False
+        )  # [1,1,32 or rows] uint32 RM (multicore by default on ROW_MAJOR last-dim)
         u.deallocate(True)
         if rows < R32:
             sliced = ttnn.slice(idx, [0, 0, 0], [1, 1, rows])  # [1,1,rows]

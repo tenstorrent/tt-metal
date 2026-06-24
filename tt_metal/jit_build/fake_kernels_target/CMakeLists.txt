@@ -27,7 +27,7 @@ file(
 # Filter to only include files from kernel directories
 set(TTNN_OPERATION_KERNELS "")
 foreach(file ${ALL_TTNN_FILES})
-    if(file MATCHES ".*/kernels/|.*/kernels_ng/")
+    if(file MATCHES ".*/kernels/|.*/kernels_ng/|.*/kernels_dfb/")
         list(APPEND TTNN_OPERATION_KERNELS ${file})
     endif()
 endforeach()

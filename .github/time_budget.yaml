@@ -82,7 +82,7 @@ ttnn:
     bh_p150b_civ2: 1015
     wh_n150_civ2: 1175
     wh_n300_civ2: 1155
-    bh_p150b_civ2_viommu: 110
+    bh_p150b_civ2_viommu: 115
   e2e:
     wh_llmbox: 90
     wh_galaxy: 120
@@ -153,6 +153,8 @@ scaleout:
     bh_galaxy: 60
     bh_spsg: 20 # single galaxy
     bh_sp1: 90
+    bh_sp1-blitz: 90 #blitz specific mgd sku
+    bh_sp1-mgd: 90 #general mgd sku
     bh_sp4: 150
     bh_loudbox: 80
     bh_p300: 80
