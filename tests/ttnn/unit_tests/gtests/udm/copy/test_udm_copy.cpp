@@ -4,7 +4,7 @@
 
 #include <gtest/gtest.h>
 
-#include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include <algorithm>
 #include "tests/ttnn/unit_tests/gtests/udm/test_udm_utils.hpp"
 
 #include <tt-metalium/experimental/udm/mesh_kernel.hpp>
@@ -138,22 +138,30 @@ inline void validate(
     auto actual_data = ttnn::distributed::aggregate_tensor(actual_tensor, *composer).to_vector<bfloat16>();
 
     // Compare values
-    uint32_t volume = expected_data.size();
+    const uint32_t volume = static_cast<uint32_t>(expected_data.size());
     uint32_t mismatches = 0;
+    uint32_t printed = 0;
     const uint32_t max_print_mismatches = 10;
-
-    for (uint32_t i = 0; i < volume; ++i) {
-        if (expected_data[i] != actual_data[i]) {
-            if (mismatches < max_print_mismatches) {
-                log_error(
-                    tt::LogTest,
-                    "Mismatch at index {}: expected={}, actual={}",
-                    i,
-                    static_cast<float>(expected_data[i]),
-                    static_cast<float>(actual_data[i]));
-            }
-            mismatches++;
+    auto exp_it = expected_data.cbegin(), act_it = actual_data.cbegin();
+    const auto exp_end = expected_data.cend();
+    while (exp_it != exp_end) {
+        auto [m1, m2] = std::mismatch(exp_it, exp_end, act_it);
+        if (m1 == exp_end) {
+            break;
         }
+        if (printed < max_print_mismatches) {
+            const size_t i = static_cast<size_t>(m1 - expected_data.cbegin());
+            log_error(
+                tt::LogTest,
+                "Mismatch at index {}: expected={}, actual={}",
+                i,
+                static_cast<float>(*m1),
+                static_cast<float>(*m2));
+            ++printed;
+        }
+        ++mismatches;
+        exp_it = std::next(m1);
+        act_it = std::next(m2);
     }
 
     if (mismatches > 0) {

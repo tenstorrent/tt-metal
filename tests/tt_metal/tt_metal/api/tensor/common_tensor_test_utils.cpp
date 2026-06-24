@@ -30,9 +30,9 @@ void test_tensor_on_device(
     std::vector<std::byte> readback_data(input_buf_size);
 
     constexpr int random_prime_number = 4051;
-    for (size_t i = 0; i < input_buf_size; i++) {
-        host_data[i] = static_cast<std::byte>(i % random_prime_number);
-    }
+    size_t fill_idx = 0;
+    std::generate(
+        host_data.begin(), host_data.end(), [&] { return static_cast<std::byte>(fill_idx++ % random_prime_number); });
 
     auto tensor = MeshTensor::allocate_on_device(device, TensorSpec(input_shape, layout), TensorTopology());
 

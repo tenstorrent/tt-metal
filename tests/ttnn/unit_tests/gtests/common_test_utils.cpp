@@ -4,6 +4,7 @@
 
 #include "common_test_utils.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <cmath>
 #include <limits>
@@ -165,35 +166,30 @@ NonfiniteReport check_nonfinite_positions(const std::vector<float>& actual, cons
         return NonfiniteReport{};
     }
     NonfiniteReport report;
-    for (std::size_t i = 0; i < actual.size(); ++i) {
-        const float a = actual[i];
-        const float b = expected[i];
-        const bool a_is_nan = std::isnan(a);
-        const bool b_is_nan = std::isnan(b);
-        const bool a_is_inf = std::isinf(a);
-        const bool b_is_inf = std::isinf(b);
 
-        if (a_is_nan || b_is_nan || a_is_inf || b_is_inf) {
-            report.any_nonfinite = true;
-        }
+    report.any_nonfinite = std::any_of(actual.cbegin(), actual.cend(), [](float a) { return !std::isfinite(a); }) ||
+                           std::any_of(expected.cbegin(), expected.cend(), [](float b) { return !std::isfinite(b); });
 
-        // NaN positions must match exactly.
-        if (a_is_nan != b_is_nan) {
-            report.positions_match = false;
-            report.first_mismatch_index = i;
-            report.first_mismatch_actual = a;
-            report.first_mismatch_expected = b;
-            return report;
+    // NaN positions must match; Inf positions and signs must match.
+    const auto nonfinite_positions_match = [](float a, float b) {
+        if (std::isnan(a) != std::isnan(b)) {
+            return false;
         }
-        // Inf positions and signs must match exactly.  std::signbit picks +/- correctly
-        // for both +inf and -inf, so comparing it only when both are Inf is sufficient.
-        if (a_is_inf != b_is_inf || (a_is_inf && b_is_inf && std::signbit(a) != std::signbit(b))) {
-            report.positions_match = false;
-            report.first_mismatch_index = i;
-            report.first_mismatch_actual = a;
-            report.first_mismatch_expected = b;
-            return report;
+        if (std::isinf(a) != std::isinf(b)) {
+            return false;
         }
+        if (std::isinf(a) && std::isinf(b) && std::signbit(a) != std::signbit(b)) {
+            return false;
+        }
+        return true;
+    };
+
+    auto [it_a, it_b] = std::mismatch(actual.cbegin(), actual.cend(), expected.cbegin(), nonfinite_positions_match);
+    if (it_a != actual.cend()) {
+        report.positions_match = false;
+        report.first_mismatch_index = static_cast<size_t>(it_a - actual.cbegin());
+        report.first_mismatch_actual = *it_a;
+        report.first_mismatch_expected = *it_b;
     }
     return report;
 }

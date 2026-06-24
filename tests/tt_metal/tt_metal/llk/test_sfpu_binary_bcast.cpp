@@ -5,6 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -311,19 +312,25 @@ bool run_sfpu_binary_bcast(const std::shared_ptr<distributed::MeshDevice>& mesh_
     const float atol = is_fp32 ? 0.0f : 1.0f / 128.0f;
     const float rtol = is_fp32 ? 1e-6f : 1.0f / 128.0f;
 
+    const auto within_tol = [&](float g, float d) { return std::fabs(g - d) <= std::max(atol, rtol * std::fabs(g)); };
+
     size_t num_mismatches = 0;
-    const size_t max_report = 8;
-    for (size_t i = 0; i < device_f.size(); ++i) {
-        const float g = golden_f[i];
-        const float d = device_f[i];
-        const float diff = std::fabs(g - d);
-        const float tol = std::max(atol, rtol * std::fabs(g));
-        if (diff > tol) {
-            if (num_mismatches < max_report) {
-                log_error(tt::LogTest, "Mismatch at flat idx {}: golden={} device={} diff={}", i, g, d, diff);
-            }
-            ++num_mismatches;
+    constexpr size_t max_report = 8;
+    auto g_it = golden_f.cbegin(), d_it = device_f.cbegin();
+    const auto g_end = golden_f.cend();
+    while (g_it != g_end) {
+        auto [m1, m2] = std::mismatch(g_it, g_end, d_it, within_tol);
+        if (m1 == g_end) {
+            break;
         }
+        if (num_mismatches < max_report) {
+            const size_t i = static_cast<size_t>(m1 - golden_f.cbegin());
+            log_error(
+                tt::LogTest, "Mismatch at flat idx {}: golden={} device={} diff={}", i, *m1, *m2, std::fabs(*m1 - *m2));
+        }
+        ++num_mismatches;
+        g_it = std::next(m1);
+        d_it = std::next(m2);
     }
     if (num_mismatches != 0) {
         log_error(tt::LogTest, "Total mismatches: {}/{}", num_mismatches, device_f.size());
