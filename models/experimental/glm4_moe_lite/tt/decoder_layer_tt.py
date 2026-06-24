@@ -148,6 +148,24 @@ def _env_bool(name: str, *, default: bool = False) -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _mla_q_chunk_size(seq_len: int) -> int:
+    """FlashMLA prefill ``q_chunk_size`` — chunks the query SEQUENCE (must be a multiple of 32).
+
+    It does NOT pad the head dimension (SDPA work already scales with the actual query-head count,
+    so head-parallel reduces it for free). Swept on Blackhole for the head-parallel MLA shape
+    (kvpe_dim=576): short seq is launch-overhead-bound so one chunk (== seq) wins; long seq favors
+    64 to trade per-chunk overhead against parallelism (S=1024: 519us@32 -> 320us@64; S=128:
+    71.6us@32 -> 59.5us@128). Numerically a no-op vs 32 (PCC 1.0). Override with
+    GLM4_MOE_LITE_MLA_Q_CHUNK_SIZE.
+    """
+    raw = os.environ.get("GLM4_MOE_LITE_MLA_Q_CHUNK_SIZE", "").strip()
+    if raw:
+        return max(int(ttnn.TILE_SIZE), int(raw))
+    if int(seq_len) <= 128:
+        return max(int(ttnn.TILE_SIZE), ((int(seq_len) + 31) // 32) * 32)
+    return 64
+
+
 @torch.no_grad()
 def prepare_decode_rope_and_positions_tt(
     *,
@@ -1038,7 +1056,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         scale = float(int(hparams.qk_head_dim) ** -0.5)
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=32,  # heads padded up to 32
+        q_chunk_size=_mla_q_chunk_size(seq_len),  # chunks query sequence (not heads); see helper
         k_chunk_size=128,
         exp_approx_mode=False,
     )
@@ -1097,8 +1115,8 @@ def run_decoder_layer_prefill_update_cache_tt(
         ttnn.deallocate(kvpe, force=False)
     _profile_add(profile, "flash_mla_prefill_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
-    # flash_mla_prefill pads heads up to q_chunk_size. Slice back to this device's head count
-    # (heads_local == num_heads unless HEAD_PARALLEL_ATTN, where q_b emitted num_heads/tp_size).
+    # flash_mla_prefill tile-pads the head dim in its output. Slice back to this device's head
+    # count (heads_local == num_heads unless HEAD_PARALLEL_ATTN, where q_b emitted num_heads/tp_size).
     attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [batch, heads_local, seq_len, int(hparams.kv_lora_rank)])
 
     t0 = time.perf_counter() if profile is not None else 0.0
