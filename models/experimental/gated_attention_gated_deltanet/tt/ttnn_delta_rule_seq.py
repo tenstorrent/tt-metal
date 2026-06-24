@@ -427,7 +427,12 @@ def chunk_gated_delta_rule_seq(
     # across the full device grid instead of the ~16-core auto-config. Same math (see _bmm_progcfg).
     _bmm_cfg = _bmm_progcfg(mesh_device, chunk_size // _TILE, chunk_size // _TILE, K // _TILE)
 
-    # Zero inputs past valid_len (fixed T bucket, variable real length). Per-row valid_len: BH rows b*H..(b+1)*H.
+    # Right-padding mask: zero every state-affecting input past valid_len. The mask
+    # SHAPE is fixed by the bucket length T (only its values depend on valid_len), so a
+    # single program serves all real lengths. Mirrors the zeros concatenated below for
+    # pad_len; here it covers the [valid_len, T) region the caller padded.
+    # valid_len may be a scalar (one length for all BH rows) or a per-row list/tuple of length B
+    # (batched prefill): BH rows are ordered b*H + h, so user b owns rows [b*H, (b+1)*H).
     _is_per_row = isinstance(valid_len, (list, tuple))
     if _is_per_row or (valid_len is not None and valid_len < T):
         _m = torch.zeros(BH, T, 1, dtype=torch.float32)

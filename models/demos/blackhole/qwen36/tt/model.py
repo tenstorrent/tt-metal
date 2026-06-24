@@ -2861,14 +2861,14 @@ class Qwen36Model:
         self._deltanet_external_states = []
         return kv_caches
 
-    def _prefill_paged_tp(self, token_ids, page_table, valid_len=None, vision_tokens=None):
+    def _prefill_paged_tp(self, token_ids, page_table, valid_len=None, vision_tokens=None, gdn_collect=False):
         """TP (num_devices>1) paged prefill, B=1. Mirrors the demo prefill_tp but routes
         the full-attention layers through the paged KV cache (forward_prefill_paged) so
         decode can read it via page_table. GDN layers capture their recurrent/conv state
         as in the demo. Returns logits [1, 1, vocab] at position valid_len-1.
         """
         B, T = token_ids.shape
-        assert B == 1, "TP prefill is single-sequence (B=1)"
+        assert B == 1, "TP prefill is single-sequence (B=1); batched serving prefills one user at a time"
         vlen = valid_len or T
         # Stage the per-request RoPE (M-RoPE for multimodal, 1D for text).
         self._build_request_rope(token_ids[:, :vlen], vision_tokens)
@@ -2899,6 +2899,7 @@ class Qwen36Model:
                 page_table=page_table_tt,
                 chunk_page_table=page_table_tt,
                 chunk_start_idx=0,
+                gdn_collect=gdn_collect,
             )
         x = self.norm(x, mode=Mode.PREFILL)
         x_last = x[:, :, vlen - 1 : vlen, :]
@@ -3300,28 +3301,34 @@ class Qwen36Model:
 
         B = tokens.shape[0]
         tokens_tt = ttnn.from_torch(tokens.to(torch.int32), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        pos = current_pos[0].item() if isinstance(current_pos, torch.Tensor) else int(current_pos)
+        # Per-user positions: current_pos may be a [B] tensor (each user at its own absolute
+        # position — variable prompt lengths / real serving) or a scalar (lockstep / B=1). Build a
+        # [B] int32 vector so cur_pos and the TP rope tables carry one rotation per user.
+        if isinstance(current_pos, torch.Tensor):
+            pos_vec = current_pos.to(torch.int32).reshape(-1)
+            assert pos_vec.shape[0] == B, f"current_pos length {pos_vec.shape[0]} != batch {B}"
+        else:
+            pos_vec = torch.full((B,), int(current_pos), dtype=torch.int32)
         # RoPE position is the KV position offset by rope_delta (multimodal compresses the position
         # space; post-image text has t==h==w so 1D RoPE at rope_pos is correct). cur_pos_tt below
         # stays the true KV position. rope_delta is 0 for text, so this is a no-op there.
-        rope_pos = pos + self.rope.rope_delta
+        rope_pos_vec = pos_vec + self.rope.rope_delta
         if self.num_devices > 1:
             # TP rope seam: build rope_tp-format cos/sin [1, B, 1, rope_dim] (same math as
             # attention/rope_tp.rot_mats_decode) on host and pack along dim 0; unpack_rope +
             # _forward_decode flow unchanged (apply_partial_rope_decode consumes this layout).
             rd = self.args.rope_head_dim
             inv_freq = 1.0 / (self.args.rope_theta ** (torch.arange(0, rd, 2).float() / rd))
-            freqs = torch.outer(torch.full((B,), float(rope_pos)), inv_freq)
+            freqs = torch.outer(rope_pos_vec.float(), inv_freq)  # [B, rd/2], per-user rotation
             emb = torch.cat([freqs, freqs], dim=-1)
             cos = emb.cos().reshape(1, B, 1, rd).to(torch.bfloat16)
             sin = emb.sin().reshape(1, B, 1, rd).to(torch.bfloat16)
             rope_packed = ttnn.from_torch(torch.cat([cos, sin], dim=0), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
         else:
-            cos_host, sin_host = self.rope.get_cos_sin_host(rope_pos)  # HOST ttnn tensors [1,1,rope_head_dim]
+            # Single-device decode is B=1 in this port; per-user single-device rope is out of scope.
+            cos_host, sin_host = self.rope.get_cos_sin_host(int(rope_pos_vec[0]))  # HOST ttnn [1,1,rope_head_dim]
             rope_packed = pack_rope_host(cos_host, sin_host)  # torch-based (host)
-        cur_pos_tt = ttnn.from_torch(
-            torch.full((B,), pos, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-        )
+        cur_pos_tt = ttnn.from_torch(pos_vec, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
         page_table_tt = (
             ttnn.from_torch(page_table, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
             if page_table is not None

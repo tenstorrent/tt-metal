@@ -190,21 +190,25 @@ def _blocks_for(seqlen, max_generated_tokens):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
-    "seqlen, max_generated_tokens, use_trace, repeat_batches",
+    "seqlen, max_generated_tokens, use_trace, batch, repeat_batches",
     [
-        pytest.param(128, 50, True, 1, id="traced_128"),
-        pytest.param(128, 50, False, 1, id="paged_128"),
-        pytest.param(4096, 100, True, 1, id="traced_4k"),
-        pytest.param(4096, 100, False, 1, id="paged_4k"),
-        pytest.param(8192, 100, True, 1, id="traced_8k"),
-        pytest.param(8192, 100, False, 1, id="paged_8k"),
-        pytest.param(16384, 100, True, 1, id="traced_16k"),
-        pytest.param(32768, 100, True, 1, id="traced_32k"),
-        pytest.param(65536, 500, True, 1, id="traced_64k"),
-        pytest.param(65536, 100, False, 1, id="paged_64k"),
-        pytest.param(131072, 100, True, 1, id="traced_128k"),
-        pytest.param(262144, 100, True, 1, id="traced_256k"),
-        pytest.param(128, 50, True, 2, id="determinism_128"),
+        pytest.param(128, 50, True, 1, 1, id="traced_128"),
+        pytest.param(128, 50, False, 1, 1, id="paged_128"),
+        pytest.param(4096, 100, True, 1, 1, id="traced_4k"),
+        pytest.param(4096, 100, False, 1, 1, id="paged_4k"),
+        pytest.param(8192, 100, True, 1, 1, id="traced_8k"),
+        pytest.param(8192, 100, False, 1, 1, id="paged_8k"),
+        pytest.param(16384, 100, True, 1, 1, id="traced_16k"),
+        pytest.param(32768, 100, True, 1, 1, id="traced_32k"),
+        pytest.param(65536, 500, True, 1, 1, id="traced_64k"),
+        pytest.param(65536, 100, False, 1, 1, id="paged_64k"),
+        pytest.param(131072, 100, True, 1, 1, id="traced_128k"),
+        pytest.param(262144, 100, True, 1, 1, id="traced_256k"),
+        # Determinism: re-run the traced 128 case and assert identical output across runs.
+        pytest.param(128, 50, True, 1, 2, id="determinism_128"),
+        # Batched decode (TP only): B users sharing one shared paged KV + batched GDN state.
+        pytest.param(128, 50, True, 8, 1, id="batched_128_b8"),
+        pytest.param(128, 50, True, 32, 1, id="batched_128_b32"),
     ],
 )
 def test_demo_text(
@@ -212,12 +216,15 @@ def test_demo_text(
     seqlen,
     max_generated_tokens,
     use_trace,
+    batch,
     repeat_batches,
 ):
     """E2e text generation: prefill + decode."""
     from transformers import AutoTokenizer
 
     device = mesh_device
+    if batch > 1 and not _MULTI:
+        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4")
     device.enable_program_cache()
     # Block budget → max_seq_len, KV cache, and RoPE table
     num_blocks = _blocks_for(seqlen, max_generated_tokens)
@@ -226,7 +233,7 @@ def test_demo_text(
     t0 = time.time()
     model = Qwen36Model.from_pretrained(
         device,
-        max_batch_size=1,
+        max_batch_size=batch,
         max_seq_len=max_seq_len,
         # n_layers=4,  # fast iteration
         # layer_indices=[0, 3],  # profile specific layers
@@ -247,7 +254,27 @@ def test_demo_text(
         f"Prompt: {actual_len} tokens (block budget: {num_blocks} blocks x {BLOCK_SIZE} = {max_seq_len} tokens)"
     )
 
-    # Multi-device: chunked prefill + paged decode; GDN state and KV carry across ~2048-token chunks.
+    # Multi-device (TP): route through the chunk-outer prefill + paged decode path.
+    # Prefill runs each ~2048-token chunk through all layers, carrying GDN recurrent/
+    # conv state + paged KV across chunks (so the GDN seq kernel never sees the whole
+    # sequence — the long-context OOM fix), then incremental paged single-token decode.
+    if model.num_devices > 1 and batch > 1:
+        # Batched serving: B users share one paged KV + batched GDN state. The demo replicates the
+        # one loaded prompt to all B users, so every row MUST generate identical tokens — a built-in
+        # batched-correctness check layered on the throughput measurement.
+        rows, perf = _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch)
+        text0 = tokenizer.decode(rows[0], skip_special_tokens=True)
+        logger.info(
+            f"[TP {model.num_devices}-dev B={batch}] ttft={perf['ttft_s']:.2f}s "
+            f"per-user-decode={perf['decode_tok_s']:.2f} tok/s aggregate={perf['agg_tok_s']:.1f} tok/s"
+        )
+        logger.info(f"[TP B={batch}] GENERATED (row 0): {text0!r}")
+        for u in range(batch):
+            assert len(rows[u]) == max_generated_tokens, f"row {u}: {len(rows[u])} != {max_generated_tokens}"
+            assert rows[u] == rows[0], f"row {u} diverged from row 0 (identical prompts must decode identically)"
+        assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
+        return
+
     if model.num_devices > 1:
         if repeat_batches > 1:
             results = []
