@@ -578,6 +578,25 @@ class TestConfig:
             )
             golden_generators_module.get_golden_generator = get_golden_proxied
 
+        # In DEFAULT mode with parallel workers, isolate artefacts per worker
+        if TestConfig.BUILD_MODE == BuildMode.DEFAULT and worker_id != "master":
+            TestConfig.ARTEFACTS_DIR = TestConfig.DEFAULT_ARTEFACTS_PATH / worker_id
+            TestConfig.SHARED_DIR = TestConfig.ARTEFACTS_DIR / "shared"
+            TestConfig.SHARED_OBJ_DIR = TestConfig.SHARED_DIR / "obj"
+            TestConfig.SHARED_ELF_DIR = TestConfig.SHARED_DIR / "elf"
+            TestConfig.PROFILER_SHARED_DIR = (
+                TestConfig.ARTEFACTS_DIR / "shared-profiler"
+            )
+            TestConfig.PROFILER_SHARED_OBJ_DIR = TestConfig.PROFILER_SHARED_DIR / "obj"
+            TestConfig.PROFILER_SHARED_ELF_DIR = TestConfig.PROFILER_SHARED_DIR / "elf"
+            TestConfig.COVERAGE_INFO_DIR = TestConfig.ARTEFACTS_DIR / "coverage_info"
+            TestConfig.PROFILER_META = TestConfig.ARTEFACTS_DIR / "profiler_meta"
+            TestConfig.SYNC_DIR = TestConfig.ARTEFACTS_DIR / "sync_primitives"
+            TestConfig.PERF_DATA_DIR = TestConfig.ARTEFACTS_DIR / "temp_perf_data"
+            TestConfig.DEFAULT_STIMULI_CACHE_FOLDER = (
+                TestConfig.ARTEFACTS_DIR / "temp_stimuli"
+            )
+
         # Always have a fresh build when compiling
         if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
             shutil.rmtree(TestConfig.ARTEFACTS_DIR.absolute(), ignore_errors=True)
