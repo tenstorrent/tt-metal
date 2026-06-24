@@ -1,5 +1,11 @@
 # Ablation lever sweep — `wan_fused_distributed_rmsnorm`
 
+> **Platform: all numbers below are Wormhole 4×8 galaxy (PROXY)** — 4 links, 8×9 grid, worker
+> cap 64. The target is Blackhole (2 links, 12×10 grid, torus), whose BW/FLOP ratio will shift
+> the compute-vs-fabric-vs-IO balance — **re-run the ablation on BH** (`WAN_ABLATION=N`,
+> `WAN_GALAXY_LINKS=2`) and add a parallel "Blackhole" section before drawing BH conclusions.
+> See `RMSNORM_FUSION_FINDINGS.md` for the porting checklist.
+
 Goal: on the **worst-speedup-over-baseline** shapes, find which component is on the critical
 path. Method: traced end-to-end fused µs (`test_bench`, fused-only) with one component stubbed
 per run (`WAN_ABLATION=N`, timing-only — not bit-correct). **Δµs = `fused(0) − fused(N)`** =
