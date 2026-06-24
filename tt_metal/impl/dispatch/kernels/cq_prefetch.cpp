@@ -78,7 +78,6 @@ constexpr uint32_t cmddat_q_pages = CMDDAT_Q_PAGES;
 constexpr uint32_t my_upstream_cb_sem_id = MY_UPSTREAM_CB_SEM_ID;
 constexpr uint32_t upstream_cb_sem_id = UPSTREAM_CB_SEM_ID;
 constexpr uint32_t cmddat_q_log_page_size = CMDDAT_Q_LOG_PAGE_SIZE;
-constexpr uint32_t cmddat_q_blocks = CMDDAT_Q_BLOCKS;
 
 // used for prefetch_d <--> dispatch_s data path
 constexpr uint32_t dispatch_s_buffer_base = DISPATCH_S_BUFFER_BASE;
@@ -184,8 +183,6 @@ constexpr uint32_t scratch_db_base1 = scratch_db_base + scratch_db_half_size;
 constexpr uint32_t prefetch_q_log_minsize = 4;
 
 const uint32_t scratch_db_top[2] = {scratch_db_base0, scratch_db_base1};
-
-constexpr uint32_t cmddat_q_pages_per_block = cmddat_q_pages / cmddat_q_blocks;
 
 // Currently capping the same as dispatch
 constexpr uint32_t max_read_packed_cmd =
@@ -2475,14 +2472,7 @@ static uintptr_t process_relay_inline_all(uintptr_t data_ptr, uintptr_t fence, b
 // We require that all data for a single fetch is available before processing commands. We can't use a normal
 // CBReaderWithReleasePolicy because that always releases pages when advancing between blocks,
 // which would cause problems if the data spans multiple blocks.
-CBReaderWithManualRelease<
-    my_upstream_cb_sem_id,
-    cmddat_q_log_page_size,
-    cmddat_q_blocks,
-    cmddat_q_pages_per_block,
-    cmddat_q_base,
-    cmddat_q_end>
-    h_cmddat_q_reader;
+CBReaderWithManualRelease<my_upstream_cb_sem_id, cmddat_q_log_page_size, cmddat_q_base, cmddat_q_end> h_cmddat_q_reader;
 
 // Used in prefetch_d downstream of a CQ_PREFETCH_CMD_RELAY_LINEAR_H command.
 inline void relay_raw_data_to_downstream(uintptr_t& data_ptr, uint64_t wlength, uint32_t& local_downstream_data_ptr) {
