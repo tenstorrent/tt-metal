@@ -12,4 +12,9 @@ std::vector<Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& servic
     return ttnn::prim::h2d_socket_sync(service, metadata_size_bytes);
 }
 
+std::vector<Tensor> h2d_socket_sync(
+    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
+    return ttnn::prim::h2d_socket_sync(service, metadata_size_bytes);
+}
+
 }  // namespace ttnn::experimental

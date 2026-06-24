@@ -8,6 +8,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "ttnn/operation.hpp"
+#include "ttnn/tensor/d2d_stream_service.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 using namespace tt::tt_metal;
@@ -91,7 +92,16 @@ ttsl::hash::hash_t H2DSocketSyncOperation::compute_program_hash(
 
 namespace ttnn::prim {
 
-std::vector<ttnn::Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes) {
+namespace {
+
+// Shared launch body. Snapshots the per-coord service state out of `service`,
+// then runs the cached device operation. Templated on the service type so the
+// same op drains either an H2DStreamService (host->device path) or a
+// D2DStreamServiceReceiver (device->device path): both expose the identical
+// receiver-side getters (only the address return width differs, absorbed by the
+// static_casts below).
+template <typename ServiceT>
+std::vector<ttnn::Tensor> h2d_socket_sync_impl(const ServiceT& service, uint32_t metadata_size_bytes) {
     using OperationType = ttnn::experimental::prim::H2DSocketSyncOperation;
 
     const auto& backing = service.get_backing_tensor();
@@ -102,12 +112,12 @@ std::vector<ttnn::Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& 
     const uint32_t num_cols = mesh_shape[1];
 
     OperationType::operation_attributes_t attrs;
-    attrs.data_ready_sem_addr = service.get_data_ready_sem_addr();
+    attrs.data_ready_sem_addr = static_cast<uint32_t>(service.get_data_ready_sem_addr());
     attrs.page_size = static_cast<uint32_t>(backing.buffer()->page_size());
     attrs.num_pages = static_cast<uint32_t>(backing.buffer()->num_pages());
     attrs.scratch_cb_index = 0;
     attrs.metadata_size_bytes = metadata_size_bytes;
-    attrs.metadata_l1_addr = metadata_size_bytes > 0 ? service.get_metadata_addr() : 0;
+    attrs.metadata_l1_addr = metadata_size_bytes > 0 ? static_cast<uint32_t>(service.get_metadata_addr()) : 0;
     attrs.worker_cores = service.get_worker_cores();
     attrs.mesh_num_cols = num_cols;
 
@@ -125,6 +135,17 @@ std::vector<ttnn::Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& 
     }
 
     return ttnn::device_operation::launch<OperationType>(attrs, OperationType::tensor_args_t{backing});
+}
+
+}  // namespace
+
+std::vector<ttnn::Tensor> h2d_socket_sync(const tt::tt_metal::H2DStreamService& service, uint32_t metadata_size_bytes) {
+    return h2d_socket_sync_impl(service, metadata_size_bytes);
+}
+
+std::vector<ttnn::Tensor> h2d_socket_sync(
+    const tt::tt_metal::D2DStreamServiceReceiver& service, uint32_t metadata_size_bytes) {
+    return h2d_socket_sync_impl(service, metadata_size_bytes);
 }
 
 }  // namespace ttnn::prim

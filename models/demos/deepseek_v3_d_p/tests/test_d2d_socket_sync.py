@@ -4,21 +4,27 @@
 
 """Op test for ``ttnn.experimental.deepseek_prefill.d2d_socket_sync`` (the D2D sender op).
 
-Realistic pipeline-parallel shape: split the 8x4 Galaxy into two 4x4 halves — the sender
-stage (rows 0-3) and the receiver stage (rows 4-7) — and stream one chunk of activations
-from the sender stage to the receiver stage over tt-fabric. Each mesh row carries
-``_TOKENS_PER_ROW`` (640) tokens of the chunk; the hidden dim is sharded across the 4
-columns. So:
+Realistic pipeline-parallel shape: a sender stage streams one chunk of activations to a
+receiver stage over tt-fabric. Parametrized by stage size (``submesh_rows``) — two stacked
+submeshes carved from the mesh:
 
-  * full per-stage activation : [2560 tokens, 7168 hidden]   (4 rows * 640, 4 cols * 1792)
-  * per-chip shard            : [ 640 tokens, 1792 hidden]   uint32 ROW_MAJOR DRAM
+  * ``stage-1row``: sender = row 0 (1xC), receiver = row 1 (1xC). Small footprint — only
+    2 mesh rows are used for the transfer (the rest of the 8x4 stays idle). 640 tokens.
+  * ``stage-half``: sender = top half, receiver = bottom half (rows 0-3 / 4-7 on 8x4).
+    Full-mesh case. 2560 tokens (4 rows * 640).
+
+Each mesh row carries ``_TOKENS_PER_ROW`` (640) tokens; the hidden dim is sharded across
+the columns, so the per-chip shard is always [640 tokens, 1792 hidden] uint32 ROW_MAJOR DRAM.
+NOTE: the 8x4 mesh is always OPENED (conftest's requires_mesh_topology mandates all 32
+Blackhole devices); ``stage-1row`` just confines the D2D transfer to 2 rows.
 
 Flow (mirrors the gtest create_pair flow, but drives the real op):
-  1. Carve sender + receiver 4x4 submeshes from the 8x4 mesh.
+  1. Carve sender + receiver submeshes from the 8x4 mesh.
   2. ``D2DStreamService.create_pair`` in OWN mode (``share_fabric_links=False``).
   3. ``d2d_socket_sync`` (op under test) pushes the sharded activation: copy -> sender
      backing, inc data_ready, return (NON-BLOCKING). Pages split across a 2x2 worker grid.
-  4. ``h2d_socket_sync`` drains it on the receiver (blocks until the forward lands).
+  4. The native ``h2d_socket_sync`` (D2DStreamServiceReceiver overload) drains it on the
+     receiver (blocks until the forward lands).
   5. Assert each receiver chip's shard equals the sender chip's shard it is wired to
      (create_pair wires coord (r,c) -> (r,c)), bit-exact; (optionally) metadata survives.
 
@@ -35,7 +41,6 @@ import torch
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
 
 _TOKENS_PER_ROW = 640  # tokens of the chunk carried per mesh row (the realistic knob)
 _HIDDEN = 7168  # DeepSeek-V3 / Kimi-K2 hidden size, sharded across the mesh columns
@@ -71,6 +76,7 @@ def _to_device(torch_u32, mesh, mapper):
     )
 
 
+@pytest.mark.parametrize("submesh_rows", [1, None], ids=["stage-1row", "stage-half"])
 @pytest.mark.parametrize("metadata_words", [None, [7, 128, 256, 1]], ids=["no_metadata", "metadata"])
 @pytest.mark.parametrize(
     "mesh_device, device_params",
@@ -84,25 +90,30 @@ def _to_device(torch_u32, mesh, mapper):
     ],
     indirect=["mesh_device", "device_params"],
 )
-def test_d2d_socket_sync(mesh_device, metadata_words):
+def test_d2d_socket_sync(mesh_device, metadata_words, submesh_rows):
     if not is_blackhole():
         pytest.skip("D2DStreamService needs Blackhole (or UBB Galaxy) service cores")
     rows_total, cols = mesh_device.shape[0], mesh_device.shape[1]
-    if rows_total < 2 or rows_total % 2 != 0:
-        pytest.skip(f"need an even row count to split into sender/receiver halves, got {mesh_device.shape}")
     if _HIDDEN % cols != 0:
         pytest.skip(f"hidden {_HIDDEN} must shard evenly across {cols} columns")
 
-    # Top half = sender stage, bottom half = receiver stage. create_pair requires equal
-    # shapes and wires chip (r,c) on the sender 1:1 to chip (r,c) on the receiver.
-    half = rows_total // 2
-    sender_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(0, 0))
-    receiver_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(half, 0))
+    # Rows per stage. None => half the mesh (full-mesh case); 1 => a 1xC sender (row 0) +
+    # 1xC receiver (row 1) -- small footprint. The two stages are stacked: sender rows
+    # [0, R), receiver rows [R, 2R). create_pair requires equal shapes and wires chip
+    # (r,c) on the sender 1:1 to (r,c) on the receiver.
+    stage_rows = submesh_rows or (rows_total // 2)
+    if 2 * stage_rows > rows_total:
+        pytest.skip(f"need >= {2 * stage_rows} rows for two {stage_rows}-row stages, got {rows_total}")
+
+    sender_mesh = mesh_device.create_submesh(ttnn.MeshShape(stage_rows, cols), offset=ttnn.MeshCoordinate(0, 0))
+    receiver_mesh = mesh_device.create_submesh(
+        ttnn.MeshShape(stage_rows, cols), offset=ttnn.MeshCoordinate(stage_rows, 0)
+    )
 
     sender_mesh.enable_program_cache()
     receiver_mesh.enable_program_cache()
 
-    g_tokens = half * _TOKENS_PER_ROW  # full per-stage chunk length (e.g. 4 * 640 = 2560)
+    g_tokens = stage_rows * _TOKENS_PER_ROW  # per-stage chunk length (640/row): 1 row=>640, 4 rows=>2560
     global_spec = ttnn.TensorSpec(
         shape=ttnn.Shape([1, 1, g_tokens, _HIDDEN]),
         dtype=ttnn.uint32,
@@ -143,12 +154,14 @@ def test_d2d_socket_sync(mesh_device, metadata_words):
             # ---- op under test: non-blocking push of the sharded activation ----
             ttnn.experimental.deepseek_prefill.d2d_socket_sync(sender, tt_in, metadata=md_tensor)
 
-            # ---- drain on the receiver (blocks until the forward lands) ----
-            if metadata_words is None:
-                recv = h2d_socket_sync(receiver, _WORKER_CORES)
-                recv_md = None
-            else:
-                recv, recv_md = h2d_socket_sync(receiver, _WORKER_CORES, metadata_size_bytes=metadata_size_bytes)
+            # ---- drain on the receiver: the native h2d_socket_sync, D2DStreamServiceReceiver
+            #      overload (blocks until the forward lands). It derives worker_cores from the
+            #      service and returns a list -> [tokens] or [tokens, metadata]. ----
+            drained = ttnn.experimental.deepseek_prefill.h2d_socket_sync(
+                receiver, metadata_size_bytes=metadata_size_bytes
+            )
+            recv = drained[0]
+            recv_md = drained[1] if metadata_words is not None else None
 
             # ---- verify per chip: receiver shard (r,c) == sender shard (r,c) it was wired to.
             #      Comparing device input vs device output is layout-agnostic and tests the
