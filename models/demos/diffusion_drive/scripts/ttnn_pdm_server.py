@@ -15,7 +15,8 @@ This process:
   1. opens the Wormhole device (l1_small_size=32768),
   2. loads DiffusionDriveModel from the checkpoint and installs the full TTNN
      stack (build_stage2 → 3 → 3_4 → 3_5 → 3_6 → 3_7) — every weight-bearing op
-     on-device,
+     on-device, with the TransFuser backbone running as one device-native graph
+     (consolidated, auto-enabled at build_stage3_6; DD_CONSOLIDATE=0 to opt out),
   3. serves one request at a time: recv {camera,lidar,status} numpy arrays →
      run forward → send back {trajectory} numpy array.
 
@@ -109,8 +110,11 @@ def _build_model(checkpoint: str, anchors: str, device):
     model = TtnnDiffusionDriveModel.from_checkpoint(checkpoint, cfg, device, latent=False)
     # Full on-device stack: backbone (stems + BasicBlocks + FPN + GPT fusion),
     # perception head, DDIM denoiser, and agent head all run via TTNN ops.
-    # Stage 3.6 (fusion) requires the production resolution the agent sends
-    # (camera 256×1024, LiDAR 256×256), where the pool/upsample ratios are integer.
+    # Once build_stage3 (FPN) + build_stage3_6 (stems+fusion) are in, the backbone
+    # runs as one device-native graph by default (consolidated; the 8 per-stage host
+    # round-trips are gone). Stage 3.6 (fusion) requires the production resolution
+    # the agent sends (camera 256×1024, LiDAR 256×256), where the pool/upsample
+    # ratios are integer. Set DD_CONSOLIDATE=0 to fall back to the staged path.
     (
         model.build_stage2(device)
         .build_stage3(device)
