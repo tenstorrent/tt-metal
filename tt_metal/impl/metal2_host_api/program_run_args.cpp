@@ -368,13 +368,7 @@ void EmitBindingCrtaValues(const TensorBindingHandle& handle, const MeshTensor& 
         // word by construction (ResolveTensorParameterStaticCTAs reserves a single slot). No
         // BufferDistributionSpec is involved -- interleaved tensors have none, which is exactly why
         // the field-kind discriminator exists (the shape path below would FATAL on a missing BDS).
-        const auto aligned_page_size = buffer->aligned_page_size();
-        TT_FATAL(
-            aligned_page_size <= std::numeric_limits<uint32_t>::max(),
-            "Internal error: Tensor argument for TensorParameter '{}' aligned page size {} exceeds uint32_t max",
-            handle.tensor_parameter_name,
-            aligned_page_size);
-        emit(static_cast<uint32_t>(aligned_page_size));
+        emit(static_cast<uint32_t>(buffer->aligned_page_size()));
         return;
     }
 
