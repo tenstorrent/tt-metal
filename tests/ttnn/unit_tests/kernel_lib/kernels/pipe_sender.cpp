@@ -4,10 +4,10 @@
 // mcast_pipe helper unit test: SENDER kernel driving dataflow_kernel_lib::SenderPipe.
 // Ported from bakeoff_mcast_sender.cpp — same program shape, but the mcast+handshake
 // block is now SenderPipe::send(). Style axis selected at compile time:
-//   STAGING_COUNTER (0/1) -> Staging::Flag | Staging::Counter
-// (F1 fence is BAKED IN to flush; F4 linking is ALWAYS on — the helper has no barrier/link knob.)
-// EXCLUDE_SRC vs INCLUDE_SRC is NOT a knob: the Pipe infers it at runtime from whether this
-// sender's core lies in the rect. Here the sender is out-of-rect, so the Pipe infers EXCLUDE.
+//   STAGING_COUNTER (0/1) -> DataReadySignal::Flag | DataReadySignal::Counter
+// (fence is baked in to flush; linking is always on — the helper has no barrier/link knob.)
+// Loopback is NOT a knob: the Pipe infers it at runtime from whether this sender's core lies in
+// the rect. Here the sender is out-of-rect, so the Pipe infers a plain (no-loopback) mcast.
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -24,14 +24,17 @@
 
 using namespace dataflow_kernel_lib;
 
-constexpr Staging STG = STAGING_COUNTER ? Staging::Counter : Staging::Flag;
+constexpr DataReadySignal STG = STAGING_COUNTER ? DataReadySignal::Counter : DataReadySignal::Flag;
 
 void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(2);
-    constexpr uint32_t consumed_sem_id = get_compile_time_arg_val(3);
-    constexpr uint32_t num_active_cores = get_compile_time_arg_val(4);
+    constexpr uint32_t consumer_ready_sem_id = get_compile_time_arg_val(3);
+    // The mcast fan-out is now derived from the rect area; this slot carries the consumer-ack count.
+    // ACK_EQUALS_FANOUT (0xFFFFFFFF) means "ack == the EXCLUDE fan-out" (dense default); a smaller value
+    // is the split-count case (fan-out > ack: the box has cores that receive but don't ack).
+    constexpr uint32_t consumer_ack_count = get_compile_time_arg_val(4);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(5);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(6);
     constexpr uint32_t num_iters = get_compile_time_arg_val(7);
@@ -64,10 +67,13 @@ void kernel_main() {
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
 
-    // Compile-time, core-uniform values (count + sem ids + staging/pre_handshake) are template
-    // params; the only runtime ctor input is the receiver rectangle.
-    SenderPipe<num_active_cores, data_ready_sem_id, consumed_sem_id, STG, pre_handshake != 0> pipe(
-        noc, McastRect{x0, y0, x1, y1});
+    // Compile-time, core-uniform values (noc id + sem ids + pre_handshake/signal) are template params.
+    // Runtime ctor inputs: the receiver rectangle (its area gives the fan-out) and the consumer-ack
+    // count (defaults to the EXCLUDE fan-out; here passed explicitly so the harness can drive the
+    // split-count case). Arg order: NOC_ID, data-ready id, PRE_HANDSHAKE gate, consumer-ready id (used
+    // iff PRE_HANDSHAKE), then the signal.
+    SenderPipe<noc_index, data_ready_sem_id, pre_handshake != 0, consumer_ready_sem_id, STG> pipe(
+        noc, McastRect<>{x0, y0, x1, y1}, consumer_ack_count);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);
