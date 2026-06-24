@@ -64,8 +64,6 @@ else:
     )
 
 SUPPORTED_REPORT_VERSION = 1
-DATABASE_SCHEMA_VERSION = "2.2"
-
 
 def sanitize_git_remote_url(url: str) -> str:
     """Return a remote URL safe to persist in shared artifacts (no credentials or query parts).
@@ -136,7 +134,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
 # String so we can follow semver-like bumps (was int on an older branch). Bump when the
 # visualizer schema changes; stale DBs are deleted on import (no migration path).
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
-DATABASE_SCHEMA_VERSION = "3.1"
+# 3.2 - git 
+DATABASE_SCHEMA_VERSION = "3.2"
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
