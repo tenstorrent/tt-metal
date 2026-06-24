@@ -8,7 +8,7 @@ Architecture: standard Llama 1D transformer, identical topology to Llama 3.1-8B.
   hidden=3072, layers=28, n_heads=24, n_kv_heads=8, head_dim=128,
   intermediate=8192, vocab=128256, rope_theta=500000, RoPE llama3-scaled.
 
-Mesh compatibility: N150 (1×1) and N300 (1×2).
+Mesh compatibility: N150 (1×1), N300 (1×2), and T3K (1×8).
 
 TTTv1 source for precision recipes:
   ``models/tt_transformers/tt/model_config.py :: DecodersPrecision``
@@ -648,7 +648,7 @@ class Llama32_3BTransformer1D(LightweightModule):
         """Load HF weights and build TTNN modules (weights materialize on first forward).
 
         Args:
-            mesh_device: Open mesh device (N150 ``(1,1)``, N300 ``(1,2)``).
+            mesh_device: Open mesh device (N150 ``(1,1)``, N300 ``(1,2)``, T3K ``(1,8)``).
             hf_model_id: Hugging Face hub id or local path.
             max_batch_size: Decode batch / KV allocation.
             max_seq_len: KV cache sequence budget per layer.

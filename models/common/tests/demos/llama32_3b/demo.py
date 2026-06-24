@@ -484,9 +484,12 @@ def _run_perf_benchmark(
 
         # On-device sampling toggle for N150/N300/T3K evidence-gathering (see sampling handoff docs):
         #   host            -> sampling_params=None (host-argmax, the default shipped path)
-        #   on_device       -> greedy temp=0,k=1,p=0 => trace-captured FORCE-ARGMAX full-vocab path
-        #   on_device_topk  -> temp=0,k=32,p=0.08    => trace-captured TOP-K op path (gathers only
-        #                      the [*,32] tuples; PERF.md-parity recipe, faster than force-argmax)
+        #   on_device       -> greedy temp=0,k=1,p=0  => trace-captured TOP-K op path with k=1
+        #   on_device_topk  -> temp=0,k=32,p=0.08      => trace-captured TOP-K op path with k=32
+        #                      (PERF.md-parity recipe). Both on-device modes route through the same
+        #                      per-device ttnn.topk -> all-gather of the [*,k] tuples -> ttnn.sampling
+        #                      op path (the model is built with allow_force_argmax=False, so the
+        #                      full-vocab argmax all-gather is never taken); they differ only in k.
         sampling_mode = os.environ.get("SAMPLING_MODE", "host").lower()
         _on_device_params = {
             "on_device": SamplingParams(temperature=0.0, top_k=1, top_p=0.0),
