@@ -5,7 +5,7 @@
 // (the bake-off winner for sender-in-rect loopback). The sender is one core of the mcast
 // rectangle and ends up with the payload in its OWN cb_dst via hardware loopback, then
 // writes that to its own output shard for verification. The other rect cores run
-// pipe_receiver.cpp. Also exercises the degenerate guard when rect_len==1 (num_active_cores==1).
+// pipe_receiver.cpp. Also exercises the degenerate guard when rect_len==1 (area==1, excl==0).
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -22,7 +22,8 @@ void kernel_main() {
     constexpr uint32_t cb_src = get_compile_time_arg_val(0);
     constexpr uint32_t cb_dst = get_compile_time_arg_val(1);
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(2);
-    constexpr uint32_t num_active_cores = get_compile_time_arg_val(3);
+    // (slot 3 was the old recipient count — the fan-out now comes from the rect area; PRE_HANDSHAKE is
+    // false here so there is no ack count to carry. Left unread.)
     constexpr uint32_t payload_pages = get_compile_time_arg_val(4);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t num_iters = get_compile_time_arg_val(6);
@@ -58,18 +59,12 @@ void kernel_main() {
     const uint32_t dst_addr = cb_dst_obj.get_write_ptr();
     const uint32_t src_addr = cb_src_obj.get_read_ptr();
 
-    // Sender is IN the rect -> the Pipe infers INCLUDE_SRC loopback (hardware writes the payload
-    // to self too). No pre-handshake (fresh single-use dest here). num_active_cores is the FULL
-    // count incl. the sender; when it == 1 the degenerate guard (ack_count==0) collapses the
-    // self-only loopback to a local copy. CONSUMED_SEM_ID is unused (PRE_HANDSHAKE=false) -> reuse
-    // data_ready_sem_id.
-    SenderPipe<
-        num_active_cores,
-        data_ready_sem_id,
-        /*CONSUMED=*/data_ready_sem_id,
-        Staging::Flag,
-        /*PRE_HANDSHAKE=*/false>
-        pipe(noc, McastRect{x0, y0, x1, y1});
+    // Sender is IN the rect -> the Pipe infers loopback (hardware writes the payload to self too). No
+    // pre-handshake (fresh single-use dest here). The fan-out is derived from the rect area: a 1x1
+    // self-only box (area==1, in_rect) gives excl==0 -> the degenerate guard collapses to a local copy.
+    // PRE_HANDSHAKE=false, so the consumer-ready id, the ack count, and the Flag signal default are all
+    // omitted entirely (the ctor's ack arg defaults to ACK_EQUALS_FANOUT, unused under no-handshake).
+    SenderPipe<noc_index, data_ready_sem_id, /*PRE_HANDSHAKE=*/false> pipe(noc, McastRect<>{x0, y0, x1, y1});
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.send(src_addr, dst_addr, payload_bytes);
