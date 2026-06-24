@@ -14,9 +14,6 @@
 
 namespace ttnn::experimental::prim {
 
-// Operation attributes: everything stable for the sender service's lifetime. The
-// per-dispatch-varying input (and metadata) base addresses are NOT here -- they are
-// runtime Buffer* BufferBindings patched on the program-cache fast path.
 struct D2DSocketSyncParams {
     // Uniform across the mesh (the sender backing shares one page-config on every
     // device).
