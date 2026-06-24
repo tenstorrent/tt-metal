@@ -3921,6 +3921,11 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                         m2::DataMovementHardwareConfig::Gen1Config{
                             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         };
+        // Block-sharded in0 sender reads num_x + num_y per-core mcast-coord varargs (in0_mcast_noc_x/y);
+        // declare the count so the framework allocates the vararg slots (else get_vararg is OOB).
+        if (in0_block_sharded) {
+            ks.advanced_options.num_runtime_varargs = num_x_bs + num_y_bs;
+        }
         kernels.push_back(std::move(ks));
     }
 
@@ -3928,7 +3933,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
     const bool has_in0_no_work = in0_block_sharded && in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value();
     if (has_in0_no_work) {
         auto no_work_cta = make_in0_sender_cta(0, 0);
-        kernels.push_back(m2::KernelSpec{
+        m2::KernelSpec no_work_ks{
             .unique_id = RO_IN0_NO_WORK_KERNEL,
             .source = std::filesystem::path(IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH),
             .compiler_options = {.defines = to_m2_defines(in0_sender_defines)},
@@ -3947,7 +3952,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     .gen1_config =
                         m2::DataMovementHardwareConfig::Gen1Config{
                             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
-        });
+        };
+        // Same varargs (in0_mcast_noc_x/y) as the work in0 sender (block-sharded only path).
+        no_work_ks.advanced_options.num_runtime_varargs = num_x_bs + num_y_bs;
+        kernels.push_back(std::move(no_work_ks));
     }
 
     // in0 receiver (interleaved path only). Left half + (split_half) right half (different NOC).
@@ -4396,7 +4404,10 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     {"in0_mcast_dest_noc_end_x", in0_mcast_receiver_grid_same_coord},
                     {"in0_mcast_dest_noc_end_y", in0_mcast_receiver_grid_diff_coord_end},
                 };
-                v.reserve(in0_mcast_noc_y.size());
+                // Kernel reads in0_mcast_noc_x[num_x=1] then in0_mcast_noc_y[num_y=W]: the single x
+                // coord is this core's physical X (same_coord), then the W mcast Y coords.
+                v.reserve(in0_mcast_noc_y.size() + 1);
+                v.push_back(in0_mcast_receiver_grid_same_coord);
                 for (auto y : in0_mcast_noc_y) {
                     v.push_back(y);
                 }
@@ -4409,10 +4420,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     {"in0_mcast_dest_noc_end_x", in0_mcast_receiver_grid_diff_coord_end},
                     {"in0_mcast_dest_noc_end_y", in0_mcast_receiver_grid_same_coord},
                 };
-                v.reserve(in0_mcast_noc_x.size());
+                // Kernel reads in0_mcast_noc_x[num_x=W] then in0_mcast_noc_y[num_y=1]: the W mcast X
+                // coords, then this core's physical Y (same_coord). Matches legacy (the trailing push).
+                v.reserve(in0_mcast_noc_x.size() + 1);
                 for (auto x : in0_mcast_noc_x) {
                     v.push_back(x);
                 }
+                v.push_back(in0_mcast_receiver_grid_same_coord);
             }
             if (in1_idx < num_blocks_x) {
                 in0_sender_run_args.runtime_arg_values.push_back(

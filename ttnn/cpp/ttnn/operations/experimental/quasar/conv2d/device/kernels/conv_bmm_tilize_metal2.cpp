@@ -33,6 +33,11 @@
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 #include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
+// DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
+// kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
+// Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMP/CC markers here no-ops.
+#undef DPRINT
+#define DPRINT(...) ((void)0)
 
 #define DEBUG_PRINT 0
 

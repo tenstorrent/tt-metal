@@ -42,6 +42,11 @@
 
 #include "api/compute/eltwise_binary.h"
 #include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
+// DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
+// kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
+// Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMPM markers here no-ops.
+#undef DPRINT
+#define DPRINT(...) ((void)0)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
