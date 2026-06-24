@@ -1583,3 +1583,45 @@ def test_group_norm_row_major_interleaved_input(device, output_layout, use_welfo
         atol=0.065,
         frobenius_threshold=0.016,
     )
+
+
+# ROW_MAJOR OUTPUT is only implemented on the single-core (no_mcast) non-welford path. The other
+# combinations must fail fast with a clear host error (NOT hang) - this guards against a regression
+# that would silently re-introduce the original hang.
+@pytest.mark.parametrize(
+    "use_welford, mcast",
+    [(True, False), (False, True), (True, True)],
+    ids=["welford", "mcast", "welford_mcast"],
+)
+def test_group_norm_rm_output_unsupported_is_rejected(device, use_welford, mcast):
+    torch.manual_seed(0)
+    N, C, H, W, num_groups = 1, 480, 1, 64, 8
+    grid_size = ttnn.CoreGrid(y=1, x=2) if mcast else ttnn.CoreGrid(y=1, x=1)
+
+    torch_input = torch.rand((N, C, H, W), dtype=torch.bfloat16)
+    torch_weight = torch.rand((C,), dtype=torch.bfloat16)
+    torch_bias = torch.rand((C,), dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(
+        torch_input.permute(0, 2, 3, 1).view(N, 1, H * W, C),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    gamma_t, beta_t = ttnn.dram_group_norm_params_from_torch(
+        [torch_weight.float(), torch_bias.float()], C, num_groups, device, core_grid=grid_size, return_mask=False
+    )
+
+    with expect_error(RuntimeError, match="not supported"):
+        ttnn.group_norm(
+            input_tensor,
+            num_groups=num_groups,
+            weight=gamma_t,
+            bias=beta_t,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            core_grid=grid_size,
+            inplace=False,
+            output_layout=ttnn.ROW_MAJOR_LAYOUT,
+            use_welford=use_welford,
+        )
