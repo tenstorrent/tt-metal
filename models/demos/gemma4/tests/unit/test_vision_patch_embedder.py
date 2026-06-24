@@ -35,7 +35,7 @@ from models.demos.gemma4.tt.vision.vision_patch_embedder import VisionPatchEmbed
     "batch_size",
     (1,),
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_vision_patch_embedder_inference(token_budget, batch_size, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99

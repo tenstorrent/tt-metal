@@ -422,7 +422,12 @@ class VisionAttention(LightweightModule):
                 cache_file_name=cache_name("wo_bias_prefill_sharded"),
             )
 
-        self.scale = 1
+        # The q/k RMSNorm reduces over the tile-padded head_dim (padded_head_dim)
+        # instead of the true head_dim, scaling Q and K each by sqrt(padded/true).
+        # That inflates the QK logits by (padded/true), a softmax-temperature shift
+        # the HF reference (scaling=1.0 over the true head_dim) does not have. Undo it
+        # in the SDPA scale until the norm itself reduces over the true head_dim.
+        self.scale = self.head_dim / self.padded_head_dim
 
         dram_shard_grid_width = 8
         target_device_shape = (1, 1)  # each 1x1 device runs a vision model

@@ -148,7 +148,7 @@ def rope_scaling_model_factory(
         if original_max_context_len is not None:
             phi3_params["original_max_position_embeddings"] = original_max_context_len
         return RopeScalingPhi3(**phi3_params)
-    elif rope_scaling_type in ["default", "mrope"]:
+    elif rope_scaling_type in ["default", "mrope", "proportional"]:
         logger.warning(
             f"Rope scaling type was set to {rope_scaling_type}, defaulting to no rope scaling as this rope type is not supported yet by TTT"
         )
