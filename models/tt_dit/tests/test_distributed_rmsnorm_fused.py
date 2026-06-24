@@ -72,6 +72,8 @@ FLUX = "flux"
 #     production "BH 4x8 ring" config (distributed_rmsnorm_av.md §0) and is the ONLY way
 #     to get a real wrap link for Ring topology — a 1x4 sub-row of the 8-wide axis is open.
 NORM_EPS = 1e-6
+# Fabric links used by the op (= forwarder cores on the AG path). Wormhole galaxy = 4;
+# Blackhole galaxy = 2 (torus, 2 links) — set WAN_GALAXY_LINKS=2 when running on BH.
 GALAXY_LINKS = int(_os.getenv("WAN_GALAXY_LINKS", "4"))
 _ITERS = {WAN: 100, LTX: 50, FLUX: 50}  # bench iterations per model
 _PINGPONG = 2  # (pob, AG-sem) sets alternated across traced fused iters (skew absorber)

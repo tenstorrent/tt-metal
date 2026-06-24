@@ -137,8 +137,8 @@ uint32_t force_num_workers() {
 }
 // Diagnostic sweep knob: WAN_RMSNORM_FORCE_CHUNK=N forces chunk_size_rows=N
 // (applied last in both compute_sizing and the program factory so the stats
-// buffer stays consistent with the kernel). Timing-only; combine with
-// WAN_RMSNORM_NO_PERHEAD_CLAMP=1 to defeat the per-head/streaming clamps.
+// buffer stays consistent with the kernel). Timing-only. Note the per-head /
+// streaming clamps still pin chunk=1 afterward for those paths.
 uint32_t force_chunk_size() {
     static const uint32_t v = [] {
         const char* env = std::getenv("WAN_RMSNORM_FORCE_CHUNK");
@@ -150,14 +150,6 @@ uint32_t force_chunk_size() {
         }
         return 0u;
     }();
-    return v;
-}
-// Diagnostic: WAN_RMSNORM_NO_PERHEAD_CLAMP=1 skips forcing chunk_size_rows=1 for
-// per-head RoPE, so the natural (chunk>=2) path runs — used to REPRODUCE the
-// per-head-RoPE chunk>=2 compute deadlock under the watcher. Applied in BOTH
-// compute_sizing and the program factory so the buffer stays consistent.
-bool perhead_chunk_clamp_disabled() {
-    static const bool v = (std::getenv("WAN_RMSNORM_NO_PERHEAD_CLAMP") != nullptr);
     return v;
 }
 // Depth (in block_size groups) of the STREAMED per-head cos/sin CBs. Per-head
@@ -180,14 +172,6 @@ uint32_t rope_stream_blocks() {
     }();
     return v;
 }
-// WAN_RMSNORM_FORCE_FUSE_MM_ROPE=1: force the block-major (fused matmul+rope) POST
-// for per-head RoPE even when the resident path would fit. Used to validate the
-// fused path's correctness/perf on configs (e.g. TP=4) that have a clean reference.
-bool force_fuse_mm_rope() {
-    static const bool v = (std::getenv("WAN_RMSNORM_FORCE_FUSE_MM_ROPE") != nullptr);
-    return v;
-}
-
 // DIAGNOSTIC ABLATIONS (WAN_ABLATION env): inject a per-ablation -D into the
 // reader/writer kernels so we can selectively skip NoC traffic and measure
 // where kernel time goes. These BREAK correctness — perf attribution only.
@@ -619,7 +603,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     // so the caller's stats buffer (window/pages) matches. feat-2048 per-head RoPE
     // still can't fit even one row -> clean compile-time CB-alloc OOM (needs
     // cos/sin streaming, a separate change), NOT a hang.
-    if ((per_head_rope && !perhead_chunk_clamp_disabled()) || streaming_low_l1) {
+    // Per-head RoPE forces chunk_size_rows=1 (the chunk>=2 per-head path deadlocked
+    // under the watcher; chunk=1 is the safe + optimal layout anyway). Streaming
+    // low-L1 also requires chunk=1.
+    if (per_head_rope || streaming_low_l1) {
         chunk_size_rows = 1u;
     }
     if (use_mux && force_chunk_size() > 0u) {
@@ -819,10 +806,15 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // Decide block-major POST FIRST, using the RESIDENT (whole-row) cos/sin + rotated
         // footprint — so we only leave the fast resident layout when it would actually
         // overflow L1 (TP=2 feat-2048). All TP=4 per-head shards fit, so they stay resident.
-        fuse_mm_rope = per_head_rope && (force_fuse_mm_rope() ||
-                                         post_rotated_overflows_l1(
-                                             num_tile_cols, block_size, input_tile_size, intermediate_tile_size,
-                                             output_tile_size, rope_resident_tiles, rope_tile_size, has_weight));
+        fuse_mm_rope = per_head_rope && post_rotated_overflows_l1(
+                                            num_tile_cols,
+                                            block_size,
+                                            input_tile_size,
+                                            intermediate_tile_size,
+                                            output_tile_size,
+                                            rope_resident_tiles,
+                                            rope_tile_size,
+                                            has_weight);
         // Stream per-head cos/sin (cap the CB at a few block_size groups, compute pops
         // per block) ONLY in the block-major path — that's where we need the L1 back.
         // The resident path keeps the WHOLE-ROW cos/sin so it isn't slowed (a shrunk
