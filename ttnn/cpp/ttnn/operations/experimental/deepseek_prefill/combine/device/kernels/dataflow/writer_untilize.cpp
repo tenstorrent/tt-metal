@@ -144,7 +144,6 @@ void kernel_main() {
     //                                  back, atomically suck the value, and dec(-N).
     //   core_id                      - this untilizer's local index (0..k_s-1) inside the sender's
     //                                  group; used to pick our k_s-way slice of receive_buf.
-    //   num_untilizer_cores               - k_s, size of the owning sender's untilizer group
     //   expert_start_idx / expert_end_idx - expert range (now [0, experts_per_chip); every group does all experts)
     //   untilizer_global_pos              - this core's position in the global interleaved untilizer
     //                                       ordering; its batches are global_pos, +G, +2G, … per expert
@@ -155,14 +154,10 @@ void kernel_main() {
     uint32_t data_ready_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t credits_semaphore_id = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t core_id = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t num_untilizer_cores = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_args_idx++);
-    // num_untilizer_cores (k_s) no longer drives batch assignment under the global round-robin;
-    // core_id still selects this core's slice of the sender's receive_buf below.
-    (void)num_untilizer_cores;
 
     uint64_t sender_data_ready_noc_addr =
         get_noc_addr(sender_noc_x, sender_noc_y, get_semaphore(data_ready_semaphore_id));

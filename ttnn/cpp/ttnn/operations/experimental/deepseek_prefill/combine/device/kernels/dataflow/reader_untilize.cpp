@@ -53,19 +53,17 @@ void kernel_main() {
     //   9: tile_height                           - tile height in rows (e.g. 32)
     //  10: tile_width                            - tile width in columns (e.g. 32)
     //  11: max_dispatch_buffer_token_size        - total per-chip dispatch buffer capacity (overflow guard)
-    //  12: core_id                               - local index within the owning sender's untilizer group (0-based)
-    //  13: num_untilizer_cores                        - size of the owning sender's untilizer group (k_s)
-    //  14: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
-    //  15: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
-    //  16: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
+    //  12: aligned_output_page_size              - aligned page size of output tensor (bytes per untilized row)
+    //  13: aligned_experts_tok_counter_page_size - aligned page size of expert_token_counts tensor
+    //  14: cb_metadata_batch_id                  - CB this kernel pushes per-batch metadata pages into
     //                                              (consumed by writer_untilize on the same core)
-    //  17: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
-    //  18: block_ct_dim                          - tiles per chunk pushed to cb_dispatched_buffer_id;
+    //  15: aligned_dispatched_metadata_page_size - aligned page size of dispatched_metadata tensor
+    //  16: block_ct_dim                          - tiles per chunk pushed to cb_dispatched_buffer_id;
     //                                              matches the compute kernel's per-block consumption
     //                                              size so producer/consumer line up 1:1
-    //  19: cb_counter_total_pages                - full page capacity of c_1 (counter + trailer)
+    //  17: cb_counter_total_pages                - full page capacity of c_1 (counter + trailer)
     //                                              used for cb_reserve_back / cb_push_back / cb_wait_front
-    //  20+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
+    //  18+: TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for dispatched_metadata
     constexpr uint32_t cb_experts_tok_counter_id = get_compile_time_arg_val(0);
     constexpr uint32_t experts_tok_counter_pages = get_compile_time_arg_val(1);
     constexpr uint32_t experts_per_chip = get_compile_time_arg_val(2);
@@ -78,15 +76,13 @@ void kernel_main() {
     constexpr uint32_t tile_height = get_compile_time_arg_val(9);
     constexpr uint32_t tile_width = get_compile_time_arg_val(10);
     constexpr uint32_t max_dispatch_buffer_token_size = get_compile_time_arg_val(11);
-    constexpr uint32_t core_id = get_compile_time_arg_val(12);
-    constexpr uint32_t num_untilizer_cores = get_compile_time_arg_val(13);
-    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(14);
-    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(15);
-    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(16);
-    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(17);
-    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(18);
-    constexpr uint32_t cb_counter_total_pages = get_compile_time_arg_val(19);
-    constexpr auto dispatched_buffer_args = TensorAccessorArgs<20>();
+    constexpr uint32_t aligned_output_page_size = get_compile_time_arg_val(12);
+    constexpr uint32_t aligned_experts_tok_counter_page_size = get_compile_time_arg_val(13);
+    constexpr uint32_t cb_metadata_batch_id = get_compile_time_arg_val(14);
+    constexpr uint32_t aligned_dispatched_metadata_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t block_ct_dim = get_compile_time_arg_val(16);
+    constexpr uint32_t cb_counter_total_pages = get_compile_time_arg_val(17);
+    constexpr auto dispatched_buffer_args = TensorAccessorArgs<18>();
     constexpr auto dispatched_metadata_args =
         TensorAccessorArgs<dispatched_buffer_args.next_compile_time_args_offset()>();
 
@@ -114,10 +110,6 @@ void kernel_main() {
     uint32_t dispatched_metadata_addr = get_arg_val<uint32_t>(rt_idx++);
     uint32_t untilizer_global_pos = get_arg_val<uint32_t>(rt_idx++);
     uint32_t total_untilizers = get_arg_val<uint32_t>(rt_idx++);
-    // core_id / num_untilizer_cores (CT args 12/13) are no longer used for batch assignment under
-    // the global round-robin; kept as compile-time args so the arg layout stays stable.
-    (void)core_id;
-    (void)num_untilizer_cores;
 
     // ===== Step 1: Wait for the owning sender to multicast expert token counts + receive_buf_addr =====
     // Note: don't reset counter_ready_sem — writer_untilize on this same core also waits on it

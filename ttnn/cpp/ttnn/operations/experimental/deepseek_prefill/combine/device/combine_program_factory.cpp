@@ -777,15 +777,13 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
     {
         // Compile-time args layout for reader_untilize (matching reader_untilize.cpp):
         //   0-11: shared base (below, includes max_dispatch_buffer_token_size at 11)
-        //   12:   core_id   — local index within sender s's untilizer group (0..k_s-1)
-        //   13:   num_untilizer_cores — per-sender count k_s (for round-robin batch assignment)
-        //   14:   aligned_output_page_size
-        //   15:   aligned_experts_tok_counter_page_size
-        //   16:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
-        //   17:   aligned_dispatched_metadata_page_size
-        //   18:   block_ct_dim — tiles per chunk pushed to cb_dispatched_buffer_id (matches the
+        //   12:   aligned_output_page_size
+        //   13:   aligned_experts_tok_counter_page_size
+        //   14:   cb_metadata_batch_id — CB this kernel pushes per-batch metadata pages into
+        //   15:   aligned_dispatched_metadata_page_size
+        //   16:   block_ct_dim — tiles per chunk pushed to cb_dispatched_buffer_id (matches the
         //                       compute kernel's per-block consumption)
-        //   19+:  TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for
+        //   17+:  TensorAccessorArgs for dispatched_buffer, then TensorAccessorArgs for
         //         dispatched_metadata (no num_senders — single-sender kernel)
         // ROW_MAJOR dispatched_buffer has no tile spec; use the hardware tile dims so the
         // tile-aligned per-expert region math (start_token / tiles_per_batch) in reader_untilize
@@ -810,8 +808,8 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
         };
 
         // Partitioned untilizer cores: each sender s owns a dedicated group of k_s untilizer cores.
-        // core_id is LOCAL within the sender's group (0..k_s-1) for round-robin batch assignment.
-        // num_untilizer_cores baked in as k_s so the kernel only considers its own group.
+        // The global round-robin (untilizer_global_pos / total_untilizers, passed as runtime args)
+        // drives batch assignment, so the kernel no longer needs core_id / num_untilizer_cores.
         // No num_senders arg — each kernel is bound to a single sender.
         reader_untilize_kernel_ids.reserve(num_untilizer_cores);
 
@@ -820,18 +818,16 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
             for (uint32_t j = 0; j < k_s; j++, global_untilizer_idx++) {
                 auto per_core_args = reader_untilize_compile_time_args_base;
-                per_core_args.push_back(j);    // 12: core_id (local to sender s's group)
-                per_core_args.push_back(k_s);  // 13: num_untilizer_cores (per-sender)
-                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 14
-                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 15
-                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 16: cb_metadata_batch_id
-                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 17
-                per_core_args.push_back(block_ct_dim);                                        // 18: block_ct_dim
-                // 19: cb_counter_total_pages = full page capacity of c_1 on the untilizer
+                per_core_args.push_back(detail::get_aligned_page_size(output_tensor));        // 12
+                per_core_args.push_back(detail::get_aligned_page_size(expert_token_counts));  // 13
+                per_core_args.push_back(static_cast<uint32_t>(tt::CBIndex::c_9));  // 14: cb_metadata_batch_id
+                per_core_args.push_back(detail::get_aligned_page_size(dispatched_metadata));  // 15
+                per_core_args.push_back(block_ct_dim);                                        // 16: block_ct_dim
+                // 17: cb_counter_total_pages = full page capacity of c_1 on the untilizer
                 // (counter pages + trailer page). Passed so reader_untilize can reserve / push /
                 // wait the entire CB, not just the counter slice.
                 per_core_args.push_back(detail::get_num_pages(expert_token_counts) + 1);  // cb_counter_total_pages
-                // 20+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
+                // 18+: TensorAccessorArgs for dispatched_buffer + dispatched_metadata
                 tt::tt_metal::TensorAccessorArgs(dispatched_buffer.buffer()).append_to(per_core_args);
                 tt::tt_metal::TensorAccessorArgs(dispatched_metadata.buffer()).append_to(per_core_args);
 
@@ -1133,7 +1129,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
             // forward c_2 rows to the sender, so these args are always pushed.
             {
                 uint32_t s = untilizer_sender_map[untilizer_idx];
-                uint32_t k_s = static_cast<uint32_t>(sender_untilizer_groups[s].size());
                 // Every sender now processes EVERY expert (full range); the per-expert work is
                 // split across senders by data instead — sender s handles batch-chunk s of each
                 // expert (see sender_idx / num_senders below).
@@ -1152,7 +1147,6 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
                 writer_untilize_runtime_args.push_back(data_ready_semaphore_ids[s][local_core_id]);
                 writer_untilize_runtime_args.push_back(credits_semaphore_ids[s][local_core_id]);
                 writer_untilize_runtime_args.push_back(local_core_id);
-                writer_untilize_runtime_args.push_back(k_s);           // num_untilizer_cores
                 writer_untilize_runtime_args.push_back(expert_start);  // expert_start_idx
                 writer_untilize_runtime_args.push_back(expert_end);    // expert_end_idx
                 writer_untilize_runtime_args.push_back(untilizer_global_pos[untilizer_idx]);  // global batch start
