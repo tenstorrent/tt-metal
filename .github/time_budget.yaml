@@ -156,8 +156,8 @@ ttsim:
     sim_wormhole_b0: 15
     sim_blackhole: 15
   sanity:
-    sim_wormhole_b0: 40
-    sim_blackhole: 40
+    sim_wormhole_b0: 30
+    sim_blackhole: 30
 
 shield:
   e2e:
