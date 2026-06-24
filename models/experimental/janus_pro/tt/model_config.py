@@ -156,6 +156,10 @@ class ModelArgs(TTModelArgs):
 
         return prefix + layer_prefix + module_map[module_name]
 
+    def reference_vision_transformer(self, wrap=True, load_checkpoint=False):
+        model = super().reference_vision_transformer(wrap=wrap, load_checkpoint=load_checkpoint)
+        return model.float()
+
     def reference_siglip_patch_embed(self):
         model = self.reference_vision_transformer(wrap=False)
         return model.model.vision_model.embeddings.patch_embedding
