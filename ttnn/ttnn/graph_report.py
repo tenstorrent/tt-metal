@@ -141,7 +141,8 @@ def get_tt_metal_git_report_metadata() -> dict[str, str]:
         logger.warning(f"Unable to determine git remote URL for report metadata; leaving empty. Reason: {e}")
     return out
 
-# String so we can follow semver-like bumps (was int on an older branch). 
+
+# String so we can follow semver-like bumps (was int on an older branch).
 # Bump when the visualizer schema changes; stale DBs are deleted on import (no migration path).
 # 3.1 — buffer_chunks (#46376) plus rank on buffer_chunks for multi-host merges.
 # 3.2 - git hash and remote URL in report_metadata (#43830)
