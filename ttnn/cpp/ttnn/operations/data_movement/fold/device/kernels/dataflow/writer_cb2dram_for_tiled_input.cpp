@@ -51,14 +51,17 @@ void kernel_main() {
         // Process each tile in the width dimension
         for (uint32_t tile_idx = 0; tile_idx < tiles_per_width_dim; tile_idx++) {
             input_cb.wait_front(tiles_per_channel_dim);
-            auto src = use<experimental::CB::AddrSelector::WRITE_PTR>(input_cb);
+            const uint32_t src_base_addr = input_cb.get_write_ptr();
             uint32_t src_offset = 0;
 
             const uint32_t width_limit =
                 (remaining_width < tt::constants::TILE_HEIGHT) ? remaining_width : tt::constants::TILE_HEIGHT;
 
             for (uint32_t stick_idx = 0; stick_idx < width_limit; stick_idx++) {
-                noc.async_write(src, dst, stick_nbytes, {.offset_bytes = src_offset}, {.page_id = output_stick_idx});
+                // noc_async_write_sharded splits this stick across cores for W/B-sharded outputs;
+                // interleaved + HEIGHT-sharded paths collapse to a single noc_async_write.
+                tt::data_movement::common::noc_async_write_sharded(
+                    noc, src_base_addr + src_offset, dst, output_stick_idx, 0, stick_nbytes);
 
                 // Update pointers and indices
                 src_offset += aligned_stick_nbytes;

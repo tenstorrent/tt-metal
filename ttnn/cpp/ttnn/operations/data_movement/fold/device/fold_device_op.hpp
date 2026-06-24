@@ -13,11 +13,19 @@
 
 namespace ttnn::operations::data_movement {
 
+// Returns true if the user's requested output config (or std::nullopt) is satisfiable by the
+// zero-NOC `MultiCore` fast path. Shared between the composite layer and `prim::fold` so the
+// gating predicate stays in one place. Mirrors the `is_native_*` predicates in transpose/repeat.
+bool override_compatible_with_fast_path(const std::optional<tt::tt_metal::MemoryConfig>& override_mc);
+
 struct Fold {
     struct operation_attributes_t {
         uint32_t stride_h{};
         uint32_t stride_w{};
-        bool is_sharded{};
+        // Gates the zero-NOC `MultiCore` fast path; everything else routes to MultiCoreDRAMFold.
+        bool is_height_sharded_rm_fast_path{};
+        // User-requested output memory config (mirrors `repeat`/`transpose`); std::nullopt → derive from input.
+        std::optional<tt::tt_metal::MemoryConfig> output_memory_config{};
     };
 
     struct tensor_args_t {
@@ -54,5 +62,9 @@ struct Fold {
 
 namespace ttnn::prim {
 ttnn::operations::data_movement::Fold::tensor_return_value_t fold(
-    const ttnn::Tensor& input_tensor, uint32_t stride_h, uint32_t stride_w);
+    const ttnn::Tensor& input_tensor,
+    uint32_t stride_h,
+    uint32_t stride_w,
+    bool is_height_sharded_rm_fast_path,
+    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt);
 }  // namespace ttnn::prim
