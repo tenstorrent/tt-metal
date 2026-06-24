@@ -212,6 +212,7 @@ class PipelineBlock:
         pipeline_config=None,
         forward_metadata=False,
         io_socket_descriptor_prefix=None,
+        second_pipeline_core_coord=None,
     ):
         if loopback is None:
             # Middle stages don't need a loopback config; fall back to a no-loopback placeholder.
@@ -231,6 +232,12 @@ class PipelineBlock:
         self.initialize_loopback = loopback.initialize_loopback
         self._loopback_mode = loopback._mode  # "fabric" | "host" | "none"
         self.mesh_device = mesh_device
+        # Second core used for a forwarding stage's exit-send kernel when its entry and exit
+        # d2d_exchange land on the same chip (two persistent kernels can't share one core).
+        # Falls back to pipeline_core_coord when not supplied.
+        self.second_pipeline_core_coord = (
+            second_pipeline_core_coord if second_pipeline_core_coord is not None else pipeline_core_coord
+        )
         self.parallel_devices = pipeline_device_coords is not None and len(pipeline_device_coords) > 0
         if stages_metadata is None:
             self._stages = {i: StageMetadata(rank=i, mesh_id=i) for i in range(self.num_procs)}
@@ -688,27 +695,47 @@ class PipelineBlock:
     ):
         prev_stage = self.my_stage_idx - 1
         ps = self._stages[prev_stage]
-        self.entry_socket_interface = SocketInterface(
-            upstream_d2d_socket_page_size,
-            upstream_d2d_socket_fifo_size,
-            upstream_d2d_socket_page_size,
-            ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, pipeline_core_coord),
-            ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, pipeline_core_coord),
-            downstream_core_coord=(
-                entry_node_downstream
-                if entry_node_downstream
-                else ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord)
-            ),
-            sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
-            receiver_mesh=MeshWrapper(mesh_device),
-        )
-
         next_stage = self.my_stage_idx + 1 if not self.is_last_stage else 0
         ns = self._stages[next_stage]
         # pipeline_config index: always my_stage_idx+1 (sequential), even for
         # the last stage where it points to the loopback config entry at
         # pipeline_config[num_procs] rather than wrapping to 0.
         next_cfg_idx = self.my_stage_idx + 1
+
+        # Multiple d2d_exchange on the same chip: a stage's entry-recv and exit-send kernels
+        # would collide if its entry and exit land on the same chip. Keep entry-recv on the
+        # primary core and move exit-send to the second core in that case. A stage's exit-send
+        # core is the *sender* core of the socket to the next stage, so adjacent stages must
+        # agree on it — each derives a neighbor's conflict from pipeline_config (entry==exit),
+        # which is identical on every rank.
+        primary = pipeline_core_coord
+        second = self.second_pipeline_core_coord
+
+        def _same_chip(a, b):
+            return int(a[0]) == int(b[0]) and int(a[1]) == int(b[1])
+
+        def _exit_send_core(stage_idx):
+            cfg = pipeline_config[stage_idx]
+            return second if _same_chip(cfg.entry_node_coord, cfg.exit_node_coord) else primary
+
+        prev_exit_send_core = _exit_send_core(prev_stage)  # sender core of the prev -> me socket
+        my_exit_send_core = _exit_send_core(self.my_stage_idx)  # sender core of the me -> next socket
+
+        self.entry_socket_interface = SocketInterface(
+            upstream_d2d_socket_page_size,
+            upstream_d2d_socket_fifo_size,
+            upstream_d2d_socket_page_size,
+            ttnn.MeshCoreCoord(pipeline_config[prev_stage].exit_node_coord, prev_exit_send_core),
+            ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].entry_node_coord, primary),
+            downstream_core_coord=(
+                entry_node_downstream
+                if entry_node_downstream
+                else ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, my_exit_send_core)
+            ),
+            sender_mesh=MeshWrapper(rank=ps.rank, mesh_id=ps.mesh_id),
+            receiver_mesh=MeshWrapper(mesh_device),
+        )
+
         use_multi_upstream = isinstance(exit_node_upstream, list)
         if use_multi_upstream:
             assert exit_upstream_page_size is not None, "exit_upstream_page_size required for multi-upstream mode"
@@ -716,8 +743,8 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
                 downstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, my_exit_send_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, primary),
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=MeshWrapper(rank=ns.rank, mesh_id=ns.mesh_id),
                 upstream_core_coords=exit_node_upstream,
@@ -729,8 +756,8 @@ class PipelineBlock:
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
                 downstream_d2d_socket_page_size,
-                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, pipeline_core_coord),
-                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, pipeline_core_coord),
+                ttnn.MeshCoreCoord(pipeline_config[self.my_stage_idx].exit_node_coord, my_exit_send_core),
+                ttnn.MeshCoreCoord(pipeline_config[next_cfg_idx].entry_node_coord, primary),
                 upstream_core_coord=exit_node_upstream,
                 upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
                 sender_mesh=MeshWrapper(mesh_device),
