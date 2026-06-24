@@ -292,10 +292,11 @@ class Model:
         use_throughput_experts=False,
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
-        # Create a dummy CCL manager for GPT-OSS
+        from models.common.utility_functions import is_blackhole
         from models.demos.gpt_oss_d_p.tt.ccl import CCLManager
 
-        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
+        topology = ttnn.Topology.Linear if is_blackhole() else ttnn.Topology.Ring
+        ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device), topology=topology)
 
         # Create instance using direct initialization
         instance = cls.__new__(cls)
