@@ -42,6 +42,47 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #define MaybeDeviceZoneScopedN(ENABLED, name)
 #endif
 
+#ifdef SDPA_NOP_PERTURB
+// Tactical timing-perturbation repro for #47911 (reduce_trigger ND) on a PLAIN build —
+// no LLK asserts needed. Inserts per-thread NOPs (no DPRINT, so it won't deadlock the
+// ring-fabric op) to widen the reduce_trigger pack->unpack race window. Delaying the
+// PACK thread (producer) before the QK cb_qkt_im write is what reproduces the ND; the
+// unpacker's unguarded first-half reduce MOP then reads stale L1 -> nondeterministic
+// row-max -> determinism test fails iter1 != iter0. Knobs are #defined in the kernel .cpp.
+#ifndef SDPA_NOP_U
+#define SDPA_NOP_U 0
+#endif
+#ifndef SDPA_NOP_M
+#define SDPA_NOP_M 0
+#endif
+#ifndef SDPA_NOP_P
+#define SDPA_NOP_P 0
+#endif
+#ifndef SDPA_NOP_RISCV
+#define SDPA_NOP_RISCV 0  // 0 = Tensix TTI_NOP, 1 = RISC-V nop
+#endif
+template <int N, int riscv>
+inline void sdpa_nops() {
+    if constexpr (N > 0) {
+        // Loop (not unrolled .rept) so large delays don't overflow the kernel config buffer.
+        // volatile counter prevents the compiler from unrolling/eliding the loop.
+        volatile int cnt = N;
+        while (cnt-- > 0) {
+            if constexpr (riscv) {
+                asm volatile("nop");
+            } else {
+                asm volatile(".ttinsn %0" : : "i"(TT_OP_NOP));
+            }
+        }
+    }
+}
+inline void sdpa_nop_perturb() {
+    UNPACK((sdpa_nops<SDPA_NOP_U, SDPA_NOP_RISCV>()));
+    MATH((sdpa_nops<SDPA_NOP_M, SDPA_NOP_RISCV>()));
+    PACK((sdpa_nops<SDPA_NOP_P, SDPA_NOP_RISCV>()));
+}
+#endif
+
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
 // llk_pack -> program_packer_destination GPR->FLOP address-programming sequence at every
@@ -341,6 +382,14 @@ void blocked_matmul_and_pack(
     if (!skip_pack_configure) {
         configure_row_pack_width(out_cb, subblock_w);
     }
+#ifdef SDPA_NOP_PERTURB
+    // QK pack only (transpose==true): delay the packer's QK writes so the unpacker's
+    // unguarded first-half reduce MOP reads stale cb_qkt_im — reproduces #47911 ND
+    // without LLK asserts. See SDPA_NOP_* knobs in the kernel .cpp.
+    if constexpr (transpose) {
+        sdpa_nop_perturb();
+    }
+#endif
     pack_contiguous_rows_nocfg(
         out_cb, row_subblock_idx * subblock_h, subblock_h, out_num_cols, out_col_offset, subblock_w);
     if (trigger_reduce) {
