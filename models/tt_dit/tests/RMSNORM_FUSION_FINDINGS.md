@@ -24,6 +24,49 @@ composite C++ op fuses weight+RoPE in-op. Fused = the single device op.
 
 ---
 
+## Blackhole port (TARGET) — Wormhole was the proxy
+
+The shipping target is **Blackhole galaxy**; all numbers below were gathered on **Wormhole
+galaxy** as a stand-in. Hardware deltas to account for on BH:
+
+| | Wormhole galaxy (proxy) | Blackhole galaxy (target) |
+|---|---|---|
+| fabric links | 4 | **2** |
+| compute grid | 8×9 (72 cores) | **12×10 (120 cores)** |
+| topology | mesh/ring | **4×8 torus** |
+| mem-BW / FLOP | — | different (changes the compute-bound balance) |
+
+**Carries over unchanged:** the fabric-forwarder AG, the grid-derived row-aligned worker cap
+(auto-adapts: `floor((grid−links)/grid.x)·grid.x`), the unconditional-fp32-internals invariant,
+and the whole op/test API.
+
+**BH porting checklist:**
+1. **Links:** run with `WAN_GALAXY_LINKS=2` (forwarder count = `min(links, workers)` = 2).
+2. **Worker cap:** the grid-derived cap yields ~108 on 12×10 — but the WH "64 = 8×8 rows"
+   optimum was *geometric* and won't transfer. **Verify** the row-alignment orientation
+   (`grid.x` = the row-major fill dim) and **re-sweep** the optimum via `WAN_RMSNORM_WORKER_CAP`
+   / `WAN_RMSNORM_FORCE_WORKERS` — don't assume 108.
+3. **Topology:** the AG uses `Ring` (fwd+bwd mcast); a torus's TP axis is a closed ring, so it
+   should map — verify the fabric `num_targets` routing on the wraparound.
+4. **Re-sweep / re-ablate:** `chunk=1` and the "compute-bound" finding are WH-only — re-run the
+   chunk sweep (`WAN_RMSNORM_FORCE_CHUNK`) and the ablation (`WAN_ABLATION`) on BH; the I/O vs
+   fabric vs compute balance will shift with BH's BW/FLOP ratio.
+
+**Headline speedup vs composite baseline (fill BH as you go):**
+
+| representative shape | WH ↑ (proxy) | BH ↑ (target) |
+|---|---:|:--:|
+| flux_tp8_N16384 (TP=8 large) | 2.34× | _TBD_ |
+| self_sp4_N18944 (WAN large) | 1.82× | _TBD_ |
+| LTX v_block_s2 | 2.71× | _TBD_ |
+| flux_tp4_N8192 | 1.63× | _TBD_ |
+| (mid/small) | 1.2–1.6× | _TBD_ |
+
+Detailed per-shape WH numbers: `REBENCH_baseline_vs_fused.md` (perf) and `ABLATION_LEVERS.md`
+(component breakdown) — both have a Wormhole section and a Blackhole stub to fill.
+
+---
+
 ## Speedups — TP=4 on WH Galaxy (4×8), 4 links
 
 LINE = 1×4 submesh; RING = full 4×8 mesh, TP on the closed 4-axis, replicate the 8-axis
@@ -125,17 +168,21 @@ slight regression at 0.89×, a dispatch-bound shape with little to fold).
 
 ## Tuning knobs & heuristic (workers, chunks)
 
-Current heuristic (committed): `num_workers = min(tile_rows, 32)` (`kMaxMuxWorkersPerChip`,
-a contention ceiling) and `chunk_size_rows = 1` (`kMaxChunkSizeRows`). A Wormhole sweep
-(chunk 1–4, rope + non-rope, real sizes) found **chunk=1 best-or-tied everywhere**: the AG
-is only ~2µs exposed so bigger chunks bought no amortization, and chunk>1 was ~10% *slower*
-on large shapes (the prefetch/compute-overlap win never materialized).
+Current heuristic (committed): `num_workers = min(tile_rows, derive_worker_cap(grid, links))`
+where the cap = the compute grid minus the forwarder cores, **rounded down to whole grid rows**
+(`floor((grid.x·grid.y − links)/grid.x)·grid.x`; = **64** on the WH 8×9 galaxy). Workers tile
+complete rows for NoC locality; using the full grid (ragged final row) regresses 3–9%. The cap
+is **device-derived (already arch-adaptive)** — no hardcoded constant. `chunk_size_rows = 1`
+(`kMaxChunkSizeRows`): a Wormhole sweep (chunk 1–4) found chunk=1 best-or-tied everywhere.
+The worker cap was +20–44% over the old hardcoded-32 cap on large all-gather-bound shapes.
 
-> **Blackhole caveat:** the chunk=1 and worker-cap=32 choices are **Wormhole-only**. BH's
-> different mem-BW/FLOP ratio can flip the chunk>1 prefetch tradeoff — **re-sweep, don't
-> assume.** Sweep with no code change via `WAN_RMSNORM_FORCE_WORKERS`, `WAN_RMSNORM_WORKER_CAP`,
-> `WAN_RMSNORM_FORCE_CHUNK` (all read through the single sizing path so buffer + kernel stay
-> consistent), then make `kMaxMuxWorkersPerChip`/`kMaxChunkSizeRows` arch-conditional.
+> **Blackhole caveat:** the `chunk=1` choice is **Wormhole-only**, and the row-aligned worker
+> cap (geometric "64 = 8×8" knee) needs re-validation on BH's 12×10 grid. BH's different
+> mem-BW/FLOP ratio can flip the chunk>1 tradeoff — **re-sweep, don't assume.** Sweep with no
+> code change via `WAN_RMSNORM_FORCE_WORKERS`, `WAN_RMSNORM_WORKER_CAP`, `WAN_RMSNORM_FORCE_CHUNK`
+> (all read through the single sizing path so buffer + kernel stay consistent). The cap formula
+> already adapts to the BH grid; only `kMaxChunkSizeRows` would need arch-conditioning if BH
+> prefers chunk>1.
 
 A split-sender ring AG (each worker one full-wrap mcast instead of two arc mcasts) was
 tried and **reverted** — essentially neutral (only the largest no-RoPE shape gained ~3%)
@@ -182,8 +229,9 @@ and more fragile under traced replay. Dual-direction arc AG is the only path.
   resident estimate would overflow (per-head only), use a **conditional block-major POST** —
   fuse the matmul-rotate + RoPE finalize per block so `rotated_input_cb` is block-local — and
   **stream cos/sin** (cap the CB at a few `block_size` groups). Both gated on the overflow
-  estimate, so the resident fast path (all TP=4 shapes) is untouched. `WAN_RMSNORM_FORCE_FUSE_MM_ROPE`
-  / `WAN_RMSNORM_ROPE_STREAM_BLOCKS` are the knobs.
+  estimate, so the resident fast path (all TP=4 shapes) is untouched. The block-major POST is
+  auto-selected on the L1-overflow estimate; `WAN_RMSNORM_ROPE_STREAM_BLOCKS` tunes the cos/sin
+  streaming depth.
 - **Underlying — per-head RoPE chunk≥2** compute path is avoided by pinning chunk=1; the
   deeper chunk≥2 deadlock isn't separately fixed (no need at chunk=1).
 

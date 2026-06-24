@@ -1,5 +1,12 @@
 # Re-bench: baseline (composite) vs fused — `wan_fused_distributed_rmsnorm`
 
+> **Platform: Wormhole 4×8 galaxy (PROXY).** Blackhole 4×8 torus (2 links, 12×10 grid) is the
+> real target — re-run with `WAN_GALAXY_LINKS=2` and paste the tables under the **Blackhole stub
+> at the bottom** so BH numbers sit next to these WH ones. BH porting checklist:
+> `RMSNORM_FUSION_FINDINGS.md`.
+
+## Wormhole 4×8 galaxy (proxy — 4 links, 8×9 grid, worker cap 64)
+
 Traced bench (`test_bench`) on a Wormhole **4×8 galaxy**, branch `cglagovich/fused_rms_norm`.
 RING = full 4×8 mesh, TP on a closed axis (4-wide for TP=4, 8-wide for TP=8), replicate the
 other axis. 4 links. WAN bench = 100 iters, LTX/FLUX = 50 iters.
@@ -88,3 +95,14 @@ composite); phn1 does not use the all-gather / worker-cap path.
   was never its bottleneck.
 - **vs the prior fused-T:** the forwarder + worker cap together cut the large shapes by up to
   ~47% (flux_tp8_N16384 770→408µs).
+
+---
+
+## Blackhole 4×8 torus (TARGET — 2 links, 12×10 grid) — TO FILL
+
+Re-run on BH with `WAN_GALAXY_LINKS=2` (and re-sweep the worker cap — the WH "64" is geometric,
+see findings doc). Paste the same three tables (Wan TP4 / LTX TP4 / FLUX TP4+TP8) here so each
+BH row sits directly under its WH counterpart for comparison. Key question: does the forwarder
+still give significant speedup over the composite baseline on BH (the real goal)?
+
+_(empty — populate from the first BH bench run)_
