@@ -18,8 +18,9 @@ Paths are prefixed with the repo: **`[metal]`** = `tt-metal/`, **`[emule]`** =
 - When the flag is off, every check is a no-op: host helpers return early, and
   the runner leaves the kernel's thread-local state pointers null so the in-kernel
   checks short-circuit.
-- The `abort()` writes **no core dump** by default (the emulated process maps GB-scale
-  L1+DRAM, so a core is ~13 GB). Set **`TT_METAL_EMULE_ASAN_ALLOW_CORE=1`** to capture
+- The `abort()` writes **no core dump** by default (the emulated process maps ~13 GB of
+  L1+DRAM *virtual* address space, but only touched pages are dumped, so a real core is
+  ~1.4 GB). Set **`TT_METAL_EMULE_ASAN_ALLOW_CORE=1`** to capture
   one for debugging instead — see *Diagnostic trace* below.
 
 **Where checks live (the three layers)**
@@ -71,8 +72,9 @@ the offending kernel line.
 **Core dumps (`TT_METAL_EMULE_ASAN_ALLOW_CORE`).** `__emule_asan_panic` decides what
 happens to the core the `abort()` would otherwise produce:
 - **Unset (default) — no core.** The process is marked non-dumpable
-  (`prctl(PR_SET_DUMPABLE, 0)`). The emulated process maps GB-scale L1+DRAM (a core is
-  ~13 GB), and on hosts whose `core_pattern` pipes to a crash handler (e.g. apport)
+  (`prctl(PR_SET_DUMPABLE, 0)`). The emulated process maps ~13 GB of L1+DRAM virtual
+  address space (only touched pages dump, so a real core is ~1.4 GB), and on hosts whose
+  `core_pattern` pipes to a crash handler (e.g. apport)
   `ulimit -c 0` / `RLIMIT_CORE` is *ignored* — `PR_SET_DUMPABLE=0` the kernel honors
   regardless. So the suite is safe to run on any machine with no `LD_PRELOAD` shim or
   external setup, and the trace above already captures what a core would.
@@ -82,7 +84,7 @@ happens to the core the `abort()` would otherwise produce:
   from non-package binaries. Best-effort: if `gcore`/ptrace is unavailable the process is
   left dumpable (a plain-file `core_pattern` still works) and a note is printed. The core
   is a standard ELF core — read it with `gdb <test-binary> emule_asan_core.<pid>`. Given
-  the ~13 GB size, use it on a single `--gtest_filter` test, not the whole suite. Done
+  its ~1.4 GB size, use it on a single `--gtest_filter` test, not the whole suite. Done
   once, under the panic lock, so a multi-core kernel bug never spawns more than one dump.
 
 ## Checks at a glance
@@ -118,7 +120,7 @@ at the top of each host entry point (`WriteToBuffer`, `ReadFromBuffer`, `ReadSha
 the core-subset and shared-ptr overloads). Not allocated → abort. One boolean,
 before any access touches memory.
 *Diagnostic:* `Use-After-Free: <op> called on Buffer … not currently allocated`.
-*Exercised by:* `test_tensor_bad_acess.cpp` (five deallocated-Buffer death tests
+*Exercised by:* `test_tensor_bad_access.cpp` (five deallocated-Buffer death tests
 across every host entry point + a live-buffer round-trip positive control).
 
 ### 2. Host L1 / DRAM Alignment
@@ -427,6 +429,15 @@ into — its "intended write set". After the kernel exits, the runner `memcmp`s 
 snapshot vs current L1 for every buffer **not** in the resolved set; any change is
 an unintended write. (Exact attribution requires one kernel per core; multi-kernel
 programs hit a friendlier early-out.)
+**Concurrency — the resolved-set append is single-kernel-only.** Each kernel thread
+records its resolved ranges into a thread-local stack array, then at exit appends them to
+the per-core `resolved_acc_` vector. That append is gated on `snapshots_` being non-empty,
+which is true **only** for single-kernel cores (the pre-launch snapshot bails when
+`num_kernels != 1`, and `verify_post_launch` early-returns with no snapshot anyway). The
+gate is load-bearing: on a multi-kernel core all kernel threads exit concurrently, so an
+ungated append would have every thread mutating the shared `resolved_acc_` vector at once
+— an unsynchronized `std::vector::insert` (UB, heap corruption) whose result is never read.
+Gating on `snapshots_` confines the append to the single-thread case at no behavioral cost.
 **Exempt buffers (never snapshotted, so writes to them never flag):** (1) *persistent
 buffers* — globally-allocated CB backing buffers (`cb_impl->globally_allocated()`); the
 CB *is* the tensor, so the kernel owns it. (2) *I/O tensors handed to this kernel* — any

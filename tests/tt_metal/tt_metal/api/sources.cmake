@@ -76,7 +76,7 @@ set(UNIT_TESTS_API_SOURCES
     test_noc_without_barrier.cpp
     test_padded_write.cpp
     test_semaphore_write.cpp
-    test_tensor_bad_acess.cpp
+    test_tensor_bad_access.cpp
     test_valid_mem_wrong_alloc.cpp
     test_write_beyond_res_pages.cpp
     test_write_outside_tensor.cpp

@@ -90,7 +90,9 @@ void ObjectIntentTracker::teardown_kernel_tls(
     __emule_l1_resolved_ranges = nullptr;
     __emule_l1_resolved_ranges_count = nullptr;
     __emule_l1_resolved_ranges_capacity = 0;
-    if (!oob.object_intent_strict || local_count == 0) {
+    // snapshots_ non-empty ⇒ single-kernel core (one thread here): gating on it keeps
+    // this append off multi-kernel cores, where concurrent inserts would race.
+    if (!oob.object_intent_strict || snapshots_.empty() || local_count == 0) {
         return;
     }
     resolved_acc_.insert(resolved_acc_.end(), local_log, local_log + local_count);
