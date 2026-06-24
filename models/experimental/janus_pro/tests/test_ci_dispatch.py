@@ -33,6 +33,7 @@ def test_ci_dispatch(hf_model_name, is_ci_env, model_location_generator):
         "models/experimental/janus_pro/tests/test_vision_attention.py",
         "models/experimental/janus_pro/tests/test_vision_transformer_block.py",
         "models/experimental/janus_pro/tests/test_vision_transformer.py",
+        "models/experimental/janus_pro/tests/test_vision_pipeline.py",
     ]
 
     # Pass the exit code of pytest to proper keep track of failures during runtime
