@@ -43,7 +43,7 @@ permissions:
 
 jobs:
   create-issues:
-    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-create-issues.yaml@ebanerjee/create-issues-copilot
+    uses: tenstorrent/tt-auto-triage/.github/workflows/triage-create-issues.yaml@main
     with:
       issue-repo: ${{ inputs.issue-repo }}
       target-repo: ${{ inputs.target-repo }}
