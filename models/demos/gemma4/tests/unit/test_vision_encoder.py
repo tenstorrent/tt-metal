@@ -30,7 +30,7 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [None, 26, 27],  # None means all layers, specific numbers will run fewer layers
+    [None, 1, 2],  # None means all layers, specific numbers will run fewer layers
     ids=["all_layers", "single_layer", "two_layers"],
 )
 @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
     ],
     ids=["300dpi", "240dpi"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_vision_model_inference(
     mesh_device,
     reset_seeds,

@@ -38,10 +38,11 @@ from models.tt_transformers.tt.load_checkpoints import standardize_hf_keys_multi
     [
         (1120 * 9, [3, 110, 85]),  # 300 DPI scanned Letter-size doc (~2550x3300)
         (560 * 9, [3, 66, 54]),  # 240 DPI scanned Letter-size doc
+        # (140 * 9, [3, 34, 27])
     ],
     ids=["300dpi", "240dpi"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": True}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_vision_tower_inference(
     mesh_device,
     reset_seeds,
@@ -59,7 +60,7 @@ def test_vision_tower_inference(
     dtype = ttnn.bfloat8_b
     pcc = 0.99 if num_layers and num_layers <= 3 else 0.91
     batch_size = 1  # prefill only supports batch_size = 1
-    seq_len = ((token_budget // 2048) + 1) * 2048
+    seq_len = ((token_budget // 128) + 1) * 128
 
     model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=seq_len)
     if num_layers:
