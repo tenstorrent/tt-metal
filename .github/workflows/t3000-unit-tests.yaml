@@ -41,7 +41,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 */2 * * *" # This cron schedule runs the workflow every 2 hours
+    - cron: "0 */6 * * *" # This cron schedule runs the workflow every 6 hours
 
 permissions:
   packages: write

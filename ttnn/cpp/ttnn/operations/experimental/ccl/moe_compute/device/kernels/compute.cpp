@@ -4,6 +4,7 @@
 
 #include "moe_ring_common.h"
 #include "api/compute/compute_kernel_api.h"
+#include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
 #include "api/compute/eltwise_binary.h"
@@ -35,6 +36,7 @@ void noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val)
     WAYPOINT("NSMD");
 }
 
+// Note GELU gets init'd at each iteration in the pack_compute_activation specialization
 template <ttnn::experimental::prim::detail::MoEActivationFunction activation>
 inline void pack_init_activation() {};
 
@@ -95,12 +97,13 @@ inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivat
 };
 
 template <>
-inline void pack_init_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
-    PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
-};
-
-template <>
 inline void pack_compute_activation<ttnn::experimental::prim::detail::MoEActivationFunction::GELU>() {
+    // GELU programs an SFPU LUT (gelu_init). The trailing binary MUL below clobbers that LUT,
+    // so when the activation loop runs >1 iteration per chunk (tiles_per_step > 2, which happens
+    // for ring sizes where ceil(Nt/ring) is odd — e.g. gemma at ring=8) the next iteration's
+    // gelu reads a stale LUT and produces garbage. Re-init the LUT here so every gelu is valid.
+    // SILU/SWIGLU don't use this LUT, so they keep their cheaper once-per-chunk init.
+    PACK((llk_math_eltwise_unary_sfpu_init<SfpuType::gelu>(ckernel::sfpu::gelu_init<true, false>)));
     PACK(SFPU_UNARY_CALL(
         DST_SYNC_MODE,
         DST_ACCUM_MODE,
@@ -224,6 +227,10 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
+    // compute_kernel_hw_startup must be the first compute API call; the has_bias block below
+    // issues compute work, so the startup is hoisted above it (otherwise it would be mid-kernel).
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2);
+
     if constexpr (has_bias) {
         // Create a ones-tile for bias addition (matmul with ones × bias_row = bias).
         // Same sequence as moe_gpt compute.cpp for GPT-OSS compatibility.
@@ -292,11 +299,15 @@ void kernel_main() {
     for (uint32_t expert_id = 0; expert_id < num_experts; ++expert_id) {
         uint32_t num_expert_chunks = NUM_CHUNKS_PER_EXPERT[expert_id];
         for (uint32_t chunk = 0; chunk < num_expert_chunks; ++chunk) {
-            detail::pack_init_activation<activation_type>();
+            // GELU re-inits its SFPU LUT inside pack_compute_activation on every iteration (the
+            // trailing MUL there clobbers it), so it's its own initializer — skip the per-chunk
+            // init for GELU to avoid a redundant gelu_init. SILU/SWIGLU init once here.
+            if constexpr (activation_type != ttnn::experimental::prim::detail::MoEActivationFunction::GELU) {
+                detail::pack_init_activation<activation_type>();
+            }
 
             // Initialize matmul for W0
-            mm_block_init(
-                cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
+            matmul_block_init(cb_s2c_in, cb_r2c_w0_w1, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
             // Wait for next chunk of tiles to arrive from the tilize cores
             // Min to allow tilize cores to send increment for second expert

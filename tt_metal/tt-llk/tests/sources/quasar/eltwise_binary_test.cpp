@@ -163,12 +163,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Configure and initialize pack hardware
     _configure_buf_desc_table_(tdma_desc.buf_desc_id, tdma_desc.buf_desc);
     _llk_pack_hw_configure_<p_pacr::PACK0>(tdma_desc);
-    _llk_pack_init_(buf_desc_id, 1);
+    _llk_pack_init_(buf_desc_id, ckernel::DEFAULT_TENSOR_SHAPE, 1);
 
     // Pack all result tiles
     for (std::uint32_t i = 0; i < static_cast<std::uint32_t>(params.OUTPUT_TILE_CNT); ++i)
     {
-        _llk_pack_(i, i);
+        _llk_pack_(i, i, ckernel::DEFAULT_TENSOR_SHAPE);
     }
 
     // Signal pack completion

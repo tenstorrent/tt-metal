@@ -671,6 +671,14 @@ def main():
     accum_steps = args.gradient_accumulation_steps
     total_steps = args.steps
     use_clip = args.clip_grad_norm > 0.0
+    # clip_grad_norm uses a per-device (per-shard) norm with no cross-mesh reduction, so reject sharded params.
+    if use_clip:
+        params = ttml_model.parameters()
+        if any(not ttml.Sharding.from_tensor(p).is_fully_replicated for _, p in params.items()):
+            raise ValueError(
+                "clip_grad_norm is not supported with sharded parameters (FSDP/TP): each device holds "
+                "only a shard, so the per-shard norm is wrong"
+            )
 
     tokens_per_step = micro_batch * dp_size * seq_len * accum_steps
     eval_batches = max(1, accum_steps * args.valid_mul)

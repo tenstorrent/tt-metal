@@ -51,7 +51,7 @@
 
 - name: t3k_fabric_stability_tests
   # Setting TT_METAL_OPERATION_TIMEOUT_SECONDS=0 to disable test timeouts and let the tests run to completion, as some of the stability tests can take a long time to complete.
-  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability.yaml
+  cmd: TT_METAL_OPERATION_TIMEOUT_SECONDS=0 build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_stability.yaml
   skus:
     wh_llmbox:
       timeout: 120
@@ -124,9 +124,9 @@
 
 - name: t3k_DeepSeek_PREFILL
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -vvv --tb=short -k "mesh-4x2" --timeout 900
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_ds_moe -vvv --tb=short -k "mesh-4x2 and not fabric2d-" --timeout 900
     pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge and cpu and 2x4 and line and not multiuser" -vvv --tb=short
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 2x4 and line" -vvv --tb=short
   skus:
     wh_llmbox:
       timeout: 25

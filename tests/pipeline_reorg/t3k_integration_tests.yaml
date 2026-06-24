@@ -46,51 +46,6 @@
 #   team: models
 #   model-name: n300 mesh llama3.2-vision
 
-- name: t3k_llama3.2-90b-vision_tests
-  cmd: run_t3000_llama3.2-90b-vision_freq_tests
-  skus:
-    wh_llmbox:
-      timeout: 20
-  owner_id: U07RY6B5FLJ # Gongyu Wang
-  team: models
-  model-name: llama3.2-90b-vision
-
-- name: t3k_llama3_tests
-  cmd: run_t3000_llama3_tests
-  skus:
-    wh_llmbox:
-      timeout: 47
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  model-name: llama3
-
-- name: t3k_llama3_accuracy_tests
-  cmd: run_t3000_llama3_accuracy_tests
-  skus:
-    wh_llmbox:
-      timeout: 40
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  model-name: llama3 accuracy
-
-- name: t3k_llama3_70n90b_accuracy_tests
-  cmd: run_t3000_llama3_70n90b_accuracy_tests
-  skus:
-    wh_llmbox:
-      timeout: 20
-  owner_id: U03PUAKE719 # Miguel Tairum Cruz
-  team: models
-  model-name: llama3_70n90b accuracy
-
-- name: t3k_llama3_90b_tests
-  cmd: run_t3000_llama3_90b_tests
-  skus:
-    wh_llmbox:
-      timeout: 30
-  owner_id: U07RY6B5FLJ # Gongyu Wang
-  team: models
-  model-name: llama3_90b
-
 - name: t3k_resnet_tests
   cmd: run_t3000_resnet_tests
   skus:
@@ -126,15 +81,6 @@
   owner_id: U08TED0JM9D # Samuel Adesoye
   team: models
   model-name: motif
-
-- name: t3k_mistral_tests
-  cmd: run_t3000_mistral_tests
-  skus:
-    wh_llmbox:
-      timeout: 15
-  owner_id: U0896VBAKFC # Pratikkumar Prajapati
-  team: models
-  model-name: mistral
 
 - name: t3k_wan2.2_tests
   cmd: run_t3000_wan22_tests

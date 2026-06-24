@@ -169,14 +169,14 @@ class TestSampling1DDevice:
         ), f"Argmax mismatch: got {tokens_flat[:5]} vs expected {expected_flat[:5]}"
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_error_on_partial_params(self, ttnn_mesh_device, vocab_size):
+    def test_error_on_partial_params(self, ttnn_mesh_device, vocab_size, expect_error):
         """k provided but not p/temp → ValueError."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
         k_tt = ttnn.from_torch(torch.ones(32), device=ttnn_mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-        with pytest.raises(ValueError, match="k, p, temp must all be provided"):
+        with expect_error(ValueError, "k, p, temp must all be provided"):
             sampler.decode_forward(logits_tt, k=k_tt)
 
     @pytest.mark.parametrize("vocab_size", [1024])
@@ -256,13 +256,13 @@ class TestSampling1DDevice:
     # ------------------------------------------------------------------
 
     @pytest.mark.parametrize("vocab_size", [1024])
-    def test_error_all_none_no_force_argmax(self, ttnn_mesh_device, vocab_size):
+    def test_error_all_none_no_force_argmax(self, ttnn_mesh_device, vocab_size, expect_error):
         """decode_forward with all-None k/p/temp when allow_force_argmax=False → ValueError (line 178)."""
         sampler = Sampling1D(vocab_size=vocab_size, mesh_device=ttnn_mesh_device)
         logits_host = torch.randn(1, 1, 32, vocab_size, dtype=torch.bfloat16)
         logits_tt = _make_logits_tt(logits_host, ttnn_mesh_device)
 
-        with pytest.raises(ValueError, match="allow_force_argmax is False"):
+        with expect_error(ValueError, "allow_force_argmax is False"):
             sampler.decode_forward(logits_tt)
 
     @pytest.mark.parametrize("vocab_size", [1024])
@@ -419,7 +419,7 @@ class TestSampling1DDevice:
         assert isinstance(resolved.index_offsets, LazyBuffer)
         assert resolved.index_offsets.device is ttnn_mesh_device  # filled in by resolve_lazy_buffer
 
-    def test_rejects_galaxy(self, ttnn_mesh_device):
+    def test_rejects_galaxy(self, ttnn_mesh_device, expect_error):
         """from_model_args should reject 2D (Galaxy) topologies."""
 
         class FakeMesh:
@@ -435,7 +435,7 @@ class TestSampling1DDevice:
             start_core = ttnn.CoreCoord(0, 0)
             max_top_k = 32
 
-        with pytest.raises(ValueError, match="1D mesh topologies"):
+        with expect_error(ValueError, "1D mesh topologies"):
             Sampling1D.from_model_args(FakeMesh(), None, MockArgs())
 
 
@@ -1425,8 +1425,9 @@ def test_sampling1d_logprobs_topk(ttnn_mesh_device):
 
     assert log_probs is not None, "logprobs must be computed on a 1×8 mesh when enabled"
 
-    # output_tensor is replicated across devices; read a single device copy → shape (1,1,1,B)
-    lp_host = ttnn.to_torch(ttnn.get_device_tensors(log_probs)[0]).reshape(-1)[:B].float()
+    # output_tensor shape (1,1,1,B), replicated across devices — match test_sampling.py read path
+    mesh_composer = ttnn.ConcatMeshToTensor(ttnn_mesh_device, dim=3)
+    lp_host = ttnn.to_torch(log_probs, mesh_composer=mesh_composer)[:, :, 0, :B].reshape(-1).float()
     tokens_host = to_torch_auto_compose(tokens_tt).flatten()[:B].long()
 
     # Reference: log_softmax over the full vocab (fp32), indexed at the sampled token.

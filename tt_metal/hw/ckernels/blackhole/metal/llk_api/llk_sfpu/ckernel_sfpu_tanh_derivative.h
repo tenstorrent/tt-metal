@@ -153,7 +153,7 @@ constexpr float SECH2_POLY_C10 = 6.33840343077387569082e-02f;
 // Uses the same mathematical approach as the GELU backward kernel:
 // - Sollya-fitted minimax polynomial for the core region
 // - Inline Cody-Waite exp with direct exponent bit manipulation for the tail
-// No external function calls (_sfpu_exp_f32_accurate_, _sfpu_reciprocal_).
+// No external function calls (_sfpu_exp_f32_accurate_, sfpu_reciprocal_iter).
 //
 // Two regions (exploiting even symmetry via a = |x|):
 //   |x| < CORE_REGION_LIMIT:  Degree-10 polynomial in t = (2/9)·a² - 1 (~12 MAD ops)

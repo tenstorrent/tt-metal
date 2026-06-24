@@ -1,0 +1,27 @@
+# Dependencies required by models/tt_dit/utils/vbench.py to run the VBench
+# quality gate on generated video. Used by the wan2.2 demo tests; without these
+# installed, assert_vbench_quality() silently skips (see vbench.py).
+#
+# Install on top of the dev env, after ./create_venv.sh:
+#
+#     source python_env/bin/activate
+#     uv pip install --no-deps -r models/tt_dit/utils/vbench-requirements.txt
+#
+# --no-deps is required: vbench 0.1.5 pulls a large transitive ML dep tree
+# (detectron2, mmcv, etc.) that conflicts with the dev env's pinned torch and
+# is not actually needed for the dimensions we evaluate. The packages below
+# are the minimal runtime set that vbench imports on the evaluation paths we
+# use.
+
+decord==0.6.0
+easydict
+openai-clip==1.0.1
+pyiqa
+lvis
+pycocoevalcap
+fvcore
+fairscale
+omegaconf
+antlr4-python3-runtime==4.9.3
+imageio_ffmpeg==0.6.0
+vbench==0.1.5

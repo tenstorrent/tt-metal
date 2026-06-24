@@ -1,0 +1,16 @@
+# Triage merge-gate smoke matrix (core triage tests only; no hang-report).
+#
+# Each entry: name, cmd, skus, team, owner_id.
+# For max allowed timeout refer to .github/time_budget.yaml (triage -> smoke).
+
+- name: triage
+  cmd: pytest -v -s ./tools/tests/triage/ --ignore=./tools/tests/triage/test_hang_report.py
+  skus:
+    wh_n150_civ2:
+      timeout: 11
+    bh_p150b_civ2_viommu_prio:
+      timeout: 11
+    bh_p150b_civ2_viommu:
+      timeout: 11
+  owner_id: U09UX6JLA3U # Ognjen Nenezic
+  team: triage

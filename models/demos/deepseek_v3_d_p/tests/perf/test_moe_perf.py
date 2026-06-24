@@ -19,6 +19,7 @@ import pytest
 
 from models.demos.deepseek_v3_d_p.utils.perf_utils import (
     _is_galaxy_env,
+    adjust_margin_for_ddr_speed,
     run_model_device_perf_test_with_merge,
     run_moe_perf_with_approximation,
 )
@@ -40,10 +41,16 @@ def test_deepseek_v3_moe_perf_loudbox():
     """
     run_moe_perf_with_approximation(
         command_8x1=_CMD_8X1,
-        expected_ns_8x1=36_272_143,
+        # Recalibrated 2026-06-23 on BH LoudBox 8x1 after the unified_routed_expert_ffn
+        # changes; measured device time dropped below the prior lower bound (35.08 ms vs
+        # the old 36.27 ms target's 35.18 ms floor). Was 36_272_143.
+        expected_ns_8x1=35_082_637,
         model_name_8x1="deepseek_v3_moe_lb_8x1_dispatch_combine",
         command_2x4=_CMD_2X4,
-        expected_ns_2x4=39_194_517,
+        # Recalibrated 2026-06-21 on BH LoudBox 2x4 after the unified_routed_expert_ffn
+        # two-RISC (UP_SPLIT) read overlap sped up the gate/up weight stream (~10% MoE
+        # device-time drop, bit-exact). Was 39_194_517.
+        expected_ns_2x4=35_127_772,
         model_name_2x4="deepseek_v3_moe_lb_2x4_gate",
         subdir="deepseek_v3_moe",
         margin=0.03,
@@ -57,6 +64,9 @@ def test_deepseek_v3_moe_perf_galaxy():
     """8x4 galaxy ground truth — the reference the loudbox approximation targets."""
     if not _is_galaxy_env():
         pytest.skip("This test requires 8x4 mesh - galaxy. (set MESH_DEVICE=TG)")
+
+    margin = adjust_margin_for_ddr_speed(0.03)
+
     run_model_device_perf_test_with_merge(
         command=_CMD_8X4,
         expected_device_perf_ns_per_iteration=41_294_210,
@@ -64,6 +74,6 @@ def test_deepseek_v3_moe_perf_galaxy():
         model_name="deepseek_v3_moe_glx_8x4",
         num_iterations=1,
         batch_size=1,
-        margin=0.03,
+        margin=margin,
         comments="seq3200_glx_8x4_ground_truth",
     )
