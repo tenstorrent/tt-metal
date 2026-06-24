@@ -1,14 +1,9 @@
-# Sweep budget definitions for ttnn-run-sweeps and ttnn-model-trace-sweep-validation.
+# Sweep budget definitions for ttnn-run-sweeps workflow.
 #
-# These entries define the per-SKU time budgets that verify_time_budget.py
-# enforces. The sweep workflow generates its own matrix (via compute_sweep_matrix.py)
-# rather than using prepare_test_matrix.py, so the cmd fields here are placeholders —
-# the budgets are the load-bearing part.
+# Budget enforcement via verify_time_budget.py. The sweep workflow generates its
+# own matrix (compute_sweep_matrix.py) — the cmd field is a placeholder.
 #
 # For max allowed timeout refer to .github/time_budget.yaml.
-
-# --- Sweep (nightly/comprehensive/lead_models/model_traced) ---
-# Budget planning: ~30 jobs × 30 min per job = 900 min per SKU.
 
 - name: ttnn sweeps
   cmd: 'python3 tests/sweep_framework/sweeps_runner.py --module-name ALL --vector-source vectors_export --result-dest results_export --tag ci-main --summary'
@@ -26,20 +21,3 @@
   owner_id: U08T3JQEB36 # stevendae
   team: ttnn
   category: sweep
-
-# --- Sweep Validation ---
-
-- name: ttnn sweep validation
-  cmd: 'python3 tests/sweep_framework/validate_sweep_trace.py'
-  skus:
-    wh_n150:
-      timeout: 120
-    wh_n300:
-      timeout: 120
-    bh_p150b_civ2:
-      timeout: 120
-    wh_galaxy:
-      timeout: 120
-  owner_id: U08T3JQEB36 # stevendae
-  team: ttnn
-  category: sweep_validation
