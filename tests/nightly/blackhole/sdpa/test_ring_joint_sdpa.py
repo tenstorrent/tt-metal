@@ -3068,7 +3068,7 @@ def test_ring_joint_attention_sdpa_determinism(model_names):
     RING_MLA_TEST_CONFIGS,
     ids=RING_MLA_TEST_CONFIG_IDS,
 )
-@skip_with_llk_assert("ring_mla deterministic replay is timing-sensitive with LLK asserts enabled.")
+@skip_with_llk_assert("ring_mla deterministic replay is timing-sensitive with LLK asserts enabled. Issue #47906.")
 def test_ring_mla_determinism(
     b,
     sq,
