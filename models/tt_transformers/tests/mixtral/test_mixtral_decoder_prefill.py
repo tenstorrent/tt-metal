@@ -154,12 +154,14 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         positions = torch.LongTensor(range(max_seq_len))
         # Causal mask generated as in HF Mixtral model: https://github.com/huggingface/transformers/blob/a7f29523361b2cc12e51c1f5133d95f122f6f45c/src/transformers/models/mixtral/modeling_mixtral.py#L473
         mask_function = create_causal_mask if hf_config.sliding_window is None else create_sliding_window_causal_mask
+        # transformers 5.x create_causal_mask: input_embeds -> inputs_embeds, and cache_position
+        # was dropped in favour of position_ids.
         causal_mask = mask_function(
             config=hf_config,
-            input_embeds=pt_decode_input_bsh,
+            inputs_embeds=pt_decode_input_bsh,
             attention_mask=None,
-            cache_position=positions,
             past_key_values=None,
+            position_ids=positions.unsqueeze(0),
         )
 
         position_ids = positions.unsqueeze(0).expand(batch, -1)
