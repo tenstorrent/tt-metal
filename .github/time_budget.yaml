@@ -140,6 +140,7 @@ scaleout:
   smoke:
     wh_n300_civ2: 10
   unit:
+    cpu_medium: 90 # 6 fabric CPU-only shards × 15 min
     wh_llmbox: 60
     wh_galaxy: 25
   stress:
