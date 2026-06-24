@@ -618,6 +618,12 @@ def _can_use_minimal_matmul_common(signature: AutoMatmulSignature, bias: Any | N
     ttnn = _ttnn()
     if signature.transpose_a or signature.transpose_b:
         return False
+    if signature.activation is not None:
+        # minimal_matmul does not support fused activations. Compound activations
+        # such as SILU can hang the device in minimal_matmul on certain block
+        # configurations. Fall back to default_matmul/default_linear, which apply
+        # the activation correctly via the full C++ kernel path.
+        return False
     if signature.input_tensor_a.get("layout") != str(ttnn.TILE_LAYOUT):
         return False
     if signature.input_tensor_b.get("layout") != str(ttnn.TILE_LAYOUT):
@@ -1441,7 +1447,9 @@ def _benchmark_candidate_eager(candidate: Candidate, device: Any) -> tuple[float
     return average_us, samples_us, "eager"
 
 
-def _benchmark_candidate_trace(candidate: Candidate, device: Any) -> tuple[float, list[float], str]:
+def _benchmark_candidate_trace(
+    candidate: Candidate, device: Any, *, queue_id: int = 0
+) -> tuple[float, list[float], str]:
     ttnn = _ttnn()
     _sync_device(device)
     warmup_output = candidate.run()
@@ -1451,15 +1459,15 @@ def _benchmark_candidate_trace(candidate: Candidate, device: Any) -> tuple[float
     trace_id = None
     trace_output = None
     try:
-        trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(device, cq_id=queue_id)
         trace_output = candidate.run()
-        ttnn.end_trace_capture(device, trace_id, cq_id=0)
+        ttnn.end_trace_capture(device, trace_id, cq_id=queue_id)
         _sync_device(device)
 
         samples_us: list[float] = []
         for _ in range(_BENCHMARK_ITERS):
             start = time.perf_counter()
-            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
+            ttnn.execute_trace(device, trace_id, cq_id=queue_id, blocking=False)
             _sync_device(device)
             samples_us.append((time.perf_counter() - start) * 1_000_000.0)
         average_us = sum(samples_us) / len(samples_us)
@@ -1473,13 +1481,13 @@ def _benchmark_candidate_trace(candidate: Candidate, device: Any) -> tuple[float
         _deallocate_result(trace_output)
 
 
-def _benchmark_candidate(candidate: Candidate, device: Any) -> tuple[float, list[float], str]:
+def _benchmark_candidate(candidate: Candidate, device: Any, *, queue_id: int = 0) -> tuple[float, list[float], str]:
     ttnn = _ttnn()
     if all(
         hasattr(ttnn, attr) for attr in ("begin_trace_capture", "end_trace_capture", "execute_trace", "release_trace")
     ):
         try:
-            return _benchmark_candidate_trace(candidate, device)
+            return _benchmark_candidate_trace(candidate, device, queue_id=queue_id)
         except Exception:
             pass
     return _benchmark_candidate_eager(candidate, device)
@@ -1615,7 +1623,9 @@ def _select_candidate(
 
     for candidate in candidates:
         try:
-            avg_us, samples_us, benchmark_mode = _benchmark_candidate(candidate, device)
+            avg_us, samples_us, benchmark_mode = _benchmark_candidate(
+                candidate, device, queue_id=int(kwargs.get("queue_id") or kwargs.get("cq_id") or 0)
+            )
         except Exception as exc:
             candidate_timings.append(
                 {
@@ -1736,6 +1746,25 @@ def dispatch_matmul(
             kwargs=kwargs,
         )
 
+    # During profiling sessions (slow-dispatch Tracy or device-profiler sync mode)
+    # the op identity must remain unambiguous. Benchmarking warmups would inject
+    # extra ops into the trace, corrupt op counts, or cause post-processing to
+    # time out waiting on oversized device logs.
+    # Known limitation: TT_METAL_SLOW_DISPATCH_MODE=1 is also used by non-profiler
+    # slow-dispatch workloads (e.g. DeepSeek B1 persistent-loop). Auto-config is
+    # disabled there too because trace-based benchmarking does not work correctly in
+    # slow dispatch mode. Those callers fall back to the default matmul config,
+    # identical to pre-auto-config behaviour.
+    if os.environ.get("TT_METAL_SLOW_DISPATCH_MODE") == "1" or os.environ.get("TT_METAL_PROFILER_SYNC") == "1":
+        return _run_base_operation(
+            base_operation=base_operation,
+            input_tensor_a=prepared.input_tensor_a,
+            input_tensor_b=prepared.input_tensor_b,
+            bias=prepared.bias,
+            is_linear=is_linear,
+            kwargs=kwargs,
+        )
+
     if not isinstance(prepared.input_tensor_b, ttnn.Tensor):
         return _run_base_operation(
             base_operation=base_operation,
@@ -1834,6 +1863,7 @@ def explain_matmul(
     optional_output_tensor: Any = None,
     global_cb: Any = None,
     sub_device_id: Any = None,
+    queue_id: int | None = None,
     is_linear: bool = False,
     allow_tuning: bool = True,
 ) -> dict[str, Any]:
@@ -1865,6 +1895,8 @@ def explain_matmul(
         "global_cb": global_cb,
         "sub_device_id": sub_device_id,
     }
+    if queue_id is not None:
+        kwargs["queue_id"] = queue_id
     signature = _build_signature(
         prepared.input_tensor_a,
         prepared.input_tensor_b,
