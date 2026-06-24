@@ -420,10 +420,19 @@ void kernel_main() {
                                     continue;
                                 }
                                 if (local) {
-                                    noc_async_read_tile(
-                                        (global_k_tile - local_k_start) * N_tiles + n, local_weight_reader, write_ptr);
+                                    noc_obj.async_read(
+                                        local_weight_reader,
+                                        CoreLocalMem<uint8_t>(write_ptr),
+                                        in1_tile_size,
+                                        {.page_id = (global_k_tile - local_k_start) * N_tiles + n},
+                                        {});
                                 } else {
-                                    noc_async_read_tile(global_k_tile * pwb_N_Wt + n, in1_reader, write_ptr);
+                                    noc_obj.async_read(
+                                        in1_reader,
+                                        CoreLocalMem<uint8_t>(write_ptr),
+                                        in1_tile_size,
+                                        {.page_id = global_k_tile * pwb_N_Wt + n},
+                                        {});
                                 }
                                 write_ptr += in1_tile_size;
                             }
@@ -441,10 +450,19 @@ void kernel_main() {
                                 if (global_k_tile >= K_tiles) {
                                     fill_zeros_async(noc_obj, cb_in1, in1_tile_size, write_ptr - in1_start_address);
                                 } else if (local) {
-                                    noc_async_read_tile(
-                                        (global_k_tile - local_k_start) * N_tiles + n, local_weight_reader, write_ptr);
+                                    noc_obj.async_read(
+                                        local_weight_reader,
+                                        CoreLocalMem<uint8_t>(write_ptr),
+                                        in1_tile_size,
+                                        {.page_id = (global_k_tile - local_k_start) * N_tiles + n},
+                                        {});
                                 } else {
-                                    noc_async_read_tile(global_k_tile * pwb_N_Wt + n, in1_reader, write_ptr);
+                                    noc_obj.async_read(
+                                        in1_reader,
+                                        CoreLocalMem<uint8_t>(write_ptr),
+                                        in1_tile_size,
+                                        {.page_id = global_k_tile * pwb_N_Wt + n},
+                                        {});
                                 }
                                 write_ptr += in1_tile_size;
                             }
@@ -568,7 +586,12 @@ void kernel_main() {
 
                 uint32_t l1_write_addr_in2 = cb_in2.get_write_ptr();
                 for (uint32_t n_tile_id = n_tile; n_tile_id < n_tile_end; n_tile_id++) {
-                    noc_async_read_page(n_tile_id, in2_reader, l1_write_addr_in2);
+                    noc_obj.async_read(
+                        in2_reader,
+                        CoreLocalMem<uint8_t>(l1_write_addr_in2),
+                        in2_tile_size,
+                        {.page_id = n_tile_id},
+                        {});
                     l1_write_addr_in2 += in2_tile_size;
                 }
                 noc_obj.async_read_barrier();
