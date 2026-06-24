@@ -120,9 +120,11 @@ def preprocess_tt_text_encoder(
     )
 
 
-def _mask_keep_nlc(text_mask: torch.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
-    """``text_mask[b,t] == True`` means padded / ignored (same as reference ``masked_fill_``)."""
-    keep = (~text_mask).to(torch.float32).unsqueeze(-1)
+def _mask_keep_flat(text_mask: torch.Tensor, *, device: ttnn.Device) -> ttnn.Tensor:
+    """Batch-flattened keep-mask ``[1, 1, B*T, 1]`` (``text_mask[b,t] == True`` => padded, as in the
+    reference ``masked_fill_``). Shaped to match the CNN's ``[1, 1, B*T, C]`` activations."""
+    B, T = text_mask.shape
+    keep = (~text_mask).to(torch.float32).reshape(1, 1, B * T, 1)
     return ttnn.from_torch(keep, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
@@ -151,12 +153,24 @@ class TTTextEncoderConvLNBlock:
         self.ln_eps = ln_eps
         self.compute_kernel_config = compute_kernel_config
 
-    def forward(self, x_nlc: ttnn.Tensor, mask_keep: ttnn.Tensor) -> ttnn.Tensor:
+    def forward(
+        self,
+        x_flat: ttnn.Tensor,
+        mask_keep: Optional[ttnn.Tensor],
+        *,
+        batch: int,
+        seq: int,
+    ) -> ttnn.Tensor:
+        """One CNN stage on batch-flattened activations ``[1, 1, batch*seq, C]`` (same shape out)."""
         x = tt_conv1d_nlc(
-            x_nlc=x_nlc,
+            x_nlc=x_flat,
             params=self.params.conv,
             device=self.device,
             compute_config=self.compute_kernel_config,
+            # Blackhole runs the whole B-batch in one conv instead of one-conv-per-item (the split
+            # is a Wormhole-only correctness workaround), halving conv/halo/shard dispatch. Flattened
+            # in/out so the CNN stack never pays the [1,B*L,C]->[B,L,C] split between stages.
+            batched_shape=(batch, seq),
         )
         x = _maybe_interleaved(x)
         x = ttnn.layer_norm(
@@ -168,6 +182,10 @@ class TTTextEncoderConvLNBlock:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.leaky_relu(x, negative_slope=0.2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        # No padding (mask_keep is None) -> the reference ``masked_fill_`` is a no-op, so skip the
+        # all-ones multiply (the full-length/single-utterance path; saves one BinaryNg per block).
+        if mask_keep is None:
+            return x
         return ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
 
@@ -217,39 +235,59 @@ class TTTextEncoder:
         dev = self.device
         B, T = input_ids.shape
 
+        # Run the whole CNN stack batch-flattened in the conv's native rank-4 shape: feed ids as
+        # [1, 1, B*T] so the embedding lands as [1, 1, B*T, C] directly and the batched conv chains
+        # conv→LN→activation with no per-stage reshape (each ReshapeView is a ~5µs dispatch). The
+        # only un-flatten ([1, 1, B*T, C] -> [B, T, C]) happens once, right before the LSTM.
+        # (Embedding/CNN ops are per-(row, channel), so folding B into the length dim is exact.)
         tt_ids = ttnn.from_torch(
-            input_ids,
+            input_ids.reshape(1, 1, B * T),
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=dev,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        x = ttnn.embedding(tt_ids, self.params.embedding_weight, layout=ttnn.TILE_LAYOUT)
+        x = ttnn.embedding(tt_ids, self.params.embedding_weight, layout=ttnn.TILE_LAYOUT)  # [1, 1, B*T, C]
         ttnn.deallocate(tt_ids)
 
+        # When there's no padding the keep-mask is all-ones and every ``x * mask_keep`` is the
+        # identity (matching the reference ``masked_fill_`` no-op). Detect that on the host and
+        # skip building/uploading the mask and all 5 multiplies (embedding, 3 CNN blocks, post-
+        # LSTM) entirely — bit-exact for the full-length / single-utterance path. The mask matches
+        # the flattened CNN activations ([1, 1, B*T, 1]).
         if mask_keep_float is not None:
-            mask_keep = ttnn.from_torch(
-                mask_keep_float,
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=dev,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            needs_mask = bool((mask_keep_float < 1.0).any())
+            mask_keep = (
+                ttnn.from_torch(
+                    mask_keep_float.reshape(1, 1, B * T, 1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=dev,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                if needs_mask
+                else None
             )
-        elif text_mask is not None:
-            mask_keep = _mask_keep_nlc(text_mask, device=dev)
+        elif text_mask is not None and bool(text_mask.any()):
+            mask_keep = _mask_keep_flat(text_mask, device=dev)
         else:
-            # Full-length sequence (no padding): keep_mask is all-ones — create on device directly.
-            mask_keep = ttnn.ones(
-                [B, T, 1],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=dev,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            # No padding (text_mask all-False or absent): keep-mask is all-ones -> identity.
+            mask_keep = None
+
+        if mask_keep is not None:
+            x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         for blk in self._cnn_blocks:
-            x = blk.forward(x, mask_keep)
+            x = blk.forward(x, mask_keep, batch=B, seq=T)
+
+        # Single un-flatten [1, 1, B*T, C] -> [B, T, C] for the per-batch BiLSTM recurrence.
+        x = ttnn.reshape(x, [B, T, x.shape[-1]], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if mask_keep is not None:
+            # Post-LSTM masking needs the per-batch [B, T, 1] shape; reshape the flattened mask once
+            # (padded path only — None in the common full-length case).
+            mask_keep_bt = ttnn.reshape(mask_keep, [B, T, 1], memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(mask_keep)
+            mask_keep = mask_keep_bt
 
         lengths_list: Sequence[int] = input_lengths.detach().cpu().tolist()
         x = tt_bilstm_nlc(
@@ -264,8 +302,9 @@ class TTTextEncoder:
             fold_gates_bias=True,
         )
 
-        x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(mask_keep)
+        if mask_keep is not None:
+            x = ttnn.multiply(x, mask_keep, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(mask_keep)
 
         return ttnn.permute(x, (0, 2, 1))
 

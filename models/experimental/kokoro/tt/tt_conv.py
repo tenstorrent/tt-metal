@@ -330,6 +330,64 @@ def tt_conv1d_nlc_cpu(
     return ttnn.from_torch(y_nlc, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
 
 
+def _batched_tt_conv1d_nlc(
+    *,
+    x_flat: ttnn.Tensor,
+    params: "TTConv1dParams",
+    device,
+    batch: int,
+    seq: int,
+    compute_config=None,
+    out_dtype=ttnn.bfloat16,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+) -> ttnn.Tensor:
+    """Single ``ttnn.conv1d`` over all ``batch`` rows (Blackhole-only; see ``batched_shape``).
+
+    Returns the conv's native ``[1, 1, batch*out_len, C]`` rows **without** an extra reshape: each
+    ReshapeView is a fixed ~5µs device dispatch, so the caller chains conv→LN→activation directly on
+    this rank-4 shape (all rank-agnostic over the channel dim) and defers the one un-flatten to
+    ``[batch, out_len, C]`` until right before the LSTM.
+    """
+    conv_config = ttnn.Conv1dConfig(weights_dtype=params.weight.dtype)
+    conv_config.config_tensors_in_dram = True
+    conv_config.deallocate_activation = True
+    if params.out_channels >= 256 or params.kernel_size >= 7:
+        try:
+            conv_config.force_split_reader = True
+        except Exception:
+            pass
+    if compute_config is None:
+        compute_config = ttnn.init_device_compute_kernel_config(
+            device.arch(), math_fidelity=ttnn.MathFidelity.HiFi3, math_approx_mode=False, fp32_dest_acc_en=True
+        )
+
+    if x_flat.layout != ttnn.TILE_LAYOUT:
+        x_flat = ttnn.to_layout(x_flat, ttnn.TILE_LAYOUT, memory_config=memory_config)
+
+    y = ttnn.conv1d(
+        input_tensor=x_flat,
+        weight_tensor=params.weight,
+        in_channels=params.in_channels,
+        out_channels=params.out_channels,
+        device=device,
+        bias_tensor=params.bias,
+        kernel_size=params.kernel_size,
+        stride=params.stride,
+        padding=params.padding,
+        dilation=params.dilation,
+        batch_size=batch,
+        input_length=seq,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        groups=params.groups,
+        dtype=out_dtype,
+    )
+    # Move the (block-sharded) conv output to interleaved DRAM and return as-is; no reshape here.
+    if y.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        y = ttnn.to_memory_config(y, memory_config)
+    return y
+
+
 def tt_conv1d_nlc(
     *,
     x_nlc: ttnn.Tensor,
@@ -340,15 +398,54 @@ def tt_conv1d_nlc(
     out_dtype=ttnn.bfloat16,
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     preserve_input_dtype: bool = False,
+    batched_shape: Optional[tuple[int, int]] = None,
 ) -> ttnn.Tensor:
     """
     Conv1d on activations ``[B, L, C]`` (NLC). Returns ``[B, out_L, out_C]`` (NLC).
 
     With ``preserve_input_dtype=True`` the output dtype is forced to match ``x_nlc.dtype`` (useful
     for fp32 paths where the default bf16 output would clamp precision below WH's accumulator).
+
+    ``batched_shape=(B, L)`` (Blackhole only) takes a batch-flattened input (``[1, 1, B*L, C]`` /
+    ``[1, B*L, C]``) and runs a single batched ``ttnn.conv1d`` (``batch_size=B``), returning the
+    conv's native ``[1, 1, B*out_L, C]`` (no extra reshape — see ``_batched_tt_conv1d_nlc``). The
+    per-item split below exists only to dodge a Wormhole-B0 ``B*L`` correctness bug; on Blackhole the
+    batched op is correct (verified PCC≈1.0 for the TextEncoder shapes) and roughly halves
+    conv-related dispatch (one conv/halo/shard set instead of B, no per-item concat). The caller keeps
+    activations batch-flattened across the CNN stack and un-flattens once downstream (before the LSTM).
     """
     if preserve_input_dtype:
         out_dtype = x_nlc.dtype
+
+    # Blackhole batched fast path: one flattened conv over all B rows (see ``batched_shape`` above).
+    if batched_shape is not None and conv_config is None and device.arch() == ttnn.device.Arch.BLACKHOLE:
+        Bb, Lb = batched_shape
+        return _batched_tt_conv1d_nlc(
+            x_flat=x_nlc,
+            params=params,
+            device=device,
+            batch=Bb,
+            seq=Lb,
+            compute_config=compute_config,
+            out_dtype=out_dtype,
+            memory_config=memory_config,
+        )
+    if batched_shape is not None:
+        # Non-Blackhole (or custom conv_config): un-flatten, run the standard (per-item) path, then
+        # re-flatten to the batched [1, 1, B*out_L, C] output contract so callers are arch-agnostic.
+        Bb, Lb = batched_shape
+        C = int(x_nlc.shape[-1])
+        x_nlc = ttnn.reshape(x_nlc, (Bb, Lb, C), memory_config=memory_config)
+        y = tt_conv1d_nlc(
+            x_nlc=x_nlc,
+            params=params,
+            device=device,
+            compute_config=compute_config,
+            out_dtype=out_dtype,
+            memory_config=memory_config,
+            preserve_input_dtype=preserve_input_dtype,
+        )
+        return ttnn.reshape(y, (1, 1, int(y.shape[0]) * int(y.shape[1]), int(y.shape[2])), memory_config=memory_config)
 
     B = int(x_nlc.shape[0])
     L = int(x_nlc.shape[1])
