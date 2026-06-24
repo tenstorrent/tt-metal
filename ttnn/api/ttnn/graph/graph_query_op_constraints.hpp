@@ -142,9 +142,13 @@ struct ConstraintQueryResponse {
 
 // Result of the pure, state-threading query. `new_state` is the allocator state
 // after the op's outputs are allocated on top of the caller-supplied initial state.
+// `output_allocations` records each output buffer's placement (one per output). The caller keeps
+// the records of still-live tensors and rebuilds the state via MockAllocatorState::with_allocations;
+// "evicting" a tensor is just dropping its record. Empty on the stateless path (outputs not allocated).
 struct QueryOutput {
     ConstraintQueryResponse response;
     tt::tt_metal::experimental::MockAllocatorState new_state;
+    std::vector<tt::tt_metal::experimental::AllocationRecord> output_allocations;
 };
 
 namespace detail {
@@ -297,9 +301,17 @@ QueryOutput query_op_constraints_with_initial_state(
     try {
         auto outputs = detail::extract_output_tensors(detail::invoke_op(op, transformed_args));
         auto op_trace = phase2.end_graph_capture();
-        // Snapshot while the output buffers are alive (after they are allocated, before they drop).
+        // Snapshot + record output placements while the output buffers are alive (after they are
+        // allocated, before they drop). Each record locates an output in new_state for later eviction.
         auto new_state = tt::tt_metal::experimental::extract_mock_allocator_state(*device);
-        return QueryOutput{detail::build_success_response(op_trace, outputs), std::move(new_state)};
+        std::vector<tt::tt_metal::experimental::AllocationRecord> output_allocations;
+        output_allocations.reserve(outputs.size());
+        for (const auto& output : outputs) {
+            const auto& buffer = output.buffer();
+            output_allocations.push_back({buffer->buffer_type(), buffer->address(), buffer->aligned_size_per_bank()});
+        }
+        return QueryOutput{
+            detail::build_success_response(op_trace, outputs), std::move(new_state), std::move(output_allocations)};
     } catch (const std::exception& e) {
         log_debug(tt::LogOp, "Error during stateful graph capture: {}", e.what());
         return QueryOutput{

@@ -81,7 +81,7 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
         /*compute_uses_reduce_tile=*/true>();
-    generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
+    generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
 
     // Lightweight mask: generate template tiles once, leave permanently fronted.
     // Sliding layout: [neginf, trailing_primary, leading_prev, leading_current, trailing_next, k_partial?].

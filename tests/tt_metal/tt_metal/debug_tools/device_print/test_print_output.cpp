@@ -556,3 +556,37 @@ TEST_F(DevicePrintOutputFixture, PrintCallstackSkipUnderflow) {
         /* present */ {"CALLSTACK_BEGIN", "...", "CALLSTACK_END"},
         /* absent */ {"inner", "middle", "kernel_main"});
 }
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackCurrent) {
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_helper.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"current"});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnambiguous) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unambiguous.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "mid", "top", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallResolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_resolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "left_top", "left", "fork_func", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"right", "right_top", "..."});
+}
+
+TEST_F(DevicePrintOutputFixture, PrintCallstackTailCallUnresolvable) {
+    GTEST_SKIP() << "Fix unwinding of tail calls #47666";
+
+    TestCallstack(
+        "tests/tt_metal/tt_metal/test_kernels/device_print/print_callstack_tailcall_unresolvable.cpp",
+        /* present */ {"CALLSTACK_BEGIN", "leaf", "...", "kernel_main", "CALLSTACK_END"},
+        /* absent */ {"left", "right"});
+}

@@ -69,7 +69,9 @@ void MeshTrace::populate_mesh_buffer(
         buffer_type = BufferType::DRAM;
         bottom_up = false;  // Top-down allocation
     } else {
-        // Traditional mode: use dedicated trace region
+        // Traditional mode: use dedicated trace region. trace_region_size is the TOTAL trace budget across all
+        // DRAM banks (see AllocatorImpl::init_one_bank_per_channel), matching get_trace_buffers_size(), which
+        // tracks the total interleaved size across all banks.
         TT_FATAL(
             mesh_cq.device()->get_trace_buffers_size() <= trace_region_size,
             "Creating trace buffers of size {}B on MeshDevice {}, but only {}B is allocated for trace region.",
