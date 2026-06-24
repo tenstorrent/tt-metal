@@ -244,21 +244,25 @@ def _blocks_for(seqlen, max_generated_tokens):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
-    "seqlen, max_generated_tokens, use_trace, repeat_batches",
+    "seqlen, max_generated_tokens, use_trace, batch, repeat_batches",
     [
-        pytest.param(128, 50, True, 1, id="traced_128"),
-        pytest.param(128, 50, False, 1, id="paged_128"),
-        pytest.param(4096, 100, True, 1, id="traced_4k"),
-        pytest.param(4096, 100, False, 1, id="paged_4k"),
-        pytest.param(8192, 500, True, 1, id="traced_8k"),
-        pytest.param(8192, 100, False, 1, id="paged_8k"),
-        pytest.param(16384, 100, True, 1, id="traced_16k"),
-        pytest.param(32768, 100, True, 1, id="traced_32k"),
-        pytest.param(65536, 500, True, 1, id="traced_64k"),
-        pytest.param(65536, 100, False, 1, id="paged_64k"),
-        pytest.param(131072, 100, True, 1, id="traced_128k"),
-        pytest.param(262144, 100, True, 1, id="traced_256k"),
-        pytest.param(128, 50, True, 2, id="determinism_128"),
+        pytest.param(128, 50, True, 1, 1, id="traced_128"),
+        pytest.param(128, 50, False, 1, 1, id="paged_128"),
+        pytest.param(4096, 100, True, 1, 1, id="traced_4k"),
+        pytest.param(4096, 100, False, 1, 1, id="paged_4k"),
+        pytest.param(8192, 500, True, 1, 1, id="traced_8k"),
+        pytest.param(8192, 100, False, 1, 1, id="paged_8k"),
+        pytest.param(16384, 100, True, 1, 1, id="traced_16k"),
+        pytest.param(32768, 100, True, 1, 1, id="traced_32k"),
+        pytest.param(65536, 500, True, 1, 1, id="traced_64k"),
+        pytest.param(65536, 100, False, 1, 1, id="paged_64k"),
+        pytest.param(131072, 100, True, 1, 1, id="traced_128k"),
+        pytest.param(262144, 100, True, 1, 1, id="traced_256k"),
+        # Determinism: re-run the traced 128 case and assert identical output across runs.
+        pytest.param(128, 50, True, 1, 2, id="determinism_128"),
+        # Batched decode (TP only): B users sharing one shared paged KV + batched GDN state.
+        pytest.param(128, 50, True, 8, 1, id="batched_128_b8"),
+        pytest.param(128, 50, True, 32, 1, id="batched_128_b32"),
     ],
 )
 def test_demo_text(
@@ -266,12 +270,15 @@ def test_demo_text(
     seqlen,
     max_generated_tokens,
     use_trace,
+    batch,
     repeat_batches,
 ):
     """End-to-end text generation: prefill + decode with performance validation."""
     from transformers import AutoTokenizer
 
     device = mesh_device
+    if batch > 1 and not _MULTI:
+        pytest.skip("batched decode is the TP (multi-device) path; run with MESH_DEVICE=P150x4")
     device.enable_program_cache()
     # Per-seqlen block budget — max_seq_len (and the KV cache + RoPE table) derived from it.
     # Sized to hold the padded prompt bucket plus the decoded tokens.
@@ -281,7 +288,7 @@ def test_demo_text(
     t0 = time.time()
     model = Qwen36Model.from_pretrained(
         device,
-        max_batch_size=1,
+        max_batch_size=batch,
         max_seq_len=max_seq_len,
         # n_layers=4,  # uncomment for fast iteration; default uses 32-layer config
     )
@@ -315,6 +322,23 @@ def test_demo_text(
     # Prefill runs each ~2048-token chunk through all layers, carrying GDN recurrent/
     # conv state + paged KV across chunks (so the GDN seq kernel never sees the whole
     # sequence — the long-context OOM fix), then incremental paged single-token decode.
+    if model.num_devices > 1 and batch > 1:
+        # Batched serving: B users share one paged KV + batched GDN state. The demo replicates the
+        # one loaded prompt to all B users, so every row MUST generate identical tokens — a built-in
+        # batched-correctness check layered on the throughput measurement.
+        rows, perf = _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch)
+        text0 = tokenizer.decode(rows[0], skip_special_tokens=True)
+        logger.info(
+            f"[TP {model.num_devices}-dev B={batch}] ttft={perf['ttft_s']:.2f}s "
+            f"per-user-decode={perf['decode_tok_s']:.2f} tok/s aggregate={perf['agg_tok_s']:.1f} tok/s"
+        )
+        logger.info(f"[TP B={batch}] GENERATED (row 0): {text0!r}")
+        for u in range(batch):
+            assert len(rows[u]) == max_generated_tokens, f"row {u}: {len(rows[u])} != {max_generated_tokens}"
+            assert rows[u] == rows[0], f"row {u} diverged from row 0 (identical prompts must decode identically)"
+        assert len(set(rows[0])) > 1, f"degenerate generation: {rows[0]}"
+        return
+
     if model.num_devices > 1:
         if repeat_batches > 1:
             results = []
@@ -605,6 +629,126 @@ def _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_bl
     avg = (sum(steady) / len(steady)) if steady else float("inf")
     profiler.end("run")
     return generated, {"ttft_s": ttft, "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0, "profiler": profiler}
+
+
+def _run_tp_generation_batched(model, tokenizer, token_ids, max_generated_tokens, batch):
+    """Multi-device (TP) BATCHED generation: B users decoded together.
+
+    Each user is prefilled into its OWN blocks of one shared paged KV cache (+ its row of the
+    batched GDN state) via prefill_paged_peruser, then a single traced decode step advances all B
+    users per iteration at their own positions (prepare_inputs_decode builds the [B] cur_pos + the
+    per-user rope tables). The demo replicates the one loaded prompt to all B users; the caller
+    asserts every row decodes identically. Returns (generated_rows, perf) with generated_rows a list
+    of B token lists. Decode is captured ONCE as a B-wide trace and replayed (mirrors the single-user
+    _run_tp_generation: snapshot the post-prefill GDN state, capture a throwaway run, restore it so the
+    baked buffer addresses stay valid).
+    """
+    from models.tt_transformers.tt.common import copy_host_to_device
+
+    B = batch
+    vocab = model.args.vocab_size
+    mesh = model.mesh_device
+    T = token_ids.shape[1]
+
+    # Per-user block budget covering the prompt + everything we decode (one contiguous range/user).
+    bpu = max(4, -(-(T + max_generated_tokens) // BLOCK_SIZE))
+    total_blocks = B * bpu
+    kv_cache_shape = [total_blocks, model.args.n_local_kv_heads, BLOCK_SIZE, model.args.head_dim]
+    model.allocate_kv_caches(kv_cache_shape, ttnn.bfloat16, batch_size=B)
+    page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
+
+    # ---- per-user prefill (replicate the one loaded prompt to all B users) ----
+    t0 = time.time()
+    token_list = [token_ids[:, :T] for _ in range(B)]
+    pf_logits = model.prefill_paged_peruser(token_list, page_table, valid_lens=[T] * B)
+    ttnn.synchronize_device(mesh)
+    ttft = time.time() - t0
+
+    comp0 = ttnn.ConcatMeshToTensor(mesh, dim=0)
+
+    def _pick(vec):
+        return int(torch.argmax(vec.float()).item())
+
+    nxt = [_pick(ttnn.to_torch(pf_logits[u], mesh_composer=comp0).reshape(-1, vocab)[0]) for u in range(B)]
+    generated = [[nxt[u]] for u in range(B)]
+
+    # ---- traced batched decode (snapshot/restore GDN around the throwaway capture run) ----
+    eager = os.environ.get("QWEN35_TP_DECODE_EAGER") == "1"
+    _gdn = [layer.attention for layer in model.layers if not layer.is_full_attention]
+
+    def _snapshot_gdn():
+        comp = ttnn.ConcatMeshToTensor(mesh, dim=0)
+        return [
+            (
+                ttnn.to_torch(dn.rec_state, mesh_composer=comp),
+                [ttnn.to_torch(c, mesh_composer=comp) for c in dn.conv_states],
+            )
+            for dn in _gdn
+        ]
+
+    def _restore_gdn(snap):
+        mapper = ttnn.ShardTensorToMesh(mesh, dim=0)
+
+        def _back(t, dtype):
+            return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh, mesh_mapper=mapper)
+
+        for dn, (rec, convs) in zip(_gdn, snap):
+            r = _back(rec, dn.rec_state.dtype)
+            ttnn.copy(r, dn.rec_state)
+            ttnn.deallocate(r)
+            for j, c in enumerate(convs):
+                cc = _back(c, dn.conv_states[j].dtype)
+                ttnn.copy(cc, dn.conv_states[j])
+                ttnn.deallocate(cc)
+
+    def _update(tokens_row, positions):
+        host = model.prepare_decode_inputs_host(
+            torch.tensor(tokens_row, dtype=torch.int32).reshape(B, 1),
+            torch.tensor(positions, dtype=torch.int32),
+            page_table=page_table,
+        )
+        copy_host_to_device(host, device_tensors=dev)
+
+    pos = [T] * B
+    dev = model.prepare_inputs_decode(
+        torch.tensor(nxt, dtype=torch.int32).reshape(B, 1),
+        torch.tensor(pos, dtype=torch.int32),
+        page_table=page_table,
+    )
+
+    trace_id, tt_logits = None, None
+    if not eager:
+        snap = _snapshot_gdn()
+        model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        trace_id = ttnn.begin_trace_capture(mesh, cq_id=0)
+        tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        ttnn.end_trace_capture(mesh, trace_id, cq_id=0)
+        _restore_gdn(snap)
+
+    decode_times = []
+    while len(generated[0]) < max_generated_tokens:
+        _update([generated[u][-1] for u in range(B)], pos)
+        t_step = time.time()
+        if eager:
+            tt_logits, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        else:
+            ttnn.execute_trace(mesh, trace_id, cq_id=0, blocking=False)
+        ttnn.synchronize_device(mesh)
+        decode_times.append(time.time() - t_step)
+        logits_step = model.process_output_decode(tt_logits, B)  # [B, 1, vocab]
+        for u in range(B):
+            generated[u].append(_pick(logits_step[u, 0, :vocab]))
+        pos = [p + 1 for p in pos]
+    if trace_id is not None:
+        ttnn.release_trace(mesh, trace_id)
+
+    steady = decode_times[1:] if len(decode_times) > 1 else decode_times
+    avg = (sum(steady) / len(steady)) if steady else float("inf")
+    return generated, {
+        "ttft_s": ttft,
+        "decode_tok_s": (1.0 / avg) if avg > 0 else 0.0,  # per decode step (advances all B users)
+        "agg_tok_s": (B / avg) if avg > 0 else 0.0,  # aggregate tokens/s across the B users
+    }
 
 
 def _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks):

@@ -174,3 +174,86 @@ def test_model_tp_long_prefill_traced(mesh_device, T, reset_seeds, ensure_gc):
     logger.info(f"traced chunk-outer prefill (T={T}) logits PCC = {pcc}")
     assert float(pcc) >= 0.99, f"traced chunk-outer prefill PCC below 0.99 at T={T}: {pcc}"
     logger.info(f"PASSED: TP traced chunk-outer prefill matches bespoke single-pass (B=1, T={T})")
+
+
+@torch.no_grad()
+@parametrize_mesh_tp()
+@pytest.mark.parametrize("B", [8, 32], ids=["B8", "B32"])
+def test_model_tp_decode_batched(mesh_device, B, reset_seeds, ensure_gc):
+    """Batched per-user decode contract (TP) — the higher-batch serving acceptance test.
+
+    B users with DISTINCT prompt lengths are prefilled into ONE shared paged KV cache + the batched
+    GDN state (prefill_paged_peruser), then N batched decode steps at per-user (diverging) positions
+    must match, row-by-row, B independent B=1 bespoke runs. The bespoke concat path is the oracle
+    (as in test_model_tp_contract); per-step logits PCC is compared per user (a flattened PCC would
+    hide a single contaminated row). Sub-0.99 is the documented SDPA-decode batch-variance, not a bug.
+    """
+    import gc
+
+    nd = mesh_device.get_num_devices()
+    assert nd > 1, "this test exercises the TP (num_devices>1) contract path"
+    N_DEC = 3
+    torch.manual_seed(0)
+
+    # ---- B=1 bespoke oracle FIRST (concat KV); collect per-user logits + argmax chains, then free
+    # it before allocating the batched model so only one model is resident at a time. ----
+    model1 = Qwen35Model.from_pretrained(mesh_device, max_batch_size=1, max_seq_len=512, n_layers=8)
+    vocab = model1.args.vocab_size
+    prompt_lens = [128 + 32 * (u % 4) for u in range(B)]  # {128,160,192,224}, distinct lengths
+    prompts = [torch.randint(0, vocab, (prompt_lens[u],)).tolist() for u in range(B)]
+
+    ref_logits = []  # ref_logits[u] = [prefill_logit, dec0, dec1, ...]
+    fed = []  # fed[u] = bespoke argmax chain, teacher-forced into the batched path
+    for u in range(B):
+        model1.reset_tp()
+        lg0 = model1.prefill_tp(torch.tensor([prompts[u]], dtype=torch.long), valid_len=prompt_lens[u])
+        chain, toks, pos = [lg0.float()], [int(torch.argmax(lg0))], prompt_lens[u]
+        for _ in range(N_DEC):
+            lg = model1.decode_tp(toks[-1], pos)
+            chain.append(lg.float())
+            toks.append(int(torch.argmax(lg)))
+            pos += 1
+        ref_logits.append(chain)
+        fed.append(toks)
+    del model1
+    gc.collect()
+
+    # ---- batched path: per-user paged prefill + batched per-user-position decode ----
+    model = Qwen35Model.from_pretrained(mesh_device, max_batch_size=B, max_seq_len=512, n_layers=8)
+    args = model.args
+    block_size, bpu = 64, 8  # 8 blocks/user covers up to 512 tokens (>> max prompt + N_DEC)
+    num_blocks = B * bpu
+    page_table = torch.stack([torch.arange(u * bpu, (u + 1) * bpu, dtype=torch.int32) for u in range(B)])  # [B, bpu]
+    kv_shape = (num_blocks, args.n_local_kv_heads, block_size, args.head_dim)
+    model.allocate_kv_caches(kv_shape, ttnn.bfloat16, batch_size=B)
+    comp0 = ttnn.ConcatMeshToTensor(mesh_device, dim=0)
+
+    token_list = [torch.tensor([prompts[u]], dtype=torch.long) for u in range(B)]
+    pf_logits = model.prefill_paged_peruser(token_list, page_table, valid_lens=prompt_lens)
+    pf_torch = [ttnn.to_torch(pf_logits[u], mesh_composer=comp0).reshape(-1, vocab)[0].float() for u in range(B)]
+
+    dec_torch = [[] for _ in range(B)]
+    pos = list(prompt_lens)
+    for step in range(N_DEC):
+        tokens_step = torch.tensor([[fed[u][step]] for u in range(B)], dtype=torch.int32)  # [B, 1]
+        pos_t = torch.tensor(pos, dtype=torch.int32)  # [B] — per-user diverging positions
+        dev = model.prepare_inputs_decode(tokens_step, pos_t, page_table)
+        out, _ = model.ttnn_decode_forward(dev[0], dev[1], rot_mat_idxs=dev[2], page_table=dev[3])
+        logits_step = model.process_output_decode(out, B)  # [B, 1, vocab]
+        for u in range(B):
+            dec_torch[u].append(logits_step[u, 0, :vocab].float())
+        pos = [p + 1 for p in pos]
+
+    # ---- per-user, per-step logits PCC (paged-batched vs concat-B1 oracle) ----
+    thr = 0.97
+    worst = (1.0, -1, -1)
+    for u in range(B):
+        steps = [pf_torch[u]] + dec_torch[u]
+        for s, (r, c) in enumerate(zip(ref_logits[u], steps)):
+            _, pcc = comp_pcc(r.reshape(-1), c.reshape(-1), thr)
+            if float(pcc) < worst[0]:
+                worst = (float(pcc), u, s)
+            assert float(pcc) >= thr, f"user {u} step {s} (len={prompt_lens[u]}) logits PCC {pcc} < {thr}"
+    logger.info(
+        f"PASSED: batched per-user decode (B={B}) worst logits PCC = {worst[0]:.5f} @ user{worst[1]} step{worst[2]}"
+    )
