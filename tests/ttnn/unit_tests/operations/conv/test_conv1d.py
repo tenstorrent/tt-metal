@@ -959,7 +959,7 @@ def run_conv1d_route(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
 def test_conv1d_default_route_long_seq(device):
-    """Fix #1: a long-sequence conv1d in DRAM with no slice_config must auto-route through
+    """Fix 1: a long-sequence conv1d in DRAM with no slice_config must auto-route through
     DRAM width slicing instead of forcing L1_FULL. Same shape as the L1_FULL OOM baseline
     (test_conv1d_no_slicing_oom); without the fix this OOMs ("circular buffers grow beyond
     max L1"), with it the input is width-sliced through DRAM and matches golden."""
@@ -968,7 +968,7 @@ def test_conv1d_default_route_long_seq(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
 def test_conv1d_default_route_auto_shard(device):
-    """Fix #1: auto-shard (shard_layout=None) with no slice_config must keep working - the
+    """Fix 1: auto-shard (shard_layout=None) with no slice_config must keep working - the
     DRAM routing path auto-determines a shard layout when none is given. Without the fix
     this OOMs in L1_FULL."""
     run_conv1d_route(device, **_SLICE_OOM_SHAPE, shard_layout=None)
@@ -976,7 +976,7 @@ def test_conv1d_default_route_auto_shard(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
 def test_conv1d_default_route_l1_input_stays_l1(device):
-    """Fix #1 guard: an input already in L1 with no slice_config must stay in L1 (L1_FULL),
+    """Fix 1 guard: an input already in L1 with no slice_config must stay in L1 (L1_FULL),
     not get pushed through the DRAM slicing path. Small enough to fit L1; passes with and
     without the fix - it guards against the new default wrongly re-routing L1 inputs."""
     run_conv1d_route(
@@ -994,7 +994,7 @@ def test_conv1d_default_route_l1_input_stays_l1(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 1 << 15}], indirect=True)
 def test_conv1d_depthwise_dram_slice_auto_shard(device):
-    """Fix #2 (4D weight reshape): depthwise (groups == C) conv1d through the DRAM-slicing
+    """Fix 2 (4D weight reshape): depthwise (groups == C) conv1d through the DRAM-slicing
     auto-shard path (explicit DRAM width slice + shard_layout=None). That path reads the
     kernel width as weight.logical_shape()[3] before weights are prepared; without the
     up-front 3D->4D reshape this raises "ShapeBase[] index out of range. 3 not in [-4, 3)".
@@ -1017,7 +1017,7 @@ def test_conv1d_depthwise_dram_slice_auto_shard(device):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_conv1d_depthwise_subblock_deadlock(device):
-    """Fix #3 (depthwise CB deadlock): a depthwise (groups == C) conv1d whose act_block_h is
+    """Fix 3 (depthwise CB deadlock): a depthwise (groups == C) conv1d whose act_block_h is
     forced large enough that out_subblock_h_ntiles > 1. The depthwise compute kernel tilized
     only in0_num_subblocks tile-rows while mul_and_accumulate_block consumed the full block;
     they mismatch when out_subblock_h_ntiles > 1, so tilize under-produces and the activation
@@ -1042,7 +1042,7 @@ def test_conv1d_depthwise_subblock_deadlock(device):
 @pytest.mark.slow
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_conv1d_depthwise_default_route_long_seq(device):
-    """Regression for #46395 (fixes #1, #2, #3 end-to-end): the real vocoder STAGE_C upsample
+    """Regression for #46395 (fixes 1, 2, 3 end-to-end): the real vocoder STAGE_C upsample
     tail - depthwise groups==C at ~29k sequence length - previously OOMed/deadlocked through
     the stock conv1d path. Ported from the experimental conv1d_depthwise repro to exercise
     only the stock conv1d path. Without the fix this OOMs in L1_FULL (~4.5 MB CB vs 1.5 MB
