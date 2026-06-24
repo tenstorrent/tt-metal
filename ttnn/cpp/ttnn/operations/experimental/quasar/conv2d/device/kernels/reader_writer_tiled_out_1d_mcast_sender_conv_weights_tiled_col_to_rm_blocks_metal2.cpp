@@ -25,8 +25,10 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
+#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
 
 void kernel_main() {
+    DPRINT("WS start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t num_blocks_weight_h = get_arg(args::num_blocks_weight_h);
     constexpr uint32_t weight_block_num_tiles = get_arg(args::weight_block_num_tiles);
 
@@ -375,5 +377,7 @@ void kernel_main() {
         }
 #endif
     }  // out_num_blocks_h
-    noc.async_write_barrier();
+    // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
+    noc.async_full_barrier();
+    DPRINT("WS end\n");  // DEBUG: conv2d layer3 hang
 }

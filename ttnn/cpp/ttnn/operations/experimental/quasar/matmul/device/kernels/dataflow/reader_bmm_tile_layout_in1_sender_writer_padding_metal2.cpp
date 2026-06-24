@@ -29,8 +29,10 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // DEBUG: matmul mcast hang diagnosis (remove after)
 
 void kernel_main() {
+    DPRINT("WSM enter\n");  // DEBUG: matmul pre-kernel_main confirmation (remove after)
     // READER
     uint32_t rt_args_idx = 0;
     // in1 tensor args (in1_tensor_addr is now the tensor::in1 binding)
@@ -163,6 +165,19 @@ void kernel_main() {
     constexpr uint32_t output_single_tile_size_bytes = get_tile_size(cb_id_out0);
 
     Noc noc;
+    // DEBUG: matmul mcast hang — the sender reports its NoC coords, expected ack count, and the
+    // multicast rectangle it sets receiver_sem=VALID over. If the rectangle doesn't cover every
+    // receiver (ragged/L-shaped grid), uncovered receivers hang at their in1 wait.
+    DPRINT(
+        "SEND core x={} y={} num_dests={} num_cores={} mcast=[{},{}]..[{},{}]\n",
+        (uint32_t)my_x[noc.get_noc_id()],
+        (uint32_t)my_y[noc.get_noc_id()],
+        in1_mcast_num_dests,
+        in1_mcast_num_cores,
+        in1_mcast_dest_noc_start_x,
+        in1_mcast_dest_noc_start_y,
+        in1_mcast_dest_noc_end_x,
+        in1_mcast_dest_noc_end_y);
     DataflowBuffer cb_in1(dfb::cb_in1);
     DataflowBuffer cb_out(dfb::cb_out);
     Semaphore sender_sem(sem::in1_sender);
@@ -269,6 +284,10 @@ void kernel_main() {
                         // wait until all in1 mcast destinations have atomically incremented the in1 semaphore_addr
                         sender_sem.wait(in1_mcast_num_dests);
                         sender_sem.set(0);
+                        // DEBUG: matmul mcast hang — reached iff all in1 acks received (first block).
+                        if (b == 0 && bh == 0 && bw == 0 && block == 0) {
+                            DPRINT("SEND in1 acked (got {} dests)\n", in1_mcast_num_dests);
+                        }
 
                         // Now we have the block in the CB address, we can mcast to dests!
                         MulticastEndpoint mcast_dst;
@@ -337,6 +356,12 @@ void kernel_main() {
 #ifndef SKIP_MCAST
                         sender_sem.wait(in1_mcast_num_dests);
                         sender_sem.set(0);
+                        // DEBUG: matmul mcast hang — reached iff all BIAS acks received (first block).
+                        // If "SEND in1 acked" prints but this does not, the bias mcast handshake is the
+                        // stuck point (receivers never reached the bias up() because in1 VALID didn't reach them).
+                        if (b == 0 && bh == 0 && bw == 0) {
+                            DPRINT("SEND bias acked (got {} dests)\n", in1_mcast_num_dests);
+                        }
 
                         MulticastEndpoint mcast_dst;
                         noc.async_write_multicast(
@@ -468,5 +493,7 @@ void kernel_main() {
     cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
-    noc.async_write_barrier();
+    // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
+    noc.async_full_barrier();
+    DPRINT("WSM end\n");  // DEBUG: matmul layer3 hang
 }

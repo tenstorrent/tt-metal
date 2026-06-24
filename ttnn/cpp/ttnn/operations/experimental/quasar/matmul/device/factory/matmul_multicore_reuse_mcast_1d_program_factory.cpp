@@ -5171,6 +5171,11 @@ const m2::KernelSpecName RO_IN0_RECEIVER_KERNEL{"in0_receiver"};
 const m2::KernelSpecName RO_IN1_SENDER_WRITER_KERNEL{"in1_sender_writer"};
 const m2::KernelSpecName RO_IN1_RECEIVER_WRITER_KERNEL{"in1_receiver_writer"};
 const m2::KernelSpecName RO_COMPUTE_KERNEL{"compute"};
+// Noop-pad kernels: placed on the multicast bounding-box cores that have no matmul work ("phantom"
+// cores on a ragged grid) so every core the in1/bias multicast rectangle touches is program-owned.
+const m2::KernelSpecName RO_NOOP_BRISC_KERNEL{"noop_brisc"};
+const m2::KernelSpecName RO_NOOP_NCRISC_KERNEL{"noop_ncrisc"};
+const m2::KernelSpecName RO_NOOP_COMPUTE_KERNEL{"noop_compute"};
 
 constexpr const char* IN0_SENDER_PADDING_KERNEL_PATH =
     "ttnn/cpp/ttnn/operations/experimental/quasar/matmul/device/kernels/dataflow/"
@@ -6434,6 +6439,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     CoreRange in1_mcast_receiver_cores_bounding_box = all_cores.bounding_box();
     uint32_t in1_mcast_receiver_num_cores = in1_mcast_receiver_cores_bounding_box.size();
 
+    // Noop-pad set: cores inside the multicast bounding-box rectangle that are NOT real work cores.
+    // The in1/bias multicast and the receiver_sem VALID broadcast hit the whole rectangle, so on a
+    // ragged grid these "phantom" cores would receive stray writes into un-owned L1. We give them
+    // blank kernels that reserve the same in1/bias CBs (self-loop DFB bindings) + semaphores, so the
+    // writes land in program-owned buffers. Empty (and thus a no-op) whenever the grid is rectangular
+    // (bbox == all_cores) -- e.g. the Quasar 1x1 / 1x2 / 4x8 grids.
+    const CoreRangeSet noop_cores = CoreRangeSet(in1_mcast_receiver_cores_bounding_box).subtract(all_cores);
+
     CoreRange in1_mcast_sender(start_core, start_core);
     CoreRangeSet in1_mcast_receivers;
     if (in1_mcast_receiver_num_cores > 1) {
@@ -6642,12 +6655,16 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
     }
 
     // ---- Semaphores. in0_sender SKIP_MCASTs here but still binds in0 sender/receiver; in1 mcast uses
-    // in1 sender/receiver. ----
+    // in1 sender/receiver. The in1 sems span the multicast bounding box (== all_cores on a rectangular
+    // grid; includes the bbox-only noop-pad cores on a ragged grid) so the receiver_sem VALID
+    // broadcast lands in program-owned L1 on every core the multicast rectangle touches. ----
     m2::Group<m2::SemaphoreSpec> semaphores = {
         m2::SemaphoreSpec{.unique_id = RO_IN0_SENDER_SEM, .target_nodes = all_cores},
         m2::SemaphoreSpec{.unique_id = RO_IN0_RECEIVER_SEM, .target_nodes = all_cores},
-        m2::SemaphoreSpec{.unique_id = RO_IN1_SENDER_SEM, .target_nodes = all_cores},
-        m2::SemaphoreSpec{.unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = all_cores},
+        m2::SemaphoreSpec{
+            .unique_id = RO_IN1_SENDER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
+        m2::SemaphoreSpec{
+            .unique_id = RO_IN1_RECEIVER_SEM, .target_nodes = CoreRangeSet(in1_mcast_receiver_cores_bounding_box)},
     };
 
     m2::ComputeHardwareConfig compute_hw_config{
@@ -6656,6 +6673,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         .dst_full_sync_en = false,
         .math_approx_mode = math_approx_mode,
     };
+
+    // The in1 sender multicasts weights/bias over a dest rectangle whose start/end are swapped based
+    // on in1_noc (below). The in1 sender/receiver writer kernels MUST issue NoC ops on that same NOC,
+    // or the rectangle is inverted for the actual NOC and the multicast degenerates (delivering only
+    // to the corner cores -> receivers never get VALID -> hang). The legacy descriptor pins
+    // in1 writers to RISCV_0 + in1_noc; mirror that here instead of leaving the NOC to the role hint.
+    const tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
 
     m2::Group<m2::KernelSpec> kernels;
 
@@ -6849,7 +6873,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
             .tensor_bindings = std::move(tb),
             .compile_time_args = std::move(cta),
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+            // Pin RISCV_0 + in1_noc (legacy parity): the multicast dest rectangle was swapped for
+            // in1_noc, so the mcast must issue on in1_noc or it inverts and degenerates.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 
@@ -6925,7 +6955,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
                 },
             .compile_time_args = std::move(cta),
             .runtime_arg_schema = {.runtime_arg_names = std::move(in1_recv_rta_names)},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+            // Pin RISCV_0 + in1_noc (legacy parity) so the receiver's NoC ops use the same NOC as
+            // the sender's multicast geometry.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 
@@ -6970,6 +7006,66 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
         });
     }
 
+    // ---- Noop-pad the multicast bounding box (ragged-grid hardening; no-op when rectangular) ----
+    // Blank kernels on the phantom cores (bbox - work cores) that RESERVE the in1/bias CBs via inert
+    // self-loop DFB bindings, so the in1/bias multicast writes land in program-owned L1. They run on
+    // all three programmable RISCs (BNT) so the cores complete normally. They do NOT bump the in1
+    // sender semaphore, so in1_mcast_num_dests (real receivers) is unchanged.
+    if (noop_cores.num_cores() > 0) {
+        // Reserve in1/bias CBs on the phantom cores via inert self-loop DFB bindings. The bindings
+        // must match the kind of each DFB role program-wide (program_spec.cpp:1134): the real in1/bias
+        // PRODUCER is the DM writer and the CONSUMER is compute, so split the self-loop accordingly --
+        // PRODUCER on the DM noop kernel, CONSUMER on the compute noop kernel.
+        std::vector<m2::DFBBinding> noop_dm_dfb = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::PRODUCER},
+        };
+        std::vector<m2::DFBBinding> noop_compute_dfb = {
+            m2::DFBBinding{
+                .dfb_spec_name = RO_IN1_DFB, .accessor_name = "cb_in1", .endpoint_type = m2::DFBEndpointType::CONSUMER},
+        };
+        if (bias_tensor.has_value()) {
+            noop_dm_dfb.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB,
+                .accessor_name = "cb_bias",
+                .endpoint_type = m2::DFBEndpointType::PRODUCER});
+            noop_compute_dfb.push_back(m2::DFBBinding{
+                .dfb_spec_name = RO_BIAS_DFB,
+                .accessor_name = "cb_bias",
+                .endpoint_type = m2::DFBEndpointType::CONSUMER});
+        }
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_NOOP_BRISC_KERNEL,
+            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            .dfb_bindings = std::move(noop_dm_dfb),
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
+        });
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_NOOP_NCRISC_KERNEL,
+            .source = std::filesystem::path("tt_metal/kernels/dataflow/blank.cpp"),
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in1_noc}},
+        });
+        kernels.push_back(m2::KernelSpec{
+            .unique_id = RO_NOOP_COMPUTE_KERNEL,
+            .source = std::filesystem::path("tt_metal/kernels/compute/blank.cpp"),
+            .dfb_bindings = std::move(noop_compute_dfb),
+            .hw_config = compute_hw_config,
+        });
+        work_units.push_back(m2::WorkUnitSpec{
+            .name = "wu_noop",
+            .kernels = {RO_NOOP_BRISC_KERNEL, RO_NOOP_NCRISC_KERNEL, RO_NOOP_COMPUTE_KERNEL},
+            .target_nodes = noop_cores,
+        });
+    }
+
     // ---- Per-core runtime args ----
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
     uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
@@ -6982,7 +7078,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in1_artifacts(
 
     CoreCoord start_core_noc = bottom_right_core_physical;
     CoreCoord end_core_noc = top_left_core_physical;
-    tt_metal::NOC in1_noc = tt::tt_metal::detail::preferred_noc_for_dram_read(device->arch());
+    // in1_noc is defined above (hoisted before kernel creation so the in1 writers pin the same NOC).
     if (in1_noc == tt::tt_metal::NOC::NOC_0) {
         std::swap(start_core_noc, end_core_noc);
     }

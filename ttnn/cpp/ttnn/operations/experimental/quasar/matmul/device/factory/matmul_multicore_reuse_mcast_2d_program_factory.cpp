@@ -3912,7 +3912,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .tensor_bindings = in0_tensor_bindings(),
             .compile_time_args = make_in0_sender_cta(1, 1),
             .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+            // Pin RISCV_1 + in0_noc (legacy parity): the in0 row-mcast dest rectangle is swapped for
+            // in0_noc below, so the mcast must issue on in0_noc or it inverts and only the sender's
+            // own column receives in0 (degenerate 2-corner delivery -> partial-grid hang).
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         };
         kernels.push_back(std::move(ks));
     }
@@ -3934,7 +3941,12 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .tensor_bindings = in0_tensor_bindings(),
             .compile_time_args = std::move(no_work_cta),
             .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+            // Pin RISCV_1 + in0_noc (legacy parity) to match the in0-mcast rectangle geometry.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         });
     }
 
@@ -3966,7 +3978,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                     {"get_batch_from_reader", 0u},
                 },
             .runtime_arg_schema = {.runtime_arg_names = {"in0_mcast_sender_noc_x", "in0_mcast_sender_noc_y"}},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
+            // Pin RISCV_1 + in0_noc (legacy parity). The m2 path computes a single in0-mcast geometry
+            // on in0_noc for both the main and _other receivers, so both must use in0_noc.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = in0_noc}},
         };
     };
     if (has_in0_receiver) {
@@ -4083,7 +4101,13 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             .tensor_bindings = std::move(tb),
             .compile_time_args = make_in1_sender_writer_cta(),
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+            // Pin RISCV_0 + in1_noc (legacy parity): the in1 column-mcast dest rectangle is swapped
+            // for in1_noc below, so the mcast must issue on in1_noc or it inverts and degenerates.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         });
     }
 
@@ -4157,7 +4181,14 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
                 },
             .compile_time_args = make_in1_receiver_writer_cta(),
             .runtime_arg_schema = {.runtime_arg_names = std::move(rta_names)},
-            .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::WRITER},
+            // Pin RISCV_0 + in1_noc (legacy parity). The m2 path computes a single in1-mcast geometry
+            // on in1_noc for both the main and _other receivers, so both must use in1_noc to match
+            // the sender's multicast rectangle and semaphore signaling.
+            .hw_config =
+                m2::DataMovementHardwareConfig{
+                    .gen1_config =
+                        m2::DataMovementHardwareConfig::Gen1Config{
+                            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = in1_noc}},
         };
     };
     const bool has_in1_receiver = in1_receiver.num_cores() > 0;
@@ -4197,17 +4228,26 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         mm_kernel_defines,
         compute_hw_config));
 
-    // ---- Work units. One per kernel/core-range group; compute + in1_sender_writer share the work
-    // grid. A core may be covered by multiple work units (one in0-role, one in1-role, compute) with
-    // disjoint kernel coverage — same pattern as mcast_1d. ----
-    CoreRangeSet all_cores_with_work_set(all_cores_with_work);
+    // ---- Work units. WorkUnitSpec target_nodes MUST be DISJOINT (program_spec.cpp); each group lists
+    // ALL kernels that run on those cores (a kernel's placement is the union of the groups listing it),
+    // and compute runs on every work core so it appears in every group. This mirrors mcast_1d -- the
+    // earlier per-kernel work units overlapped (e.g. the corner is both in0 and in1 sender). ----
     m2::Group<m2::WorkUnitSpec> work_units;
     if (in0_block_sharded) {
+        // in0_sender runs on every work core; partition by in1 role: top row (senders) vs the rest
+        // (receivers). in1_sender (top row) and in1_receiver (rows below) partition all_cores_with_work.
         work_units.push_back(m2::WorkUnitSpec{
-            .name = "wu_in0_sender",
-            .kernels = {RO_IN0_SENDER_KERNEL},
-            .target_nodes = all_cores_with_work_set,
+            .name = "wu_top_row",
+            .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+            .target_nodes = CoreRangeSet(in1_sender),
         });
+        if (has_in1_receiver) {
+            work_units.push_back(m2::WorkUnitSpec{
+                .name = "wu_rest",
+                .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_RECEIVER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+                .target_nodes = in1_receiver,
+            });
+        }
         if (has_in0_no_work) {
             work_units.push_back(m2::WorkUnitSpec{
                 .name = "wu_in0_no_work",
@@ -4216,50 +4256,46 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
             });
         }
     } else {
+        // Interleaved: disjoint partition by (in0 role, in1 role). The corner (start_core) is both the
+        // in0 sender (left column) and in1 sender (top row); the remaining left column / top row /
+        // interior groups each pair the right in0+in1 receiver/sender kernels. compute is in every group.
+        const CoreRange corner_core(
+            {(std::size_t)start_core_x, (std::size_t)start_core_y},
+            {(std::size_t)start_core_x, (std::size_t)start_core_y});
         work_units.push_back(m2::WorkUnitSpec{
-            .name = "wu_in0_sender",
-            .kernels = {RO_IN0_SENDER_KERNEL},
-            .target_nodes = CoreRangeSet(in0_sender_interleaved),
+            .name = "wu_corner",
+            .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+            .target_nodes = CoreRangeSet(corner_core),
         });
-        if (has_in0_receiver) {
+        if (in0_sender_in1_receiver.has_value()) {
             work_units.push_back(m2::WorkUnitSpec{
-                .name = "wu_in0_receiver",
-                .kernels = {RO_IN0_RECEIVER_KERNEL},
-                .target_nodes = in0_receiver_interleaved,
+                .name = "wu_left_col",
+                .kernels = {RO_IN0_SENDER_KERNEL, RO_IN1_RECEIVER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+                .target_nodes = CoreRangeSet(in0_sender_in1_receiver.value()),
             });
         }
-        if (has_in0_receiver_other) {
+        if (in0_receiver_in1_sender.has_value()) {
             work_units.push_back(m2::WorkUnitSpec{
-                .name = "wu_in0_receiver_other",
-                .kernels = {RO_IN0_RECEIVER_OTHER_KERNEL},
+                .name = "wu_top_row",
+                .kernels = {RO_IN0_RECEIVER_KERNEL, RO_IN1_SENDER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+                .target_nodes = CoreRangeSet(in0_receiver_in1_sender.value()),
+            });
+        }
+        if (in0_receiver_in1_receiver_left_half.has_value()) {
+            work_units.push_back(m2::WorkUnitSpec{
+                .name = "wu_interior",
+                .kernels = {RO_IN0_RECEIVER_KERNEL, RO_IN1_RECEIVER_WRITER_KERNEL, RO_COMPUTE_KERNEL},
+                .target_nodes = CoreRangeSet(in0_receiver_in1_receiver_left_half.value()),
+            });
+        }
+        if (in0_receiver_in1_receiver_interleaved_other_cores.has_value()) {
+            work_units.push_back(m2::WorkUnitSpec{
+                .name = "wu_interior_other",
+                .kernels = {RO_IN0_RECEIVER_OTHER_KERNEL, RO_IN1_RECEIVER_WRITER_OTHER_KERNEL, RO_COMPUTE_KERNEL},
                 .target_nodes = CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value()),
             });
         }
     }
-    work_units.push_back(m2::WorkUnitSpec{
-        .name = "wu_in1_sender",
-        .kernels = {RO_IN1_SENDER_WRITER_KERNEL},
-        .target_nodes = CoreRangeSet(in1_sender),
-    });
-    if (has_in1_receiver) {
-        work_units.push_back(m2::WorkUnitSpec{
-            .name = "wu_in1_receiver",
-            .kernels = {RO_IN1_RECEIVER_WRITER_KERNEL},
-            .target_nodes = in1_receiver,
-        });
-    }
-    if (has_in1_receiver_other) {
-        work_units.push_back(m2::WorkUnitSpec{
-            .name = "wu_in1_receiver_other",
-            .kernels = {RO_IN1_RECEIVER_WRITER_OTHER_KERNEL},
-            .target_nodes = CoreRangeSet(in0_receiver_in1_receiver_interleaved_other_cores.value()),
-        });
-    }
-    work_units.push_back(m2::WorkUnitSpec{
-        .name = "wu_compute",
-        .kernels = {RO_COMPUTE_KERNEL},
-        .target_nodes = all_cores_with_work_set,
-    });
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Runtime Args (per-core loop)

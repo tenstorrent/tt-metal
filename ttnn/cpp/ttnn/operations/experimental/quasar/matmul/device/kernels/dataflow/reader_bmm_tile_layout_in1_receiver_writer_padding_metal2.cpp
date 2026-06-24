@@ -22,8 +22,10 @@
 #include "api/dataflow/noc_semaphore.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // DEBUG: matmul mcast hang diagnosis (remove after)
 
 void kernel_main() {
+    DPRINT("WRM enter\n");  // DEBUG: matmul pre-kernel_main confirmation (remove after)
     // READER
     uint32_t rt_args_idx = 0;
     // in1 mcast args
@@ -115,6 +117,15 @@ void kernel_main() {
     // WRITER
     const auto s = TensorAccessor(tensor::out);
 
+    // DEBUG: matmul mcast hang — each receiver reports its own NoC coords and which core it
+    // increments (in1_mcast_sender_noc_x/y). Compare against the sender's mcast rectangle.
+    DPRINT(
+        "RECV core x={} y={} -> bumps sender x={} y={}\n",
+        (uint32_t)my_x[noc.get_noc_id()],
+        (uint32_t)my_y[noc.get_noc_id()],
+        in1_mcast_sender_noc_x,
+        in1_mcast_sender_noc_y);
+
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t out_tensor_current_h_dim_block_tile_id = out_tensor_start_tile_id;
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
@@ -132,6 +143,15 @@ void kernel_main() {
 
                     // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts data)
                     receiver_sem.wait(VALID);
+
+                    // DEBUG: matmul mcast hang — print once on the first block. A receiver that hangs
+                    // at the wait above (sender's VALID mcast didn't reach it) will NOT print this.
+                    if (b == 0 && bh == 0 && bw == 0 && block == 0) {
+                        DPRINT(
+                            "RECV in1 VALID x={} y={}\n",
+                            (uint32_t)my_x[noc.get_noc_id()],
+                            (uint32_t)my_y[noc.get_noc_id()]);
+                    }
 
                     cb_in1.push_back(in1_block_num_tiles);
                 }
@@ -245,4 +265,10 @@ void kernel_main() {
     cb_out.wait_front(
         batch * out_num_nonzero_subblocks_h * out_num_nonzero_subblocks_w * out_subblock_w * out_subblock_h);
 #endif
+    // Drain outstanding NOC writes AND atomics (sender_sem.up) before returning. Under Metal 2.0 the
+    // FW kernel epilogue does not drain the kernel's outstanding NOC transactions the way the legacy
+    // runtime did, so a kernel that returns with an un-acked atomic/write leaves the core "running"
+    // and it never signals program completion -> dispatch process_wait hangs.
+    noc.async_full_barrier();
+    DPRINT("WRM end\n");  // DEBUG: matmul layer3 hang
 }

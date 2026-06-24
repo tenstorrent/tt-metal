@@ -32,6 +32,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
+#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
 
 #define DEBUG_PRINT 0
 
@@ -198,6 +199,7 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
+    DPRINT("CMP start\n");  // DEBUG: conv2d layer3 hang
     constexpr uint32_t in0_block_w = get_arg(args::in0_block_w);
     constexpr uint32_t in0_num_subblocks = get_arg(args::in0_num_subblocks);
     constexpr uint32_t in0_block_num_tiles = get_arg(args::in0_block_num_tiles);
@@ -304,6 +306,7 @@ void kernel_main() {
     PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;)
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
+            DPRINT("CMP blk {} {}\n", in1_block_w_i, in0_block_h_i);  // DEBUG: conv2d layer3 hang
             bool enable_reload = false;
 
             if constexpr (pack_relu) {
@@ -327,12 +330,18 @@ void kernel_main() {
                             pack_reconfig_data_format(curr_matmul_out_cb, tilized_in0_cb_id);
                             pack_reconfig_l1_acc(0);
                         }
+                        if (in1_block_w_i == 0 && in0_block_h_i == 0 && in0_block_w_i == 0) {
+                            DPRINT("CC pre_tilize (bs)\n");  // DEBUG (remove after)
+                        }
                         tilize_in<
                             in0_block_w,
                             in0_pretilize_cb_id,
                             tilized_in0_cb_id,
                             true,
                             !split_reader || split_reader_cb_shared>(in0_num_subblocks_read);
+                        if (in1_block_w_i == 0 && in0_block_h_i == 0 && in0_block_w_i == 0) {
+                            DPRINT("CC post_tilize (bs)\n");  // DEBUG (remove after)
+                        }
 
 #ifdef SPLIT_READER
                         if constexpr (split_reader && !split_reader_cb_shared) {
@@ -405,6 +414,9 @@ void kernel_main() {
                         in0_block_w);
                 }
 
+                if (in1_block_w_i == 0 && in0_block_h_i == 0 && in0_block_w_i == 0) {
+                    DPRINT("CC pre_mm_in0 (waits mcast act)\n");  // DEBUG (remove after)
+                }
                 cb_mm_in0.wait_front(in0_block_num_tiles);
 
                 uint32_t in0_index_subblock_offset = 0;
@@ -670,4 +682,5 @@ void kernel_main() {
         }
 #endif
     }  // for in1_num_blocks_w
+    DPRINT("CMP end\n");  // DEBUG: conv2d layer3 hang
 }  // void kernel_main()

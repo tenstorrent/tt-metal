@@ -933,7 +933,24 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     // handoff in the reader); still emit ACT_TILIZED for depthwise.  Emit both when block_sharded; emit
     // ACT_TILIZED for depthwise.
     if (block_sharded) {
-        spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_RM, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16));
+        // get_cb_info() overlaps ACT_ROW_MAJOR onto ACT (num_pages = 0) when conv_input_df == output_df
+        // (the legacy `overlap_im2col_cb` L1 optimization — true for bf16-in/bf16-out). The Metal 2.0
+        // aliased-DFB form of that overlap isn't wired up in this port yet, and a 0-entry DFB is rejected.
+        // DEFER the optimization: give ACT_ROW_MAJOR its own buffer (sized like ACT, which is what the
+        // non-overlapped path uses) so it is a valid DFB. Slightly more L1; identical numerics, and the
+        // existing reader-producer / compute-consumer bindings + HAS_ACT_ROW_MAJOR define already assume
+        // a real ACT_ROW_MAJOR DFB.
+        const CBInfo& act_rm_info = cb(Conv2dCb::ACT_ROW_MAJOR_BFLOAT16);
+        if (act_rm_info.num_pages > 0) {
+            spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_RM, Conv2dCb::ACT_ROW_MAJOR_BFLOAT16));
+        } else {
+            spec.dataflow_buffers.push_back(m2::DataflowBufferSpec{
+                .unique_id = DFB_ACT_RM,
+                .entry_size = act_rm_info.page_size,
+                .num_entries = cb(Conv2dCb::ACT).num_pages,
+                .data_format_metadata = act_rm_info.data_format,
+            });
+        }
         spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));
     } else if (is_conv_1d_depthwise_conv) {
         spec.dataflow_buffers.push_back(make_dfb(DFB_ACT_TILIZED, Conv2dCb::ACT_TILIZED));

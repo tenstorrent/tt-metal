@@ -41,6 +41,7 @@
 #endif
 
 #include "api/compute/eltwise_binary.h"
+#include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
 #ifdef SFPU_ACTIVATION
 #include "bmm_fused_activation.hpp"
 #endif
@@ -153,6 +154,7 @@ inline void reblock_and_untilize(
 }
 
 void kernel_main() {
+    DPRINT("CMPM start\n");  // DEBUG: matmul layer3 hang
 // RUNTIME ARGS
 #ifdef MATMUL_DRAM_SHARDED
     const bool is_worker_core = get_arg(args::is_worker_core) == 1;
@@ -277,6 +279,7 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
+                DPRINT("CMPM blk {} {}\n", bh, bw);  // DEBUG: matmul layer3 hang
                 bool enable_reload = false;
 
 #ifdef PACK_RELU
@@ -602,4 +605,5 @@ void kernel_main() {
             }
         }
     }
+    DPRINT("CMPM end\n");  // DEBUG: matmul layer3 hang
 }

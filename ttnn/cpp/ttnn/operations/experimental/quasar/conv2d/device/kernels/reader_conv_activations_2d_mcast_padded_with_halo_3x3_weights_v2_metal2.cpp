@@ -203,6 +203,16 @@ void kernel_main() {
     const bool is_receiver_core = get_arg(args::is_receiver_core) > 0;
     const bool is_sender_core = get_arg(args::is_sender_core) > 0;
     uint32_t dram_config_reader_index = get_arg(args::dram_config_reader_index);
+    // DEBUG: block-sharded conv2d act-mcast deadlock localization (remove after)
+    DPRINT(
+        "ARD x={} y={} sid={} nd={} nc={} snd={} rcv={}\n",
+        (uint32_t)my_x[noc.get_noc_id()],
+        (uint32_t)my_y[noc.get_noc_id()],
+        act_mcast_sender_id,
+        (uint32_t)act_mcast_num_dests,
+        (uint32_t)act_mcast_num_cores,
+        (uint32_t)is_sender_core,
+        (uint32_t)is_receiver_core);
 
     // The act-mcast sender NoC-coord lookup table for the mcast dimension is supplied as positional
     // runtime varargs; get_vararg(act_w_outer_i) is the physical coord of sender act_w_outer_i.
@@ -284,17 +294,27 @@ void kernel_main() {
                     // wait until all act mcast destinations have atomically incremented the act semaphore_addr
                     // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
+                    if (nbh == 0 && outer == 0) {
+                        DPRINT("ASND semwait\n");  // DEBUG (remove after)
+                    }
                     act_mcast_sender_sem.wait(act_mcast_num_dests + (is_receiver_core ? 0 : 1));
                     act_mcast_sender_sem.set(0);
 
                     act_mcast_receiver_sem.set(INVALID);
 
+                    if (nbh == 0 && outer == 0) {
+                        DPRINT("ASND mcast_start (waits cb_tilized_in0)\n");  // DEBUG (remove after)
+                    }
                     mcast_block_chunked<
                         act_mcast_num_cores,
                         NOC_MAX_BURST_SIZE,
                         act_block_num_tiles,
                         act_mcast_tile_size_bytes>(
                         noc, mcast_ep, cb_tilized_in0_obj, is_receiver_core, cb_act_obj, act_mcast_rect);
+
+                    if (nbh == 0 && outer == 0) {
+                        DPRINT("ASND mcast_data_done\n");  // DEBUG (remove after)
+                    }
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
@@ -336,8 +356,14 @@ void kernel_main() {
                         act_mcast_sender_sem.up(noc, get_vararg(act_w_outer_i), act_mcast_sender_noc_x, 1);
                     }
 
+                    if (nbh == 0 && outer == 0) {
+                        DPRINT("ARCV bumped sender, waiting VALID\n");  // DEBUG (remove after)
+                    }
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     act_mcast_receiver_sem.wait(VALID);
+                    if (nbh == 0 && outer == 0) {
+                        DPRINT("ARCV got VALID\n");  // DEBUG (remove after)
+                    }
                 }
                 cb_act_obj.push_back(act_block_num_tiles);
             }  // act_w_num_outer

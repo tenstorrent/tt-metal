@@ -31,8 +31,10 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "experimental/kernel_args.h"
+#include "api/debug/dprint.h"  // DEBUG: matmul layer3 hang localization (remove after)
 
 void kernel_main() {
+    DPRINT("IN0 start\n");  // DEBUG: matmul layer3 hang
     uint32_t rt_args_idx = 0;
     // in0 tensor args (in0_tensor_addr is now the tensor::in0 binding)
     uint32_t in0_tensor_start_tile_id = get_arg(args::in0_tensor_start_tile_id);
@@ -421,4 +423,7 @@ void kernel_main() {
         cb_sparsity.wait_front(1);
         cb_sparsity.pop_front(1);
     }
+    // Drain outstanding NOC writes AND atomics before returning (Metal 2.0 FW epilogue does not).
+    noc.async_full_barrier();
+    DPRINT("IN0 end\n");  // DEBUG: matmul layer3 hang
 }
