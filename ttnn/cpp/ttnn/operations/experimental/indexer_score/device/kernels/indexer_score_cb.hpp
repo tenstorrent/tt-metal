@@ -16,13 +16,15 @@ namespace ttnn::operations::experimental::indexer_score {
 // One slot per circular buffer, in the order the factory appends the CB indices to the common
 // compile-time args. Kernels read each back at (num common dim args) + the matching slot.
 enum CbArg : uint32_t {
-    cb_q_arg,          // q head-group block: heads_per_group * QC * Dt tiles
-    cb_k_arg,          // k chunk, double buffered
-    cb_w_arg,          // resident gate (w) group: Hi * QC tiles
-    cb_mask_arg,       // [diag strict-upper -inf, full -inf], built once
-    cb_qk_arg,         // relu(q.kT) for a whole head group
-    cb_acc_strip_arg,  // unit accumulator: QC x KC strip (untilize input)
-    cb_out_strip_arg,  // untilized row-major strip output
+    cb_q_arg,             // q head-group block: heads_per_group * QC * Dt tiles
+    cb_k_arg,             // k chunk, double buffered
+    cb_w_arg,             // resident gate (w) group: Hi * QC tiles
+    cb_mask_arg,          // [diag strict-upper -inf, full -inf], built once
+    cb_qk_arg,            // relu(q.kT) for a whole head group
+    cb_acc_strip_arg,     // unit accumulator: QC x KC strip (untilize input)
+    cb_out_strip_arg,     // untilized row-major strip output (block_size==0); tilized col-0 block-max (pool)
+    cb_scaler_arg,        // block-max-pool only: one 1.0 tile (reduce-MAX scaler); index 0 / unused otherwise
+    cb_pool_scratch_arg,  // block-max-pool only: writer's one-tile row-assembly scratch; unused otherwise
     num_cb_args
 };
 

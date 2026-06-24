@@ -4,7 +4,9 @@
 
 // Reader for indexer_score (DMA bottleneck). Walks this core's flat span of work units
 // (QC q-rows x up-to-KC k-tiles): per group pushes resident w + (if all heads fit) q,
-// per unit pushes the k chunk. Builds the [diag, full] -inf mask tiles once.
+// per unit pushes the k chunk. Builds the [diag, full] -inf mask tiles once, plus a 1.0
+// reduce-scaler tile when block-max-pooling (block_size>0). G-agnostic: the per-group
+// output planes are produced downstream by compute/writer, not re-read here.
 //
 // Grid-aligned multicast: grid ROW shares q/w, grid COLUMN shares the k-band. role 1
 // (sender) reads DRAM + mcasts; role 2 (receiver) takes the L1->L1 copy; role 0 plain
@@ -123,6 +125,20 @@ inline void build_mask_tiles(Noc noc) {
     fill_causal_diagonal_tile_bf16<bf16_tile_bytes>(noc, cb_mask, /*tile_id=*/0);  // diagonal strict-upper -inf
     fill_neginf_tile<bf16_tile_bytes>(cb_mask, /*tile_id=*/1);                     // full -inf
     cb.push_back(num_mask_tiles);
+}
+
+/** Block-max-pool only: fill cb_scaler with one bf16 tile of 1.0 (the reduce-MAX scaler -- MAX scales its
+ *  result by this, so it must be 1). Pushed once and never popped (compute keeps it resident). */
+inline void build_scaler_tile() {
+    CircularBuffer cb(cb_scaler);
+    cb.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
+    constexpr uint32_t total_words = bf16_tile_bytes / sizeof(uint32_t);
+    constexpr uint32_t one_bf16_pair = 0x3F803F80;  // two bf16 1.0 values per word
+    for (uint32_t i = 0; i < total_words; ++i) {
+        ptr[i] = one_bf16_pair;
+    }
+    cb.push_back(1);
 }
 
 /** Read ONE q-row (heads_per_group heads x head_dim_tiles tiles, heads starting at first_head) from
@@ -244,6 +260,9 @@ void kernel_main() {
     Noc noc;
 
     build_mask_tiles(noc);
+    if constexpr (block_pool) {
+        build_scaler_tile();  // 1.0 reduce-MAX scaler for the block-max-pool
+    }
 
     WorkUnitSpan span;
     span.start(flat_start);

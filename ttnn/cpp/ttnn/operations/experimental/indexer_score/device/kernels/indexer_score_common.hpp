@@ -24,7 +24,19 @@ constexpr uint32_t chunk_start_tiles = get_compile_time_arg_val(4);  // q chunk 
 constexpr uint32_t q_tiles_per_unit = get_compile_time_arg_val(5);   // q-tile-rows per work unit (q_chunk knob)
 constexpr uint32_t k_tiles_per_unit = get_compile_time_arg_val(6);   // k tiles per work unit (k_chunk knob)
 constexpr uint32_t heads_per_group = get_compile_time_arg_val(7);    // heads resident at once (head_group knob)
-constexpr uint32_t num_dim_args = 8;
+constexpr uint32_t num_out_groups = get_compile_time_arg_val(8);     // output groups; score [B, num_out_groups, Sq, T]
+constexpr uint32_t block_tiles = get_compile_time_arg_val(9);        // block-max-pool width in k-tiles; 0 = no pooling
+constexpr uint32_t num_dim_args = 10;
+
+// Heads summed into one output plane. num_out_groups==1 sums all heads (DeepSeek/GLM); >1 partitions the
+// heads into num_out_groups contiguous groups of reduce_heads each, summed within a group (MiniMax M3).
+constexpr uint32_t reduce_heads = num_heads / num_out_groups;
+
+// Block-max-pool: when on, each block_tiles consecutive k-tiles of a unit max-reduce to ONE block score,
+// so a unit emits blocks_per_unit tiles (col-0 = per-query block max) instead of the full KC-wide strip.
+// validate guarantees block_tiles divides k_tiles_per_unit and blocks_per_unit <= TILE_HEIGHT.
+constexpr bool block_pool = block_tiles != 0;
+constexpr uint32_t blocks_per_unit = block_pool ? (k_tiles_per_unit / block_tiles) : k_tiles_per_unit;
 
 // CB indices, forwarded from the factory in CbArg order right after the dim args. Bare names so
 // kernels (and their template-arg uses) read like the host-side constants did.
@@ -35,6 +47,8 @@ constexpr uint32_t cb_mask = get_compile_time_arg_val(num_dim_args + iscore::cb_
 constexpr uint32_t cb_qk = get_compile_time_arg_val(num_dim_args + iscore::cb_qk_arg);
 constexpr uint32_t cb_acc_strip = get_compile_time_arg_val(num_dim_args + iscore::cb_acc_strip_arg);
 constexpr uint32_t cb_out_strip = get_compile_time_arg_val(num_dim_args + iscore::cb_out_strip_arg);
+constexpr uint32_t cb_scaler = get_compile_time_arg_val(num_dim_args + iscore::cb_scaler_arg);
+constexpr uint32_t cb_pool_scratch = get_compile_time_arg_val(num_dim_args + iscore::cb_pool_scratch_arg);
 
 // Dim args + CB indices are common to all kernels; per-kernel compile-time args start here.
 constexpr uint32_t num_common_ct_args = num_dim_args + iscore::num_cb_args;
