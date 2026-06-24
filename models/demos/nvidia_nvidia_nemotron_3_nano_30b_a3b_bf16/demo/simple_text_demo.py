@@ -167,12 +167,24 @@ def run_demo(
     eager: bool,
     quiet: bool,
     max_seq_len: int,
+    ttlang: bool = False,
 ) -> None:
     """Run the demo using the NemotronHForCausalLM Generator class.
 
     Uses the same prefill_forward / decode_forward call pattern as the
     tt-inference-server so the demo exercises the real serving code path.
     """
+    # Must be set before any model imports so mamba2_prefill.py reads the flag.
+    if ttlang:
+        os.environ["NEMOTRON_USE_TTLANG_SSD"] = "1"
+        _tt_lang_path = os.environ.get(
+            "TT_LANG_PYTHON_PATH",
+            "/home/ttuser/ssinghal/tt-lang/build/python_packages",
+        )
+        if _tt_lang_path not in sys.path:
+            sys.path.insert(0, _tt_lang_path)
+        print("[ttlang] Using tt-lang fused SSD scan (NEMOTRON_USE_TTLANG_SSD=1)", flush=True)
+
     from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt import NemotronHForCausalLM
     from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.generate import _load_tokenizer
     from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.tp import close_device_tp4, open_device_tp4
@@ -239,14 +251,16 @@ def run_demo(
         # ── Decode loop ────────────────────────────────────────────────────
         # Feed tokens one at a time, exactly as the inference server does.
         # current_pos at step s = isl + s (the slot the token occupies).
+        # greedy=True: argmax runs on-device (inside trace); only 1 int is
+        # transferred back per step instead of 131K bfloat16 logits.
         t_decode_start = time.perf_counter()
         for step in range(osl - 1):
             if generated[-1] == tokenizer.eos_token_id:
                 break
             tok_t = torch.tensor([[next_tok]], dtype=torch.int64)  # [1, 1]
             pos_t = torch.tensor([isl + step], dtype=torch.int64)  # [1]
-            logits_t, _ = gen.decode_forward(tok_t, current_pos=pos_t)  # ([1, 1, vocab], None)
-            next_tok = int(logits_t[0, 0].argmax())
+            tok_out, _ = gen.decode_forward(tok_t, start_pos=pos_t, greedy=True)
+            next_tok = int(tok_out[0, 0])  # argmax already done on device
             generated.append(next_tok)
             if not quiet and step < 3:
                 print(f"  tok {step+2}: {repr(tokenizer.decode([next_tok]))}", flush=True)
@@ -321,6 +335,12 @@ def _parse_args() -> argparse.Namespace:
     )
     p.add_argument("--eager", action="store_true", help="Disable traced decode (cpu_gate=True). Slower but simpler.")
     p.add_argument("--quiet", action="store_true", help="Suppress per-token progress; print summary table only.")
+    p.add_argument(
+        "--ttlang",
+        action="store_true",
+        help="Use tt-lang fused SSD scan kernel (NEMOTRON_USE_TTLANG_SSD=1). "
+        "Pre-compiles kernels for all ISLs during warmup.",
+    )
     args = p.parse_args()
     if args.isl and args.prompt:
         p.error("--isl and --prompt are mutually exclusive.")
@@ -337,4 +357,5 @@ if __name__ == "__main__":
         eager=args.eager,
         quiet=args.quiet,
         max_seq_len=args.max_seq_len,
+        ttlang=args.ttlang,
     )

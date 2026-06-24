@@ -105,6 +105,30 @@ _PREFILL_CALL_COUNT: int = 0
 
 _SSD_SCRATCH: dict = {}  # keyed by (id(mesh_device), B, C)
 
+# Pre-allocated y_mesh output buffers keyed by (S_pad, id(mesh_device)).
+# Populate these during warmup (clean DRAM) via bench/test setup so that
+# _mamba2_ssd_all_chunks_ttlang always uploads to a V_bad-safe address.
+# Use ttnn.copy_host_to_device_tensor instead of ttnn.from_torch at ISL time.
+_TTLANG_Y_PREALLOC: dict = {}  # (S_pad, mesh_id) → ttnn.Tensor [1, S_pad, H, D]
+
+
+def warmup_ttlang_kernels(max_seq_len: int) -> None:
+    """Pre-compile tt-lang SSD kernels for all powers-of-2 n_chunks up to max_seq_len.
+
+    Call once at model startup when NEMOTRON_USE_TTLANG_SSD=1 so inference
+    requests never pay JIT compilation latency.
+    """
+    if not _USE_TTLANG_SSD:
+        return
+    from .mamba2_ssd_scan_ttlang import make_mamba2_ssd_scan_kernel
+
+    max_chunks = max_seq_len // CHUNK_SIZE
+    nc = 1
+    while nc <= max_chunks:
+        print(f"  [ttlang warmup] n_chunks={nc} (ISL={nc * CHUNK_SIZE}) ...", flush=True)
+        make_mamba2_ssd_scan_kernel(nc, num_heads=NUM_HEADS, n_groups=N_GROUPS)
+        nc *= 2
+
 
 def _get_ssd_scratch(mesh_device, B: int, C: int) -> dict:
     """Return (or lazily create) persistent scratch buffers for _mamba2_ssd_chunk."""
@@ -282,7 +306,7 @@ def _build_ttlang_ssd_inputs(
     # ── Intra-chunk cumulative log-decay ──────────────────────────────────
     # logd_t [S_pad, H] → [H, n_chunks, C] → A_cumsum [H, n_chunks, C]
     logd = logd_t.T.reshape(H, n_chunks, C)  # [H, n_chunks, C]
-    A_cum = torch.cumsum(logd.float(), dim=2)  # [H, n_chunks, C]
+    A_cum = torch.cumsum(logd, dim=2)  # [H, n_chunks, C] float32
 
     # ── log_L [H*n_chunks*C, C] — lower-triangular; -inf above diagonal ─
     i_idx = torch.arange(C).unsqueeze(1)
@@ -381,7 +405,7 @@ def _mamba2_ssd_all_chunks_ttlang(
     replicated back to mesh. Using the full mesh (not submesh) avoids CQ
     ownership conflicts during mesh close.
     """
-    from .mamba2_ssd_scan_ttlang import make_mamba2_ssd_scan_kernel
+    from .mamba2_ssd_scan_ttlang import _IS_SIM, make_mamba2_ssd_scan_kernel
 
     H, D, N, G, C = NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE, N_GROUPS, CHUNK_SIZE
 
@@ -400,56 +424,70 @@ def _mamba2_ssd_all_chunks_ttlang(
     # ── Build all tt-lang inputs on CPU ───────────────────────────────────
     inputs = _build_ttlang_ssd_inputs(x_dt_cpu, B_cpu, C_cpu, x_cpu, logd_cpu, D_cpu, h_prev_cpu, n_chunks)
 
-    # ── Upload to full mesh (replicated) — kernel runs identically on all devices ─
-    def _to_dev(t: torch.Tensor) -> ttnn.Tensor:
-        return ttnn.from_torch(
-            t,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=_R(mesh_device),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+    # ── Dispatch kernel ───────────────────────────────────────────────────
 
-    tensors = {k: _to_dev(v) for k, v in inputs.items()}
-
-    # ── Single kernel dispatch (runs on all mesh devices; results identical) ─
     kernel = make_mamba2_ssd_scan_kernel(n_chunks, num_heads=H, n_groups=G)
-    kernel(
-        tensors["log_L"],
-        tensors["x_dt"],
-        tensors["B"],
-        tensors["C_mat"],
-        tensors["x"],
-        tensors["log_gamma"],
-        tensors["log_delta"],
-        tensors["log_gscalar"],
-        tensors["h_in"],
-        tensors["D_skip_t"],
-        tensors["y_out"],
-        tensors["h_out"],
-    )
-
-    # ── Extract outputs from device 0 → reshape → return as mesh tensors ─
-    # y_out: per-device [H*n_chunks*C, D] → [1, S_pad, H, D] replicated
     S_pad = n_chunks * C
-    y_dev0 = ttnn.get_device_tensors(tensors["y_out"])[0]
-    y_torch = ttnn.to_torch(y_dev0).float()  # [H*n_chunks*C, D]
+
+    if _IS_SIM:
+        # Sim runs on CPU — pass SimTensors to avoid deepcopy of Metal TTNN tensors
+        from sim.ttnnsim import TILE_LAYOUT as _TILE_LAYOUT
+        from sim.ttnnsim import Tensor as _SimTensor
+
+        sim_t = {k: _SimTensor(v.clone(), _TILE_LAYOUT) for k, v in inputs.items()}
+        kernel(
+            sim_t["log_L"],
+            sim_t["x_dt"],
+            sim_t["B"],
+            sim_t["C_mat"],
+            sim_t["x"],
+            sim_t["log_gamma"],
+            sim_t["log_delta"],
+            sim_t["log_gscalar"],
+            sim_t["h_in"],
+            sim_t["D_skip_t"],
+            sim_t["y_out"],
+            sim_t["h_out"],
+        )
+        y_torch = sim_t["y_out"]._tensor.float()  # [H*n_chunks*C, D]
+        h_torch = sim_t["h_out"]._tensor.float()  # [H*D, N]
+    else:
+        # Hardware Metal path — upload to mesh device
+        def _to_dev(t: torch.Tensor) -> ttnn.Tensor:
+            return ttnn.from_torch(
+                t,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=_R(mesh_device),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+        tensors = {k: _to_dev(v) for k, v in inputs.items()}
+        kernel(
+            tensors["log_L"],
+            tensors["x_dt"],
+            tensors["B"],
+            tensors["C_mat"],
+            tensors["x"],
+            tensors["log_gamma"],
+            tensors["log_delta"],
+            tensors["log_gscalar"],
+            tensors["h_in"],
+            tensors["D_skip_t"],
+            tensors["y_out"],
+            tensors["h_out"],
+        )
+        y_dev0 = ttnn.get_device_tensors(tensors["y_out"])[0]
+        y_torch = ttnn.to_torch(y_dev0).float()  # [H*n_chunks*C, D]
+        h_dev0 = ttnn.get_device_tensors(tensors["h_out"])[0]
+        h_torch = ttnn.to_torch(h_dev0).float()  # [H*D, N]
+
+    # ── Reshape outputs → upload to mesh as Metal TTNN tensors ────────────
     y_hsd = y_torch.reshape(H, S_pad, D)
     y_bshd = y_hsd.permute(1, 0, 2).unsqueeze(0).to(torch.bfloat16)  # [1, S_pad, H, D]
-
-    h_dev0 = ttnn.get_device_tensors(tensors["h_out"])[0]
-    h_torch = ttnn.to_torch(h_dev0).float()  # [H*D, N]
     h_bhdn = h_torch.reshape(1, H, D, N).to(torch.bfloat16)
 
-    y_mesh = ttnn.from_torch(
-        y_bshd,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=_R(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
     h_mesh = ttnn.from_torch(
         h_bhdn,
         dtype=ttnn.bfloat16,
@@ -458,6 +496,25 @@ def _mamba2_ssd_all_chunks_ttlang(
         mesh_mapper=_R(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+    # y_mesh: use a pre-allocated buffer if available so the upload always goes to
+    # a V_bad-safe address (pre-allocated during warmup when DRAM is clean).
+    # V_bad (~0x90a8cb80 on device-2) causes PCIe writes to be silently discarded
+    # (→ NaN) and NOC reads/writes to hang the device (→ process killed).
+    _prealloc_key = (S_pad, id(mesh_device))
+    if _prealloc_key in _TTLANG_Y_PREALLOC:
+        _y_host = ttnn.from_torch(y_bshd, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+        ttnn.copy_host_to_device_tensor(_y_host, _TTLANG_Y_PREALLOC[_prealloc_key])
+        y_mesh = _TTLANG_Y_PREALLOC[_prealloc_key]
+    else:
+        y_mesh = ttnn.from_torch(
+            y_bshd,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=_R(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     return y_mesh, h_mesh
 
@@ -921,9 +978,12 @@ def mamba2_prefill_layer_forward(
         if pad_S > 0:
             _y_padded = y_full_raw
             y_full_raw = ttnn.slice(_y_padded, [0, 0, 0, 0], [B, S, NUM_HEADS, HEAD_DIM])
-            _y_padded.deallocate(True)
+            if (S_pad, id(mesh_device)) not in _TTLANG_Y_PREALLOC:
+                _y_padded.deallocate(True)
         y_flat = _rr(y_full_raw, [B, S, INTERMEDIATE_SIZE])
-        y_full_raw.deallocate(True)
+        # Don't force-deallocate if this is a pre-alloc guard — it must stay alive
+        if (S_pad, id(mesh_device)) not in _TTLANG_Y_PREALLOC:
+            y_full_raw.deallocate(True)
         gate_silu = ttnn.silu(gate)
         gate.deallocate(True)
         xg = ttnn.mul(y_flat, gate_silu)

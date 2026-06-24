@@ -49,13 +49,51 @@ import time
 from typing import Optional
 
 import torch
+import torch.nn.functional as F
 
 import ttnn
 from models.tt_transformers.tt.generator import Generator
 
 from .kv_cache import DEFAULT_BLOCK_SIZE, DEFAULT_MAX_SEQ_LEN, MODEL_MAX_SEQ_LEN, DecoderState, allocate_decoder_state
 from .model import WeightCache, nemotron_h_forward_stateful, nemotron_h_prefill_stateful
-from .tp import _R, _host_rep
+from .tp import _R, _host_rep, probe_dram_defect_for_shape
+
+
+def _sample_from_logits(logits_1d: torch.Tensor, sampling_params) -> int:
+    """Host-side top-k → top-p → temperature sampling from a 1-D logits tensor.
+
+    Called when the vllm runner is in sample_on_device_mode='decode_only' —
+    the runner expects a token ID back, not raw logits.
+    sampling_params is a TTSamplingParams(temperature, top_k, top_p).
+    temperature=0.0 uses greedy argmax (avoids division-by-zero in softmax).
+    """
+    temperature = float(getattr(sampling_params, "temperature", 1.0))
+    top_k = int(getattr(sampling_params, "top_k", 0))
+    top_p = float(getattr(sampling_params, "top_p", 1.0))
+
+    logits = logits_1d.float()
+
+    if temperature == 0.0:
+        return int(torch.argmax(logits).item())
+
+    if top_k > 0:
+        k = min(top_k, logits.shape[0])
+        top_k_values, top_k_indices = torch.topk(logits, k=k)
+    else:
+        top_k_values = logits
+        top_k_indices = torch.arange(logits.shape[0], dtype=torch.long)
+
+    # top-p nucleus filtering
+    sorted_probs = F.softmax(top_k_values / temperature, dim=-1)
+    cumulative = sorted_probs.cumsum(-1)
+    mask = (cumulative - sorted_probs) > top_p
+    top_k_values = top_k_values.masked_fill(mask, float("-inf"))
+
+    probs = F.softmax(top_k_values / temperature, dim=-1)
+    probs = torch.nan_to_num(probs)
+    selected = torch.multinomial(probs, num_samples=1).item()
+    return int(top_k_indices[selected])
+
 
 # ---------------------------------------------------------------------------
 # Minimal model-args proxy — satisfies any Generator base that calls
@@ -143,6 +181,9 @@ class NemotronHForCausalLM(Generator):
         self._trace_id: Optional[int] = None
         self._trace_logits_tt = None  # persistent output tensor captured in trace
         self._ids_tt = None  # persistent input token tensor (updated between replays)
+        self._greedy_tok_tt = None  # persistent [1,1] uint32: on-device argmax output
+        self._pos_one_tt = None  # constant [1] int32 = 1 for in-trace position increment
+        self._first_decode: bool = True  # True until first decode_forward is called
         self._prefill_pos: int = 0  # tracks current sequence position across calls
         self._decode_pos: int = 0
 
@@ -188,7 +229,7 @@ class NemotronHForCausalLM(Generator):
     # KV cache / state allocation (called by vLLM after initialize_vllm_model)
     # -----------------------------------------------------------------
 
-    def allocate_kv_cache(self, max_batch_size: int = 1, max_seq_len: int = None, **kwargs):
+    def allocate_kv_cache(self, *args, max_batch_size: int = 1, max_seq_len: int = None, **kwargs):
         """Allocate the DecoderState (SSM states + KV caches).
 
         vLLM calls this after ``initialize_vllm_model``.  We allocate our
@@ -214,8 +255,27 @@ class NemotronHForCausalLM(Generator):
             device=self.mesh_device,
             mesh_mapper=_R(self.mesh_device),
         )
+        # Pre-allocate the on-device greedy argmax output ([1,1] uint32).
+        # Must exist before trace capture so no allocation occurs during replay.
+        cpu_greedy = torch.zeros(1, 1, dtype=torch.int32)
+        self._greedy_tok_tt = ttnn.from_torch(
+            cpu_greedy,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=_R(self.mesh_device),
+        )
+        # Constant [1] int32 = 1 used for in-trace position increment.
+        self._pos_one_tt = ttnn.from_torch(
+            torch.ones(1, dtype=torch.int32),
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=_R(self.mesh_device),
+        )
         self._prefill_pos = 0
         self._decode_pos = 0
+        self._first_decode = True
         # Return a minimal handle (1-element list matching Generator convention).
         return [self._state]
 
@@ -240,6 +300,12 @@ class NemotronHForCausalLM(Generator):
 
         print("[NemotronHForCausalLM] Warming up prefill (compiling kernels)...", flush=True)
         t0 = time.time()
+
+        # When using the tt-lang SSD path, pre-compile ELFs for all powers-of-2
+        # n_chunks up to max_seq_len so inference never pays JIT latency.
+        from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_prefill import warmup_ttlang_kernels
+
+        warmup_ttlang_kernels(self._max_seq_len)
 
         # 128-token dummy sequence: compiles the chunked SSD scan + paged_fill_cache.
         dummy_ids = torch.zeros(1, 128, dtype=torch.int64)
@@ -271,17 +337,26 @@ class NemotronHForCausalLM(Generator):
         print("[NemotronHForCausalLM] Capturing decode trace...", flush=True)
         t0 = time.time()
 
-        # Warmup pass outside trace (primes caches for cpu_gate=False path).
+        # Warmup pass outside trace: primes caches + compiles all kernels used in trace.
         self._update_ids(0)
         self._update_pos(self._decode_pos)
-        nemotron_h_forward_stateful(self.mesh_device, self._ids_tt, self._wc, self._state, cpu_gate=False)
+        logits_warmup = nemotron_h_forward_stateful(
+            self.mesh_device, self._ids_tt, self._wc, self._state, cpu_gate=False
+        )
+        ttnn.argmax(logits_warmup, dim=-1, output_tensor=self._greedy_tok_tt)
+        self._state.advance()
+        ttnn.assign(ttnn.add(self._state.current_pos, self._pos_one_tt), self._state.current_pos)
         ttnn.synchronize_device(self.mesh_device)
 
-        # Trace capture.
+        # Trace capture.  advance() and pos-increment are folded in so decode_forward
+        # needs no Python calls between steps for state management.
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self._trace_logits_tt = nemotron_h_forward_stateful(
             self.mesh_device, self._ids_tt, self._wc, self._state, cpu_gate=False
         )
+        ttnn.argmax(self._trace_logits_tt, dim=-1, output_tensor=self._greedy_tok_tt)
+        self._state.advance()
+        ttnn.assign(ttnn.add(self._state.current_pos, self._pos_one_tt), self._state.current_pos)
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
         self._trace_id = trace_id
@@ -347,7 +422,18 @@ class NemotronHForCausalLM(Generator):
         if self._state is None:
             self.allocate_kv_cache()
         assert tokens.shape[0] == 1, f"NemotronHForCausalLM: batch_size must be 1, got {tokens.shape[0]}"
-        start_pos = int(current_pos[0]) if current_pos is not None else self._prefill_pos
+        # When current_pos is None (vllm server path), every prefill call is a
+        # new sequence starting at position 0 — always reset.  When current_pos
+        # is provided (demo / test path), reset only when it says 0.
+        # In-place reset preserves DRAM buffer addresses and is trace-safe.
+        start_pos = int(current_pos[0]) if current_pos is not None else 0
+        if start_pos == 0:
+            # switch_mode("prefill") mirrors the Qwen3.6 pattern: synchronize
+            # the device and reset SSM/conv states for the new sequence.
+            # It also documents the decode→prefill boundary for future extensions
+            # (e.g. rebuilding persistent prefill-specific CCL buffers if NemotronH
+            # ever gains separate prefill/decode sub-device managers).
+            self.switch_mode("prefill")
         S = tokens.shape[1]
 
         # Set current_pos on device (used by dense_attention decode path; harmless for prefill).
@@ -369,8 +455,9 @@ class NemotronHForCausalLM(Generator):
     def decode_forward(
         self,
         tokens: torch.Tensor,  # [B, 1] int64 — next input token
-        current_pos: torch.Tensor = None,  # [B] int64 current position
+        start_pos: torch.Tensor = None,  # [B] int64 current position (matches Generator base)
         kv_cache=None,
+        greedy: bool = False,
         **kwargs,
     ) -> torch.Tensor:
         """Single-token decode step using the captured trace.
@@ -379,17 +466,53 @@ class NemotronHForCausalLM(Generator):
         Returns (logits [B, 1, vocab], None) matching the Generator base class
         contract.  Falls back to eager (cpu_gate=True) if the trace has not
         been captured.
+
+        greedy=True enables the on-device sampling fast path:
+          - The argmax (captured inside the trace) writes the next token to
+            _greedy_tok_tt on-device.
+          - After the first step, _greedy_tok_tt is copied to _ids_tt via D2D
+            (no host involvement for the token).
+          - Only 1 int is read back from device (vs 131K floats for full logits).
+          - Returns (torch.Tensor [1, 1] int64 containing the greedy token, None).
+
+        When the vllm runner uses sample_on_device_mode='decode_only', it passes
+        sampling_params (TTSamplingParams) via kwargs and expects a token ID back,
+        not full logits.  temperature=0 maps to greedy (fast path); temperature>0
+        samples on host inside this function before returning.
         """
         if self._state is None:
             self.allocate_kv_cache()
         assert tokens.shape[0] == 1, f"NemotronHForCausalLM: batch_size must be 1, got {tokens.shape[0]}"
         tok = int(tokens[0, 0])
-        pos = int(current_pos[0]) if current_pos is not None else self._decode_pos
+        pos = int(start_pos[0]) if start_pos is not None else self._decode_pos
 
-        self._update_ids(tok)
-        self._update_pos(pos)
+        # When vllm runner operates in sample_on_device_mode='decode_only' it passes
+        # sampling_params and always expects a token (not logits) in return.
+        sampling_params = kwargs.get("sampling_params", None)
+        if sampling_params is not None and float(getattr(sampling_params, "temperature", 1.0)) == 0.0:
+            greedy = True
+        if self._first_decode:  # log once per sequence
+            print(
+                f"decode_forward: sampling_params={sampling_params}, greedy={greedy}, is_first={self._first_decode}",
+                flush=True,
+            )
+
+        is_first = self._first_decode
+        self._first_decode = False
+
+        if greedy and self._trace_id is not None and not is_first:
+            # Autoregressive greedy: previous trace wrote _greedy_tok_tt; copy D2D.
+            ttnn.assign(self._greedy_tok_tt, self._ids_tt)
+        else:
+            self._update_ids(tok)
+
+        # Position: trace increments current_pos on-device, so H2D write is only
+        # needed on the first decode step (to set the initial position from prefill).
+        if not (greedy and self._trace_id is not None and not is_first):
+            self._update_pos(pos)
 
         if self._trace_id is not None:
+            # advance() and pos-increment are folded into the trace.
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
             logits_tt = self._trace_logits_tt
         else:
@@ -397,16 +520,62 @@ class NemotronHForCausalLM(Generator):
                 self.mesh_device, self._ids_tt, self._wc, self._state, cpu_gate=True
             )
             ttnn.synchronize_device(self.mesh_device)
+            self._state.advance()
 
-        self._state.advance()
         self._decode_pos = pos + 1
 
+        if greedy and self._trace_id is not None:
+            # Read back only the greedy token (4 bytes, not 262 KB of logits).
+            greedy_full = ttnn.to_torch(
+                self._greedy_tok_tt,
+                mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0),
+            )
+            next_tok = int(greedy_full[0, 0])
+            return torch.tensor([[next_tok]], dtype=torch.int64), None
+
         logits_cpu = _host_rep(logits_tt, self.mesh_device, 1)  # [1, 1, vocab]
+
+        if sampling_params is not None:
+            # Runner expects a sampled token when sample_on_device_mode is active —
+            # returning logits would corrupt the runner's token-ID interpretation.
+            next_tok = _sample_from_logits(logits_cpu[0, 0, :], sampling_params)
+            return torch.tensor([[next_tok]], dtype=torch.int64), None
+
         return logits_cpu, None  # (logits [1, 1, vocab], log_probs) matches Generator base
 
     # -----------------------------------------------------------------
     # State management
     # -----------------------------------------------------------------
+
+    def switch_mode(self, mode: str) -> None:
+        """Switch between prefill and decode modes.
+
+        Mirrors the Qwen3.6 switch_mode() pattern.  For NemotronH:
+
+        "prefill": drain the dispatch queue, then reset SSM/conv states
+            in-place for the new sequence.  The in-place reset preserves
+            DRAM buffer addresses — reallocation would break the decode trace
+            which holds address references, not tensor values.  Persistent
+            prefill-specific DRAM tensors (e.g. the causal_mask in
+            _mamba2_ssd_chunk, cached via _rep_keyed) are not touched; they
+            live at stable addresses first assigned during warmup and are safe
+            to reuse across requests.
+
+        "decode": no-op — the decode trace is already captured at init and
+            stays valid across requests.  NemotronH has no prefetch-side CCL
+            state that needs tearing down on decode entry.
+        """
+        if mode == "prefill":
+            ttnn.synchronize_device(self.mesh_device)
+            # Probe DRAM for defective pages at the shape of the largest
+            # per-chunk intermediates in _mamba2_ssd_chunk (log_L, L_raw:
+            # [B, NUM_HEADS, CHUNK_SIZE, CHUNK_SIZE] = [1, 64, 64, 64] = 512 KB).
+            # After a prior request frees ~180 MB of chunk intermediates, the
+            # DRAM allocator may coalesce those freed blocks back to a defective
+            # page address.  This probe permanently blocks any defective pages
+            # before the actual prefill allocation sequence begins.
+            probe_dram_defect_for_shape(self.mesh_device, [1, 64, 64, 64])
+            self.reset_state()
 
     def reset_state(self):
         """Reset all SSM / conv / KV state to zeros for a new sequence.
@@ -424,6 +593,7 @@ class NemotronHForCausalLM(Generator):
         self._state.reset_inplace(self.mesh_device)
         self._prefill_pos = 0
         self._decode_pos = 0
+        self._first_decode = True
 
     # -----------------------------------------------------------------
     # Private helpers
