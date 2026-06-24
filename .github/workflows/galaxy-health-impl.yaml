@@ -67,7 +67,7 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
       options: --device /dev/tenstorrent
     defaults:
@@ -80,11 +80,12 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
+          path: docker-job
       - name: Mark repository as safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -125,5 +126,5 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

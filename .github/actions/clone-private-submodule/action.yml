@@ -1,0 +1,33 @@
+name: Clone private submodule
+description: >
+  Clone the private tt_ops_code_gen submodule (LLK helper library) after checkout.
+  It is marked `update = none` in .gitmodules so a plain `submodules: recursive`
+  checkout skips it; this action clones it explicitly using the provided PAT.
+  For jobs that call the setup-job action, prefer passing private-submodule-token
+  to setup-job instead of using this action.
+
+inputs:
+  private-submodule-token:
+    description: 'PAT (TT-OPS-CODE-GEN-CLONE secret) authenticating the clone. Leave empty to skip.'
+    required: false
+    default: ''
+  path:
+    description: 'Checkout path relative to the workspace where the repo (and .gitmodules) lives.'
+    required: false
+    default: '.'
+
+runs:
+  using: composite
+  steps:
+    - name: 🔑 Clone private tt_ops_code_gen submodule
+      if: ${{ inputs.private-submodule-token != '' }}
+      working-directory: ${{ inputs.path }}
+      shell: bash
+      env:
+        PRIVATE_TOKEN: ${{ inputs.private-submodule-token }}
+      run: |
+        git config --global --add safe.directory "$(pwd)"
+        git config --global url."https://oauth2:${PRIVATE_TOKEN}@github.com/tenstorrent/tt_ops_code_gen".insteadOf "https://github.com/tenstorrent/tt_ops_code_gen"
+        # --checkout overrides the `update = none` strategy in .gitmodules, which otherwise
+        # makes `git submodule update --init` silently skip this submodule.
+        git submodule update --init --checkout tt_metal/third_party/tt_ops_code_gen

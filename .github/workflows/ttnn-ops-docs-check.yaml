@@ -64,7 +64,7 @@ jobs:
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
       options: "--device /dev/tenstorrent"
     defaults:
       run:
@@ -75,21 +75,17 @@ jobs:
         (format('tt-ubuntu-2204-{0}-viommu-stable', inputs.runner-label))
       }}
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ttnn nightly check OPs docs
@@ -100,5 +96,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "ttnn_ops_docs_check_"
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

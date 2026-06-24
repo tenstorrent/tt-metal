@@ -114,7 +114,7 @@ jobs:
         LOGURU_LEVEL: INFO
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
@@ -128,11 +128,12 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
+          path: docker-job
       - name: Mark repository as safe directory
         run: |
           git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -153,5 +154,5 @@ jobs:
         if: ${{ failure() }}
         with:
           test-report-path: generated/test_reports/
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

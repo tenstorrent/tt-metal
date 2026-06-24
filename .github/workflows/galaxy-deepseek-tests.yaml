@@ -103,7 +103,7 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
@@ -112,21 +112,17 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run DeepSeek module tests (T3K gate)
@@ -134,6 +130,11 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests -m t3k_compat --timeout 120 --durations=0
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"
 
   # ── Galaxy tests (N-x module tests, runs in parallel with T3K gate) ────
   Galaxy-DeepSeek-tests:
@@ -174,7 +175,7 @@ jobs:
         DEEPSEEK_V3_HF_MODEL: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked
         DEEPSEEK_V3_CACHE: /mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
       options: "--device /dev/tenstorrent"
@@ -183,21 +184,17 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Run DeepSeek module tests (Galaxy confirmation)
@@ -205,3 +202,8 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests -m t3k_compat --timeout 120 --durations=0
+      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+        timeout-minutes: 10
+        if: ${{ !cancelled() }}
+        with:
+          prefix: "test_reports_"

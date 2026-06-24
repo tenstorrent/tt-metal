@@ -115,7 +115,7 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         MLPERF_READ_ONLY: ${{ inputs.mlperf-read-only }} # used by GPT-OSS 120B to toggle --skip-model-load
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         # Mount the HF / tt_cache root so it always appears inside the container
         # at /mnt/MLPerf/huggingface, regardless of which BH cache mode the
@@ -140,8 +140,9 @@ jobs:
         timeout-minutes: 20
         with:
           submodules: recursive
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
@@ -178,12 +179,12 @@ jobs:
           config: |
             {
               "model": "${{ vars.AI_SUMMARY_MODEL }}",
-              "workspace": "$GITHUB_WORKSPACE",
+              "workspace": "$GITHUB_WORKSPACE/docker-job",
               "input_dirs": ["generated/test_logs"],
               "output_dir": "generated/ai_summaries"
             }
           api-key: ${{ secrets.TT_CHAT_API_KEY }}
           api-url: ${{ secrets.TT_CHAT_URL }}
           job-name: ${{ matrix.test-group.name }}
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

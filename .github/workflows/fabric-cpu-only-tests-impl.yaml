@@ -46,27 +46,23 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         TT_METAL_CLEAR_L1: 1
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+          path: docker-job
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           hang-detection-timeout: 20.0

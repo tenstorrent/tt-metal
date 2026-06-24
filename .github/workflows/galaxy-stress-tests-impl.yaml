@@ -114,7 +114,7 @@ jobs:
         ARCH_NAME: wormhole_b0
         LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct/
       volumes:
-        - ${{ github.workspace }}:/work
+        - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - ${{ contains(matrix.test-group.sku, 'perf') && '/mnt/MLPerf:/mnt/MLPerf:ro' || '/donotmount:/donotmount:ro' }}
       options: "--device /dev/tenstorrent"
@@ -123,21 +123,20 @@ jobs:
         shell: bash
         working-directory: /work
     steps:
-      - name: Bootstrap local actions
+      - name: 🧬 Checkout Repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
         with:
-          sparse-checkout: .github/actions
-          sparse-checkout-cone-mode: false
-      - name: 🧬 Checkout Repository
-        uses: ./.github/actions/checkout
-        with:
           submodules: recursive
-          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
+          path: docker-job
+      - name: Mark repository as safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
       - name: ⬇️  Setup Job
-        uses: ./.github/actions/setup-job
+        uses: ./docker-job/.github/actions/setup-job
         timeout-minutes: 10
         with:
+          private-submodule-token: ${{ secrets.TT-OPS-CODE-GEN-CLONE }}
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
@@ -149,5 +148,5 @@ jobs:
         if: ${{ !cancelled() }}
         with:
           prefix: "test_reports_"
-      - uses: ./.github/actions/cleanup
+      - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
