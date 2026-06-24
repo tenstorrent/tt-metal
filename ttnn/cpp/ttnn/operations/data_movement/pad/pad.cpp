@@ -6,7 +6,6 @@
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
-#include "ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
@@ -25,7 +24,7 @@ inline bool is_bw_sharded(const MemoryConfig& mc) {
            (layout == TensorMemoryLayout::BLOCK_SHARDED || layout == TensorMemoryLayout::WIDTH_SHARDED);
 }
 
-// Route through sharded_to_interleaved only when native kernels cannot handle the input.
+// Route through to_memory_config composite only when native kernels cannot handle the input.
 //
 // All L1 WIDTH/BLOCK sharded inputs are handled natively:
 //   - TILE layout: tile factories use TensorAccessor page_id addressing, resolved transparently
@@ -34,8 +33,8 @@ inline bool is_bw_sharded(const MemoryConfig& mc) {
 //     regardless of tile alignment; the front_padding kernel branch reads into a temp buffer
 //     and memmoves to the correct L1 offset, so width front-pad is also handled natively.
 //
-// Only DRAM-sharded W/B inputs are routed through S2I: factory core-grid setup assumes L1
-// buffers and auditing it for DRAM semantics is out of scope.
+// DRAM-sharded W/B inputs use to_memory_config → pad → (optional) interleaved_to_sharded.
+// sharded_to_interleaved is L1-only, so to_memory_config is used instead (mirrors repeat.cpp).
 inline bool needs_pad_composite_fallback(const ttnn::Tensor& input_tensor) {
     if (!is_bw_sharded(input_tensor.memory_config())) {
         return false;
@@ -52,7 +51,8 @@ ttnn::Tensor pad_via_interleaved_composite(
     const MemoryConfig& output_memory_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, input_tensor.memory_config().buffer_type()};
-    auto interleaved_input = ttnn::sharded_to_interleaved(input_tensor, interleaved_config, std::nullopt);
+    // sharded_to_interleaved is L1-only; DRAM-sharded W/B inputs use to_memory_config (mirrors repeat.cpp).
+    auto interleaved_input = ttnn::to_memory_config(input_tensor, interleaved_config, std::nullopt);
 
     MemoryConfig working_output =
         output_memory_config.is_sharded()
