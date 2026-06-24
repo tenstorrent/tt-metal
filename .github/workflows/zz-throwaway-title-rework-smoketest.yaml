@@ -1,9 +1,12 @@
 # THROWAWAY — smoke test for the MINFRA-978 release-time title rework.
-# Delete this file before merging the backstop PR. Manual dispatch only;
-# creates no tags, artifacts, or releases.
+# Delete this file before merging the backstop PR. Runs automatically on push
+# to this branch only; creates no tags, artifacts, or releases.
 name: "[throwaway] Title rework smoke test"
 
 on:
+  push:
+    branches:
+      - dgnidash/minfra-978-release-title-backstop
   workflow_dispatch:
 
 permissions:
