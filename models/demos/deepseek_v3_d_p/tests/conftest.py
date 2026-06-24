@@ -26,6 +26,11 @@ from models.demos.deepseek_v3_d_p.tests.model_variants import DSV3, TEST_VARIANT
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import download_infinitebench_subset
 
+# Shared DeepSeek-family test plugin: tier markers (dev/gate/nightly) + the --ds-* MLA/indexer
+# knobs and their ds_* fixtures. A standalone plugin module (not a conftest) so the v3.1 and V3.2
+# sibling suites can both load it without double-registering its options.
+pytest_plugins = ["models.demos.deepseek_v3_d_p.tests.dsa_plugin"]
+
 # Shared FABRIC_2D parametrize entries for the prefill block + transformer tests.
 # Minimum CI-gated coverage: (4,2) on BH LoudBox, (8,4) on BH Galaxy. (2,4) included
 # for asymmetry coverage. RELAXED_INIT matches the canonical pattern in test_prefill_block.py
@@ -409,6 +414,12 @@ def _resolve_hf_config(model_path_str: str):
 @lru_cache(maxsize=None)
 def _resolve_config_only(variant_name: str):
     v = TEST_VARIANTS[variant_name]
+    # Hand-built config takes precedence: some models (e.g. GLM-5.1, model_type `glm_moe_dsa`) are
+    # not registered with transformers, so AutoConfig cannot load them. The builder returns a ready
+    # HF-attribute config. (Result is lru_cached like the AutoConfig path; tests that mutate
+    # config.max_seq_len already rely on this shared/cached object.)
+    if v.config_builder is not None:
+        return v.config_builder()
     # Check environment variable first
     env_path = os.getenv(v.env_var)
     if env_path:

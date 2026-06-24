@@ -200,6 +200,25 @@
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: models
 
+- id: bh-lb-deepseek-dsa
+  name: bh_lb_DeepSeek_DSA
+  model-name: deepseek_prefill
+  cmd: |
+    exit_code=0
+    export DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+    export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache GLM51_MLA_REF_CACHE=/tmp/glm_5_1_mla_ref_cache
+    # Sparse MLA (V3.2 + GLM-5.1) vs MLACPU. Random weights + on-the-fly CPU truth -> no staged weights.
+    # GLM (tp<=2) gets its primary coverage here on sp4xtp2; DeepSeek-V3.2 covers the asymmetric sp2xtp4
+    # mesh (its 8x4 coverage is on Galaxy). -m gate drops the dev-only determinism test.
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py -m gate -k "glm_5_1 and sp4xtp2" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py -m gate -k "deepseek_v32 and sp2xtp4" -vvv --tb=short || exit_code=$?
+    exit $exit_code
+  skus:
+    bh_loudbox:
+      timeout: 40
+  owner_id: U08E1JCMAJF # Marko Bezulj
+  team: models
+
 - id: bh-lb-deepseek-prefill-op-tests
   name: bh_lb_DeepSeek_PREFILL_OP_TESTS
   model-name: deepseek_prefill

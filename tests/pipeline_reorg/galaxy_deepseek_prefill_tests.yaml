@@ -105,6 +105,22 @@
   owner_id: U08RL15T4N8
   team: models
 
+- name: "(Galaxy) DeepSeek Prefill - DSA MLA (V3.2)"
+  cmd: |
+    export MESH_DEVICE=TG DEEPSEEK_V3_HF_MODEL=/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528
+    export DEEPSEEK_V32_MLA_REF_CACHE=/tmp/deepseek_v32_mla_ref_cache
+    # Sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. Random weights + on-the-fly CPU truth
+    # -> no staged V3.2 weights needed; R1 supplies the (shared-dim) config. GLM is tp<=2, so it skips on
+    # the 8x4 (tp=4) Galaxy mesh and is covered on the LoudBox instead. -m gate drops the dev-only determinism.
+    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py -m gate -k "deepseek_v32 and sp8xtp4" -vvv --tb=short
+  test_type: dsa_mla
+  test_group: module
+  skus:
+    bh_galaxy:
+      timeout: 30
+  owner_id: U08RL15T4N8
+  team: models
+
 - name: "(Galaxy) DeepSeek Prefill - Kimi MoE"
   cmd: |
     export MESH_DEVICE=TG
