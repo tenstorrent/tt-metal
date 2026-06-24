@@ -79,6 +79,75 @@ def _ensure_row_major_topk(tensor: ttnn.Tensor) -> ttnn.Tensor:
     return out
 
 
+def _moe_fast_remap_from_dense_weights(
+    topk_weights_dense: ttnn.Tensor,
+    *,
+    total_tokens: int,
+    block: int,
+    experts_per_device: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Fast equivalent to ``moe_expert_token_remap`` for contiguous per-device expert sharding.
+
+    ``moe_expert_token_remap`` splits work over metadata pages in multiples of ``block``.
+    With few blocks relative to core count the kernel under-utilizes the grid (~100us on
+    one core). Experts are assigned contiguously per device (see ``create_moe_runtime``),
+    so after scatter the remap outputs reduce to:
+
+    - ``local_weights``: per-device expert-dim partition of the dense routing weights
+    - ``sparsity``: per-local-expert presence (1 if any token in the block routes to it)
+
+    Requires ``total_tokens % block == 0``. Validated against the device op on 1x4 mesh.
+    """
+    local_weights = ttnn.mesh_partition(topk_weights_dense, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    num_blocks = total_tokens // block
+    lw_tiled = ttnn.to_layout(local_weights, ttnn.TILE_LAYOUT)
+    lw_blocks = ttnn.reshape(lw_tiled, (1, 1, num_blocks, block, experts_per_device))
+    _presence = ttnn.sum(lw_blocks, dim=3)
+    sparsity = ttnn.to_layout(ttnn.typecast(ttnn.gtz(_presence), ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT)
+    ttnn.deallocate(_presence, force=False)
+    return local_weights, sparsity
+
+
+def _moe_scatter_and_remap_local(
+    *,
+    device: Any,
+    rt: Glm4MoeLiteMoERuntime,
+    topk_expert_indices: ttnn.Tensor,
+    topk_expert_weights: ttnn.Tensor,
+    tokens_per_device: int,
+    total_tokens: int,
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Scatter top-k routing into dense weights and produce (local_weights, sparsity)."""
+    block = int(rt.sparsity_block_size)
+    topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
+    topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
+    weights_zero = _get_scatter_zero_tensor(
+        device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
+    )
+    topk_weights_dense = ttnn.scatter(
+        weights_zero, 3, topk_indices_rm, topk_weights_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    ttnn.deallocate(topk_weights_rm, force=False)
+
+    if _env_bool("GLM4_MOE_LITE_MOE_FAST_REMAP", default=True) and total_tokens % block == 0:
+        local_weights, sparsity = _moe_fast_remap_from_dense_weights(
+            topk_weights_dense,
+            total_tokens=total_tokens,
+            block=block,
+            experts_per_device=int(rt.num_experts_per_device),
+        )
+    else:
+        local_weights, sparsity = ttnn.moe_expert_token_remap(
+            topk_weights_dense,
+            rt.expert_mapping_tensors,
+            topk_indices_rm,
+            reduction_size=block,
+        )
+    ttnn.deallocate(topk_weights_dense, force=False)
+    ttnn.deallocate(topk_indices_rm, force=False)
+    return local_weights, sparsity
+
+
 def _parse_math_fidelity(value: str, *, default: ttnn.MathFidelity) -> ttnn.MathFidelity:
     raw = value.strip().lower()
     if not raw:
@@ -477,21 +546,27 @@ def create_moe_runtime(*, device: Any, hparams: Glm4MoeLiteHParams) -> Glm4MoeLi
     # - We previously (incorrectly) scaled `per_core_M` with experts-per-device, which can yield
     #   invalid configs for `M=32` (1 tile) and produce garbage outputs for inactive experts.
     per_core_M = 1
-    # Decode sparse_matmul sweep winners (test_sparse_matmul_sweep.py, Blackhole p300c
-    # 11x10, M=32 per_core_M=1, pcN=2 ob_w=2 osb_w=2).  The tight rectangular grids beat
-    # the auto-config (_make_sparse_matmul_program_config) which leaves core_y=max_y:
-    #   gate_up       (K=2048 N=1536): 3x8 → 159us  (1.05x vs auto 168us)
-    #   gate_up_fused (K=2048 N=3072): 8x6 → 226us  (1.85x vs auto 418us)
-    #   down          (K=1536 N=2048): 4x8 → 130us  (1.06x vs auto 138us)
+    # Sparse_matmul sweep winners (test_sparse_matmul_sweep.py, Blackhole p300c 11x10,
+    # M=32 per_core_M=1, BFP8 in0 x BFP4 w, LoFi, nnz=16 worst-case).  These run for both
+    # decode and the default-chunked prefill (GLM4_MOE_LITE_MOE_SPARSE_PREFILL_PCM=1 keeps
+    # num_blocks=1).  num_blocks>1 is 2-4x slower per token (forced to DRAM — L1 sparse
+    # output is broken for nb>1), so do NOT raise PREFILL_PCM.
+    #   gate_up_fused (K=2048 N=3072): 8x6  pcN2 ob_w2 osb_w2 → 217us (sweep winner)
+    #   down          (K=1536 N=2048): 8x8  pcN1 ibw16        → 112us (1.08x vs prior 4x8/122us;
+    #                                                            win is 64 cores + larger K-block)
     gate_up_program_config = _tuned_prefill_sparse_matmul_pc(
         grid_x=3,
         grid_y=8,
         per_core_M=per_core_M,
     )
     down_program_config = _tuned_prefill_sparse_matmul_pc(
-        grid_x=4,
+        grid_x=8,
         grid_y=8,
         per_core_M=per_core_M,
+        per_core_N=1,
+        in0_block_w=16,
+        out_block_w=1,
+        out_subblock_w=1,
     )
 
     ep_l1 = _env_bool("GLM4_MOE_LITE_EP_L1", default=True)
@@ -1640,23 +1715,14 @@ def moe_sparse_experts_forward_tt(
         # Only valid for the replicated-token reduce path (a2a is not chunked here).
         local_weights_full = sparsity_full = None
         if not use_all_to_all:
-            _topk_idx_rm = _ensure_row_major_topk(topk_expert_indices)
-            _topk_w_rm = _ensure_row_major_topk(topk_expert_weights)
-            _weights_zero = _get_scatter_zero_tensor(
-                device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
+            local_weights_full, sparsity_full = _moe_scatter_and_remap_local(
+                device=device,
+                rt=rt,
+                topk_expert_indices=topk_expert_indices,
+                topk_expert_weights=topk_expert_weights,
+                tokens_per_device=tokens_per_device,
+                total_tokens=total_tokens,
             )
-            _topk_w_dense = ttnn.scatter(
-                _weights_zero, 3, _topk_idx_rm, _topk_w_rm, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-            ttnn.deallocate(_topk_w_rm, force=False)
-            local_weights_full, sparsity_full = ttnn.moe_expert_token_remap(
-                _topk_w_dense,
-                rt.expert_mapping_tensors,
-                _topk_idx_rm,
-                reduction_size=block,
-            )
-            ttnn.deallocate(_topk_w_dense, force=False)
-            ttnn.deallocate(_topk_idx_rm, force=False)
 
         experts_per_device = int(rt.num_experts_per_device)
         # Pre-cast the routed-expert input to BFP8 once, before slicing per chunk.
@@ -1795,48 +1861,18 @@ def moe_sparse_experts_forward_tt(
             local_weights = _precomputed_local_weights
             sparsity = _precomputed_sparsity
         else:
-            topk_indices_rm = _ensure_row_major_topk(topk_expert_indices)
-            topk_weights_rm = _ensure_row_major_topk(topk_expert_weights)
-
-            weights_zero = _get_scatter_zero_tensor(
-                device=device, tokens_per_device=tokens_per_device, num_experts=int(rt.num_experts)
+            local_weights, sparsity = _moe_scatter_and_remap_local(
+                device=device,
+                rt=rt,
+                topk_expert_indices=topk_expert_indices,
+                topk_expert_weights=topk_expert_weights,
+                tokens_per_device=tokens_per_device,
+                total_tokens=total_tokens,
             )
-            topk_weights_dense = ttnn.scatter(
-                weights_zero,
-                3,
-                topk_indices_rm,
-                topk_weights_rm,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-            ttnn.deallocate(topk_weights_rm, force=False)
-            block = int(rt.sparsity_block_size)
-            if _env_bool("GLM4_MOE_LITE_MOE_FAST_REMAP", default=True) and total_tokens == block:
-                # Decode (single sparsity block): `moe_expert_token_remap` splits work over
-                # metadata pages in multiples of `reduction_size`. With reduction_size ==
-                # total_tokens there is exactly ONE work unit, so the kernel runs on a single
-                # core (~95us, 100+ idle cores). Experts are assigned contiguously per device
-                # (see `create_moe_runtime` mapping), so the two remap outputs reduce to:
-                #   - local_weights: the per-device expert-dim partition of the dense weights
-                #   - sparsity: per-local-expert presence (1 if any token in the block routes
-                #     to it) across the single 32-token block.
-                # Validated exact-equal to the remap on a 1x4 mesh (experiments/remap_equiv.py).
-                local_weights = ttnn.mesh_partition(topk_weights_dense, dim=3, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                _presence = ttnn.sum(ttnn.to_layout(local_weights, ttnn.TILE_LAYOUT), dim=2, keepdim=True)
-                sparsity = ttnn.to_layout(ttnn.typecast(ttnn.gtz(_presence), ttnn.uint16), ttnn.ROW_MAJOR_LAYOUT)
-                ttnn.deallocate(_presence, force=False)
-            else:
-                local_weights, sparsity = ttnn.moe_expert_token_remap(
-                    topk_weights_dense,
-                    rt.expert_mapping_tensors,
-                    topk_indices_rm,
-                    reduction_size=block,
-                )
-            # `ttnn.moe_expert_token_remap` returns a UINT16 (0/1) sparsity tensor.
+            # `moe_expert_token_remap` / fast remap returns UINT16 (0/1) sparsity.
             # `ttnn.sparse_matmul` accepts this UINT16 sparsity directly, and keeping it as
             # UINT16 avoids a device-side typecast on small Row-Major tensors (e.g. last dim
             # = experts_per_device = 8) which currently requires padding to a multiple of 32.
-            ttnn.deallocate(topk_weights_dense, force=False)
-            ttnn.deallocate(topk_indices_rm, force=False)
 
         if debug:
             lw_dt = ttnn.get_device_tensors(local_weights)
