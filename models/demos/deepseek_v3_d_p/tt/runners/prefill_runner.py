@@ -32,8 +32,10 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
-from models.demos.deepseek_v3_d_p.tt.runners.d2d_socket_push_op import d2d_socket_push
-from models.demos.deepseek_v3_d_p.tt.runners.h2d_socket_sync_op import h2d_socket_sync
+
+# D2D send + D2D/H2D receive use the native C++ ops via ttnn.experimental.deepseek_prefill:
+#   d2d_socket_sync (sender push); h2d_socket_sync drains an H2DStreamService OR a
+#   D2DStreamServiceReceiver (same receiver getters -> one op, two overloads).
 from models.demos.deepseek_v3_d_p.tt.runners.runner_utils import (
     build_h2d_service,
     get_variant,
@@ -261,7 +263,7 @@ def _d2d_recv(inbound) -> tuple:
     import torch
 
     t0 = time.perf_counter()
-    act, md = h2d_socket_sync(inbound, D2D_SYNC_WORKER_CORES, metadata_size_bytes=D2D_METADATA_SIZE_BYTES)
+    act, md = ttnn.experimental.deepseek_prefill.h2d_socket_sync(inbound, metadata_size_bytes=D2D_METADATA_SIZE_BYTES)
     m = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten()
     meta = {"slot_id": int(m[0]), "actual_start": int(m[1]), "actual_end": int(m[2]), "is_last": bool(int(m[3]))}
     logger.info(
@@ -269,6 +271,25 @@ def _d2d_recv(inbound) -> tuple:
         f"is_last={meta['is_last']} [xfer] sync={(time.perf_counter() - t0) * 1000.0:.2f}ms"
     )
     return act, meta
+
+
+def _d2d_metadata_tensor(mesh_device, words: list[int]) -> ttnn.Tensor:
+    """Per-chunk inline metadata as a replicated [1,1,1,N] uint32 device tensor. The native
+    d2d_socket_sync takes metadata as a tensor input (not the scalar word list the Python push
+    used), so the program cache cannot freeze the metadata at the first chunk's values."""
+    import torch
+
+    md = torch.tensor(words, dtype=torch.int32).reshape(1, 1, 1, -1)
+    return ttnn.from_torch(
+        md,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.create_mesh_mapper(
+            mesh_device, ttnn.MeshMapperConfig(placements=[ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+        ),
+    )
 
 
 def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
@@ -281,7 +302,11 @@ def _d2d_send(outbound, activation: ttnn.Tensor, rank: int, meta: dict) -> None:
         activation = ttnn.to_layout(activation, backing.layout)
         activation = ttnn.to_memory_config(activation, backing.memory_config())
     words = [meta["slot_id"], meta["actual_start"], meta["actual_end"], int(bool(meta["is_last"]))]
-    d2d_socket_push(outbound, activation, D2D_SYNC_WORKER_CORES, metadata=words)
+    # Native d2d_socket_sync takes metadata as an input TENSOR (scalar runtime args would be
+    # frozen by the program cache at chunk 0), so materialize the per-chunk words here.
+    md_tensor = _d2d_metadata_tensor(backing.device(), words)
+    ttnn.experimental.deepseek_prefill.d2d_socket_sync(outbound, activation, metadata=md_tensor)
+    ttnn.deallocate(md_tensor)
     ttnn.deallocate(activation)
     logger.info(
         f"[pp rank {rank}] SEND-d2d [{meta['actual_start']},{meta['actual_end']}) is_last={meta['is_last']} "
