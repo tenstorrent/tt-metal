@@ -195,10 +195,19 @@ def test_minimal_ring_ag(mesh_device, device_params, num_links):
     logger.success("AG completed under this fabric config — no hang.")
 
     # Structural check: the gather expands each per-chip SP shard back to the full
-    # ISL_TOTAL on every chip. Catches a degenerate "ran but gathered nothing/wrong"
-    # without needing a PCC reference (numerical PCC lives in the dispatch/combine suite).
+    # ISL_TOTAL on every chip.
     assert tuple(out_tensors[0].shape) == k_output_shape, f"K gather shape {out_tensors[0].shape} != {k_output_shape}"
     assert tuple(out_tensors[1].shape) == v_output_shape, f"V gather shape {out_tensors[1].shape} != {v_output_shape}"
+
+    # No value-level PCC here, deliberately:
+    #   1. Ring-vs-Linear retention is NOT observable from the output — an all-gather is
+    #      order-independent, so a ring and a degraded-linear gather produce identical values; only
+    #      get_usable_topology decides it, and it has no Python binding.
+    #   2. The gather's numerical correctness is already covered end-to-end by the dispatch/combine
+    #      and prefill-block PCC suites (the 8-ring block MoE passes at ~0.9998). A standalone
+    #      gathered-tensor PCC would need careful 2D-mesh recomposition of the replicated + TP-sharded
+    #      output (a naive device-0 readback scores ~0.94 from layout/order mismatch, not a real
+    #      error) and adds no coverage those suites lack.
 
     mesh_device.reset_sub_device_stall_group()
     mesh_device.clear_loaded_sub_device_manager()

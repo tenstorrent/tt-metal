@@ -130,9 +130,39 @@ def pytest_collection_modifyitems(config, items):
     Hardware constraints:
     - Blackhole: Only supports 4-device configs (linear-4, ring-4)
     - Wormhole: Ring topology only works with 8 devices (ring-8)
+
+    Subtorus / galaxy-ring guard (CI): FABRIC_2D_TORUS_{X,Y,XY} and a 2D-mesh FABRIC_1D_RING
+    need physical wrap cabling that NO CI runner has — opening that fabric on a plain bh-glx
+    just hangs (there are no subtorus-enabled runners on CI). So these are skipped whenever a CI
+    environment is detected; they run only on a subtorus-wired host (CI unset). (8,1)/(4,1) rings
+    are unaffected — they are already device-count-skipped off a galaxy and run on ring runners.
     """
+    on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
+    subtorus_fabrics = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+    }
 
     for item in items:
+        # Subtorus / galaxy-ring guard — must run before the marker check below so it catches torus
+        # configs regardless of whether they carry a requires_mesh_topology mark.
+        if on_ci:
+            params = getattr(getattr(item, "callspec", None), "params", {})
+            dp = params.get("device_params")
+            fabric = dp.get("fabric_config") if isinstance(dp, dict) else None
+            shape = params.get("mesh_device")
+            is_2d_mesh = isinstance(shape, (tuple, list)) and len(shape) == 2 and shape[0] > 1 and shape[1] > 1
+            if fabric in subtorus_fabrics or (fabric == ttnn.FabricConfig.FABRIC_1D_RING and is_2d_mesh):
+                item.add_marker(
+                    pytest.mark.skip(
+                        reason="subtorus/galaxy-ring config (FABRIC_2D_TORUS_* or 2D FABRIC_1D_RING) "
+                        "needs wrap cabling absent on CI runners; would hang on bh-glx. Run only on a "
+                        "subtorus-wired host (CI unset)."
+                    )
+                )
+                continue
+
         marker = item.get_closest_marker("requires_mesh_topology")
         if not marker:
             continue

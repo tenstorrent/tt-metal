@@ -6,7 +6,10 @@
 # the galaxy's horizontal X-ring (the 4x8 torus is a ring on the 4-wide X axis too).
 #
 # Select via TT_MESH_GRAPH_DESC_PATH (override) paired with FabricConfig.FABRIC_2D_TORUS_XY.
-# Open a (4,4) mesh_device and run Topology.Ring on cluster_axis=0. Single host / single rank.
+# Open a (4,4) mesh_device and run Topology.Ring on BOTH cluster_axis=0 (SP) AND cluster_axis=1
+# (TP) — both axes are physically wrapped here, so unlike the y4 [RING, LINE] descriptor the TP
+# axis must also be Ring (a Linear TP collective would wait on a wrap link / mismatch the fabric).
+# Single host / single rank.
 # RELAXED so the 16-chip slice maps onto the partial 32-chip UBB board.
 
 mesh_descriptors {
