@@ -152,8 +152,7 @@ def test_moe_grouped_topk(
     if apply_padding:
         pad_rows = tt_indices_2d[num_real:]
         assert torch.all(pad_rows == total_experts), (
-            f"Padded rows not all sentinel ({total_experts}); got unique values "
-            f"{torch.unique(pad_rows).tolist()}"
+            f"Padded rows not all sentinel ({total_experts}); got unique values " f"{torch.unique(pad_rows).tolist()}"
         )
         tt_indices_2d, ref_indices_2d = tt_indices_2d[:num_real], ref_indices_2d[:num_real]
         tt_weights_2d, ref_weights_2d = tt_weights_2d[:num_real], ref_weights_2d[:num_real]
