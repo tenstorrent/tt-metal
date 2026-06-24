@@ -100,6 +100,16 @@ const char* get_riscv_name(const Hal& hal, HalProgrammableCoreType core_type, ui
                 core_type);
             return names[processor_index];
         }
+        case HalProgrammableCoreType::DISPATCH: {
+            auto num_processors = hal.get_num_risc_processors(core_type);
+            TT_FATAL(
+                processor_index < num_processors,
+                "Watcher data corrupted, unexpected processor index {} on core {} (max {})",
+                processor_index,
+                core_type,
+                num_processors - 1);
+            return hal.get_processor_class_name(core_type, processor_index, false).c_str();
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("unsupported core type");
     }
     TT_THROW("unreachable");

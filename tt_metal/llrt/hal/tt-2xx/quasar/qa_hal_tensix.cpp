@@ -294,4 +294,36 @@ HalCoreInfoType create_tensix_mem_map() {
         tensix_realtime_profiler_msgs::create_factory()};
 }
 
+dev_msgs::Factory create_tensix_dev_msgs_factory() { return tensix_dev_msgs::create_factory(); }
+
+HalCoreInfoType create_dispatch_mem_map() {
+    auto tensix_mem_map = create_tensix_mem_map();
+    std::vector<std::vector<HalJitBuildConfig>> processor_classes = {tensix_mem_map.processor_classes()[0]};
+    std::vector<std::vector<std::pair<std::string, std::string>>> processor_classes_names = {
+        {{"DM0", "DM0"},
+         {"DM1", "DM1"},
+         {"DM2", "DM2"},
+         {"DM3", "DM3"},
+         {"DM4", "DM4"},
+         {"DM5", "DM5"},
+         {"DM6", "DM6"},
+         {"DM7", "DM7"}},
+    };
+    return HalCoreInfoType(
+        HalProgrammableCoreType::DISPATCH,
+        CoreType::DISPATCH,
+        std::move(processor_classes),
+        std::vector<uint8_t>{1},
+        tensix_mem_map.mem_map_bases(),
+        tensix_mem_map.mem_map_sizes(),
+        tensix_mem_map.eth_fw_mailbox_msgs(),
+        std::move(processor_classes_names),
+        true,
+        true,
+        false,
+        create_tensix_dev_msgs_factory(),
+        tensix_fabric_telemetry::create_factory(),
+        tensix_realtime_profiler_msgs::create_factory());
+}
+
 }  // namespace tt::tt_metal::quasar
