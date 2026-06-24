@@ -174,7 +174,7 @@ inline void calculate_typecast_int32_to_fp16b() {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_2, v >> 2);
         TT_SFPABS(0, v, t, 0);
-        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
     TTI_SFPNOP;
@@ -362,7 +362,7 @@ inline void calculate_typecast_int32_to_fp32() {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_2, v >> 2);
         TT_SFPABS(0, v, t, 0);
-        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+        TTI_SFPSHFT2(t, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TTI_SFPCAST(t, t, 0);
     }
     TTI_SFPNOP;
@@ -415,7 +415,7 @@ inline void calculate_typecast_uint32_to_fp16b() {
     for (int d = 0; d < ITERATIONS; d++) {
         int v = 2 + (d & 1);  // alternate between p_sfpu::LREG2 and p_sfpu::LREG3
         TT_SFPLOADMACRO((0 << 2) | (v & 3), InstrModLoadStore::INT32, ADDR_MOD_2, v >> 2);
-        TT_SFPSHFT2(v, p_sfpu::LREG12, p_sfpu::LREG7, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+        TT_SFPSHFT2(v, p_sfpu::LREG12, p_sfpu::LREG7, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
         TT_SFPSETSGN(0, v, v, 1);
     }
     TTI_SFPNOP;
@@ -628,13 +628,16 @@ inline void init_typecast_uint16_to_uint32() {
 #endif
 }
 
+// SFPCAST interprets its input as sign-magnitude, so bit 31 of the source flags the case
+// that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is preloaded with -31 -- the shift
+// amount the int/uint -> float macro inits (init_typecast_{uint32,int32}_to_fp32 / _to_fp16b)
+// use to extract that bit.
+inline void preload_sign_magnitude_cast_fixup() { sfpi::vConstIntPrgm0 = -31; }
+
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp32() {
 #ifndef DISABLE_SFPLOADMACRO
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     constexpr int a = p_sfpu::LREG2;
 
@@ -645,7 +648,7 @@ inline void init_typecast_uint32_to_fp32() {
     TTI_SFPCAST(a, 13, 0);
 
     // InstructionTemplate[2]
-    TTI_SFPSHFT2(0, p_sfpu::LREG12, 14, 5);  // SFPSHFT2_MOD1_SHFT_LREG
+    TTI_SFPSHFT2(0, p_sfpu::LREG12, 14, sfpi::SFPSHFT2_MOD1_SHFT_LREG);
 
     // InstructionTemplate[3]
     TTI_SFPMAD(0, p_sfpu::LCONST_1, 0, 15, 4);  // SFPMAD_MOD1_INDIRECT_VA
@@ -690,10 +693,7 @@ inline void init_typecast_int32_to_fp32() {
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
 
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     // InstructionTemplate[0]
     TTI_SFPSETSGN(0, t, 12, 0);
@@ -727,10 +727,7 @@ inline void init_typecast_int32_to_fp16b() {
 #ifndef DISABLE_SFPLOADMACRO
     constexpr int t = p_sfpu::LREG4;
 
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     // InstructionTemplate[0]
     TTI_SFPSETSGN(0, t, 12, 0);
@@ -832,10 +829,7 @@ inline void init_typecast_uint16_to_fp16b() {
 template <bool APPROXIMATION_MODE>
 inline void init_typecast_uint32_to_fp16b() {
 #ifndef DISABLE_SFPLOADMACRO
-    // SFPCAST interprets its input as sign-magnitude, so bit 31 of the source
-    // flags the case that needs a post-cast fixup. vConstIntPrgm0 (LREG12) is
-    // preloaded with -31 -- the shift amount used to extract that bit.
-    sfpi::vConstIntPrgm0 = -31;
+    preload_sign_magnitude_cast_fixup();
 
     // InstructionTemplate[0]
     TTI_SFPCAST(0, 12, 0);

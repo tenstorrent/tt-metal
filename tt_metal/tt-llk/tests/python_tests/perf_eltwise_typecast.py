@@ -53,7 +53,9 @@ from helpers.test_variant_parameters import (
 # dest_acc). The dest_acc choice mirrors the production/functional typecast wiring
 # (32-bit dtypes require 32-bit Dest -> dest_acc=Yes).
 _TYPECAST_PERF_CASES = [
-    # calculate_typecast_fp32_to_uint16, macro on !DST_ACCUM_MODE (16-bit Dest).
+    # Float16_b -> UInt16 routes through calculate_typecast_fp32_to_uint16: the
+    # Compute API maps the Float16_b-in-Dest -> UInt16 cast to that kernel (it does
+    # not load FP32 from L1). Macro on !DST_ACCUM_MODE (16-bit Dest).
     (DataFormat.Float16_b, DataFormat.UInt16, DestAccumulation.No),
     # calculate_typecast_uint16_to_fp32, macro on !DST_ACCUM_MODE (16-bit Dest).
     (DataFormat.UInt16, DataFormat.Float32, DestAccumulation.No),
