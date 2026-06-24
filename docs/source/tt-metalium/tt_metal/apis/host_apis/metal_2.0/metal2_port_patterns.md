@@ -111,7 +111,7 @@ experimental::DataflowBuffer dfb_recip(dfb::recip);
 // ... read via base pointer as before ...
 ```
 
-(Shared `accessor_name` for both endpoints relies on the per-kernel accessor-name dedup relaxation noted under [Self-loop DFB binding](#pattern-self-loop-dfb-binding); the two-distinct-names form also works. For a **single-ended** CB that already has one genuine endpoint — e.g. the packer's producer — bind that one for real and fabricate only the missing side; where a real-but-non-popping kernel exists (conv2d's `writer_tiled_out`), bind *it* as the consumer instead of self-looping.)
+(Shared `accessor_name` for both endpoints relies on the per-kernel accessor-name dedup relaxation noted under [Self-loop DFB binding](#pattern-self-loop-dfb-binding); the two-distinct-names form also works. For a **single-ended** CB that already has one genuine endpoint — e.g. the packer's producer — bind that one for real and fabricate only the missing side. Whether you can avoid fabricating at all turns on **one question: does any kernel other than the packer actually touch the CB?** If a co-resident kernel also accesses it — e.g. a DM kernel that reads the packed result to drain it elsewhere — bind *that* kernel as the consumer; it is a real endpoint, nothing fabricated. If the packer is the **sole** toucher — the usual shape for **sharded output**, where packed tiles land straight in the resident output shard and nothing drains them — there is no kernel to bind, so **self-loop** the packer. Decide by reading the kernel *bodies* for a real access, not by kernel names: a `writer_*`-named kernel can be a weights- or activation-mover that never touches the output CB.)
 
 **Document the hack prominently in the port report.** This is an *interim* workaround, not the intended end state. Record each self-loop binding in the report's [Open items for downstream](port_op_to_metal2_recipe.md#capture-the-port-report), stating plainly that the self-loop is a validator-satisfying device and **not** a genuine FIFO — so the eventual migration can find and replace every one.
 
@@ -217,6 +217,8 @@ For larger alias groups (three or more), every member names every other member i
 
 **Recognition signal**: A kernel refers to **one** circular buffer through **multiple names**, via legacy `uint32_t` CB-index aliasing — `constexpr uint32_t cb_x = cb_in;`, or a ternary that resolves one name to a CB index (`constexpr uint32_t cb_x = fuse ? cb_fusion : cb_out;`). Both names are then used for the *same* FIFO: a `push`/`reserve_back` via one name is seen by a `wait_front`/`pop_front` via the other, because they are literally the same buffer with the same read/write pointers.
 
+**Two forms — kernel-side and host-side.** The signal above is kernel-side (a `constexpr` aliases one CB index to another). The *same* one-FIFO-two-names situation can also be set up **on the host**: the program factory **mirrors one CB's index onto another** (and the buffer handle, in the allocation path) — often a 0-page CB pointed at a real one — so two logical CB names resolve to the same buffer before any kernel runs (one legacy spelling is a CB-descriptor field such as `overlapped_by_cb` whose handler does `cb.handle = other.handle; cb.index = other.index;`). The consequence is identical — one FIFO, two names — but a kernel-only scan won't catch it; you have to read the factory's CB setup. Treat it exactly as the kernel-side form below: **one** `DataflowBufferSpec`, the second name aliased to it — *not* a second spec, and *not* `alias_with`.
+
 **This is not [Aliased DFBs](#pattern-aliased-dfbs-legacy-aliased-cbs).** The two are easy to conflate and the distinction is correctness-critical:
 
 | | Aliased DFBs (`alias_with`) | Same-FIFO aliasing (this entry) |
@@ -224,7 +226,7 @@ For larger alias groups (three or more), every member names every other member i
 | Buffers | Two+ **distinct** DFBs | **One** DFB |
 | FIFO pointers | **Independent** per DFB | **Shared** — one FIFO |
 | What's shared | The physical L1 region | The buffer's identity |
-| Legacy form | Two CB *indices* configured at the same L1 address | Two `uint32_t` *variables* holding the same CB index |
+| Legacy form | Two CB *indices* configured at the same L1 address | Same CB index under two names — kernel-side (`uint32_t` alias) or host-side (factory copies handle + index) |
 
 Modeling same-FIFO aliasing with `alias_with` is a **bug**: you would get two independent FIFOs at one address, and the producer/consumer pointer coherence the kernel relies on (produce via one name, consume via the other) is lost silently.
 
