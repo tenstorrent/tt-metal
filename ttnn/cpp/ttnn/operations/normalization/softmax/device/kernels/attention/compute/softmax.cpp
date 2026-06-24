@@ -318,6 +318,15 @@ void kernel_main() {
         cb_recipsumexps_obj.pop_front(1);
         cb_exps_obj.pop_front(Wt);
     }  // NCHt loop
-    // cb_pop_front(cb_max_scaler, 1); // we don't actually have to do this
-    // cb_pop_front(cb_fused_scale, 1); // we don't actually have to do this
+
+    // The scaler CBs (and the fused-scale CB) are waited on once and reused as broadcast
+    // scalars across every NCHt iteration, so they are intentionally not popped inside the
+    // loop. Drain them here so the CBs are flushed at kernel exit. Leaving a page resident is
+    // benign per-launch (FIFO re-init) but a real hazard on a program-cache hit, where the
+    // reused program skips CB re-init and the leftover page back-pressures the next call.
+    cb_max_scaler_obj.pop_front(1);
+    cb_sum_scaler_obj.pop_front(1);
+#if FUSED_SCALE_MASK
+    cb_fused_scale_obj.pop_front(1);
+#endif
 }
