@@ -57,8 +57,8 @@ def build_pipeline(mesh_device: ttnn.MeshDevice):
 
     Returns a compiled GptOssPrefillPipeline ready for prefill() calls.
     """
-    from models.demos.gpt_oss.config import MeshConfig, ModeConfig
-    from models.demos.gpt_oss.tt.common import create_tt_model
+    from models.demos.gpt_oss_d_p.config import MeshConfig, ModeConfig
+    from models.demos.gpt_oss_d_p.tt.common import create_tt_model
     from models.demos.gpt_oss_d_p.tt.tt_gpt_oss_prefill_pipeline import GptOssPrefillPipeline
 
     hf_model_path = os.environ.get("DEEPSEEK_V3_HF_MODEL")
