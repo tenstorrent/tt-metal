@@ -168,14 +168,21 @@ class Pi0_5GLX1x8Pipeline:
         if not 1 <= self._num_real_cams <= _NUM_CHIPS_REQUIRED:
             raise RuntimeError(f"PI0_NUM_CAMERAS={self._num_real_cams} out of range [1, {_NUM_CHIPS_REQUIRED}]")
 
-        # Upstream-openpi-compat artifacts: position-aware suffix RoPE +
-        # cross-attention mask. Without these, denoise suffix Q uses RoPE at
-        # sequential positions 0..suffix_padded-1 instead of the correct
-        # prefix_len..prefix_len+suffix_padded-1 — corrupts cross-attention
-        # against the prefill KV cache. Effect scales with prefix_len so 2-cam
-        # (768) and 3-cam (1024) drift differently. Torch ref builds the same
-        # in _denoise_forward (torch_pi0_5_model.py:148).
-        self._suffix_cos, self._suffix_sin, self._expert_attn_mask = self._build_suffix_rope_and_expert_mask()
+        # Upstream-openpi-compat attention artifacts (prefix mask, position-
+        # aware prefix/suffix RoPE, expert mask). Defaults to all-real
+        # masks at init — backward-compatible with the perf test which
+        # doesn't pass masks. The LIBERO adapter calls
+        # `prepare_runtime_masks(img_masks, lang_masks)` per task to rebuild
+        # these artifacts when the actual padding pattern is known.
+        # Mirrors single-chip ttnn_pi0_5_model.py:_build_upstream_attn_artifacts.
+        self._suffix_cos = None
+        self._suffix_sin = None
+        self._expert_attn_mask = None
+        self._prefix_cos = None
+        self._prefix_sin = None
+        self._prefix_attn_mask = None
+        self._artifact_mask_key = None  # (img_present_tuple, lang_real_count) — re-build trigger
+        self._build_upstream_artifacts()  # init with all-real defaults
 
         # ---- Persistent buffers (pre-allocated for trace replay) ----
         # Allocated lazily on the first sample_actions call so the per-call
@@ -305,51 +312,103 @@ class Pi0_5GLX1x8Pipeline:
             )
         return self.suffix.project_output(normed)
 
-    # ──────────── Upstream-compat suffix RoPE + expert mask ──────────
+    # ──────────── Upstream-compat attention artifacts (unified builder) ──
 
-    def _build_suffix_rope_and_expert_mask(self):
-        """Build (suffix_cos, suffix_sin, expert_attn_mask) on the mesh.
+    def _build_upstream_artifacts(self, img_masks=None, lang_masks=None):
+        """Build all 6 attention artifacts based on optional masks.
 
-        Ports the relevant slice of tt_bh_glx/pipeline.py:_build_upstream_attn_artifacts
-        for the 1×8 single-mesh case. In our pipeline, img_masks and lang_masks
-        are always all-True (no padding) and the prefix length equals the
-        tile-aligned padded length, so:
-          - prefix attn mask is None (no padding to mask)
-          - prefix RoPE positions are sequential 0..prefix_len-1 (default)
-          - suffix RoPE positions are prefix_len + [0..suffix_padded-1]   ← THE FIX
-          - expert mask blocks only the suffix-padding tail rows/cols
+        Args:
+          img_masks: list of torch bool tensors (one per camera, each shape (1,)).
+                     None → all real (default; matches perf test).
+          lang_masks: torch bool tensor shape (1, 256). None → all real.
 
-        All tensors are replicated across the 1×8 mesh (no mesh_mapper).
+        SIDE EFFECT: deallocates current artifacts (if any) and rebuilds them.
+        Sets self._suffix_cos, _suffix_sin, _expert_attn_mask, _prefix_cos,
+        _prefix_sin, _prefix_attn_mask. When all real + prefix tile-aligned,
+        _prefix_attn_mask is None (skip-mask fast path) and _prefix_cos/sin
+        are None (prefill uses internal sequential RoPE).
+
+        Mirrors single-chip ttnn_pi0_5_model.py:_build_upstream_attn_artifacts.
         """
-        action_horizon = self.action_horizon
+        num_cams = self._num_real_cams
         suffix_padded = self._action_horizon_padded
-        prefix_len = self._num_real_cams * _NUM_PATCHES + 256  # 256 = LANG_LEN production
-        prefix_padded = ((prefix_len + 31) // 32) * 32  # equal to prefix_len for our case
+        action_horizon = self.action_horizon
+        vlm_head_dim = self.config.vlm_config.head_dim
         expert_head_dim = self.config.expert_config.head_dim
         max_seq_len = self.config.max_seq_len
 
-        # Suffix RoPE at prefix_len + [0..suffix_padded-1].
+        # Default masks: all real.
+        if img_masks is None:
+            img_masks = [torch.ones(1, dtype=torch.bool) for _ in range(num_cams)]
+        if lang_masks is None:
+            lang_masks = torch.ones(1, 256, dtype=torch.bool)
+        assert len(img_masks) == num_cams, f"need {num_cams} img masks, got {len(img_masks)}"
+
+        # 1) Build pad_mask = concat(per-cam-pad-segments, lang_mask[0]).
+        pad_segs = []
+        for m in img_masks:
+            real = bool(m.item()) if m.numel() == 1 else bool(m[0].item())
+            pad_segs.append(torch.full((_NUM_PATCHES,), real, dtype=torch.bool))
+        pad_segs.append(lang_masks[0].to(torch.bool))
+        pad_mask = torch.cat(pad_segs, dim=0)
+        prefix_len = pad_mask.shape[0]
+        prefix_padded = ((prefix_len + 31) // 32) * 32
+        prefix_real_count = int(pad_mask.sum().item())
+        all_real_aligned = (prefix_real_count == prefix_len) and (prefix_padded == prefix_len)
+
+        # 2) Prefix attention mask (None when all real + tile-aligned → fast SDPA path).
+        if all_real_aligned:
+            prefix_mask_4d = None
+        else:
+            pad_2d = pad_mask[:, None] & pad_mask[None, :]
+            prefix_mask = torch.zeros(prefix_padded, prefix_padded, dtype=torch.bfloat16)
+            prefix_mask[:prefix_len, :prefix_len].masked_fill_(~pad_2d, _MASK_VAL)
+            if prefix_padded > prefix_len:
+                prefix_mask[prefix_len:, :] = _MASK_VAL
+                prefix_mask[:, prefix_len:] = _MASK_VAL
+            prefix_mask_4d = prefix_mask.unsqueeze(0).unsqueeze(0)
+
+        # 3) Prefix RoPE — only override when masking is needed (else prefill
+        # stage's internal sequential cos/sin works fine and avoids extra alloc).
+        if all_real_aligned:
+            prefix_cos_4d = None
+            prefix_sin_4d = None
+        else:
+            position_ids = torch.cumsum(pad_mask.to(torch.int64), dim=0) - 1
+            position_ids = position_ids.clamp(min=0, max=max_seq_len - 1)
+            cos_vlm, sin_vlm = _precompute_rope_table_torch(vlm_head_dim, max_seq_len)
+            prefix_cos = cos_vlm[position_ids]
+            prefix_sin = sin_vlm[position_ids]
+            if prefix_padded > prefix_len:
+                zc = torch.zeros(prefix_padded - prefix_len, vlm_head_dim, dtype=prefix_cos.dtype)
+                zs = torch.zeros(prefix_padded - prefix_len, vlm_head_dim, dtype=prefix_sin.dtype)
+                prefix_cos = torch.cat([prefix_cos, zc], dim=0)
+                prefix_sin = torch.cat([prefix_sin, zs], dim=0)
+            prefix_cos_4d = prefix_cos.unsqueeze(0).unsqueeze(0)
+            prefix_sin_4d = prefix_sin.unsqueeze(0).unsqueeze(0)
+
+        # 4) Suffix RoPE: offset by REAL prefix count (= prefix_len when all real).
         cos_exp, sin_exp = _precompute_rope_table_torch(expert_head_dim, max_seq_len)
-        suffix_positions = (torch.arange(suffix_padded, dtype=torch.int64) + prefix_len).clamp(max=max_seq_len - 1)
+        suffix_positions = (torch.arange(suffix_padded, dtype=torch.int64) + prefix_real_count).clamp(
+            max=max_seq_len - 1
+        )
         suffix_cos_4d = cos_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
         suffix_sin_4d = sin_exp[suffix_positions].unsqueeze(0).unsqueeze(0)
 
-        # Expert cross-attention mask: (1, 1, suffix_padded, prefix_padded + suffix_padded).
-        # In our all-real case, only suffix-tail padding needs masking.
+        # 5) Expert cross-attention mask: block prefix-pad cols + suffix-tail pad.
         kv_total = prefix_padded + suffix_padded
         em = torch.zeros(suffix_padded, kv_total, dtype=torch.bfloat16)
+        pad_blocked = (~pad_mask).nonzero(as_tuple=True)[0]
+        if pad_blocked.numel() > 0:
+            em[:, pad_blocked] = _MASK_VAL
+        if prefix_padded > prefix_len:
+            em[:, prefix_len:prefix_padded] = _MASK_VAL
         if suffix_padded > action_horizon:
-            # Block columns in the suffix-segment past action_horizon.
             em[:, prefix_padded + action_horizon : kv_total] = _MASK_VAL
-            # Block rows past action_horizon (those queries don't matter).
             em[action_horizon:suffix_padded, :] = _MASK_VAL
         expert_mask_4d = em.unsqueeze(0).unsqueeze(0)
 
-        # PI0_ROPE_TABLES_L1=1 places suffix cos/sin in L1 (saves ~55 µs/denoise
-        # step = 0.27 ms/inference on 1×8 mesh — RoPE kernel reads tables on
-        # every call). SDPA mask MUST stay in DRAM (SDPA kernel hard-asserts).
-        # Tables are tiny: (1, 1, 32, 256) bf16 ≈ 16 KB × 2 = 32 KB / chip.
-        # Mirrors single-chip ttnn_pi0_5_model.py:507 and pipeline.py:253.
+        # Upload helpers.
         _rope_l1 = os.environ.get("PI0_ROPE_TABLES_L1", "").lower() in ("1", "true", "yes", "on")
         rope_mc = ttnn.L1_MEMORY_CONFIG if _rope_l1 else ttnn.DRAM_MEMORY_CONFIG
 
@@ -362,7 +421,45 @@ class Pi0_5GLX1x8Pipeline:
                 memory_config=mc,
             )
 
-        return _up(suffix_cos_4d, rope_mc), _up(suffix_sin_4d, rope_mc), _up(expert_mask_4d)
+        # Deallocate previous artifacts (idempotent on first call when all None).
+        for attr in (
+            "_suffix_cos",
+            "_suffix_sin",
+            "_expert_attn_mask",
+            "_prefix_cos",
+            "_prefix_sin",
+            "_prefix_attn_mask",
+        ):
+            t = getattr(self, attr, None)
+            if t is not None:
+                ttnn.deallocate(t)
+                setattr(self, attr, None)
+
+        # Upload new artifacts.
+        self._suffix_cos = _up(suffix_cos_4d, rope_mc)
+        self._suffix_sin = _up(suffix_sin_4d, rope_mc)
+        self._expert_attn_mask = _up(expert_mask_4d, ttnn.DRAM_MEMORY_CONFIG)
+        if prefix_mask_4d is not None:
+            self._prefix_attn_mask = _up(prefix_mask_4d, ttnn.DRAM_MEMORY_CONFIG)
+        if prefix_cos_4d is not None:
+            self._prefix_cos = _up(prefix_cos_4d, rope_mc)
+            self._prefix_sin = _up(prefix_sin_4d, rope_mc)
+
+        # Record the mask key so callers can skip rebuild when masks unchanged.
+        img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks)
+        lang_real_count = int(lang_masks[0].to(torch.bool).sum().item())
+        self._artifact_mask_key = (img_present, lang_real_count)
+
+    def prepare_runtime_masks(self, img_masks, lang_masks):
+        """Rebuild upstream artifacts for new runtime masks. Idempotent if
+        masks match the last build (no-op). Call BEFORE capture_trace per task.
+        """
+        img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks)
+        lang_real_count = int(lang_masks[0].to(torch.bool).sum().item())
+        key = (img_present, lang_real_count)
+        if key == self._artifact_mask_key:
+            return  # masks unchanged — current artifacts are valid
+        self._build_upstream_artifacts(img_masks, lang_masks)
 
     # ──────────── TIER A: host-side modulation precompute ──────────────
 
@@ -541,7 +638,19 @@ class Pi0_5GLX1x8Pipeline:
         ttnn.deallocate(vision_real)
 
         # ---- Stage 1: prefill TP=8 ----
-        _final_hidden, per_layer_kv = self.prefill.run(prefix_embs)
+        # When LIBERO single-arm masking is on, pass prefix_attn_mask + position-
+        # aware RoPE override (cos/sin replicated across all 18 layers, since the
+        # prefill stage's loop indexes per_chip_cos[i] per LAYER, not per chip).
+        if self._prefix_cos is not None:
+            num_layers = len(self.prefill.blocks)
+            _final_hidden, per_layer_kv = self.prefill.run(
+                prefix_embs,
+                attention_mask=self._prefix_attn_mask,
+                per_chip_cos=[self._prefix_cos] * num_layers,
+                per_chip_sin=[self._prefix_sin] * num_layers,
+            )
+        else:
+            _final_hidden, per_layer_kv = self.prefill.run(prefix_embs, attention_mask=self._prefix_attn_mask)
         ttnn.deallocate(prefix_embs)
 
         # ---- Stage 2: 5-step Euler denoise (replicated on all 8 chips) ----
@@ -711,12 +820,34 @@ class Pi0_5GLX1x8Pipeline:
         self,
         images: List[torch.Tensor],
         lang_tokens: torch.Tensor,
+        img_masks: Optional[List[torch.Tensor]] = None,
+        lang_masks: Optional[torch.Tensor] = None,
     ) -> None:
-        """One-time setup: allocate persistent buffers, JIT-compile every
-        kernel via an eager warmup, then capture the full _sample_actions_device
-        body as a TTNN trace on the parent mesh's CQ 0. After this completes,
-        sample_actions_traced() can be called repeatedly with new inputs.
+        """One-time setup: optionally rebuild attention artifacts for the
+        runtime masks, allocate persistent buffers, JIT-compile every kernel
+        via an eager warmup, then capture the full _sample_actions_device body
+        as a TTNN trace on the parent mesh's CQ 0.
+
+        If img_masks/lang_masks are provided, the upstream attention artifacts
+        (prefix mask, position-aware RoPE, suffix RoPE offset, expert mask)
+        are rebuilt for these masks BEFORE warmup + capture. The new trace
+        records reads from the freshly-allocated artifact tensors, so the
+        old trace (if any) is released and must be re-captured. Default
+        masks=None preserves backward-compat with the perf test which uses
+        random inputs assumed all-real.
         """
+        # 0. If masks provided and changed, release any prior trace and
+        #    rebuild attention artifacts.
+        if img_masks is not None and lang_masks is not None:
+            img_present = tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks)
+            lang_real_count = int(lang_masks[0].to(torch.bool).sum().item())
+            new_key = (img_present, lang_real_count)
+            if new_key != self._artifact_mask_key:
+                if self._trace_id is not None:
+                    ttnn.release_trace(self.mesh, self._trace_id)
+                    self._trace_id = None
+                self._build_upstream_artifacts(img_masks, lang_masks)
+
         # 1. Stage the persistent inputs.
         self._ensure_persistent_input_buffers(images, lang_tokens)
         self._refresh_noise_buffer()

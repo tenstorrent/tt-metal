@@ -175,6 +175,20 @@ class Pi0_5LiberoAdapter:
             self._Pi0_5ModelTTNN = None
             self.mesh_handles = mesh_handles
             self.model = Pi0_5GLXPipeline(cfg, loader.categorized_weights, mesh_handles)
+        elif backend == "ttnn_1x8":
+            # 1×8 mesh pipeline: 8 chips with on-device CCL, num_command_queues=2
+            # for H2D overlap, traced + 2CQ replay loop. mesh_handles is the raw
+            # mesh device returned by open_prefill_tp4_mesh(tp=8, num_command_queues=2).
+            assert mesh_handles is not None, "ttnn_1x8 backend requires mesh from open_prefill_tp4_mesh()"
+            from models.experimental.pi0_5.tt.tt_bh_glx.pipeline_1x8 import Pi0_5GLX1x8Pipeline
+
+            self._ttnn = None
+            self._Pi0_5ModelTTNN = None
+            self.mesh_handles = mesh_handles
+            self.model = Pi0_5GLX1x8Pipeline(cfg, loader.categorized_weights, mesh_handles)
+            # Per-task trace cache: re-capture when (task_desc, num_denoising_steps)
+            # changes. Same idea as `ttnn` backend's trace cache (line ~631-654).
+            self._glx1x8_trace_key = None
         else:
             raise ValueError(f"Unknown backend: {backend}")
         self.cfg = cfg
@@ -395,6 +409,36 @@ class Pi0_5LiberoAdapter:
                     lang_masks=lang_mask,
                 )
             self.model.num_denoising_steps = original_steps
+            actions_np = actions[0].float().cpu().numpy()
+        elif self.backend == "ttnn_1x8":
+            # 1×8 mesh + Trace + 2CQ pipeline. capture_trace rebuilds attention
+            # artifacts (prefix mask, position-aware RoPE, suffix RoPE offset,
+            # expert mask) for the runtime img_masks + lang_masks BEFORE warmup
+            # + trace capture. Re-captures the trace when masks change (per task).
+            # sample_actions_traced_2cq_loop refreshes input buffers (H2D on CQ1)
+            # and replays the trace (CQ0) with 2CQ event pingpong.
+            cache_key = (
+                task_desc,
+                num_denoising_steps,
+                int(tokens.shape[-1]),
+                tuple(bool(m.item()) if m.numel() == 1 else bool(m[0].item()) for m in img_masks),
+                int(lang_mask[0].to(torch.bool).sum().item()),
+            )
+            if cache_key != self._glx1x8_trace_key:
+                self.model.num_denoising_steps = num_denoising_steps
+                self.model.capture_trace(
+                    images,
+                    lang_tokens=tokens,
+                    img_masks=img_masks,
+                    lang_masks=lang_mask,
+                )
+                self._glx1x8_trace_key = cache_key
+            with torch.no_grad():
+                actions, _times = self.model.sample_actions_traced_2cq_loop(
+                    images,
+                    lang_tokens=tokens,
+                    iters=1,
+                )
             actions_np = actions[0].float().cpu().numpy()
         elif self._use_trace:
             # === TTNN backend with persistent buffers + trace replay ===
@@ -917,7 +961,7 @@ def main():
         default=None,
         help="Override env step cap. If unset, uses per-suite default (spatial=220, object=280, goal=300, 10=520).",
     )
-    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn", "ttnn_glx"])
+    ap.add_argument("--backend", default="pytorch", choices=["pytorch", "ttnn", "ttnn_glx", "ttnn_1x8"])
     ap.add_argument(
         "--replan-steps",
         type=int,
@@ -1031,6 +1075,32 @@ def main():
         mesh_ctx = open_galaxy_mesh(l1_small_size=24576)
         mesh_handles = mesh_ctx.__enter__()
         print(f"   ttnn_glx mesh opened in {time.time() - t0:.1f}s (28 chips on 8x4 BH Galaxy)")
+    elif args.backend == "ttnn_1x8":
+        # 1×8-specific env vars that the perf test (test_perf_tt_bh_glx_1x8.py)
+        # self-applies at module load. These are NOT in pi05_production.env
+        # — they're pipeline_1x8-specific and control how attention/MLP
+        # weights shard across the 8-chip mesh. Without these, wqkv loads
+        # un-sharded (N=2560 instead of N=768/chip) and the prefill QKV
+        # matmul kernel-config invariant fails. setdefault preserves any
+        # explicit shell override.
+        for _k, _v in {
+            "PI0_TP": "8",
+            "PI0_TP4_ATTN_HEADPAR": "1",
+            "PI0_MLP_BS": "1",
+            "PI0_MLP_FUSED_RS": "0",
+        }.items():
+            os.environ.setdefault(_k, _v)
+
+        from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
+
+        mesh_ctx = open_prefill_tp4_mesh(
+            tp=8,
+            l1_small_size=24576,
+            trace_region_size=128 * 1024 * 1024,
+            num_command_queues=2,
+        )
+        mesh_handles = mesh_ctx.__enter__()
+        print(f"   ttnn_1x8 mesh opened in {time.time() - t0:.1f}s (8 chips, 2 CQs)")
     adapter = Pi0_5LiberoAdapter(
         args.checkpoint,
         backend=args.backend,
