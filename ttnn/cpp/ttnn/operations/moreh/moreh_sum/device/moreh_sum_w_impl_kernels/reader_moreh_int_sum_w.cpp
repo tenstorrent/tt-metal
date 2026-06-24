@@ -18,7 +18,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_mask_w = 1;
 #ifdef DO_MASK_W
-    generate_mask_w<int32_t>(cb_id_mask_w, mask_w);
+    CircularBuffer cb_mask_w_obj(cb_id_mask_w);
+    generate_mask_w<int32_t>(cb_mask_w_obj, mask_w);
 #endif
 
     constexpr uint32_t onetile = 1;

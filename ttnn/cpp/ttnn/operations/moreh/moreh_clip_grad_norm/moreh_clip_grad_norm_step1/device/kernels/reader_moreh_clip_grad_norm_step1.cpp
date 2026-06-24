@@ -29,9 +29,12 @@ void kernel_main() {
         uint32_t u;
     } scaler;
     scaler.f = 1.0f;
-    fill_cb_with_value(cb_id_decimal, decimal);
-    fill_cb_with_value(cb_id_one, scaler.u);
-    generate_mask_h_w_if_needed(cb_id_mask_h_w, origin_h, origin_w);
+    CircularBuffer cb_decimal(cb_id_decimal);
+    CircularBuffer cb_one(cb_id_one);
+    CircularBuffer cb_mask_h_w(cb_id_mask_h_w);
+    fill_cb_with_value(cb_decimal, decimal);
+    fill_cb_with_value(cb_one, scaler.u);
+    generate_mask_h_w_if_needed(cb_mask_h_w, origin_h, origin_w);
 
     constexpr uint32_t onetile = 1;
 

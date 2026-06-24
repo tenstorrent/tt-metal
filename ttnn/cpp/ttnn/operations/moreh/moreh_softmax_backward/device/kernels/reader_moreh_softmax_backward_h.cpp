@@ -34,8 +34,10 @@ void kernel_main() {
     const auto y_in = TensorAccessor(y_args, y_addr);
     const auto dy_in = TensorAccessor(dy_args, dy_addr);
 
-    generate_bcast_scaler(cb_scaler, scaler);
-    generate_mask_h(cb_mask, mask_h);
+    CircularBuffer cb_scaler_obj(cb_scaler);
+    CircularBuffer cb_mask_obj(cb_mask);
+    generate_bcast_scaler(cb_scaler_obj, scaler);
+    generate_mask_h(cb_mask_obj, mask_h);
 
     Noc noc;
     CircularBuffer cb_y_obj(cb_y);

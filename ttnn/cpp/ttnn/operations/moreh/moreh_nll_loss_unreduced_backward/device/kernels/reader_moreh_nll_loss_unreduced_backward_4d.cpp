@@ -49,7 +49,8 @@ void kernel_main() {
     CircularBuffer cb_weight_obj(cb_weight);
     const auto addrg_weight = TensorAccessor(weight_args, weight_addr);
 
-    read_line(cb_weight, cb_weight_scratch, addrg_weight, Ct);
+    CircularBuffer cb_weight_scratch_obj(cb_weight_scratch);
+    read_line(cb_weight_obj, cb_weight_scratch_obj, addrg_weight, Ct);
 
     cb_weight_obj.wait_front(Ct);
     CoreLocalMem<volatile uint16_t> weight_l1_ptr(cb_weight_obj.get_read_ptr());
@@ -65,10 +66,10 @@ void kernel_main() {
         uint32_t c = nc % C;
 
         auto target_noc_id = n * num_inner_tile + inner;
-        read_tile(cb_target, addrg_target, target_noc_id);
+        read_tile(cb_target_obj, addrg_target, target_noc_id);
 
         auto output_grad_noc_id = n * num_inner_tile + inner;
-        read_tile(cb_output_grad, addrg_output_grad, output_grad_noc_id);
+        read_tile(cb_output_grad_obj, addrg_output_grad, output_grad_noc_id);
 
         cb_input_grad_obj.reserve_back(onetile);
         cb_target_obj.wait_front(onetile);
