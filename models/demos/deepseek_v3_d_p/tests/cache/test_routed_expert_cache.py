@@ -175,39 +175,6 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         tt_expanded = ttnn.unsqueeze(ttnn.unsqueeze(tt_tensor, dim=0), dim=0)
         return ttnn.to_torch(tt_expanded, mesh_composer=mesh_composer)
 
-    def written_rows(output_4d):
-        """Gather only the rows the op actually writes, matching its output contract.
-
-        The unified op allocates `expert_outputs` with ttnn::empty and the FFN
-        writer places each expert's ceil_tile(count) rows at its region offset
-        (direct-write); the rest of the dispatch-shaped buffer (zero-count expert
-        regions and the tail of the capacity-factor-padded buffer — typically the
-        large majority of rows) is left uninitialized. Comparing the full buffer
-        would diff harmless uninitialized padding (different DRAM garbage per
-        allocation), so we compare only the written rows — same per-expert slicing
-        as the op test.
-        """
-        rows = []
-        for dg in range(num_dispatch_groups):
-            for ds in range(dispatch_group_size):
-                chip = output_4d[dg, ds]  # (max_dispatch_buffer_token_size, emb_dim)
-                inter_chip_offset = 0
-                for expert_idx in range(experts_per_chip):
-                    global_expert_idx = ExpertMapping.get_global_expert_idx(
-                        group=dg,
-                        chip=ds,
-                        local_expert=expert_idx,
-                        experts_per_chip=experts_per_chip,
-                        dispatch_group_size=dispatch_group_size,
-                        num_dispatch_groups=num_dispatch_groups,
-                        is_col_major=True,
-                    )
-                    token_count = expert_token_counts_torch[dg, 0, global_expert_idx].item()
-                    if token_count > 0:
-                        rows.append(chip[inter_chip_offset : inter_chip_offset + token_count])
-                    inter_chip_offset += (token_count + ttnn.TILE_SIZE - 1) // ttnn.TILE_SIZE * ttnn.TILE_SIZE
-        return torch.cat(rows, dim=0)
-
     # Use consistent dtype across all paths
     weights_dtype = ttnn.bfloat4_b
 
@@ -227,7 +194,12 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         weights_dtype=weights_dtype,
         weight_cache_path=None,
     )
-    output1_tt = expert_from_weights(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
+    # The unified op writes its FFN results back into the dispatched buffer in
+    # place (no separate output allocation), so each path must run on its own
+    # pristine copy of the input — otherwise path 2/3 would extract from path 1's
+    # already-overwritten rows. Clone per path; the determinism we are checking is
+    # over the weights->cold->warm cache, not the input buffer.
+    output1_tt = expert_from_weights(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)
     output1 = to_torch_expert(output1_tt)
 
     # === Path 2: Cold Cache ===
@@ -268,7 +240,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         cache_name_prefix="routed_expert",
     )
     profiler.end("cold_load")
-    output2_tt = expert_cold(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
+    output2_tt = expert_cold(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)
     output2 = to_torch_expert(output2_tt)
 
     # === Path 3: Warm Cache ===
@@ -286,7 +258,7 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         cache_name_prefix="routed_expert",
     )
     profiler.end("warm_load")
-    output3_tt = expert_warm(dispatched_buffer_tt, expert_token_counts_tt, expert_region_offsets_tt)
+    output3_tt = expert_warm(ttnn.clone(dispatched_buffer_tt), expert_token_counts_tt, expert_region_offsets_tt)
     output3 = to_torch_expert(output3_tt)
 
     # === Validation ===
@@ -301,15 +273,8 @@ def test_routed_expert_weights_cold_warm_cache(mesh_device, device_params):
         f"Output3 (warm cache): shape={output3.shape}, min={output3.min():.4f}, max={output3.max():.4f}, mean={output3.mean():.4f}"
     )
 
-    # Compare only the rows the op actually writes (its real output contract).
-    # The padding rows are uninitialized by design (ttnn::empty) and differ
-    # run-to-run, so they are excluded from the determinism check.
-    output1_written = written_rows(output1)
-    output2_written = written_rows(output2)
-    output3_written = written_rows(output3)
-
-    passed_cold, pcc_cold = comp_pcc(output1_written, output2_written)
-    passed_warm, pcc_warm = comp_pcc(output1_written, output3_written)
+    passed_cold, pcc_cold = comp_pcc(output1, output2)
+    passed_warm, pcc_warm = comp_pcc(output1, output3)
 
     logger.info(f"Routed Expert Cache Test:")
     logger.info(f"  Weights vs Cold Cache PCC: {pcc_cold}")
