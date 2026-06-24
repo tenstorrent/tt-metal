@@ -83,6 +83,32 @@ jobs:
               cat "$f"
               echo
             done
+            cat <<'EOF'
+
+          # === How to post inline review comments ===
+          Post every finding as a LINE-ANCHORED inline comment on the PR diff, using the
+          GitHub REST API via `gh api`. Anchor each comment to the file and line it is
+          about. Use this exact form (the flag types matter):
+
+            HEAD="$(git rev-parse HEAD)"
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" --method POST \
+              -f body="<finding text>" \
+              -f commit_id="$HEAD" \
+              -f path="<path/relative/to/repo/root>" \
+              -f side="RIGHT" \
+              -F line=<line-number>
+
+          Rules — follow these or the call fails:
+          - Pass `line` (and `start_line`, if a range) with `-F` (numeric), NEVER `-f`
+            (`-f line=...` sends a string and the API rejects it with HTTP 422).
+          - Do NOT pass `subject_type` — it is not a valid key for this endpoint.
+          - For a multi-line range, add `-F start_line=<n> -f start_side="RIGHT"`.
+          - `commit_id` must be the PR head SHA (`git rev-parse HEAD` after checkout).
+          - `path` is relative to the repo root, exactly as it appears in the diff.
+          - NEVER fall back to `gh pr review --comment` or `gh pr comment` — those post an
+            unanchored summary, not a line comment. If an inline post fails, fix the
+            command and retry; do not downgrade to a top-level comment.
+          EOF
           } > "$out"
           echo "Assembled $(wc -l < "$out") lines into $out"
 
@@ -115,7 +141,7 @@ jobs:
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
           # anthropic/ prefix for the proxy).
           claude_args: |
-            --allowedTools "Bash(gh:*),Bash(git:*)"
+            --allowedTools "Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*)"
             --max-turns 60
             --mcp-config tt_metal/tt-llk/.mcp.json
             --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
