@@ -14,9 +14,10 @@ socket.
 This process:
   1. opens the Wormhole device (l1_small_size=32768),
   2. loads DiffusionDriveModel from the checkpoint and installs the full TTNN
-     stack (build_stage2 → 3 → 3_4 → 3_5 → 3_6 → 3_7) — every weight-bearing op
+     stack (build_stage2 → 3 → 3_4 → 3_5 → 3_6 → 3_7 → 4) — every weight-bearing op
      on-device, with the TransFuser backbone running as one device-native graph
-     (consolidated, auto-enabled at build_stage3_6; DD_CONSOLIDATE=0 to opt out),
+     (consolidated, auto-enabled at build_stage3_6; DD_CONSOLIDATE=0 to opt out)
+     and the perception block + DDIM decoder consolidated by build_stage4,
   3. serves one request at a time: recv {camera,lidar,status} numpy arrays →
      run forward → send back {trajectory} numpy array.
 
@@ -115,6 +116,9 @@ def _build_model(checkpoint: str, anchors: str, device):
     # round-trips are gone). Stage 3.6 (fusion) requires the production resolution
     # the agent sends (camera 256×1024, LiDAR 256×256), where the pool/upsample
     # ratios are integer. Set DD_CONSOLIDATE=0 to fall back to the staged path.
+    # build_stage4 then consolidates the perception block + the DDIM decoder loop
+    # onto the device too (drops the per-drop-in round-trips) — measured ~1.20×
+    # faster per request, and the prerequisite for whole-model trace capture.
     (
         model.build_stage2(device)
         .build_stage3(device)
@@ -122,6 +126,7 @@ def _build_model(checkpoint: str, anchors: str, device):
         .build_stage3_5(device)
         .build_stage3_6(device)
         .build_stage3_7(device)
+        .build_stage4(device)
     )
     return model
 
