@@ -13,7 +13,12 @@ import argparse, glob, json, os, shutil
 import numpy as np
 import torch
 
-SNAP_BASE = "/home/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots"
+# Base Qwen3-ASR-1.7B snapshot dir. Overridable via env so this runs both on the host
+# (eval venv, default below) and inside the server container (e.g. /root/.cache/...).
+SNAP_BASE = os.environ.get(
+    "QWEN3ASR_SNAP_BASE",
+    "/home/ttuser/.cache/huggingface/hub/models--Qwen--Qwen3-ASR-1.7B/snapshots",
+)
 TEXT_CFG = dict(
     architectures=["Qwen3ForCausalLM"], model_type="qwen3",
     hidden_size=2048, intermediate_size=6144, num_hidden_layers=28,
