@@ -11,7 +11,7 @@ Uses ``EagerQwen3_32BExecutor`` / ``TracedQwen3_32BExecutor`` directly
 both divide T3K (8). The port raises on any other mesh.
 
 Usage:
-    # Token accuracy (requires refpt — generate with generate_controlled_refpt.py)
+    # Token accuracy (gates against the committed book ``.refpt``)
     MESH_DEVICE=T3K HF_MODEL=Qwen/Qwen3-32B \\
       pytest models/common/tests/demos/qwen3_32b/demo.py -k "token-accuracy" -v
 
@@ -187,11 +187,7 @@ def load_reference_data(hf_model_id: str):
     name = ref_basename_for_hf(hf_model_id)
     ref_path = Path("models/tt_transformers/tests/reference_outputs") / f"{name}.refpt"
     if not ref_path.exists():
-        pytest.skip(
-            f"Reference file not found: {ref_path}. "
-            f"Generate with: python models/common/tests/demos/qwen3_32b/generate_controlled_refpt.py "
-            f"--hf-model {hf_model_id}"
-        )
+        pytest.skip(f"Reference file not found: {ref_path}")
 
     ref_data = torch.load(ref_path, map_location="cpu")
     reference_tokens = ref_data["reference_tokens"]
