@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <iostream>
 #include <tt_stl/fmt.hpp>
 #include "tt_metal/distributed/mesh_socket_utils.hpp"
 #include "tt_metal/distributed/mesh_socket_serialization.hpp"
@@ -388,19 +387,6 @@ void write_socket_configs(
                         recv_device_coord, peer_device, config.receiver_mesh_id.value(), config.receiver_rank);
                     uint32_t receiver_id = receiver_ids_per_sender.at(connection);
                     auto sender_node = mesh_device->get_fabric_node_id(sender_core.device_coord);
-                    std::cout << fmt::format(
-                                     "[SOCK-RES] sender_rank={} recv_rank={} | sender_coord={} -> "
-                                     "node(mesh={},chip={}) | recv_coord={} peer_device={} -> node(mesh={},chip={})\n",
-                                     *config.sender_rank,
-                                     *config.receiver_rank,
-                                     sender_core.device_coord,
-                                     *sender_node.mesh_id,
-                                     sender_node.chip_id,
-                                     recv_device_coord,
-                                     peer_device ? 1 : 0,
-                                     *recv_fabric_node_id.mesh_id,
-                                     recv_fabric_node_id.chip_id)
-                              << std::flush;
                     auto [downstream_mesh_id, downstream_chip_id] = get_sender_receiver_chip_fabric_encoding(
                         sender_node, recv_fabric_node_id, fabric_config, SocketEndpoint::SENDER);
                     // Write to the correct slot based on receiver ID
