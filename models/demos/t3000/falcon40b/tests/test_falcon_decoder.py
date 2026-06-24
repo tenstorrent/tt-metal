@@ -59,6 +59,11 @@ def run_test_FalconDecoder_inference(
         low_cpu_mem_usage=True,
         num_hidden_layers=layer_num + 1,
     )
+    # transformers v5 defaults from_pretrained to dtype="auto", loading weights in the
+    # checkpoint dtype (bfloat16 for Falcon-40B). The CPU reference (incl. LayerNorm) is
+    # compared against float32 test inputs, so force float32 to match — restoring the
+    # pre-v5 default and avoiding "mixed dtype (CPU): expect parameter ... Float" errors.
+    hugging_face_reference_model = hugging_face_reference_model.to(torch.float32)
     hugging_face_reference_model.eval()
     configuration = hugging_face_reference_model.config
     state_dict = hugging_face_reference_model.state_dict()
