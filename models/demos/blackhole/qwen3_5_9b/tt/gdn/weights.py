@@ -102,11 +102,11 @@ def load_gdn_weights(mesh_device, state_dict, args, dtype=ttnn.bfloat16, tensor_
     #            │ K heads 12–15                │   2048 rows
     #            │ V heads 24–31                │
     #            └──────────────────────────────┘
-    qkv_re = tpc.prepare_gdn_qkv(
+    qkv_reorganized_for_sharding = tpc.prepare_gdn_qkv(
         state_dict["in_proj_qkv.weight"], key_dim, value_dim, num_k_heads, head_k_dim, num_v_heads, head_v_dim, tp
     )
     wqkv = tpc.shard_w(
-        qkv_re, mesh_device, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=cache("wqkv"), dtype=dtype
+        qkv_reorganized_for_sharding, mesh_device, dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG, cache_path=cache("wqkv"), dtype=dtype
     )
 
     # in_proj_z has [4096, hidden] shape
