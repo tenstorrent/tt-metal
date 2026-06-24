@@ -499,6 +499,12 @@ Tensor reduce(
     float scalar,
     bool correction,
     const std::optional<CoreRangeSet>& sub_core_grids) {
+    // ttnn.mean does not support integer inputs. Remove once integer AVG is implemented.
+    if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
+        const auto dt = input_tensor_arg.dtype();
+        TT_FATAL(
+            dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
+    }
     ttnn::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     float pad_value = get_pad_value(reduce_type, input_tensor_arg.dtype());
     // TODO: generalize to support all types, parameters, and formats. Issue #18566
