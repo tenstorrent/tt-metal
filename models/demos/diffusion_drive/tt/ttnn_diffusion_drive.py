@@ -19,8 +19,15 @@ Public API:
     out = model(features)              # Stage-2 forward (TTNN backbone)
     model.build_stage3(device)         # install TTNN FPN in-place (requires Stage 2)
     out = model(features)              # Stage-3 forward (TTNN backbone + TTNN FPN)
+    model.build_stage3_6(device)       # stems+fusion → backbone goes device-native
+                                       #   (consolidated path auto-enabled here)
+    model.build_stage5(device)         # explicit/redundant: force consolidated path
     model.compile(device)              # (Stage 4+) trace capture
     model.execute_compiled(features)   # (Stage 4+) trace replay
+
+Once build_stage3 (FPN) and build_stage3_6 (stems+fusion) have both run the
+TransFuser backbone runs as one device-native graph by default (no per-stage host
+round-trips); set DD_CONSOLIDATE=0 to fall back to the staged path.
 """
 
 from __future__ import annotations
@@ -102,6 +109,9 @@ class TtnnDiffusionDriveModel:
         ref_backbone = self._model._backbone._ttnn._ref
         ttnn_fpn = TtnnFPN(ref_backbone, device)
         self._model._backbone._ttnn._ttnn_fpn = ttnn_fpn
+        # FPN was the last consolidation prerequisite if stems+fusion (3_6) already
+        # ran; flip the backbone to the device-native path (no-op until 3_6 lands).
+        self._model._backbone._ttnn._maybe_enable_consolidated()
         return self
 
     # ------------------------------------------------------------------
@@ -129,6 +139,10 @@ class TtnnDiffusionDriveModel:
         ttnn_bb = self._model._backbone._ttnn
         ttnn_bb.install_stems(device)
         ttnn_bb.install_fusion(TtnnFuseFeatures(ttnn_bb._ref, device))
+        # Stems+fusion were the last consolidation prerequisites if the FPN (3) is
+        # installed; flip the backbone to the device-native path by default here
+        # (no-op if build_stage3 hasn't run, or if DD_CONSOLIDATE=0).
+        ttnn_bb._maybe_enable_consolidated()
         return self
 
     # ------------------------------------------------------------------
@@ -235,6 +249,29 @@ class TtnnDiffusionDriveModel:
         if not isinstance(th.diff_decoder.layers[0].ffn, TtnnSequentialMLP):
             raise RuntimeError("build_stage4 requires build_stage3_5 to be called first")
         install_ttnn_diff_decoder(th, device)
+        return self
+
+    # ------------------------------------------------------------------
+    # Stage 5: device-native backbone (consolidated stage→fusion chaining)
+    # ------------------------------------------------------------------
+
+    def build_stage5(self, device: ttnn.Device) -> "TtnnDiffusionDriveModel":
+        """Route the TransFuser backbone through the device-native consolidated path.
+
+        Keeps the image/LiDAR feature maps on-device across all four ResNet-34
+        stages and the 4× GPT fusion, removing the 8 per-stage host round-trips of
+        the staged path (the prerequisite for whole-model trace capture).
+
+        This is already enabled **by default** once ``build_stage3`` (FPN) and
+        ``build_stage3_6`` (stems + fusion) have both run — the production server
+        and full-stack tests pick it up automatically — so calling it explicitly is
+        usually redundant. It is kept as a named, raising entry point (and for
+        forcing the path even when ``DD_CONSOLIDATE=0`` would otherwise opt out).
+        Requires ``build_stage2``/``3``/``3_6``.  Chainable.  Returns self.
+        """
+        if not hasattr(self._model._backbone, "_ttnn"):
+            raise RuntimeError("build_stage5 requires build_stage2/3/3_6 to be called first")
+        self._model._backbone._ttnn.enable_consolidated()
         return self
 
     # ------------------------------------------------------------------
