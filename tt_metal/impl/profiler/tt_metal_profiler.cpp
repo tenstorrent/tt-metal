@@ -856,7 +856,10 @@ static void ReadDeviceProfilerResultsImpl(
     TT_FATAL(
         !MetalContext::instance().dprint_server(), "Debug print server is running, cannot read device profiler data");
 
-    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+    if (tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_trace_only() ||
+        tt::tt_metal::MetalContext::instance().rtoptions().get_profiler_accumulate()) {
+        // Accumulate mode keeps the un-pushed residual in L1 (only flushing to DRAM when the
+        // buffer is nearly full), so the L1 buffers must be read alongside DRAM.
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     } else {
@@ -906,7 +909,8 @@ void ReadDeviceProfilerResultsInternal(
         !MetalContext::instance(context_id).dprint_server(),
         "Debug print server is running, cannot read device profiler data");
 
-    if (include_l1 || MetalContext::instance(context_id).rtoptions().get_profiler_trace_only()) {
+    if (include_l1 || MetalContext::instance(context_id).rtoptions().get_profiler_trace_only() ||
+        MetalContext::instance(context_id).rtoptions().get_profiler_accumulate()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     } else {
@@ -961,7 +965,8 @@ void ProcessDeviceProfilerResults(
         return;
     }
 
-    if (MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+    if (MetalContext::instance().rtoptions().get_profiler_trace_only() ||
+        MetalContext::instance().rtoptions().get_profiler_accumulate()) {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     } else {
         profiler.processResults(device, virtual_cores, state, ProfilerDataBufferSource::DRAM, metadata);

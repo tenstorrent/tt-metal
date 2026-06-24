@@ -63,6 +63,19 @@ constexpr bool DO_SUM = true;
 #else
 constexpr bool DO_SUM = false;
 #endif
+// Accumulate mode applies ONLY to the worker/main-scope path. Dispatch-core
+// profiling is a separate, realtime feed that streams to DRAM via quick_push;
+// it must keep the original guaranteed behavior, so accumulate is force-disabled
+// for any DISPATCH_KERNEL build even when the global flag is set.
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_ACCUMULATE) && !defined(DISPATCH_KERNEL)
+constexpr bool DO_ACCUMULATE = true;
+#else
+constexpr bool DO_ACCUMULATE = false;
+#endif
+// In accumulate mode, flush the L1 buffer to DRAM once fewer than this many
+// uint32 slots remain, leaving room for the next iteration's main + child
+// start/end markers so they are not dropped mid-iteration.
+constexpr uint32_t ACCUMULATE_FLUSH_HEADROOM = PROFILER_L1_GUARANTEED_MARKER_COUNT * PROFILER_L1_MARKER_UINT32_SIZE;
 constexpr uint32_t TRACE_MARK_FW_START = (1 << 31);
 constexpr uint32_t TRACE_MARK_KERNEL_START = (1 << 30);
 constexpr uint32_t TRACE_MARK_ALL_ENDS = (1 << 29);
@@ -285,6 +298,100 @@ __attribute__((noinline)) void signal_host_buffer_full(uint32_t control_buffer_i
 }
 
 __attribute__((noinline)) void finish_profiler() {
+    if constexpr (DO_ACCUMULATE) {
+        // Accumulate mode: do NOT reset wIndex or push every iteration. Each RISC
+        // pads its own buffer to NOC alignment and publishes its current fill
+        // level; the aggregating RISC then flushes ALL RISCs to DRAM only when at
+        // least one RISC is full. After a flush, each published end index is
+        // zeroed as a sentinel so that RISC restarts accumulation on next entry.
+        for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
+            mark_padding();
+        }
+        profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
+#if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
+    defined(COMPILE_FOR_BRISC)
+        constexpr uint32_t ACCUMULATE_FULL_THRESHOLD = PROFILER_L1_VECTOR_SIZE - ACCUMULATE_FLUSH_HEADROOM;
+        bool any_full = false;
+        for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+            if (profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID] >=
+                ACCUMULATE_FULL_THRESHOLD) {
+                any_full = true;
+                break;
+            }
+        }
+        if (any_full) {
+            uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+            uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+            bool is_dram_set = profiler_control_buffer[DRAM_PROFILER_ADDRESS] != 0;
+            int dramProfilerAddressIndex = DRAM_PROFILER_ADDRESS;
+            uint32_t pageSize =
+                PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MaxProcessorsPerCoreType * profiler_core_count_per_dram;
+
+            NocRegisterStateSave noc_state;
+            for (uint32_t riscID = 0; riscID < PROCESSOR_COUNT; riscID++) {
+                bool do_noc = true;
+                if constexpr (NON_DROPPING) {
+                    dramProfilerAddressIndex = kernel_profiler::DRAM_PROFILER_ADDRESS_BR_ER_0 + riscID;
+                    is_dram_set = profiler_control_buffer[dramProfilerAddressIndex] != 0;
+                }
+                // Preserve the upper (trace ID) bits of ID_LH; stamp core + risc id.
+                profiler_data_buffer[riscID].data[ID_LH] =
+                    (profiler_data_buffer[riscID].data[ID_LH] & 0x7FFF800) | (((core_flat_id & 0xFF) << 3) | riscID);
+
+                int hostIndex = kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER + riscID;
+                int deviceIndex = kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + riscID;
+                if (profiler_control_buffer[deviceIndex]) {
+                    uint32_t currEndIndexAll =
+                        profiler_control_buffer[deviceIndex] + profiler_control_buffer[hostIndex];
+                    uint32_t send_size = 0;
+                    uint32_t dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                                               PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                                           hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                                           profiler_control_buffer[hostIndex] * sizeof(uint32_t);
+
+                    // If the per-RISC DRAM region is exhausted, ask the host for a fresh one.
+                    if (currEndIndexAll > PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+                        signal_host_buffer_full(dramProfilerAddressIndex);
+                        profiler_control_buffer[hostIndex] = 0;
+                        currEndIndexAll = profiler_control_buffer[deviceIndex];
+                        dram_offset = (core_flat_id % profiler_core_count_per_dram) * MaxProcessorsPerCoreType *
+                                          PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
+                                      hostIndex * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
+                    }
+
+                    if (currEndIndexAll <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
+                        send_size = profiler_control_buffer[deviceIndex] * sizeof(uint32_t);
+                        profiler_control_buffer[hostIndex] = currEndIndexAll;
+                    } else {
+                        do_noc = false;
+                        mark_dropped_timestamps(hostIndex);
+                    }
+
+                    if (do_noc && is_dram_set) {
+                        const auto s = TensorAccessor(
+                            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+                            profiler_control_buffer[dramProfilerAddressIndex],
+                            pageSize);
+                        uint64_t dram_bank_dst_noc_addr =
+                            s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
+                        profiler_noc_async_write_posted(
+                            reinterpret_cast<uint32_t>(profiler_data_buffer[riscID].data),
+                            dram_bank_dst_noc_addr,
+                            send_size);
+                    }
+                }
+                // Reset sentinel: a zeroed end index tells this RISC to restart
+                // accumulation (reset its wIndex) on its next main-scope entry.
+                profiler_control_buffer[deviceIndex] = 0;
+            }
+
+            profiler_noc_async_flush_posted_write();
+            profiler_control_buffer[RUN_COUNTER]++;
+        }
+        profiler_control_buffer[PROFILER_DONE] = 1;
+#endif
+        return;
+    }
     risc_finished_profiling();
 #if defined(COMPILE_FOR_IDLE_ERISC) || (defined(COMPILE_FOR_AERISC) && (COMPILE_FOR_AERISC == 0)) || \
     defined(COMPILE_FOR_BRISC)
@@ -554,6 +661,59 @@ struct profileScopeGuaranteed {
     }
 };
 
+// Variant of profileScopeGuaranteed used when PROFILER_OPT_DO_ACCUMULATE is set.
+// Instead of writing the main/main-child timestamps into the fixed guaranteed
+// slots (which would overwrite the previous iteration), it appends them at the
+// growing wIndex like a regular profileScope. This lets several program
+// iterations accumulate in the per-RISC L1 buffer; the buffer is only pushed to
+// DRAM once it is nearly full. The un-pushed residual is left in L1 and read
+// back by the host via ProfilerDataBufferSource::DRAM_AND_L1.
+//   index == 0 -> the main / FW scope: owns one-time init and the full-buffer flush.
+//   index == 1 -> the main-child / KERNEL scope: just brackets the kernel.
+template <uint32_t timer_id, uint32_t index>
+struct profileScopeMainAccumulate {
+    bool start_marked = false;
+    inline __attribute__((always_inline)) profileScopeMainAccumulate() {
+        if constexpr (index == 0) {
+            // wIndex is a per-RISC global, zero-initialized in BSS and left at
+            // CUSTOM_MARKERS by init_profiler(), so it is only ever 0 before this
+            // RISC has initialized. (RUN_COUNTER cannot be the guard here: it is
+            // shared by all RISCs on the core, which would let later RISCs skip
+            // their own init.)
+            if (wIndex == 0) {
+                // First entry on this RISC: full init (sets wIndex = CUSTOM_MARKERS).
+                init_profiler();
+            } else if (profiler_control_buffer[DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] == 0) {
+                // The aggregating RISC flushed this RISC's buffer to DRAM and
+                // zeroed its published end index as a reset sentinel; restart
+                // accumulation from the optional region (headers stay intact).
+                wIndex = CUSTOM_MARKERS;
+                stackSize = 0;
+            }
+        }
+        if (bufferHasRoom()) {
+            stackSize += PROFILER_L1_MARKER_UINT32_SIZE;
+            start_marked = true;
+            mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_START));
+            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+        }
+    }
+    inline __attribute__((always_inline)) ~profileScopeMainAccumulate() {
+        if (start_marked) {
+            mark_time_at_index_inlined(wIndex, get_const_id(timer_id, ZONE_END));
+            wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
+            start_marked = false;
+            stackSize -= PROFILER_L1_MARKER_UINT32_SIZE;
+        }
+        if constexpr (index == 0) {
+            // Publish this RISC's fill level and let the aggregating RISC (BRISC /
+            // idle-ERISC) flush ALL RISCs to DRAM iff any one of them is full.
+            // No quick_push: the only DRAM push path in this mode is finish.
+            finish_profiler();
+        }
+    }
+};
+
 template <uint32_t timer_id, uint32_t index>
 struct profileScopeAccumulate {
     uint64_t start_time = 0;
@@ -697,15 +857,24 @@ __attribute__((noinline)) void trace_only_init() {
 
 #define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
 
+// Select between the fixed-slot guaranteed scope (default) and the accumulating
+// scope (PROFILER_OPT_DO_ACCUMULATE) for the main / main-child zones. Dispatch
+// kernels always use the guaranteed scope so their realtime feed is unaffected.
+#if (PROFILE_KERNEL & PROFILER_OPT_DO_ACCUMULATE) && !defined(DISPATCH_KERNEL)
+#define PROFILER_MAIN_SCOPE kernel_profiler::profileScopeMainAccumulate
+#else
+#define PROFILER_MAIN_SCOPE kernel_profiler::profileScopeGuaranteed
+#endif
+
 #define DeviceZoneScopedMainN(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
+    PROFILER_MAIN_SCOPE<hash, 0> zone = PROFILER_MAIN_SCOPE<hash, 0>();
 
 #define DeviceZoneScopedMainChildN(name)                                       \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
-    kernel_profiler::profileScopeGuaranteed<hash, 1> zone = kernel_profiler::profileScopeGuaranteed<hash, 1>();
+    PROFILER_MAIN_SCOPE<hash, 1> zone = PROFILER_MAIN_SCOPE<hash, 1>();
 
 #define DeviceZoneScopedSumN1(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
