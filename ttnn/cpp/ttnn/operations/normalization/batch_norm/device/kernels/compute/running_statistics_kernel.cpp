@@ -36,9 +36,8 @@ ALWI void update_running_stat() {
     using ckl::BinaryFpuOp;
 
     // one/momentum held (CallerManaged); old_stat and batch_stat streamed (wait 1 / pop 1, as the
-    // original popped them). cb_updated is caller-reserved/pushed (CallerManaged output); cb_out0 is
-    // reserved/pushed once per loop iteration by kernel_main.
-    cb_reserve_back(cb_updated, 1);
+    // original popped them). cb_updated -> OutputLifecycle::Bulk (chain reserves+pushes M=1); cb_out0
+    // stays CallerManaged — reserved/pushed once per loop iteration by kernel_main.
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::BinaryFpu<
@@ -60,9 +59,8 @@ ALWI void update_running_stat() {
             ckl::BinaryDataFormatReconfig::Input,
             D::D1>{},                           // D1 = momentum * batch_stat
         ckl::AddBinary<D::D0, D::D1, D::D0>{},  // D0 = D0 + D1
-        ckl::PackTile<cb_updated, ckl::OutputLifecycle::CallerManaged>{},
+        ckl::PackTile<cb_updated, ckl::OutputLifecycle::Bulk>{},
         ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, ckl::OutputLifecycle::CallerManaged>>{});
-    cb_push_back(cb_updated, 1);
 }
 
 void kernel_main() {

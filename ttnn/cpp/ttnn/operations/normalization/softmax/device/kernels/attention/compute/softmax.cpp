@@ -28,8 +28,6 @@ namespace ckl = compute_kernel_lib;
 // All call sites pass constexpr CBs.
 template <uint32_t cb_in, uint32_t cb_max_scaler, uint32_t cb_max, uint32_t cb_out>
 void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
-    auto cb_in_obj = CircularBuffer(cb_in);
-    auto cb_max_obj = CircularBuffer(cb_max);
     auto cb_out_obj = CircularBuffer(cb_out);
 
     // calculate max val per row
@@ -44,15 +42,15 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
 
     // x - max(x) then exp, fused into one chain — DEST-batched ndst tiles per acquire,
     // matching the original's `for (wt += ndst)` window. cb_in is fully resident (the
-    // reduce above WaitUpfrontNoPop-waited all Wt tiles; popped below) -> CallerManaged +
-    // Block, read by absolute index `wt_base + j`. cb_max held (wait/pop kept outside) ->
-    // CallerManaged + Scalar. cb_out per-chunk reserve+push -> Chunked (reserve ndst /
+    // reduce above WaitUpfrontNoPop-waited all Wt tiles) -> DeferredPop + Block (chain
+    // bulk-pops Wt at chain end), read by absolute index `wt_base + j`. cb_max consumed once
+    // -> Bulk + Scalar (the chain owns the single wait/pop — M=1 via window_1d<Scalar>).
+    // cb_out per-chunk reserve+push -> Chunked (reserve ndst /
     // push ndst per block, == original reserve_back(ndst)/push_back(ndst)).
     // EltwiseShape::tiles(Wt, ndst): ndst is the RUNTIME block_size; the chain clamps it to
     // the DEST/lane capacity automatically. sub_bcast_cols_init_short ->
     // BinaryDataFormatReconfig::Input; plain pack_tile (pack format already cb_out) ->
     // PackTileReconfig::None.
-    cb_max_obj.wait_front(1);
     ckl::eltwise_chain(
         ckl::EltwiseShape::tiles(Wt, ndst),
         ckl::BinaryFpu<
@@ -60,16 +58,14 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
             cb_max,
             ckl::BinaryFpuOp::Sub,
             ckl::BroadcastDim::Col,
-            ckl::InputLifecycle::CallerManaged,
-            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::DeferredPop,
+            ckl::InputLifecycle::Bulk,
             ckl::BinaryDataFormatReconfig::Input,
             ckl::Dst::D0,
             ckl::OperandKind::Block,
             ckl::OperandKind::Scalar>{},
         ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
         ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
-    cb_in_obj.pop_front(Wt);
-    cb_max_obj.pop_front(1);
     cb_out_obj.wait_front(Wt);
 }
 

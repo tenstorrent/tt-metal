@@ -47,8 +47,8 @@ ALWI void update_running_stat() {
     constexpr auto PK_OUT = ckl::PackTileReconfig::Output;
 
     // one/momentum held (CallerManaged); old_stat and batch_stat streamed (wait 1 / pop 1, as the
-    // original popped them). cb_updated is caller-reserved/pushed; cb_out0 is handled by kernel_main.
-    cb_reserve_back(cb_updated, 1);
+    // original popped them). cb_updated -> OutputLifecycle::Bulk (chain reserves+pushes M=1); cb_out0
+    // stays CallerManaged — handled by kernel_main.
     ckl::eltwise_chain(
         ckl::EltwiseShape::single(),
         ckl::CopyTile<cb_one, D::D0, CM, CP_IN, SCALAR>{},
@@ -60,9 +60,8 @@ ALWI void update_running_stat() {
         ckl::CopyTile<cb_batch, D::D2, STREAM, CP_IN, SCALAR>{},
         MulBinary<D::D1, D::D2, D::D1>{},  // D1 = momentum * batch_stat
         AddBinary<D::D0, D::D1, D::D0>{},  // D0 = (1 - momentum) * old + momentum * batch
-        ckl::PackTile<cb_updated, OUT_CM, PK_OUT>{},
+        ckl::PackTile<cb_updated, ckl::OutputLifecycle::Bulk, PK_OUT>{},
         ckl::OptionalChainElement<AlsoOut0, ckl::PackTile<cb_out0, OUT_CM, PK_OUT>>{});
-    cb_push_back(cb_updated, 1);
 }
 
 template <bool NeedsTypecast, uint32_t TcInFmt, uint32_t TcOutFmt, uint32_t SrcCb, uint32_t DstCb>

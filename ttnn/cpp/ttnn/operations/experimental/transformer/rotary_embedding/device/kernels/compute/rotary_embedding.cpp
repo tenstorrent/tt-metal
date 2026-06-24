@@ -39,9 +39,7 @@ template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain(uint32_t in1_idx) {
     using namespace compute_kernel_lib;
     if constexpr (kDecodeMode) {
-        cb_wait_front(in0_cb, 1);
         cb_wait_front(in1_cb, in1_idx + 1);
-        cb_reserve_back(out_cb, 1);
         eltwise_chain(
             EltwiseShape::single(),
             BinaryFpu<
@@ -49,18 +47,17 @@ ALWI void mul_tiles_chain(uint32_t in1_idx) {
                 in1_cb,
                 BinaryFpuOp::Mul,
                 BroadcastDim::Row,
-                InputLifecycle::CallerManaged,
-                InputLifecycle::CallerManaged,
+                InputLifecycle::Streaming,      // in0: chain owns wait(1)/pop(1)
+                InputLifecycle::CallerManaged,  // in1: held across the walk (TileOffset, no pop)
                 BinaryDataFormatReconfig::None,
                 Dst::D0,
                 OperandKind::Scalar,
                 OperandKind::Scalar,
                 compute_kernel_lib::TileOffset::Unset,
                 compute_kernel_lib::TileOffset::Set>{0u, in1_idx},
-            PackTile<out_cb, OutputLifecycle::CallerManaged, PackTileReconfig::None>{});
-        cb_pop_front(in0_cb, 1);
-        cb_push_back(out_cb, 1);
-        // in1 NOT popped — held across the whole walk per DECODE_MODE contract.
+            PackTile<out_cb, OutputLifecycle::Streaming, PackTileReconfig::None>{});
+        // in0 / out_cb owned by the chain (Streaming); in1 NOT popped — held across the walk
+        // per DECODE_MODE contract.
     } else {
         (void)in1_idx;  // unused — in1 is per-iter streamed at index 0.
         mul<in0_cb,

@@ -89,10 +89,8 @@ void kernel_main() {
 
     auto cb_in0_obj = CircularBuffer(cb_in0);
     auto cb_max_scaler_obj = CircularBuffer(cb_max_scaler);
-    auto cb_fused_scale_obj = CircularBuffer(cb_fused_scale);
     auto cb_fused_attn_obj = CircularBuffer(cb_fused_attn);
     auto cb_exps_obj = CircularBuffer(cb_exps);
-    auto cb_recipsumexps_obj = CircularBuffer(cb_recipsumexps);
     auto cb_scale_mask_obj = CircularBuffer(cb_scale_mask);
     auto cb_out0_obj = CircularBuffer(cb_out0);
     auto cb_x_obj = CircularBuffer(cb_x);
@@ -138,14 +136,13 @@ void kernel_main() {
         // block_w upfront/walk -> Bulk (block-correct). reconfig +
         // mul_tiles_bcast_scalar_init_short -> Input; pack_reconfig -> Output.
         // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
-        cb_fused_scale_obj.wait_front(1);
         ckl::mul<
             cb_in0,
             cb_fused_scale,
             cb_scale_mask,
             ckl::BroadcastDim::Scalar,
             ckl::InputLifecycle::DeferredPop,
-            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::HeldBulk,  // cb_fused_scale: held scalar, chain waits(1)/call, no pop
             ckl::OutputLifecycle::Bulk,
             ckl::BinaryDataFormatReconfig::Input,
             ckl::PackTileReconfig::Output,
@@ -249,19 +246,17 @@ void kernel_main() {
         // Reconfig: reconfig_data_format + mul_bcast_cols_init_short -> Input;
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
         // EltwiseShape::tiles(block_w, subblock_w): subblock_w is the block_size, DEST-clamped.
-        cb_recipsumexps_obj.wait_front(1);
         ckl::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
             ckl::BroadcastDim::Col,
             ckl::InputLifecycle::DeferredPop,
-            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::Bulk,  // cb_recipsumexps: chain owns wait(1)/pop(1)
             ckl::OutputLifecycle::Bulk,
             ckl::BinaryDataFormatReconfig::Input,
             ckl::PackTileReconfig::Output,
             ckl::OperandKind::Block,
             ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(block_w, subblock_w));
-        cb_recipsumexps_obj.pop_front(1);
     }
 }

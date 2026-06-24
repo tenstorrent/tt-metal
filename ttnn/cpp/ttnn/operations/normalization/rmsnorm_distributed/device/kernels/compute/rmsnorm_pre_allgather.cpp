@@ -67,15 +67,15 @@ void kernel_main() {
                 ckl::OperandKind::Block>(squaring_shape);
         }
 
-        // x**2 — same-CB FPU mul. cb_inp lifecycle: InputLifecycle::HeldCumulative (chain emits
-        // cumulative `cb_wait_front(cb_inp, (i+1)*blk)` per blk-chunk; never pops).
-        // The caller pops Wt from cb_inp after the reduce below. cb_x2 lifecycle:
+        // x**2 — same-CB FPU mul. cb_inp lifecycle: InputLifecycle::Pipelined (chain emits
+        // cumulative `cb_wait_front(cb_inp, (i+1)*blk)` per blk-chunk AND bulk-pops Wt at chain end
+        // — cb_inp feeds only this square; the reduce below reads cb_x2). cb_x2 lifecycle:
         // OutputLifecycle::Chunked (chain emits reserve_back(blk) + push_back(blk) per chunk;
         // pack writes absolute slots via Block index).
         ckl::square<
             cb_inp,
             cb_x2,
-            ckl::InputLifecycle::HeldCumulative,
+            ckl::InputLifecycle::Pipelined,
             ckl::OutputLifecycle::Bulk,
             ckl::BinaryDataFormatReconfig::Input,
             ckl::PackTileReconfig::Output,
@@ -89,7 +89,6 @@ void kernel_main() {
             cb_reduce,
             cb_out,
             ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::row(Wt));
-        cb_pop_front(cb_inp, Wt);
     }
     cb_pop_front(cb_reduce, 1);
 }

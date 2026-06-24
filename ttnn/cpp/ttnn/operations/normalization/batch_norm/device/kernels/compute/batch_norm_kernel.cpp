@@ -30,9 +30,9 @@ namespace ckl = compute_kernel_lib;
 //                                             (Scalar idx = 0; pop advances the front so each
 //                                             iter consumes the next producer-pushed tile —
 //                                             matches the original `sub_tiles(cb_other, _, 0, _, _)`)
-//   cb_bcast, cb_den  InputLifecycle::CallerManaged on Scalar caller waits before the chain, pops after
+//   cb_bcast, cb_den  InputLifecycle::Bulk on Scalar           chain waits 1 / pops 1 per call
 //   cb_weight,
-//   cb_bias           InputLifecycle::CallerManaged on Scalar same — held by this function call only
+//   cb_bias           InputLifecycle::Bulk on Scalar (Optional) same; gated off => chain emits no CB edges
 // CB ids are non-type template params (the chain elements take them as template args, which
 // requires constant expressions); only the per-call tile counts stay runtime.
 template <
@@ -62,63 +62,41 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
 
     const uint32_t inner_count = freq - tile_start;
 
-    // Wait the operands that live across the entire stage-2+ chain (InputLifecycle::CallerManaged on the chain
-    // means the chain emits no wait/pop edges on these — the caller owns them).
-    cb_wait_front(cb_bcast, 1);
-    cb_wait_front(cb_den, 1);
-    if constexpr (WeightHas) {
-        cb_wait_front(cb_weight, 1);
-    }
-    if constexpr (BiasHas) {
-        cb_wait_front(cb_bias, 1);
-    }
-
     // Reusable chain pieces. Sub walks cb_other producer-streamed (Scalar idx + InputLifecycle::Streaming
-    // wait/pop drains the producer one tile per iter); the three DestReuse multiplies/adds
-    // are bcast operands held across the whole chain (InputLifecycle::CallerManaged on Scalar). The
-    // weight / bias multiplies are OptionalChainElement-gated on the template bools so
-    // they collapse to no-op tag wrappers when the caller didn't pass those tensors.
+    // wait/pop drains the producer one tile per iter); the three DestReuse multiplies/adds are
+    // single-tile bcast operands -> InputLifecycle::Bulk + Scalar (the chain owns one wait(1)/pop(1)
+    // per call, mirroring batch_norm_sfpu_kernel.cpp). The weight / bias multiplies are
+    // OptionalChainElement-gated on the template bools so they collapse to no-op tag wrappers (no CB
+    // edges — wait/pop suppressed) when the caller didn't pass those tensors.
     constexpr auto sub_op = ckl::BinaryFpu<
         cb_other,
         cb_bcast,
         ckl::BinaryFpuOp::Sub,
         ckl::BroadcastDim::None,
         ckl::InputLifecycle::Streaming,
-        ckl::InputLifecycle::CallerManaged>{};
-    constexpr auto mul_den = ckl::DestReuseBinary<
-        cb_den,
-        ckl::BinaryFpuOp::Mul,
-        ckl::DestReuseType::DEST_TO_SRCA,
-        ckl::InputLifecycle::CallerManaged>{};
+        ckl::InputLifecycle::Bulk>{};  // cb_bcast: held scalar, chain owns wait(1)/pop(1) per call
+    constexpr auto mul_den = ckl::
+        DestReuseBinary<cb_den, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA, ckl::InputLifecycle::Bulk>{};
     constexpr auto mul_weight = ckl::OptionalChainElement<
         WeightHas,
         ckl::DestReuseBinary<
             cb_weight,
             ckl::BinaryFpuOp::Mul,
             ckl::DestReuseType::DEST_TO_SRCA,
-            ckl::InputLifecycle::CallerManaged>>{};
+            ckl::InputLifecycle::Bulk>>{};
     constexpr auto add_bias = ckl::OptionalChainElement<
         BiasHas,
         ckl::DestReuseBinary<
             cb_bias,
             ckl::BinaryFpuOp::Add,
             ckl::DestReuseType::DEST_TO_SRCA,
-            ckl::InputLifecycle::CallerManaged>>{};
+            ckl::InputLifecycle::Bulk>>{};
     constexpr auto pack_out = ckl::PackTile<cb_output_0>{};
 
     // Stage 2..4 fused. Single chain — DEST[0] threaded through Sub → Mul(den) →
     // [Mul(weight)] → [Add(bias)] → Pack. Optional weight / bias gates handle the four
     // (WeightHas, BiasHas) cases without a four-way constexpr-if.
     ckl::eltwise_chain(ckl::EltwiseShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
-
-    cb_pop_front(cb_bcast, 1);
-    cb_pop_front(cb_den, 1);
-    if constexpr (WeightHas) {
-        cb_pop_front(cb_weight, 1);
-    }
-    if constexpr (BiasHas) {
-        cb_pop_front(cb_bias, 1);
-    }
 }
 
 void kernel_main() {

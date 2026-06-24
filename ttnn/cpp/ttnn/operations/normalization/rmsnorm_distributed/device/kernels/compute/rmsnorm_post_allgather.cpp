@@ -99,43 +99,40 @@ void kernel_main() {
          *     cb_gamma / cb_beta which already span all Wt tiles upfront),
          *   - pack-side reserve_upfront / push_at_end on the output CB,
          *   - entry-time srca/srcb + pack reconfig.
-         * The kernel only sets up the once-per-NCHt wait on cb_recip_sqrt_var
-         * (per ncht) and the once-per-row cb_gamma / cb_beta waits — the latter
-         * are reused across rows and the trailing cb_pop_front after the NCHt
-         * loop releases them.
+         * The chain now owns the B-side CB edges too: cb_recip_sqrt_var is Bulk
+         * (wait+pop per call); cb_gamma / cb_beta are HeldBulk (chain waits Wt per
+         * row, no pop) — they stay resident across rows, released by the trailing
+         * cb_pop_front after the NCHt loop.
          */
         constexpr uint32_t normed_output_cb = do_gamma ? cb_x_normed : cb_out;
 
         /*
          * x * 1/sqrt(stdev)
          */
-        cb_wait_front(cb_recip_sqrt_var, 1);
         ckl::mul<
             cb_norm_x_input,
             cb_recip_sqrt_var,
             normed_output_cb,
             ckl::BroadcastDim::Col,
             ckl::InputLifecycle::Bulk,
-            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::Bulk,
             ckl::OutputLifecycle::Bulk,
             ckl::BinaryDataFormatReconfig::Input,
             ckl::PackTileReconfig::Output,
             ckl::OperandKind::Block,
             ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
-        cb_pop_front(cb_recip_sqrt_var, 1);
 
         if constexpr (do_gamma) {
             /*
              * x_normed * gamma   (cb_gamma walks Block — index = 0..Wt-1)
              */
-            cb_wait_front(cb_gamma, Wt);  // gamma is reused across NCHt — wait once per row
             ckl::mul<
                 cb_x_normed,
                 cb_gamma,
                 cb_times_gamma_out,
                 ckl::BroadcastDim::Row,
                 ckl::InputLifecycle::Bulk,
-                ckl::InputLifecycle::CallerManaged,
+                ckl::InputLifecycle::HeldBulk,  // gamma resident across NCHt: chain waits Wt/row, no pop
                 ckl::OutputLifecycle::Bulk,
                 ckl::BinaryDataFormatReconfig::Input,
                 ckl::PackTileReconfig::Output,
@@ -145,14 +142,13 @@ void kernel_main() {
                 /*
                  * (x_normed * gamma) + beta   (cb_beta walks Block — 0..Wt-1)
                  */
-                cb_wait_front(cb_beta, Wt);
                 ckl::add<
                     cb_times_gamma_out,
                     cb_beta,
                     cb_out,
                     ckl::BroadcastDim::Row,
                     ckl::InputLifecycle::Bulk,
-                    ckl::InputLifecycle::CallerManaged,
+                    ckl::InputLifecycle::HeldBulk,  // beta resident across NCHt: chain waits Wt/row, no pop
                     ckl::OutputLifecycle::Bulk,
                     ckl::BinaryDataFormatReconfig::Input,
                     ckl::PackTileReconfig::Output,
