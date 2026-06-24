@@ -32,6 +32,7 @@ Run (tt-metal venv):
 from __future__ import annotations
 
 import argparse
+import ctypes
 import os
 import pickle
 import socket
@@ -45,6 +46,37 @@ import torch
 
 def _log(*a):
     print("[ttnn_pdm_server]", *a, file=sys.stderr, flush=True)
+
+
+def _rss_gb() -> float:
+    """Resident set size in GB (for watching memory)."""
+    try:
+        with open("/proc/self/status") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024 / 1024
+    except Exception:
+        pass
+    return -1.0
+
+
+try:
+    _LIBC = ctypes.CDLL("libc.so.6")
+except OSError:
+    _LIBC = None
+
+
+def _trim_heap() -> None:
+    """Return freed glibc-arena pages to the OS.
+
+    The per-request pickle/numpy alloc-free churn fragments the glibc heap,
+    growing RSS ~2.6 MB/forward → host OOM over ~12k forwards. The model forward
+    itself retains nothing (verified: live ttnn-tensor count stays 0 across
+    forwards), so this is heap fragmentation, not a Python/ttnn reference leak —
+    which is why gc.collect() did NOT help. malloc_trim keeps RSS flat.
+    """
+    if _LIBC is not None:
+        _LIBC.malloc_trim(0)
 
 
 def _recv_exactly(conn, n: int) -> bytes:
@@ -136,9 +168,11 @@ def serve(checkpoint: str, anchors: str, sock_path: str) -> None:
                         out = model(features)
                     traj = out["trajectory"].squeeze(0).cpu().numpy().astype(np.float32)
                     _send_msg(conn, {"trajectory": traj})
+                    del out, features, traj, req
+                    _trim_heap()  # keep RSS flat — see _trim_heap (glibc fragmentation, not a ref leak)
                     n += 1
                     if n % 200 == 0:
-                        _log(f"served {n} requests")
+                        _log(f"served {n} requests (rss={_rss_gb():.1f}GB)")
             except Exception:
                 _log("request error:\n" + traceback.format_exc())
                 try:
