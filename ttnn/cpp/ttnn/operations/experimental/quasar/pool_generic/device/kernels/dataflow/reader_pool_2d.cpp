@@ -330,10 +330,22 @@ void kernel_main() {
     uint16_t num_segments = reader_indices_ptr[0] & 0xffff;
     bool first_row_value = reader_id == 0 || !use_split_reader;
 
+    // [#47797 DEBUG] If POOL hangs at waypoint R, dump the loop-control values. A garbage num_segments
+    // (e.g. unwritten reader_indices config) or stride_w==0 makes while(num_segments--)/the inner stride
+    // loop spin forever. Compare these against the host sliding-window config for this pool.
+    DPRINT(
+        "POOL rdr id={} nseg={} strW={} kH={} kW={}\n",
+        (uint32_t)reader_id,
+        (uint32_t)num_segments,
+        (uint32_t)stride_w,
+        (uint32_t)kernel_h,
+        (uint32_t)kernel_w);
+
     while (num_segments--) {
         uint32_t start_end_segment = reader_indices_ptr[segments_counter++];
         uint16_t start = start_end_segment & 0xffff;
         uint16_t end = start_end_segment >> 16;
+        DPRINT("POOL seg start={} end={}\n", (uint32_t)start, (uint32_t)end);  // [#47797 DEBUG]
 
         if (!first_row_value) {
             start += stride_w;

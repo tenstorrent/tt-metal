@@ -320,6 +320,16 @@ ttnn::device_operation::ProgramArtifacts Conv2dShardedProgramFactory::create_pro
     const bool block_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED;
     const bool height_sharded = a.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
 
+    // [#47797] Force full DEST sync on the block-sharded 2D-mcast path. With half-sync DEST the BH MATH
+    // coprocessor overlaps and backs up at the height-block boundary (h's matmul/output DEST not drained
+    // before h+1's tilize-init), deadlocking the cross-core tilize->mcast->matmul loop from the second
+    // height-block on (works on WH, hangs on BH). Full sync drains DEST per op, preventing the backup.
+    // (This also selects the standard tilize, since can_use_fast_tilize() requires !dst_full_sync.)
+    // Numerically identical; localized perf cost on this conv only.
+    if (block_sharded) {
+        dst_full_sync_en = true;
+    }
+
     // parallelization config
     CoreRangeSet input_cores = a.memory_config().shard_spec().value().grid;
     CoreRangeSet output_cores = output.memory_config().shard_spec().value().grid;

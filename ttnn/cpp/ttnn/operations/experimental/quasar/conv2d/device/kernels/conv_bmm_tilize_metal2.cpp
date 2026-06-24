@@ -36,12 +36,14 @@
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-#include "api/debug/dprint.h"  // DEBUG: conv2d layer3 hang localization (remove after)
-// DEBUG: neutralize compute-kernel DPRINT. DPRINT inside the compute (pack/math/unpack) perturbs the
-// kernel epilogue timing and re-triggers the program-completion stall when DPRINT is enabled on-device.
-// Keep DM-kernel DPRINT (reader/writer) for diagnosis; make the CMP/CC markers here no-ops.
-#undef DPRINT
-#define DPRINT(...) ((void)0)
+#include "api/debug/dprint.h"  // DEBUG: conv2d block-sharded hang localization (remove after)
+// DEBUG [#47797]: per-thread progress trace. The block-sharded conv deadlocks at the h=0->h=1
+// boundary; these tag each compute thread (U=unpack, M=math, P=pack) with its current height-block /
+// inner-block so the last line per thread in each core's dprint file shows exactly where it parked.
+// Encoded (h,k) = in0_block_h_i, in0_block_w_i. Run with DPRINT on.
+#define CC_U(tag, h, k) UNPACK(DPRINT("U " tag " h={} k={}\n", (uint32_t)(h), (uint32_t)(k)))
+#define CC_M(tag, h, k) MATH(DPRINT("M " tag " h={} k={}\n", (uint32_t)(h), (uint32_t)(k)))
+#define CC_P(tag, h, k) PACK(DPRINT("P " tag " h={} k={}\n", (uint32_t)(h), (uint32_t)(k)))
 
 // DEBUG: deadlock localization via watcher ring buffer (safe, unlike DPRINT). Push only from the MATH
 // thread to avoid a 3-TRISC race on the ring pointer. Marker: 0xCP_IIII, P=phase,
@@ -344,6 +346,9 @@ void kernel_main() {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
+                CC_U("blk", in0_block_h_i, in0_block_w_i);  // DEBUG: inner-block enter (per thread)
+                CC_M("blk", in0_block_h_i, in0_block_w_i);
+                CC_P("blk", in0_block_h_i, in0_block_w_i);
                 RB_CMP(1, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: inner-block start (pre-tilize)
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
@@ -454,7 +459,9 @@ void kernel_main() {
                 }
 
                 RB_CMP(2, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: post-tilize, pre wait mcast-act
+                CC_U("Wact", in0_block_h_i, in0_block_w_i);              // DEBUG: pre wait cb_act (mcast result)
                 cb_mm_in0.wait_front(in0_block_num_tiles);
+                CC_U("Gact", in0_block_h_i, in0_block_w_i);              // DEBUG: got cb_act
                 RB_CMP(3, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: got mcast-act, pre wait weights
 
                 uint32_t in0_index_subblock_offset = 0;
@@ -465,7 +472,9 @@ void kernel_main() {
                 }
 #endif
 
+                CC_U("Wwt", in0_block_h_i, in0_block_w_i);  // DEBUG: pre wait cb_weight
                 cb_in1.wait_front(in1_block_num_tiles);
+                CC_U("Gwt", in0_block_h_i, in0_block_w_i);               // DEBUG: got cb_weight
                 RB_CMP(4, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: got weights, pre matmul
 
                 if (last_inner_dim_block) {
@@ -633,8 +642,10 @@ void kernel_main() {
                 reconfig_data_format(in1_cb_id, matmul_partials_cb, mm_in0_cb_id, bias_cb_id);
                 add_bcast_rows_init_short(matmul_partials_cb, bias_cb_id);
 
+                CC_U("Obias", in0_block_h_i, 0);  // DEBUG: output bias-add, pre wait bias/partials
                 cb_bias.wait_front(bias_ntiles_w);
                 cb_matmul_partials.wait_front(out_block_num_tiles);
+                CC_P("Oout", in0_block_h_i, 0);  // DEBUG: output bias-add, got inputs, packing to out
                 for (uint32_t in0_subblock_i = 0; in0_subblock_i < in0_num_subblocks; ++in0_subblock_i) {
                     uint32_t in1_index_subblock_offset = 0;
                     for (uint32_t in1_subblock_i = 0; in1_subblock_i < in1_num_subblocks; ++in1_subblock_i) {

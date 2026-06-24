@@ -29,8 +29,8 @@
 #include "noc/noc_parameters.h"
 #define ENABLE_DEBUG 0
 
+#include "api/debug/dprint.h"  // [#47797] act-mcast handshake DPRINT trace (run with DPRINT on)
 #if ENABLE_DEBUG
-#include "api/debug/dprint.h"
 #include "api/debug/dprint_pages.h"
 #endif
 
@@ -294,6 +294,7 @@ void kernel_main() {
                     // (i.e. its value should be act_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
                     WATCHER_RING_BUFFER_PUSH(0xA1000000u | RB_ITER(nbh, act_w_outer_i));  // sender: pre sem.wait
+                    DPRINT("RDR Ssem nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
                     act_mcast_sender_sem.wait(act_mcast_num_dests + (is_receiver_core ? 0 : 1));
                     act_mcast_sender_sem.set(0);
 
@@ -301,6 +302,9 @@ void kernel_main() {
 
                     WATCHER_RING_BUFFER_PUSH(
                         0xA2000000u | RB_ITER(nbh, act_w_outer_i));  // sender: got bumps, pre mcast (waits tilized)
+                    // [#47797] Sender got all bumps; about to mcast cb_tilized_in0. If this is the LAST
+                    // reader line on a sender core, the compute never produced this nbh's tilized act.
+                    DPRINT("RDR Smc nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);
                     mcast_block_chunked<
                         act_mcast_num_cores,
                         NOC_MAX_BURST_SIZE,
@@ -309,6 +313,7 @@ void kernel_main() {
                         noc, mcast_ep, cb_tilized_in0_obj, is_receiver_core, cb_act_obj, act_mcast_rect);
 
                     WATCHER_RING_BUFFER_PUSH(0xA3000000u | RB_ITER(nbh, act_w_outer_i));  // sender: mcast data done
+                    DPRINT("RDR Sdone nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id and
                     // same vc even though cmd bufs are different Also, this only works because we are setting VCs
@@ -352,9 +357,11 @@ void kernel_main() {
 
                     WATCHER_RING_BUFFER_PUSH(
                         0xA5000000u | RB_ITER(nbh, act_w_outer_i));  // recv: bumped, pre wait VALID
+                    DPRINT("RDR Rval nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
                     // wait on act semaphore value to become VALID (set by mcast sender after it multicasts data)
                     act_mcast_receiver_sem.wait(VALID);
                     WATCHER_RING_BUFFER_PUSH(0xA6000000u | RB_ITER(nbh, act_w_outer_i));  // recv: got VALID
+                    DPRINT("RDR Rgot nbh={} awo={}\n", (uint32_t)nbh, (uint32_t)act_w_outer_i);  // [#47797]
                 }
                 cb_act_obj.push_back(act_block_num_tiles);
             }  // act_w_num_outer
