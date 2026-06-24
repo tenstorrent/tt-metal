@@ -257,7 +257,11 @@ inline void fprintClientName(FILE* f, uint32_t client_id) {
 }
 
 // DPRINT queries can take tens of seconds per poll on RTL sim.
-inline int debug_server_timeout_sec(const llrt::RunTimeOptions& rtoptions) {
+inline int debug_server_wait_timeout_sec(const llrt::RunTimeOptions& rtoptions) {
+    return rtoptions.get_simulator_enabled() ? 30 : 5;
+}
+
+inline int debug_server_finish_timeout_sec(const llrt::RunTimeOptions& rtoptions) {
     return rtoptions.get_simulator_enabled() ? 30 : 2;
 }
 

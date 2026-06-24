@@ -535,6 +535,7 @@ void Hal::initialize_qa(std::uint32_t profiler_dram_bank_size_per_risc_bytes, bo
     // Values found in PCIe tile spec
     this->pcie_addr_lower_bound_ = 0x0000'0000'0000'0000ULL;
     this->pcie_addr_upper_bound_ = 0x1FFF'FFFF'FFFF'FFFFULL;
+    this->supports_64_bit_pcie_addressing_ = true;
 
     this->noc_x_id_translate_table_ = {};
 

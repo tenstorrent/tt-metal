@@ -19,28 +19,13 @@ void kernel_main() {
     constexpr uint32_t l1_staging_addr = get_arg(args::l1_staging_addr);
     constexpr uint32_t transfer_size_bytes = get_arg(args::transfer_size_bytes);
 
-    DPRINT("Device PCIe Loopback Start\n");
     const uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(PCIE_NOC_X, PCIE_NOC_Y));
 
     const uint64_t host_src_noc_addr = pcie_noc_xy | host_src_pcie_addr;
-    DPRINT(
-        "Device PCIe Loopback NOC read from 0x{:x} to 0x{:x} size {}\n",
-        host_src_noc_addr,
-        l1_staging_addr,
-        transfer_size_bytes);
     noc_async_read(host_src_noc_addr, l1_staging_addr, transfer_size_bytes);
-    DPRINT("Device PCIe Loopback NOC read barrier\n");
     noc_async_read_barrier();
-    DPRINT("Device PCIe Loopback NOC read barrier done\n");
 
     const uint64_t host_dst_noc_addr = pcie_noc_xy | host_dst_pcie_addr;
-    DPRINT(
-        "Device PCIe Loopback NOC write from 0x{:x} to 0x{:x} size {}\n",
-        l1_staging_addr,
-        host_dst_noc_addr,
-        transfer_size_bytes);
     noc_async_write(l1_staging_addr, host_dst_noc_addr, transfer_size_bytes);
-    DPRINT("Device PCIe Loopback NOC write barrier\n");
     noc_async_write_barrier();
-    DPRINT("Device PCIe Loopback NOC write barrier done\n");
 }
