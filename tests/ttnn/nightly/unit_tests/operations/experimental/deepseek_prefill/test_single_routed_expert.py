@@ -171,7 +171,7 @@ SINGLE_EXPERT_MODELS = [
 # on blackhole by _xfail_blackhole_token_sweep. Delete an entry once resolved.
 _GPTOSS_KGATE_XFAIL = (
     "GPT-OSS 120B single routed expert: K_gate_tiles not divisible by in0_block_w_gu — "
-    "https://github.com/tenstorrent/tt-metal/issues/47604"
+    "https://github.com/tenstorrent/tt-metal/issues/47622"
 )
 _DSV4_PRO_CB_XFAIL = (
     "DeepSeek V4 Pro single routed expert: circular buffers grow beyond L1 — "
