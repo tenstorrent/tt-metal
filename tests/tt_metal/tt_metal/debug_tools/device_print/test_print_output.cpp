@@ -238,6 +238,128 @@ TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscs) {
     }
 }
 
+// All-workers variant of PrintConcurrentAllRiscs: run the same per-iteration print kernel on EVERY
+// Tensix worker core (the full compute grid) to stress the DevicePrintDispatch worker-L1 -> DRAM
+// aggregation under maximum concurrency. The single-core variant never exercises the multi-core
+// aggregation path; this one does. Each iteration value must appear EXACTLY
+// risc_count_per_iter * num_worker_cores times: fewer => the aggregation dropped data, more =>
+// it duplicated data. Run with TT_METAL_DEVICE_PRINT=1 to route through the DRAM aggregation path.
+TEST_F(DevicePrintOutputFixture, PrintConcurrentAllRiscsAllWorkers) {
+    size_t device_counter = 0;
+    for (auto& mesh_device : this->devices_) {
+        if (mesh_device->arch() != tt::ARCH::WORMHOLE_B0 && mesh_device->arch() != tt::ARCH::BLACKHOLE) {
+            continue;  // WH/BH only.
+        }
+        device_counter++;
+
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        Program program = Program();
+        workload.add_program(device_range, std::move(program));
+        auto& program_ = workload.get_programs().at(device_range);
+
+        // Cover the entire compute grid (every usable worker core).
+        CoreCoord grid = mesh_device->compute_with_storage_grid_size();
+        CoreRange all_cores({0, 0}, {grid.x - 1, grid.y - 1});
+        const uint32_t num_cores = grid.x * grid.y;
+
+        // Allow overriding the iteration count to stress the DRAM ring with many wrap-arounds.
+        uint32_t iterations_count = 100u;
+        if (const char* env = std::getenv("DPRINT_AW_ITERS")) {
+            iterations_count = static_cast<uint32_t>(std::max(1, atoi(env)));
+        }
+        std::vector<uint32_t> runtime_args = {iterations_count};
+
+        // BRISC
+        auto kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        // NCRISC
+        kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            all_cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        // TRISC0 (Unpack), TRISC1 (Math), TRISC2 (Pack)
+        kernel_handle = CreateKernel(
+            program_,
+            "tests/tt_metal/tt_metal/test_kernels/device_print/print_iterations.cpp",
+            all_cores,
+            ComputeConfig{});
+        SetRuntimeArgs(program_, kernel_handle, all_cores, runtime_args);
+
+        const int risc_count_per_iter =
+            static_cast<int>(MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::TENSIX));
+
+        DebugToolsMeshFixture::RunProgram(mesh_device, workload);
+        MetalContext::instance().dprint_server()->await();
+
+        // Count how many times each iteration value appears across the whole grid.
+        std::fstream log_file;
+        ASSERT_TRUE(OpenFile(dprint_file_name, log_file, std::fstream::in));
+        std::vector<int> counts(iterations_count, 0);
+        std::string line;
+        int total_lines = 0, matched_lines = 0;
+        std::string first_line, last_line;
+        for (;;) {
+            if (!getline(log_file, line)) {
+                break;
+            }
+            total_lines++;
+            if (total_lines == 1) {
+                first_line = line;
+            }
+            last_line = line;
+            int iter = -1;
+            if (sscanf(line.c_str(), "Test iteration: %d", &iter) == 1 && iter >= 0 && iter < (int)counts.size()) {
+                counts[iter]++;
+                matched_lines++;
+            }
+        }
+        log_info(
+            tt::LogTest,
+            "AllWorkers FILE: {} total lines, {} matched 'Test iteration:'; first='{}' last='{}'",
+            total_lines,
+            matched_lines,
+            first_line,
+            last_line);
+        const int expected_count = risc_count_per_iter * static_cast<int>(num_cores) * static_cast<int>(device_counter);
+        int dup_iters = 0, missing_iters = 0, total_extra = 0, total_missing = 0;
+        for (int i = 0; i < (int)counts.size(); i++) {
+            if (counts[i] > expected_count) {
+                dup_iters++;
+                total_extra += counts[i] - expected_count;
+            } else if (counts[i] < expected_count) {
+                missing_iters++;
+                total_missing += expected_count - counts[i];
+            }
+        }
+        log_info(
+            tt::LogTest,
+            "AllWorkers: {} cores x {} riscs x {} iters; expected {}/iter; {} iters duplicated (+{}), {} iters short "
+            "(-{})",
+            num_cores,
+            risc_count_per_iter,
+            iterations_count,
+            expected_count,
+            dup_iters,
+            total_extra,
+            missing_iters,
+            total_missing);
+        for (int i = 0; i < (int)counts.size(); i++) {
+            EXPECT_EQ(counts[i], expected_count)
+                << "Iteration " << i << " appeared " << counts[i] << " times (expected " << expected_count << ")";
+        }
+    }
+}
+
 // Quasar-only race-detection variant of PrintConcurrentAllRiscs that uses *only the rocket-core
 // DMs* (DM2..DM7). Isolates whether the contention bug is within a single rocket-core group, or
 // requires the mix of rocket + baby-risc contenders.

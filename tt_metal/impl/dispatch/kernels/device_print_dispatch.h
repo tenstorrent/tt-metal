@@ -489,32 +489,31 @@ private:
 
         buffer_size = dram_align(buffer_size);
 
-        // Check if DRAM buffer is overflowing and write what we can until end of the buffer.
-        if (dram_write_pointer >= dram_read_pointer) {
-            // Check if we can write whole buffer without wrapping around.
-            if (buffer_size <= dram_buffer_size - dram_write_pointer) {
-                dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, buffer_size);
-                dram_write_pointer += buffer_size;
-                buffer_size = 0;
-            } else {
-                // We need to split buffer into two parts and write them separately.
-                uint32_t first_part_size = dram_buffer_size - dram_write_pointer;
-                dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, first_part_size);
-                buffer_size -= first_part_size;
-                buffer_address += first_part_size;
-                dram_write_pointer = 0;
-            }
-        }
-
         // Pointer to DRAM read/write pointers in our local L1.
         volatile tt_l1_ptr uint32_t* dram_rw_pointers = (volatile tt_l1_ptr uint32_t*)l1_dram_rw_pointers;
 
-        // Check if there is remaining buffer to write
         if (buffer_size > 0) {
-            // We know that buffer is overflowing.
-            // Wait until there is enough space in the buffer.
-            while (dram_read_pointer != dram_write_pointer && buffer_size > dram_read_pointer - dram_write_pointer) {
-                // Read updated read pointer from DRAM.
+            // The write pointer must never be advanced to equal the read pointer. Both this producer and
+            // the host reader treat dram_write_pointer == dram_read_pointer as EMPTY. If a write ever
+            // made wp == rp while the ring actually held unread data (a FULL ring), the host would stop
+            // draining and we would overwrite it — silent, timing-dependent data loss. We therefore
+            // reserve a one-alignment-unit gap and wait until the ring has room for the WHOLE message
+            // before writing any of it.
+            while (true) {
+                // Free space that keeps wp != rp. When wp == rp the ring is empty (whole ring free).
+                uint32_t free;
+                if (dram_read_pointer == dram_write_pointer) {
+                    free = dram_buffer_size;
+                } else if (dram_read_pointer > dram_write_pointer) {
+                    free = dram_read_pointer - dram_write_pointer;
+                } else {
+                    free = dram_buffer_size - (dram_write_pointer - dram_read_pointer);
+                }
+                free -= dram_align(1);
+                if (free >= buffer_size) {
+                    break;
+                }
+                // Not enough room yet — re-read the host's read pointer from DRAM and wait.
                 noc_read_with_state<DM_DEDICATED_NOC, NCRISC_RD_CMD_BUF, CQ_NOC_SNDL>(
                     NOC_INDEX,
                     dram_noc_xy,
@@ -525,8 +524,21 @@ private:
                 dram_read_pointer = dram_rw_pointers[1];
             }
 
-            dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, buffer_size);
-            dram_write_pointer += buffer_size;
+            // Write the message, splitting across the ring-end boundary if needed. The space check
+            // above guarantees the resulting dram_write_pointer stays strictly short of the read
+            // pointer (>= one gap unit away), so it can never alias the read pointer.
+            uint32_t until_end = dram_buffer_size - dram_write_pointer;
+            if (buffer_size <= until_end) {
+                dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, buffer_size);
+                dram_write_pointer += buffer_size;
+                if (dram_write_pointer == dram_buffer_size) {
+                    dram_write_pointer = 0;
+                }
+            } else {
+                dram_write_chunked(buffer_address, dram_buffer_start_addr + dram_write_pointer, until_end);
+                dram_write_chunked(buffer_address + until_end, dram_buffer_start_addr, buffer_size - until_end);
+                dram_write_pointer = buffer_size - until_end;
+            }
         }
 
         // Wait until all data is written to DRAM before returning to make sure data is visible to host.
