@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
+import json
 import os
 import signal
 from pathlib import Path
@@ -21,6 +22,42 @@ from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
 )
+
+def _apply_manifest_env():
+    """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
+    the runner (and migration/validation helpers) read. setdefault => an explicitly
+    exported env var still wins over the manifest. Must be invoked before the
+    module-level env reads below (e.g. PREFILL_MAX_SEQ_LEN) so the values take effect."""
+    manifest_path = os.environ.get("PREFILL_MANIFEST")
+    if not manifest_path:
+        return
+
+    with open(manifest_path) as mp:
+        manifest = json.load(mp)
+    users = manifest["users"]
+    N = len(users)
+
+    def sd(key, val):
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+    model = manifest.get("model", {})
+    mig = manifest.get("migration", {})
+    paths = manifest.get("paths", {})
+
+
+    sd("PREFILL_MODEL_VARIANT", model.get("variant"))
+    sd("DEEPSEEK_PREFILL_TRACE_DIR", paths.get("trace_dir"))
+    sd("PREFILL_MIGRATION_CLIENT_DIR", paths.get("migration_client_dir"))
+    sd("PREFILL_MIGRATE", mig.get("mode"))
+    sd("PREFILL_NUM_USERS", 2 * N)
+    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
+    sd("PREFILL_STANDALONE_CHUNKED_NCHUNKS", sum(u["n_chunks"] for u in users))
+    sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
+    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u["kv_cache"] for u in users))
+
+# Populate env from the manifest BEFORE the module-level env reads below.
+_apply_manifest_env()
 
 # Sync-op worker core. Single core suffices: the kernel only copies the
 # backing tensor's pages into a fresh output, no per-core parallelism needed.
