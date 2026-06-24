@@ -349,6 +349,7 @@ def initialize_vllm_text_transformer(
             max_batch_size=max_batch_size // tt_data_parallel,
             optimizations=lambda model_args: optimizations(model_args.n_layers, model_args.model_name),
             max_seq_len=max_seq_len,
+            dummy_weights=True,
         )
 
         assert model_args_i.model_name.replace("-", "") in hf_config._name_or_path.replace(
