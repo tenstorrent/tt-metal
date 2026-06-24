@@ -123,34 +123,49 @@ def pytest_collection_modifyitems(config, items):
     - Blackhole: Only supports 4-device configs (linear-4, ring-4)
     - Wormhole: Ring topology only works with 8 devices (ring-8)
 
-    Subtorus / galaxy-ring guard (CI): FABRIC_2D_TORUS_{X,Y,XY} and a 2D-mesh FABRIC_1D_RING
-    need physical wrap cabling that NO CI runner has — opening that fabric on a plain bh-glx
-    just hangs (there are no subtorus-enabled runners on CI). So these are skipped whenever a CI
-    environment is detected; they run only on a subtorus-wired host (CI unset). (8,1)/(4,1) rings
-    are unaffected — they are already device-count-skipped off a galaxy and run on ring runners.
+    Galaxy ring/subtorus guard (CI): ring and torus fabrics need physical wrap cabling. On a
+    GALAXY board that wrap is subtorus wiring that CI galaxy runners do not have — the native
+    galaxy mesh is 32x4 across 4 hosts, so an 8-ring or 4-ring on a single galaxy is a sub-torus
+    (and the 4-ring exists ONLY on a subtorus-wired galaxy, not on a LoudBox). Opening such a
+    fabric on a CI galaxy just hangs. So on CI + galaxy we skip EVERY torus
+    (FABRIC_2D_TORUS_{X,Y,XY}) and FABRIC_1D_RING config. LoudBox is untouched: its ring is
+    native there, and galaxy-only torus configs can't be collected on it anyway (device count).
+    None of this fires off CI, so a subtorus-wired host (CI unset) still runs everything.
     """
     on_ci = os.getenv("CI") == "true" or "TT_GH_CI_INFRA" in os.environ
-    subtorus_fabrics = {
+    ring_or_torus_fabrics = {
         ttnn.FabricConfig.FABRIC_2D_TORUS_X,
         ttnn.FabricConfig.FABRIC_2D_TORUS_Y,
         ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ttnn.FabricConfig.FABRIC_1D_RING,
     }
+    # Only skip ring/torus on a galaxy; LoudBox rings are native. Detection opens the chip, same as
+    # the get_num_devices() call below, so it adds no extra cost. On detection failure default to
+    # skipping (a missed skip on a galaxy means a hang, which is worse than over-skipping on LB).
+    skip_rings = False
+    if on_ci:
+        try:
+            skip_rings = ttnn.cluster.get_cluster_type() in (
+                ttnn.cluster.ClusterType.GALAXY,
+                ttnn.cluster.ClusterType.TG,
+                ttnn.cluster.ClusterType.BLACKHOLE_GALAXY,
+            )
+        except Exception:
+            skip_rings = True
 
     for item in items:
-        # Subtorus / galaxy-ring guard — must run before the marker check below so it catches torus
-        # configs regardless of whether they carry a requires_mesh_topology mark.
-        if on_ci:
+        # Galaxy ring/subtorus guard — runs before the marker check so it catches configs whether or
+        # not they carry a requires_mesh_topology mark.
+        if skip_rings:
             params = getattr(getattr(item, "callspec", None), "params", {})
             dp = params.get("device_params")
             fabric = dp.get("fabric_config") if isinstance(dp, dict) else None
-            shape = params.get("mesh_device")
-            is_2d_mesh = isinstance(shape, (tuple, list)) and len(shape) == 2 and shape[0] > 1 and shape[1] > 1
-            if fabric in subtorus_fabrics or (fabric == ttnn.FabricConfig.FABRIC_1D_RING and is_2d_mesh):
+            if fabric in ring_or_torus_fabrics:
                 item.add_marker(
                     pytest.mark.skip(
-                        reason="subtorus/galaxy-ring config (FABRIC_2D_TORUS_* or 2D FABRIC_1D_RING) "
-                        "needs wrap cabling absent on CI runners; would hang on bh-glx. Run only on a "
-                        "subtorus-wired host (CI unset)."
+                        reason="ring/subtorus config on a CI galaxy runner: an 8-/4-ring on one galaxy "
+                        "needs subtorus wrap cabling that CI galaxies lack -> would hang. Runs only on a "
+                        "subtorus-wired galaxy (CI unset), or — for a native ring — a LoudBox."
                     )
                 )
                 continue
