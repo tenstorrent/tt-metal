@@ -358,6 +358,8 @@ reduce_init<...>(dfb::in, dfb::scale, dfb::out);
 pack_tile(0, dfb::out);
 ```
 
+> **The `dfb::name → uint32_t` conversion is a decoupling shim, not the default.** It exists to bridge a named handle into call sites that aren't on Metal 2.0 — LLK primitives and shared / other-op helpers (*escapes*) that can't all port at once. Where Metal 2.0 offers a native mechanism, prefer it: e.g. tile/format metadata now comes off the `DataflowBuffer` object directly (rule 7), so query the object rather than passing `dfb::name` into a legacy `get_*(cb_id)` helper.
+
 **3. Resource construction from named tokens.** Every kernel-side resource is constructed from its named binding token:
 
 ```cpp
@@ -447,11 +449,13 @@ constexpr uint32_t cb_x = cb_out;
 
 The `#ifdef` runs at the preprocessor stage, before the C++ compiler sees the code — so `dfb::fusion` never enters name lookup in the unfused build, and the conditionally-bound resource is honored end-to-end. See [patterns catalog — Conditional / optional DFB bindings](metal2_port_patterns.md#pattern-conditional--optional-dfb-bindings) for the deeper rationale.
 
-**7. Comments — preserve.** The kernel's self-documentation is load-bearing. Slight tweaks to align an existing comment with the line you're forced to change are fine; **deletion is not.** When in doubt, err on the side of preserving information. **A previous porter deleted huge blocks of highly relevant comments while adding `#ifdef`s** — do not repeat that.
+**7. DFB metadata via the object, not cb-id free functions or JIT arrays.** Compile-time tile/format metadata the kernel used to read by cb id — free functions (`get_tile_size(cb_id)`, `get_dataformat(cb_id)`) or `chlkc_descriptors.h` array lookups (`pack_tile_size[cb_id]`, `unpack_src_format[cb_id]`, …) — is now answered by the `DataflowBuffer` object: `dfb.get_tile_size()`, `.get_dataformat()`, `.get_tile_hw()`, `.get_tile_r_dim()` / `.get_tile_c_dim()`, the face-dim accessors, and pack/unpack format variants (defined on `DataflowBuffer` in `tt_metal/hw/inc/api/dataflow/dataflow_buffer.h`). The cb id is gone in Metal 2.0, so these lines must be rewritten — query the object; don't extract `.id` to keep the legacy form.
+
+**8. Comments — preserve.** The kernel's self-documentation is load-bearing. Slight tweaks to align an existing comment with the line you're forced to change are fine; **deletion is not.** When in doubt, err on the side of preserving information. **A previous porter deleted huge blocks of highly relevant comments while adding `#ifdef`s** — do not repeat that.
 
 The temptation is strongest when adding `#ifdef` blocks — the new structure may feel like it "obviates" an old explanatory comment that sat above the conditional. It doesn't. The explanation of *why* the conditional exists is still valuable; the change in HOW it's gated doesn't retire the WHY. Keep the comments.
 
-**8. No edits to kernel code outside the op's directory.** Shared kernels (under `ttnn/cpp/ttnn/kernel_lib/`, framework primitive locations, or anywhere outside this op's own top-level directory) are vetted for Metal 2.0 compatibility *before* op porting begins. If you find you need to edit one to complete the port, that's a signal the vetting missed something — and the most valuable thing you can do is surface that fact, not bundle the fix. Document in the port report:
+**9. No edits to kernel code outside the op's directory.** Shared kernels (under `ttnn/cpp/ttnn/kernel_lib/`, framework primitive locations, or anywhere outside this op's own top-level directory) are vetted for Metal 2.0 compatibility *before* op porting begins. If you find you need to edit one to complete the port, that's a signal the vetting missed something — and the most valuable thing you can do is surface that fact, not bundle the fix. Document in the port report:
 
 - The shared kernel file (path).
 - The function or construct that needed change.
