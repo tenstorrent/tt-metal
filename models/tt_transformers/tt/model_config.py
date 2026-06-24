@@ -15,6 +15,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.transformer_types import MathFidelitySetting, OpGroup, PrecisionSetting, TensorGroup
 from models.common.utility_functions import hf_cache_to_legacy, is_blackhole, is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.common import (
     Mode,
@@ -64,38 +65,6 @@ _REPO_ROOT = Path(
 )
 
 
-class TensorGroup(Enum):
-    FF1_FF3 = "ff1_3"
-    FF2 = "ff2"
-    WQKV = "wqkv"
-    WO = "wo"
-    KV_CACHE = "kv_cache"
-    ACTIVATION = "activation"
-
-
-class PrecisionSetting(Enum):
-    BFP4 = "bfp4"
-    BFP8 = "bfp8"
-    BF16 = "bf16"
-
-
-class OpGroup(Enum):
-    """
-    LI_* are linear operator groups
-    SDPA_* are scaled_dot_product_attention operator groups
-    """
-
-    LI_FF1_FF3 = "li_ff1_3"
-    LI_FF2 = "li_ff2"
-    LI_QKV_DECODE = "li_qkv_decode"
-    LI_O_DECODE = "li_o_decode"
-    SDPA_DECODE = "sdpa_decode"
-    LI_QKV_PREFILL = "li_qkv_prefill"
-    LI_O_PREFILL = "li_o_prefill"
-    SDPA_PREFILL = "sdpa_prefill"
-    ACCURACY = "accuracy"  # This is a special group for accuracy mode, not an actual operator group
-
-
 def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     """Pad total vocab so each device shard is tile-aligned."""
     if num_devices < 1:
@@ -113,16 +82,6 @@ def should_pad_sampling_logits_to_power_of_2(
 
     per_device_vocab = padded_vocab_size // sampling_splits
     return per_device_vocab > 0 and (per_device_vocab & (per_device_vocab - 1)) != 0
-
-
-class MathFidelitySetting(Enum):
-    LOFI = "lofi"
-    HIFI2 = "hifi2"
-    HIFI2_NA = "hifi2na"  # na specified `packer_l1_acc=False` and `fp32_dest_acc_en=False` in compute kernel config
-    HIFI2_FP16 = "hifi2fp16"  # fp16 specified `fp32_dest_acc_en=False` in compute kernel config
-    HIFI2_NOL1ACC = "hifi2nol1acc"  # fp32_dest_acc_en=True but packer_l1_acc=False (issue #36378)
-    HIFI4 = "hifi4"
-    HIFI4_FP32 = "hifi4fp32"
 
 
 class ModelOptimizations:
