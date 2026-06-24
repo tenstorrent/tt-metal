@@ -44,7 +44,7 @@ void kernel_main() {
 #endif
                 cumsum_tile(0, ht == 0);
 #ifdef ROWWISE
-                transpose_wh_dest_init_short();
+                transpose_wh_dest_init_short(tt::CBIndex::c_0);
                 transpose_wh_dest(0);
 #endif
 
