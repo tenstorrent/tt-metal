@@ -35,6 +35,24 @@ constexpr std::uint32_t AVG_SHIFT_MASK = 0xfff;  // Mask for shift instruction e
 constexpr std::uint32_t ROWS_PER_TILE = 64;
 constexpr std::uint32_t ROWS_PER_FACE = 16;
 
+// Tile-layout address tables shared by the manual column MAX/MIN reduce paths
+// (calculate_reduce_max_min_uint16 / calculate_reduce_max_min_int32). Hoisted to file scope so the two
+// paths cannot drift out of sync if the tile layout changes.
+//   COL_REDUCE_ODD_COLUMNS:    dest-word offset between the even- and odd-column halves of a face.
+//   COL_REDUCE_COLUMN_OFFSETS: even/odd column-half selector per face index (even, odd, even, odd).
+//   COL_REDUCE_FACE_ADDRS:     per-face load addresses for the two vertically adjacent face pairs.
+//   COL_REDUCE_FINAL_ADDRS:    top/bottom face dst indices used by the cross-face reduce.
+constexpr std::uint32_t COL_REDUCE_ODD_COLUMNS = 2;
+constexpr std::uint32_t COL_REDUCE_COLUMN_OFFSETS[NUM_FACES] = {0, 2, 0, 2};  // even, odd, even, odd
+constexpr std::uint32_t COL_REDUCE_FACE_ADDRS[2][NUM_FACES] = {
+    {0, 0, 32, 32},   // j=0: Face 0 and Face 2
+    {16, 16, 48, 48}  // j=1: Face 1 and Face 3
+};
+constexpr std::uint32_t COL_REDUCE_FINAL_ADDRS[2][2] = {
+    {0, 32},  // j=0: Face 0 and Face 2
+    {16, 48}  // j=1: Face 1 and Face 3
+};
+
 // Register holding the 0x0000FFFF mask used to clear garbage high bits when loading UInt16 data
 // from a 32-bit (fp32 dest accumulation) dest word. Maps to sfpi::vConstIntPrgm0 on Blackhole.
 constexpr std::uint32_t CLEAR_REG = p_sfpu::LREG12;
@@ -1158,16 +1176,8 @@ inline void calculate_reduce_max_min_uint16() {
         pool_type == PoolType::MAX || pool_type == PoolType::MIN,
         "Only MAX and MIN pool types are supported for this function");
 
-    constexpr std::uint32_t ODD_COLUMNS = 2;
-    constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2};  // even, odd, even, odd
-    constexpr std::uint32_t FACE_ADDRS[2][4] = {
-        {0, 0, 32, 32},   // j=0: Face 0 and Face 2
-        {16, 16, 48, 48}  // j=1: Face 1 and Face 3
-    };
-    constexpr std::uint32_t FINAL_REDUCE_ADDRS[2][2] = {
-        {0, 32},  // j=0: Face 0 and Face 2
-        {16, 48}  // j=1: Face 1 and Face 3
-    };
+    // Shared tile-layout address tables live at file scope (COL_REDUCE_*), so the UInt16 and Int32
+    // column MAX/MIN paths stay in lockstep.
 
     // The intermediate stores below land in non-row-0 dest slots that we reload, so they use the
     // plain (full 32-bit) instruction mode. Only the final row-0 stores are packer-visible and use
@@ -1177,8 +1187,8 @@ inline void calculate_reduce_max_min_uint16() {
         pack_low16 ? 9u /* SFPSTORE_MOD0_FMT_LO16 */ : static_cast<std::uint32_t>(INSTRUCTION_MODE);
 
     for (std::uint32_t j = 0; j < 2; j++) {
-        std::uint32_t top_face_addr = FINAL_REDUCE_ADDRS[j][0];     // face 0 & 1 dst indices
-        std::uint32_t bottom_face_addr = FINAL_REDUCE_ADDRS[j][1];  // face 2 & 3 dst indices
+        std::uint32_t top_face_addr = COL_REDUCE_FINAL_ADDRS[j][0];     // face 0 & 1 dst indices
+        std::uint32_t bottom_face_addr = COL_REDUCE_FINAL_ADDRS[j][1];  // face 2 & 3 dst indices
 
         // Reduce each of the four vertically adjacent faces (f0,f2 then f1,f3) within itself; the
         // max/min of its 16 rows is left in the top 4 rows.
@@ -1186,20 +1196,25 @@ inline void calculate_reduce_max_min_uint16() {
             // Masked load straight into LREG4-7, where the recorded swap buffer reduces them. Loading
             // directly into the target registers eliminates the four LREG0-3 -> LREG4-7 moves (and the
             // post-reduce LREG4 -> LREG0 move) that the previous LREG0-3 load required.
-            load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
+            load_face_data<INSTRUCTION_MODE, clear_high_bits, p_sfpu::LREG4>(
+                COL_REDUCE_FACE_ADDRS[j][i], COL_REDUCE_COLUMN_OFFSETS[i]);
 
             lltt::replay(0, 3);  // compare-and-swap reduce LREG4-7 -> LREG4
 
-            TT_SFPSTORE(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, FACE_ADDRS[j][i] + COLUMN_OFFSETS[i]);
+            TT_SFPSTORE(
+                p_sfpu::LREG4,
+                INSTRUCTION_MODE,
+                ADDR_MOD_7,
+                COL_REDUCE_FACE_ADDRS[j][i] + COL_REDUCE_COLUMN_OFFSETS[i]);
         }
 
         // Load the partial max/min (top 4 rows) of the two vertically adjacent faces into LREG0-3.
         load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
         load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
+            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + COL_REDUCE_ODD_COLUMNS);
         load_and_clear_high_bits<clear_high_bits>(
-            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + ODD_COLUMNS);
+            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + COL_REDUCE_ODD_COLUMNS);
 
         // Move into LREG4-7 for the transpose + cross-row reduction.
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
@@ -1220,7 +1235,7 @@ inline void calculate_reduce_max_min_uint16() {
         TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
 
         TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, top_face_addr);
-        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
+        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, top_face_addr + COL_REDUCE_ODD_COLUMNS);
     }
 }
 
@@ -1257,16 +1272,8 @@ inline void calculate_reduce_max_min_int32() {
         pool_type == PoolType::MAX || pool_type == PoolType::MIN,
         "Only MAX and MIN pool types are supported for this function");
 
-    constexpr std::uint32_t ODD_COLUMNS = 2;
-    constexpr std::uint32_t COLUMN_OFFSETS[4] = {0, 2, 0, 2};  // even, odd, even, odd
-    constexpr std::uint32_t FACE_ADDRS[2][4] = {
-        {0, 0, 32, 32},   // j=0: Face 0 and Face 2
-        {16, 16, 48, 48}  // j=1: Face 1 and Face 3
-    };
-    constexpr std::uint32_t FINAL_REDUCE_ADDRS[2][2] = {
-        {0, 32},  // j=0: Face 0 and Face 2
-        {16, 48}  // j=1: Face 1 and Face 3
-    };
+    // Shared tile-layout address tables live at file scope (COL_REDUCE_*), so the UInt16 and Int32
+    // column MAX/MIN paths stay in lockstep.
 
     // Intermediate stores hold sign-magnitude partials reloaded below; the final row-0 stores write the
     // packer-visible two's-complement result. Both use the plain (raw, no-op on Blackhole) instruction mode.
@@ -1278,14 +1285,15 @@ inline void calculate_reduce_max_min_int32() {
     init_reduce_max_min_int32<INSTRUCTION_MODE, pool_type>();
 
     for (std::uint32_t j = 0; j < 2; j++) {
-        std::uint32_t top_face_addr = FINAL_REDUCE_ADDRS[j][0];     // face 0 & 1 dst indices
-        std::uint32_t bottom_face_addr = FINAL_REDUCE_ADDRS[j][1];  // face 2 & 3 dst indices
+        std::uint32_t top_face_addr = COL_REDUCE_FINAL_ADDRS[j][0];     // face 0 & 1 dst indices
+        std::uint32_t bottom_face_addr = COL_REDUCE_FINAL_ADDRS[j][1];  // face 2 & 3 dst indices
 
         // Reduce each of the four vertically adjacent faces within itself; its max/min of 16 rows is left
         // in the top 4 rows.
         for (std::uint32_t i = 0; i < NUM_FACES; i++) {
             // Raw-load 16 rows of the face straight into LREG4-7 (two's-complement; mode-12 load is a no-op).
-            load_face_data<INSTRUCTION_MODE, false, p_sfpu::LREG4>(FACE_ADDRS[j][i], COLUMN_OFFSETS[i]);
+            load_face_data<INSTRUCTION_MODE, false, p_sfpu::LREG4>(
+                COL_REDUCE_FACE_ADDRS[j][i], COL_REDUCE_COLUMN_OFFSETS[i]);
 
             // Convert each operand two's-complement -> sign-magnitude so the sign-magnitude SFPSWAP
             // comparator orders negatives and the two's-complement pad sentinels correctly. LREG0-3 are free.
@@ -1297,15 +1305,21 @@ inline void calculate_reduce_max_min_int32() {
             lltt::replay(0, 3);  // compare-and-swap reduce LREG4-7 -> LREG4 (sign-magnitude)
 
             // Store the sign-magnitude partial back to dest; reloaded below for the cross-face reduce.
-            TT_SFPSTORE(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_7, FACE_ADDRS[j][i] + COLUMN_OFFSETS[i]);
+            TT_SFPSTORE(
+                p_sfpu::LREG4,
+                INSTRUCTION_MODE,
+                ADDR_MOD_7,
+                COL_REDUCE_FACE_ADDRS[j][i] + COL_REDUCE_COLUMN_OFFSETS[i]);
         }
 
         // Reload the partial max/min (top 4 rows) of the two vertically adjacent faces. They were stored
         // as sign-magnitude, so a raw load keeps them sign-magnitude (no cast needed here).
         load_and_clear_high_bits<false>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr);
         load_and_clear_high_bits<false>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr);
-        load_and_clear_high_bits<false>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
-        load_and_clear_high_bits<false>(p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + ODD_COLUMNS);
+        load_and_clear_high_bits<false>(
+            p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_7, top_face_addr + COL_REDUCE_ODD_COLUMNS);
+        load_and_clear_high_bits<false>(
+            p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_7, bottom_face_addr + COL_REDUCE_ODD_COLUMNS);
 
         // Move into LREG4-7 for the transpose + cross-row reduction.
         TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
@@ -1331,7 +1345,7 @@ inline void calculate_reduce_max_min_int32() {
         convert_int_representation_inplace(p_sfpu::LREG1, p_sfpu::LREG3);
 
         TT_SFPSTORE(p_sfpu::LREG0, STORE_MODE, ADDR_MOD_7, top_face_addr);
-        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, top_face_addr + ODD_COLUMNS);
+        TT_SFPSTORE(p_sfpu::LREG1, STORE_MODE, ADDR_MOD_7, top_face_addr + COL_REDUCE_ODD_COLUMNS);
     }
 }
 
