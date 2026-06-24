@@ -185,6 +185,7 @@ template <BroadcastType BROADCAST_TYPE, bool unpack_to_dest = false, bool is_fp3
 inline void _llk_math_eltwise_unary_broadcast_init_(const TensorShape& tensor_shape)
 {
     static_assert(!(unpack_to_dest && is_fp32_dest_acc_en), "Unary broadcast: unpack_to_dest with Float32 dest accumulation is not supported yet");
+    LLK_ASSERT(tensor_shape.total_num_faces() == 4, "Unary broadcast currently only supports 32x32 tiles");
     _llk_math_eltwise_unary_broadcast_addrmod_<BROADCAST_TYPE, unpack_to_dest>(tensor_shape);
     if constexpr (!unpack_to_dest)
     {
