@@ -860,9 +860,10 @@ class TTTorchSTFT:
         # well-conditioned dense matmul tolerate bf16 here (unlike the forward atan2 path), so the
         # two BF16=>FP32 typecast dispatches are pure overhead on this op-gap-bound path.
         # cos/sin live in L1 (tiny, transient, freed right here) — L1 bandwidth >> DRAM.  X_real /
-        # X_imag, however, stay ALIVE through the conv_transpose (the caller frees them after), so
-        # they must be DRAM: at the 510-phoneme max (F~138k) an L1 X_real/X_imag (~3 MiB each)
-        # clashes with the conv's static circular buffers ("circular buffers clash with L1 buffers").
+        # X_imag must be DRAM, NOT L1: an L1 X_real/X_imag clashes with the conv_transpose's static
+        # circular buffers at the 510-phoneme max (F~138k, ~3 MiB each).  Freeing them before the
+        # conv does NOT help — the L1 allocation high-water-mark is not reclaimed in time, so the
+        # clash persists (measured).  The conv input is materialised in DRAM for the same reason.
         mcl1 = ttnn.L1_MEMORY_CONFIG
         mc = ttnn.DRAM_MEMORY_CONFIG
         cos_phase = ttnn.cos(phase, memory_config=mcl1)

@@ -97,16 +97,17 @@ def test_tt_text_encoder_conv_block_is_callable(device):
         ),
     )
     torch.manual_seed(3)
-    x = torch.randn(1, 16, 512)
+    # Block operates on batch-flattened rank-4 activations [1, 1, batch*seq, C] (here batch=1, seq=16).
+    x = torch.randn(1, 1, 16, 512)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     m = torch.zeros(1, 16, dtype=torch.bool)
     mk = ttnn.from_torch(
-        (~m).to(torch.float32).unsqueeze(-1),
+        (~m).to(torch.float32).reshape(1, 1, 16, 1),
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
-    y = blk.forward(x_tt, mk)
+    y = blk.forward(x_tt, mk, batch=1, seq=16)
     assert y.shape == x_tt.shape
     ttnn.deallocate(y)
     ttnn.deallocate(mk)
