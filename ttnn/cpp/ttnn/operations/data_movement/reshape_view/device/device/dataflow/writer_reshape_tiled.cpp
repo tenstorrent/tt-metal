@@ -31,6 +31,7 @@ void kernel_main() {
     Noc noc;
     // loop over output (reshaped) pages this core is responsible for
     bool first = true;
+    bool input_page_loaded = false;
     cb_reserve_back(cb_id_working, 1);
     const uint32_t working_write_addr = get_write_ptr(cb_id_working);
     for (uint32_t output_page_idx = start_output_page; output_page_idx < end_output_page; ++output_page_idx) {
@@ -43,6 +44,7 @@ void kernel_main() {
                 if (output_page_idx == end_output_page - 1 && seg_idx == Max_Map_Entries - 1) {
                     noc_async_write_barrier();
                     cb_pop_front(cb_id_input, 1);
+                    input_page_loaded = false;
                 }
                 continue;
             }
@@ -52,13 +54,16 @@ void kernel_main() {
                 input_base_addr = get_read_ptr(cb_id_input);
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
                 first = false;
+                input_page_loaded = true;
 
             } else if (map_ptr[seg_idx].input_page_index != previous_input_page_idx) {
                 noc_async_write_barrier();
                 cb_pop_front(cb_id_input, 1);
+                input_page_loaded = false;
                 cb_wait_front(cb_id_input, 1);
                 input_base_addr = get_read_ptr(cb_id_input);
                 previous_input_page_idx = map_ptr[seg_idx].input_page_index;
+                input_page_loaded = true;
             }
             // TODO (maybe) pre calculate size and offsets in bytes on host
             const uint32_t output_addr = working_write_addr + map_ptr[seg_idx].output_page_offset * element_sz_bytes;
@@ -73,6 +78,10 @@ void kernel_main() {
         noc_async_write_barrier();
 
         cb_pop_front(cb_id_mapping, 1);
+    }
+    if (input_page_loaded) {
+        noc_async_write_barrier();
+        cb_pop_front(cb_id_input, 1);
     }
     cb_push_back(cb_id_working, 1);
 }
