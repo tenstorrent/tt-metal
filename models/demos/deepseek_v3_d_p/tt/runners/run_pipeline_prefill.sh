@@ -41,8 +41,11 @@ export TT_METAL_HOME PYTHONPATH="$TT_METAL_HOME"
 export TT_METAL_CACHE="${PP_TT_METAL_CACHE:-/tmp/tt-metal-cache-pp}"
 cd "$TT_METAL_HOME"
 
+# -x PATH/LD_LIBRARY_PATH: ttrun only forwards TT_*/ARCH_*/... prefixed vars, not PATH, so peer ranks
+# would otherwise resolve a bare `python3` to the system interpreter (no ttnn). Forwarding the launch
+# host's PATH works only because every host's venv sits at the identical clone path.
 exec python3 ttnn/ttnn/distributed/ttrun.py \
   --tcp-interface "$TCP_IFACE" \
   --rank-binding "$RANK_BINDING" \
-  --mpi-args "--host ${HOST_LIST} --map-by slot --bind-to none --tag-output --allow-run-as-root" \
+  --mpi-args "--host ${HOST_LIST} --map-by slot --bind-to none --tag-output --allow-run-as-root -x PATH -x LD_LIBRARY_PATH" \
   python3 -m models.demos.deepseek_v3_d_p.tt.runners.prefill_runner

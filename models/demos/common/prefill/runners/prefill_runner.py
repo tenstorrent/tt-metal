@@ -574,6 +574,7 @@ def _print_config() -> None:
         ("PREFILL_CAPACITY_FACTOR", str(CAPACITY_FACTOR)),
         ("PREFILL_GATE_FALLBACK_MODE", _gate_mode_name),
         ("PREFILL_FABRIC_MODE", os.environ.get("PREFILL_FABRIC_MODE", "<auto: 1d if sp<=8 else 2d>")),
+        ("PREFILL_PP_NUM_LINKS", os.environ.get("PREFILL_PP_NUM_LINKS", "2")),
         ("PREFILL_STANDALONE (pipeline/bring-up mode)", os.environ.get("PREFILL_STANDALONE", "0")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
@@ -631,6 +632,15 @@ def main() -> None:
     params = PrefillRunParams(
         mesh_shape=GLOBAL_MESH_SHAPE,
         num_layers=num_my_layers,
+        chunk_size=CHUNK_SIZE,
+        num_users=NUM_USERS,
+        num_links=int(
+            os.environ.get("PREFILL_PP_NUM_LINKS", "2")
+        ),  # drop to 1 where the fabric trains only 1 routing plane
+        capacity_factor=CAPACITY_FACTOR,
+        gate_fallback_mode=GateComputeMode[_gate_mode_name],
+        weight_cache_path=cache_path,
+        model_cfg=MODEL_CFG,
         first_layer_idx=first_layer_idx,
         is_first_rank=is_first_rank,
         is_last_rank=is_last_rank,
