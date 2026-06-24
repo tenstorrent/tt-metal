@@ -139,7 +139,7 @@ protected:
 
         const auto detected_arch = tt::tt_metal::MetalContext::instance().get_cluster().arch();
         tt::tt_metal::MetalContext::instance().rtoptions().set_watcher_noc_sanitize_linked_transaction(
-            detected_arch == tt::ARCH::BLACKHOLE || detected_arch == tt::ARCH::QUASAR);
+            detected_arch == tt::ARCH::BLACKHOLE);
 
         // Parent class initializes devices and any necessary flags
         DebugToolsMeshFixture::SetUp();
