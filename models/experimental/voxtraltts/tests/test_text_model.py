@@ -33,12 +33,14 @@ from models.experimental.voxtraltts.utils.common import (
 _MAX_SEQ_LEN = DEFAULT_VOXTRAL_TT_TEXT_MAX_SEQ_LEN
 # Mirrors devstral2 / tt_transformers bringup: sweep ISLs + tail prefill at 65504 (65536 budget).
 _PREFILL_LOGIT_PCC_ISLS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65280)
-_DECODE_32STEP_ISLS = (128, 256, 384, 512)
+_DECODE_32STEP_ISLS = (128, 256, 384, 512, 8192)
 _DECODE_32STEP_TAIL_ISL = _MAX_SEQ_LEN - 32  # 65504 + 32 → full KV timeline
 _DECODE_256STEP_TAIL_ISL = _MAX_SEQ_LEN - 256  # 65280 + 256 → positions through 65535
 _PREFILL_LOGIT_PCC_THRESHOLD = 0.99
 _DECODE_LOGIT_PCC_THRESHOLD = 0.98
-_PREFILL_CHUNK_SIZE = 2048
+_PREFILL_CHUNK_SIZE = (
+    512  # BH: MinimalMatmulConfig (w2) has CB_end=914KB, free L1=643KB/core=52.7MB; 512-chunk peak ~26MB (2.8x margin)
+)
 
 
 def _is_ci() -> bool:
@@ -67,12 +69,33 @@ def _build_decode_page_table_tt(model, seq_len: int, *, max_seq_len: int, paged_
 
 
 def _create_text_model_for_logit_pcc(device):
-    return create_real_voxtral_text_model_or_skip(
-        device,
-        max_seq_len=_MAX_SEQ_LEN,
-        dtype=ttnn.bfloat16,
-        optimizations=voxtral_text_logits_pcc_optimizations,
-    )
+    # Enable interleaved-weight 1D mcast for w1/w3 decode (~25% faster per decode step) and
+    # L1 activations for 512-token prefill chunks (= BH prefill_len_cutoff, no reshape needed).
+    # The w2 MinimalMatmulConfig kernel uses 384KB CBs + 508KB kernel = CB_end at 914KB, leaving
+    # only 643KB/core free for L1 tensors (52.7MB across 80 cores).
+    # At 1024-chunk the live tensors (residual+x+act_out+w2_out+attn intermediates) exceed that
+    # limit by ~22KB/core causing a CB clash.  At 512-chunk peak is ~26MB (2.8x margin).
+    # Both vars are scoped here; demo pipeline is unaffected.
+    _prev_mlp_1d = os.environ.get("VOXTRAL_MLP_1D")
+    _prev_l1_max = os.environ.get("VOXTRAL_TEXT_PREFILL_L1_MAX_SEQ_LEN")
+    os.environ["VOXTRAL_MLP_1D"] = "1"
+    os.environ["VOXTRAL_TEXT_PREFILL_L1_MAX_SEQ_LEN"] = "512"
+    try:
+        return create_real_voxtral_text_model_or_skip(
+            device,
+            max_seq_len=_MAX_SEQ_LEN,
+            dtype=ttnn.bfloat16,
+            optimizations=voxtral_text_logits_pcc_optimizations,
+        )
+    finally:
+        if _prev_mlp_1d is None:
+            os.environ.pop("VOXTRAL_MLP_1D", None)
+        else:
+            os.environ["VOXTRAL_MLP_1D"] = _prev_mlp_1d
+        if _prev_l1_max is None:
+            os.environ.pop("VOXTRAL_TEXT_PREFILL_L1_MAX_SEQ_LEN", None)
+        else:
+            os.environ["VOXTRAL_TEXT_PREFILL_L1_MAX_SEQ_LEN"] = _prev_l1_max
 
 
 def _tt_decode_step_logits(

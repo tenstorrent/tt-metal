@@ -596,11 +596,15 @@ def get_VoxtralTTArgs(preloaded_state_dict: Optional[dict[str, torch.Tensor]] = 
                 # Base prefill config overrides per_core_N with a dram_shard_grid_width value tuned
                 # for DRAM-SHARDED weights -> inconsistent with DRAM-interleaved weights (CB error).
                 # Build a standard 2D matmul_config (per_core_N derived from the compute grid).
+                # in0_block_w=1: the default find_largest_divisor gives 6, making in1 CB = 36×6×2KB
+                # = 432 KB per core. Combined with L1-resident activation tensors this overflows the
+                # 1.5 MB per-core L1 budget. in0_block_w=1 keeps in1 CB at 36×1×2KB = 72 KB.
                 return self.matmul_config(
                     m=min(seq_len, self.prefill_len_cutoff),
                     k=self.dim // self.cluster_shape[0],
                     n=self.hidden_dim // self.cluster_shape[1],
                     grid_size=self.mlp1_3_grid(seq_len),
+                    in0_block_w=1,
                 )
             grid = self.mlp_core_grid
             nc = grid.num_cores
