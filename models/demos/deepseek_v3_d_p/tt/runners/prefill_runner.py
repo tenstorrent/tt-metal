@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
+import json
 import os
 import signal
 
@@ -25,6 +26,68 @@ from models.demos.deepseek_v3_d_p.tt.tt_deepseek_prefill_pipeline import (
     TtDeepSeekPrefillPipeline,
     TtPrefillPipelineConfig,
 )
+
+
+def _apply_manifest_env():
+    """If PREFILL_MANIFEST is set, load the shared run.json and populate the env vars
+    the runner (and migration/validation helpers) read. setdefault => an explicitly
+    exported env var still wins over the manifest. Must be invoked before the
+    module-level env reads below (e.g. PREFILL_MAX_SEQ_LEN) so the values take effect."""
+    manifest_path = os.environ.get("PREFILL_MANIFEST")
+    if not manifest_path:
+        return
+
+    with open(manifest_path) as mp:
+        manifest = json.load(mp)
+    users = manifest["users"]
+    N = len(users)
+
+    def sd(key, val):
+        if val is not None:
+            os.environ.setdefault(key, str(val))
+
+    model = manifest.get("model", {})
+    mig = manifest.get("migration", {})
+    paths = manifest.get("paths", {})
+
+    sd("PREFILL_MODEL_VARIANT", model.get("variant"))
+    sd("DEEPSEEK_PREFILL_TRACE_DIR", paths.get("trace_dir"))
+    sd("PREFILL_MIGRATION_CLIENT_DIR", paths.get("migration_client_dir"))
+    sd("PREFILL_NUM_USERS", 2 * N)
+    sd("PREFILL_MAX_SEQ_LEN", model.get("max_seq_len"))
+    sd("PREFILL_STANDALONE_CHUNKED_NCHUNKS", sum(u["n_chunks"] for u in users))
+    sd("PREFILL_MIGRATE_WAIT_S", mig.get("wait_s"))
+    sd("PREFILL_MIGRATE_GOLDEN_PTS", ",".join(u["kv_cache"] for u in users))
+
+    # Mode: explicit must match user count; otherwise derive (1 user => burst, else pairwise).
+    mode = mig.get("mode")
+    if mode in ("burst", "pairwise"):
+        if mode == "burst" and N != 1:
+            raise ValueError(f"manifest migration.mode 'burst' requires exactly 1 user, got {N}")
+        if mode == "pairwise" and N < 2:
+            raise ValueError(f"manifest migration.mode 'pairwise' requires more than 1 user, got {N}")
+    elif mode is None:
+        mode = "burst" if N == 1 else "pairwise"
+    else:
+        raise ValueError(f"manifest migration.mode must be 'pairwise' or 'burst', got: {mode}")
+    sd("PREFILL_MIGRATE", mode)
+
+    # Each non-empty kv_cache must exist on disk.
+    for i, u in enumerate(users):
+        kv = u.get("kv_cache", "")
+        if kv and not os.path.exists(kv):
+            raise FileNotFoundError(f"PREFILL_MANIFEST user {i} kv_cache not found: {kv}")
+
+    # PREFILL_NUM_USERS (derived or explicitly exported) must equal 2*N.
+    num_users = int(os.environ["PREFILL_NUM_USERS"])
+    if num_users != 2 * N:
+        raise ValueError(
+            f"PREFILL_NUM_USERS ({num_users}) inconsistent with manifest " f"({N} users => expected {2 * N})"
+        )
+
+
+# Populate env from the manifest BEFORE the module-level env reads below.
+_apply_manifest_env()
 
 # Sync-op worker core. Single core suffices: the kernel only copies the
 # backing tensor's pages into a fresh output, no per-core parallelism needed.
