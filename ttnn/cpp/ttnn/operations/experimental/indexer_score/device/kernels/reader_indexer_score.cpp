@@ -94,9 +94,13 @@ inline void mcast_recv(Noc noc, const McastDir& d) {
 
 /** Role-aware block read shared by the q-block, w-group and k-chunk readers. Reserve `ntiles` of cb_id;
  *  receiver waits the sender's mcast and returns; everyone else runs `read_into(addr)` (DRAM read loop),
- *  barriers, and (sender only) broadcasts `bytes`. read_q_rows has its own per-row variant. */
+ *  barriers, and (sender only) broadcasts `bytes`. read_q_rows has its own per-row variant.
+ *  A fully-padded k band passes k_tiles_in_unit == 0, so read_into reads nothing (its K DMA is skipped);
+ *  the sender still broadcasts the stale L1 (compute discards it as -inf) so the mcast handshake and CB
+ *  ring stay in lockstep -- no peer hangs on a missing rendezvous. */
 template <uint32_t cb_id, uint32_t mcast_on, uint32_t send_sem, uint32_t recv_sem, uint32_t valid_sem, typename ReadFn>
-inline void read_block_or_mcast(Noc noc, uint32_t ntiles, uint32_t bytes, const McastDir& dir, ReadFn&& read_into) {
+inline void read_block_or_mcast(
+    Noc noc, uint32_t ntiles, uint32_t bytes, const McastDir& dir, ReadFn&& read_into) {
     CircularBuffer cb(cb_id);
     cb.reserve_back(ntiles);
     const uint32_t addr = cb.get_write_ptr();
@@ -216,9 +220,14 @@ inline void read_k_chunk(
     uint32_t k_batch_page_offset) {
     // Reserves/pushes the full k_chunk_tiles to keep the 2-chunk ring half-aligned, but reads only the
     // k_tiles_in_unit valid columns (pad slots stay stale; compute masks them). k_batch_page_offset shifts
-    // every page into the indexed cache slot; 0 when not indexed.
+    // every page into the indexed cache slot; 0 when not indexed. A fully-padded band has k_tiles_in_unit
+    // == 0 (valid width = min(kv_len, chunk_start + Sqt)), so the loop is empty -- its K DMA is skipped.
     read_block_or_mcast<cb_k, k_mcast_on, k_send_sem, k_recv_sem, k_valid_sem>(
-        noc, k_chunk_tiles, k_chunk_tiles * k_tile_bytes, k_dir, [&](uint32_t addr) {
+        noc,
+        k_chunk_tiles,
+        k_chunk_tiles * k_tile_bytes,
+        k_dir,
+        [&](uint32_t addr) {
             uint32_t ptr = addr;
             for (uint32_t k_col = 0; k_col < k_tiles_in_unit; ++k_col) {
                 for (uint32_t dim_tile = 0; dim_tile < head_dim_tiles; ++dim_tile) {
@@ -248,10 +257,11 @@ void kernel_main() {
     const uint32_t max_bands = get_arg_val<uint32_t>(8);  // row's widest column; streaming pads q to this
     const McastDir k_dir = read_mcast_dir(9);             // K column mcast: args [9, 17)
     const McastDir q_dir = read_mcast_dir(17);            // Q/W row mcast: args [17, 25)
-    // Persistent-cache runtime args (excluded from the hash, re-applied each dispatch), after the mcast
-    // tuples so they never perturb the fixed read_mcast_dir() offsets.
+    // Persistent-cache + chunk_start runtime args (excluded from the hash, re-applied each dispatch), after
+    // the mcast tuples so they never perturb the fixed read_mcast_dir() offsets.
     const uint32_t k_batch_page_offset = get_arg_val<uint32_t>(25);  // indexed-cache k page offset; 0 when not indexed
     const uint32_t kv_len_tiles = get_arg_val<uint32_t>(26);  // valid KV length in tiles (full k_len_tiles when unset)
+    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(27);  // per-turn chunk-start offset, in tiles
 
     const auto q_acc = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto k_acc = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -262,12 +272,16 @@ void kernel_main() {
     build_mask_tiles(noc);
 
     WorkUnitSpan span;
-    span.set_valid_k_len_tiles(kv_len_tiles);
+    // Unified valid K width = min(kv_len, chunk_start + Sqt): bands entirely past it are -inf for ALL
+    // q-rows, so k_tiles() drops to 0 and their K DMA (the bottleneck) is skipped. Both bounds default-open
+    // (kv_len unset -> Tt; chunk_start large -> Tt), so the dense path is unchanged.
+    const uint32_t causal_k_tiles = chunk_start_tiles + q_len_tiles;
+    span.set_valid_k_len_tiles(kv_len_tiles < causal_k_tiles ? kv_len_tiles : causal_k_tiles);
 
     // group-OUTER, band-INNER. Resident-heads order within a group: k -> q -> w (w/gates consumed only in
     // the mul phase, so read LAST behind latency-critical q/k). Streaming path reads w FIRST: compute's mul
     // drains streamed q, so w must be present or both kernels block => deadlock. q/w are read once per
-    // group (j==0); k-mcast fires every band down the column, q/w-mcast once per group along the row.
+    // group (band==0); k-mcast fires every band down the column, q/w-mcast once per group along the row.
     //
     // Streaming pads the band loop to max_bands so every core in a row issues the SAME number of q reads
     // (hence q-mcast rendezvous): columns own uneven band counts, but a phantom band [num_bands, max_bands)

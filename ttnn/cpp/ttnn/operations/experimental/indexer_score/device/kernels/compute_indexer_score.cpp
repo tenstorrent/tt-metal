@@ -285,10 +285,10 @@ inline void drain_phantom_band_q() {
 /** Stamp the causal -inf mask onto q_row's masked suffix [valid, KC) in place, so the strip still
  *  untilizes via the fast W=KC path (empty loop when the row is fully valid). */
 inline void stamp_masked_suffix(
-    const WorkUnitSpan& span, uint32_t q_row, uint32_t slot_base, uint32_t k_tiles_in_unit) {
+    const WorkUnitSpan& span, uint32_t q_row, uint32_t slot_base, uint32_t k_tiles_in_unit, uint32_t chunk_start_tiles) {
     const uint32_t k_tile0 = span.k_tile_start();
     const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + q_row;
-    const uint32_t valid = row_valid_prefix(span.q_tile_start() + q_row, k_tile0, k_tiles_in_unit);
+    const uint32_t valid = row_valid_prefix(span.q_tile_start() + q_row, k_tile0, k_tiles_in_unit, chunk_start_tiles);
     for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
         stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, k_tile0 + k_col, diag_tile);
     }
@@ -307,6 +307,9 @@ void kernel_main() {
     // Valid KV length in tiles: caps each cell's valid columns (the causal mask suffix grows to cover the
     // unwritten tail). Full k_len_tiles when not set, so the dense path is unchanged. Excluded from the hash.
     const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
+    // Per-turn chunk-start offset (in tiles), runtime so distinct chunk_start values reuse one compiled
+    // program (hash-excluded; see the device op's compute_program_hash).
+    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
@@ -321,7 +324,12 @@ void kernel_main() {
     CircularBuffer q(cb_q);
 
     WorkUnitSpan span;
-    span.set_valid_k_len_tiles(kv_len_tiles);
+    // Unified valid K width: the smaller of the runtime kv_len and this chunk's causal reach
+    // (chunk_start + Sqt = the diagonal the last q-row hits). Columns past it are -inf for ALL rows, so the
+    // reader skips their K DMA and the band's k_tiles() drops to 0. Both bounds default-open (kv_len unset
+    // -> Tt; chunk_start large -> Tt), so the dense path is unchanged.
+    const uint32_t causal_k_tiles = chunk_start_tiles + q_len_tiles;
+    span.set_valid_k_len_tiles(kv_len_tiles < causal_k_tiles ? kv_len_tiles : causal_k_tiles);
 
     constexpr uint32_t unit_strip = q_tiles_per_unit * k_tiles_per_unit;  // QC x KC accumulator slots
     constexpr uint32_t q_row_tiles = q_group_tiles / q_tiles_per_unit;    // heads_per_group * head_dim_tiles
@@ -347,6 +355,11 @@ void kernel_main() {
             k.wait_front(k_chunk_tiles);
             const uint32_t k_tiles_in_unit = span.k_tiles();
 
+            // PADDED-KV / kv_len: a fully-padded band (k_tiles_in_unit == 0, all -inf tail) still matmuls
+            // here on STALE k (the reader skipped its K DMA, the bottleneck) and stamp_masked_suffix
+            // overwrites it with -inf, as the main path already does for a partial band's pad columns.
+            // Skipping the matmul too corrupts the BH fast-untilize of a stamp-only band; the K-read skip
+            // is the saving. No whole-block q/w wait here: resident q is waited PER ROW below; w in the mul.
             acc.reserve_back(unit_strip);
             for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
                 // wait q rows 0..q_row only (reader pushes per row): row q_row reads only its row, so row 0
@@ -370,7 +383,8 @@ void kernel_main() {
                     accumulate_row_streaming(q_row, slot_base);  // PHASE 1+2 head-streaming / KC==1 fallback
                 }
 
-                stamp_masked_suffix(span, q_row, slot_base, k_tiles_in_unit);  // causal -inf on masked suffix
+                // causal -inf on the row's masked suffix (chunk_start is a runtime arg, see kernel_main top)
+                stamp_masked_suffix(span, q_row, slot_base, k_tiles_in_unit, chunk_start_tiles);
             }
             acc.push_back(unit_strip);
 

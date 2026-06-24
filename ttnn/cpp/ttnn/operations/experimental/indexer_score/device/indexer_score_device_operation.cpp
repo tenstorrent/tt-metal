@@ -45,11 +45,28 @@ void validate_static(const operation_attributes_t& attrs, const tensor_args_t& t
     }
 }
 
-// The slot/kv_len values: hashed only by has_value(), so they can differ on a cache hit and feed kernel
-// addressing (page offset / read width). Cheap integer checks on shape metadata, run on miss AND hit.
+// Runtime values: cache_batch_idx, kv_len, and chunk_start_idx are all hash-excluded (the optionals
+// contribute only has_value(); chunk_start nothing), so they can differ on a cache hit and feed kernel
+// addressing (page offset / read width / causal window). Cheap integer checks, run on miss AND hit.
 void validate_runtime_values(const operation_attributes_t& attrs, const tensor_args_t& t) {
     const auto& q = t.q;
     const auto& k = t.k;
+    const uint32_t Sq = q.logical_shape()[2];
+    const uint32_t T = k.logical_shape()[2];
+
+    // chunk_start is hash-excluded (per-turn runtime, patched in override_runtime_arguments): re-check its
+    // alignment + causal window every dispatch so no turn runs off the end of K with a reused program.
+    TT_FATAL(
+        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
+        "chunk_start_idx {} must be tile-aligned",
+        attrs.chunk_start_idx);
+    TT_FATAL(
+        attrs.chunk_start_idx + Sq <= T,
+        "chunk window [{}, {}+{}) exceeds T={}",
+        attrs.chunk_start_idx,
+        attrs.chunk_start_idx,
+        Sq,
+        T);
 
     // Indexed KV cache: k is [B,1,T,D]; cache_batch_idx picks a slot (q/weights are batch 1). An
     // out-of-range slot offsets every k page id OOB.
@@ -67,8 +84,6 @@ void validate_runtime_values(const operation_attributes_t& attrs, const tensor_a
     // the valid keys, preserving the kernel's "stale-k tail -> -inf overwrite" invariant (no unwritten tile
     // is ever accumulated).
     if (attrs.kv_len.has_value()) {
-        const uint32_t T = k.logical_shape()[2];
-        const uint32_t Sq = q.logical_shape()[2];
         const uint32_t kv_len = attrs.kv_len.value();
         TT_FATAL(kv_len % tt::constants::TILE_WIDTH == 0, "indexer_score kv_len {} must be tile-aligned", kv_len);
         TT_FATAL(
@@ -94,12 +109,11 @@ IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::sele
 
 ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    // Default reflection hash, except the two persistent-cache optionals contribute only has_value() (whether
-    // indexed / runtime-kv_len), not their values -- those are runtime args re-applied every dispatch, so
-    // switching slot/kv_len reuses one program. Everything else stays hashed (chunk_start_idx, configs, full
-    // q/k/w specs incl. k's T/B), so do NOT drop fields beyond those two values.
+    // chunk_start_idx is ALSO excluded here (padded-KV/multiturn: per-turn runtime, re-applied in
+    // override_runtime_arguments) on top of the two persistent-cache optionals, which contribute only
+    // has_value() (whether indexed / runtime-kv_len), not their values. Everything else stays hashed
+    // (configs, full q/k/w specs incl. k's T/B), so distinct chunk_start/slot/kv_len reuse one program.
     return tt::tt_metal::operation::hash_operation<IndexerScoreDeviceOperation>(
-        attrs.chunk_start_idx,
         attrs.program_config,
         attrs.compute_kernel_config,
         attrs.has_indexed_kv_cache(),
@@ -177,17 +191,7 @@ void IndexerScoreDeviceOperation::validate_on_program_cache_miss(
         Sq,
         T,
         D);
-    TT_FATAL(
-        attrs.chunk_start_idx % tt::constants::TILE_WIDTH == 0,
-        "chunk_start_idx {} must be tile-aligned",
-        attrs.chunk_start_idx);
-    TT_FATAL(
-        attrs.chunk_start_idx + Sq <= T,
-        "chunk window [{}, {}+{}) exceeds T={}",
-        attrs.chunk_start_idx,
-        attrs.chunk_start_idx,
-        Sq,
-        T);
+    // chunk_start alignment + causal window is checked in validate_runtime_values (also re-run on cache hit).
 
     // Work-unit knobs (elements, tile-aligned); see IndexerScoreProgramConfig.
     const auto& cfg = attrs.program_config;

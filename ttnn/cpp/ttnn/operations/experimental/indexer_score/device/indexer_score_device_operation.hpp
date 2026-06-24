@@ -24,13 +24,15 @@ struct IndexerScoreDeviceOperation {
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
-    // Custom hash so the cache_batch_idx / kv_len values do NOT recompile (only their has_value() is hashed);
-    // everything else keys as usual. See the definition for details.
+    // Custom hash so the cache_batch_idx / kv_len values AND chunk_start_idx do NOT recompile (only the
+    // optionals' has_value() is hashed; chunk_start not at all) -- they are per-dispatch runtime values
+    // patched in override_runtime_arguments. Everything else (config, dtypes, shapes) keys as usual. See
+    // the definition for details.
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
-    // Only re-checks the runtime values (slot < B, kv_len bounds) that can change on a hit; the hash pins
-    // everything else. See validate_runtime_values.
+    // Re-checks the runtime values (chunk_start window/alignment, slot < B, kv_len bounds) that can change on
+    // a hit; the hash pins everything else. See validate_runtime_values.
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);

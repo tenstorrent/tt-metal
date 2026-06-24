@@ -22,8 +22,9 @@
 
 namespace ttnn::operations::experimental::indexer_score::program {
 
-// Runtime-arg slots, shared by create()/override_runtime_arguments() and matched positionally
-// by the kernels. Reader: q,k,w addrs then schedule(6) + mcast(2x8); writer: out addr then schedule(6).
+// by the kernels. Reader: q,k,w addrs then schedule(6) + mcast(2x8) + cache(2) + chunk_start; compute &
+// writer: schedule(6) + cache/kv_len + (compute) chunk_start. The cache (k_batch_offset, kv_len) and
+// chunk_start tail args are hash-excluded and re-patched on a cache hit.
 namespace rt_arg {
 constexpr uint32_t reader_q_addr = 0;
 constexpr uint32_t reader_k_addr = 1;
@@ -38,6 +39,10 @@ constexpr uint32_t reader_k_batch_offset = reader_num_scalars + reader_num_mcast
 constexpr uint32_t reader_kv_len_tiles = reader_k_batch_offset + 1;                                          // 26
 constexpr uint32_t compute_kv_len_tiles = 6;  // after the 6 schedule scalars {row_group0..max_bands}
 constexpr uint32_t writer_kv_len_tiles = 1 + 6;  // out_addr + the 6 schedule scalars {row_group0..max_bands}
+// chunk_start (tiles) last, after the cache args (hash-excluded, re-patched on a hit). Reader appends it
+// after kv_len; compute appends it after its kv_len. Writer needs no chunk_start (it clips to kv_len).
+constexpr uint32_t reader_chunk_start_tiles = reader_kv_len_tiles + 1;    // 27
+constexpr uint32_t compute_chunk_start_tiles = compute_kv_len_tiles + 1;  // 7
 }  // namespace rt_arg
 
 // Patch one runtime-arg slot on a program-cache hit, asserting the slot exists.
@@ -252,8 +257,10 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
     // No up-front L1-fit guard: an oversized QC/KC/head_group config fails at CB allocation. The caller
     // owns the knob trade-off (see glx_config() in the test).
 
-    // Common args: 8 dims then the CB indices in CbArg order (kernels read both from this shared base).
-    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, chunk_t, QC, KC, HB};
+    // Common args: 7 dims then the CB indices in CbArg order (kernels read both from this shared base).
+    // chunk_t is NOT here -- it is a per-turn compute runtime arg (hash-excluded), so distinct
+    // chunk_start values reuse one compiled program.
+    std::vector<uint32_t> common_ct = {Hi, Sqt, Tt, Dt, QC, KC, HB};
     common_ct.insert(common_ct.end(), cb_id.begin(), cb_id.end());
 
     std::vector<uint32_t> reader_ct = common_ct;
@@ -371,13 +378,17 @@ IndexerScoreProgramFactory::cached_program_t IndexerScoreProgramFactory::create(
                 q_py,
                 q_sender,
                 cols_used - 1);
-            // Persistent-cache args last (slots reader[25,26]): after the mcast tuples in both branches.
+            // Persistent-cache args (slots reader[25,26]) then chunk_start (reader[27]): after the mcast
+            // tuples, all hash-excluded. The reader derives the valid k-width from kv_len + chunk_start to
+            // skip fully-padded bands' K reads (padded-KV / indexed cache / runtime kv_len).
             reader_rt.push_back(k_batch_page_offset);
             reader_rt.push_back(kv_len_tiles);
+            reader_rt.push_back(chunk_t);
             tt::tt_metal::SetRuntimeArgs(program, reader_id, core, reader_rt);
-            // compute: schedule scalars then kv_len_tiles at slot [6].
+            // compute: schedule scalars then kv_len_tiles [6], chunk_start [7].
             std::vector<uint32_t> compute_rt(sched.begin(), sched.end());
             compute_rt.push_back(kv_len_tiles);
+            compute_rt.push_back(chunk_t);
             tt::tt_metal::SetRuntimeArgs(program, compute_id, core, compute_rt);
             std::vector<uint32_t> writer_rt = {out.buffer()->address()};
             writer_rt.insert(writer_rt.end(), sched.begin(), sched.end());
@@ -404,9 +415,11 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
     auto& reader_args = tt::tt_metal::GetRuntimeArgs(cached.program, shared.reader_kernel);
     auto& compute_args = tt::tt_metal::GetRuntimeArgs(cached.program, shared.compute_kernel);
     auto& writer_args = tt::tt_metal::GetRuntimeArgs(cached.program, shared.writer_kernel);
-    // cache_batch_idx and kv_len are excluded from the hash, so a hit may carry new values against the same
-    // cached program -- re-apply both every dispatch (the analog of buffer-address patching).
+    // cache_batch_idx, kv_len AND chunk_start are excluded from the hash, so a hit may carry new values
+    // against the same cached program -- re-apply all three every dispatch (the analog of buffer-address
+    // patching).
     const auto [k_batch_page_offset, kv_len_tiles] = persistent_cache_args(args, tensors.k);
+    const uint32_t chunk_t = args.chunk_start_idx / tt::constants::TILE_WIDTH;
     for (const auto& core : shared.worker_cores) {
         auto& reader_rt = reader_args[core.x][core.y];
         patch_arg(reader_rt, rt_arg::reader_q_addr, tensors.q.buffer()->address(), "reader.q_addr");
@@ -414,7 +427,9 @@ void IndexerScoreProgramFactory::override_runtime_arguments(
         patch_arg(reader_rt, rt_arg::reader_w_addr, tensors.weights.buffer()->address(), "reader.w_addr");
         patch_arg(reader_rt, rt_arg::reader_k_batch_offset, k_batch_page_offset, "reader.k_batch_offset");
         patch_arg(reader_rt, rt_arg::reader_kv_len_tiles, kv_len_tiles, "reader.kv_len_tiles");
+        patch_arg(reader_rt, rt_arg::reader_chunk_start_tiles, chunk_t, "reader.chunk_start");
         patch_arg(compute_args[core.x][core.y], rt_arg::compute_kv_len_tiles, kv_len_tiles, "compute.kv_len_tiles");
+        patch_arg(compute_args[core.x][core.y], rt_arg::compute_chunk_start_tiles, chunk_t, "compute.chunk_start");
         patch_arg(writer_args[core.x][core.y], rt_arg::writer_out_addr, out.buffer()->address(), "writer.out_addr");
         patch_arg(writer_args[core.x][core.y], rt_arg::writer_kv_len_tiles, kv_len_tiles, "writer.kv_len_tiles");
     }

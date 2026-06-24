@@ -55,4 +55,8 @@ constexpr uint32_t rows_for_groups(uint32_t groups, uint32_t grid_y) { return la
 /** Grid columns for U k-bands: min(U, grid_x); spare columns idle when U < grid_x. */
 constexpr uint32_t cols_for_bands(uint32_t bands, uint32_t grid_x) { return bands < grid_x ? bands : grid_x; }
 
+// Note: the causal "valid k-width" = min(Tt, chunk_start + Sqt) padded-tail skip is NOT a separate helper:
+// the kernels fold it into WorkUnitSpan::valid_k_len_tiles (= min(kv_len, chunk_start + Sqt)), so a band
+// entirely in the padded tail simply reports k_tiles() == 0 and the reader skips its K DMA.
+
 }  // namespace ttnn::operations::experimental::indexer_score
