@@ -62,7 +62,7 @@ inline void _llk_math_reduce_col_mop_config_(const TensorShape& tensor_shape)
     const std::uint32_t MOP_INNER_LOOP = (tensor_shape.total_num_faces() >= 2) ? (tensor_shape.total_num_faces() >> 1) : tensor_shape.total_num_faces();
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
     constexpr bool RUN_FID_LOOPS           = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    constexpr std::uint32_t replay_buf_len      = 2 + (2 * NUM_FIDELITY_PHASES);
+    constexpr std::uint32_t replay_buf_len      = 2 + (RUN_FID_LOOPS ? 2 * NUM_FIDELITY_PHASES : 0);
 
     load_replay_buf(
         0,
@@ -245,7 +245,7 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
     else if (tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim)
     {
         // If the tensor_shape is narrow, then there are two rows of faces. Both faces should be pooled to the different address.
-        // Since increments increments of dest_addrs are required, MOP calls pool instruction with intermediate_rwc_update for first loop and changes to
+        // Since increments of dest_addrs are required, MOP calls pool instruction with intermediate_rwc_update for first loop and changes to
         // final_rwc_update to ensure dest counters are reset at the end each tile.
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pool_one_face_in_row, intermediate_rwc_update);
         temp.set_last_inner_loop_instr(final_rwc_update);
@@ -254,7 +254,7 @@ inline void _llk_math_reduce_row_mop_config_(const TensorShape& tensor_shape)
     else
     {
         // In every other case, we should be incrementing dest_addr for every second face.
-        // Since increments increments of dest_addrs are required, MOP calls pool instruction with intermediate_rwc_update for first loop and changes to
+        // Since increments of dest_addrs are required, MOP calls pool instruction with intermediate_rwc_update for first loop and changes to
         // final_rwc_update to ensure dest counters are reset at the end each tile.
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, pool_two_faces_in_row, intermediate_rwc_update);
         temp.set_last_inner_loop_instr(final_rwc_update);
@@ -358,6 +358,7 @@ inline void _llk_math_reduce_scalar_mop_config_(const TensorShape& tensor_shape)
  * @tparam REDUCE_DIMENSION: Sets the reduce dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @tparam MATH_FIDELITY_TYPE: Only works for AVG/SUM pool types; sets how many loops to use full precision of Source register datums with multiplies, values =
  * <LoFi/HiFi2/HiFi3/HiFi4>
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  */
 template <ReduceDim REDUCE_DIMENSION, ckernel::MathFidelity MATH_FIDELITY_TYPE>
 inline void _llk_math_reduce_addrmod_(const TensorShape& tensor_shape)

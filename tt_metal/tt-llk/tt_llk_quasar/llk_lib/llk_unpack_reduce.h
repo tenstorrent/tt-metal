@@ -18,6 +18,7 @@ using namespace ckernel;
  * Unpacks a full tile for SrcA and a single face for SrcB. buf_desc_id_0 feeds UNPACKER0 -> SRCA,
  * buf_desc_id_1 feeds UNPACKER1 -> SRCB.
  *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
@@ -72,6 +73,7 @@ inline void _llk_unpack_reduce_mop_config_(
  * unpacking a full tile for SrcA and a single face for SrcB. buf_desc_id_0 feeds UNPACKER0 -> SRCA,
  * buf_desc_id_1 feeds UNPACKER1 -> SRCB.
  *
+ * @tparam POOL_TYPE: Type of reduce pool op, values = <MAX/SUM/AVG>
  * @tparam REDUCE_DIMENSION: Reduction dimension, values = <REDUCE_ROW/REDUCE_COL/REDUCE_SCALAR>
  * @param buf_desc_id_0/1: The buffer descriptor ID where the buffer information is
  *        stored in the buffer descriptor table, values = 0 - 16
@@ -94,6 +96,7 @@ inline void _llk_unpack_reduce_init_(
  *
  * @param start_l1_tile_idx_0/1: Start tile index into the L1 buffer;
  *        start_l1_tile_idx_0 -> UNPACKER0 -> SRCA, start_l1_tile_idx_1 -> UNPACKER1 -> SRCB.
+ * @param tensor_shape: Contains all the information of the tile shape: num faces, face row/col dim, etc.
  * @note Call @ref _llk_unpack_reduce_init_ with matching template args before this function.
  */
 inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const std::uint32_t start_l1_tile_idx_1, const TensorShape& tensor_shape)
