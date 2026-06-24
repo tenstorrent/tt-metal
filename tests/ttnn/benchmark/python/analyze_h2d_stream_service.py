@@ -13,7 +13,7 @@ The benchmark is organized by payload regime and mode:
   - large_payload / size|tune
 
 Benchmark name grammar:
-  BM_H2DStreamService/<payload_regime>/<mode>/bytes<per_device_bytes>/max_coalesce<pages|auto>/fifo<pages|auto>
+  BM_H2DStreamService/<payload_regime>/<mode>/host<serial|parallel>/bytes<per_device_bytes>/max_coalesce<pages|auto>/fifo<pages|auto>
 
 Usage:
   python3 analyze_h2d_stream_service.py run results.json
@@ -71,6 +71,7 @@ MODE_AXIS = {
 CASE_KEY = [
     "family",
     "mode",
+    "host_push",
     "per_device_bytes",
     "tensor_page_bytes",
     "max_coalesce_pages",
@@ -85,6 +86,7 @@ LATENCY_PLOT_METRICS = ("latency_p50_us", "latency_p90_us", "latency_max_us")
 AXIS_SHORT = {
     "per_device_bytes": "size",
     "tensor_page_bytes": "page_bytes",
+    "host_push": "host",
     "max_coalesce_pages": "max_coalesce",
     "fifo_pages": "fifo",
     "metadata_size_bytes": "meta",
@@ -95,7 +97,14 @@ def held_cols(xcol: str) -> list[str]:
     """The two axes a family holds (or perturbs across lines) while sweeping `xcol`."""
     return [
         c
-        for c in ("per_device_bytes", "tensor_page_bytes", "max_coalesce_pages", "fifo_pages", "metadata_size_bytes")
+        for c in (
+            "host_push",
+            "per_device_bytes",
+            "tensor_page_bytes",
+            "max_coalesce_pages",
+            "fifo_pages",
+            "metadata_size_bytes",
+        )
         if c != xcol
     ]
 
@@ -112,6 +121,8 @@ def format_payload_bytes(value: float | int) -> str:
 
 
 def axis_value_label(column: str, value: float | int) -> str:
+    if isinstance(value, str):
+        return value
     if column in ("per_device_bytes", "tensor_page_bytes"):
         return format_payload_bytes(value)
     return str(int(value))
@@ -136,6 +147,7 @@ NUMERIC_COLUMNS = [
     "latency_p50_us",
     "latency_p90_us",
     "latency_max_us",
+    "parallel_host_push",
     "per_device_bytes",
     "per_device_pages",
     "tensor_page_bytes",
@@ -166,7 +178,8 @@ NUMERIC_COLUMNS = [
 
 # Tolerates the trailing "/manual_time" that UseManualTime() appends to the name.
 _NAME_RE = re.compile(
-    rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/bytes(?P<bytes>\d+)/"
+    rf"^{re.escape(BENCHMARK_PREFIX)}/(?P<family>[^/]+)/(?P<mode>[^/]+)/"
+    r"(?:host(?P<host>serial|parallel)/)?bytes(?P<bytes>\d+)/"
     r"(?:max_coalesce|page)(?P<page>auto|\d+)/fifo(?P<fifo>auto|\d+)"
 )
 
@@ -214,6 +227,7 @@ def parse_name(name: str) -> dict[str, str | int] | None:
     return {
         "family": match.group("family"),
         "mode": match.group("mode"),
+        "host_push": match.group("host") or "parallel",
         "per_device_bytes": int(match.group("bytes")),
         "max_coalesce_pages": _parse_page_count(match.group("page")),
         "fifo_pages": _parse_page_count(match.group("fifo")),
@@ -525,7 +539,7 @@ def compare_runs(baseline_df: pd.DataFrame, candidate_df: pd.DataFrame) -> pd.Da
 
 def _case_id(row) -> str:
     return (
-        f"{row.family}/{row.mode}/size={format_payload_bytes(row.per_device_bytes)}/"
+        f"{row.family}/{row.mode}/host={row.host_push}/size={format_payload_bytes(row.per_device_bytes)}/"
         f"page_bytes={format_payload_bytes(row.tensor_page_bytes)}/"
         f"max_coalesce{int(row.max_coalesce_pages)}/fifo{int(row.fifo_pages)}/meta{int(row.metadata_size_bytes)}"
     )
