@@ -49,9 +49,12 @@ inline bool needs_pad_composite_fallback(
     if (input_layout != TensorMemoryLayout::WIDTH_SHARDED && input_layout != TensorMemoryLayout::BLOCK_SHARDED) {
         return false;
     }
+    // TILE layout: tile factories use TensorAccessor with page_id addressing, which the Device 2.0
+    // API resolves transparently for sharded buffers. No composite fallback needed.
     if (input_tensor.layout() == Layout::TILE) {
-        return true;
+        return false;
     }
+    // RM + W/B sharded: native only when W is tile-aligned and no width front-pad.
     const bool width_front_pad = input_tensor_start.size() >= 4 && input_tensor_start[3] > 0;
     return has_nontile_w(input_tensor.logical_shape()) || width_front_pad;
 }
