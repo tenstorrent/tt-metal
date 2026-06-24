@@ -1748,6 +1748,7 @@ class VoxtralTTSPipeline:
                     debug=debug,
                 )
 
+            shifted_bt37_tt = None
             if _codes_host_accum:
                 stacked_host = torch.stack(generated_codes, dim=0)
                 shifted_audio_tokens, audio_tokens, _ = self._finalize_host_stacked_codes(
@@ -1840,7 +1841,7 @@ class VoxtralTTSPipeline:
                 ttnn.deallocate(wav_tt)
             ttnn.deallocate(codes_b37t_tt)
             ttnn.deallocate(shifted_codes_t37_tt)
-            if shifted_bt37_tt.is_allocated():
+            if shifted_bt37_tt is not None and shifted_bt37_tt.is_allocated():
                 ttnn.deallocate(shifted_bt37_tt)
             if debug is not None:
                 debug.set("output.codes", codes_b37t.float())

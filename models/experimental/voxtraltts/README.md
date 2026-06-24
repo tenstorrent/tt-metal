@@ -311,9 +311,9 @@ pytest models/experimental/voxtraltts/tests/ \
   -q --timeout=3600
 ```
 
-#### E2E waveform PCC (P150 1×1)
+#### E2E waveform PCC (P150 1×1 and QB2 1×4)
 
-Run on **P150 (1×1)** — do not set `MESH_DEVICE=P150x4` for these tests.
+Default CI runs on **P150 (1×1)**. For QB2, set `MESH_DEVICE=P150x4`; measured results are in [§6.1](#61-pcc-targets-accuracy).
 
 Run all four end-to-end tests (~1–2 h cold cache):
 
@@ -323,12 +323,12 @@ pytest models/experimental/voxtraltts/tests/pcc/test_voxtral_e2e_pcc.py -sv --ti
 
 Or run individually:
 
-| Test | What it validates | Pass threshold | Measured (P150 1×1) |
-|------|-------------------|----------------|---------------------|
-| `test_ttnn_voxtral_tts_golden_codes_pcc` | Audio tokenizer only | PCC ≥ 0.99 | **0.9989** |
-| `test_ttnn_voxtral_tts_acoustic_pcc` | Acoustic FM only (isolated) | PCC ≥ 0.97 | **0.98** |
-| `test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc` | Text + acoustic + tokenizer (teacher-forced) | PCC ≥ 0.97 | **0.979** |
-| `test_ttnn_voxtral_tts_staged_pcc` | Free-run diagnostic (full AR, no golden feedback) | diagnostic | — |
+| Test | What it validates | Pass threshold | Measured (P150 1×1) | QB2 (1×4) |
+|------|-------------------|----------------|---------------------|-----------|
+| `test_ttnn_voxtral_tts_golden_codes_pcc` | Audio tokenizer only | PCC ≥ 0.99 | **0.9989** | Pass (≥ 0.99) |
+| `test_ttnn_voxtral_tts_acoustic_pcc` | Acoustic FM only (isolated) | PCC ≥ 0.97 | **0.98** | Pass (≥ 0.97) |
+| `test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc` | Text + acoustic + tokenizer (teacher-forced) | PCC ≥ 0.97 | **0.979** | **0.988** |
+| `test_ttnn_voxtral_tts_staged_pcc` | Free-run diagnostic | diagnostic | ~0.957 | TBD |
 
 **`test_ttnn_voxtral_tts_golden_codes_pcc`** — Audio tokenizer in isolation. Fixed `[1, 37, T]` codes from `reference/reference_outputs/voxtral_golden_codes.refpt` are fed to both the CPU reference tokenizer and the TT audio tokenizer; waveforms are compared with PCC. No text model or acoustic model runs.
 
@@ -409,7 +409,7 @@ export MESH_DEVICE=P150
 pytest models/experimental/voxtraltts/tests/perf/test_e2e_isl_sweep_perf.py -sv --timeout=0
 ```
 
-See [§6.4](#64-performance-verification) for measured P150 rows.
+See [§6.3](#63-e2e-perf-test-trace--2cq) for `test_e2e_performant.py` throughput (P150 and QB2) and [§6.4](#64-performance-verification) for demo sweep perf (RTF, latency, throughput).
 
 #### Full model device perf
 
@@ -553,14 +553,13 @@ These are read by `demo.py` / the pipeline in addition to the CLI flags above. S
 
 ### 6.1 PCC targets (accuracy)
 
-| Test | Target | Measured | Notes |
-|:-----|:------:|:--------:|:------|
-| Text prefill logits | ≥ 0.99 (≤4096) | **0.996–0.999** | P150 1×1; long ISL tiers in [§6.1.1](#611-text-logit-pcc-p150-11) |
-| Text decode multistep (32 steps) | ≥ 0.98 | **≥ 0.998** | P150 1×1; per-step min in [§6.1.1](#611-text-logit-pcc-p150-11) |
-| `test_ttnn_voxtral_tts_golden_codes_pcc` (audio tokenizer) | ≥ 0.99 | **0.9989** | Fixed golden `[1,37,T]` codes → CPU ref vs TT tokenizer waveform |
-| `test_ttnn_voxtral_tts_acoustic_pcc` (acoustic FM isolation) | ≥ 0.97 | **0.98** | Same golden text hiddens + noise; ref tokenizer held constant |
-| `test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc` (pipeline teacher-forced) | ≥ 0.97 | **0.979** (P150), **0.988** (QB2) | Live text + acoustic; golden codes fed to both text models each step |
-| E2E waveform (free-run diagnostic) | ~0.957 | | Logged in `staged_pcc` |
+| Test | Target | Measured (P150) |
+|:-----|:------:|:--------:|
+| Text prefill logits | ≥ 0.99 (≤4096) | **0.996–0.999** |
+| Text decode multistep (32 steps) | ≥ 0.98 | **≥ 0.998** |
+| `test_ttnn_voxtral_tts_golden_codes_pcc` (audio tokenizer) | ≥ 0.99 | **0.9989** |
+| `test_ttnn_voxtral_tts_acoustic_pcc` (acoustic FM isolation) | ≥ 0.97 | **0.98** |
+| `test_ttnn_voxtral_tts_pipeline_teacher_forced_pcc` (pipeline teacher-forced) | ≥ 0.97 | **0.979**|
 
 #### 6.1.1 Text logit PCC (P150 1×1)
 
@@ -591,13 +590,22 @@ Measured on **P150 (1×1)** with `MESH_DEVICE=P150`, Tale of Two Cities prompt t
 
 Logged by `test_ttnn_voxtral_tts_500_char_quality_and_perf` (free-run, voice `cheerful_female`). CI asserts `hit_end` only; other columns are reference targets and measured values.
 
-| Metric | Tool | Reference target | Measured | Notes |
-|:-------|:----:|:----------------:|:--------:|:------|
-| MOS (naturalness) | UTMOS-v2 | ≥ 3.0 | 3.215 | Logged; env `VOXTRAL_TTS_UTMOS_V2_MIN_SCORE` |
-| Word Error Rate | Whisper Small | < 10% | 1.39% | Logged; env `VOXTRAL_TTS_WER_TARGET`; `openai/whisper-small` |
-| Speaker similarity | SpeechBrain ECAPA-TDNN | ≥ 0.55 cosine | 0.7187 | Logged; reference wav from Mistral demo Space |
+| Metric | Tool | Reference target | P150 | QB2 (1×4) |
+|:-------|:----:|:----------------:|:----:|:---------:|
+| MOS (naturalness) | UTMOS-v2 | ≥ 3.0 | **3.215** | **3.285** |
+| Word Error Rate | Whisper Small | < 10% | **1.39%** | **1.39%** |
+| Speaker similarity | SpeechBrain ECAPA-TDNN | ≥ 0.55 cosine | **0.7187** | **0.6848** |
 
 > Audio is produced at 12.5 acoustic frames/s at 24 kHz. Real-time factor = `frames_per_s / 12.5`. A value > 1.0 means faster than real time.
+
+### 6.3 E2E perf test (trace + 2CQ)
+
+From `tests/perf/test_e2e_performant.py` with trace + 2CQ enabled, voice `casual_male`, and `fixed_step_count=True`. Throughput is measured on the fixed decode step count (not the trimmed audio frames kept before `END_AUDIO`).
+
+| Decode steps | P150 ms/frame | P150 frames/s | P150 RTF | QB2 ms/frame | QB2 frames/s | QB2 RTF |
+|:-------------|-------------:|--------------:|---------:|-------------:|-------------:|--------:|
+| F128 (128)   | **65.0**     | **15.39**     | **1.23** | **102.3**    | **9.78**     | **0.78** |
+| F589 (589)   | **41.6**     | **24.04**     | **1.92** | **42.3**     | **23.62**    | **1.89** |
 
 ### 6.4 Performance Verification
 
@@ -652,6 +660,58 @@ Verified using `demo/demo.py`
 | 16384            | 514 chars / 458 audio tokens    | 94806.01     | 1.6167 | 5.42                |
 | 64000            | 514 chars / 458 audio tokens    | 92893.81     | 1.5841 | 5.53                |
 | 65536            | 514 chars / 458 audio tokens    | 94664.92     | 1.6143 | 5.43                |
+
+#### BH QB2 (1×4)
+
+Verified using `demo/demo.py` with `MESH_DEVICE=P150x4`.
+
+##### Trace enabled + 2CQ
+
+###### `casual_male`
+
+| text_max_seq_len | text chars | RTF | Latency (ms) | Throughput (char/s) | Bitrate (Kbps) | First audio latency (ms) | frames/s |
+|:-----------------|:-----------|----:|-------------:|--------------------:|---------------:|-------------------------:|---------:|
+| 512 | 255 | 0.6864 | 13838.47 | 18.43 | 2.14 | 3361.48 | 18.21 |
+| 1024 | 514 | 0.6297 | 22720.97 | 22.62 | 2.14 | 3957.86 | 19.85 |
+| 4096 | 514 | 0.6306 | 22751.16 | 22.59 | 2.14 | 3969.72 | 19.82 |
+| 16384 | 514 | 0.6253 | 22560.82 | 22.78 | 2.14 | 3984.97 | 19.99 |
+| 64000 | 514 | 0.6292 | 22703.27 | 22.64 | 2.14 | 3947.68 | 19.86 |
+| 65536 | 514 | 0.6238 | 22506.11 | 22.84 | 2.14 | 3949.11 | 20.04 |
+
+###### `cheerful_female`
+
+| text_max_seq_len | text chars | RTF | Latency (ms) | Throughput (char/s) | Bitrate (Kbps) | First audio latency (ms) | frames/s |
+|:-----------------|:-----------|----:|-------------:|--------------------:|---------------:|-------------------------:|---------:|
+| 512 | 255 | 0.6483 | 15144.32 | 16.84 | 2.14 | 3173.47 | 19.28 |
+| 1024 | 514 | 0.6078 | 27275.86 | 18.84 | 2.14 | 3871.41 | 20.57 |
+| 4096 | 514 | 0.6097 | 27364.54 | 18.78 | 2.14 | 3839.54 | 20.50 |
+| 16384 | 514 | 0.6084 | 27306.31 | 18.82 | 2.14 | 3787.14 | 20.54 |
+| 64000 | 514 | 0.6125 | 27490.72 | 18.70 | 2.14 | 3814.19 | 20.41 |
+| 65536 | 514 | 0.6107 | 27410.13 | 18.75 | 2.14 | 3769.66 | 20.47 |
+
+##### Trace disabled (`--no-decode-trace`)
+
+###### `casual_male`
+
+| text_max_seq_len | text chars | RTF | Latency (ms) | Throughput (char/s) | Bitrate (Kbps) | First audio latency (ms) | frames/s |
+|:-----------------|:-----------|----:|-------------:|--------------------:|---------------:|-------------------------:|---------:|
+| 512 | 255 | 1.6221 | 29328.21 | 8.69 | 2.14 | 9174.75 | 7.71 |
+| 1024 | 514 | 1.6648 | 55405.64 | 9.28 | 2.14 | 10115.94 | 7.51 |
+| 4096 | 514 | 1.4468 | 42476.71 | 12.10 | 2.14 | 10361.80 | 8.64 |
+| 16384 | 514 | 1.6400 | 58122.28 | 8.84 | 2.14 | 10324.05 | 7.62 |
+| 64000 | 514 | 1.3723 | 47975.48 | 10.71 | 2.14 | 10261.56 | 9.11 |
+| 65536 | 514 | 1.4174 | 42862.95 | 11.99 | 2.14 | 10238.91 | 8.82 |
+
+###### `cheerful_female`
+
+| text_max_seq_len | text chars | RTF | Latency (ms) | Throughput (char/s) | Bitrate (Kbps) | First audio latency (ms) | frames/s |
+|:-----------------|:-----------|----:|-------------:|--------------------:|---------------:|-------------------------:|---------:|
+| 512 | 255 | 1.4068 | 33875.56 | 7.53 | 2.14 | 8124.37 | 8.89 |
+| 1024 | 514 | 1.2364 | 54203.44 | 9.48 | 2.14 | 9689.78 | 10.11 |
+| 4096 | 514 | 1.2706 | 51841.80 | 9.91 | 2.14 | 9716.55 | 9.84 |
+| 16384 | 514 | 1.2427 | 62431.87 | 8.23 | 2.14 | 9802.60 | 10.06 |
+| 64000 | 514 | 1.5847 | 66432.52 | 7.74 | 2.14 | 9894.93 | 7.89 |
+| 65536 | 514 | 1.2308 | 54649.37 | 9.41 | 2.14 | 9932.85 | 10.16 |
 
 
 #### Sizing `--text-max-seq-len` (why too small produces no output)
@@ -731,14 +791,17 @@ Whisper (`openai/whisper-small`) is used as the ASR model for the WER comparison
 
 A known limitation of this setup is **number formatting**. When the input reference text spells numbers out as words (for example, "twenty" rather than "20"), Whisper transcribes the spoken audio back into numeric digit form ("20"). The WER normalizer does not reconcile word-form and digit-form numbers, so each such number is counted as a word error even though the speech is correct. This inflates the reported WER percentage and means the metric can read worse than the actual intelligibility of the output. It is a known limitation of using Whisper as the WER reference ASR, not a defect in the generated speech.
 
+### TTNN in-loop staging
+On P150 free-run inference, moving in-loop steps fully to TTNN i.e device code→MM embedding, device FM noise (`VOXTRAL_ACOUSTIC_NOISE_RNG=ttnn`), and device-side code accumulation, has been observed to degrade audio quality or produce noise-only output. Host/torch fallbacks remain in use for audio quality.
+
 ---
 
 ## 8. Work in progress
 
 1. **Text logit PCC** — tail prefill/decode rows at max KV length(64k)(see [§6.1.1](#611-text-logit-pcc-p150-11)). Also, for decode, verify results for 128/256/512/1024/2048/4096/32k ISL.
-2. **Host staging → TTNN** — P150 traced prefill and code→MM-embed staging; device-side code accumulation (trace aliasing); device FM noise RNG; TT mel concat for long audio.
-3. **BH QB2 demo results** — Demo results for all ISL.
-4. **BH QB2 optimizations** — kernel and memory-config tuning for 1×4 tensor-parallel text.
+2. **BH QB2 optimizations** — kernel and memory-config tuning for 1×4 tensor-parallel text.
+3. **Chunked-demo audio quality** — Prompts **>180 words** use sentence chunking + crossfade in `demo/demo.py`. Analyse and tune chunk-boundary smoothness (seams, level/timbre continuity, pacing); extend quality metrics (UTMOS / WER / listening tests) to multi-chunk stitched output.
+
 
 ## 9. References
 
