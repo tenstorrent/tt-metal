@@ -17,6 +17,7 @@
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/group.hpp>
 #include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
 #include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
@@ -151,6 +152,14 @@ struct KernelSpec {
         std::string accessor_name;                  // tensor accessor name (used in the kernel source code)
     };
     Group<TensorBinding> tensor_bindings;
+
+    // Scratchpad bindings
+    // Declares that this kernel access a scratchpad resource (declared at the ProgramSpec level)
+    // The kernel constructs the accessor via ScratchpadAccessor(scratch::<accessor_name>)
+    struct ScratchpadBinding {
+        ScratchpadSpecName scratchpad_spec_name;
+        std::string accessor_name;
+    };
 
     // Additional resource binding types:
     //  - Scratchpad bindings (Program-local memory resource)
