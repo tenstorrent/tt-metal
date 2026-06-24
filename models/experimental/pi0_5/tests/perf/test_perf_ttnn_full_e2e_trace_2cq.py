@@ -32,6 +32,31 @@ import time
 from pathlib import Path
 from typing import List
 
+# Pin chip 9 + auto-source production env (default if not explicitly set).
+# setdefault: an explicit shell export still wins. Must run before any
+# ttnn / pi0_5 import so modules see the production flags at construction.
+os.environ.setdefault("TT_VISIBLE_DEVICES", "9")
+
+
+def _apply_production_env_defaults():
+    """Source _bench_runs/pi05_production.env as DEFAULTS — no manual `source` needed."""
+    import re as _re
+
+    root = os.environ.get("TT_METAL_HOME") or os.path.abspath(
+        os.path.join(os.path.dirname(__file__), *([os.pardir] * 4))
+    )
+    envf = os.path.join(root, "_bench_runs", "pi05_production.env")
+    if not os.path.exists(envf):
+        return
+    with open(envf) as f:
+        for line in f:
+            m = _re.match(r"\s*export\s+([A-Z0-9_]+)=(\S+)", line)
+            if m:
+                os.environ.setdefault(m.group(1), m.group(2))
+
+
+_apply_production_env_defaults()
+
 import pytest
 import torch
 import ttnn
