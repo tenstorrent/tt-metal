@@ -25,6 +25,22 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 KVPE_HEAD_DIM = 576
 
 
+def _make_metadata_tensor(mesh_device, kv_actual_global, slot_idx):
+    """Replicate the post-h2d_socket_sync state: a small uint32 DRAM tensor, replicated
+    across the mesh, holding the runner's canonical metadata payload
+    [slot_id, actual_start, actual_end]. The op's writer kernel reads slot_idx from index 0
+    and kv_actual_global (= actual_start) from index 1 on-device (no host scalars)."""
+    payload = torch.tensor([slot_idx, kv_actual_global, kv_actual_global, 0], dtype=torch.int64).reshape(1, 1, 1, 4)
+    return ttnn.from_torch(
+        payload,
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+
 @pytest.mark.parametrize("mesh_device", [(1, 4), (2, 4), (8, 4)], ids=["1x4", "2x4", "8x4"], indirect=True)
 @pytest.mark.parametrize(
     "config_name, num_users, num_layers, new_isl_tiles_per_dev, cache_tokens_per_dev",
@@ -91,13 +107,13 @@ def test_update_padded_kv_cache_single_iteration_prefill(
                     mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims
                 ),
             )
+            metadata = _make_metadata_tensor(mesh_device, kv_actual_global=0, slot_idx=u)
             ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                 kv_cache,
                 tt_input,
-                slot_idx=u,
+                metadata,
                 layer_idx=l,
                 num_layers=num_layers,
-                kv_actual_global=0,
                 cluster_axis=sp_axis,
             )
 
@@ -270,13 +286,13 @@ def test_update_padded_kv_cache_multi_iteration_prefill(
                         mesh_device, mesh_shape=tuple(mesh_device.shape), dims=input_shard_dims
                     ),
                 )
+                metadata = _make_metadata_tensor(mesh_device, kv_actual_global=kv_actual, slot_idx=u)
                 ttnn.experimental.deepseek_prefill.update_padded_kv_cache(
                     kv_cache,
                     tt_input,
-                    slot_idx=u,
+                    metadata,
                     layer_idx=l,
                     num_layers=num_layers,
-                    kv_actual_global=kv_actual,
                     cluster_axis=sp_axis,
                 )
         kv_actual = valid_end

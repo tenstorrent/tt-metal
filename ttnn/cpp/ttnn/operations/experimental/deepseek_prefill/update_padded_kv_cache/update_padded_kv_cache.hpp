@@ -17,22 +17,22 @@ namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cac
 // write at different offsets so that new tokens overwrite the trailing pad cells of the prior
 // cache before spilling into the next slab.
 //
-// Cache slot is addressed with users-outer, layers-inner linearization — the op composes
-// `batch_idx = slot_idx * num_layers + layer_idx`. For a single-user prefill workload, callers
-// pass `slot_idx = 0` and the desired `layer_idx`.
+// `slot_idx` and `kv_actual_global` (tokens, tile-aligned) are read on-device by the writer
+// kernel from `metadata` — a small uint32 DRAM tensor holding the runner's h2d_socket_sync payload
+// in canonical layout [slot_id, actual_start, actual_end] (slot_idx = index 0, kv_actual_global =
+// actual_start = index 1). They never touch the host dispatch path, so they stay out of the program
+// hash and successive users/chunks reuse one cached program (per layer).
 //
-// `slot_idx` and `kv_actual_global` are per-call scalars held in common runtime args and patched on
-// cache hits, so their values stay out of the program hash and successive users/chunks reuse one
-// cached program (per layer).
+// Cache slot is addressed with users-outer, layers-inner linearization — the op composes
+// `batch_idx = slot_idx * num_layers + layer_idx`.
 //
 // In-place: returns a handle to `cache`.
 ttnn::Tensor update_padded_kv_cache(
     const ttnn::Tensor& cache,
     const ttnn::Tensor& input,
-    uint32_t slot_idx,
+    const ttnn::Tensor& metadata,
     uint32_t layer_idx,
     uint32_t num_layers,
-    uint32_t kv_actual_global,
     uint32_t cluster_axis);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache
