@@ -21,7 +21,7 @@ on:
 jobs:
   check:
     name: "Check Harbor"
-    runs-on: ${{ inputs.runs-on }}
+    runs-on: ${{ inputs.runs-on || 'tt-ubuntu-light' }}
     permissions:
       contents: read
     outputs:
