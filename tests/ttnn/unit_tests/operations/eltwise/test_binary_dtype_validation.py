@@ -106,9 +106,9 @@ def _make_mixed_binary_tensors(device, dtype_a, dtype_b, shape=TENSOR_SHAPE):
         pytest.param(_ISCLOSE, ttnn.uint32, id="isclose_uint32"),
     ],
 )
-def test_binary_unsupported_input_dtype_rejected(device, op, dtype):
+def test_binary_unsupported_input_dtype_rejected(device, expect_error, op, dtype):
     tensor_a, tensor_b = _make_binary_tensors(device, dtype)
-    with pytest.raises(RuntimeError, match=UNSUPPORTED_DTYPE_ERROR):
+    with expect_error(RuntimeError, UNSUPPORTED_DTYPE_ERROR):
         op(tensor_a, tensor_b)
 
 
@@ -135,6 +135,23 @@ def test_binary_unsupported_input_dtype_rejected(device, op, dtype):
     ],
 )
 def test_binary_mixed_float_allowed(device, op, dtype_a, dtype_b):
+    tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
+    op(tensor_a, tensor_b)
+
+
+# DIV/MUL promote a 32-bit-integer operand to the float operand's precision before reaching
+# the device op, so these mixes are accepted rather than rejected as a dtype mismatch.
+@pytest.mark.parametrize(
+    "op, dtype_a, dtype_b",
+    [
+        pytest.param(ttnn.div, ttnn.int32, ttnn.float32, id="div_int32_float32"),
+        pytest.param(ttnn.div, ttnn.bfloat16, ttnn.uint32, id="div_bfloat16_uint32"),
+        pytest.param(ttnn.div, ttnn.uint32, ttnn.bfloat16, id="div_uint32_bfloat16"),
+        pytest.param(ttnn.mul, ttnn.int32, ttnn.bfloat16, id="mul_int32_bfloat16"),
+        pytest.param(ttnn.mul, ttnn.float32, ttnn.uint32, id="mul_float32_uint32"),
+    ],
+)
+def test_binary_div_mul_int_float_promoted_allowed(device, op, dtype_a, dtype_b):
     tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
     op(tensor_a, tensor_b)
 
@@ -172,8 +189,6 @@ def test_isclose_mixed_float32_bfloat16_allowed(device, dtype_a, dtype_b):
         pytest.param(ttnn.pow, ttnn.bfloat16, ttnn.float32, id="pow_bfloat16_float32"),
         pytest.param(ttnn.pow, ttnn.bfloat16, ttnn.bfloat8_b, id="pow_bfloat16_bf8"),
         pytest.param(ttnn.maximum, ttnn.bfloat16, ttnn.bfloat8_b, id="maximum_bfloat16_bf8"),
-        # float_and_int32
-        pytest.param(ttnn.div, ttnn.int32, ttnn.float32, id="div_int32_float32"),
         # maximum_minimum
         pytest.param(ttnn.maximum, ttnn.int32, ttnn.uint32, id="maximum_int32_uint32"),
         pytest.param(ttnn.minimum, ttnn.uint32, ttnn.int32, id="minimum_uint32_int32"),
@@ -184,10 +199,10 @@ def test_isclose_mixed_float32_bfloat16_allowed(device, dtype_a, dtype_b):
         pytest.param(ttnn.logical_right_shift, ttnn.int32, ttnn.uint32, id="logical_right_shift_int32_uint32"),
     ],
 )
-def test_binary_mixed_dtype_rejected(device, op, dtype_a, dtype_b):
+def test_binary_mixed_dtype_rejected(device, expect_error, op, dtype_a, dtype_b):
     """Each operand uses a supported dtype, but the mix is rejected: the pair is not a
     float-family mix on an op that supports mixing. See binary_op_utils.cpp for the
     full set of mixed-dtype exceptions."""
     tensor_a, tensor_b = _make_mixed_binary_tensors(device, dtype_a, dtype_b)
-    with pytest.raises(RuntimeError, match=MIXED_DTYPE_ERROR):
+    with expect_error(RuntimeError, MIXED_DTYPE_ERROR):
         op(tensor_a, tensor_b)
