@@ -1,0 +1,175 @@
+name: LLK PR Review
+
+# On-demand AI code review for LLK pull requests.
+#
+# Anyone with write access triggers it by commenting "@llk-ai review" on a PR.
+# The job runs the /code-review skill at the chosen effort (default max) against
+# the PR's diff, with:
+#   * the LLK MCP servers (tt_metal/tt-llk/.mcp.json — DeepWiki, Atlassian, Glean),
+#   * the repo's own guidance (tt_metal/tt-llk/.claude/CLAUDE.md, auto-discovered
+#     from the checkout), and
+#   * the team's private LLK review knowledge, fetched at runtime and injected as
+#     an appended system prompt,
+# then posts its findings as inline review comments on the PR.
+#
+# The human gate is that a person with write access must type the trigger phrase.
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  # Manual on-demand trigger: review any open PR by number at a chosen effort.
+  # Handy for re-running a review or reviewing a PR without the trigger comment.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to review"
+        required: true
+        type: string
+      effort:
+        description: "Review effort level"
+        required: false
+        default: "max"
+        type: choice
+        options: [low, medium, high, max]
+
+# One review at a time per PR; a newer trigger does not kill an in-flight review.
+concurrency:
+  group: llk-pr-review-${{ github.event.inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    # Run only when the trigger phrase appears in a comment on a PR (not a plain
+    # issue). claude-code-action also honours trigger_phrase, but gating here
+    # avoids spinning up a runner for every unrelated comment.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (
+        github.event_name == 'issue_comment' &&
+        github.event.issue.pull_request &&
+        contains(github.event.comment.body, '@llk-ai review')
+      ) || (
+        github.event_name == 'pull_request_review_comment' &&
+        contains(github.event.comment.body, '@llk-ai review')
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 45          # /code-review max fans out subagents; this bounds it
+    permissions:
+      contents: read             # read the checkout
+      pull-requests: write       # post inline review comments
+      issues: write              # post acknowledgement / summary
+      id-token: write            # OIDC, if the key path requires it
+    env:
+      # PR number from whichever trigger fired (dispatch input, issue comment,
+      # or review comment).
+      PR_NUMBER: ${{ github.event.inputs.pr_number || github.event.issue.number || github.event.pull_request.number }}
+    steps:
+      # 1. Full checkout so /code-review can compute the merge-base diff vs main.
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # 2. Switch to the PR's head branch, and ensure a local `main` exists so
+      #    /code-review can diff the PR against it (main...HEAD).
+      - name: Check out the PR branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr checkout "${PR_NUMBER}"
+          git fetch origin +refs/heads/main:refs/heads/main
+
+      # 3. Fetch the private LLK review knowledge, kept out of the public tree and
+      #    pulled at runtime into a scratch dir via a sparse checkout.
+      - name: Fetch private LLK review knowledge
+        uses: actions/checkout@v4
+        with:
+          repository: tenstorrent/llk_code_gen
+          # Token with read access to the private knowledge repo.
+          token: ${{ secrets.LLK_KNOWLEDGE_TOKEN }}
+          path: .llk-review-knowledge-src
+          sparse-checkout: dashboard/pr_review/knowledge
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # 4. Assemble the knowledge into a single append-system-prompt file:
+      #    a framing line, then each .md file.
+      - name: Assemble review system prompt
+        run: |
+          set -euo pipefail
+          src=".llk-review-knowledge-src/dashboard/pr_review/knowledge"
+          out="${GITHUB_WORKSPACE}/.llk-review-system-prompt.md"
+          {
+            echo "You are the LLK PR review bot. Apply the knowledge below as authoritative."
+            echo
+            for f in "$src"/*.md; do
+              [ -e "$f" ] || continue
+              echo "# === $(basename "$f") ==="
+              cat "$f"
+              echo
+            done
+            cat <<'EOF'
+
+          # === How to post inline review comments ===
+          Post every finding as a LINE-ANCHORED inline comment on the PR diff, using the
+          GitHub REST API via `gh api`. Anchor each comment to the file and line it is
+          about. Use this exact form (the flag types matter):
+
+            HEAD="$(git rev-parse HEAD)"
+            gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/comments" --method POST \
+              -f body="<finding text>" \
+              -f commit_id="$HEAD" \
+              -f path="<path/relative/to/repo/root>" \
+              -f side="RIGHT" \
+              -F line=<line-number>
+
+          Rules — follow these or the call fails:
+          - Pass `line` (and `start_line`, if a range) with `-F` (numeric), NEVER `-f`
+            (`-f line=...` sends a string and the API rejects it with HTTP 422).
+          - Do NOT pass `subject_type` — it is not a valid key for this endpoint.
+          - For a multi-line range, add `-F start_line=<n> -f start_side="RIGHT"`.
+          - `commit_id` must be the PR head SHA (`git rev-parse HEAD` after checkout).
+          - `path` is relative to the repo root, exactly as it appears in the diff.
+          - NEVER fall back to `gh pr review --comment` or `gh pr comment` — those post an
+            unanchored summary, not a line comment. If an inline post fails, fix the
+            command and retry; do not downgrade to a top-level comment.
+          EOF
+          } > "$out"
+          echo "Assembled $(wc -l < "$out") lines into $out"
+
+      # 5. Run the review: /code-review at max effort, with the LLK MCP servers
+      #    and the assembled knowledge, posting findings inline via --comment.
+      - name: Run /code-review
+        uses: anthropics/claude-code-action@v1
+        env:
+          # Route Claude through the TT-Chat LiteLLM proxy (Anthropic-compatible).
+          # The proxy expects Bearer auth, which Claude Code sends when the token
+          # is given as ANTHROPIC_AUTH_TOKEN (not ANTHROPIC_API_KEY → x-api-key).
+          ANTHROPIC_BASE_URL: ${{ secrets.TT_CHAT_URL }}
+          ANTHROPIC_AUTH_TOKEN: ${{ secrets.TT_CHAT_API_KEY }}
+          # The proxy requires the "anthropic/" model prefix.
+          ANTHROPIC_MODEL: anthropic/claude-opus-4-5-20251101
+          ANTHROPIC_SMALL_FAST_MODEL: anthropic/claude-haiku-4-5-20251001
+          # So /code-review --comment can detect the PR and post via gh.
+          # GITHUB_TOKEN is the per-run automatic token; its write scope comes
+          # from the job's `permissions:` block (pull-requests/issues: write),
+          # so comments post as github-actions[bot] — no user PAT required.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Present only to satisfy the action's auth precheck; actual auth +
+          # routing is via the ANTHROPIC_* env vars above (AUTH_TOKEN takes
+          # precedence, so no x-api-key is sent to the proxy).
+          anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          trigger_phrase: "@llk-ai review"
+          prompt: "/code-review ${{ github.event.inputs.effort || 'max' }} --comment"
+          # No --model here: the model comes from ANTHROPIC_MODEL (needs the
+          # anthropic/ prefix for the proxy).
+          claude_args: |
+            --allowedTools "Bash(gh:*),Bash(git:*),Bash(grep:*),Bash(find:*),Bash(diff:*),Bash(head:*),mcp__deepwiki,mcp__atlassian,mcp__glean_default"
+            --max-turns 60
+            --mcp-config tt_metal/tt-llk/.mcp.json
+            --append-system-prompt-file ${{ github.workspace }}/.llk-review-system-prompt.md
