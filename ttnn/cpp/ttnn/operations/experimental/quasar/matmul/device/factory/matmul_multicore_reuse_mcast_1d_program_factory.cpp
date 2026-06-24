@@ -5842,6 +5842,35 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
     const char* in0_sender_source =
         in0_is_sharded ? IN0_SENDER_BLOCK_SHARDED_KERNEL_PATH : IN0_SENDER_PADDING_KERNEL_PATH;
 
+    // Named runtime args read by the in0 sender kernels (must match the per-core run-arg values set
+    // below and the kernel-side get_arg(args::...) reads). The sharded sender + both no-work variants
+    // take {sender_id, 4 mcast dest-noc coords}; the interleaved (padding) sender instead takes the in0
+    // tensor start tile id, the 4 dest-noc coords, last_block_h and sparsity_addr.
+    const m2::Group<std::string> in0_sender_rta_names =
+        in0_is_sharded ? m2::Group<std::string>{
+                             "sender_id",
+                             "in0_mcast_dest_noc_start_x",
+                             "in0_mcast_dest_noc_start_y",
+                             "in0_mcast_dest_noc_end_x",
+                             "in0_mcast_dest_noc_end_y",
+                         }
+                       : m2::Group<std::string>{
+                             "in0_tensor_start_tile_id",
+                             "in0_mcast_dest_noc_start_x",
+                             "in0_mcast_dest_noc_start_y",
+                             "in0_mcast_dest_noc_end_x",
+                             "in0_mcast_dest_noc_end_y",
+                             "last_block_h",
+                             "sparsity_addr",
+                         };
+    const m2::Group<std::string> in0_no_work_rta_names = {
+        "sender_id",
+        "in0_mcast_dest_noc_start_x",
+        "in0_mcast_dest_noc_start_y",
+        "in0_mcast_dest_noc_end_x",
+        "in0_mcast_dest_noc_end_y",
+    };
+
     m2::Group<m2::KernelSpec> kernels;
 
     // in0 sender (work cores in receiver grid).
@@ -5861,6 +5890,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                 m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
             },
         .compile_time_args = make_in0_sender_cta(1, 1),
+        .runtime_arg_schema = {.runtime_arg_names = in0_sender_rta_names},
         .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
     });
 
@@ -5885,6 +5915,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                     m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args = make_in0_sender_cta(0, 1),
+            .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
         });
     }
@@ -5905,6 +5936,7 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_artifacts(
                     m2::TensorBinding{.tensor_parameter_name = RO_SPARSITY_TENSOR, .accessor_name = "sparsity"},
                 },
             .compile_time_args = make_in0_sender_cta(0, 0),
+            .runtime_arg_schema = {.runtime_arg_names = in0_no_work_rta_names},
             .hw_config = m2::DataMovementHardwareConfig{.role = m2::DataMovementRoleHint::READER},
         });
     }

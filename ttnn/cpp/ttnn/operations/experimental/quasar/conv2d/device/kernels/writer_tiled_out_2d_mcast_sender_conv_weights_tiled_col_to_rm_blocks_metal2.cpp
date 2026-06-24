@@ -26,8 +26,11 @@
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
 #include "conv_reader_common.hpp"
+#include "api/debug/ring_buffer.h"
+// DEBUG: weights-mcast-sender deadlock localization. Marker 0xEP_00CC, P=phase, CC=load counter.
 
 void kernel_main() {
+    uint32_t rb_wcnt = 0;  // DEBUG: weight-load counter for ring buffer markers
     constexpr uint32_t num_blocks_weight_h = get_arg(args::num_blocks_weight_h);
     constexpr uint32_t weight_block_num_tiles = get_arg(args::weight_block_num_tiles);
     constexpr uint32_t weight_block_height_num_outer = get_arg(args::weight_block_height_num_outer);
@@ -210,6 +213,7 @@ void kernel_main() {
                 const uint32_t height_block_offset = height_block_index * height_stride_factor;
                 for (uint32_t weight_tile_h_outer_i = 0; weight_tile_h_outer_i < weight_block_height_num_outer;
                      weight_tile_h_outer_i++) {
+                    WATCHER_RING_BUFFER_PUSH(0xE1000000u | (rb_wcnt & 0xffff));  // sender: pre reserve cb_weight
                     cb_weight_obj.reserve_back(weight_block_num_tiles);
 
                     const uint32_t outer_block_offset = weight_tile_h_outer_i * tiles_per_full_block;
@@ -236,6 +240,7 @@ void kernel_main() {
                     // wait until all weights mcast destinations have atomically incremented the weights semaphore_addr
                     // (i.e. its value should be weights_mcast_num_dests), then reset the semaphore_addr value back to
                     // zero for the next block
+                    WATCHER_RING_BUFFER_PUSH(0xE2000000u | (rb_wcnt & 0xffff));  // sender: weights read, pre wait bumps
                     weights_mcast_sender_sem.wait(weights_mcast_num_dests);
                     weights_mcast_sender_sem.set(0);
 
@@ -264,6 +269,8 @@ void kernel_main() {
                         mcast_rect.noc_y_end,
                         weights_mcast_num_cores);
 #endif
+                    WATCHER_RING_BUFFER_PUSH(0xE3000000u | (rb_wcnt & 0xffff));  // sender: mcast done
+                    rb_wcnt++;
                     cb_weight_obj.push_back(weight_block_num_tiles);
                 }  // for weight_block_height_num_outer
             }

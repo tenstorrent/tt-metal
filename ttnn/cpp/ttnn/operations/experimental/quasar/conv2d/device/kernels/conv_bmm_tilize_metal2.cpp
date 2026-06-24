@@ -39,6 +39,15 @@
 #undef DPRINT
 #define DPRINT(...) ((void)0)
 
+// DEBUG: deadlock localization via watcher ring buffer (safe, unlike DPRINT). Push only from the MATH
+// thread to avoid a 3-TRISC race on the ring pointer. Marker: 0xCP_IIII, P=phase,
+// IIII=(in1_block_w_i<<12)|(in0_block_h_i<<8)|in0_block_w_i.
+#include "api/debug/ring_buffer.h"
+#define RB_CMP(phase, w, h, k)                                                                                   \
+    MATH(WATCHER_RING_BUFFER_PUSH(                                                                               \
+        0xC0000000u | ((uint32_t)(phase) << 24) | (((uint32_t)(w) & 0xf) << 12) | (((uint32_t)(h) & 0xf) << 8) | \
+        ((uint32_t)(k) & 0xff)))
+
 #define DEBUG_PRINT 0
 
 #ifdef SPLIT_READER
@@ -324,6 +333,7 @@ void kernel_main() {
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
                 bool last_inner_dim_block = (in0_block_w_i == in0_num_blocks_w - 1);
+                RB_CMP(1, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: inner-block start (pre-tilize)
                 if constexpr (!height_sharded) {
                     if (in0_block_w_i % in0_nblocks_w_tilize == 0) {
                         if constexpr (pack_relu && !fuse_bias) {
@@ -419,10 +429,9 @@ void kernel_main() {
                         in0_block_w);
                 }
 
-                if (in1_block_w_i == 0 && in0_block_h_i == 0 && in0_block_w_i == 0) {
-                    DPRINT("CC pre_mm_in0 (waits mcast act)\n");  // DEBUG (remove after)
-                }
+                RB_CMP(2, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: post-tilize, pre wait mcast-act
                 cb_mm_in0.wait_front(in0_block_num_tiles);
+                RB_CMP(3, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: got mcast-act, pre wait weights
 
                 uint32_t in0_index_subblock_offset = 0;
 #ifdef CHECK_SKIP_COMPUTE
@@ -433,6 +442,7 @@ void kernel_main() {
 #endif
 
                 cb_in1.wait_front(in1_block_num_tiles);
+                RB_CMP(4, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: got weights, pre matmul
 
                 if (last_inner_dim_block) {
                     if constexpr (!fuse_bias) {
@@ -577,6 +587,7 @@ void kernel_main() {
 
                 cb_mm_in0.pop_front(in0_block_num_tiles);
                 cb_in1.pop_front(in1_block_num_tiles);
+                RB_CMP(5, in1_block_w_i, in0_block_h_i, in0_block_w_i);  // DEBUG: inner-block matmul done, popped
             }  // for in0_num_blocks_w
             if constexpr (matmul_partials_cb == mm_out_cb_id && partials_cb_uses_output) {
                 UNPACK(get_local_cb_interface(matmul_partials_cb).fifo_rd_ptr = partials_cb_read_ptr);
