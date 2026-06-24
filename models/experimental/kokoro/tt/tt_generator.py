@@ -347,10 +347,28 @@ def _reflection_pad_left_1_nlc(x_nlc: ttnn.Tensor, *, memory_config: ttnn.Memory
 
 
 def _upsample_nearest_axis1(x_nlc: ttnn.Tensor, *, scale: int, memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
-    """Nearest-neighbour upsample along axis 1 (matches ``nn.Upsample(scale_factor=scale)``)."""
+    """Nearest-neighbour upsample along axis 1 (matches ``nn.Upsample(scale_factor=scale)``).
+
+    Done on device as reshape→broadcast-repeat→reshape, NOT ``ttnn.repeat_interleave``: the latter runs
+    in bf16 and silently rounds the fp32 F0 (~0.27 Hz). That error is tiny as a tensor metric (F0 PCC
+    0.999997) but the SineGen phase accumulation (×2π × cumsum over T_har) amplifies it into a badly
+    decorrelated harmonic source (sine_wavs PCC ~0.48) — the dominant config-E waveform residual. The
+    broadcast ``ttnn.repeat`` is a pure data copy and preserves fp32 exactly.
+
+    NOTE: ``ttnn.reshape`` returns a VIEW aliasing its input's buffer, so the intermediates here must
+    NOT be ``ttnn.deallocate``-d (doing so frees the buffer the view still points to → silent,
+    non-deterministic garbage). They are tiny (``[B, T_f0, 1]``) and are freed at scope exit. See
+    ``test_tt_kmodel_degradation_localization_proof.test_config_e_f0_into_source``.
+    """
     if scale == 1:
         return x_nlc
-    return ttnn.repeat_interleave(x_nlc, scale, 1, memory_config=memory_config)
+    B, T, C = (int(d) for d in x_nlc.shape)
+    x = ttnn.to_layout(x_nlc, ttnn.ROW_MAJOR_LAYOUT)
+    x = ttnn.reshape(x, [B, T, 1, C])
+    x = ttnn.repeat(x, ttnn.Shape([1, 1, scale, 1]))
+    x = ttnn.reshape(x, [B, T * scale, C])
+    x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+    return ttnn.to_memory_config(x, memory_config)
 
 
 # ---------------------------------------------------------------------------
