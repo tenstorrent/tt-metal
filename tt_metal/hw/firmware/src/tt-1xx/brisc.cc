@@ -394,32 +394,35 @@ int main() {
         // written in order, so it will arrive in order. We also have a barrier
         // before mcasting the launch message (as a hang workaround), which
         // ensures that the unicast data will also have been received.
-        while (
-            ((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
-            !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
-            invalidate_l1_cache();
-            // While the go signal for kernel execution is not sent, check if the worker was signalled
-            // to reset its launch message read pointer.
-            if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
-                (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
-                (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
-                // Set the rd_ptr on workers to specified value
-                mailboxes->launch_msg_rd_ptr = 0;
-                if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                    if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
-                        DeviceIncrementTraceCount();
-                        DeviceTraceOnlyProfilerInit();
+        {
+            DeviceZoneScopedMainN("GO_WAIT");
+            while (((go_message_signal = mailboxes->go_messages[mailboxes->go_message_index].signal) != RUN_MSG_GO) &&
+                   !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload &
+                     DISPATCH_ENABLE_FLAG_PRELOAD)) {
+                invalidate_l1_cache();
+                // While the go signal for kernel execution is not sent, check if the worker was signalled
+                // to reset its launch message read pointer.
+                if ((go_message_signal == RUN_MSG_RESET_READ_PTR) ||
+                    (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) ||
+                    (go_message_signal == RUN_MSG_REPLAY_TRACE)) {
+                    // Set the rd_ptr on workers to specified value
+                    mailboxes->launch_msg_rd_ptr = 0;
+                    if (go_message_signal == RUN_MSG_RESET_READ_PTR || go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                        if (go_message_signal == RUN_MSG_REPLAY_TRACE) {
+                            DeviceIncrementTraceCount();
+                            DeviceTraceOnlyProfilerInit();
+                        }
+                        uint32_t go_message_index = mailboxes->go_message_index;
+                        // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
+                        // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
+                        // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC
+                        // txn is not issued.
+                        uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
+                        mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+                        // Notify dispatcher that this has been done
+                        DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
+                        notify_dispatch_core_done(dispatch_addr, noc_index);
                     }
-                    uint32_t go_message_index = mailboxes->go_message_index;
-                    // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently
-                    // guaranteed to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid
-                    // value. For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn
-                    // is not issued.
-                    uint64_t dispatch_addr = calculate_dispatch_addr(&mailboxes->go_messages[go_message_index]);
-                    mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
-                    // Notify dispatcher that this has been done
-                    DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
-                    notify_dispatch_core_done(dispatch_addr, noc_index);
                 }
             }
         }
@@ -435,6 +438,10 @@ int main() {
             launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
             DeviceValidateProfiler(launch_msg_address->kernel_config.enables);
             DeviceZoneSetCounter(launch_msg_address->kernel_config.host_assigned_id);
+
+            {
+                DeviceZoneScopedN("Start");
+            }
 
             uint32_t enables = launch_msg_address->kernel_config.enables;
             // Trigger the NCRISC to start loading CBs and IRAM as soon as possible.
@@ -484,6 +491,9 @@ int main() {
                 (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.local_cb_offset);
             start_ncrisc_kernel_run_early(enables);
 
+            {
+                DeviceZoneScopedN("End");
+            }
             // Run the BRISC kernel
             WAYPOINT("R");
             int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
