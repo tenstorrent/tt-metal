@@ -128,7 +128,6 @@ jobs:
           # alongside new versions to suppress newly-failing tests.
           ALLOWED=(
             "tt_metal/ttsim-version"
-            "tests/pipeline_reorg/ttsim-skip-list.yaml"
           )
 
           SAFE=true

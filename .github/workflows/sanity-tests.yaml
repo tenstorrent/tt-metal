@@ -43,11 +43,6 @@ on:
         type: boolean
         default: true
         description: "Run ops unit tests"
-      run-ttsim-tests:
-        required: false
-        type: boolean
-        default: true
-        description: "Run TTSim tests (unit + integration)"
       run-ttsim-integration-tests:
         required: false
         type: boolean
@@ -143,11 +138,6 @@ on:
         default: true
         type: boolean
         description: "Run ops unit tests"
-      run-ttsim-tests:
-        required: false
-        default: true
-        type: boolean
-        description: "Run TTSim tests (unit + integration)"
       run-ttsim-integration-tests:
         required: false
         default: true
@@ -288,7 +278,7 @@ jobs:
           echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
       - id: set-ttsim-tests
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-tests }}" >> "$GITHUB_OUTPUT"
+          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}" >> "$GITHUB_OUTPUT"
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
@@ -353,20 +343,15 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
 
-  ttsim-integration-tests:
+  ttsim-sanity-tests:
     needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
     if: ${{ !cancelled() && needs.resolve-artifacts.result == 'success' && needs.tests-to-run.outputs.ttsim-tests == 'true' }}
-    strategy:
-      fail-fast: false
-    uses: ./.github/workflows/ttsim-integration-tests-impl.yaml
+    uses: ./.github/workflows/ttsim-sanity-tests-impl.yaml
     secrets: inherit
     with:
       basic-docker-image: ${{ needs.resolve-artifacts.outputs.basic-dev-docker-image }}
-      test-docker-image: ${{ needs.resolve-artifacts.outputs.ci-test-docker-image }}
       package-artifact-name: ${{ needs.resolve-artifacts.outputs.packages-artifact-name }}
-      build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      wheel-artifact-name: ${{ needs.resolve-artifacts.outputs.wheel-artifact-name }}
-      run-ttsim-integration-tests: ${{ github.event_name == 'push' || inputs.run-ttsim-integration-tests }}
+      enabled-skus: "sim_wormhole_b0,sim_blackhole"
 
   runtime-sim-sanity-tests:
     needs: [resolve-docker-pull-refs, resolve-artifacts, tests-to-run]
