@@ -210,6 +210,61 @@ The smoke passes only if `run.py` exits `0`, the TTI-written run spec has `docke
 
 If the smoke fails before a request is sent because the TTI benchmark client entry point is missing, fix the TTI client environment. For example, create/install the checkout's `BENCHMARKS_VLLM` venv or point the expected `vllm` client command at the already-installed vLLM CLI. Record this as a TTI setup fix. Do not respond by switching to `--docker-server` or a stock implementation.
 
+## External-Server Smoke
+
+Do not start with the full release workflow. First prove the topology with a small smoke that cannot run for hours.
+
+1. Start the generated autoport vLLM server from the tt-metal checkout using the same serving command and flags proven in optimized-vLLM. A typical LLM pattern is:
+
+```bash
+cd "$TT_METAL_HOME"
+source python_env/bin/activate
+MODEL_DIR=models/autoports/<model>
+MAX_MODEL_LEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_model_len"])' "$MODEL_DIR/doc/context_contract.json")
+export PYTHONPATH="$TT_METAL_HOME:$VLLM_CHECKOUT:${PYTHONPATH:-}"
+export TT_LLAMA_TEXT_VER=<autoport selector if required>
+python -m models.common.readiness_check.run_vllm_server \
+  --stages serve \
+  --model-dir "$MODEL_DIR" \
+  --hf-model "$HF_MODEL_OR_LOCAL_WEIGHTS" \
+  --mesh-device T3K \
+  --max-num-seqs 32 \
+  --max-model-len "$MAX_MODEL_LEN" \
+  --tt-config '{"sample_on_device_mode": "all"}' \
+  --additional-server-args "--served-model-name $HF_MODEL"
+```
+
+Match the optimized-vLLM stage's actual command where it differs. The important points are: the server imports the generated autoport, preserves the context contract, and serves the HF model name that TTI will request.
+
+2. Verify the server before invoking TTI:
+
+```bash
+curl -fsS "http://127.0.0.1:$SERVICE_PORT/health"
+curl -fsS "http://127.0.0.1:$SERVICE_PORT/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$HF_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply in one short sentence.\"}],\"max_tokens\":8,\"temperature\":0}"
+```
+
+3. Run a tiny TTI client workflow against the live server. Use a temporary no-Docker spec with one 8-token-in / 8-token-out benchmark request, `disable_trace_capture=true`, and very loose performance targets. This proves that TTI can load the autoport spec, see the external server, send a request, write benchmark output, and run reports.
+
+```bash
+cd "$TTI_WORK_ROOT/tt-inference-server"
+export CACHE_ROOT="$SMOKE_EVIDENCE_DIR/tti_cache"
+export SERVICE_PORT=8000
+python3 run.py \
+  --model "$TTI_MODEL" \
+  --model-spec-json "$AUTOPORT_SMOKE_SPEC" \
+  --device "$TTI_DEVICE" \
+  --workflow benchmarks \
+  --no-auth \
+  --skip-system-sw-validation \
+  --disable-trace-capture
+```
+
+The smoke passes only if `run.py` exits `0`, the TTI-written run spec has `docker_server=false` and `impl.code_path=models/autoports/<model>`, and the benchmark JSON records `completed=1` with `failed=0`.
+
+If the smoke fails before a request is sent because the TTI benchmark client entry point is missing, fix the TTI client environment. For example, create/install the checkout's `BENCHMARKS_VLLM` venv or point the expected `vllm` client command at the already-installed vLLM CLI. Record this as a TTI setup fix. Do not respond by switching to `--docker-server` or a stock implementation.
+
 ## Run The Release Workflow
 
 Run the release workflow only after the smoke passes. Keep the generated autoport vLLM server running and run TTI as a client. Never print tokens.

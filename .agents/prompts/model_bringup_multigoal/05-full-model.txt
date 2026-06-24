@@ -7,18 +7,20 @@ This goal creates the full-model state for the repo-local TTNN autoport pipeline
 Goal completion requirements:
 - models/autoports/<model>/tt/model.py and tt/generator.py implement the full HF autoregressive path and standard Metal readiness generator contract.
 - The full model preserves the optimized multichip decoder strategy, dtype/fidelity/KV-cache/activation/CCL policy, paged-cache dtype split, rejection ledger, and inter-layer residual layout. Fallback to single-chip, replicated, host-side, or less optimized behavior is not acceptable.
-- The full model preserves the context contract for the full layer stack. Recompute full-stack weight plus KV-cache DRAM capacity and update doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
-- Generate fresh AIME24 HF-tokenizer chat-template readiness reference, 100 generated tokens, unless metadata proves same HF model/revision/tokenizer/prompt/chat-template/gen/top-k/command.
+- Preserve the full-stack context contract. Recompute weight plus KV-cache DRAM capacity in doc/context_contract.json. Reduce advertised capability only for a hard physical limit, with evidence and the largest feasible value.
+- The model/generator accepts valid prompt lengths up to the supported context, including non-aligned lengths. If prefill chunks internally, the public generator owns padding, masking, cache fill, position handling, and output slicing.
+- Expose serving-ready low-level prefill/decode with explicit cache/page-table/position/prompt-length/batch state, mixed prompts, fixed slots, and inactive rows where used.
+- Generate a fresh AIME24 HF-tokenizer chat-template reference, 100 tokens, unless metadata proves an exact match.
 - run_prefill_check and run_teacher_forcing report top-1/top-5/top-100 for prefill and decode. The expected bar is top-5 >= 98% and top-100 = 100%.
 - run_autoregressive produces HF and TT completions, and the outputs are read for coherence, repetition, wrong-language drift, and early divergence.
 - Before token-out sampling, compare both common samplers, choose the best fit, and record the rejected alternative. Write custom sampler code only if neither common path fits.
 - Decode satisfies the $full-model/$tt-enable-tracing split-sampling contract. Greedy decode stays on device with no host argmax, full-logits readback, untraced sampling, or Python token-feedback loop.
 - Greedy split-sampling comparison must be semantically greedy. If split greedy fails on shape/layout/tiling, fix that contract or leave the stage incomplete with a minimal repro.
-- Trace evidence proves sampled-token feedback, current-position coherence, and changed/unchanged page-table handling. Decode does not rebuild or copy token inputs, position/RoPE state, masks, or page tables on the host for each generated token.
+- Trace evidence proves token feedback, position coherence, and changed/unchanged page-table handling with no per-token host rebuilds.
 - Top of README.md reports full-model TTFT and trace-verified batch-1 decode t/s/u, separating teacher-forcing and token-out decode when they differ.
 - Runtime fallback audit covers model/generator paths, cache ownership, host-logit boundaries, sampling, and reset behavior.
 - models/autoports/<model>/doc/full_model/README.md and work_log.md record commands, top-k accuracy, qualitative verdict, perf, limitations, and exact artifacts.
-- Canonical split sampling is required for completion. If force-argmax, full-vocab all-gather, generic `TopKDeviceOperation`, or another sampler op dominates token-out decode, fix the LM-head/sampling contract before completing the goal.
+- Canonical split sampling is required. If sampler ops dominate token-out decode, fix the LM-head/sampling contract before completing.
 - The generator supports an explicit host-sampling compatibility mode for tests that require host sampling, while the optimized measured token-out path remains on-device traced sampling.
 - $stage-review returns `clean-pass`; findings fixed/rereviewed. Local commit stage-owned touched-repo changes; never push; log SHAs.
 
