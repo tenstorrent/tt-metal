@@ -110,12 +110,22 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     ih = _i(test_vector.get("input_height") or test_vector.get("input_h"))
     iw = _i(test_vector.get("input_width") or test_vector.get("input_w"))
     oc = _i(test_vector.get("out_channels"))
+    bs = _i(test_vector.get("batch_size"), 1)
     placement = str(test_vector.get("input_tensor_tensor_placement", ""))
-    replicated = "PlacementShard" not in placement
-    if replicated and ih * iw >= 1048576 and oc >= 16:
+    shard_dims = re.findall(r"PlacementShard\((\d+)\)", placement)
+    # "Effectively replicated": either no shard at all, OR the only shard is on the
+    # batch dim (0) while batch <= 1 -- a size-1 dim can't be split across the mesh,
+    # so every chip still runs the FULL conv (same cost/footprint as replicated, and
+    # on T3K 1x8 the 1024x1024 oc>=16 case hangs / overflows dispatch:
+    # system_memory_manager.cpp:757). The model ran these sharded on larger hardware
+    # where the split is real. Genuinely-sharded (shard on a splittable dim, or
+    # batch > 1) and stride-2 1024x1024 convs are unaffected.
+    effectively_replicated = (not shard_dims) or (all(int(d) == 0 for d in shard_dims) and bs <= 1)
+    if effectively_replicated and ih * iw >= 1048576 and oc >= 16:
         return (
             True,
-            f"conv2d: replicated {ih}x{iw} oc={oc} conv too slow to validate per-chip on T3K (full conv on every chip)",
+            f"conv2d: effectively-replicated {ih}x{iw} oc={oc} bs={bs} conv too slow / over-resource "
+            f"to validate per-chip on T3K (full conv on every chip; batch-dim shard can't split)",
         )
     return False, None
 
