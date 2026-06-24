@@ -7,7 +7,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
-#include "ttnn/operations/data_movement/slice/device/slice_device_operation.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 
 namespace ttnn::experimental::prim {
 
@@ -28,7 +28,10 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_unpad_r
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
-    uint32_t start_id = ttnn::operations::data_movement::get_tiled_start_offset(input_tensor, output_tensor_start);
+    uint32_t start_id =
+        (static_cast<void>(input_tensor),
+         static_cast<void>(output_tensor_start),
+         0u);  // TODO(nuked-op slice): get_tiled_start_offset() was removed with the slice op
     const uint32_t num_tiles_shifted_per_core = input_shape[-2] * input_shape[-1] / TILE_HW;
 
     for (uint32_t i = 0; i < num_cores_total; i++) {

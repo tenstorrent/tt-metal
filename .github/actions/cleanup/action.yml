@@ -5,7 +5,7 @@ inputs:
   path:
     description: "The directory to clean up"
     required: false
-    default: "/__w/tt-metal/tt-metal/docker-job"
+    default: "/work"
 runs:
   using: "composite"
   steps:
@@ -15,6 +15,8 @@ runs:
         cd /
         echo "pre rm"
         ls -al "${{ inputs.path }}"
-        rm -rf "${{ inputs.path }}"
+        # Preserve .github so the runner can still resolve local action definitions
+        # for post-steps (e.g. "Post Checkout Repository") after cleanup runs.
+        find "${{ inputs.path }}" -mindepth 1 -maxdepth 1 ! -name '.github' -exec rm -rf {} +
         echo "post rm"
-        ls -al "$(dirname "${{ inputs.path }}")"
+        ls -al "${{ inputs.path }}"

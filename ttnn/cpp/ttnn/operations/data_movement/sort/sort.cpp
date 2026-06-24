@@ -10,7 +10,7 @@
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
-#include "ttnn/operations/data_movement/slice/slice.hpp"
+// TODO(nuked-op): removed include of deleted slicing op header
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 
@@ -91,7 +91,7 @@ std::vector<Tensor> post_sort_transform_tensor(
     const int8_t dim,
     const bool is_dim_last_idx,
     const Shape& original_lshape,
-    const MemoryConfig& input_memory_config) {
+    [[maybe_unused]] const MemoryConfig& input_memory_config) {
     // Reverse the pre-sort transformations
     const auto& input_shape = input_tensor.logical_shape();
     const auto orig_rank = input_shape.rank();
@@ -108,8 +108,8 @@ std::vector<Tensor> post_sort_transform_tensor(
             output_logical_shape[-3],
             output_logical_shape[-2],
             original_lshape[dim < 0 ? orig_rank + dim : dim]};
-        result[0] = ttnn::slice(result[0], start_index, end_index, step, input_memory_config);
-        result[1] = ttnn::slice(result[1], start_index, end_index, step, input_memory_config);
+        result[0] = /*nuked-op*/ result[0];
+        result[1] = /*nuked-op*/ result[1];
     }
     // Reshape back to original rank if needed
     if (orig_rank < 4 && orig_rank > 1) {

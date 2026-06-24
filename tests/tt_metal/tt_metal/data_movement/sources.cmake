@@ -7,7 +7,6 @@ set(UNIT_TESTS_DATA_MOVEMENT_SRC
     one_to_all/test_one_to_all.cpp
     one_to_all/test_multicast_schemes.cpp
     loopback/test_loopback.cpp
-    reshard_hardcoded/test_reshard_hardcoded.cpp
     deinterleave_hardcoded/test_deinterleave_hardcoded.cpp
     conv_hardcoded/test_conv_hardcoded.cpp
     one_to_one/test_one_to_one.cpp

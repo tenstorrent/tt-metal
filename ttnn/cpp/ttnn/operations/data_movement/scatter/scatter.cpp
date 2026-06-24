@@ -9,7 +9,7 @@
 
 #include "device/scatter_device_operation.hpp"
 
-#include "slice/slice.hpp"
+// TODO(nuked-op slice): removed include of deleted slice header
 #include "tt_stl/small_vector.hpp"
 #include "scatter/scatter_enums.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -158,7 +158,7 @@ Tensor pre_scatter_transform_tensor(
         const ttnn::SmallVector<uint32_t> start(index_shape->rank(), 0);
         const ttnn::SmallVector<uint32_t> steps(index_shape->rank(), 1);
         const ttnn::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
-        processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
+        /* nuked-op slice: passthrough no-op */;
     }
     // if layout is tile, convert to row-major first
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {
@@ -187,7 +187,7 @@ Tensor pre_scatter_transform_tensor(
         const ttnn::SmallVector<uint32_t> start(index_shape->rank(), 0);
         const ttnn::SmallVector<uint32_t> steps(index_shape->rank(), 1);
         const ttnn::SmallVector<uint32_t> end(index_shape->cbegin(), index_shape->cend());
-        processed_tensor = ttnn::slice(processed_tensor, start, end, steps, processed_tensor.memory_config());
+        /* nuked-op slice: passthrough no-op */;
     }
     // if layout is tile, convert to row-major first - this allows for minimized memory usage by transpose (no padding)
     if (processed_tensor.layout() != Layout::ROW_MAJOR) {

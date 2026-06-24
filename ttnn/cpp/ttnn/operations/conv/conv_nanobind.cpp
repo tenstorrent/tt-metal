@@ -7,14 +7,13 @@
 #include <nanobind/nanobind.h>
 
 #include "conv2d/conv2d_nanobind.hpp"
-#include "conv_transpose2d/conv_transpose2d_nanobind.hpp"
-#include "conv1d/conv1d_nanobind.hpp"
 
 namespace ttnn::operations::conv {
 
 void py_module(nb::module_& mod) {
-    ttnn::operations::conv::conv1d::bind_conv1d(mod);
+    // conv1d, conv_transpose2d, and the public conv2d op + prepare_conv_weights/
+    // prepare_conv_bias ops were nuked for the agent-regen baseline. Only the
+    // shared Conv2dConfig + PaddingMode bindings remain (bind_conv2d trimmed).
     ttnn::operations::conv::conv2d::bind_conv2d(mod);
-    ttnn::operations::conv::conv_transpose2d::bind_conv_transpose2d(mod);
 }
 }  // namespace ttnn::operations::conv

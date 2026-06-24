@@ -32,7 +32,7 @@
 
 namespace {
 
-constexpr uint32_t TILE_WIDTH = 32;
+constexpr uint32_t MOE_TILE_WIDTH = 32;
 
 inline uint32_t non_tile_cb_page_size(tt::DataFormat data_format, uint32_t l1_alignment) {
     return std::max({tt::datum_size(data_format), l1_alignment, CIRCULAR_BUFFER_COMPUTE_WORD_SIZE});
@@ -121,7 +121,7 @@ get_cores(
      */
 
     // Calculate number of tilize cores based on hidden dimension
-    const uint32_t hidden_tiles = hidden_size / TILE_WIDTH;
+    const uint32_t hidden_tiles = hidden_size / MOE_TILE_WIDTH;
 
     // Per-arch tilize/combine layout (layout struct above; see #41827 for BH bring-up).
     const auto& layout = get_layout(mesh_device->arch());
@@ -895,9 +895,9 @@ MoEComputeMeshWorkloadFactory::create_at(
         tilize_cores_physical[i] = mesh_device->worker_core_from_logical_core(tilize_cores[i]);
     }
 
-    // tile_width_bytes = TILE_WIDTH * element_size
+    // tile_width_bytes = MOE_TILE_WIDTH * element_size
     // max_tiles_per_chunk = max_tilize_subtoken_size / tile_width_bytes
-    uint32_t tile_width_bytes = TILE_WIDTH * tilize_input_tensor.element_size();
+    uint32_t tile_width_bytes = MOE_TILE_WIDTH * tilize_input_tensor.element_size();
     uint32_t max_tiles_per_local_chunk = max_tilize_subtoken_size / tile_width_bytes;
 
     const uint32_t primary_mcast_gather_group_num_cores = tilize_num_cores / 2;
