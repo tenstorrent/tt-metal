@@ -183,45 +183,16 @@
   team: ttnn
 
 # --- deepseek_prefill ---
-- id: bh-lb-deepseek-prefill
-  name: bh_lb_DeepSeek_PREFILL
-  model-name: deepseek_prefill
-  cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/ -vvv --tb=short -k "not matmul_pcc and not perf-host-64 and ((mesh-4x2 or mesh-2x4 or linear-8) or not (moe_gate_prefill2d or moe_routing_setup or ttnn_moe))" --timeout 1800 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_ds_mla -k "2x4 and random and scaled_sl and check_pcc and line" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "maxedge-1u and cpu and 2x4 and fabric2d" -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block.py::test_ds_prefill_block -k "balanced and not non_balanced and fabric2d" -vvv --tb=short --timeout=900 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/test_prefill_block_loop.py -k "2x4 and layer0 and device and not fabric2d-" -vvv --tb=short || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_loudbox:
-      timeout: 93
-  owner_id: U08E1JCMAJF # Marko Bezulj
-  team: models
-
-- id: bh-lb-deepseek-prefill-op-tests
-  name: bh_lb_DeepSeek_PREFILL_OP_TESTS
-  model-name: deepseek_prefill
-  cmd: |
-    exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/ -vvv --tb=short -k "(not test_ring_joint_mla or (4x2 and pcc_check and not fabric2d)) and (not test_rope_prefill or 4x2) and (not update_padded_kv_cache or 2x4) and (not rotary_embedding_indexed or 2x4) and not single-1" || exit_code=$?
-    exit $exit_code
-  skus:
-    bh_loudbox:
-      timeout: 37
-  owner_id: U094PKWHNJ0 # Petar Milojevic
-  team: models
-
+# MINFRA-979 canary: narrowed to only the perf test from issue #47287
+# (ring-8-2link-real-l28-col1). PREFILL and PREFILL_OP_TESTS jobs removed
+# on this branch so the scheduler doesn't put them on f01cs02 (we need
+# f01cs02 free for the PERF job). Do not merge.
 - id: bh-lb-deepseek-prefill-perf
   name: bh_lb_DeepSeek_PREFILL_PERF
   model-name: deepseek_prefill
   cmd: |
     exit_code=0
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_moe_perf.py -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_mla_perf.py -vvv --tb=short || exit_code=$?
-    pytest models/demos/deepseek_v3_d_p/tests/perf/test_prefill_block_perf.py -k "block_2x4" -vvv --tb=short || exit_code=$?
+    pytest models/demos/deepseek_v3_d_p/tests/perf/test_dispatch_combine_perf.py -m models_device_performance_bare_metal -vvv --tb=short --timeout=900 -k "ring-8-2link-real-l28-col1" || exit_code=$?
     exit $exit_code
   skus:
     bh_loudbox:
