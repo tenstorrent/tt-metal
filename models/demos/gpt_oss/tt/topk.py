@@ -24,6 +24,18 @@ def topk_router(g, experts_per_token, use_throughput_experts, softmax_compute_co
         g = ttnn.typecast(g, dtype=ttnn.bfloat16)
 
     expert_weights, expert_indices = ttnn.topk(g, k=experts_per_token, dim=-1, sorted=True)
+    import os as _os
+
+    if _os.environ.get("ROUTER_DBG_LOGITS"):
+        from loguru import logger as _logger
+
+        try:
+            _ew = ttnn.to_torch(expert_weights).float().flatten()[:8].tolist()
+            _gg = ttnn.to_torch(g).float().flatten()[:16].tolist()
+            _logger.info(f"ROUTER_DBG_LOGITS pre-softmax topk values row0={_ew}")
+            _logger.info(f"ROUTER_DBG_LOGITS raw g row0[:16]={_gg}")
+        except Exception as _e:
+            _logger.info(f"ROUTER_DBG_LOGITS dump failed: {_e}")
     if typecast_needed:
         g.deallocate(True)
         g = g_og

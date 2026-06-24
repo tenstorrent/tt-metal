@@ -460,7 +460,7 @@
 
 - name: GPT-OSS 120B unit tests
   cmd: |
-    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2
+    export HF_MODEL=models/demos/gpt_oss/configs/gpt-oss-120b TT_MM_THROTTLE_PERF=2 ROUTER_DBG_LOGITS=1
     # Tensor cache is pre-built on the NAS — skip loading model weights by default.
     # Check mlperf-write-access in the workflow to load weights and regenerate the cache.
     SKIP_MODEL_LOAD="--skip-model-load"
