@@ -326,6 +326,9 @@ class PassthroughStage(StageKind):
             my_stage_idx=my_stage_idx,
             stages_metadata=ctx.stages_metadata,
             pipeline_config=ctx.pipeline_config,
+            # Second core for the exit-send kernel when a forwarding stage's entry and exit
+            # land on the same chip (e.g. snake turns on a 1x2 submesh).
+            second_pipeline_core_coord=SECOND_PIPELINE_CORE_COORD,
         )
 
 
