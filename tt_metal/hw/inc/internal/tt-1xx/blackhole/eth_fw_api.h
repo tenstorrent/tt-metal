@@ -52,6 +52,8 @@ enum link_train_status_e : uint32_t {
     LINK_TRAIN_TIMEOUT_BIST_LOCK,
     LINK_TRAIN_TIMEOUT_LINK_UP,
     LINK_TRAIN_TIMEOUT_CHIP_INFO,
+    LINK_TRAIN_PRBS,
+    LINK_TRAIN_REQUESTED_DOWN,
 };
 
 enum port_status_e : uint32_t {
@@ -372,6 +374,16 @@ constexpr uint32_t ETH_LINK_DOWN_RING_BUF_CODE = 0xD09D0000;
 // marker above, so a down->recovered cycle reads as ... D09D D09D ... 600D in the per-core ring buffer.
 constexpr uint32_t ETH_LINK_UP_RING_BUF_CODE = 0x600D0000;
 
+// Pushed immediately before ERISC0 actually invokes the FW link-recovery entry point (i.e. the pointer
+// was non-null). 0xCA11ED reads as "CALLED" in the watcher dump, confirming the recovery function was
+// reached. Seeing this interleaved with 0xD09D means we are calling recovery on every down poll.
+constexpr uint32_t ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE = 0xCA11ED00;
+
+// Pushed when the FW link-recovery pointer is null (recovery unsupported on this FW), so the call is
+// skipped. 0xDEAD reads as "dead/absent pointer" in the watcher dump. If this shows up instead of
+// 0xCA11ED, the FW API table never populated eth_link_recovery_ptr.
+constexpr uint32_t ETH_LINK_RECOVERY_UNAVAIL_RING_BUF_CODE = 0xDEAD0000;
+
 // This should only be run on ERISC0, and ERISC1 should not be sending/receiving traffic while this is called.
 static void recover_eth_link_if_down() {
 #if defined(COMPILE_FOR_AERISC) && (PHYSICAL_AERISC_ID == 0)
@@ -379,11 +391,31 @@ static void recover_eth_link_if_down() {
     // initialized to false, so no static-init guard variable is emitted.
     static bool eth_link_was_down = false;
     if (!is_link_up()) {
+        volatile eth_status_t* eth_status = (volatile eth_status_t*)(MEM_SYSENG_ETH_STATUS);
+        invalidate_l1_cache();  // train_status is FW-written; read a fresh value, not a stale cache line
+        if (eth_status->train_status == link_train_status_e::LINK_TRAIN_REQUESTED_DOWN) {  // LINK_TRAIN_REQUESTED_DOWN
+            // Convert an administrative down into a recoverable training-failure state so the FW recovery
+            // path below isn't precluded from running.
+            eth_status->train_status =
+                link_train_status_e::LINK_TRAIN_TIMEOUT_MANUAL_EQ;  // LINK_TRAIN_TIMEOUT_MANUAL_EQ
+            eth_status->port_status = port_status_e::PORT_UP;
+        }
         // Record the down-link/recovery event for the watcher (no-op unless the watcher is enabled).
         WATCHER_RING_BUFFER_PUSH(ETH_LINK_DOWN_RING_BUF_CODE);
         eth_link_was_down = true;
-        reinterpret_cast<void (*)()>(
-            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr))();
+        // The link-recovery entry point is optional in the FW API table: base/older FW may leave it
+        // null. Gate on a non-zero pointer -- calling through a null here would jump to address 0 and
+        // hang the core. When unsupported we still record the down edge above but take no action.
+        const uint32_t eth_link_recovery_ptr =
+            (uint32_t)(((eth_api_table_t*)(MEM_SYSENG_ETH_API_TABLE))->eth_link_recovery_ptr);
+        if (eth_link_recovery_ptr != 0) {
+            // Confirm in the watcher trace that we are about to jump into FW recovery.
+            WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_CALLED_RING_BUF_CODE);
+            reinterpret_cast<void (*)()>(eth_link_recovery_ptr)();
+        } else {
+            // FW does not provide a recovery entry point; record that we skipped the call.
+            WATCHER_RING_BUFFER_PUSH(ETH_LINK_RECOVERY_UNAVAIL_RING_BUF_CODE);
+        }
     } else if (eth_link_was_down) {
         // Link came back up after a down/recovery sequence -- record the recovery edge once.
         WATCHER_RING_BUFFER_PUSH(ETH_LINK_UP_RING_BUF_CODE);

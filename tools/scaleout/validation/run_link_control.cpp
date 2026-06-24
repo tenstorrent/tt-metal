@@ -73,7 +73,10 @@ void print_usage() {
               << "  run_link_control down          # Bring all ethernet links down (they stay down)\n"
               << "  run_link_control up            # Bring all ethernet links back up (reinitialize MAC/PCS)\n"
               << "  run_link_control down_unsafe   # Bring all links down WITHOUT taking the CHIP_IN_USE lock\n"
-              << "                                 # (use while a test holds the chip; racy, recovery testing only)\n";
+              << "                                 # (use while a test holds the chip; racy, recovery testing only)\n"
+              << "  run_link_control down_single_unsafe\n"
+              << "                                 # Like down_unsafe, but downs only ONE end of each link so\n"
+              << "                                 # the partner stays up for recovery's retrain handshake\n";
 }
 
 }  // namespace tt::scaleout_tools
@@ -90,7 +93,7 @@ int main(int argc, char* argv[]) {
         print_usage();
         return 0;
     }
-    if (command != "down" && command != "up" && command != "down_unsafe") {
+    if (command != "down" && command != "up" && command != "down_unsafe" && command != "down_single_unsafe") {
         std::cerr << "Unknown command: " << command << "\n";
         print_usage();
         return 1;
@@ -98,12 +101,18 @@ int main(int argc, char* argv[]) {
 
     set_config_vars();
 
-    // The unsafe path constructs its own UMD cluster and never goes through MetalContext, so it must
+    // The unsafe paths construct their own UMD cluster and never go through MetalContext, so they must
     // branch out BEFORE we touch MetalContext::get_cluster() (which calls start_device() and would
     // block on the CHIP_IN_USE lock held by whoever currently owns the chip).
     if (command == "down_unsafe") {
         std::cout << "Bringing all ethernet links DOWN (UNSAFE: bypassing CHIP_IN_USE lock)..." << std::endl;
         down_links_bh_unsafe();
+        std::cout << "Done. Links will stay down until 'run_link_control up' or a chip reset (tt-smi -r)." << std::endl;
+        return 0;
+    }
+    if (command == "down_single_unsafe") {
+        std::cout << "Bringing ONE end of each ethernet link DOWN (UNSAFE: bypassing CHIP_IN_USE lock)..." << std::endl;
+        down_links_bh_single_ended_unsafe();
         std::cout << "Done. Links will stay down until 'run_link_control up' or a chip reset (tt-smi -r)." << std::endl;
         return 0;
     }

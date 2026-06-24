@@ -8,6 +8,13 @@
 #include <llrt/tt_cluster.hpp>
 #include <umd/device/cluster.hpp>
 
+#include <chrono>
+#include <set>
+#include <thread>
+#include <tuple>
+#include <utility>
+#include <vector>
+
 namespace tt::scaleout_tools {
 
 // ============================================================================
@@ -178,7 +185,10 @@ void up_links_bh(const std::vector<ResetLink>& links_to_reset) {
     send_eth_msg_to_links(links_to_reset, ETH_MSG_PORT_REINIT);
 }
 
-void down_links_bh_unsafe() {
+// Shared implementation behind down_links_bh_unsafe() (all links) and down_links_bh_single_ended_unsafe()
+// (one end per link). The only difference between the two is which (chip, eth channel) endpoints get the
+// link-down write sequence; see the endpoint-selection block below and the two public wrappers at the end.
+static void down_links_bh_unsafe_impl(bool single_ended) {
     // Build a standalone HAL purely to resolve the Blackhole ETH FW mailbox layout and message
     // encodings. This touches no device -- it is host-side architecture description only.
     const tt::tt_metal::Hal hal(
@@ -205,33 +215,105 @@ void down_links_bh_unsafe() {
     args.resize(mailbox_arg_count, 0);
     const std::vector<uint32_t> msg_vec = {call | msg_val};
 
+    // After downing the port we also forge boot_results->eth_status.train_status to look like a genuine
+    // (recoverable) training failure. The port-down above is a *latched administrative down*, which the
+    // FW link-recovery path deliberately refuses to override; stamping the train_status field makes the
+    // link instead present as having failed training at the manual-EQ stage -- the spontaneous-failure
+    // stimulus that recover_eth_link_if_down() is meant to act on. get_eth_fw_mailbox_val(TRAIN_STATUS)
+    // returns the L1 address of that field (same offset on every eth core); the value is
+    // link_train_status_e::LINK_TRAIN_TIMEOUT_MANUAL_EQ (index 5 of the enum in eth_fw_api.h).
+    // const auto train_status_addr = hal.get_eth_fw_mailbox_val(tt_metal::FWMailboxMsg::TRAIN_STATUS);
+    // constexpr uint32_t LINK_TRAIN_TIMEOUT_MANUAL_EQ = 5;
+    // const std::vector<uint32_t> train_status_vec = {LINK_TRAIN_TIMEOUT_MANUAL_EQ};
+
+    // After the PORT_ACTION + train_status writes we also clear the syseng FW PORT_DOWN record at
+    // 0x7CF68 (write 0). PORT_ACTION leaves the link latched as administratively/PORT_DOWN, and the FW
+    // link-recovery path refuses to run on a link in that state. Clearing this record removes the
+    // administrative-down latch so recovery is no longer precluded -- i.e. it turns the deliberate
+    // down into a fault recover_eth_link_if_down() is allowed to act on.
+    // (Address sits in the boot_results spare region in metal's struct view; it is a live FW field.)
+    // constexpr uint64_t ETH_FW_PORT_DOWN_RECORD_ADDR = 0x7CF68;
+    // const std::vector<uint32_t> zero_vec = {0};
+
+    // Finally force boot_results->eth_status.port_status back to PORT_UP (1). 0x7CC04 is the port_status
+    // field (boot_results base 0x7CC00 + offsetof(eth_status_t, port_status) == +4; value 1 == PORT_UP per
+    // port_status_e in eth_fw_api.h). PORT_ACTION leaves it at PORT_DOWN, which also precludes recovery;
+    // overwriting it with PORT_UP clears that gate so recover_eth_link_if_down() can act on the link.
+    // constexpr uint64_t ETH_FW_PORT_STATUS_ADDR = 0x7CC04;
+    // constexpr uint32_t PORT_UP = 1;
+    // const std::vector<uint32_t> port_up_vec = {PORT_UP};
+
     log_warning(
         tt::LogDistributed,
-        "UNSAFE: writing ETH_MSG_PORT_ACTION (port down) directly to all links without acquiring the "
-        "CHIP_IN_USE lock");
+        "UNSAFE: writing ETH_MSG_PORT_ACTION (port down) directly to {} without acquiring the CHIP_IN_USE lock",
+        single_ended ? "one specific ethernet link" : "all ethernet links");
 
-    // Only target local MMIO chips: without start_device() there is no ethernet routing, so remote
-    // chips are unreachable from here anyway.
-    for (auto chip_id : cluster.get_target_mmio_device_ids()) {
+    // Only local MMIO chips are reachable: without start_device() there is no ethernet routing, so we can
+    // only poke chips we have a direct PCIe BAR mapping for.
+    const auto mmio_chips = cluster.get_target_mmio_device_ids();
+    const auto is_local = [&](int chip_id) { return mmio_chips.count(chip_id) != 0; };
+
+    // Build the set of (chip, eth channel) endpoints to bring down.
+    std::vector<std::pair<int, uint32_t>> endpoints;
+    if (!single_ended) {
+        // All links: every eth channel on every local chip.
+        for (auto chip_id : mmio_chips) {
+            const auto& soc_desc = cluster.get_soc_descriptor(chip_id);
+            const uint32_t num_eth_channels = soc_desc.get_num_eth_channels();
+            for (uint32_t channel = 0; channel < num_eth_channels; channel++) {
+                endpoints.emplace_back(chip_id, channel);
+            }
+        }
+    } else {
+        // Single-ended, single-link: bring down exactly ONE specific link, leaving its partner end UP so
+        // the FW link-recovery retrain has a live peer to handshake with. Isolating one link keeps the
+        // fault contained for debugging recovery.
+        //
+        // Target: chip 2, logical eth channel 8 -- this is syseng channel 10 ("ETH10" in the
+        // eth_train_status dump). get_eth_core_for_channel() in the loop below takes the LOGICAL channel,
+        // so the value here is the logical channel. Edit these two constants to retarget.
+        constexpr int kTargetChip = 2;
+        constexpr uint32_t kTargetLogicalChannel = 8;
+        TT_FATAL(
+            is_local(kTargetChip),
+            "down_links_bh_single_ended_unsafe target chip {} is not a locally reachable MMIO chip",
+            kTargetChip);
+        endpoints.emplace_back(kTargetChip, kTargetLogicalChannel);
+    }
+
+    for (const auto& [chip_id, channel] : endpoints) {
         const auto& soc_desc = cluster.get_soc_descriptor(chip_id);
         TT_FATAL(
             soc_desc.arch == tt::ARCH::BLACKHOLE,
             "down_links_bh_unsafe only supports Blackhole (chip {} arch: {})",
             chip_id,
             soc_desc.arch);
-        const uint32_t num_eth_channels = soc_desc.get_num_eth_channels();
-        for (uint32_t channel = 0; channel < num_eth_channels; channel++) {
-            const auto core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::TRANSLATED);
-            log_warning(
-                tt::LogDistributed,
-                "  UNSAFE port-down chip " + std::to_string(chip_id) + " channel " + std::to_string(channel));
-            // Write args first, then the call word, matching send_eth_msg() ordering so the FW never
-            // acts on a half-populated arg window. No wait-for-ready/done: this is fire-and-forget.
-            cluster.write_to_device(args.data(), args.size() * sizeof(uint32_t), chip_id, core, first_arg_addr);
-            cluster.write_to_device(msg_vec.data(), msg_vec.size() * sizeof(uint32_t), chip_id, core, mailbox_addr);
-        }
+        const auto core = soc_desc.get_eth_core_for_channel(channel, CoordSystem::TRANSLATED);
+        log_warning(
+            tt::LogDistributed,
+            "  UNSAFE port-down chip " + std::to_string(chip_id) + " channel " + std::to_string(channel));
+        // Write args first, then the call word, matching send_eth_msg() ordering so the FW never acts on a
+        // half-populated arg window. No wait-for-ready/done: this is fire-and-forget.
+        cluster.write_to_device(args.data(), args.size() * sizeof(uint32_t), chip_id, core, first_arg_addr);
+        cluster.write_to_device(msg_vec.data(), msg_vec.size() * sizeof(uint32_t), chip_id, core, mailbox_addr);
+        // Give the FW time to finish processing PORT_ACTION before we stamp train_status. The FW writes
+        // train_status = LINK_TRAIN_REQUESTED_DOWN as part of bringing the port down; if we stamp our value
+        // first it just gets clobbered. Waiting lets the FW settle so our write below is the last word.
+        // std::this_thread::sleep_for(std::chrono::seconds(5));
+        // Stamp train_status = LINK_TRAIN_TIMEOUT_MANUAL_EQ so the link presents as a recoverable training
+        // failure (see comment above where train_status_addr is computed).
+        // cluster.write_to_device(
+        //     train_status_vec.data(), train_status_vec.size() * sizeof(uint32_t), chip_id, core, train_status_addr);
+        // Force port_status back to PORT_UP at 0x7CC04 so the PORT_DOWN status doesn't preclude recovery
+        // (see comment above).
+        // cluster.write_to_device(
+        //     port_up_vec.data(), port_up_vec.size() * sizeof(uint32_t), chip_id, core, ETH_FW_PORT_STATUS_ADDR);
     }
 }
+
+void down_links_bh_unsafe() { down_links_bh_unsafe_impl(/*single_ended=*/false); }
+
+void down_links_bh_single_ended_unsafe() { down_links_bh_unsafe_impl(/*single_ended=*/true); }
 
 void reset_links_bh(const std::vector<ResetLink>& links_to_reset) {
     const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();

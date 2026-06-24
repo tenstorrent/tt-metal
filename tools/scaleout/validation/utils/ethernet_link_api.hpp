@@ -51,6 +51,15 @@ void up_links_bh(const std::vector<ResetLink>& links_to_reset);
 // reinitialize anything.
 void down_links_bh_unsafe();
 
+// UNSAFE: Like down_links_bh_unsafe(), but brings down only ONE endpoint of each physical ethernet link
+// instead of both ends, leaving the partner end UP. This is the stimulus for exercising link recovery:
+// the FW link-recovery retrain needs a live peer on the far end to complete the training handshake.
+// Downing both ends (down_links_bh_unsafe()) makes recovery's retrain time out at signal-detect because
+// nothing answers on the wire. Endpoints are enumerated from the cluster's ethernet connection map, which
+// is only populated for trained links, so this must be run while links are still up. Same racy,
+// CHIP_IN_USE-bypassing caveats as down_links_bh_unsafe(); recovery testing only.
+void down_links_bh_single_ended_unsafe();
+
 // ============================================================================
 // Consolidated helpers (should be arch agnostic)
 // ============================================================================
