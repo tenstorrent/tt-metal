@@ -21,21 +21,20 @@ std::pair<bool, std::string> use_composite_all_gather(
     const int32_t gather_dim = (dim < 0) ? rank + dim : dim;
     const bool is_last_dim = (gather_dim == rank - 1);
 
-    // 1. Row-major, last-dim gather, unaligned pages.
+    // Row-major, last-dim gather, unaligned pages.
     if (input_tensor.layout() == ttnn::Layout::ROW_MAJOR && is_last_dim &&
         input_tensor.buffer()->page_size() != input_tensor.buffer()->aligned_page_size()) {
         return {true, "last-dim gather on unaligned row-major pages"};
     }
 
-    // 2. Tiled, padded on the gather dim.
+    // Tiled, padded on the gather dim.
     if (input_tensor.layout() == ttnn::Layout::TILE &&
         input_tensor.logical_shape()[gather_dim] != input_tensor.padded_shape()[gather_dim]) {
         return {true, "input tensor has tile padding on the gather dim"};
     }
 
-    // 3. Output memory_config forces an unrelated re-shard: happens when output shard
-    //    width isn't a whole multiple/divisor of the input shard width (no integer
-    //    page-size ratio).
+    // Output memory_config forces an unrelated re-shard: happens when output shard width isn't
+    // a whole multiple/divisor of the input shard width (no integer page-size ratio).
     if (memory_config.has_value() && memory_config->is_sharded() && input_tensor.memory_config().is_sharded()) {
         const uint32_t input_shard_width = input_tensor.memory_config().shard_spec()->shape[1];
         const uint32_t output_shard_width = memory_config->shard_spec()->shape[1];

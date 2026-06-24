@@ -63,11 +63,6 @@ void AllGatherDeviceOperation::validate_on_program_cache_miss(
             "Output tensor page config {} should be same as input tensor page config {}",
             output_tensor.tensor_spec().page_config(),
             input_tensor.tensor_spec().page_config());
-        TT_FATAL(
-            output_tensor.memory_config().memory_layout() == input_tensor.memory_config().memory_layout(),
-            "Output tensor memory layout {} should be same as input tensor memory layout {}",
-            output_tensor.memory_config().memory_layout(),
-            input_tensor.memory_config().memory_layout());
 
         // Check the output tensor size
         auto output_shape = output_tensor.padded_shape();
