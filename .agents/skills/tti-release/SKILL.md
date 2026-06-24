@@ -125,6 +125,8 @@ PY
 
 Do not stop at a matching TTI model name. Before launching, print the selected spec path and check that it contains `models/autoports/<model>`. After the run, inspect the copied run spec and release report data and confirm the same autoport path is present.
 
+Known TTI issue: some `tt-inference-server` checkouts accept a custom `--runtime-model-spec-json` or `--model-spec-json`, then still validate the model/device or benchmark setup against the built-in `MODEL_SPECS` / `BENCHMARK_CONFIGS`. Symptoms include a valid autoport spec failing with `model:=... does not support device:=...` or `not found in BENCHMARKS_CONFIGS`. This is fixed by tenstorrent/tt-inference-server#4345, branch `yieldthought/model-spec-json-custom-registry`, commit `0ab021986`. If that PR is not merged in the checkout being used, cherry-pick that fix before continuing. Do not work around this bug by switching to a stock TTI model spec or stock implementation.
+
 ## Run The Release Workflow
 
 Run from the physical host. Never print tokens.
@@ -196,6 +198,8 @@ Valid harness fixes are narrower: wrong autoport path, wrong tokenizer/chat temp
 If the release workflow exits nonzero because `spec_tests`, `tests`, API parameter conformance, eval harness execution, or benchmark harness execution failed, use `$autofix` before declaring the TTI release stage blocked. Give `$autofix` the exact failed command, model, device, physical host, workflow log path, server log path, report/test output path, and the smallest local repro command that preserves the failure.
 
 Use `$autofix` for report-marked API/spec/test failures even when `run.py` exits 0, because the release wrapper may still generate a report with failed conformance rows. After a fix, rerun the failed workflow or the full release workflow as needed, then regenerate and copy back the final report.
+
+Treat report generation as aggregation, not evidence collection. `release` runs expensive data-collection workflows such as `evals`, `benchmarks`, `spec_tests`, and `tests`, then runs the cheaper `reports` workflow over their outputs. If evals, benchmarks, spec tests, and tests already produced valid raw outputs, and the remaining failure is report generation, report copy-back, waiver text, stale report-input state, or the stage check not finding `report_*.md`, preserve the existing `workflow_logs` and rerun only `run.py --workflow reports` or the exact failing `workflows/run_reports.py` command after fixing the report/report-input state. Rerun expensive workflows only when their raw outputs are missing, stale for the current autoport/spec/commit, invalid, or affected by a model/spec/server change that can change the results. Record the reason for any expensive rerun.
 
 Do not use `$autofix` for pure infrastructure failures such as missing Docker, Hugging Face auth, SSH problems, or ARC/reset hangs; recover those with the topology and reset policy above. For accuracy or performance target failures, first decide whether the evidence points to an implementation/test bug or a real readiness gap. Use `$autofix` for the former. Record the latter in `RUN_NOTES.md` and the final response.
 
