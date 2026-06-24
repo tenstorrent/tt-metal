@@ -8,6 +8,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr int onetile = 1;
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
@@ -17,42 +19,42 @@ void kernel_main() {
         bool last_out = block == (per_core_block_cnt - 1);
 
         // elemwise-mul: cb_intermed0 = cb_in0 * cb_in1
-        compute_kernel_lib::mul<
+        ckl::mul<
             tt::CBIndex::c_0,
             tt::CBIndex::c_1,
             tt::CBIndex::c_24,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Streaming,
+            ckl::OutputLifecycle::Streaming,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
 
         // reduce-w
         if (last_out) {
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 REDUCE_OP,
                 REDUCE_DIM,
                 tt::CBIndex::c_24,
                 tt::CBIndex::c_2,
                 tt::CBIndex::c_16,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::NONE>(
+                ckl::ReduceInputBlockShape::single(),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(tt::CBIndex::c_25, block));
         } else {
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 REDUCE_OP,
                 REDUCE_DIM,
                 tt::CBIndex::c_24,
                 tt::CBIndex::c_2,
                 tt::CBIndex::c_25,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(tt::CBIndex::c_25, block));
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::NONE>(
+                ckl::ReduceInputBlockShape::single(),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(tt::CBIndex::c_25, block));
         }
     }
 }

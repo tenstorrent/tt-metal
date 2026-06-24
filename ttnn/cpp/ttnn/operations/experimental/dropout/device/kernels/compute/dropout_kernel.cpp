@@ -7,6 +7,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_scalar.hpp"  // Dropout (owns dropout_kernel_init via init_runtime)
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr uint32_t per_core_block_cnt = get_compile_time_arg_val(0);
     constexpr uint32_t per_core_block_dim = get_compile_time_arg_val(1);
@@ -26,16 +28,9 @@ void kernel_main() {
     // the Dropout element carries the runtime seed and the chain fires its
     // init_runtime() once at boot (see Dropout in eltwise_scalar.inl).
     constexpr uint32_t total_tiles = per_core_block_cnt * per_core_block_dim;
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(total_tiles),
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::Dropout<compute_kernel_lib::Dst::D0>{int_probability, int_scale_factor, seed},
-        compute_kernel_lib::PackTile<
-            cb_output,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(total_tiles),
+        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
+        ckl::Dropout<ckl::Dst::D0>{int_probability, int_scale_factor, seed},
+        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

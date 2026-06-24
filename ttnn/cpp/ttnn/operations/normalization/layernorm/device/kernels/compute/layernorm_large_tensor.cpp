@@ -25,6 +25,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_misc.hpp"  // Square
 
+namespace ckl = compute_kernel_lib;
+
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
 namespace policies = kutil::compute::policies;
@@ -146,44 +148,41 @@ void kernel_main() {
             // tile) -> CallerManaged + Scalar; cb_inb Bulk; cb_xmm2 Bulk. inits/reconfigs -> Input;
             // pack_reconfig(cb_xmm2) -> Output. (cb_in's pop moves from post-sub to chain-end, as
             // in the normalize-pass chain — Bulk drain.)
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
 #ifdef RMSNORM
-                compute_kernel_lib::CopyTile<
+                ckl::CopyTile<
                     cb_in,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::OperandKind::Block>{},
+                    ckl::Dst::D0,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::OperandKind::Block>{},
 #else
-                compute_kernel_lib::BinaryFpu<
+                ckl::BinaryFpu<
                     cb_in,
                     cb_ex,
-                    compute_kernel_lib::BinaryFpuOp::Sub,
-                    compute_kernel_lib::BroadcastDim::Col,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::OperandKind::Scalar>{},
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::Col,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Scalar>{},
 #endif
 #ifdef FUSE_PRE_ADD
-                compute_kernel_lib::DestReuseBinary<
+                ckl::DestReuseBinary<
                     cb_inb,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::DestReuseReconfig::Input,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Block>{},
+                    ckl::BinaryFpuOp::Add,
+                    ckl::DestReuseType::DEST_TO_SRCB,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::DestReuseReconfig::Input,
+                    ckl::Dst::D0,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Block>{},
 #endif
-                compute_kernel_lib::Square<compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_xmm2,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                ckl::Square<ckl::Dst::D0>{},
+                ckl::PackTile<cb_xmm2, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::Output>{});
 
             tile_regs_acquire();
             if (!block.is_first()) {
@@ -239,26 +238,22 @@ void kernel_main() {
         // Reconfig: explicit reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init -> Input;
         // pack_reconfig_data_format(cb_ex2pe) -> Output. Original lacks cb_ex2pe.reserve_back
         // (relies on CB capacity) -> OutputLifecycle::DeferredReserve (no reserve, push at end).
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(onetile),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
                 cb_ex2,
                 cb_eps,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>{},
-            compute_kernel_lib::Rsqrt<
-                compute_kernel_lib::Approx::Exact,
-                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_ex2pe, compute_kernel_lib::OutputLifecycle::DeferredReserve>{});
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::DeferredReserve>{});
 
         // Broadcast the column vector across cols. UnaryBcast<COL> reconfigs both srca/srcb to
         // cb_ex2pe (Input); downstream PackTile owns pack reconfig (Output). Per-tile
         // Streaming in/out, then re-wait the pushed tile for downstream use.
-        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(
-            compute_kernel_lib::EltwiseShape::tiles(onetile));
+        ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
         cb_ex2pe_obj.wait_front(onetile);
 
         // End of
@@ -290,43 +285,40 @@ void kernel_main() {
             // x - E[x] (RMSNORM: copy x) [+ b when FUSE_PRE_ADD] -> cb_xmm, fused in DEST over one
             // padded block. cb_in Bulk; cb_ex held col-bcast (1 tile) -> CallerManaged + Scalar;
             // cb_inb Bulk; cb_xmm Bulk. inits/reconfigs -> Input; pack_reconfig(cb_xmm) -> Output.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()),
 #ifdef RMSNORM
-                compute_kernel_lib::CopyTile<
+                ckl::CopyTile<
                     cb_in,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::OperandKind::Block>{},
+                    ckl::Dst::D0,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::OperandKind::Block>{},
 #else
-                compute_kernel_lib::BinaryFpu<
+                ckl::BinaryFpu<
                     cb_in,
                     cb_ex,
-                    compute_kernel_lib::BinaryFpuOp::Sub,
-                    compute_kernel_lib::BroadcastDim::Col,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::OperandKind::Scalar>{},
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::Col,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Scalar>{},
 #endif
 #ifdef FUSE_PRE_ADD
-                compute_kernel_lib::DestReuseBinary<
+                ckl::DestReuseBinary<
                     cb_inb,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::DestReuseType::DEST_TO_SRCB,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::DestReuseReconfig::Input,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::Dst::D0,
-                    compute_kernel_lib::OperandKind::Block>{},
+                    ckl::BinaryFpuOp::Add,
+                    ckl::DestReuseType::DEST_TO_SRCB,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::DestReuseReconfig::Input,
+                    ckl::Dst::D0,
+                    ckl::Dst::D0,
+                    ckl::OperandKind::Block>{},
 #endif
-                compute_kernel_lib::PackTile<
-                    cb_xmm,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::PackTileReconfig::Output>{});
+                ckl::PackTile<cb_xmm, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::Output>{});
 
             cb_xmm_obj.wait_front(block.full_block_size());
             reconfig_data_format(cb_xmm, cb_ex2pe);

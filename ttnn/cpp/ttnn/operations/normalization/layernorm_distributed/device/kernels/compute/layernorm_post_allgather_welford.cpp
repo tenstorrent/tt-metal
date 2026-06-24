@@ -24,6 +24,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 constexpr uint32_t cb_inp = tt::CBIndex::c_0;
 constexpr uint32_t cb_stats_id = tt::CBIndex::c_1;
 
@@ -140,26 +142,25 @@ void kernel_main() {
         // mean is at index 0); cb_eps at index 0.
         // Reconfig audit: explicit reconfig_data_format + add_tiles_init -> Input.
         // Explicit pack_reconfig_data_format -> Output. rsqrt_tile_init<true> -> Legacy::On.
-        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set
+        // Lifecycles: cb_stats_reduced InputLifecycle::HeldBulk + Scalar + ckl::TileOffset::Set
         // (held, popped at line 164 with stats_tile_stride). cb_eps InputLifecycle::CallerManaged + Scalar.
         // cb_recip_sqrt_var OutputLifecycle::Streaming.
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::single(),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<
                 cb_stats_reduced_id,
                 cb_eps_id,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileOffset::Set>{1, 0u},
-            compute_kernel_lib::
-                Rsqrt<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Legacy::On, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_recip_sqrt_var_id>{});
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::Dst::D0,
+                ckl::OperandKind::Scalar,
+                ckl::OperandKind::Scalar,
+                ckl::TileOffset::Set>{1, 0u},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+            ckl::PackTile<cb_recip_sqrt_var_id>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

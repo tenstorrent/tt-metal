@@ -18,6 +18,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -43,7 +45,7 @@ void kernel_main() {
     // 2D walk for the squaring chain: outer = Wt/blk subblocks, inner = blk tiles.
     // Total iterations = Wt. Wt is assumed divisible by blk (matches the original
     // loop `for (wt = 0; wt < Wt; wt += blk)` which has no tail handling).
-    constexpr auto squaring_shape = compute_kernel_lib::EltwiseShape::of(Wt / blk, blk);
+    constexpr auto squaring_shape = ckl::EltwiseShape::of(Wt / blk, blk);
 
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         // Fuse pre-add: cb_inp = cb_in0 + cb_res (no-op when !FUSE_PRE_ADD). Migrated from
@@ -51,18 +53,18 @@ void kernel_main() {
         // Bulk + Block index, reproducing one_row's wait/pop/reserve/push(blk) loop. Reconfig
         // Input (reconfig_data_format + add_tiles_init) + Output (pack_reconfig_data_format).
         if constexpr (FUSE_PRE_ADD) {
-            compute_kernel_lib::add<
+            ckl::add<
                 cb_in0,
                 cb_res,
                 cb_inp,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::Output,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::OperandKind::Block>(squaring_shape);
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::Bulk,
+                ckl::OutputLifecycle::Bulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::Output,
+                ckl::OperandKind::Block,
+                ckl::OperandKind::Block>(squaring_shape);
         }
 
         // x**2 — same-CB FPU mul. cb_inp lifecycle: InputLifecycle::HeldCumulative (chain emits
@@ -70,23 +72,23 @@ void kernel_main() {
         // The caller pops Wt from cb_inp after the reduce below. cb_x2 lifecycle:
         // OutputLifecycle::Chunked (chain emits reserve_back(blk) + push_back(blk) per chunk;
         // pack writes absolute slots via Block index).
-        compute_kernel_lib::square<
+        ckl::square<
             cb_inp,
             cb_x2,
-            compute_kernel_lib::InputLifecycle::HeldCumulative,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block>(squaring_shape);
+            ckl::InputLifecycle::HeldCumulative,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block>(squaring_shape);
 
         // sum(x**2) — BulkWaitBulkPop: all Wt tiles already in CB.
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,
             cb_x2,
             cb_reduce,
             cb_out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::row(Wt));
         cb_pop_front(cb_inp, Wt);
     }
     cb_pop_front(cb_reduce, 1);

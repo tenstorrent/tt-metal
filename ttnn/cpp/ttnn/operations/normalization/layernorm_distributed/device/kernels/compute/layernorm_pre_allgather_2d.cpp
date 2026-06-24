@@ -18,6 +18,8 @@ For rmsnorm it computes E(x**2) and returns it as a one tile wide output
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // add
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr uint32_t NCHt = get_compile_time_arg_val(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(1);
@@ -59,18 +61,18 @@ void kernel_main() {
         // is @skip + needs an 8-device mesh + passes no residual. Mechanically identical to the
         // validated layernorm_pre_allgather.cpp / rmsnorm_pre_allgather.cpp migration.
         if constexpr (FUSE_PRE_ADD) {
-            compute_kernel_lib::add<
+            ckl::add<
                 cb_in0_id,
                 cb_res_id,
                 cb_inp_id,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::Output,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::of(Wt / blk, blk));
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::Bulk,
+                ckl::OutputLifecycle::Bulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::Output,
+                ckl::OperandKind::Block,
+                ckl::OperandKind::Block>(ckl::EltwiseShape::of(Wt / blk, blk));
         }
 
         /*
@@ -104,13 +106,13 @@ void kernel_main() {
          * sum(x**2)
          */
         // BulkWaitBulkPop: All Wt tiles already in CB (see cumulative wait above)
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::AVG,
             ReduceDim::REDUCE_ROW,
             cb_x2_id,
             cb_reduce_id,
             cb_out,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(ckl::ReduceInputBlockShape::row(Wt));
         cb_inp.pop_front(Wt);
         cb_reduce.pop_front(1);
     }

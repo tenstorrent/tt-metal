@@ -13,6 +13,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 ALWI void ACQ() {
     tile_regs_acquire();
     tile_regs_wait();
@@ -89,43 +91,43 @@ void kernel_main() {
         // sin_interim = rotated * sin (bcast ROW).
         // rotated InputLifecycle::Bulk + Block; sin InputLifecycle::HeldBulk + Block (pre-waited line 42, popped at
         // 106). sin_interm OutputLifecycle::Bulk + Block. Reconfig Input + None (no explicit pack_reconfig).
-        compute_kernel_lib::mul<
+        ckl::mul<
             rotated_in_interm_cb,
             sin_cb,
             sin_interm_cb,
-            compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::HeldBulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None,
-            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::BroadcastDim::Row,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::None,
+            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
         // cos_interim = x * cos (bcast ROW). Same pattern as sin_interim.
-        compute_kernel_lib::mul<
+        ckl::mul<
             in_cb,
             cos_cb,
             cos_interm_cb,
-            compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::HeldBulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None,
-            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::BroadcastDim::Row,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::None,
+            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
         // out = cos_interim + sin_interim. Both InputLifecycle::Bulk + Block, out_cb OutputLifecycle::Bulk + Block.
-        compute_kernel_lib::add<
+        ckl::add<
             cos_interm_cb,
             sin_interm_cb,
             out_cb,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None,
-            compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::None,
+            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
     }
 
     // Done with the sin/cos matrices, so remove from CB

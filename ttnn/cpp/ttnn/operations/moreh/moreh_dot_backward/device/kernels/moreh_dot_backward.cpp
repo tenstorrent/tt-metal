@@ -5,6 +5,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr int onetile = 1;
     uint32_t has_input_grad = get_arg_val<uint32_t>(0);
@@ -16,30 +18,30 @@ void kernel_main() {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         if (has_input_grad) {
             // cb_16 = cb_2 * cb_0 (scalar bcast on cb_0)
-            compute_kernel_lib::mul<
+            ckl::mul<
                 tt::CBIndex::c_2,
                 tt::CBIndex::c_0,
                 tt::CBIndex::c_16,
-                compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::BinaryDataFormatReconfig::None,
-                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::BroadcastDim::Scalar,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::OutputLifecycle::Streaming,
+                ckl::BinaryDataFormatReconfig::None,
+                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
         }
 
         if (has_other_grad) {
             // cb_17 = cb_1 * cb_0 (scalar bcast on cb_0)
-            compute_kernel_lib::mul<
+            ckl::mul<
                 tt::CBIndex::c_1,
                 tt::CBIndex::c_0,
                 tt::CBIndex::c_17,
-                compute_kernel_lib::BroadcastDim::Scalar,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::BinaryDataFormatReconfig::None,
-                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::BroadcastDim::Scalar,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::OutputLifecycle::Streaming,
+                ckl::BinaryDataFormatReconfig::None,
+                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(onetile));
         }
     }
 }

@@ -12,6 +12,8 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_mask = tt::CBIndex::c_1;
@@ -38,20 +40,20 @@ void kernel_main() {
         if (Ht == 1) {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
+                ckl::ReduceInputBlockShape::single());
         } else {
             // Phase 1: Reduce Ht-1 tiles
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_in0, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_in0, cb_max_scaler, cb_max>(
+                ckl::ReduceInputBlockShape::col(Ht - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/1, /*popm=*/0);
 
             // Phase 2: Reduce final masked tile with accumulation
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, 1));
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
+                ckl::ReduceInputBlockShape::single(),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(cb_max, 1));
         }
 
         for (uint32_t h = 0; h < Ht; h += onetile) {
@@ -65,115 +67,97 @@ void kernel_main() {
             // cb_mask InputLifecycle::CallerManaged (popm=0).
             if (h == Ht - 1) {
 #ifdef SOFTMAX
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::BinaryFpu<
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::BinaryFpu<
                         cb_in0,
                         cb_max,
-                        compute_kernel_lib::BinaryFpuOp::Sub,
-                        compute_kernel_lib::BroadcastDim::Row,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::HeldStream>{},
-                    compute_kernel_lib::Exp<
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::CopyTile<
-                        cb_mask,
-                        compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::HeldStream>{},
-                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<cb_exps>{});
+                        ckl::BinaryFpuOp::Sub,
+                        ckl::BroadcastDim::Row,
+                        ckl::InputLifecycle::Streaming,
+                        ckl::InputLifecycle::HeldStream>{},
+                    ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                    ckl::PackTile<cb_exps>{});
 #else
                 // rexp + mask, no sub (matches rexp_tile_and_mask_tile_to_cb).
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::CopyTile<cb_in0>{},
-                    compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::Exp<
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::CopyTile<
-                        cb_mask,
-                        compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::HeldStream>{},
-                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<cb_exps>{});
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::CopyTile<cb_in0>{},
+                    ckl::Negative<ckl::Dst::D0>{},
+                    ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+                    ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::HeldStream>{},
+                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                    ckl::PackTile<cb_exps>{});
 #endif
             } else {
 #ifdef SOFTMAX
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::BinaryFpu<
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::BinaryFpu<
                         cb_in0,
                         cb_max,
-                        compute_kernel_lib::BinaryFpuOp::Sub,
-                        compute_kernel_lib::BroadcastDim::Row,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::HeldStream>{},
-                    compute_kernel_lib::Exp<
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<cb_exps>{});
+                        ckl::BinaryFpuOp::Sub,
+                        ckl::BroadcastDim::Row,
+                        ckl::InputLifecycle::Streaming,
+                        ckl::InputLifecycle::HeldStream>{},
+                    ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+                    ckl::PackTile<cb_exps>{});
 #else
                 // sub_bcast_rows then rexp via cb_tmp intermediary. Original used
                 // two helper calls; chain folds both into a single chain.
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::BinaryFpu<
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::BinaryFpu<
                         cb_in0,
                         cb_max,
-                        compute_kernel_lib::BinaryFpuOp::Sub,
-                        compute_kernel_lib::BroadcastDim::Row,
-                        compute_kernel_lib::InputLifecycle::Streaming,
-                        compute_kernel_lib::InputLifecycle::HeldStream>{},
-                    compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::Exp<
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Approx::Exact,
-                        compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<cb_exps>{});
+                        ckl::BinaryFpuOp::Sub,
+                        ckl::BroadcastDim::Row,
+                        ckl::InputLifecycle::Streaming,
+                        ckl::InputLifecycle::HeldStream>{},
+                    ckl::Negative<ckl::Dst::D0>{},
+                    ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+                    ckl::PackTile<cb_exps>{});
 #endif
             }
 
             // Accumulate sum of exps into cb_add. Seed copy on first iteration.
             if (h == 0) {
-                compute_kernel_lib::copy<cb_exps, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::copy<cb_exps, cb_add>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_add, cb_exps, cb_add>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::add<cb_add, cb_exps, cb_add>(ckl::EltwiseShape::tiles(onetile));
             }
         }
 
 #ifdef LOG
         // log(sum) — pop tile after reduce
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
             cb_add,
             cb_sum_scaler,
             cb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            compute_kernel_lib::ReduceInputBlockShape::single(),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
+            ckl::ReduceInputBlockShape::single(),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
                 log_tile_init();
                 log_tile(dst_idx);
             });
 #else
         // 1 / sum(exp(x)) — pop tile after reduce
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
             cb_add,
             cb_sum_scaler,
             cb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            compute_kernel_lib::ReduceInputBlockShape::single(),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
+            ckl::ReduceInputBlockShape::single(),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
                 recip_tile_init();
                 recip_tile(dst_idx);
@@ -187,71 +171,65 @@ void kernel_main() {
             // x - max - log(sum). Original chains two sub_tiles_bcast_rows calls
             // via cb_tmp; the chain is the same shape (no DEST-fold possible
             // because BinaryFpu reads from CBs, not DEST). Keep two chains.
-            compute_kernel_lib::sub<
+            ckl::sub<
                 cb_in0,
                 cb_max,
                 cb_tmp,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
-            compute_kernel_lib::sub<
+                ckl::BroadcastDim::Row,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
+            ckl::sub<
                 cb_tmp,
                 cb_recipsumexps,
                 cb_out0,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::BroadcastDim::Row,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
             // -x + max - log(sum) — logsoftmin not implemented in original.
 #endif
 #else
 #ifdef SOFTMAX
             // exp(x - max) / sum. Sub+Exp folded; then Mul by recip.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(onetile),
-                compute_kernel_lib::BinaryFpu<
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::BinaryFpu<
                     cb_in0,
                     cb_max,
-                    compute_kernel_lib::BinaryFpuOp::Sub,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::HeldStream>{},
-                compute_kernel_lib::Exp<
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<cb_exps>{});
-            compute_kernel_lib::mul<
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::HeldStream>{},
+                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+                ckl::PackTile<cb_exps>{});
+            ckl::mul<
                 cb_exps,
                 cb_recipsumexps,
                 cb_out0,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::BroadcastDim::Row,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #else
             // rexp(x - max) / sum (softmin path).
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(onetile),
-                compute_kernel_lib::BinaryFpu<
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::BinaryFpu<
                     cb_in0,
                     cb_max,
-                    compute_kernel_lib::BinaryFpuOp::Sub,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::HeldStream>{},
-                compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::Exp<
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<cb_exps>{});
-            compute_kernel_lib::mul<
+                    ckl::BinaryFpuOp::Sub,
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::HeldStream>{},
+                ckl::Negative<ckl::Dst::D0>{},
+                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+                ckl::PackTile<cb_exps>{});
+            ckl::mul<
                 cb_exps,
                 cb_recipsumexps,
                 cb_out0,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::BroadcastDim::Row,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #endif
 #endif
         }

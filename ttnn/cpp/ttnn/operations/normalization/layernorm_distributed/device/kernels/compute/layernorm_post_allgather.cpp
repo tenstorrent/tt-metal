@@ -25,6 +25,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 ALWI void ACQ() {
     tile_regs_acquire();
     tile_regs_wait();
@@ -173,29 +175,29 @@ void kernel_main() {
         /*
          * E[x]**2  — same-CB Mul at index 1.
          * cb_stats_reduced: pre-waited for stats_tile_stride at line 171, held
-         *   (popped at line 229). InputLifecycle::HeldBulk + Scalar + compute_kernel_lib::TileOffset::Set.
+         *   (popped at line 229). InputLifecycle::HeldBulk + Scalar + ckl::TileOffset::Set.
          * Same-CB constraint: AIndex==BIndex (both Scalar + same TileBase).
          * Reconfig audit: explicit reconfig_data_format(cb_stats_reduced, cb_stats_reduced)
          *   + mul_tiles_init reconfigs (idempotent) -> Input. Explicit
          *   pack_reconfig_data_format(cb_mean_squared) -> Output.
          */
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::single(),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<
                 cb_stats_reduced,
                 cb_stats_reduced,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::OperandKind::Scalar,
-                compute_kernel_lib::TileOffset::Set,
-                compute_kernel_lib::TileOffset::Set>{1, 1},
-            compute_kernel_lib::PackTile<cb_mean_squared, compute_kernel_lib::OutputLifecycle::Bulk>{});
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::Dst::D0,
+                ckl::OperandKind::Scalar,
+                ckl::OperandKind::Scalar,
+                ckl::TileOffset::Set,
+                ckl::TileOffset::Set>{1, 1},
+            ckl::PackTile<cb_mean_squared, ckl::OutputLifecycle::Bulk>{});
 
         /*
          * E[x**2] - E[x]**2  — sub at index 0.
@@ -204,14 +206,14 @@ void kernel_main() {
          * cb_var: OutputLifecycle::Bulk + Scalar (reserve + push 1).
          * Reconfig: explicit reconfig + sub_tiles_init -> Input. Explicit pack_reconfig -> Output.
          */
-        compute_kernel_lib::sub<
+        ckl::sub<
             cb_stats_reduced,
             cb_mean_squared,
             cb_var,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::InputLifecycle::HeldBulk,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OutputLifecycle::Bulk>(compute_kernel_lib::EltwiseShape::single());
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::HeldBulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk>(ckl::EltwiseShape::single());
 
         /*
          * 1/sqrt(var + eps)  — same shape as layernorm.cpp Var+eps prologue.
@@ -219,20 +221,17 @@ void kernel_main() {
          * OutputLifecycle::Streaming. Reconfig: explicit reconfig + add_tiles_init -> Input. Explicit pack_reconfig ->
          * Output.
          */
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::single(),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<
                 cb_var,
                 cb_eps,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>{},
-            compute_kernel_lib::Rsqrt<
-                compute_kernel_lib::Approx::Exact,
-                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_recip_sqrt_var>{});
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<cb_recip_sqrt_var>{});
 
         if constexpr (do_gamma && do_beta) {
             /*

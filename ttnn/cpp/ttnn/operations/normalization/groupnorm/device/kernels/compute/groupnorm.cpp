@@ -22,6 +22,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/operations/normalization/groupnorm/device/kernels/groupnorm_constants.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     // clang-format off
     // Definitions
@@ -240,22 +242,22 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::WaitBlock,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::NoWait,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     cb_in.wait_front(per_core_MN);
 #else
@@ -317,7 +319,7 @@ void kernel_main() {
                 // input Block; cb_x Bulk. TILIZE_IN reads cb_in (pre-waited per_core_MN at line 261;
                 // pop actual -> DeferredPop); else cb_in0 (wait/pop normal -> Bulk + slack pop).
                 // mul_tiles_init -> Input; plain pack_tile -> None.
-                compute_kernel_lib::mul<
+                ckl::mul<
 #ifdef TILIZE_IN
                     cb_in_id,
 #else
@@ -325,19 +327,18 @@ void kernel_main() {
 #endif
                     cb_input_mask_id,
                     cb_x_id,
-                    compute_kernel_lib::BroadcastDim::None,
+                    ckl::BroadcastDim::None,
 #ifdef TILIZE_IN
-                    compute_kernel_lib::InputLifecycle::DeferredPop,
+                    ckl::InputLifecycle::DeferredPop,
 #else
-                    compute_kernel_lib::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::Bulk,
 #endif
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::OperandKind::Row>(
-                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Row>(ckl::EltwiseShape::grid(out_block_h_actual, block_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
 #ifndef TILIZE_IN
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
@@ -349,15 +350,15 @@ void kernel_main() {
 
                 // Partial/E[x]
                 cb_x.wait_front(out_block_hw_normal);
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_x_id,
                     cb_scaler_id,
                     cb_ex_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                    ckl::ReduceInputPolicy::NoWaitNoPop,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_x.pop_front(out_block_hw_normal);
 
                 cb_ex_partial.wait_front(1);
@@ -365,15 +366,15 @@ void kernel_main() {
             // End Local Redcue
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
+                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex.reserve_back(1);
                     cb_ex.push_back(1);
@@ -405,17 +406,16 @@ void kernel_main() {
                 // Reconfig: sub_tiles_bcast_scalar_init_short -> Input.
                 // Original plain pack_tile -> PackTileReconfig::None.
                 cb_ex_global.wait_front(1);
-                compute_kernel_lib::sub<
+                ckl::sub<
                     cb_in0_id,
                     cb_ex_global_id,
                     cb_xmm_id,
-                    compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None>(
-                    compute_kernel_lib::EltwiseShape::tiles(out_block_hw_actual));
+                    ckl::BroadcastDim::Scalar,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(out_block_hw_actual));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
                     cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
@@ -427,19 +427,18 @@ void kernel_main() {
                 // zero out the garbage values by mult mask again — xmm * mask -> cb_x.
                 // mask Row (block_w tiles reused per row) + CallerManaged; cb_xmm Block + Bulk;
                 // cb_x Bulk. mul_tiles_init -> Input; plain pack_tile -> None. Slack handles extra block.
-                compute_kernel_lib::mul<
+                ckl::mul<
                     cb_xmm_id,
                     cb_input_mask_id,
                     cb_x_id,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::OperandKind::Row>(
-                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Row>(ckl::EltwiseShape::grid(out_block_h_actual, block_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
                     cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
@@ -450,15 +449,14 @@ void kernel_main() {
                 // (x - E[x])^2 — square over the actual block; slack handles the extra-last block.
                 // cb_x Bulk (wait+pop); cb_xmm Bulk (reserve+push). mul_tiles_init -> Input;
                 // plain pack_tile (cb_x/cb_xmm share format) -> None.
-                compute_kernel_lib::square<
+                ckl::square<
                     cb_x_id,
                     cb_xmm_id,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block>(
-                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                    ckl::InputLifecycle::Bulk,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block>(ckl::EltwiseShape::grid(out_block_h_actual, block_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_x.pop_front(out_block_hw_normal - out_block_hw_last);
                     cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
@@ -467,29 +465,29 @@ void kernel_main() {
 
                 // Partial-Var(x)
                 cb_xmm.wait_front(out_block_hw_normal);
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_xmm_id,
                     cb_scaler_id,
                     cb_ex2_partial_id,
-                    compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::of(out_block_h_actual, block_w));
+                    ckl::ReduceInputPolicy::NoWaitNoPop,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::of(out_block_h_actual, block_w));
                 cb_xmm.pop_front(out_block_hw_normal);
             }
             // End Local Reduce
             // Start Global Reduce
             if constexpr (is_mcast_sender) {
-                compute_kernel_lib::reduce<
+                ckl::reduce<
                     PoolType::SUM,
                     ReduceDim::REDUCE_SCALAR,
                     cb_ex_external_id,
                     cb_scaler_global_id,
                     cb_ex2_global_id,
-                    compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                    compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
+                    ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                    ckl::ReduceDataFormatReconfigMode::NONE>(
+                    ckl::ReduceInputBlockShape::col(cb_ex_external_tiles_required));
                 if (num_cores_per_mcast_group > 1) {
                     cb_ex2.reserve_back(1);
                     cb_ex2.push_back(1);
@@ -509,23 +507,17 @@ void kernel_main() {
             // Lifecycles: cb_ex2_global InputLifecycle::Streaming (wait+pop per iter); cb_eps held outside
             // the chain via the unchanged cb_eps.wait_front(1) above -> InputLifecycle::CallerManaged.
             cb_eps.wait_front(1);
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::single(),
-                compute_kernel_lib::BinaryFpu<
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
                     cb_ex2_global_id,
                     cb_eps_id,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>{},
-                compute_kernel_lib::Rsqrt<
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Legacy::On,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<
-                    cb_ex2pe_id,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+                    ckl::BinaryFpuOp::Add,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<cb_ex2pe_id, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
             // End Variance Calc
 
             bool start_copy_or_add = copy_or_add;
@@ -562,17 +554,16 @@ void kernel_main() {
                 // Original pack_tile (no _with_dt / no pack_reconfig) -> PackTileReconfig::None.
                 // cb_ex_global held by external wait_front(1) / pop_front(1) -> InputLifecycle::CallerManaged.
                 cb_ex_global.wait_front(1);
-                compute_kernel_lib::sub<
+                ckl::sub<
                     cb_in0_id,
                     cb_ex_global_id,
                     cb_xmm_id,
-                    compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None>(
-                    compute_kernel_lib::EltwiseShape::tiles(out_block_hw_actual));
+                    ckl::BroadcastDim::Scalar,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(out_block_hw_actual));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_in0.pop_front(out_block_hw_normal - out_block_hw_last);
                     // Slack reserve+push so consumer wait_front(out_block_hw_normal) succeeds.
@@ -585,19 +576,18 @@ void kernel_main() {
                 // zero out the garbage values by mult mask again — xmm * mask -> cb_x.
                 // mask Row (block_w tiles reused per row) + CallerManaged; cb_xmm Block + Bulk;
                 // cb_x Bulk. mul_tiles_init -> Input; plain pack_tile -> None. Slack handles extra block.
-                compute_kernel_lib::mul<
+                ckl::mul<
                     cb_xmm_id,
                     cb_input_mask_id,
                     cb_x_id,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::OperandKind::Row>(
-                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Row>(ckl::EltwiseShape::grid(out_block_h_actual, block_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_xmm.pop_front(out_block_hw_normal - out_block_hw_last);
                     cb_x.reserve_back(out_block_hw_normal - out_block_hw_last);
@@ -610,19 +600,18 @@ void kernel_main() {
                 // CallerManaged + Scalar; cb_xmm Bulk. mul_tiles_bcast_scalar_init_short -> Input;
                 // plain pack_tile -> None.
                 cb_ex2pe.wait_front(1);
-                compute_kernel_lib::mul<
+                ckl::mul<
                     cb_x_id,
                     cb_ex2pe_id,
                     cb_xmm_id,
-                    compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block,
-                    compute_kernel_lib::OperandKind::Scalar>(
-                    compute_kernel_lib::EltwiseShape::grid(out_block_h_actual, block_w));
+                    ckl::BroadcastDim::Scalar,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block,
+                    ckl::OperandKind::Scalar>(ckl::EltwiseShape::grid(out_block_h_actual, block_w));
                 if (extra_out_block && (out_block_index == (num_out_blocks_padded - 1))) {
                     cb_x.pop_front(out_block_hw_normal - out_block_hw_last);
                     cb_xmm.reserve_back(out_block_hw_normal - out_block_hw_last);
@@ -763,13 +752,13 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
                 // untilize - DEST capacity auto-detected
-                compute_kernel_lib::untilize<
+                ckl::untilize<
                     per_core_N,
                     cb_untilize_in_id,
                     cb_untilize_out_id,
-                    compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-                    compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-                    compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+                    ckl::untilize_config::InitUninitMode::InitAndUninit,
+                    ckl::untilize_config::WaitMode::WaitUpfront,
+                    ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
             }
             // End Final Val Calc

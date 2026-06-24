@@ -10,6 +10,8 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     int i{0};
     const auto num_output_tiles_per_core = get_arg_val<uint32_t>(i++);
@@ -35,40 +37,39 @@ void kernel_main() {
             // f(x): no mask in nc path. IS_ZERO -> unary_ne; default -> abs.
             // MINUS_INF additionally negates.
             // Per-stage reconfig matches original *_with_dt calls.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(onetile),
-                compute_kernel_lib::CopyTile<cb_x>{},
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_x>{},
 #ifdef IS_ZERO
-                compute_kernel_lib::UnaryNe<compute_kernel_lib::Dst::D0>{0u},
+                ckl::UnaryNe<ckl::Dst::D0>{0u},
 #else
-                compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>{},
+                ckl::Abs<ckl::Dst::D0>{},
 #endif
 #ifdef MINUS_INF
-                compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+                ckl::Negative<ckl::Dst::D0>{},
 #endif
-                compute_kernel_lib::PackTile<cb_val>{});
+                ckl::PackTile<cb_val>{});
 
             // Accumulator over N/C dimension.
             if (inner_idx == 0) {
-                compute_kernel_lib::copy<cb_val, cb_cal>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::copy<cb_val, cb_cal>(ckl::EltwiseShape::tiles(onetile));
             } else {
 #ifdef IS_ZERO
-                compute_kernel_lib::add<cb_val, cb_cal, cb_cal>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::add<cb_val, cb_cal, cb_cal>(ckl::EltwiseShape::tiles(onetile));
 #else
-                compute_kernel_lib::binary_sfpu<compute_kernel_lib::BinaryMax<>, cb_val, cb_cal, cb_cal>(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::binary_sfpu<ckl::BinaryMax<>, cb_val, cb_cal, cb_cal>(ckl::EltwiseShape::tiles(onetile));
 #endif
             }
         }
 
         // Final: copy cb_cal -> [negate if MINUS_INF] -> cb_y.
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(onetile),
-            compute_kernel_lib::CopyTile<cb_cal>{},
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::CopyTile<cb_cal>{},
 #ifdef MINUS_INF
-            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+            ckl::Negative<ckl::Dst::D0>{},
 #endif
-            compute_kernel_lib::PackTile<cb_y>{});
+            ckl::PackTile<cb_y>{});
     }
     cb_one_obj.pop_front(onetile);
 }

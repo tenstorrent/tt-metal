@@ -13,6 +13,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 ALWI void ACQ() {
     tile_regs_acquire();
     tile_regs_wait();
@@ -102,101 +104,92 @@ void kernel_main() {
 
                 // sin_interim = rotated * sin
                 // A = rotated_in_interm_cb InputLifecycle::Bulk + Block (Wt tiles waited above, chain pops).
-                // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + compute_kernel_lib::TileOffset::Set.
+                // B = sin_cb: index = j + (sin_cos_row_cnt * Wt). Block + ckl::TileOffset::Set.
                 //   RELOAD_IMPL==0: sin held externally (waited my_cos_sin_tiles outside)
                 //     -> InputLifecycle::CallerManaged; sin_cos_row_cnt increments per seq_tile so offset varies.
                 //   RELOAD_IMPL==1: sin waited Wt per iter (above), chain pops Wt
-                //     -> InputLifecycle::Bulk; sin_cos_row_cnt always 0 so compute_kernel_lib::TileOffset::Set(0).
+                //     -> InputLifecycle::Bulk; sin_cos_row_cnt always 0 so ckl::TileOffset::Set(0).
                 // Output sin_interm_cb OutputLifecycle::Bulk + Block (Wt tiles).
                 // Reconfig audit: mul_tiles_init reconfigs srca/srcb -> Input.
                 //   No explicit pack_reconfig (relies on sin_interm_cb format == out_cb's
                 //   from startup) -> PackTileReconfig::None.
 #if RELOAD_IMPL == 0
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-                    compute_kernel_lib::BinaryFpu<
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::BinaryFpu<
                         rotated_in_interm_cb,
                         sin_cb,
-                        compute_kernel_lib::BinaryFpuOp::Mul,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::TileOffset::Unset,
-                        compute_kernel_lib::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
-                    compute_kernel_lib::PackTile<
-                        sin_interm_cb,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::Bulk,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Unset,
+                        ckl::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<sin_interm_cb, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::None>{});
 #else
-                compute_kernel_lib::mul<
+                ckl::mul<
                     rotated_in_interm_cb,
                     sin_cb,
                     sin_interm_cb,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block>(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
                 // cos_interim = x * cos  — same pattern as sin_interim.
 #if RELOAD_IMPL == 0
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
-                    compute_kernel_lib::BinaryFpu<
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt),
+                    ckl::BinaryFpu<
                         in_cb,
                         cos_cb,
-                        compute_kernel_lib::BinaryFpuOp::Mul,
-                        compute_kernel_lib::BroadcastDim::None,
-                        compute_kernel_lib::InputLifecycle::Bulk,
-                        compute_kernel_lib::InputLifecycle::CallerManaged,
-                        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::OperandKind::Block,
-                        compute_kernel_lib::TileOffset::Unset,
-                        compute_kernel_lib::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
-                    compute_kernel_lib::PackTile<
-                        cos_interm_cb,
-                        compute_kernel_lib::OutputLifecycle::Bulk,
-                        compute_kernel_lib::PackTileReconfig::None>{});
+                        ckl::BinaryFpuOp::Mul,
+                        ckl::BroadcastDim::None,
+                        ckl::InputLifecycle::Bulk,
+                        ckl::InputLifecycle::CallerManaged,
+                        ckl::BinaryDataFormatReconfig::Input,
+                        ckl::Dst::D0,
+                        ckl::OperandKind::Block,
+                        ckl::OperandKind::Block,
+                        ckl::TileOffset::Unset,
+                        ckl::TileOffset::Set>{0u, sin_cos_row_cnt * Wt},
+                    ckl::PackTile<cos_interm_cb, ckl::OutputLifecycle::Bulk, ckl::PackTileReconfig::None>{});
 #else
-                compute_kernel_lib::mul<
+                ckl::mul<
                     in_cb,
                     cos_cb,
                     cos_interm_cb,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block>(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 #endif
 
                 // out = cos_interim + sin_interim
                 // Both operands InputLifecycle::Bulk + Block (Wt tiles, popped at end), out_cb OutputLifecycle::Bulk +
                 // Block. Reconfig: add_tiles_init reconfigs srca/srcb -> Input. No pack_reconfig -> None.
-                compute_kernel_lib::add<
+                ckl::add<
                     cos_interm_cb,
                     sin_interm_cb,
                     out_cb,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None,
-                    compute_kernel_lib::OperandKind::Block>(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::None,
+                    ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
 #if RELOAD_IMPL == 0
                 // no-reload needs to increment this counter

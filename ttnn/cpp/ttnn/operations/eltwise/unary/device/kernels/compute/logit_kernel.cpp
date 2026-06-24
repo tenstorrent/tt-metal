@@ -9,6 +9,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_binary_sfpu.hpp"  // DivBinary
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 // Formula: logit(x) = log(x/(1-x)) -- calls clamp, rsub, div, and log tiles.
 
 void kernel_main() {
@@ -38,39 +40,20 @@ void kernel_main() {
     //
     // Reconfig matches original init_sfpu + copy_tile_init at boot —
     // CopyTileReconfig::None + PackTileReconfig::None.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::CopyTileReconfig::None>{},
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
 #ifdef CLAMP
-        compute_kernel_lib::Clamp<compute_kernel_lib::Dst::D0>{packed_scalar1, packed_scalar2},
+        ckl::Clamp<ckl::Dst::D0>{packed_scalar1, packed_scalar2},
 #endif
-        compute_kernel_lib::PackTile<
-            cb_tmp0,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+        ckl::PackTile<cb_tmp0, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
-        compute_kernel_lib::CopyTile<
-            cb_tmp0,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::HeldStream,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::CopyTile<
-            cb_tmp0,
-            compute_kernel_lib::Dst::D1,
-            compute_kernel_lib::InputLifecycle::NoWaitPop,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::RsubUnary<compute_kernel_lib::Dst::D0>{0x3F800000u},  // 1.0 - x
-        compute_kernel_lib::
-            DivBinary<compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::PackTile<
-            cb_output,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::CopyTile<cb_tmp0, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_tmp0, ckl::Dst::D1, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>{},
+        ckl::RsubUnary<ckl::Dst::D0>{0x3F800000u},  // 1.0 - x
+        ckl::DivBinary<ckl::Dst::D1, ckl::Dst::D0, ckl::Dst::D0>{},
+        ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>{},
+        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

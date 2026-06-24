@@ -8,6 +8,8 @@
 #include "api/dataflow/circular_buffer.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
@@ -32,21 +34,18 @@ void kernel_main() {
     // compute just consumes the B*Ht cb_rhs tiles in order. CHAIN_BCAST_DIM (COL) does the
     // intra-tile column broadcast. Folding the loop in hoists the per-op bcast init out of
     // the per-row path (emitted once, not B*Ht times).
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::grid(B * Ht, Wt),
-        compute_kernel_lib::BinaryFpu<
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::grid(B * Ht, Wt),
+        ckl::BinaryFpu<
             cb_lhs,
             cb_rhs,
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM,
-            compute_kernel_lib::InputLifecycle::Streaming,    // cb_lhs: one tile per (row,col)
-            compute_kernel_lib::InputLifecycle::OuterStream,  // cb_rhs: streamed broadcast, one per row
-            compute_kernel_lib::BinaryDataFormatReconfig::None,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Scalar,     // cb_lhs reads the front
-            compute_kernel_lib::OperandKind::Scalar>{},  // cb_rhs reads the front (advances per row)
-        compute_kernel_lib::PackTile<
-            cb_out,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+            ckl::InputLifecycle::Streaming,    // cb_lhs: one tile per (row,col)
+            ckl::InputLifecycle::OuterStream,  // cb_rhs: streamed broadcast, one per row
+            ckl::BinaryDataFormatReconfig::None,
+            ckl::Dst::D0,
+            ckl::OperandKind::Scalar,     // cb_lhs reads the front
+            ckl::OperandKind::Scalar>{},  // cb_rhs reads the front (advances per row)
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

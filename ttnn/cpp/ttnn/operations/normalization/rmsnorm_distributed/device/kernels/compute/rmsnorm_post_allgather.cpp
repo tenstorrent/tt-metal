@@ -22,6 +22,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     uint32_t NCHt = get_arg_val<uint32_t>(0);
     constexpr uint32_t Wt = get_compile_time_arg_val(0);
@@ -65,8 +67,8 @@ void kernel_main() {
          * RMSNorm reduces sum(x**2) directly into cb_var for rsqrt computation.
          * Uses auto-batched STREAMING mode - library handles CB lifecycle.
          */
-        compute_kernel_lib::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_reduce, cb_var>(
-            compute_kernel_lib::ReduceInputBlockShape::row(stats_tiles_cols));
+        ckl::reduce<PoolType::AVG, ReduceDim::REDUCE_ROW, cb_stats, cb_reduce, cb_var>(
+            ckl::ReduceInputBlockShape::row(stats_tiles_cols));
 
         /*
          * 1/sqrt(var + eps)
@@ -74,20 +76,17 @@ void kernel_main() {
          * cb_var: InputLifecycle::Streaming (per-tile wait/pop). cb_eps: InputLifecycle::CallerManaged (pre-waited
          * before NCHt loop, popped once after). cb_recip_sqrt_var: OutputLifecycle::Streaming.
          */
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(onetile),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
                 cb_var,
                 cb_eps,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>{},
-            compute_kernel_lib::Rsqrt<
-                compute_kernel_lib::Approx::Exact,
-                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_recip_sqrt_var>{});
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<cb_recip_sqrt_var>{});
 
         /*
          * norm x
@@ -111,18 +110,18 @@ void kernel_main() {
          * x * 1/sqrt(stdev)
          */
         cb_wait_front(cb_recip_sqrt_var, 1);
-        compute_kernel_lib::mul<
+        ckl::mul<
             cb_norm_x_input,
             cb_recip_sqrt_var,
             normed_output_cb,
-            compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));
+            ckl::BroadcastDim::Col,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
         cb_pop_front(cb_recip_sqrt_var, 1);
 
         if constexpr (do_gamma) {
@@ -130,36 +129,34 @@ void kernel_main() {
              * x_normed * gamma   (cb_gamma walks Block — index = 0..Wt-1)
              */
             cb_wait_front(cb_gamma, Wt);  // gamma is reused across NCHt — wait once per row
-            compute_kernel_lib::mul<
+            ckl::mul<
                 cb_x_normed,
                 cb_gamma,
                 cb_times_gamma_out,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::Output,
-                compute_kernel_lib::OperandKind::Block>(
-                compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));
+                ckl::BroadcastDim::Row,
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::OutputLifecycle::Bulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::Output,
+                ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
 
             if constexpr (do_beta) {
                 /*
                  * (x_normed * gamma) + beta   (cb_beta walks Block — 0..Wt-1)
                  */
                 cb_wait_front(cb_beta, Wt);
-                compute_kernel_lib::add<
+                ckl::add<
                     cb_times_gamma_out,
                     cb_beta,
                     cb_out,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::InputLifecycle::Bulk,
-                    compute_kernel_lib::InputLifecycle::CallerManaged,
-                    compute_kernel_lib::OutputLifecycle::Bulk,
-                    compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::Output,
-                    compute_kernel_lib::OperandKind::Block>(
-                    compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/blk));
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Bulk,
+                    ckl::InputLifecycle::CallerManaged,
+                    ckl::OutputLifecycle::Bulk,
+                    ckl::BinaryDataFormatReconfig::Input,
+                    ckl::PackTileReconfig::Output,
+                    ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/blk));
             }
         }
     }

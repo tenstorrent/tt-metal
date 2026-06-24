@@ -12,6 +12,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     const auto num_input_tiles = get_arg_val<uint32_t>(0);
     const auto num_output_tiles = get_arg_val<uint32_t>(1);
@@ -45,17 +47,15 @@ void kernel_main() {
             // cb_in0 InputLifecycle::Streaming on A. cb_intermed0 OutputLifecycle::Streaming.
             // Reconfig: add_tiles_init_with_dt + pack_tile_with_dt -> Input + Output.
             if (enable_reload) {
-                compute_kernel_lib::add<cb_in0, cb_intermed0, cb_intermed0>(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::add<cb_in0, cb_intermed0, cb_intermed0>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<
+                ckl::add<
                     cb_in0,
                     cb_in1,
                     cb_intermed0,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile));
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
             }
 
             enable_reload = true;
@@ -65,12 +65,12 @@ void kernel_main() {
         // cb_intermed0 InputLifecycle::Streaming (last iter's push, popped here);
         // cb_scalar InputLifecycle::CallerManaged + Scalar (pre-waited at top of kernel);
         // cb_out0 OutputLifecycle::Streaming.
-        compute_kernel_lib::mul<
+        ckl::mul<
             cb_intermed0,
             cb_scalar,
             cb_out0,
-            compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::BroadcastDim::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
     }
 }

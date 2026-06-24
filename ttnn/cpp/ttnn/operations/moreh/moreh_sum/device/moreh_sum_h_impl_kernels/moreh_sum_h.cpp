@@ -8,6 +8,8 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     uint32_t Ht = get_compile_time_arg_val(0);
     uint32_t Wt = get_compile_time_arg_val(1);
@@ -48,8 +50,8 @@ void kernel_main() {
 
             // Phase 1: Reduce Ht-1 tiles into accumulator (if Ht > 1)
             if (!is_h_single_tile) {
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_accum_dst>(
-                    compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_accum_dst>(
+                    ckl::ReduceInputBlockShape::col(Ht - 1));
             }
 
             // Optional masking of last H tile.
@@ -65,29 +67,26 @@ void kernel_main() {
                 // chain's prev-CB elision handles the no-op case at compile time.
                 // cb_input InputLifecycle::Streaming; cb_mask_h InputLifecycle::CallerManaged + Scalar (held outside);
                 // cb_masked_input OutputLifecycle::Streaming.
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::CopyTile<cb_input>{},
-                    compute_kernel_lib::CopyTile<
-                        cb_mask_h,
-                        compute_kernel_lib::Dst::D1,
-                        compute_kernel_lib::InputLifecycle::CallerManaged>{},
-                    compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<cb_masked_input>{});
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::CopyTile<cb_input>{},
+                    ckl::CopyTile<cb_mask_h, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+                    ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+                    ckl::PackTile<cb_masked_input>{});
 
                 // Phase 2 with masked input: Reduce final masked tile with accumulation
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(
-                    compute_kernel_lib::ReduceInputBlockShape::single(),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_masked_input, cb_scaler, cb_out>(
+                    ckl::ReduceInputBlockShape::single(),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
             } else {
                 // Phase 2 without masking: Reduce final tile with accumulation
                 // - If Ht == 1 (single tile): iteration=0, no accumulator reload
                 // - If Ht > 1 (multi-tile): iteration=1, reload accumulator from cb_accum_dst
-                compute_kernel_lib::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_out>(
-                    compute_kernel_lib::ReduceInputBlockShape::single(),
-                    compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                    compute_kernel_lib::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
+                ckl::reduce<REDUCE_OP, REDUCE_DIM, cb_input, cb_scaler, cb_out>(
+                    ckl::ReduceInputBlockShape::single(),
+                    ckl::ReduceInputMemoryLayout::contiguous(),
+                    ckl::Accumulate::at(cb_accum_dst, is_h_single_tile ? 0 : 1));
             }
         }
     }

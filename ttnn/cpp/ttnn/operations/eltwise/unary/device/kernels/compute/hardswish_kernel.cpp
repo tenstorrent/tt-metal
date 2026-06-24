@@ -10,6 +10,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"     // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 // `#ifdef`-driven constexpr selectors: keep the program-factory's INP_FLOAT*
 // numeric defines but reduce them to compile-time booleans here so the chain
 // body is a single eltwise_chain call gated by OptionalChainElement instead
@@ -55,33 +57,16 @@ void kernel_main() {
     // no-op tag (no wait, no pop, no compute emitted), so the chain "selects"
     // between (CopyTile<D1, InputLifecycle::NoWaitPop> + MulBinary) and DestReuseBinary based
     // on kIsFloat32 / kIsFloat.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::HeldStream,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::Hardsigmoid<compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::OptionalChainElement<
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
+        ckl::Hardsigmoid<ckl::Dst::D0>{},
+        ckl::OptionalChainElement<
             kIsFloat32,
-            compute_kernel_lib::CopyTile<
-                cb_input,
-                compute_kernel_lib::Dst::D1,
-                compute_kernel_lib::InputLifecycle::NoWaitPop,
-                compute_kernel_lib::CopyTileReconfig::None>>{},
-        compute_kernel_lib::OptionalChainElement<
-            kIsFloat32,
-            compute_kernel_lib::
-                MulBinary<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>>{},
-        compute_kernel_lib::OptionalChainElement<
+            ckl::CopyTile<cb_input, ckl::Dst::D1, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>>{},
+        ckl::OptionalChainElement<kIsFloat32, ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>>{},
+        ckl::OptionalChainElement<
             kIsFloat,
-            compute_kernel_lib::DestReuseBinary<
-                cb_input,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::DestReuseType::DEST_TO_SRCA>>{},
-        compute_kernel_lib::PackTile<
-            cb_output,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+            ckl::DestReuseBinary<cb_input, ckl::BinaryFpuOp::Mul, ckl::DestReuseType::DEST_TO_SRCA>>{},
+        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

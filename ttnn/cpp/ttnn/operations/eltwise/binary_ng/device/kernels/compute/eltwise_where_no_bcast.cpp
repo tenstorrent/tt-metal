@@ -11,6 +11,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 // where(cond, true_value, false_value) — no-broadcast binary_ng path (WHERE_TTS / WHERE_TST).
 //
 // Original kernel (eltwise_where_no_bcast.cpp before migration) processed a block of
@@ -57,44 +59,35 @@ void kernel_main() {
     // TTS: tensor (cb_in1) is the TRUE value -> D1, scalar is the FALSE value -> D2.
     // TST: tensor (cb_in1) is the FALSE value -> D2, scalar is the TRUE value -> D1.
 #if WHERE_TTS
-    constexpr auto kTensorSlot = compute_kernel_lib::Dst::D1;
-    constexpr auto kFillSlot = compute_kernel_lib::Dst::D2;
+    constexpr auto kTensorSlot = ckl::Dst::D1;
+    constexpr auto kFillSlot = ckl::Dst::D2;
 #else  // WHERE_TST
-    constexpr auto kTensorSlot = compute_kernel_lib::Dst::D2;
-    constexpr auto kFillSlot = compute_kernel_lib::Dst::D1;
+    constexpr auto kTensorSlot = ckl::Dst::D2;
+    constexpr auto kFillSlot = ckl::Dst::D1;
 #endif
 
     init_sfpu(cb_cond, cb_out);  // caller-owned BIG init
 
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles, num_tiles_per_cycle),
         // cond -> D0 (block read, init_short for cb_cond).
-        compute_kernel_lib::CopyTile<
+        ckl::CopyTile<
             cb_cond,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::CopyTileReconfig::Input,
-            compute_kernel_lib::OperandKind::Block>{},
+            ckl::Dst::D0,
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::Input,
+            ckl::OperandKind::Block>{},
         // tensor -> D1 (TTS) / D2 (TST) (block read, init_short for cb_tensor).
-        compute_kernel_lib::CopyTile<
+        ckl::CopyTile<
             cb_tensor,
             kTensorSlot,
-            compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::CopyTileReconfig::Input,
-            compute_kernel_lib::OperandKind::Block>{},
+            ckl::InputLifecycle::Chunked,
+            ckl::CopyTileReconfig::Input,
+            ckl::OperandKind::Block>{},
         // scalar fill -> the other slot. Inactive flavor folds to a no-op.
-        compute_kernel_lib::OptionalChainElement<kIsInt, compute_kernel_lib::FillInt<kWhereDF, kFillSlot>>{
-            scalar_value},
-        compute_kernel_lib::OptionalChainElement<kIsFloat, compute_kernel_lib::FillBitcast<kFillSlot>>{scalar_value},
+        ckl::OptionalChainElement<kIsInt, ckl::FillInt<kWhereDF, kFillSlot>>{scalar_value},
+        ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<kFillSlot>>{scalar_value},
         // where(D0, D1, D2) -> D0.
-        compute_kernel_lib::Where<
-            kWhereDF,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::Dst::D1,
-            compute_kernel_lib::Dst::D2,
-            compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::PackTile<
-            cb_out,
-            compute_kernel_lib::OutputLifecycle::Chunked,
-            compute_kernel_lib::PackTileReconfig::None>{});
+        ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
 }

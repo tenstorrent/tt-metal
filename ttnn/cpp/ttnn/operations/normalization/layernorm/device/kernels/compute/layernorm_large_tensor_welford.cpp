@@ -23,6 +23,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 namespace generic = norm::kernel_util::generic;
 
 template <
@@ -94,18 +96,17 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
         // block_size = full_block_size so all tiles run in one DEST window — matches the original
         // for(i:block.local()) inside one ACQ; padding tiles are processed harmlessly).
         // add_tiles_init + reconfig -> Input; pack_reconfig(cb_interm_pre_add) -> Output.
-        compute_kernel_lib::add<
+        ckl::add<
             cb_in,
             cb_inb,
             cb_interm_pre_add,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block>(
-            compute_kernel_lib::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(block.full_block_size(), block.full_block_size()));
 
         // Now run Welfords in these blk number of tiles
         cb_interm_pre_add_obj.wait_front(block.full_block_size());
@@ -473,28 +474,21 @@ void kernel_main() {
         // Reconfig: reconfig_data_format(cb_ex2, cb_eps) + add_tiles_init -> Input; no pack_reconfig
         // in original (cb_ex2/cb_ex2pe compatible) -> PackTileReconfig::None.
         // cb_ex2pe.reserve_back IS called -> OutputLifecycle::Streaming. Non-LEGACY rsqrt -> Legacy::Off.
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(onetile),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
                 cb_ex2,
                 cb_eps,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>{},
-            compute_kernel_lib::Rsqrt<
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Legacy::Off,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<
-                cb_ex2pe,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::PackTileReconfig::None>{});
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<cb_ex2pe, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
         // Broadcast the column vector across cols (UnaryBcast<COL>): reconfigs both srca/srcb to
         // cb_ex2pe (Input), downstream PackTile owns pack reconfig. Streaming in/out.
-        compute_kernel_lib::unary_bcast<compute_kernel_lib::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(
-            compute_kernel_lib::EltwiseShape::tiles(onetile));
+        ckl::unary_bcast<ckl::BroadcastDim::Col, cb_ex2pe, cb_ex2pe>(ckl::EltwiseShape::tiles(onetile));
 
         // =====================================
         // Second pass over the input.

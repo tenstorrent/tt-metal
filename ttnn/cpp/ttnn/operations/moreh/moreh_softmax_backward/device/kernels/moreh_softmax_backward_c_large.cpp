@@ -11,6 +11,8 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr uint32_t onetile = 1;
 
@@ -34,68 +36,59 @@ void kernel_main() {
         // both full tiles (no axis-mask either).
         for (uint32_t i = 0; i < dim_size; ++i) {
             if (i == 0) {
-                compute_kernel_lib::copy<cb_dy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::copy<cb_dy, cb_sum>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_sum, cb_dy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::add<cb_sum, cb_dy, cb_sum>(ckl::EltwiseShape::tiles(onetile));
             }
         }
 
         // Per-tile result: exp(y) * sum then dy - that.
         for (uint32_t i = 0; i < dim_size; ++i) {
             constexpr auto cb_exp = tt::CBIndex::c_24;
-            compute_kernel_lib::unary<
-                compute_kernel_lib::Exp<
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>,
-                cb_y,
-                cb_exp>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::unary<ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>, cb_y, cb_exp>(
+                ckl::EltwiseShape::tiles(onetile));
 
             // sum * exp(y) — cb_sum held outside, cb_exp streaming.
             constexpr auto cb_inter2 = tt::CBIndex::c_26;
-            compute_kernel_lib::mul<
-                cb_sum,
-                cb_exp,
-                cb_inter2,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::mul<cb_sum, cb_exp, cb_inter2, ckl::BroadcastDim::None, ckl::InputLifecycle::HeldStream>(
+                ckl::EltwiseShape::tiles(onetile));
 
             // dy - sum * exp(y).
-            compute_kernel_lib::sub<cb_dy, cb_inter2, cb_dx>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::sub<cb_dy, cb_inter2, cb_dx>(ckl::EltwiseShape::tiles(onetile));
         }
         cb_sum_obj.pop_front(onetile);
 #else
         // compute sum(y * dy) over C-dim. No bcast.
         for (uint32_t i = 0; i < dim_size; ++i) {
-            compute_kernel_lib::mul<cb_y, cb_dy, cb_ydy>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::mul<cb_y, cb_dy, cb_ydy>(ckl::EltwiseShape::tiles(onetile));
 
             if (i == 0) {
-                compute_kernel_lib::copy<cb_ydy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::copy<cb_ydy, cb_sum>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_sum, cb_ydy, cb_sum>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::add<cb_sum, cb_ydy, cb_sum>(ckl::EltwiseShape::tiles(onetile));
             }
         }
 
         // Final result loop. cb_sum held outside.
         for (uint32_t i = 0; i < dim_size; ++i) {
             // dy - sum.
-            compute_kernel_lib::sub<
+            ckl::sub<
                 cb_dy,
                 cb_sum,
                 cb_dy_m_sum,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::HeldStream>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::HeldStream>(ckl::EltwiseShape::tiles(onetile));
 #ifdef SOFTMAX
             // (dy - sum) * y. cb_y held outside (InputLifecycle::CallerManaged).
-            compute_kernel_lib::mul<cb_dy_m_sum, cb_y, cb_dx>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::mul<cb_dy_m_sum, cb_y, cb_dx>(ckl::EltwiseShape::tiles(onetile));
 #else
             // -(dy - sum) * y.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(onetile),
-                compute_kernel_lib::BinaryFpu<cb_dy_m_sum, cb_y, compute_kernel_lib::BinaryFpuOp::Mul>{},
-                compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<cb_dx>{});
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::BinaryFpu<cb_dy_m_sum, cb_y, ckl::BinaryFpuOp::Mul>{},
+                ckl::Negative<ckl::Dst::D0>{},
+                ckl::PackTile<cb_dx>{});
 #endif
         }
         cb_sum_obj.pop_front(onetile);

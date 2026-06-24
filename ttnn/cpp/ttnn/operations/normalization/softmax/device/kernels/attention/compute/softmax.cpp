@@ -15,6 +15,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 // for scale+mask+softmax:
 // bcast HW (mul by 1 tile)  example: (  [2,1,1024,64] * [1,1,32,32]  )
 // bcast add H               example: ( [2,1,1024,64] + [2,1,32,64] ) (bcast W -> H)
@@ -31,14 +33,14 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     auto cb_out_obj = CircularBuffer(cb_out);
 
     // calculate max val per row
-    compute_kernel_lib::reduce<
+    ckl::reduce<
         PoolType::MAX,
         ReduceDim::REDUCE_ROW,
         cb_in,
         cb_max_scaler,
         cb_max,
-        compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(compute_kernel_lib::ReduceInputBlockShape::row(Wt));
+        ckl::ReduceInputPolicy::WaitUpfrontNoPop,
+        ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(Wt));
 
     // x - max(x) then exp, fused into one chain — DEST-batched ndst tiles per acquire,
     // matching the original's `for (wt += ndst)` window. cb_in is fully resident (the
@@ -51,27 +53,21 @@ void calc_numeric_stable(uint32_t Wt, uint32_t ndst) {
     // BinaryDataFormatReconfig::Input; plain pack_tile (pack format already cb_out) ->
     // PackTileReconfig::None.
     cb_max_obj.wait_front(1);
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(Wt, ndst),
-        compute_kernel_lib::BinaryFpu<
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(Wt, ndst),
+        ckl::BinaryFpu<
             cb_in,
             cb_max,
-            compute_kernel_lib::BinaryFpuOp::Sub,
-            compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>{},
-        compute_kernel_lib::Exp<
-            static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-            compute_kernel_lib::Approx::Exact,
-            compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::PackTile<
-            cb_out,
-            compute_kernel_lib::OutputLifecycle::Chunked,
-            compute_kernel_lib::PackTileReconfig::None>{});
+            ckl::BinaryFpuOp::Sub,
+            ckl::BroadcastDim::Col,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::Dst::D0,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar>{},
+        ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
     cb_in_obj.pop_front(Wt);
     cb_max_obj.pop_front(1);
     cb_out_obj.wait_front(Wt);
@@ -141,13 +137,13 @@ void kernel_main() {
         // Reconfig: reconfig_data_format(cb_in0, cb_fused_scale) +
         // mul_tiles_bcast_scalar_init_short -> BinaryDataFormatReconfig::Input.
         // pack_reconfig_data_format(cb_scale_mask) -> PackTileReconfig::Output.
-        compute_kernel_lib::mul<
+        ckl::mul<
             cb_in0,
             cb_fused_scale,
             cb_scale_mask,
-            compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(Wt));
+            ckl::BroadcastDim::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(Wt));
         // fused mask add (+exp) — DEST-batched ndst tiles per acquire, matching the original's
         // `for (wt += ndst)` window. Both inputs are fully resident before this chain runs, so
         // both walk by absolute index `wt_base + j`:
@@ -170,33 +166,27 @@ void kernel_main() {
             cb_fused_attn_obj.wait_front(Wt);
         }
 #endif
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Wt, ndst),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(Wt, ndst),
+            ckl::BinaryFpu<
                 cb_scale_mask,
                 cb_fused_attn,
-                compute_kernel_lib::BinaryFpuOp::Add,
+                ckl::BinaryFpuOp::Add,
 #ifdef CAUSAL_MASK
-                compute_kernel_lib::BroadcastDim::None,
+                ckl::BroadcastDim::None,
 #else
-                compute_kernel_lib::BroadcastDim::Row,
+                ckl::BroadcastDim::Row,
 #endif
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::OperandKind::Block>{},
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::Dst::D0,
+                ckl::OperandKind::Block,
+                ckl::OperandKind::Block>{},
 #ifndef NUMERIC_STABLE
-            compute_kernel_lib::Exp<
-                static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Dst::D0>{},
+            ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
 #endif
-            compute_kernel_lib::PackTile<
-                cb_x,
-                compute_kernel_lib::OutputLifecycle::Chunked,
-                compute_kernel_lib::PackTileReconfig::None>{});
+            ckl::PackTile<cb_x, ckl::OutputLifecycle::Chunked, ckl::PackTileReconfig::None>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -239,39 +229,27 @@ void kernel_main() {
             // Reconfig: copy_tile_init / add_bcast_rows_init_short
             // reconfig srca/srcb -> Input.
             cb_mask_padded_obj.wait_front(1);
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(Wt - 1),
-                compute_kernel_lib::CopyTile<cb_in0>{},
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(Wt - 1),
+                ckl::CopyTile<cb_in0>{},
 #ifndef NUMERIC_STABLE
-                compute_kernel_lib::Exp<
-                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
 #endif
-                compute_kernel_lib::PackTile<
-                    cb_x,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+                ckl::PackTile<cb_x, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::single(),
-                compute_kernel_lib::BinaryFpu<
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<
                     cb_in0,
                     cb_mask_padded,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    compute_kernel_lib::BroadcastDim::Row,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>{},
+                    ckl::BinaryFpuOp::Add,
+                    ckl::BroadcastDim::Row,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged>{},
 #ifndef NUMERIC_STABLE
-                compute_kernel_lib::Exp<
-                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>{},
 #endif
-                compute_kernel_lib::PackTile<
-                    cb_x,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+                ckl::PackTile<cb_x, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 
 // add numeric_stable
 // fuse exp with sub tiles
@@ -297,32 +275,29 @@ void kernel_main() {
             // reconfig_data_format outside this block, so CopyTileReconfig::Input matches
             // copy_tile_init's reconfig. PackTileReconfig::None — pack format set by
             // binary_op_init_common at line 70 to cb_exps already.
-            compute_kernel_lib::unary<
-                compute_kernel_lib::Exp<
-                    static_cast<compute_kernel_lib::Approx>(EXP_APPROX),
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>,
+            ckl::unary<
+                ckl::Exp<static_cast<ckl::Approx>(EXP_APPROX), ckl::Approx::Exact, ckl::Dst::D0>,
                 cb_in0,
                 cb_exps,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::OutputLifecycle::Streaming,
-                compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::tiles(Wt));
+                ckl::InputLifecycle::Streaming,
+                ckl::OutputLifecycle::Streaming,
+                ckl::CopyTileReconfig::Input,
+                ckl::PackTileReconfig::None>(ckl::EltwiseShape::tiles(Wt));
 #endif
         }
 #endif
 
         // SUM reduce with reciprocal post-processing (1/sum)
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_ROW,
             cb_exps,
             cb_sum_scaler,
             cb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            compute_kernel_lib::ReduceInputBlockShape::row(Wt),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
+            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+            ckl::ReduceInputBlockShape::row(Wt),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
             [](uint32_t) {
                 recip_tile_init();
                 recip_tile(0);
@@ -344,18 +319,18 @@ void kernel_main() {
         // mul_bcast_cols_init_short reconfig srca/srcb -> Input.
         // pack_reconfig_data_format(cb_out0) -> PackTileReconfig::Output.
         // tiles(Wt, ndst): ndst is the RUNTIME block_size, clamped to DEST capacity.
-        compute_kernel_lib::mul<
+        ckl::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
-            compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OutputLifecycle::Chunked,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Wt, ndst));
+            ckl::BroadcastDim::Col,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::OutputLifecycle::Chunked,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Wt, ndst));
         cb_exps_obj.pop_front(Wt);
         cb_recipsumexps_obj.pop_front(1);
     }  // NCHt loop

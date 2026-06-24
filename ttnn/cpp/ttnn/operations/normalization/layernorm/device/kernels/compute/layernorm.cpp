@@ -31,6 +31,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"  // square
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 namespace generic = norm::kernel_util::generic;
 namespace kutil = norm::kernel_util;
 namespace numeric = kutil::compute::numeric;
@@ -170,18 +172,17 @@ void kernel_main() {
         // == the old per-block Bulk-in-external-loop) — a single Bulk would wait the whole
         // row upfront and deadlock the streaming reader. cb_x output is also streamed
         // (im6_t = 2*block_size) -> Chunked. tiles(Wt_padded) keeps every internal block full.
-        compute_kernel_lib::add<
+        ckl::add<
             cb_in,
             cb_inb,
             cb_x,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::OutputLifecycle::Chunked,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block>(
-            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Chunked,
+            ckl::InputLifecycle::Chunked,
+            ckl::OutputLifecycle::Chunked,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #ifndef RMSNORM
         reconfig_data_format(cb_in, cb_x, cb_inb, cb_scaler);
 #else
@@ -229,19 +230,18 @@ void kernel_main() {
         // is held -> CallerManaged, popped right after. cb_xmm output Chunked (per-chunk push;
         // the squaring below waits it whole via HeldBulk once this stage completes).
         // tiles(Wt_padded) keeps every internal block full.
-        compute_kernel_lib::sub<
+        ckl::sub<
             cb_x,
             cb_ex,
             cb_xmm,
-            compute_kernel_lib::BroadcastDim::Col,
-            compute_kernel_lib::InputLifecycle::Chunked,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::OutputLifecycle::Chunked,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(
-            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::BroadcastDim::Col,
+            ckl::InputLifecycle::Chunked,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::OutputLifecycle::Chunked,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::None,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
         cb_ex_obj.pop_front(1);
 
 #ifndef FUSE_PRE_ADD
@@ -273,15 +273,14 @@ void kernel_main() {
          * Reconfig: mul_tiles_init(cb_xmm, cb_xmm) -> BinaryDataFormatReconfig::Input
          *   (fold elides after first block, CbA==CbB); no pack_reconfig -> None.
          */
-        compute_kernel_lib::square<
+        ckl::square<
             cb_xmm,
             cb_xmm2,
-            compute_kernel_lib::InputLifecycle::HeldBulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::None,
-            compute_kernel_lib::OperandKind::Block>(
-            compute_kernel_lib::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
+            ckl::InputLifecycle::HeldBulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::None,
+            ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt_padded, /*block_size=*/block_size));
 #if defined RMSNORM and not defined FUSED_PRE_ADD
         reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
 #endif
@@ -299,20 +298,17 @@ void kernel_main() {
         // srca/srcb; pack_reconfig_data_format(cb_ex2pe) explicitly reconfigs pack.
         // cb_ex2: InputLifecycle::Streaming (chain owns wait/pop). cb_eps: InputLifecycle::CallerManaged (waited once
         // outside the loop, never popped). cb_ex2pe: OutputLifecycle::Streaming (chain owns reserve/push).
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::single(),
-            compute_kernel_lib::BinaryFpu<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::BinaryFpu<
                 cb_ex2,
                 cb_eps,
-                compute_kernel_lib::BinaryFpuOp::Add,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>{},
-            compute_kernel_lib::Rsqrt<
-                compute_kernel_lib::Approx::Exact,
-                LEGACY_RSQRT ? compute_kernel_lib::Legacy::On : compute_kernel_lib::Legacy::Off,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_ex2pe>{});
+                ckl::BinaryFpuOp::Add,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Rsqrt<ckl::Approx::Exact, LEGACY_RSQRT ? ckl::Legacy::On : ckl::Legacy::Off, ckl::Dst::D0>{},
+            ckl::PackTile<cb_ex2pe>{});
 
         // (x-E[x]) / sqrt(Var[x] + eps) * gamma + beta
         cb_ex2pe_obj.wait_front(1);

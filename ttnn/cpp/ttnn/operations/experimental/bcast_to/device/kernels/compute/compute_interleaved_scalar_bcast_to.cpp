@@ -8,6 +8,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "tools/profiler/kernel_profiler.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     uint32_t arg_index = 0;
     uint32_t start_n = get_arg_val<uint32_t>(arg_index++);
@@ -35,17 +37,14 @@ void kernel_main() {
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
             // Per-(n,c) 1-tile scalar broadcast; setup already emitted above (SetupOwner::Caller).
-            compute_kernel_lib::eltwise_chain<compute_kernel_lib::SetupOwner::Caller>(
-                compute_kernel_lib::EltwiseShape::single(),
-                compute_kernel_lib::UnaryBcast<
-                    compute_kernel_lib::BroadcastDim::Scalar,
+            ckl::eltwise_chain<ckl::SetupOwner::Caller>(
+                ckl::EltwiseShape::single(),
+                ckl::UnaryBcast<
+                    ckl::BroadcastDim::Scalar,
                     cb_id_src,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::UnaryBcastReconfig::None>{},  // Caller owns setup -> no chain reconfig
-                compute_kernel_lib::PackTile<
-                    cb_id_dst,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::PackTileReconfig::None>{});
+                    ckl::InputLifecycle::Streaming,
+                    ckl::UnaryBcastReconfig::None>{},  // Caller owns setup -> no chain reconfig
+                ckl::PackTile<cb_id_dst, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
             num_tiles_read += HtWt - start_t;
         }
     }

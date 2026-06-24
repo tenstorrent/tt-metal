@@ -6,6 +6,8 @@
 #include "api/compute/bcast.h"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     uint32_t B = get_arg_val<uint32_t>(0);
     uint32_t Ht = get_arg_val<uint32_t>(1);
@@ -28,25 +30,22 @@ void kernel_main() {
     //               CallerManaged. Matches the original's wait-once / hold / never-pop held tile.
     //   undefined -> cb_rhs is waited+popped each iter (InputLifecycle::Streaming).
 #ifdef BCAST_SCALAR
-    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::HeldStream;
+    constexpr auto rhs_lifecycle = ckl::InputLifecycle::HeldStream;
 #else
-    constexpr auto rhs_lifecycle = compute_kernel_lib::InputLifecycle::Streaming;
+    constexpr auto rhs_lifecycle = ckl::InputLifecycle::Streaming;
 #endif
 
     // Flat 1D chain over total tiles (B*Ht*Wt) — bcast_hw is tile-by-tile,
     // no need for 2D shape.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(B * Ht * Wt),
-        compute_kernel_lib::BinaryFpu<
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(B * Ht * Wt),
+        ckl::BinaryFpu<
             cb_lhs,
             cb_rhs,
             CHAIN_BCAST_OP,
             CHAIN_BCAST_DIM,
-            compute_kernel_lib::InputLifecycle::Streaming,
+            ckl::InputLifecycle::Streaming,
             rhs_lifecycle,
-            compute_kernel_lib::BinaryDataFormatReconfig::None>{},
-        compute_kernel_lib::PackTile<
-            cb_out,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+            ckl::BinaryDataFormatReconfig::None>{},
+        ckl::PackTile<cb_out, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

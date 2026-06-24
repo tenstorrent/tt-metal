@@ -10,6 +10,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_activations.hpp"  // Logsigmoid
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     uint32_t num_tiles = get_arg_val<uint32_t>(0);
 
@@ -23,25 +25,12 @@ void kernel_main() {
     //   D1 = -cb_input -> exp -> exp(-x) (InputLifecycle::NoWaitPop pops cb_input)
     //   Logsigmoid<D0, D1, D0> reads D0=x and D1=exp(-x), writes D0.
     //   pack_tile(D0) -> cb_output.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::HeldStream,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D1,
-            compute_kernel_lib::InputLifecycle::NoWaitPop,
-            compute_kernel_lib::CopyTileReconfig::None>{},
-        compute_kernel_lib::Negative<compute_kernel_lib::Dst::D1>{},
-        compute_kernel_lib::
-            Exp<compute_kernel_lib::Approx::Fast, compute_kernel_lib::Approx::Fast, compute_kernel_lib::Dst::D1>{},
-        compute_kernel_lib::
-            Logsigmoid<compute_kernel_lib::Dst::D0, compute_kernel_lib::Dst::D1, compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::PackTile<
-            cb_output,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
+        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::HeldStream, ckl::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, ckl::Dst::D1, ckl::InputLifecycle::NoWaitPop, ckl::CopyTileReconfig::None>{},
+        ckl::Negative<ckl::Dst::D1>{},
+        ckl::Exp<ckl::Approx::Fast, ckl::Approx::Fast, ckl::Dst::D1>{},
+        ckl::Logsigmoid<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
+        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

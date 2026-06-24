@@ -15,6 +15,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 // SPLIT REDUCE across Cores
 void kernel_main() {
     constexpr uint32_t num_blocks_first_stage = get_compile_time_arg_val(0);
@@ -83,18 +85,17 @@ void kernel_main() {
     // neither wait_front's nor pop_front's them -> CallerManaged (chain emits neither, exact
     // match). cb_in output: reserve+push num_tiles_per_block -> Bulk. add_tiles_init + reconfig
     // -> BinaryDataFormatReconfig::Input; pack_reconfig(cb_in) -> PackTileReconfig::Output.
-    compute_kernel_lib::add<
+    ckl::add<
         cb_in0,
         cb_in1,
         cb_in,
-        compute_kernel_lib::BroadcastDim::None,
-        compute_kernel_lib::InputLifecycle::CallerManaged,
-        compute_kernel_lib::InputLifecycle::CallerManaged,
-        compute_kernel_lib::OutputLifecycle::Bulk,
-        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-        compute_kernel_lib::PackTileReconfig::Output,
-        compute_kernel_lib::OperandKind::Block>(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
+        ckl::BroadcastDim::None,
+        ckl::InputLifecycle::CallerManaged,
+        ckl::InputLifecycle::CallerManaged,
+        ckl::OutputLifecycle::Bulk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::Output,
+        ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
     index_h_offset += block_w;
     cb_wait_front(cb_in, num_tiles_per_block);
     pack_reconfig_data_format(cb_in, cb_x2);
@@ -107,15 +108,14 @@ void kernel_main() {
     // waited (cb_wait_front above in the FUSE path; sharded-resident otherwise) -> CallerManaged.
     // cb_x2 reserve+push num_tiles_per_block -> Bulk. mul_tiles_init -> BinaryDataFormatReconfig::Input;
     // plain pack_tile (pack format already programmed above) -> PackTileReconfig::None.
-    compute_kernel_lib::square<
+    ckl::square<
         cb_in,
         cb_x2,
-        compute_kernel_lib::InputLifecycle::CallerManaged,
-        compute_kernel_lib::OutputLifecycle::Bulk,
-        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-        compute_kernel_lib::PackTileReconfig::None,
-        compute_kernel_lib::OperandKind::Block>(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
+        ckl::InputLifecycle::CallerManaged,
+        ckl::OutputLifecycle::Bulk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::None,
+        ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
     // E(x^2)
     reconfig_data_format_srca(cb_in, cb_x2);
@@ -151,27 +151,26 @@ void kernel_main() {
         const bool is_second_stage_reader = get_arg_val<uint32_t>(3) == 1;
         uint32_t num_blocks_reduce;
         num_blocks_reduce = (is_second_stage_reader) ? num_blocks_second_stage_reduction : num_blocks_first_stage;
-        const auto reduce_block =
-            compute_kernel_lib::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce);
+        const auto reduce_block = ckl::ReduceInputBlockShape::of(num_tiles_per_allgather_worker, num_blocks_reduce);
 
         if (!use_two_stage_reduce || is_second_stage_reader) {
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 cb_ex_external2,
                 cb_scaler_global,
                 cb_to_allgather_writer,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
         } else {
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 cb_ex_external2,
                 cb_scaler_global,
                 cb_ex2,
-                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
+                ckl::ReduceInputPolicy::WaitAndPopPerTile,
+                ckl::ReduceDataFormatReconfigMode::INPUT>(reduce_block);
         }
     }
 
@@ -191,15 +190,14 @@ void kernel_main() {
         if (enable_sqrt) {
             uint32_t num_distributed_blocks = get_arg_val<uint32_t>(5);
 
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 PoolType::AVG,
                 ReduceDim::REDUCE_ROW,
                 cb_stats,
                 post_cb_scaler_global,
                 cb_var,
-                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
-                compute_kernel_lib::ReduceInputBlockShape::row(num_distributed_blocks));
+                ckl::ReduceInputPolicy::NoWaitNoPop,
+                ckl::ReduceDataFormatReconfigMode::INPUT>(ckl::ReduceInputBlockShape::row(num_distributed_blocks));
             cb_pop_front(cb_stats, num_distributed_blocks);
 
             // 1/[sqrt(Var + eps)] — Variance Calc to inverse square root.
@@ -210,14 +208,11 @@ void kernel_main() {
             // Lifecycles: cb_var InputLifecycle::Streaming (wait+pop per call); cb_eps InputLifecycle::Streaming
             //   (also wait+pop per call here, unlike other rsqrt kernels where
             //   cb_eps is held); cb_stats_reduced OutputLifecycle::Streaming. rsqrt Legacy::On.
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::single(),
-                compute_kernel_lib::BinaryFpu<cb_var, cb_eps>{},
-                compute_kernel_lib::Rsqrt<
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Legacy::On,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<cb_stats_reduced>{});
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::single(),
+                ckl::BinaryFpu<cb_var, cb_eps>{},
+                ckl::Rsqrt<ckl::Approx::Exact, ckl::Legacy::On, ckl::Dst::D0>{},
+                ckl::PackTile<cb_stats_reduced>{});
         }
     }
     // (x - Ex) * 1/[sqrt(Var + eps)] — Col-bcast over the block, single chain.
@@ -231,19 +226,18 @@ void kernel_main() {
     //   Upfront wait_front(1) + AtEnd pop_front(1)), Scalar index, BroadcastDim::Col.
     // cb_im out: reserve+push num_tiles_per_block -> Bulk. reconfig_data_format +
     //   mul_bcast_cols_init_short -> Input; pack_reconfig(cb_im) -> Output.
-    compute_kernel_lib::mul<
+    ckl::mul<
         cb_xmm,
         cb_ex_global,
         cb_im,
-        compute_kernel_lib::BroadcastDim::Col,
-        compute_kernel_lib::InputLifecycle::Bulk,
-        compute_kernel_lib::InputLifecycle::Bulk,
-        compute_kernel_lib::OutputLifecycle::Bulk,
-        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-        compute_kernel_lib::PackTileReconfig::Output,
-        compute_kernel_lib::OperandKind::Block,
-        compute_kernel_lib::OperandKind::Scalar>(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
+        ckl::BroadcastDim::Col,
+        ckl::InputLifecycle::Bulk,
+        ckl::InputLifecycle::Bulk,
+        ckl::OutputLifecycle::Bulk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::Output,
+        ckl::OperandKind::Block,
+        ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 
     // gamma: cb_im * gamma (bcast-rows) -> cb_outgamma, single chain.
     // cb_im: Bulk (chain waits+pops num_tiles_per_block — folds the prior cb_wait_front(cb_im)
@@ -252,16 +246,15 @@ void kernel_main() {
     //   for both with BroadcastDim::Row (the FPU bcast-rows mode). cb_outgamma: reserve(num_tiles
     //   _per_block) upfront + push(subblock_w) per chunk -> BulkReservePerChunk.
     //   reconfig_data_format + mul_bcast_rows_init_short -> Input; pack_reconfig(cb_out) -> Output.
-    compute_kernel_lib::mul<
+    ckl::mul<
         cb_im,
         cb_gamma,
         cb_outgamma,
-        compute_kernel_lib::BroadcastDim::Row,
-        compute_kernel_lib::InputLifecycle::Bulk,
-        compute_kernel_lib::InputLifecycle::HeldBulk,
-        compute_kernel_lib::OutputLifecycle::BulkReservePerChunk,
-        compute_kernel_lib::BinaryDataFormatReconfig::Input,
-        compute_kernel_lib::PackTileReconfig::Output,
-        compute_kernel_lib::OperandKind::Block>(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
+        ckl::BroadcastDim::Row,
+        ckl::InputLifecycle::Bulk,
+        ckl::InputLifecycle::HeldBulk,
+        ckl::OutputLifecycle::BulkReservePerChunk,
+        ckl::BinaryDataFormatReconfig::Input,
+        ckl::PackTileReconfig::Output,
+        ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(num_tiles_per_block, subblock_w));
 }

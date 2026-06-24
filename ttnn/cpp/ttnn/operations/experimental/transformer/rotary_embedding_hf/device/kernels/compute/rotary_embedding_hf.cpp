@@ -10,6 +10,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 // in0 * in1 -> out, plain per-iter streaming mul with NO data-format reconfig.
 // The explicit reconfig_data_format / pack_reconfig_data_format calls preserved in
 // the loop body set the src/pack formats; this mirrors the device-validated
@@ -17,16 +19,16 @@
 // PackTileReconfig::None). Replaces the old raw-LLK ALWI MUL_TILES helper.
 template <uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb>
 ALWI void mul_tiles_chain() {
-    compute_kernel_lib::mul<
+    ckl::mul<
         in0_cb,
         in1_cb,
         out_cb,
-        compute_kernel_lib::BroadcastDim::None,
-        compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::OutputLifecycle::Streaming,
-        compute_kernel_lib::BinaryDataFormatReconfig::None,
-        compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::single());
+        ckl::BroadcastDim::None,
+        ckl::InputLifecycle::Streaming,
+        ckl::InputLifecycle::Streaming,
+        ckl::OutputLifecycle::Streaming,
+        ckl::BinaryDataFormatReconfig::None,
+        ckl::PackTileReconfig::None>(ckl::EltwiseShape::single());
 }
 
 void kernel_main() {
@@ -58,14 +60,13 @@ void kernel_main() {
                 //   convenience default BinaryDataFormatReconfig::Input + PackTileReconfig::Output.
                 //   rotated_in_cb InputLifecycle::Streaming; scalar_cb InputLifecycle::CallerManaged
                 //   (waited once above, never popped); rotated_in_interm_cb OutputLifecycle::Streaming.
-                compute_kernel_lib::mul<
+                ckl::mul<
                     rotated_in_cb,
                     scalar_cb,
                     rotated_in_interm_cb,
-                    compute_kernel_lib::BroadcastDim::Scalar,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile));
+                    ckl::BroadcastDim::Scalar,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
                 reconfig_data_format_srcb(scalar_cb, sin_cb);
                 pack_reconfig_data_format(rotated_in_interm_cb, sin_interm_cb);
                 // Multiply rotated input by sin (chain-based)
@@ -85,8 +86,7 @@ void kernel_main() {
             //   pack_reconfig_data_format(cos_interm_cb, out_cb) -> replaced by the convenience
             //   default Input/Output reconfig. cos_interm_cb/sin_interm_cb InputLifecycle::Streaming;
             //   out_cb OutputLifecycle::Streaming.
-            compute_kernel_lib::add<cos_interm_cb, sin_interm_cb, out_cb>(
-                compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::add<cos_interm_cb, sin_interm_cb, out_cb>(ckl::EltwiseShape::tiles(onetile));
         }
     }
 }

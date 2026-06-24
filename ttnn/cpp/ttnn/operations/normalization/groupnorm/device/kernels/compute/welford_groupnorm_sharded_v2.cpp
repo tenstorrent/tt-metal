@@ -23,6 +23,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_math.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr uint32_t do_gamma = get_compile_time_arg_val(1);
     constexpr uint32_t do_beta = get_compile_time_arg_val(2);
@@ -126,22 +128,22 @@ void kernel_main() {
 // Tilize in0 -> in (row-major to tiled)
 #ifdef READER_REPACK
     constexpr uint32_t cb_in_rm_id = cb_repack_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::WaitBlock,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #else
     constexpr uint32_t cb_in_rm_id = cb_in0_id;
-    compute_kernel_lib::tilize<
+    ckl::tilize<
         per_core_N,
         cb_in_rm_id,
         cb_in_id,
-        compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::tilize_config::WaitMode::NoWait,
-        compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::tilize_config::InitUninitMode::InitAndUninit,
+        ckl::tilize_config::WaitMode::NoWait,
+        ckl::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
     cb_in.wait_front(per_core_MN);
     if constexpr (welford_fp32_alias) {
@@ -445,25 +447,22 @@ void kernel_main() {
                     // mul_bcast_rows_init_short + manual reconfig_data_format_srcb ->
                     // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
                     // PackTileReconfig::None.
-                    compute_kernel_lib::eltwise_chain(
-                        compute_kernel_lib::EltwiseShape::single(),
-                        compute_kernel_lib::BinaryFpu<
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
                             cb_x_id,
                             cb_gamma_id,
-                            compute_kernel_lib::BinaryFpuOp::Mul,
-                            compute_kernel_lib::BroadcastDim::Row,
-                            compute_kernel_lib::InputLifecycle::Streaming,
-                            compute_kernel_lib::InputLifecycle::CallerManaged,
-                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                            compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OperandKind::Scalar,
-                            compute_kernel_lib::OperandKind::Scalar,
-                            compute_kernel_lib::TileOffset::Unset,
-                            compute_kernel_lib::TileOffset::Set>{0u, nt},
-                        compute_kernel_lib::PackTile<
-                            cb_x_id,
-                            compute_kernel_lib::OutputLifecycle::Streaming,
-                            compute_kernel_lib::PackTileReconfig::None>{});
+                            ckl::BinaryFpuOp::Mul,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Scalar,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0u, nt},
+                        ckl::PackTile<cb_x_id, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
                 }
 
                 if constexpr (do_beta) {
@@ -471,25 +470,22 @@ void kernel_main() {
                     // add_bcast_rows_init_short + manual reconfig_data_format_srcb ->
                     // BinaryDataFormatReconfig::Input. pack_tile (no _with_dt) ->
                     // PackTileReconfig::None.
-                    compute_kernel_lib::eltwise_chain(
-                        compute_kernel_lib::EltwiseShape::single(),
-                        compute_kernel_lib::BinaryFpu<
+                    ckl::eltwise_chain(
+                        ckl::EltwiseShape::single(),
+                        ckl::BinaryFpu<
                             cb_x_id,
                             cb_beta_id,
-                            compute_kernel_lib::BinaryFpuOp::Add,
-                            compute_kernel_lib::BroadcastDim::Row,
-                            compute_kernel_lib::InputLifecycle::Streaming,
-                            compute_kernel_lib::InputLifecycle::CallerManaged,
-                            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                            compute_kernel_lib::Dst::D0,
-                            compute_kernel_lib::OperandKind::Scalar,
-                            compute_kernel_lib::OperandKind::Scalar,
-                            compute_kernel_lib::TileOffset::Unset,
-                            compute_kernel_lib::TileOffset::Set>{0u, nt},
-                        compute_kernel_lib::PackTile<
-                            cb_x_id,
-                            compute_kernel_lib::OutputLifecycle::Streaming,
-                            compute_kernel_lib::PackTileReconfig::None>{});
+                            ckl::BinaryFpuOp::Add,
+                            ckl::BroadcastDim::Row,
+                            ckl::InputLifecycle::Streaming,
+                            ckl::InputLifecycle::CallerManaged,
+                            ckl::BinaryDataFormatReconfig::Input,
+                            ckl::Dst::D0,
+                            ckl::OperandKind::Scalar,
+                            ckl::OperandKind::Scalar,
+                            ckl::TileOffset::Unset,
+                            ckl::TileOffset::Set>{0u, nt},
+                        ckl::PackTile<cb_x_id, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
                 }
 
                 // Write out the final output: cb_x -> write_cb.
@@ -500,13 +496,13 @@ void kernel_main() {
 #else
                 constexpr auto write_cb_id = cb_out0_id;
 #endif
-                compute_kernel_lib::copy<
+                ckl::copy<
                     cb_x_id,
                     write_cb_id,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::OutputLifecycle::Streaming,
-                    compute_kernel_lib::CopyTileReconfig::Input,
-                    compute_kernel_lib::PackTileReconfig::None>(compute_kernel_lib::EltwiseShape::single());
+                    ckl::InputLifecycle::Streaming,
+                    ckl::OutputLifecycle::Streaming,
+                    ckl::CopyTileReconfig::Input,
+                    ckl::PackTileReconfig::None>(ckl::EltwiseShape::single());
             }
         }
 
@@ -527,12 +523,12 @@ void kernel_main() {
 
 #ifdef UNTILIZE_OUT
     // untilize - DEST capacity auto-detected
-    compute_kernel_lib::untilize<
+    ckl::untilize<
         per_core_N,
         cb_untilize_in_id,
         cb_untilize_out_id,
-        compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
-        compute_kernel_lib::untilize_config::WaitMode::WaitUpfront,
-        compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
+        ckl::untilize_config::InitUninitMode::InitAndUninit,
+        ckl::untilize_config::WaitMode::WaitUpfront,
+        ckl::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(per_core_M);
 #endif
 }

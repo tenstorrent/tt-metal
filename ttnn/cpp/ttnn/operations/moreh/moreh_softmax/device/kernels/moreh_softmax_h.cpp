@@ -12,6 +12,8 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     CircularBuffer cb_in0_obj(cb_in0);
@@ -51,23 +53,22 @@ void kernel_main() {
         if (Ht == 1) {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
 
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single());
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
+                ckl::ReduceInputBlockShape::single());
         } else {
-            compute_kernel_lib::reduce<
+            ckl::reduce<
                 PoolType::MAX,
                 ReduceDim::REDUCE_COL,
                 cb_in0,
                 cb_max_scaler,
                 cb_max,
-                compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                compute_kernel_lib::ReduceInputBlockShape::col(Ht - 1));
+                ckl::ReduceInputPolicy::WaitUpfrontNoPop>(ckl::ReduceInputBlockShape::col(Ht - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Ht - 1, 0, /*pop0=*/0, /*popm=*/0);
-            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
-                compute_kernel_lib::ReduceInputBlockShape::single(),
-                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, cb_tmp, cb_max_scaler, cb_max>(
+                ckl::ReduceInputBlockShape::single(),
+                ckl::ReduceInputMemoryLayout::contiguous(),
+                ckl::Accumulate::at(cb_max, 1));  // iteration=1, reload from cb_max
         }
 
         // compute x - max(x)  — ROW bcast: cb_max is 1 tile broadcast across Ht rows.
@@ -76,18 +77,18 @@ void kernel_main() {
         // Lifecycles: cb_in0 InputLifecycle::Bulk + Block (chain owns wait Ht + pop Ht). cb_max
         //   InputLifecycle::Bulk + Scalar — chain emits cb_wait_front(cb_max, 1) thanks to the
         //   OperandKind-aware window_1d helper. cb_x_m_max OutputLifecycle::Bulk + Block.
-        compute_kernel_lib::sub<
+        ckl::sub<
             cb_in0,
             cb_max,
             cb_x_m_max,
-            compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Ht));
+            ckl::BroadcastDim::Row,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Ht));
 
         // compute exp(x - max(x)). Original per-tile copy + (Negative if !SOFTMAX)
         // + Exp + (Mask on last tile) + pack with cb_exps reserve(Ht) upfront and
@@ -97,7 +98,7 @@ void kernel_main() {
         //                                CopyTile(cb_mask) + Mask + Pack
         //
         // cb_x_m_max InputLifecycle::CallerManaged + Block (held outside; sequential read 0..Ht-1
-        // across iters; compute_kernel_lib::TileOffset::Set(Ht-1) for the last tile).
+        // across iters; ckl::TileOffset::Set(Ht-1) for the last tile).
         // cb_mask InputLifecycle::CallerManaged + Scalar (held outside via line 42 wait_front(1)).
         // cb_exps OutputLifecycle::Streaming (per-tile reserve+push replaces upfront reserve+
         // push; net Ht tiles pushed matches original).
@@ -105,72 +106,65 @@ void kernel_main() {
         // Reconfig: copy_tile_init_with_dt -> CopyTileReconfig::Input.
         // pack_tile_with_dt -> PackTileReconfig::Output.
         cb_x_m_max_obj.wait_front(Ht);
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(Ht - 1),
-            compute_kernel_lib::CopyTile<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(Ht - 1),
+            ckl::CopyTile<
                 cb_x_m_max,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::OperandKind::Block>{},
+                ckl::Dst::D0,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::CopyTileReconfig::Input,
+                ckl::OperandKind::Block>{},
 #ifndef SOFTMAX
-            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+            ckl::Negative<ckl::Dst::D0>{},
 #endif
-            compute_kernel_lib::Exp<
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_exps>{});
+            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<cb_exps>{});
 
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::single(),
-            compute_kernel_lib::CopyTile<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::single(),
+            ckl::CopyTile<
                 cb_x_m_max,
-                compute_kernel_lib::Dst::D0,
-                compute_kernel_lib::InputLifecycle::CallerManaged,
-                compute_kernel_lib::CopyTileReconfig::Input,
-                compute_kernel_lib::OperandKind::Block,
-                compute_kernel_lib::TileOffset::Set>{Ht - 1},
+                ckl::Dst::D0,
+                ckl::InputLifecycle::CallerManaged,
+                ckl::CopyTileReconfig::Input,
+                ckl::OperandKind::Block,
+                ckl::TileOffset::Set>{Ht - 1},
 #ifndef SOFTMAX
-            compute_kernel_lib::Negative<compute_kernel_lib::Dst::D0>{},
+            ckl::Negative<ckl::Dst::D0>{},
 #endif
-            compute_kernel_lib::Exp<
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::
-                CopyTile<cb_mask, compute_kernel_lib::Dst::D1, compute_kernel_lib::InputLifecycle::CallerManaged>{},
-            compute_kernel_lib::Mask<DataFormat::Float16_b, compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_exps>{});
+            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::CopyTile<cb_mask, ckl::Dst::D1, ckl::InputLifecycle::CallerManaged>{},
+            ckl::Mask<DataFormat::Float16_b, ckl::Dst::D0>{},
+            ckl::PackTile<cb_exps>{});
 
 #ifdef LOG
         // log(sum) - pop tiles after reduce
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
             cb_exps,
             cb_sum_scaler,
             cb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
-            compute_kernel_lib::ReduceInputBlockShape::col(Ht),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
+            ckl::ReduceInputPolicy::BulkWaitBulkPop>(
+            ckl::ReduceInputBlockShape::col(Ht),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
                 log_tile_init();
                 log_tile(dst_idx);
             });
 #else
         // 1/sum - keep tiles for subsequent multiplication
-        compute_kernel_lib::reduce<
+        ckl::reduce<
             PoolType::SUM,
             ReduceDim::REDUCE_COL,
             cb_exps,
             cb_sum_scaler,
             cb_recipsumexps,
-            compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-            compute_kernel_lib::ReduceInputBlockShape::col(Ht),
-            compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-            compute_kernel_lib::NoAccumulation{},
+            ckl::ReduceInputPolicy::WaitUpfrontNoPop>(
+            ckl::ReduceInputBlockShape::col(Ht),
+            ckl::ReduceInputMemoryLayout::contiguous(),
+            ckl::NoAccumulation{},
             [](uint32_t dst_idx) {
                 recip_tile_init();
                 recip_tile(dst_idx);
@@ -189,31 +183,31 @@ void kernel_main() {
         //   pack_tile_with_dt -> Output.
         cb_x_m_max_obj.wait_front(Ht);
 #ifdef LOG
-        compute_kernel_lib::sub<
+        ckl::sub<
             cb_x_m_max,
             cb_recipsumexps,
             cb_out0,
-            compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::InputLifecycle::CallerManaged,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Ht));
+            ckl::BroadcastDim::Row,
+            ckl::InputLifecycle::CallerManaged,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Ht));
 #else
-        compute_kernel_lib::mul<
+        ckl::mul<
             cb_exps,
             cb_recipsumexps,
             cb_out0,
-            compute_kernel_lib::BroadcastDim::Row,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::OutputLifecycle::Bulk,
-            compute_kernel_lib::BinaryDataFormatReconfig::Input,
-            compute_kernel_lib::PackTileReconfig::Output,
-            compute_kernel_lib::OperandKind::Block,
-            compute_kernel_lib::OperandKind::Scalar>(compute_kernel_lib::EltwiseShape::tiles(Ht));
+            ckl::BroadcastDim::Row,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::Bulk,
+            ckl::OutputLifecycle::Bulk,
+            ckl::BinaryDataFormatReconfig::Input,
+            ckl::PackTileReconfig::Output,
+            ckl::OperandKind::Block,
+            ckl::OperandKind::Scalar>(ckl::EltwiseShape::tiles(Ht));
 #endif
         cb_x_m_max_obj.pop_front(Ht);
     }

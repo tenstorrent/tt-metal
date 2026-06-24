@@ -13,6 +13,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     // compile-time args
     constexpr uint32_t num_output_tiles = get_compile_time_arg_val(0);
@@ -46,33 +48,28 @@ void kernel_main() {
     // when any bcast is needed (Scalar / Row / Col); CopyTile runs when neither is
     // needed (faster than add(zero, x) for the no-bcast path).
     constexpr bool has_bcast = ht_need_bcast || wt_need_bcast;
-    constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? compute_kernel_lib::BroadcastDim::Scalar
-                               : ht_need_bcast                  ? compute_kernel_lib::BroadcastDim::Row
-                               : wt_need_bcast                  ? compute_kernel_lib::BroadcastDim::Col
-                                                                : compute_kernel_lib::BroadcastDim::None;
+    constexpr auto bcast_dim = (ht_need_bcast && wt_need_bcast) ? ckl::BroadcastDim::Scalar
+                               : ht_need_bcast                  ? ckl::BroadcastDim::Row
+                               : wt_need_bcast                  ? ckl::BroadcastDim::Col
+                                                                : ckl::BroadcastDim::None;
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(onetile),
-            compute_kernel_lib::OptionalChainElement<
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::OptionalChainElement<
                 has_bcast,
-                compute_kernel_lib::BinaryFpu<
-                    cb_in1,
-                    cb_in0,
-                    compute_kernel_lib::BinaryFpuOp::Add,
-                    bcast_dim,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>>{},
-            compute_kernel_lib::OptionalChainElement<!has_bcast, compute_kernel_lib::CopyTile<cb_in0>>{},
-            compute_kernel_lib::PackTile<cb_intermed0>{});
+                ckl::BinaryFpu<cb_in1, cb_in0, ckl::BinaryFpuOp::Add, bcast_dim, ckl::InputLifecycle::CallerManaged>>{},
+            ckl::OptionalChainElement<!has_bcast, ckl::CopyTile<cb_in0>>{},
+            ckl::PackTile<cb_intermed0>{});
 
         // Stage B: cb_out0 = cb_intermed0 * cb_scalar (SCALAR bcast).
-        compute_kernel_lib::mul<
+        ckl::mul<
             cb_intermed0,
             cb_scalar,
             cb_out0,
-            compute_kernel_lib::BroadcastDim::Scalar,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::InputLifecycle::CallerManaged>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::BroadcastDim::Scalar,
+            ckl::InputLifecycle::Streaming,
+            ckl::InputLifecycle::CallerManaged>(ckl::EltwiseShape::tiles(onetile));
     }
     cb_in1_obj.pop_front(onetile);
 }

@@ -10,6 +10,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_optional.hpp"  // OptionalChainElement
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 // where(cond, true_value, false_value): copy cond -> D0, fill true -> D1,
 // fill false -> D2, Where(D0,D1,D2 -> D0), pack D0 -> out. The factory used to
 // inject this as the SFPU_OP_CHAIN_0 macro, but for WHERE_TSS the op-chain is
@@ -49,37 +51,17 @@ void kernel_main() {
 
     init_sfpu(cb_input, cb_output);  // caller-owned BIG init
 
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(num_tiles),
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::tiles(num_tiles),
         // cond -> D0. Single CB read: Streaming (wait 1 / pop 1 per iter), Scalar index.
-        compute_kernel_lib::CopyTile<
-            cb_input,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::InputLifecycle::Streaming,
-            compute_kernel_lib::CopyTileReconfig::None>{},
+        ckl::CopyTile<cb_input, ckl::Dst::D0, ckl::InputLifecycle::Streaming, ckl::CopyTileReconfig::None>{},
         // true_value -> D1 (inactive flavor folds to a FillTileTag no-op).
-        compute_kernel_lib::
-            OptionalChainElement<kIsInt, compute_kernel_lib::FillInt<DataFormat::Int32, compute_kernel_lib::Dst::D1>>{
-                packed_scalar1},
-        compute_kernel_lib::
-            OptionalChainElement<kIsFloat, compute_kernel_lib::FillBitcast<compute_kernel_lib::Dst::D1>>{
-                packed_scalar1},
+        ckl::OptionalChainElement<kIsInt, ckl::FillInt<DataFormat::Int32, ckl::Dst::D1>>{packed_scalar1},
+        ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<ckl::Dst::D1>>{packed_scalar1},
         // false_value -> D2.
-        compute_kernel_lib::
-            OptionalChainElement<kIsInt, compute_kernel_lib::FillInt<DataFormat::Int32, compute_kernel_lib::Dst::D2>>{
-                packed_scalar2},
-        compute_kernel_lib::
-            OptionalChainElement<kIsFloat, compute_kernel_lib::FillBitcast<compute_kernel_lib::Dst::D2>>{
-                packed_scalar2},
+        ckl::OptionalChainElement<kIsInt, ckl::FillInt<DataFormat::Int32, ckl::Dst::D2>>{packed_scalar2},
+        ckl::OptionalChainElement<kIsFloat, ckl::FillBitcast<ckl::Dst::D2>>{packed_scalar2},
         // where(D0, D1, D2) -> D0.
-        compute_kernel_lib::Where<
-            kWhereDF,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::Dst::D1,
-            compute_kernel_lib::Dst::D2,
-            compute_kernel_lib::Dst::D0>{},
-        compute_kernel_lib::PackTile<
-            cb_output,
-            compute_kernel_lib::OutputLifecycle::Streaming,
-            compute_kernel_lib::PackTileReconfig::None>{});
+        ckl::Where<kWhereDF, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D2, ckl::Dst::D0>{},
+        ckl::PackTile<cb_output, ckl::OutputLifecycle::Streaming, ckl::PackTileReconfig::None>{});
 }

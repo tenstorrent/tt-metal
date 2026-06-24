@@ -10,6 +10,8 @@
 
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 // batchnorm_bcast_tiles: computes one block of (input - batch_mean) / sqrt(batch_var + eps),
 // optionally scaled by weight and offset by bias. Layout:
 //
@@ -46,17 +48,17 @@ template <
     uint32_t cb_output_0>
 ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // Stage 1: cb_den = 1 / sqrt(cb_batch_var + cb_eps), one tile.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::single(),
-        compute_kernel_lib::BinaryFpu<
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::single(),
+        ckl::BinaryFpu<
             cb_batch_var,
             cb_eps,
-            compute_kernel_lib::BinaryFpuOp::Add,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::InputLifecycle::Bulk,
-            compute_kernel_lib::InputLifecycle::CallerManaged>{},
-        compute_kernel_lib::Rsqrt<>{},
-        compute_kernel_lib::PackTile<cb_den>{});
+            ckl::BinaryFpuOp::Add,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Bulk,
+            ckl::InputLifecycle::CallerManaged>{},
+        ckl::Rsqrt<>{},
+        ckl::PackTile<cb_den>{});
 
     const uint32_t inner_count = freq - tile_start;
 
@@ -76,39 +78,38 @@ ALWI void batchnorm_bcast_tiles(uint32_t freq, uint32_t tile_start) {
     // are bcast operands held across the whole chain (InputLifecycle::CallerManaged on Scalar). The
     // weight / bias multiplies are OptionalChainElement-gated on the template bools so
     // they collapse to no-op tag wrappers when the caller didn't pass those tensors.
-    constexpr auto sub_op = compute_kernel_lib::BinaryFpu<
+    constexpr auto sub_op = ckl::BinaryFpu<
         cb_other,
         cb_bcast,
-        compute_kernel_lib::BinaryFpuOp::Sub,
-        compute_kernel_lib::BroadcastDim::None,
-        compute_kernel_lib::InputLifecycle::Streaming,
-        compute_kernel_lib::InputLifecycle::CallerManaged>{};
-    constexpr auto mul_den = compute_kernel_lib::DestReuseBinary<
+        ckl::BinaryFpuOp::Sub,
+        ckl::BroadcastDim::None,
+        ckl::InputLifecycle::Streaming,
+        ckl::InputLifecycle::CallerManaged>{};
+    constexpr auto mul_den = ckl::DestReuseBinary<
         cb_den,
-        compute_kernel_lib::BinaryFpuOp::Mul,
-        compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-        compute_kernel_lib::InputLifecycle::CallerManaged>{};
-    constexpr auto mul_weight = compute_kernel_lib::OptionalChainElement<
+        ckl::BinaryFpuOp::Mul,
+        ckl::DestReuseType::DEST_TO_SRCA,
+        ckl::InputLifecycle::CallerManaged>{};
+    constexpr auto mul_weight = ckl::OptionalChainElement<
         WeightHas,
-        compute_kernel_lib::DestReuseBinary<
+        ckl::DestReuseBinary<
             cb_weight,
-            compute_kernel_lib::BinaryFpuOp::Mul,
-            compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-            compute_kernel_lib::InputLifecycle::CallerManaged>>{};
-    constexpr auto add_bias = compute_kernel_lib::OptionalChainElement<
+            ckl::BinaryFpuOp::Mul,
+            ckl::DestReuseType::DEST_TO_SRCA,
+            ckl::InputLifecycle::CallerManaged>>{};
+    constexpr auto add_bias = ckl::OptionalChainElement<
         BiasHas,
-        compute_kernel_lib::DestReuseBinary<
+        ckl::DestReuseBinary<
             cb_bias,
-            compute_kernel_lib::BinaryFpuOp::Add,
-            compute_kernel_lib::DestReuseType::DEST_TO_SRCA,
-            compute_kernel_lib::InputLifecycle::CallerManaged>>{};
-    constexpr auto pack_out = compute_kernel_lib::PackTile<cb_output_0>{};
+            ckl::BinaryFpuOp::Add,
+            ckl::DestReuseType::DEST_TO_SRCA,
+            ckl::InputLifecycle::CallerManaged>>{};
+    constexpr auto pack_out = ckl::PackTile<cb_output_0>{};
 
     // Stage 2..4 fused. Single chain — DEST[0] threaded through Sub → Mul(den) →
     // [Mul(weight)] → [Add(bias)] → Pack. Optional weight / bias gates handle the four
     // (WeightHas, BiasHas) cases without a four-way constexpr-if.
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
+    ckl::eltwise_chain(ckl::EltwiseShape::tiles(inner_count), sub_op, mul_den, mul_weight, add_bias, pack_out);
 
     cb_pop_front(cb_bcast, 1);
     cb_pop_front(cb_den, 1);

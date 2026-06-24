@@ -11,6 +11,8 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_convenience.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t in_cb = get_compile_time_arg_val(0);
@@ -97,46 +99,46 @@ void kernel_main() {
             // popped at batch level below — held across the heads_per_batch_t loop); sin_interm
             // OutputLifecycle::Bulk. mul_bcast_rows_init_short -> Reconfig::Input; no explicit
             // pack_reconfig -> PackTileReconfig::None. Block walk over Wt tiles.
-            compute_kernel_lib::mul<
+            ckl::mul<
                 rotated_in_interm_cb,
                 sin_cb,
                 sin_interm_cb,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None,
-                compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                ckl::BroadcastDim::Row,
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::OutputLifecycle::Bulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::None,
+                ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
             // cos_interim = x * cos (bcast ROW). in_cb InputLifecycle::Bulk — this is its last use,
             // so the stage's wait+pop replaces the original cb_pop_front(in_cb, Wt) (in_cb was
             // held raw across the rotate stages above). cos InputLifecycle::HeldBulk (batch-level).
-            compute_kernel_lib::mul<
+            ckl::mul<
                 in_cb,
                 cos_cb,
                 cos_interm_cb,
-                compute_kernel_lib::BroadcastDim::Row,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::HeldBulk,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None,
-                compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                ckl::BroadcastDim::Row,
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::HeldBulk,
+                ckl::OutputLifecycle::Bulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::None,
+                ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
 
             // out = cos_interim + sin_interim. Both InputLifecycle::Bulk (wait+pop within stage),
             // out_cb OutputLifecycle::Bulk.
-            compute_kernel_lib::add<
+            ckl::add<
                 cos_interm_cb,
                 sin_interm_cb,
                 out_cb,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::InputLifecycle::Bulk,
-                compute_kernel_lib::OutputLifecycle::Bulk,
-                compute_kernel_lib::BinaryDataFormatReconfig::Input,
-                compute_kernel_lib::PackTileReconfig::None,
-                compute_kernel_lib::OperandKind::Block>(compute_kernel_lib::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::Bulk,
+                ckl::OutputLifecycle::Bulk,
+                ckl::BinaryDataFormatReconfig::Input,
+                ckl::PackTileReconfig::None,
+                ckl::OperandKind::Block>(ckl::EltwiseShape::tiles(Wt, /*block_size=*/Wt));
         }
 
         cb_pop_front(sin_cb, Wt);

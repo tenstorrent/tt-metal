@@ -16,6 +16,8 @@
 #include <cstdint>
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise_chain.hpp"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     constexpr uint32_t cb_a = tt::CBIndex::c_0;
     constexpr uint32_t cb_b = tt::CBIndex::c_1;
@@ -26,18 +28,18 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_a, cb_b, cb_out);
 
-    compute_kernel_lib::eltwise_chain(
-        compute_kernel_lib::EltwiseShape::grid(Ht, Wt),
-        compute_kernel_lib::BinaryFpu<
+    ckl::eltwise_chain(
+        ckl::EltwiseShape::grid(Ht, Wt),
+        ckl::BinaryFpu<
             cb_a,
             cb_b,
-            compute_kernel_lib::BinaryFpuOp::Add,
-            compute_kernel_lib::BroadcastDim::None,
-            compute_kernel_lib::InputLifecycle::Streaming,    // cb_a: one tile per (ht, wt)
-            compute_kernel_lib::InputLifecycle::OuterStream,  // cb_b: one tile per row
-            compute_kernel_lib::BinaryDataFormatReconfig::None,
-            compute_kernel_lib::Dst::D0,
-            compute_kernel_lib::OperandKind::Scalar,     // cb_a reads the front
-            compute_kernel_lib::OperandKind::Scalar>{},  // cb_b reads the front (advances per row)
-        compute_kernel_lib::PackTile<cb_out>{});
+            ckl::BinaryFpuOp::Add,
+            ckl::BroadcastDim::None,
+            ckl::InputLifecycle::Streaming,    // cb_a: one tile per (ht, wt)
+            ckl::InputLifecycle::OuterStream,  // cb_b: one tile per row
+            ckl::BinaryDataFormatReconfig::None,
+            ckl::Dst::D0,
+            ckl::OperandKind::Scalar,     // cb_a reads the front
+            ckl::OperandKind::Scalar>{},  // cb_b reads the front (advances per row)
+        ckl::PackTile<cb_out>{});
 }

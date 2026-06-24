@@ -9,6 +9,8 @@
 #include "ttnn/kernel/compute/moreh_common.hpp"
 #include "api/dataflow/circular_buffer.h"
 
+namespace ckl = compute_kernel_lib;
+
 void kernel_main() {
     int i{0};
     const auto num_output_tiles_per_core = get_arg_val<uint32_t>(i++);
@@ -52,58 +54,43 @@ void kernel_main() {
     for (uint32_t outer_idx = 0; outer_idx < num_output_tiles_per_core; ++outer_idx) {
         for (uint32_t inner_idx = 0; inner_idx < num_reduced_tiles_along_dim; ++inner_idx) {
             // |x| — no mask in ord_other variant.
-            compute_kernel_lib::unary<compute_kernel_lib::Abs<compute_kernel_lib::Dst::D0>, cb_x, cb_xabs>(
-                compute_kernel_lib::EltwiseShape::tiles(onetile));
+            ckl::unary<ckl::Abs<ckl::Dst::D0>, cb_x, cb_xabs>(ckl::EltwiseShape::tiles(onetile));
 
             // power_tile_to_cb 4 chain stages -> cb_correct_xpow.
             if (p_is_negative) {
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::CopyTile<
-                        cb_xabs,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::HeldStream>{},
-                    compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
-                    compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
-                    compute_kernel_lib::PackTile<cb_xpow>{});
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::CopyTile<cb_xabs, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                    ckl::PowerIterative<ckl::Dst::D0>{p},
+                    ckl::Recip<ckl::Dst::D0>{},
+                    ckl::PackTile<cb_xpow>{});
             } else {
-                compute_kernel_lib::eltwise_chain(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile),
-                    compute_kernel_lib::CopyTile<
-                        cb_xabs,
-                        compute_kernel_lib::Dst::D0,
-                        compute_kernel_lib::InputLifecycle::HeldStream>{},
-                    compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{p},
-                    compute_kernel_lib::PackTile<cb_xpow>{});
+                ckl::eltwise_chain(
+                    ckl::EltwiseShape::tiles(onetile),
+                    ckl::CopyTile<cb_xabs, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                    ckl::PowerIterative<ckl::Dst::D0>{p},
+                    ckl::PackTile<cb_xpow>{});
             }
-            compute_kernel_lib::unary<
-                compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
-                cb_xabs,
-                cb_logx,
-                compute_kernel_lib::InputLifecycle::NoWaitPop>(compute_kernel_lib::EltwiseShape::tiles(onetile));
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(onetile),
-                compute_kernel_lib::BinaryFpu<
+            ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_xabs, cb_logx, ckl::InputLifecycle::NoWaitPop>(
+                ckl::EltwiseShape::tiles(onetile));
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::BinaryFpu<
                     cb_logx,
                     cb_decimal,
-                    compute_kernel_lib::BinaryFpuOp::Mul,
-                    compute_kernel_lib::BroadcastDim::None,
-                    compute_kernel_lib::InputLifecycle::Streaming,
-                    compute_kernel_lib::InputLifecycle::CallerManaged>{},
-                compute_kernel_lib::Exp<
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Approx::Exact,
-                    compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<cb_exp_lxmd>{});
-            compute_kernel_lib::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(
-                compute_kernel_lib::EltwiseShape::tiles(onetile));
+                    ckl::BinaryFpuOp::Mul,
+                    ckl::BroadcastDim::None,
+                    ckl::InputLifecycle::Streaming,
+                    ckl::InputLifecycle::CallerManaged>{},
+                ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+                ckl::PackTile<cb_exp_lxmd>{});
+            ckl::mul<cb_xpow, cb_exp_lxmd, cb_correct_xpow>(ckl::EltwiseShape::tiles(onetile));
 
             // Accumulator (cb_xpowadd): inner_idx==0 -> seed; else -> add.
             if (inner_idx == 0) {
-                compute_kernel_lib::copy<cb_correct_xpow, cb_xpowadd>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::copy<cb_correct_xpow, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
             } else {
-                compute_kernel_lib::add<cb_correct_xpow, cb_xpowadd, cb_xpowadd>(
-                    compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::add<cb_correct_xpow, cb_xpowadd, cb_xpowadd>(ckl::EltwiseShape::tiles(onetile));
             }
         }
 
@@ -111,41 +98,33 @@ void kernel_main() {
         // Same 4-stage decomposition: cb_xpow=cb_tmp0, cb_logx=cb_tmp1,
         // cb_exp_lxmd=cb_tmp2, cb_correct_xpow=cb_y.
         if (recip_p_is_negative) {
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(onetile),
-                compute_kernel_lib::
-                    CopyTile<cb_xpowadd, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
-                compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{recip_p},
-                compute_kernel_lib::Recip<compute_kernel_lib::Dst::D0>{},
-                compute_kernel_lib::PackTile<cb_tmp0>{});
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_xpowadd, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                ckl::PowerIterative<ckl::Dst::D0>{recip_p},
+                ckl::Recip<ckl::Dst::D0>{},
+                ckl::PackTile<cb_tmp0>{});
         } else {
-            compute_kernel_lib::eltwise_chain(
-                compute_kernel_lib::EltwiseShape::tiles(onetile),
-                compute_kernel_lib::
-                    CopyTile<cb_xpowadd, compute_kernel_lib::Dst::D0, compute_kernel_lib::InputLifecycle::HeldStream>{},
-                compute_kernel_lib::PowerIterative<compute_kernel_lib::Dst::D0>{recip_p},
-                compute_kernel_lib::PackTile<cb_tmp0>{});
+            ckl::eltwise_chain(
+                ckl::EltwiseShape::tiles(onetile),
+                ckl::CopyTile<cb_xpowadd, ckl::Dst::D0, ckl::InputLifecycle::HeldStream>{},
+                ckl::PowerIterative<ckl::Dst::D0>{recip_p},
+                ckl::PackTile<cb_tmp0>{});
         }
-        compute_kernel_lib::unary<
-            compute_kernel_lib::Log<compute_kernel_lib::Approx::Exact, compute_kernel_lib::Dst::D0>,
-            cb_xpowadd,
-            cb_tmp1,
-            compute_kernel_lib::InputLifecycle::NoWaitPop>(compute_kernel_lib::EltwiseShape::tiles(onetile));
-        compute_kernel_lib::eltwise_chain(
-            compute_kernel_lib::EltwiseShape::tiles(onetile),
-            compute_kernel_lib::BinaryFpu<
+        ckl::unary<ckl::Log<ckl::Approx::Exact, ckl::Dst::D0>, cb_xpowadd, cb_tmp1, ckl::InputLifecycle::NoWaitPop>(
+            ckl::EltwiseShape::tiles(onetile));
+        ckl::eltwise_chain(
+            ckl::EltwiseShape::tiles(onetile),
+            ckl::BinaryFpu<
                 cb_tmp1,
                 cb_recip_p_decimal,
-                compute_kernel_lib::BinaryFpuOp::Mul,
-                compute_kernel_lib::BroadcastDim::None,
-                compute_kernel_lib::InputLifecycle::Streaming,
-                compute_kernel_lib::InputLifecycle::CallerManaged>{},
-            compute_kernel_lib::Exp<
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Approx::Exact,
-                compute_kernel_lib::Dst::D0>{},
-            compute_kernel_lib::PackTile<cb_tmp2>{});
-        compute_kernel_lib::mul<cb_tmp0, cb_tmp2, cb_y>(compute_kernel_lib::EltwiseShape::tiles(onetile));
+                ckl::BinaryFpuOp::Mul,
+                ckl::BroadcastDim::None,
+                ckl::InputLifecycle::Streaming,
+                ckl::InputLifecycle::CallerManaged>{},
+            ckl::Exp<ckl::Approx::Exact, ckl::Approx::Exact, ckl::Dst::D0>{},
+            ckl::PackTile<cb_tmp2>{});
+        ckl::mul<cb_tmp0, cb_tmp2, cb_y>(ckl::EltwiseShape::tiles(onetile));
     }
     cb_pop_front(cb_one, onetile);
     cb_pop_front(cb_decimal, onetile);
