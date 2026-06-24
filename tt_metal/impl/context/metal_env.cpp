@@ -143,7 +143,7 @@ void MetalEnvImpl::initialize_base_objects() {
             this->rtoptions_->set_dram_backed_cq(true);
         }
         // Watcher NOC sanitization currently only works on Quasar in slow dispatch.
-        // Once it is supported on Quasar in fast dispatch, this can be removed.
+        // TODO: Remove this once NOC sanitization is supported on Quasar in fast dispatch (#45878)
         this->rtoptions_->disable_watcher_noc_sanitize();
     }
 

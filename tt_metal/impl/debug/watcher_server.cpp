@@ -122,6 +122,7 @@ void WatcherServer::Impl::attach_devices() {
         return;
     }
 
+    // TODO: Remove this once NOC sanitization is supported on Quasar in fast dispatch (#45878)
     if (env_.get_hal().get_arch() == tt::ARCH::QUASAR && rtoptions.get_fast_dispatch()) {
         log_warning(
             tt::LogMetal,
