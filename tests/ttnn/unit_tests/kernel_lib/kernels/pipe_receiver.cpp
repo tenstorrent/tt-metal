@@ -3,8 +3,8 @@
 //
 // mcast_pipe helper unit test: RECEIVER kernel driving dataflow_kernel_lib::ReceiverPipe.
 // Ported from bakeoff_mcast_receiver.cpp. The ReceiverPipe takes only the noc + (template) sem
-// ids; the sender's coords (the target of the consumed ack) are passed to receive().
-//   STAGING_COUNTER(0/1) -> Staging::Flag (wait+reset) | Staging::Counter (wait_min)
+// ids; the sender's coords (the target of the consumer-ready ack) are passed to receive().
+//   STAGING_COUNTER(0/1) -> DataReadySignal::Flag (wait+reset) | DataReadySignal::Counter (wait_min)
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -21,12 +21,12 @@
 
 using namespace dataflow_kernel_lib;
 
-constexpr Staging STG = STAGING_COUNTER ? Staging::Counter : Staging::Flag;
+constexpr DataReadySignal STG = STAGING_COUNTER ? DataReadySignal::Counter : DataReadySignal::Flag;
 
 void kernel_main() {
     constexpr uint32_t cb_dst = get_compile_time_arg_val(0);
     constexpr uint32_t data_ready_sem_id = get_compile_time_arg_val(1);
-    constexpr uint32_t consumed_sem_id = get_compile_time_arg_val(2);
+    constexpr uint32_t consumer_ready_sem_id = get_compile_time_arg_val(2);
     constexpr uint32_t payload_pages = get_compile_time_arg_val(3);
     constexpr uint32_t page_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t num_iters = get_compile_time_arg_val(5);
@@ -45,8 +45,8 @@ void kernel_main() {
     cb_dst_obj.reserve_back(payload_pages);
 
     // The receiver takes no rectangle / count — just the noc; the sem ids are template params.
-    // The sender's coords (target of the consumed ack) are passed to receive().
-    ReceiverPipe<data_ready_sem_id, consumed_sem_id, STG, pre_handshake != 0> pipe(noc);
+    // The sender's coords (target of the consumer-ready ack) are passed to receive().
+    ReceiverPipe<data_ready_sem_id, pre_handshake != 0, consumer_ready_sem_id, STG> pipe(noc);
 
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         pipe.receive(sender_x, sender_y);
