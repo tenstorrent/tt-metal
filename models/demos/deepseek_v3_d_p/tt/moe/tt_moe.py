@@ -327,14 +327,9 @@ class TtMoe(LightweightModule):
                 f"Sub-devices: grid={grid_x}x{grid_y}, dm=rows[0,{dm_sd_rows}), " f"compute=rows[{dm_sd_rows},{grid_y})"
             )
 
-            # Global semaphore reserved for overlapping the routed expert with the combine.
-            # For now it is created here and propagated to the routed_expert op as an
-            # argument, but is not yet consumed by the device kernels.
-            _routed_expert_sem_cores = ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))}
-            )
+            # Global semaphore for overlapping the routed expert with the combine.
             self.routed_expert_global_semaphore = ttnn.create_global_semaphore(
-                mesh_device, _routed_expert_sem_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
+                mesh_device, dm_cores, initial_value=0, buffer_type=ttnn.BufferType.L1_SMALL
             )
         else:
             self.sd_manager_id = None

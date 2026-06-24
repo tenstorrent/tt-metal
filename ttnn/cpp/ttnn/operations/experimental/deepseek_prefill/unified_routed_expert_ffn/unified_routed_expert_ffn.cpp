@@ -23,7 +23,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore) {
     // Single-op fused per-expert FFN. One device Program runs gate matmul,
     // up matmul, silu, multiply, down matmul as four phases inside the same
     // kernel. The kernel reads counts[global_expert_idx_table[local_expert_id]]
@@ -75,7 +76,8 @@ ttnn::Tensor unified_routed_expert_ffn(
                                           : std::nullopt,
         output,
         expert_region_offsets,
-        subdevice_id);
+        subdevice_id,
+        global_semaphore);
 }
 
 ttnn::Tensor unified_routed_expert_moe(
@@ -150,14 +152,8 @@ ttnn::Tensor unified_routed_expert_moe(
             compute_kernel_config,
             dispatched_buffer,
             expert_region_offsets,
-            subdevice_id);
-
-        // Bump the overlap semaphore by one per processed expert. Starting from 0
-        // this leaves it at `experts_per_chip` once the loop completes. reset_*
-        // sets the absolute value, so we write `local_expert + 1`.
-        if (global_semaphore.has_value()) {
-            global_semaphore->reset_semaphore_value(local_expert + 1);
-        }
+            subdevice_id,
+            global_semaphore);
     }
     return dispatched_buffer;
 }

@@ -53,6 +53,10 @@ namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_exper
 //   subdevice_id: optional sub-device to confine the op to. When set, the
 //      GRID_X x GRID_Y compute block is placed at that sub-device's worker-core
 //      origin.
+//   global_semaphore: optional GlobalSemaphore the op increments on-device once
+//      this expert's output is fully written. A per-program leader core waits
+//      for every other core's writer to finish, then multicast-increments the
+//      semaphore on each of its cores.
 ttnn::Tensor unified_routed_expert_ffn(
     const ttnn::Tensor& x,
     const ttnn::Tensor& gate_proj,
@@ -64,7 +68,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<ttnn::Tensor>& output = std::nullopt,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
 
 // MoE-level composite: takes the dispatched buffer + ALL local experts'
 // weights and loops over local experts in C++, calling

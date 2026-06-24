@@ -223,7 +223,8 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore) {
     using OperationType =
         ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::UnifiedRoutedExpertFfnDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
@@ -231,7 +232,8 @@ ttnn::Tensor unified_routed_expert_ffn(
             .chunk_M_tiles = chunk_M_tiles,
             .local_expert_id = local_expert_id,
             .compute_kernel_config = compute_kernel_config,
-            .subdevice_id = subdevice_id},
+            .subdevice_id = subdevice_id,
+            .global_semaphore = global_semaphore},
         OperationType::tensor_args_t{
             .x = x,
             .gate_proj = gate_proj,

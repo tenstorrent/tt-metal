@@ -9,6 +9,7 @@
 #include <tuple>
 
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -51,8 +52,16 @@ struct UnifiedRoutedExpertFfnParams {
     // on a disjoint sub-device. std::nullopt => block at (0, 0) (full-grid origin).
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt;
 
-    static constexpr auto attribute_names = std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "subdevice_id");
-    auto attribute_values() const { return std::forward_as_tuple(chunk_M_tiles, local_expert_id, subdevice_id); }
+    // Optional: A per-program leader core waits for every other (non-leader)
+    // core's writer to finish, then multicast-increments this semaphore on each
+    // of its cores.
+    std::optional<tt::tt_metal::GlobalSemaphore> global_semaphore = std::nullopt;
+
+    static constexpr auto attribute_names =
+        std::forward_as_tuple("chunk_M_tiles", "local_expert_id", "subdevice_id", "global_semaphore");
+    auto attribute_values() const {
+        return std::forward_as_tuple(chunk_M_tiles, local_expert_id, subdevice_id, global_semaphore);
+    }
 };
 
 // Tensors fed into the op.

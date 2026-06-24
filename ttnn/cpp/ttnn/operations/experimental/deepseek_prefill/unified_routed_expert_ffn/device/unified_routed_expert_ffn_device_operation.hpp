@@ -44,6 +44,7 @@ ttnn::Tensor unified_routed_expert_ffn(
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& optional_output,
     const std::optional<ttnn::Tensor>& expert_region_offsets = std::nullopt,
-    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt);
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id = std::nullopt,
+    const std::optional<tt::tt_metal::GlobalSemaphore>& global_semaphore = std::nullopt);
 
 }  // namespace ttnn::prim

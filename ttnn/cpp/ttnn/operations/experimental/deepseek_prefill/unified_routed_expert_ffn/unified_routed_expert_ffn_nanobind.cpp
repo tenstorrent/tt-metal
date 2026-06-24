@@ -69,6 +69,9 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
                 compute block at this sub-device's worker-core origin instead of
                 grid origin (0, 0), so the routed expert can overlap the combine
                 on a disjoint sub-device. Defaults to None (origin (0, 0)).
+            global_semaphore (ttnn._ttnn.global_semaphore.global_semaphore, optional):
+                When set, the op increments this semaphore on-device once the
+                expert's output is fully written. Defaults to None (no signaling).
 
         Returns:
             ttnn.Tensor: (M_max, K=emb).
@@ -85,7 +88,8 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output") = nb::none(),
         nb::arg("expert_region_offsets") = nb::none(),
-        nb::arg("subdevice_id") = nb::none());
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("global_semaphore") = nb::none());
 
     ttnn::bind_function<"unified_routed_expert_moe", "ttnn.experimental.deepseek_prefill.">(
         mod,
