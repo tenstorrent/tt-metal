@@ -175,7 +175,7 @@ _GPTOSS_KGATE_XFAIL = (
 )
 _DSV4_PRO_CB_XFAIL = (
     "DeepSeek V4 Pro single routed expert: circular buffers grow beyond L1 — "
-    "https://github.com/tenstorrent/tt-metal/issues/46608"
+    "https://github.com/tenstorrent/tt-metal/issues/46486"
 )
 
 _TOKEN_SWEEP_XFAIL = {
