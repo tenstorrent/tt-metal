@@ -165,6 +165,10 @@ class TtnnTransfuserBackbone:
         self._img_stem: Optional[TtnnStem] = None
         self._lidar_stem: Optional[TtnnStem] = None
         self._ttnn_fusion = None  # callable(image_features, lidar_features, layer_idx)
+        # Stage 5: keep img/lidar feats on-device across all 4 stages + fusion
+        # (removes the per-stage host round-trips). Off by default; enabled by
+        # enable_consolidated() once stems+fusion+fpn are installed.
+        self._consolidated = False
 
     # ------------------------------------------------------------------
     # Stage 3.6 installers
@@ -179,6 +183,17 @@ class TtnnTransfuserBackbone:
     def install_fusion(self, fusion) -> None:
         """Install a TTNN GPT cross-modal fusion callable (see ttnn_gpt_fusion.TtnnFuseFeatures)."""
         self._ttnn_fusion = fusion
+
+    def enable_consolidated(self) -> None:
+        """Route __call__ through the device-native consolidated path (Stage 5).
+
+        Requires on-device stems (install_stems), TTNN fusion (install_fusion), and
+        the TTNN FPN (build_stage3). Keeps img/lidar feats on device across all 4
+        stage→fusion seams — only the stem input and the FPN-input boundary remain
+        host hops (next increments)."""
+        if self._img_stem is None or self._ttnn_fusion is None or self._ttnn_fpn is None:
+            raise RuntimeError("enable_consolidated requires stems + fusion + FPN installed (build_stage3/3_6/3_7)")
+        self._consolidated = True
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -204,13 +219,23 @@ class TtnnTransfuserBackbone:
         """
         B, C, H, W = x.shape
         x_ttnn = _to_ttnn_tile(x, B, H, W, C, self._device)
-        shape = (B, H, W, C)
-
-        for block in stage_blocks:
-            x_ttnn, shape = block(x_ttnn, shape)
-
+        x_ttnn, shape = self._run_ttnn_stage_dev(x_ttnn, (B, H, W, C), stage_blocks)
         B_out, H_out, W_out, C_out = shape
         return _from_ttnn_tile(x_ttnn, B_out, H_out, W_out, C_out)
+
+    @staticmethod
+    def _run_ttnn_stage_dev(x_ttnn, shape, stage_blocks):
+        """Device core (no host hop): run all pre-built BasicBlocks in one stage.
+
+        Args:
+            x_ttnn: (1,1,B*H*W,C) TILE device tensor.
+            shape:  (B, H, W, C).
+        Returns:
+            (x_ttnn, shape) on device, ready for the next stage or fusion.
+        """
+        for block in stage_blocks:
+            x_ttnn, shape = block(x_ttnn, shape)
+        return x_ttnn, shape
 
     # ------------------------------------------------------------------
     # Forward
@@ -230,6 +255,9 @@ class TtnnTransfuserBackbone:
               bev_upscale:  (B, 64, H_bev, W_bev)
               bev_feature:  (B, 512, H_bev/8, W_bev/8)
         """
+        if self._consolidated:
+            return self.forward_consolidated(image, lidar)
+
         ref = self._ref
 
         if ref.config.latent:
@@ -284,6 +312,40 @@ class TtnnTransfuserBackbone:
             bev_upscale = self._ttnn_fpn(lidar_feats)
         else:
             bev_upscale = ref._top_down(lidar_feats)
+        return bev_upscale, lidar_feats, None
+
+    def forward_consolidated(self, image: torch.Tensor, lidar: torch.Tensor):
+        """Device-native backbone (Stage 5): stems → [stage → fusion] × 4 on device → FPN.
+
+        Eliminates the 8 per-stage host round-trips of __call__ (the stage↔fusion
+        seams): img/lidar feats stay as on-device (1,1,B*H*W,C) tensors across all
+        four stages and fusions. Only two host hops remain — lifting the stem output
+        to ttnn, and lowering the deepest LiDAR feature back to torch for the FPN
+        tail (FPN-on-device is the next increment). Output matches __call__:
+        (bev_upscale, bev_feature, None).
+        """
+        ref = self._ref
+        if ref.config.latent:
+            lidar = ref.lidar_latent.expand(image.shape[0], -1, -1, -1)
+
+        # Stems fold conv1+bn1+act1+maxpool on device (returns torch); lift to ttnn once.
+        img_feats = self._img_stem(image)
+        lidar_feats = self._lidar_stem(lidar)
+        Bi, Ci, Hi, Wi = img_feats.shape
+        Bl, Cl, Hl, Wl = lidar_feats.shape
+        img_t = _to_ttnn_tile(img_feats, Bi, Hi, Wi, Ci, self._device)
+        lid_t = _to_ttnn_tile(lidar_feats, Bl, Hl, Wl, Cl, self._device)
+        img_shape, lid_shape = (Bi, Hi, Wi, Ci), (Bl, Hl, Wl, Cl)
+
+        for i in range(4):
+            img_t, img_shape = self._run_ttnn_stage_dev(img_t, img_shape, self._img_stages[i])
+            lid_t, lid_shape = self._run_ttnn_stage_dev(lid_t, lid_shape, self._lidar_stages[i])
+            img_t, img_shape, lid_t, lid_shape = self._ttnn_fusion.forward_dev(img_t, img_shape, lid_t, lid_shape, i)
+
+        # One host hop: deepest LiDAR feature → torch for the FPN tail.
+        B, H, W, C = lid_shape
+        lidar_feats = _from_ttnn_tile(lid_t, B, H, W, C)
+        bev_upscale = self._ttnn_fpn(lidar_feats)
         return bev_upscale, lidar_feats, None
 
 
