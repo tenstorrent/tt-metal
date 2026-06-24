@@ -243,14 +243,27 @@ using ScratchpadBinding = KernelSpec::ScratchpadBinding;
 
 // Ergonomic alternatives to writing a designated-initializer DFBBinding{...}
 
-// Creates a DFB producer binding with a STRIDED access pattern
-// (All DFB producers are STRIDED)
+// Creates a DFB producer binding with a STRIDED access pattern (the common case).
+// For a BLOCKED producer (single-burst sub-block fill), use BlockedProducerOf below.
 inline DFBBinding ProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name) {
     return DFBBinding{
         .dfb_spec_name = std::move(dfb_spec_name),
         .accessor_name = std::move(accessor_name),
         .endpoint_type = DFBEndpointType::PRODUCER,
         .access_pattern = DFBAccessPattern::STRIDED};
+}
+
+// Creates a DFB producer binding with a BLOCKED access pattern.
+// block_size is the number of contiguous entries a thread accesses before striding
+// by block_size * num_threads; it must be > 0.
+inline DFBBinding BlockedProducerOf(DFBSpecName dfb_spec_name, std::string accessor_name, uint32_t block_size) {
+    return DFBBinding{
+        .dfb_spec_name = std::move(dfb_spec_name),
+        .accessor_name = std::move(accessor_name),
+        .endpoint_type = DFBEndpointType::PRODUCER,
+        .access_pattern = DFBAccessPattern::BLOCKED,
+        .block_size = block_size,
+    };
 }
 
 // Creates a DFB consumer binding (with a default-STRIDED access pattern)
