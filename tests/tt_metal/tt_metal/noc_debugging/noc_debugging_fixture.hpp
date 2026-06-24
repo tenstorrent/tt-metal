@@ -97,7 +97,13 @@ public:
         tt_cxy_pair core{chip_id, {virtual_core.x, virtual_core.y}};
         const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
         return issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM) ||
-               issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+               issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB) ||
+               issue.has_base_issue(NOCDebugIssueBaseType::WRITE_TO_LOCKED_DFB);
+    }
+
+    // #45918: noc event logging on quasar is not supported yet
+    bool dfb_scoped_lock_tracker_supported(const std::shared_ptr<distributed::MeshDevice>& mesh_device) const {
+        return mesh_device->arch() != tt::ARCH::QUASAR;
     }
 
     std::vector<NOCDebugIssueType> get_write_to_locked_issues(
@@ -111,8 +117,10 @@ public:
         const NOCDebugIssue& issue = noc_debug_state->get_issues(core, processor_id);
         auto mem_issues = issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CORE_LOCAL_MEM);
         auto cb_issues = issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_LOCKED_CB);
+        auto dfb_issues = issue.get_issues_by_base(NOCDebugIssueBaseType::WRITE_TO_LOCKED_DFB);
         result.insert(result.end(), mem_issues.begin(), mem_issues.end());
         result.insert(result.end(), cb_issues.begin(), cb_issues.end());
+        result.insert(result.end(), dfb_issues.begin(), dfb_issues.end());
         return result;
     }
 
