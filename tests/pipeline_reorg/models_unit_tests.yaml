@@ -601,7 +601,7 @@
   model: phi-3-mini
   skus:
     wh_n150:
-      timeout: 4
+      timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
