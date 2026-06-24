@@ -1483,6 +1483,30 @@ class Qwen35Model:
 
         return kv_caches
 
+    def free_kv_caches(self):
+        """Release paged KV caches and external GDN state so allocate_kv_caches can be called
+        again for a fresh independent generation run (e.g. a determinism check).
+
+        Releases the chunked prefill trace stored on the model, frees GDN external state
+        tensors (single-device path only; the TP path's list is always empty), and deallocates
+        the paged KV cache tensors. After this call the model is in the same state as before
+        allocate_kv_caches was first called.
+        """
+        if self._deltanet_external_states is None:
+            return
+        if getattr(self, "_chunked_trace_id", None) is not None:
+            ttnn.release_trace(self.device, self._chunked_trace_id)
+            self._chunked_trace_id = None
+        for rec, conv in self._deltanet_external_states:
+            ttnn.deallocate(rec)
+            ttnn.deallocate(conv)
+        self._deltanet_external_states = None
+        if getattr(self, "_paged_kv_caches", None) is not None:
+            for k_cache, v_cache in self._paged_kv_caches:
+                ttnn.deallocate(k_cache)
+                ttnn.deallocate(v_cache)
+            self._paged_kv_caches = None
+
     def _allocate_kv_caches_tp(self, kv_cache_shape, dtype, batch_size):
         """TP (num_devices>1) paged KV allocation (B=1 single-sequence serving).
 

@@ -253,20 +253,21 @@ def _blocks_for(seqlen, max_generated_tokens):
 @pytest.mark.parametrize("mesh_device", [_MESH_SHAPE], indirect=True)
 @pytest.mark.parametrize("device_params", DEVICE_PARAMS, indirect=True)
 @pytest.mark.parametrize(
-    "seqlen, max_generated_tokens, use_trace",
+    "seqlen, max_generated_tokens, use_trace, repeat_batches",
     [
-        (128, 50, True),
-        (128, 50, False),
-        (4096, 100, True),
-        (4096, 100, False),
-        (8192, 500, True),
-        (8192, 100, False),
-        (16384, 100, True),
-        (32768, 100, True),
-        (65536, 500, True),
-        (65536, 100, False),
-        (131072, 100, True),
-        (262144, 100, True),
+        (128, 50, True, 1),
+        (128, 50, False, 1),
+        (4096, 100, True, 1),
+        (4096, 100, False, 1),
+        (8192, 500, True, 1),
+        (8192, 100, False, 1),
+        (16384, 100, True, 1),
+        (32768, 100, True, 1),
+        (65536, 500, True, 1),
+        (65536, 100, False, 1),
+        (131072, 100, True, 1),
+        (262144, 100, True, 1),
+        (128, 50, True, 2),
     ],
     ids=[
         "traced_128",
@@ -281,6 +282,7 @@ def _blocks_for(seqlen, max_generated_tokens):
         "paged_64k",
         "traced_128k",
         "traced_256k",
+        "determinism_128",
     ],
 )
 def test_demo_text(
@@ -288,6 +290,7 @@ def test_demo_text(
     seqlen,
     max_generated_tokens,
     use_trace,
+    repeat_batches,
 ):
     """End-to-end text generation: prefill + decode with performance validation."""
     from transformers import AutoTokenizer
@@ -337,6 +340,19 @@ def test_demo_text(
     # conv state + paged KV across chunks (so the GDN seq kernel never sees the whole
     # sequence — the long-context OOM fix), then incremental paged single-token decode.
     if model.num_devices > 1:
+        if repeat_batches > 1:
+            results = []
+            for run in range(repeat_batches):
+                gen, _ = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
+                results.append(gen)
+                if run < repeat_batches - 1:
+                    model.free_kv_caches()
+            for i in range(1, repeat_batches):
+                assert results[0] == results[i], (
+                    f"Non-deterministic output between run 0 and run {i}.\n"
+                    f"Run 0: {results[0]}\nRun {i}: {results[i]}"
+                )
+            return
         generated, perf = _run_tp_generation(model, tokenizer, token_ids, max_generated_tokens, num_blocks)
         text = tokenizer.decode(generated, skip_special_tokens=True)
         logger.info(f"[TP {model.num_devices}-dev] ttft={perf['ttft_s']:.2f}s decode={perf['decode_tok_s']:.2f} tok/s")
@@ -363,6 +379,22 @@ def test_demo_text(
     if not (use_trace and actual_len < PREFILL_CHUNK):
         _warmup_prefill(model, device, token_ids)
     t_compile = time.time() - t_compile
+
+    if repeat_batches > 1:
+        results = []
+        for run in range(repeat_batches):
+            if use_trace:
+                gen, _ = _run_traced_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks)
+            else:
+                gen, _ = _run_paged_generation(model, tokenizer, device, token_ids, max_generated_tokens, num_blocks)
+            results.append(gen)
+            if run < repeat_batches - 1:
+                model.free_kv_caches()
+        for i in range(1, repeat_batches):
+            assert results[0] == results[i], (
+                f"Non-deterministic output between run 0 and run {i}.\n" f"Run 0: {results[0]}\nRun {i}: {results[i]}"
+            )
+        return
 
     if use_trace:
         generated, perf = _run_traced_generation(
