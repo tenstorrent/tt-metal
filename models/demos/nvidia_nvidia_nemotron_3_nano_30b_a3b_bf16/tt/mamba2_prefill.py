@@ -112,21 +112,70 @@ _SSD_SCRATCH: dict = {}  # keyed by (id(mesh_device), B, C)
 _TTLANG_Y_PREALLOC: dict = {}  # (S_pad, mesh_id) → ttnn.Tensor [1, S_pad, H, D]
 
 
-def warmup_ttlang_kernels(max_seq_len: int) -> None:
+def warmup_ttlang_kernels(max_seq_len: int, mesh_device=None) -> None:
     """Pre-compile tt-lang SSD kernels for all powers-of-2 n_chunks up to max_seq_len.
 
-    Call once at model startup when NEMOTRON_USE_TTLANG_SSD=1 so inference
-    requests never pay JIT compilation latency.
+    mesh_device MUST be provided to trigger MLIR→C++ codegen and ELF disk caching.
+    Without it only the Python kernel object is created; MLIR runs on first real prefill.
     """
     if not _USE_TTLANG_SSD:
         return
+    import ttnn as _ttnn
+
     from .mamba2_ssd_scan_ttlang import make_mamba2_ssd_scan_kernel
 
     max_chunks = max_seq_len // CHUNK_SIZE
+    _R = _ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device is not None else None
+
+    def _up(t):
+        return _ttnn.from_torch(
+            t,
+            dtype=_ttnn.bfloat16,
+            layout=_ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=_R,
+            memory_config=_ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     nc = 1
     while nc <= max_chunks:
-        print(f"  [ttlang warmup] n_chunks={nc} (ISL={nc * CHUNK_SIZE}) ...", flush=True)
-        make_mamba2_ssd_scan_kernel(nc, num_heads=NUM_HEADS, n_groups=N_GROUPS)
+        S = nc * CHUNK_SIZE
+        print(f"  [ttlang warmup] n_chunks={nc} (ISL={S}) ...", flush=True)
+        kernel = make_mamba2_ssd_scan_kernel(nc, num_heads=NUM_HEADS, n_groups=N_GROUPS)
+
+        if mesh_device is not None:
+            # Dispatch with zero dummy tensors to trigger MLIR→C++ codegen and ELF
+            # disk caching. Without this actual dispatch the ELF is not compiled until
+            # the first real prefill, polluting TTFT for the first request.
+            dummy = _build_ttlang_ssd_inputs(
+                torch.zeros(S, NUM_HEADS, HEAD_DIM),
+                torch.zeros(S, N_GROUPS, SSM_STATE_SIZE),
+                torch.zeros(S, N_GROUPS, SSM_STATE_SIZE),
+                torch.zeros(S, NUM_HEADS, HEAD_DIM),
+                torch.zeros(S, NUM_HEADS),
+                torch.ones(NUM_HEADS),
+                None,
+                nc,
+            )
+            dev = {k: _up(v) for k, v in dummy.items()}
+            kernel(
+                dev["log_L"],
+                dev["x_dt"],
+                dev["B"],
+                dev["C_mat"],
+                dev["x"],
+                dev["log_gamma"],
+                dev["log_delta"],
+                dev["log_gscalar"],
+                dev["h_in"],
+                dev["D_skip_t"],
+                dev["y_out"],
+                dev["h_out"],
+            )
+            _ttnn.synchronize_device(mesh_device)
+            for t in dev.values():
+                t.deallocate(True)
+
         nc *= 2
 
 
@@ -285,6 +334,188 @@ def _causal_conv1d_prefill(
 
 _TILE = 32  # tt-lang tile size
 
+# Cache for the causal adder constant (pre-computed, uploaded once per device).
+# [1, 1, C, C] ROW_MAJOR with 0 on/below diagonal, -inf above diagonal.
+_CAUSAL_ADDER_CACHE: dict = {}
+
+# Pre-computed D_skip_t per mesh_device (D is a static weight, constant across layers).
+# Key: (id(mesh), layer_idx) — we cache per-layer since D differs per layer.
+# Cleared by warmup / first call.
+_D_SKIP_T_CACHE: dict = {}
+
+
+def _get_causal_adder(mesh_device: MeshDevice) -> ttnn.Tensor:
+    """Causal log-decay adder [1,1,C,C] ROW_MAJOR: 0 on/below diag, -inf above."""
+    key = id(mesh_device)
+    if key not in _CAUSAL_ADDER_CACHE:
+        C = CHUNK_SIZE
+        i_idx = torch.arange(C).unsqueeze(1)
+        s_idx = torch.arange(C).unsqueeze(0)
+        mask = (s_idx <= i_idx).reshape(1, 1, C, C)
+        adder = torch.where(mask, torch.zeros(1, 1, C, C), torch.full((1, 1, C, C), float("-inf")))
+        _CAUSAL_ADDER_CACHE[key] = ttnn.from_torch(
+            adder.to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+    return _CAUSAL_ADDER_CACHE[key]
+
+
+def _build_derived_tensors_device(
+    log_decay_pad: "ttnn.Tensor",  # [1, S_pad, H] TILE_LAYOUT on device (B=1 assumed)
+    D_tt: "ttnn.Tensor",  # [1, H, 1, 1] TILE_LAYOUT on device
+    n_chunks: int,
+    mesh_device: MeshDevice,
+) -> "dict[str, ttnn.Tensor]":
+    """Build A_cumsum-derived tt-lang kernel inputs entirely on device — zero D2H/H2D.
+
+    Replaces _build_derived_tensors_cpu + the subsequent 144 MB/layer H2D upload.
+    All five derived tensors (log_L, log_gamma, log_delta, log_gscalar, D_skip_t)
+    are computed as TTNN ops from tensors already resident on device.
+
+    For ISL=8192 (n_chunks=128) this eliminates 144 MB × 23 layers = 3.3 GB H2D.
+    """
+    H, D_dim, N, G, C = NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE, N_GROUPS, CHUNK_SIZE
+    T = _TILE
+
+    # ── (1) log_decay → A_cumsum ────────────────────────────────────────────
+    # [1, S_pad, H] → permute [1, H, S_pad] → reshape [1, H, n_chunks, C]
+    logd_t = ttnn.permute(log_decay_pad, [0, 2, 1])  # [1, H, S_pad]
+    logd_t = ttnn.reshape(logd_t, [1, H, n_chunks, C])  # [1, H, n_chunks, C]
+    A_cum = ttnn.cumsum(logd_t, dim=3)  # [1, H, n_chunks, C]
+    logd_t.deallocate(True)
+
+    # Convert to ROW_MAJOR once — reused for all derived tensors below.
+    A_rm = ttnn.to_layout(A_cum, ttnn.ROW_MAJOR_LAYOUT)  # [1, H, n_chunks, C] RM
+
+    # ── (2) log_L [H*n_chunks*C, C] ─────────────────────────────────────────
+    # Outer subtraction: log_L[h,c,i,s] = A_cum[h,c,i] - A_cum[h,c,s]  for s<=i
+    # NOTE: reshape on ROW_MAJOR returns a view sharing A_rm's buffer.
+    # Never call deallocate(True) on the view while A_rm is still needed;
+    # instead drop the Python reference and let the source live until last use.
+    Hn = H * n_chunks
+    A_col = ttnn.reshape(A_rm, [1, Hn, C, 1])  # view of A_rm
+    A_row = ttnn.reshape(A_rm, [1, Hn, 1, C])  # view of A_rm
+    diff = ttnn.subtract(A_col, A_row)  # [1, Hn, C, C] — new buffer
+    del A_col, A_row  # drop views; A_rm buffer still live
+    causal_add = _get_causal_adder(mesh_device)  # [1, 1, C, C] RM constant
+    log_L_rm = ttnn.add(diff, causal_add)  # [1, Hn, C, C] — new buffer
+    diff.deallocate(True)
+    log_L = ttnn.to_layout(ttnn.reshape(log_L_rm, [Hn * C, C]), ttnn.TILE_LAYOUT)
+    log_L_rm.deallocate(True)
+
+    # ── (3) log_gamma [H*n_chunks*C, T] ─────────────────────────────────────
+    lg_4d = ttnn.reshape(A_rm, [1, Hn * C, 1, 1])  # view of A_rm
+    log_gamma_4d = ttnn.repeat(lg_4d, ttnn.Shape([1, 1, 1, T]))  # [1, Hn*C, 1, T] — new buffer
+    del lg_4d  # drop view before next A_rm use
+    log_gamma = ttnn.to_layout(ttnn.reshape(log_gamma_4d, [Hn * C, T]), ttnn.TILE_LAYOUT)
+    log_gamma_4d.deallocate(True)
+
+    # ── (4) log_delta [H*n_chunks*C, T] ─────────────────────────────────────
+    A_last = ttnn.slice(A_rm, [0, 0, 0, C - 1], [1, H, n_chunks, C])  # [1, H, n_chunks, 1]
+    ld_rm = ttnn.subtract(A_last, A_rm)  # [1, H, n_chunks, C] — new buffer
+    A_last.deallocate(True)
+    ld_4d = ttnn.reshape(ld_rm, [1, Hn * C, 1, 1])  # view of ld_rm
+    log_delta_4d = ttnn.repeat(ld_4d, ttnn.Shape([1, 1, 1, T]))  # new buffer — use view first
+    del ld_4d  # drop view; then safe to free ld_rm
+    ld_rm.deallocate(True)
+    log_delta = ttnn.to_layout(ttnn.reshape(log_delta_4d, [Hn * C, T]), ttnn.TILE_LAYOUT)
+    log_delta_4d.deallocate(True)
+
+    # ── (5) log_gscalar [H*n_chunks*T, T] ───────────────────────────────────
+    A_last2 = ttnn.slice(A_rm, [0, 0, 0, C - 1], [1, H, n_chunks, C])  # [1,H,n_chunks,1]
+    lgs_4d = ttnn.reshape(A_last2, [1, Hn, 1, 1])  # view of A_last2
+    lgs_rep = ttnn.repeat(lgs_4d, ttnn.Shape([1, 1, T, T]))  # new buffer — use view first
+    del lgs_4d  # drop view; then safe to free A_last2
+    A_last2.deallocate(True)
+    log_gscalar = ttnn.to_layout(ttnn.reshape(lgs_rep, [Hn * T, T]), ttnn.TILE_LAYOUT)
+    lgs_rep.deallocate(True)
+
+    A_rm.deallocate(True)
+    A_cum.deallocate(True)
+
+    # ── (6) D_skip_t [H*T, T] ───────────────────────────────────────────────
+    D_rm = ttnn.to_layout(D_tt, ttnn.ROW_MAJOR_LAYOUT)
+    D_4d = ttnn.reshape(D_rm, [1, H, 1, 1])  # view of D_rm
+    D_rep = ttnn.repeat(D_4d, ttnn.Shape([1, 1, T, T]))  # new buffer — use view first
+    del D_4d  # drop view; then safe to free D_rm
+    D_rm.deallocate(True)
+    D_skip_t = ttnn.to_layout(ttnn.reshape(D_rep, [H * T, T]), ttnn.TILE_LAYOUT)
+    D_rep.deallocate(True)
+
+    return {
+        "log_L": log_L,
+        "log_gamma": log_gamma,
+        "log_delta": log_delta,
+        "log_gscalar": log_gscalar,
+        "D_skip_t": D_skip_t,
+    }
+
+
+def _build_derived_tensors_cpu(
+    A_cum: torch.Tensor,  # [H, n_chunks, C] float32 — intra-chunk cumulative log-decay
+    D_cpu: torch.Tensor,  # [H] float32 — D skip scalar per head
+    n_chunks: int,
+) -> dict[str, torch.Tensor]:
+    """Build the A_cumsum-derived tt-lang inputs on CPU (bfloat16).
+
+    Does NOT need the activation tensors (x_dt, B, C, x, h_prev) — those are
+    kept on device and permuted/reshaped there.  Only log_decay and D need to
+    be fetched from device to call this function.
+    """
+    H, D_dim, N, G, C = NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE, N_GROUPS, CHUNK_SIZE
+    T = _TILE
+
+    # log_L [H*n_chunks*C, C] — lower-triangular; -inf above diagonal
+    i_idx = torch.arange(C).unsqueeze(1)
+    s_idx = torch.arange(C).unsqueeze(0)
+    causal = s_idx <= i_idx  # [C, C] bool
+    A_col = A_cum.unsqueeze(3)  # [H, n_chunks, C, 1]
+    A_row = A_cum.unsqueeze(2)  # [H, n_chunks, 1, C]
+    log_L = (
+        torch.where(
+            causal.unsqueeze(0).unsqueeze(0),
+            A_col - A_row,
+            torch.tensor(float("-inf")),
+        )
+        .reshape(H * n_chunks * C, C)
+        .to(torch.bfloat16)
+    )
+
+    # log_gamma [H*n_chunks*C, T] — broadcast-filled column vec
+    lg = A_cum.reshape(H * n_chunks * C)
+    log_gamma = lg.unsqueeze(1).expand(-1, T).to(torch.bfloat16).contiguous()
+
+    # log_delta [H*n_chunks*C, T] — broadcast-filled column vec
+    A_last = A_cum[:, :, -1:]  # [H, n_chunks, 1]
+    ld = (A_last - A_cum).reshape(H * n_chunks * C)
+    log_delta = ld.unsqueeze(1).expand(-1, T).to(torch.bfloat16).contiguous()
+
+    # log_gscalar [H*n_chunks*T, T] — per-chunk scalar tile
+    A_last_flat = A_cum[:, :, -1].reshape(H * n_chunks)
+    log_gscalar = (
+        A_last_flat.unsqueeze(1)
+        .unsqueeze(2)
+        .expand(-1, T, T)
+        .reshape(H * n_chunks * T, T)
+        .to(torch.bfloat16)
+        .contiguous()
+    )
+
+    # D_skip_t [H*T, T] — per-head scalar tile
+    D_skip = D_cpu.to(torch.bfloat16).unsqueeze(1).unsqueeze(2).expand(-1, T, T).reshape(H * T, T).contiguous()
+
+    return {
+        "log_L": log_L,
+        "log_gamma": log_gamma,
+        "log_delta": log_delta,
+        "log_gscalar": log_gscalar,
+        "D_skip_t": D_skip,
+    }
+
 
 def _build_ttlang_ssd_inputs(
     x_dt_t: torch.Tensor,  # [S_pad, H, D] float32
@@ -296,98 +527,56 @@ def _build_ttlang_ssd_inputs(
     h_prev_t: torch.Tensor | None,  # [H, D, N] float32 or None
     n_chunks: int,
 ) -> dict[str, torch.Tensor]:
-    """CPU-side vectorized build of all tt-lang kernel inputs (bfloat16).
+    """CPU-side build of all tt-lang kernel inputs (bfloat16). Used by warmup and sim.
 
-    All shapes match what make_mamba2_ssd_scan_kernel expects (group-format B/C).
+    For the hardware inference path use _mamba2_ssd_all_chunks_ttlang which keeps
+    activations on device and only fetches log_decay to CPU.
     """
-    H, D, N, G, C = NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE, N_GROUPS, CHUNK_SIZE
-    T = _TILE
+    H, D_dim, N, G, C = NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE, N_GROUPS, CHUNK_SIZE
 
-    # ── Intra-chunk cumulative log-decay ──────────────────────────────────
-    # logd_t [S_pad, H] → [H, n_chunks, C] → A_cumsum [H, n_chunks, C]
-    logd = logd_t.T.reshape(H, n_chunks, C)  # [H, n_chunks, C]
-    A_cum = torch.cumsum(logd, dim=2)  # [H, n_chunks, C] float32
+    logd = logd_t.T.reshape(H, n_chunks, C)
+    A_cum = torch.cumsum(logd, dim=2)  # [H, n_chunks, C]
+    derived = _build_derived_tensors_cpu(A_cum, D_t, n_chunks)
 
-    # ── log_L [H*n_chunks*C, C] — lower-triangular; -inf above diagonal ─
-    i_idx = torch.arange(C).unsqueeze(1)
-    s_idx = torch.arange(C).unsqueeze(0)
-    causal = s_idx <= i_idx  # [C, C] bool
-    A_col = A_cum.unsqueeze(3)  # [H, n_chunks, C, 1]
-    A_row = A_cum.unsqueeze(2)  # [H, n_chunks, 1, C]
-    log_L_4d = A_col - A_row  # [H, n_chunks, C, C]
-    log_L_4d = torch.where(
-        causal.unsqueeze(0).unsqueeze(0),
-        log_L_4d,
-        torch.tensor(float("-inf")),
-    )
-    log_L = log_L_4d.reshape(H * n_chunks * C, C).to(torch.bfloat16)
+    # x_dt [H*n_chunks*C, D] — head-first layout
+    x_dt = x_dt_t.to(torch.bfloat16).permute(1, 0, 2).reshape(H * n_chunks * C, D_dim).contiguous()
 
-    # ── log_gamma [H*n_chunks*C, T] — broadcast-filled column vec ────────
-    lg = A_cum.reshape(H * n_chunks * C)
-    log_gamma = lg.unsqueeze(1).expand(-1, T).to(torch.bfloat16).contiguous()
+    # B, C_mat [G*n_chunks*C, N] — group format
+    B_mat = B_t.to(torch.bfloat16).permute(1, 0, 2).reshape(G * n_chunks * C, N).contiguous()
+    C_mat = C_t.to(torch.bfloat16).permute(1, 0, 2).reshape(G * n_chunks * C, N).contiguous()
 
-    # ── log_delta [H*n_chunks*C, T] — broadcast-filled column vec ────────
-    A_last = A_cum[:, :, -1:]  # [H, n_chunks, 1]
-    ld = (A_last - A_cum).reshape(H * n_chunks * C)
-    log_delta = ld.unsqueeze(1).expand(-1, T).to(torch.bfloat16).contiguous()
+    # x [H*n_chunks*C, D]
+    x = x_t.to(torch.bfloat16).permute(1, 0, 2).reshape(H * n_chunks * C, D_dim).contiguous()
 
-    # ── log_gscalar [H*n_chunks*T, T] — per-chunk scalar tile ───────────
-    A_last_flat = A_cum[:, :, -1].reshape(H * n_chunks)  # [H*n_chunks]
-    log_gscalar = (
-        A_last_flat.unsqueeze(1)
-        .unsqueeze(2)
-        .expand(-1, T, T)
-        .reshape(H * n_chunks * T, T)
-        .to(torch.bfloat16)
-        .contiguous()
-    )
-
-    # ── x_dt [H*n_chunks*C, D] — head-first layout ────────────────────────
-    x_dt_t2 = x_dt_t.to(torch.bfloat16).permute(1, 0, 2)  # [H, S_pad, D]
-    x_dt = x_dt_t2.reshape(H * n_chunks * C, D).contiguous()
-
-    # ── B, C [G*n_chunks*C, N] — group format ─────────────────────────────
-    B_g = B_t.to(torch.bfloat16).permute(1, 0, 2)  # [G, S_pad, N]
-    B_mat = B_g.reshape(G * n_chunks * C, N).contiguous()
-    C_g = C_t.to(torch.bfloat16).permute(1, 0, 2)  # [G, S_pad, N]
-    C_mat = C_g.reshape(G * n_chunks * C, N).contiguous()
-
-    # ── x [H*n_chunks*C, D] ──────────────────────────────────────────────
-    x_t2 = x_t.to(torch.bfloat16).permute(1, 0, 2)  # [H, S_pad, D]
-    x = x_t2.reshape(H * n_chunks * C, D).contiguous()
-
-    # ── h_in [H*D, N] — stacked initial states ───────────────────────────
+    # h_in [H*D, N]
     if h_prev_t is not None:
-        h_in = h_prev_t.to(torch.bfloat16).reshape(H * D, N).contiguous()
+        h_in = h_prev_t.to(torch.bfloat16).reshape(H * D_dim, N).contiguous()
     else:
-        h_in = torch.zeros(H * D, N, dtype=torch.bfloat16)
-
-    # ── D_skip_t [H*T, T] — per-head scalar tile ─────────────────────────
-    D_skip = D_t.to(torch.bfloat16).unsqueeze(1).unsqueeze(2).expand(-1, T, T).reshape(H * T, T).contiguous()
-
-    # ── Pre-allocated output tensors ──────────────────────────────────────
-    y_out = torch.zeros(H * n_chunks * C, D, dtype=torch.bfloat16)
-    h_out = torch.zeros(H * D, N, dtype=torch.bfloat16)
+        h_in = torch.zeros(H * D_dim, N, dtype=torch.bfloat16)
 
     return {
-        "log_L": log_L,
+        **derived,
         "x_dt": x_dt,
         "B": B_mat,
         "C_mat": C_mat,
         "x": x,
-        "log_gamma": log_gamma,
-        "log_delta": log_delta,
-        "log_gscalar": log_gscalar,
         "h_in": h_in,
-        "D_skip_t": D_skip,
-        "y_out": y_out,
-        "h_out": h_out,
+        "y_out": torch.zeros(H * n_chunks * C, D_dim, dtype=torch.bfloat16),
+        "h_out": torch.zeros(H * D_dim, N, dtype=torch.bfloat16),
     }
+
+
+def _dev_permute_reshape(t: ttnn.Tensor, perm: list, new_shape: list) -> ttnn.Tensor:
+    """Permute then reshape a device tensor with no PCIe round-trip."""
+    t = ttnn.to_layout(t, ttnn.ROW_MAJOR_LAYOUT)
+    t = ttnn.permute(t, perm)
+    t = ttnn.reshape(t, new_shape)
+    return ttnn.to_layout(t, ttnn.TILE_LAYOUT)
 
 
 def _mamba2_ssd_all_chunks_ttlang(
     mesh_device: MeshDevice,
-    x_dt_pad: ttnn.Tensor,  # [B, S_pad, H, D]
+    x_dt_pad: ttnn.Tensor,  # [B, S_pad, H, D] TILE_LAYOUT on device
     B_pad: ttnn.Tensor,  # [B, S_pad, G, N]
     C_pad: ttnn.Tensor,  # [B, S_pad, G, N]
     x_pad: ttnn.Tensor,  # [B, S_pad, H, D]
@@ -396,45 +585,38 @@ def _mamba2_ssd_all_chunks_ttlang(
     D_tt: ttnn.Tensor,  # [1, H, 1, 1]
     n_chunks: int,
 ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-    """Fused SSD scan via tt-lang kernel — single dispatch for all n_chunks.
+    """Fused SSD scan via tt-lang kernel — all tensors stay on device.
 
     Returns (y_full [B, S_pad, H, D], h_next [B, H, D, N]) on mesh_device.
 
-    Implementation: preprocessing on CPU (vectorized PyTorch), kernel dispatch
-    on the full mesh (replicated — identical result on all devices), results
-    replicated back to mesh. Using the full mesh (not submesh) avoids CQ
-    ownership conflicts during mesh close.
+    All derived tensors (log_L, log_gamma, log_delta, log_gscalar, D_skip_t)
+    are computed on device via _build_derived_tensors_device — zero D2H/H2D.
+    For ISL=8192 this eliminates ~23 MB D2H + 144 MB H2D per layer (3.3 GB total
+    over 23 Mamba2 layers).
     """
     from .mamba2_ssd_scan_ttlang import _IS_SIM, make_mamba2_ssd_scan_kernel
 
     H, D, N, G, C = NUM_HEADS, HEAD_DIM, SSM_STATE_SIZE, N_GROUPS, CHUNK_SIZE
-
-    # ── Extract from mesh device 0 to CPU ────────────────────────────────
-    def _cpu(t: ttnn.Tensor) -> torch.Tensor:
-        return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
-
-    x_dt_cpu = _cpu(x_dt_pad)[0]  # [S_pad, H, D]
-    B_cpu = _cpu(B_pad)[0]  # [S_pad, G, N]
-    C_cpu = _cpu(C_pad)[0]  # [S_pad, G, N]
-    x_cpu = _cpu(x_pad)[0]  # [S_pad, H, D]
-    logd_cpu = _cpu(log_decay_pad)[0]  # [S_pad, H]
-    D_cpu = _cpu(D_tt)[0, :, 0, 0]  # [H]
-    h_prev_cpu = _cpu(h_prev)[0].reshape(H, D, N) if h_prev is not None else None
-
-    # ── Build all tt-lang inputs on CPU ───────────────────────────────────
-    inputs = _build_ttlang_ssd_inputs(x_dt_cpu, B_cpu, C_cpu, x_cpu, logd_cpu, D_cpu, h_prev_cpu, n_chunks)
-
-    # ── Dispatch kernel ───────────────────────────────────────────────────
-
-    kernel = make_mamba2_ssd_scan_kernel(n_chunks, num_heads=H, n_groups=G)
     S_pad = n_chunks * C
 
     if _IS_SIM:
-        # Sim runs on CPU — pass SimTensors to avoid deepcopy of Metal TTNN tensors
+        # Sim path: still needs activations on CPU to build SimTensors.
+        def _cpu(t: ttnn.Tensor) -> torch.Tensor:
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[0]).float()
+
+        logd_cpu = _cpu(log_decay_pad)[0]  # [S_pad, H]
+        D_cpu = _cpu(D_tt)[0, :, 0, 0]  # [H]
+        x_dt_cpu = _cpu(x_dt_pad)[0]
+        B_cpu = _cpu(B_pad)[0]
+        C_cpu_t = _cpu(C_pad)[0]
+        x_cpu = _cpu(x_pad)[0]
+        h_prev_cpu = _cpu(h_prev)[0].reshape(H, D, N) if h_prev is not None else None
+        full_inputs = _build_ttlang_ssd_inputs(x_dt_cpu, B_cpu, C_cpu_t, x_cpu, logd_cpu, D_cpu, h_prev_cpu, n_chunks)
         from sim.ttnnsim import TILE_LAYOUT as _TILE_LAYOUT
         from sim.ttnnsim import Tensor as _SimTensor
 
-        sim_t = {k: _SimTensor(v.clone(), _TILE_LAYOUT) for k, v in inputs.items()}
+        sim_t = {k: _SimTensor(v.clone(), _TILE_LAYOUT) for k, v in full_inputs.items()}
+        kernel = make_mamba2_ssd_scan_kernel(n_chunks, num_heads=H, n_groups=G)
         kernel(
             sim_t["log_L"],
             sim_t["x_dt"],
@@ -449,11 +631,12 @@ def _mamba2_ssd_all_chunks_ttlang(
             sim_t["y_out"],
             sim_t["h_out"],
         )
-        y_torch = sim_t["y_out"]._tensor.float()  # [H*n_chunks*C, D]
-        h_torch = sim_t["h_out"]._tensor.float()  # [H*D, N]
-    else:
-        # Hardware Metal path — upload to mesh device
-        def _to_dev(t: torch.Tensor) -> ttnn.Tensor:
+        y_torch = sim_t["y_out"]._tensor.float()
+        h_torch = sim_t["h_out"]._tensor.float()
+        y_bshd = y_torch.reshape(H, S_pad, D).permute(1, 0, 2).unsqueeze(0).to(torch.bfloat16)
+        h_bhdn = h_torch.reshape(1, H, D, N).to(torch.bfloat16)
+
+        def _up(t):
             return ttnn.from_torch(
                 t,
                 dtype=ttnn.bfloat16,
@@ -463,60 +646,75 @@ def _mamba2_ssd_all_chunks_ttlang(
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        tensors = {k: _to_dev(v) for k, v in inputs.items()}
-        kernel(
-            tensors["log_L"],
-            tensors["x_dt"],
-            tensors["B"],
-            tensors["C_mat"],
-            tensors["x"],
-            tensors["log_gamma"],
-            tensors["log_delta"],
-            tensors["log_gscalar"],
-            tensors["h_in"],
-            tensors["D_skip_t"],
-            tensors["y_out"],
-            tensors["h_out"],
-        )
-        y_dev0 = ttnn.get_device_tensors(tensors["y_out"])[0]
-        y_torch = ttnn.to_torch(y_dev0).float()  # [H*n_chunks*C, D]
-        h_dev0 = ttnn.get_device_tensors(tensors["h_out"])[0]
-        h_torch = ttnn.to_torch(h_dev0).float()  # [H*D, N]
+        return _up(y_bshd), _up(h_bhdn)
 
-    # ── Reshape outputs → upload to mesh as Metal TTNN tensors ────────────
-    y_hsd = y_torch.reshape(H, S_pad, D)
-    y_bshd = y_hsd.permute(1, 0, 2).unsqueeze(0).to(torch.bfloat16)  # [1, S_pad, H, D]
-    h_bhdn = h_torch.reshape(1, H, D, N).to(torch.bfloat16)
+    # ── (1) Build all derived tensors on device — zero D2H/H2D ───────────
+    dev = _build_derived_tensors_device(log_decay_pad, D_tt, n_chunks, mesh_device)
 
-    h_mesh = ttnn.from_torch(
-        h_bhdn,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=mesh_device,
-        mesh_mapper=_R(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
+    # ── (2) Permute/reshape activations entirely on device ────────────────
+    # x_dt_pad [B, S_pad, H, D] → [H*S_pad, D]
+    x_dt_dev = _dev_permute_reshape(x_dt_pad, [0, 2, 1, 3], [H * S_pad, D])
+    # B_pad    [B, S_pad, G, N] → [G*S_pad, N]
+    B_dev = _dev_permute_reshape(B_pad, [0, 2, 1, 3], [G * S_pad, N])
+    # C_pad    [B, S_pad, G, N] → [G*S_pad, N]
+    C_dev = _dev_permute_reshape(C_pad, [0, 2, 1, 3], [G * S_pad, N])
+    # x_pad    [B, S_pad, H, D] → [H*S_pad, D]
+    x_dev = _dev_permute_reshape(x_pad, [0, 2, 1, 3], [H * S_pad, D])
 
-    # y_mesh: use a pre-allocated buffer if available so the upload always goes to
-    # a V_bad-safe address (pre-allocated during warmup when DRAM is clean).
-    # V_bad (~0x90a8cb80 on device-2) causes PCIe writes to be silently discarded
-    # (→ NaN) and NOC reads/writes to hang the device (→ process killed).
-    _prealloc_key = (S_pad, id(mesh_device))
-    if _prealloc_key in _TTLANG_Y_PREALLOC:
-        _y_host = ttnn.from_torch(y_bshd, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-        ttnn.copy_host_to_device_tensor(_y_host, _TTLANG_Y_PREALLOC[_prealloc_key])
-        y_mesh = _TTLANG_Y_PREALLOC[_prealloc_key]
+    # ── (3) h_in: reshape h_prev on device or allocate zeros ─────────────
+    if h_prev is not None:
+        h_in_dev = ttnn.reshape(h_prev, [H * D, N])  # [B, H, D, N] → [H*D, N]
     else:
-        y_mesh = ttnn.from_torch(
-            y_bshd,
+        h_in_dev = ttnn.zeros(
+            [H * D, N],
             dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
+            layout=_TL,
             device=mesh_device,
-            mesh_mapper=_R(mesh_device),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    return y_mesh, h_mesh
+    # ── (4) Pre-allocate output tensors on device ─────────────────────────
+    y_out_dev = ttnn.zeros(
+        [H * S_pad, D],
+        dtype=ttnn.bfloat16,
+        layout=_TL,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    h_out_dev = ttnn.zeros(
+        [H * D, N],
+        dtype=ttnn.bfloat16,
+        layout=_TL,
+        device=mesh_device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # ── (5) Kernel dispatch ───────────────────────────────────────────────
+    kernel = make_mamba2_ssd_scan_kernel(n_chunks, num_heads=H, n_groups=G)
+    kernel(
+        dev["log_L"],
+        x_dt_dev,
+        B_dev,
+        C_dev,
+        x_dev,
+        dev["log_gamma"],
+        dev["log_delta"],
+        dev["log_gscalar"],
+        h_in_dev,
+        dev["D_skip_t"],
+        y_out_dev,
+        h_out_dev,
+    )
+
+    # ── (6) Reshape outputs on device — no PCIe re-upload ─────────────────
+    # y_out_dev [H*S_pad, D] → [1, S_pad, H, D]
+    y_hsd = ttnn.reshape(y_out_dev, [H, S_pad, D])  # [H, S_pad, D]
+    y_bshd = ttnn.reshape(ttnn.permute(y_hsd, [1, 0, 2]), [1, S_pad, H, D])
+
+    # h_out_dev [H*D, N] → [1, H, D, N]
+    h_mesh = ttnn.reshape(h_out_dev, [1, H, D, N])
+
+    return y_bshd, h_mesh
 
 
 # ---------------------------------------------------------------------------
