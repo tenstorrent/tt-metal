@@ -420,7 +420,15 @@ void kernel_main() {
                                 // packer at multi-row-chunk x ring_size>1 (see the TP=2 hang
                                 // note in RMSNORM_FUSION_FINDINGS.md). stats_tiles_cols ==
                                 // ring_size == TP is always even (2/4/8).
-                                static_assert(stats_tiles_cols % 2 == 0, "eltwise stats-sum needs even ring_size");
+                                // NB: this branch is `if constexpr (stats_tiles_cols > 1)`, but the
+                                // kernel is a plain function (constexpr CT args, not a template), so the
+                                // discarded branch is still semantically checked — hence the `== 1` exempt
+                                // so the TP=1 (stats_tiles_cols==1) build, which takes the else-branch
+                                // matmul reduce below, compiles. The even-ness guard still protects the
+                                // pairwise add_tiles(...,k,k+1,...) loop from an OOB read at odd ring_size>1.
+                                static_assert(
+                                    stats_tiles_cols == 1 || stats_tiles_cols % 2 == 0,
+                                    "eltwise stats-sum needs even ring_size");
                                 constexpr uint32_t recip_h_full_bits = __builtin_bit_cast(
                                     uint32_t, 1.0f / static_cast<float>(num_tile_cols * 32u * stats_tiles_cols));
                                 if constexpr (packed_ag_enabled != 0) {
