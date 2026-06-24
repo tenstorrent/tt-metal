@@ -155,7 +155,7 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 400000000}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 1000000000}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
@@ -169,7 +169,7 @@ jobs:
               "runner-label": "config-t3000",
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 200000000}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 1500000000}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
@@ -183,7 +183,7 @@ jobs:
               "runner-label": "BH-Quietbox-2",
               "arch": "arch-blackhole",
               "mesh-device": "P150x4",
-              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 300000000}",
+              "tt-config": "{\"sample_on_device_mode\": \"decode_only\", \"fabric_config\": \"FABRIC_1D\", \"trace_region_size\": 1500000000}",
               "additional-server-args": "--max_num_seqs 1 --async-scheduling",
               "multimodal": false,
               "owner_id": "U08TJ70UFRT"
@@ -537,21 +537,22 @@ jobs:
             export TT_MM_THROTTLE_PERF="${{ matrix.test-group.tt_mm_throttle_perf }}"
           fi
 
-          # Gemma4 trace-region tuning for this benchmark (random-input-len 100,
+          # Gemma4 warmup tuning for this benchmark (random-input-len 100,
           # single-stream max_num_seqs=1):
-          #   * The prefill trace bucket sweep (128..4096) is the dominant trace
-          #     consumer — the 4096 bucket alone is ~0.5 GB on 26B-A4B — yet a
-          #     100-token prompt only ever replays the 128 bucket. Limit it so the
-          #     trace region stays small and startup is fast.
+          #   * Keep the full prefill trace bucket sweep (128..4096) so every
+          #     prefill bucket is captured at startup. This is the dominant trace
+          #     consumer (the 4096 bucket alone is ~0.5 GB on 26B-A4B, >1 GB for
+          #     the whole sweep), so the per-entry trace_region_size above is
+          #     sized to hold it — also clearing the ~110 MB prefill-trace OOM
+          #     seen on [WH-T3K] Gemma4-26B-A4B.
           #   * Decode warmup captures one resident trace per sampling-param
           #     permutation; the full penalties×logprobs sweep is unused by the
-          #     default-sampling benchmark. Warm only plain/greedy/None.
-          # Both shrink the required trace_region_size (validated to fit <200 MB
-          # on 26B-A4B P150x4, vs >1 GB unbounded).
+          #     default-sampling benchmark. Warm only plain/greedy/None to keep
+          #     the decode side of the trace region lean.
           case "$HF_MODEL" in
             google/gemma-4-*)
               export TT_LEAN_DECODE_WARMUP=1
-              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128
+              export GEMMA4_TRACE_PREFILL_SEQ_LENS=128,512,1024,2048,4096
               ;;
           esac
 
