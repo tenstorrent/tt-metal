@@ -63,3 +63,69 @@ The acceptance test needs ≥2 mesh devices on a line with the fabric enabled.
 
 Next step: run `tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point.py` on a
 working multi-device environment.
+
+## 2026-06-24 — Phase 0 verification pass (verifier)
+
+### What was done
+Code review + registry-conformance hardening + analytical capability snapshot for the
+Phase-0 implementation. On-device verification attempted but blocked (see below).
+
+### SUPPORTED at Phase 0 (after the fix)
+- **dtype** = `[bfloat16, float32, bfloat8_b, uint16, int32, uint32]`
+- **layout** = `[TILE, ROW_MAJOR]`
+- **topology** = `[Linear, Ring]`
+- **alignment** = `[tile_aligned, non_tile_aligned]`  ← **added this pass**
+- After the fix, `SUPPORTED == TARGET` on every axis → **0 axis-expansion refinements**.
+
+### Issues encountered / fixed
+- **Registry-conformance bug (fixed in `point_to_point.py`).** The op shipped
+  `INPUT_TAGGERS = {}` and no `alignment` key in `SUPPORTED`, but `feature_spec.py`
+  declares `alignment` as a TARGET axis and specifies a `tag_alignment(inputs, axes)`
+  tagger. With an empty taggers dict the golden harness would have treated `alignment`
+  as a spurious *finite* axis (double-counting each shape, label decoupled from the
+  real shape). Added `tag_alignment` (last-two-dims-÷32 → `tile_aligned`),
+  `INPUT_TAGGERS = {"alignment": tag_alignment}`, and
+  `SUPPORTED["alignment"] = ["tile_aligned", "non_tile_aligned"]`. The op is a pure
+  byte mover (no tilize/untilize), so it genuinely supports both alignments;
+  `validate()` already iterates `INPUT_TAGGERS` generically, so no further change.
+- **Kernels / descriptor / host assembly reviewed clean** (no changes): CB push==wait
+  balance, both coalesce/de-coalesce regimes incl. short-last-packet, the
+  `[has_forward][fwd?][has_backward][bwd?]` fabric arg block at `conn_arg_idx=9`
+  (matches host), the handshake + cache-reuse reset ordering, and the
+  helper-vs-raw-API split all verified against `ccl_helpers_dataflow.hpp` and the
+  reference CCL kernels. INVALID audit (`feature_spec.py`) well-formed
+  (single-tensor coupling, universe-must-change, canonical bf8b×ROW_MAJOR present).
+
+### Accuracy achieved
+- **Not measured on device** (blocked — see below). Analytical oracle: pure byte
+  copy ⇒ receiver shard is bit-for-bit equal to the device-resident sender shard
+  ⇒ PCC = 1.0, zero error for all dtypes. Precision baseline test written and
+  collects (8 items) but could not execute.
+
+### Golden suite at Phase 0
+- **Analytical only** (no `test_golden.py` scaffold + sim blocker): 432 cells =
+  396 expected-supported + 36 INVALID-skipped (bf8b×ROW_MAJOR), **0 xfail_expected**,
+  loud drift categories 0 by construction. Saved to
+  `eval/results/point_to_point/verifier_report.json` with a `_provenance` block
+  flagging it as expected-categories, not observed results.
+
+### On-device verification — BLOCKED (infra, not the op)
+- `run_multidevice_sim_pytest.py --op point_to_point` (topology `bh_8xP150_p2p`,
+  required) fails fabric router sync in `open_mesh_device` (fixture setup, before the
+  op runs): *"Timeout ... Device 4 ... 4 core(s) stuck at STARTED ... ethernet
+  handshake likely failed."* Reproduced with both the default 15000 ms and a raised
+  **600000 ms** `TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS` — identical failure, so it is
+  a genuine handshake failure in the `blackhole_8xP150_torus_x` sim model, not
+  slowness and not an op defect. Verdict: `MULTIDEV_SIM_RESULT[bh_8xP150_p2p]: HANG`.
+- **Mandatory follow-up:** re-run acceptance + precision + golden suites on real
+  ≥2-device Blackhole hardware (or a repaired sim-bh fabric) to confirm the
+  (currently review-only) SUPPORTED claims.
+
+### Tests added
+- `tests/ttnn/unit_tests/operations/point_to_point/test_point_to_point_precision_baseline.py`
+  (PCC + max/mean abs + relative-RMS over 4 shapes × {bf16, f32} × Linear; multi-device
+  fixtures matching the acceptance suite; ready to run under the sim/hardware runner).
+
+### Artifacts written
+- `verification_report.md`, `op_requirements.md` (empty refinement queue + verification
+  debt), this changelog entry, and `eval/results/point_to_point/verifier_report.json`.

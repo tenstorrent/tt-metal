@@ -41,8 +41,22 @@ from .point_to_point_program_descriptor import create_mesh_program_descriptor, r
 # Registry-model declarations
 # ---------------------------------------------------------------------------
 # The 16-byte page-size constraint is a shape x dtype validate() gate (kept
-# satisfiable by INPUTS), not an axis, so no shape-derived taggers are needed.
-INPUT_TAGGERS: dict = {}
+# satisfiable by INPUTS), not an axis. `alignment` IS a shape-derived axis
+# (the golden suite tags it from the per-device shard's last two dims): the op
+# is pure byte movement and never tilizes/untilizes, so it copies the physical
+# pages (padded tiles for TILE, last-dim rows for ROW_MAJOR) verbatim and is
+# alignment-agnostic — both tile_aligned and non_tile_aligned are supported.
+
+
+def tag_alignment(inputs, axes):
+    """Both of the per-device shard's last two dims divisible by 32 -> tile_aligned."""
+    shape = inputs[0]
+    if len(shape) >= 2 and shape[-1] % 32 == 0 and shape[-2] % 32 == 0:
+        return "tile_aligned"
+    return "non_tile_aligned"
+
+
+INPUT_TAGGERS: dict = {"alignment": tag_alignment}
 
 SUPPORTED = {
     # Pure byte movement: every fixed-width dtype is correct. bfloat8_b is a
@@ -58,6 +72,9 @@ SUPPORTED = {
     ],
     "layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
     "topology": [_Topology.Linear, _Topology.Ring],
+    # Shape-derived (tagged from the shard's last two dims). Format is preserved
+    # end to end, so non-tile-aligned shards transfer just like aligned ones.
+    "alignment": ["tile_aligned", "non_tile_aligned"],
 }
 
 EXCLUSIONS: list = []
