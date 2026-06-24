@@ -1137,18 +1137,21 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         static_cast<uint32_t>(fuse_mm_rope),  // block-major POST: fuse matmul+rope per block (rotated block-local)
     };
 
-    // Float32 input requires fp32 dest accumulation; otherwise the unpacker
-    // would silently downcast through SrcA to TF32 / Float16_b (~10 mantissa
-    // bits) and the pre-phase sum(x**2) loses precision when |x| is large.
-    // Our compute kernel uses mul_tiles (SrcA/SrcB FPU path), which still
-    // truncates SrcA to TF32 even when fp32_dest_acc_en is true — TF32's 10
-    // mantissa bits is comparable to bf16, so we accept that precision floor
-    // and don't set UnpackToDestFp32 (that mode only takes effect on the
-    // unpack-to-dest paths like transpose_dest, used by Welford kernels).
+    // fp32 dest accumulation is REQUIRED, unconditionally — not just for fp32
+    // input. It is what keeps every internal CB (stats, reduce, intermediate,
+    // rotated) at fp32 (intermediate_format above) and the reduce/eps/rsqrt
+    // accumulating in fp32 DST. Without it the intermediates silently drop to
+    // bf16 (8 mantissa bits) and the sum(x**2) / normalize lose precision (worse
+    // for bf16 input than fp32 input, since the unpacker also downcasts through
+    // SrcA to TF32). The op's invariant is "inputs/outputs may be bf16 or fp32,
+    // internals are always fp32", so we enforce it here regardless of input dtype.
+    // (Note: the FPU eltwise path — mul_tiles/add_tiles — still truncates its
+    // operands to TF32 ~10 mantissa bits; that floor is inherent to SrcA/SrcB and
+    // is NOT lifted by fp32_dest_acc_en or UnpackToDestFp32.)
     TT_FATAL(
-        !(input_format == tt::DataFormat::Float32 && !fp32_dest_acc_en),
-        "wan_fused_distributed_rmsnorm with Float32 input requires fp32_dest_acc_en=true in the "
-        "compute kernel config.");
+        fp32_dest_acc_en,
+        "wan_fused_distributed_rmsnorm requires fp32_dest_acc_en=true in the compute kernel config "
+        "(internals are always fp32); got fp32_dest_acc_en=false.");
 
     KernelHandle compute_kernel_id = CreateKernel(
         program,
