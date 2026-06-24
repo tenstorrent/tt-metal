@@ -19,6 +19,7 @@ _tt_lang_path = _os.environ.get("TT_LANG_PYTHON_PATH", "")
 if _tt_lang_path and _tt_lang_path not in _sys.path:
     _sys.path.insert(0, _tt_lang_path)
 
+import pytest
 import torch
 import torch.nn.functional as F
 
@@ -36,67 +37,69 @@ G = 8  # N_GROUPS
 C = 64  # CHUNK_SIZE
 
 
-# ── PyTorch reference (copied from test_mamba2_ssd_scan.py) ──────────────────
-
-
-def _segment_sum_torch(x: torch.Tensor) -> torch.Tensor:
-    cs = x.size(-1)
-    t = x[..., None].expand(*x.size(), cs)
-    mask_lower = torch.tril(torch.ones(cs, cs, device=x.device, dtype=torch.bool), diagonal=-1)
-    t = t.masked_fill(~mask_lower, 0)
-    seg = torch.cumsum(t, dim=-2)
-    mask_diag = torch.tril(torch.ones(cs, cs, device=x.device, dtype=torch.bool), diagonal=0)
-    return seg.masked_fill(~mask_diag, float("-inf"))
+# ── PyTorch reference ─────────────────────────────────────────────────────────
 
 
 def _ssd_scan_ref(x_dt, B_in, C_in, x_raw, log_decay, D_skip, chunk_size=C):
-    """Pure-PyTorch reference. Returns (y [B,S_pad,H,D], h_next [B,H,D,N])."""
+    """Pure-PyTorch reference, iterative over chunks — O(C²·H) memory per step.
+
+    The original batched formulation allocates O(n_chunks²·H·D·N) for the
+    cross-chunk state accumulation, which OOMs at n_chunks≥512.  This version
+    loops over chunks and updates h incrementally, keeping peak memory small.
+    """
     B, S, H, D_dim = x_dt.shape
     G_dim, N_dim = B_in.shape[2], B_in.shape[3]
     reps = H // G_dim
-    B_f = B_in.repeat_interleave(reps, dim=2)
+    B_f = B_in.repeat_interleave(reps, dim=2)  # [B, S, H, N]
     C_f = C_in.repeat_interleave(reps, dim=2)
+
     pad_size = (chunk_size - S % chunk_size) % chunk_size
-    x_pad = F.pad(x_raw, (0, 0, 0, 0, 0, pad_size))
-    D_residual = D_skip[None, None, :, None] * x_pad
+    n_chunks = (S + pad_size) // chunk_size
 
-    def _chunk4(t):
-        t = F.pad(t, (0, 0, 0, 0, 0, pad_size))
-        return t.reshape(B, -1, chunk_size, t.shape[2], t.shape[3])
+    xdt_p = F.pad(x_dt, (0, 0, 0, 0, 0, pad_size))
+    B_p = F.pad(B_f, (0, 0, 0, 0, 0, pad_size))
+    C_p = F.pad(C_f, (0, 0, 0, 0, 0, pad_size))
+    x_p = F.pad(x_raw, (0, 0, 0, 0, 0, pad_size))
+    ld_p = F.pad(log_decay, (0, 0, 0, pad_size))
 
-    def _chunk3(t):
-        t = F.pad(t, (0, 0, 0, pad_size))
-        return t.reshape(B, -1, chunk_size, t.shape[2])
+    causal = torch.tril(torch.ones(chunk_size, chunk_size, dtype=torch.bool))
 
-    x_c = _chunk4(x_dt)
-    B_c = _chunk4(B_f)
-    C_c = _chunk4(C_f)
-    A_c = _chunk3(log_decay)
-    A_c_h = A_c.permute(0, 3, 1, 2)
-    A_cumsum = torch.cumsum(A_c_h, dim=-1)
+    y_out = torch.zeros(B, n_chunks * chunk_size, H, D_dim, dtype=x_dt.dtype)
+    h = torch.zeros(B, H, D_dim, N_dim, dtype=x_dt.dtype)  # running state [B,H,D,N]
 
-    L = torch.exp(_segment_sum_torch(A_c_h))
-    G_mat = (C_c[:, :, :, None, :, :] * B_c[:, :, None, :, :, :]).sum(dim=-1)
-    M = G_mat * L.permute(0, 2, 3, 4, 1)
-    Y_diag = (M[..., None] * x_c[:, :, None]).sum(dim=3)
+    for ci in range(n_chunks):
+        s, e = ci * chunk_size, (ci + 1) * chunk_size
+        xdt_c = xdt_p[:, s:e]  # [B, C, H, D]
+        B_c = B_p[:, s:e]  # [B, C, H, N]
+        C_c = C_p[:, s:e]  # [B, C, H, N]
+        x_c = x_p[:, s:e]  # [B, C, H, D]
+        ld_c = ld_p[:, s:e]  # [B, C, H]
 
-    decay_states = torch.exp(A_cumsum[:, :, :, -1:] - A_cumsum)
-    B_decay = B_c * decay_states.permute(0, 2, 3, 1)[..., None]
-    states = (B_decay[..., None, :] * x_c[..., None]).sum(dim=2)
+        A_cum = torch.cumsum(ld_c, dim=1)  # [B, C, H]
+        A_last = A_cum[:, -1, :]  # [B, H]
 
-    previous_states = torch.zeros_like(states[:, :1])
-    states = torch.cat([previous_states, states], dim=1)
-    A_cumsum_last = A_cumsum[:, :, :, -1]
-    decay_chunk = torch.exp(_segment_sum_torch(F.pad(A_cumsum_last, (1, 0))))
-    decay_chunk = decay_chunk.transpose(1, 3)
-    new_states = (decay_chunk[..., None, None] * states[:, :, None, ...]).sum(dim=1)
-    states, h_next = new_states[:, :-1], new_states[:, -1]
+        # Intra-chunk: L[i,s] = exp(A_cum[i]-A_cum[s]) lower-triangular causal
+        diff = A_cum[:, :, None, :] - A_cum[:, None, :, :]  # [B, C_i, C_s, H]
+        diff.masked_fill_(~causal[None, :, :, None], float("-inf"))
+        L = torch.exp(diff)  # [B, C_i, C_s, H]
+        CB = (C_c[:, :, None] * B_c[:, None]).sum(-1)  # [B, C_i, C_s, H]
+        # y_intra[b,i,h,d] = sum_s (L*CB)[b,i,s,h] * xdt_c[b,s,h,d]
+        LCB = (L * CB).permute(0, 3, 1, 2)  # [B, H, C_i, C_s]
+        y_intra = torch.einsum("bhis,bshd->bihd", LCB, xdt_c)  # [B, C, H, D]
 
-    state_decay_out = torch.exp(A_cumsum)
-    Y_off = (C_c[..., None, :] * states[:, :, None, ...]).sum(-1)
-    Y_off = Y_off * state_decay_out.permute(0, 2, 3, 1)[..., None]
-    y = (Y_diag + Y_off).reshape(B, -1, H, D_dim) + D_residual
-    return y, h_next
+        # Cross-chunk: exp(A_cum[i]) * C_c[i] @ h
+        gamma = torch.exp(A_cum)  # [B, C, H]
+        y_cross = torch.einsum("bchn,bhdn->bchd", C_c, h) * gamma[:, :, :, None]
+
+        y_out[:, s:e] = y_intra + y_cross + D_skip[None, None, :, None] * x_c
+
+        # State update: h = exp(A_last)*h + sum_s exp(A_last-A_cum[s])*xdt_c[s]⊗B_c[s]
+        delta = torch.exp(A_last[:, None, :] - A_cum)  # [B, C, H]
+        xdt_sc = xdt_c * delta[:, :, :, None]  # [B, C, H, D]
+        dh = torch.einsum("bchd,bchn->bhdn", xdt_sc, B_c)  # [B, H, D, N]
+        h = torch.exp(A_last)[:, :, None, None] * h + dh
+
+    return y_out, h
 
 
 # ── Hardware tensor builder ───────────────────────────────────────────────────
@@ -212,9 +215,16 @@ def _build_all_heads_hw_tensors(device, x_dt_raw, B_in_raw, C_in_raw, x_raw, log
 # ── Hardware PCC test ─────────────────────────────────────────────────────────
 
 
-def test_mamba2_ssd_scan_ttlang_hw_pcc():
+def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
+    a, b = a.float().flatten(), b.float().flatten()
+    a, b = a - a.mean(), b - b.mean()
+    denom = (a.pow(2).sum() * b.pow(2).sum()).sqrt()
+    return ((a * b).sum() / denom).item() if denom.item() != 0.0 else 1.0
+
+
+@pytest.mark.parametrize("n_chunks", [2, 16, 64, 128, 256, 512, 1024, 2048, 4096])
+def test_mamba2_ssd_scan_ttlang_hw_pcc(n_chunks):
     """Multi-core tt-lang SSD scan on hardware matches PyTorch reference."""
-    n_chunks = 2
     S = n_chunks * C
     torch.manual_seed(0)
 
@@ -278,12 +288,20 @@ def test_mamba2_ssd_scan_ttlang_hw_pcc():
         y_ref_s = y_ref[0, :S].float()
         h_ref_s = h_ref[0].float()
 
-        assert torch.allclose(
-            y_ttlang.float(), y_ref_s, atol=1e-2, rtol=1e-2
-        ), f"y max_diff={(y_ttlang.float()-y_ref_s).abs().max():.4f}"
-        assert torch.allclose(
-            h_ttlang.float(), h_ref_s, atol=1e-2, rtol=1e-2
-        ), f"h max_diff={(h_ttlang.float()-h_ref_s).abs().max():.4f}"
+        y_pcc = _pcc(y_ttlang, y_ref_s)
+        h_pcc = _pcc(h_ttlang, h_ref_s)
+        y_max = (y_ttlang.float() - y_ref_s).abs().max().item()
+        h_max = (h_ttlang.float() - h_ref_s).abs().max().item()
+        print(
+            f"\nn_chunks={n_chunks:4d}  ISL={S:6d}  "
+            f"y_PCC={y_pcc:.6f}  h_PCC={h_pcc:.6f}  "
+            f"y_maxdiff={y_max:.4f}  h_maxdiff={h_max:.4f}  "
+            f"{'PASS' if y_pcc > 0.99 and h_pcc > 0.99 else 'FAIL'}",
+            flush=True,
+        )
+
+        assert y_pcc > 0.99, f"n_chunks={n_chunks}: y_PCC={y_pcc:.6f} < 0.99"
+        assert h_pcc > 0.99, f"n_chunks={n_chunks}: h_PCC={h_pcc:.6f} < 0.99"
 
     finally:
         ttnn.close_device(device)

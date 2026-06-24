@@ -208,13 +208,14 @@ class DecoderState:
 
 
 def _zeros_on_device(shape, mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-    cpu = torch.zeros(shape, dtype=torch.bfloat16)
-    return ttnn.from_torch(
-        cpu,
+    # Use device-side zeros fill instead of H2D DMA (from_torch) to avoid
+    # uint16 tile-count overflow in the host tiling kernel for large shapes
+    # (e.g. kv_cache [8193, 2, 32, 128] TILE = 65544 total tiles ≥ 2^16).
+    return ttnn.zeros(
+        shape,
         dtype=dtype,
         layout=layout,
         device=mesh_device,
-        mesh_mapper=_R(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
@@ -233,14 +234,15 @@ def allocate_decoder_state(
       - 6 sequential page tables
       - current_pos = [B] zeros on device
 
-    Raises:
-        ValueError: if max_seq_len exceeds the model's max_position_embeddings (262144).
     """
     if max_seq_len > MODEL_MAX_SEQ_LEN:
-        raise ValueError(
-            f"max_seq_len={max_seq_len} exceeds the model's max_position_embeddings "
-            f"({MODEL_MAX_SEQ_LEN}). RoPE would produce undefined positional encodings "
-            f"beyond this limit."
+        import warnings
+
+        warnings.warn(
+            f"max_seq_len={max_seq_len} exceeds MODEL_MAX_SEQ_LEN={MODEL_MAX_SEQ_LEN}. "
+            f"Mamba2 layers are position-independent; attention RoPE will extrapolate "
+            f"beyond the trained range for the extra {max_seq_len - MODEL_MAX_SEQ_LEN} positions.",
+            stacklevel=2,
         )
     if block_size < 1 or (max_seq_len % block_size != 0 and max_seq_len > block_size):
         # Round up silently — the page table covers the full range either way.

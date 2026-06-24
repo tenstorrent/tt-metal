@@ -36,8 +36,12 @@ try:
     import ttl  # noqa: F401 — hardware Metal kernel
 
     import ttnn  # noqa: F401
+
+    _IS_SIM = False
 except ImportError:
     from sim import ttl, ttnn  # type: ignore[no-redef]  # noqa: F401
+
+    _IS_SIM = True
 
 # Tile counts (all in tile units, each tile = 32×32 elements)
 _XDT_SHAPE = (2, 2)  # [C=64, D=64]

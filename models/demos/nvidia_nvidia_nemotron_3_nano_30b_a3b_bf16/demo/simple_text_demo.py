@@ -98,15 +98,12 @@ _SEED_TEXT = (
 # ---------------------------------------------------------------------------
 
 
-def _make_prompt_of_isl(tokenizer, isl: int) -> str:
-    """Return a string that tokenises to exactly `isl` tokens."""
+def _make_prompt_of_isl(tokenizer, isl: int) -> list[int]:
+    """Return exactly `isl` token IDs by repeating the seed text."""
     ids = tokenizer.encode(_SEED_TEXT, add_special_tokens=True)
-    if len(ids) < isl:
-        # Repeat until we have enough tokens
-        while len(ids) < isl:
-            ids = ids + tokenizer.encode(_SEED_TEXT, add_special_tokens=False)
-    ids = ids[:isl]
-    return tokenizer.decode(ids)
+    while len(ids) < isl:
+        ids = ids + tokenizer.encode(_SEED_TEXT, add_special_tokens=False)
+    return ids[:isl]
 
 
 def _fmt_ms(s: float) -> str:
@@ -168,6 +165,7 @@ def run_demo(
     quiet: bool,
     max_seq_len: int,
     ttlang: bool = False,
+    prefill_trace: bool = False,
 ) -> None:
     """Run the demo using the NemotronHForCausalLM Generator class.
 
@@ -214,9 +212,8 @@ def run_demo(
     runs: list[tuple[str, list[int]]] = []
     if isl_list:
         for isl in isl_list:
-            seed_prompt = _make_prompt_of_isl(tokenizer, isl)
-            ids = tokenizer.encode(seed_prompt, add_special_tokens=True)
-            runs.append((f"ISL={len(ids)} tokens (raw)", ids))
+            ids = _make_prompt_of_isl(tokenizer, isl)
+            runs.append((f"ISL={isl} tokens (raw)", ids))
     else:
         ids = _encode_prompt(tokenizer, prompt, system, isl_list_mode=False)
         runs.append((f"ISL={len(ids)} tokens (chat)", ids))
@@ -229,15 +226,23 @@ def run_demo(
         print(f"Run {run_idx+1}/{len(runs)}: {label}", flush=True)
         print(f"  Max output: {osl} tokens | Mode: {'eager' if eager else 'traced'}", flush=True)
 
-        # Reset state between requests (same as server does between sequences).
-        gen.reset_state()
-
         tokens_pt = torch.tensor([token_ids], dtype=torch.int64)  # [1, S]
         start_pos = torch.zeros(1, dtype=torch.int64)
 
-        # ── Prefill ────────────────────────────────────────────────────────
-        # prefill_forward runs S=1 decode steps internally (no batched kernel).
-        # Returns logits [1, vocab] for the last prompt position.
+        # ── Prefill warmup (compile pass for this ISL) ─────────────────────
+        # Mirrors tt_transformers: run once untimed to compile any ISL-specific
+        # kernels, then reset and run again for the real TTFT measurement.
+        gen.reset_state()
+        gen.prefill_forward(tokens_pt, current_pos=start_pos)
+
+        # ── Prefill trace capture (optional) ──────────────────────────────
+        # After the compile pass, all ISL-specific kernels are compiled.
+        # Capturing the trace now eliminates Python dispatch overhead on replay.
+        if prefill_trace:
+            gen.capture_prefill_trace(isl)
+
+        # ── Prefill measurement ────────────────────────────────────────────
+        gen.reset_state()
         t_prefill_start = time.perf_counter()
         last_logits = gen.prefill_forward(tokens_pt, current_pos=start_pos)  # [1, vocab]
         t_prefill = time.perf_counter() - t_prefill_start
@@ -250,23 +255,26 @@ def run_demo(
 
         # ── Decode loop ────────────────────────────────────────────────────
         # Feed tokens one at a time, exactly as the inference server does.
-        # current_pos at step s = isl + s (the slot the token occupies).
-        # greedy=True: argmax runs on-device (inside trace); only 1 int is
-        # transferred back per step instead of 131K bfloat16 logits.
-        t_decode_start = time.perf_counter()
+        # Iteration 0 is the compile/trace-capture step (mirrors tt_transformers
+        # compile_decode); only iterations 1+ are included in the tok/s metric.
+        decode_times: list[float] = []
         for step in range(osl - 1):
             if generated[-1] == tokenizer.eos_token_id:
                 break
             tok_t = torch.tensor([[next_tok]], dtype=torch.int64)  # [1, 1]
             pos_t = torch.tensor([isl + step], dtype=torch.int64)  # [1]
+            t0 = time.perf_counter()
             tok_out, _ = gen.decode_forward(tok_t, start_pos=pos_t, greedy=True)
+            decode_times.append(time.perf_counter() - t0)
             next_tok = int(tok_out[0, 0])  # argmax already done on device
             generated.append(next_tok)
             if not quiet and step < 3:
                 print(f"  tok {step+2}: {repr(tokenizer.decode([next_tok]))}", flush=True)
-        t_decode = time.perf_counter() - t_decode_start
 
-        n_decode = len(generated) - 1  # tokens produced by decode_forward
+        # Exclude iteration 0 (compile step) from tok/s, matching tt_transformers.
+        steady_times = decode_times[1:] if len(decode_times) > 1 else decode_times
+        t_decode = sum(steady_times)
+        n_decode = len(steady_times)
         decode_tps = n_decode / t_decode if t_decode > 0 and n_decode > 0 else 0.0
         prefill_ptok_ms = t_prefill / max(isl - 1, 1) * 1000
         decode_ptok_ms = 1000.0 / decode_tps if decode_tps > 0 else 0.0
@@ -285,7 +293,8 @@ def run_demo(
             "Warmup": "done",
         }
         table_rows.append(row)
-        print(f"  Wall time: {t_prefill + t_decode:.1f}s", flush=True)
+        t_wall = t_prefill + sum(decode_times)
+        print(f"  Wall time: {t_wall:.1f}s", flush=True)
 
     _print_table(table_rows)
 
@@ -341,6 +350,13 @@ def _parse_args() -> argparse.Namespace:
         help="Use tt-lang fused SSD scan kernel (NEMOTRON_USE_TTLANG_SSD=1). "
         "Pre-compiles kernels for all ISLs during warmup.",
     )
+    p.add_argument(
+        "--prefill-trace",
+        action="store_true",
+        help="Capture a TTNN prefill trace for each ISL after the compile warmup. "
+        "Eliminates Python dispatch overhead during the timed prefill measurement. "
+        "Adds ~1 forward pass of overhead per ISL for trace capture.",
+    )
     args = p.parse_args()
     if args.isl and args.prompt:
         p.error("--isl and --prompt are mutually exclusive.")
@@ -358,4 +374,5 @@ if __name__ == "__main__":
         quiet=args.quiet,
         max_seq_len=args.max_seq_len,
         ttlang=args.ttlang,
+        prefill_trace=args.prefill_trace,
     )

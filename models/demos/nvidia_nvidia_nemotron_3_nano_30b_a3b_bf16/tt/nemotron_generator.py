@@ -55,7 +55,7 @@ import ttnn
 from models.tt_transformers.tt.generator import Generator
 
 from .kv_cache import DEFAULT_BLOCK_SIZE, DEFAULT_MAX_SEQ_LEN, MODEL_MAX_SEQ_LEN, DecoderState, allocate_decoder_state
-from .model import WeightCache, nemotron_h_forward_stateful, nemotron_h_prefill_stateful
+from .model import WeightCache, nemotron_h_forward_stateful, nemotron_h_prefill_stateful, nemotron_h_prefill_stateful_tt
 from .tp import _R, _host_rep, probe_dram_defect_for_shape
 
 
@@ -186,6 +186,10 @@ class NemotronHForCausalLM(Generator):
         self._first_decode: bool = True  # True until first decode_forward is called
         self._prefill_pos: int = 0  # tracks current sequence position across calls
         self._decode_pos: int = 0
+        # Prefill trace support: separate trace per ISL.
+        self._prefill_trace_ids: dict = {}  # ISL → trace_id
+        self._prefill_ids_tt: dict = {}  # ISL → [1, ISL] uint32 device tensor
+        self._prefill_logits_tt: dict = {}  # ISL → [1, 1, vocab] device tensor
 
     @classmethod
     def initialize_vllm_model(
@@ -204,7 +208,9 @@ class NemotronHForCausalLM(Generator):
             mesh_device:  Already-opened TTNN MeshDevice (TP=4 QB).
             max_batch_size: Must be 1 (NemotronH current limitation).
             max_seq_len:  Maximum sequence length (prompt + generated tokens).
-                          Capped at MODEL_MAX_SEQ_LEN (262144).
+                          MODEL_MAX_SEQ_LEN (262144) is the trained context window; values
+                          above it are allowed for generation beyond a full-context prefill
+                          (Mamba2 layers are position-independent; attention RoPE extrapolates).
             n_layers:     Optional layer count override (for unit tests).
         """
         if max_batch_size > 1:
@@ -213,7 +219,14 @@ class NemotronHForCausalLM(Generator):
                 f"(requested {max_batch_size}). Multi-sequence batching is future work."
             )
         if max_seq_len > MODEL_MAX_SEQ_LEN:
-            raise ValueError(f"max_seq_len={max_seq_len} exceeds MODEL_MAX_SEQ_LEN={MODEL_MAX_SEQ_LEN}.")
+            import warnings
+
+            warnings.warn(
+                f"max_seq_len={max_seq_len} exceeds MODEL_MAX_SEQ_LEN={MODEL_MAX_SEQ_LEN}. "
+                f"Mamba2 layers are position-independent; attention RoPE extrapolates beyond "
+                f"the trained range for the extra {max_seq_len - MODEL_MAX_SEQ_LEN} positions.",
+                stacklevel=2,
+            )
 
         print(
             f"[NemotronHForCausalLM] Loading weight cache " f"(max_seq_len={max_seq_len})...",
@@ -305,7 +318,7 @@ class NemotronHForCausalLM(Generator):
         # n_chunks up to max_seq_len so inference never pays JIT latency.
         from models.demos.nvidia_nvidia_nemotron_3_nano_30b_a3b_bf16.tt.mamba2_prefill import warmup_ttlang_kernels
 
-        warmup_ttlang_kernels(self._max_seq_len)
+        warmup_ttlang_kernels(self._max_seq_len, mesh_device=self.mesh_device)
 
         # 128-token dummy sequence: compiles the chunked SSD scan + paged_fill_cache.
         dummy_ids = torch.zeros(1, 128, dtype=torch.int64)
@@ -363,6 +376,55 @@ class NemotronHForCausalLM(Generator):
 
         print(
             f"[NemotronHForCausalLM] Decode trace captured ({time.time() - t0:.1f}s).",
+            flush=True,
+        )
+
+    def capture_prefill_trace(self, isl: int) -> None:
+        """Capture a TTNN trace for prefill at a fixed sequence length.
+
+        After capture, prefill_forward called with exactly `isl` tokens will
+        bypass Python dispatch overhead and execute the compiled trace directly.
+        For other ISLs the existing eager path is used.
+
+        Call this after warmup_model_prefill has already compiled all kernels.
+        Multiple ISLs can be traced independently (each needs ~1 forward pass).
+        """
+        if isl in self._prefill_trace_ids:
+            return  # already captured
+
+        if self._state is None:
+            self.allocate_kv_cache()
+
+        print(f"[NemotronHForCausalLM] Capturing prefill trace ISL={isl}...", flush=True)
+        t0 = time.time()
+
+        # Pre-allocate the fixed-ISL input ids tensor on device.
+        ids_cpu = torch.zeros(1, isl, dtype=torch.int32)
+        ids_tt = ttnn.from_torch(
+            ids_cpu,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        self._prefill_ids_tt[isl] = ids_tt
+
+        # Warmup pass outside trace (compile all ISL-specific kernels).
+        self.reset_state()
+        nemotron_h_prefill_stateful_tt(self.mesh_device, ids_tt, self._wc, self._state)
+        ttnn.synchronize_device(self.mesh_device)
+
+        # Trace capture.
+        self.reset_state()
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        self._prefill_logits_tt[isl] = nemotron_h_prefill_stateful_tt(self.mesh_device, ids_tt, self._wc, self._state)
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        self._prefill_trace_ids[isl] = trace_id
+
+        print(
+            f"[NemotronHForCausalLM] Prefill trace ISL={isl} captured ({time.time() - t0:.1f}s).",
             flush=True,
         )
 
@@ -441,8 +503,24 @@ class NemotronHForCausalLM(Generator):
 
         # Bulk chunked prefill: all S tokens in one forward pass.
         # Returns [B, 1, vocab_size] ttnn.Tensor for the last prompt position only.
-        logits_tt = nemotron_h_prefill_stateful(self.mesh_device, tokens, self._wc, self._state)
-        ttnn.synchronize_device(self.mesh_device)
+        if S in self._prefill_trace_ids:
+            # Traced path: write actual token ids into the pre-allocated device tensor,
+            # then replay the compiled trace (zero Python dispatch overhead).
+            ids_host = ttnn.from_torch(
+                tokens.int(),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+            ttnn.copy_host_to_device_tensor(ids_host, self._prefill_ids_tt[S])
+            ttnn.execute_trace(self.mesh_device, self._prefill_trace_ids[S], cq_id=0, blocking=True)
+            logits_tt = self._prefill_logits_tt[S]
+        else:
+            import os as _os
+
+            _verbose = _os.environ.get("NEMOTRON_PREFILL_VERBOSE", "0") == "1"
+            logits_tt = nemotron_h_prefill_stateful(self.mesh_device, tokens, self._wc, self._state, verbose=_verbose)
+            ttnn.synchronize_device(self.mesh_device)
         self._state.advance()
 
         self._prefill_pos = start_pos + S
@@ -574,7 +652,7 @@ class NemotronHForCausalLM(Generator):
             # DRAM allocator may coalesce those freed blocks back to a defective
             # page address.  This probe permanently blocks any defective pages
             # before the actual prefill allocation sequence begins.
-            probe_dram_defect_for_shape(self.mesh_device, [1, 64, 64, 64])
+            probe_dram_defect_for_shape(self.mesh_device, [1, 64, 64, 64], n_probes=4500)
             self.reset_state()
 
     def reset_state(self):

@@ -22,6 +22,7 @@ Single all_reduce at the end (one CCL op regardless of sequence length).
 """
 
 import math
+import os
 
 import torch
 
@@ -46,18 +47,48 @@ _DOWN_IN0_BLOCK_W = 3
 # block per DRAM bank.  S_OUTER=32768 (3.87 GB) overflows that; S_OUTER=16384 (1.94 GB)
 # needs 242 MB/bank which fits.  At S=256K this means 16 outer iterations (vs 8) with
 # G=512 rows in the UP sparse_matmul (still 4× better than G=128 at S_OUTER=4096).
-# Must be a multiple of TILE=32 (for the UP reshape) and ≥ S_CHUNK=128 (DOWN inner).
+# Must be a multiple of UP_GROUP_TILE (for the UP reshape) and ≥ S_CHUNK (DOWN inner).
 S_OUTER_CHUNK = 16384
 
-# Inner DOWN chunk (bounds per_core_M = S_CHUNK//32 = 4).
-S_CHUNK = 128
+# UP group tile: tokens per UP sparse_matmul group.  Larger values reduce the number of
+# sparse_matmul blocks (G = S/UP_GROUP_TILE) and improve DRAM bandwidth efficiency by
+# amortizing the per-expert weight load (2.5 MB/expert) across more tokens:
+#   UP_GROUP_TILE=32  → G=256 groups at ISL=8192, nnz=32768 (baseline)
+#   UP_GROUP_TILE=128 → G=64  groups at ISL=8192, nnz=8192  (4× fewer blocks)
+#   UP_GROUP_TILE=512 → G=16  groups at ISL=8192, nnz=2048  (16× fewer blocks)
+# L1 cost per core: UP_GROUP_TILE × 448 + 7168 bytes (e.g. 128 → 64 KB, 512 → 242 KB).
+# S_OUTER_CHUNK=16384 must be divisible by UP_GROUP_TILE; valid up to 16384.
+# Tunable via MOE_UP_GROUP_TILE env var; default 512.
+# With out_block_h=per_core_M, weight loads are amortized across all tokens in the group.
+# Larger values → fewer groups → weight loaded fewer times per E-layer:
+#   TILE=32  → G=256 groups at ISL=8192, weight loaded 256×/expert  (baseline)
+#   TILE=128 → G=64,  out_block_h=4,  L1=148KB  — safe
+#   TILE=512 → G=16,  out_block_h=16, L1=508KB  — safe (empirically verified)
+#   TILE=1024→ G=8,   out_block_h=32, L1~988KB  — L1 overflow at ISL<8192 (collision)
+# Must divide S_OUTER_CHUNK=16384.
+UP_GROUP_TILE: int = int(os.environ.get("MOE_UP_GROUP_TILE", "512"))
+
+# Inner DOWN chunk: controls DOWN sparse_matmul tiling (per_core_M = S_CHUNK//32).
+# Larger values amortize per-expert weight reads (319 MB/chunk) across more tokens:
+#   S_CHUNK=128  → per_core_M=4,  64 DOWN iters at ISL=8192 (baseline)
+#   S_CHUNK=512  → per_core_M=16, 16 DOWN iters at ISL=8192 (4× fewer)
+#   S_CHUNK=2048 → per_core_M=64,  4 DOWN iters at ISL=8192 (16× fewer)
+# L1 cost at S_CHUNK=2048: ~667 KB/core (within 1 MB Blackhole L1).
+# Tunable via MOE_DOWN_CHUNK env var; default 1024.
+# With out_block_h=per_core_M, weight loaded once per chunk (per K-block):
+#   S_CHUNK=512  → 8 iters/outer-chunk (ISL=8192), out_block_h=16, L1=172KB  — safe
+#   S_CHUNK=1024 → 4 iters/outer-chunk,             out_block_h=32, L1=332KB  — safe
+#   S_CHUNK=2048 → 2 iters/outer-chunk,             out_block_h=64, L1=652KB  — safe (DOWN cores differ from UP)
+# Must divide S_OUTER_CHUNK=16384.
+S_CHUNK: int = int(os.environ.get("MOE_DOWN_CHUNK", "1024"))
 
 # Sparsity tensors cached per (G, id(mesh)).  All-ones = every expert active.
 # ROW_MAJOR layout required by sparse_matmul.
 _UP_SPARSITY_CACHE: dict = {}  # (G, id(mesh)) → [1, 1, G, 128] RM all-ones
 _DOWN_SPARSITY_CACHE: dict = {}  # id(mesh) → [1, 1, 1, 128] RM all-ones
 
-# Program config cache: same (chunk_S, local_inter) always produces the same config.
+# Program config caches.
+_UP_CFG_CACHE: dict = {}  # (group_tile, local_inter) → MatmulMultiCoreReuseMultiCast1DProgramConfig
 _DOWN_CFG_CACHE: dict = {}  # (chunk_S, local_inter) → MatmulMultiCoreReuseMultiCast1DProgramConfig
 
 
@@ -103,12 +134,15 @@ def _mm_cfg(
     num_cores = cores_x * cores_y
     per_core_N = math.ceil(Nt / num_cores)
     per_core_M = max(32, m) // 32
+    # out_block_h=per_core_M: process all M-tiles per core before moving to next weight block,
+    # amortizing the per-expert weight DRAM load across all tokens in the group.
+    # With mcast_in0=True, activation is multicasted once per K-block (not per M-tile).
     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=ttnn.CoreCoord(cores_x, cores_y),
         in0_block_w=in0_block_w,
         out_subblock_h=1,
         out_subblock_w=1,
-        out_block_h=1,
+        out_block_h=per_core_M,
         out_block_w=1,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
@@ -116,6 +150,19 @@ def _mm_cfg(
         fused_activation=None,
         mcast_in0=True,
     )
+
+
+def _get_up_cfg(group_tile: int, local_inter: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
+    key = (group_tile, local_inter)
+    if key not in _UP_CFG_CACHE:
+        _UP_CFG_CACHE[key] = _mm_cfg(
+            *_UP_CORES,
+            m=group_tile,
+            n=local_inter,
+            k=HIDDEN_SIZE,
+            in0_block_w=_UP_IN0_BLOCK_W,
+        )
+    return _UP_CFG_CACHE[key]
 
 
 def _get_down_cfg(chunk_S: int, local_inter: int) -> ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig:
@@ -141,13 +188,12 @@ def _moe_experts_bulk_one_outer_chunk(
     """Process one outer sequence chunk.  Returns [1, 1, S_outer, H] partial (before all_reduce)."""
     S_outer = h_chunk.shape[1]
     local_inter = up_weights_tt.shape[-1]
-    G = S_outer // TILE
+    G = S_outer // UP_GROUP_TILE
     output_tile = ttnn.Tile([32, 32])
 
-    # UP: [1, S_outer, H] → [1, G, 32, H] (reshape is a view — do not deallocate h_chunk)
-    h4d = ttnn.reshape(h_chunk, [1, G, TILE, HIDDEN_SIZE])
+    # UP: [1, S_outer, H] → [1, G, UP_GROUP_TILE, H] (reshape is a view — do not deallocate h_chunk)
+    h4d = ttnn.reshape(h_chunk, [1, G, UP_GROUP_TILE, HIDDEN_SIZE])
     sparsity_up = _get_up_sparsity(G, mesh_device)
-    up_cfg = _mm_cfg(*_UP_CORES, m=TILE, n=local_inter, k=HIDDEN_SIZE, in0_block_w=_UP_IN0_BLOCK_W)
     up = ttnn.sparse_matmul(
         h4d,
         up_weights_tt,
@@ -155,7 +201,7 @@ def _moe_experts_bulk_one_outer_chunk(
         nnz=N_EXPERTS * G,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         output_tile=output_tile,
-        program_config=up_cfg,
+        program_config=_get_up_cfg(UP_GROUP_TILE, local_inter),
         dtype=ttnn.bfloat16,
     )
     # h4d is a reshape view of h_chunk — not deallocated here
@@ -180,7 +226,7 @@ def _moe_experts_bulk_one_outer_chunk(
         rw_chunks = [rw]
 
     sparsity_down = _get_down_sparsity(mesh_device)
-    acc = None
+    chunk_outs = []
     for act_c, rw_c in zip(act_chunks, rw_chunks):
         c_S = act_c.shape[2]
         down = ttnn.sparse_matmul(
@@ -200,14 +246,13 @@ def _moe_experts_bulk_one_outer_chunk(
         rw_c.deallocate(True)
         chunk_out = ttnn.unsqueeze_to_4D(ttnn.experimental.fast_reduce_nc(down, dims=[1]))
         down.deallocate(True)
-        if acc is None:
-            acc = chunk_out
-        else:
-            new_acc = ttnn.concat([acc, chunk_out], dim=2)
-            acc.deallocate(True)
-            chunk_out.deallocate(True)
-            acc = new_acc
+        chunk_outs.append(chunk_out)
 
+    if len(chunk_outs) == 1:
+        return chunk_outs[0]  # [1, 1, S_outer, H] partial (no all_reduce yet)
+    acc = ttnn.concat(chunk_outs, dim=2)
+    for c in chunk_outs:
+        c.deallocate(True)
     return acc  # [1, 1, S_outer, H] partial (no all_reduce yet)
 
 
@@ -229,9 +274,9 @@ def moe_experts_prefill_forward(
     """
     S = hidden_states.shape[1]
 
-    # Pad to TILE multiple so inner reshape [1,S_outer,H] → [1,G,32,H] is valid.
-    # Tokenizer round-trips can produce S that is not divisible by 32 (e.g. 126 for ISL=128).
-    S_padded = math.ceil(S / TILE) * TILE
+    # Pad to UP_GROUP_TILE multiple so UP reshape [1,S_outer,H] → [1,G,UP_GROUP_TILE,H] is valid.
+    # Since UP_GROUP_TILE ≥ TILE=32, this also satisfies the TILE alignment for DOWN.
+    S_padded = math.ceil(S / UP_GROUP_TILE) * UP_GROUP_TILE
     if S_padded > S:
         pad_len = S_padded - S
         zeros_h = ttnn.from_torch(
@@ -285,7 +330,7 @@ def moe_experts_prefill_forward(
         h_work.deallocate(True)
         rw_work.deallocate(True)
 
-    # Single all_reduce per E-layer: sums partial intermediate-column contributions across TP=4
+    # all_reduce auto-chunks along dim=-2 for large S (see tp.py:all_reduce)
     partial = all_reduce(partial)  # [1, 1, S_padded, H]
 
     # Trim padding tokens before reshaping back to [1, S, H]

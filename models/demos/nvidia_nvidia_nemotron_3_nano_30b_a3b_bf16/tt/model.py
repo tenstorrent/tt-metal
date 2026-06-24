@@ -181,7 +181,13 @@ def prewarm_mamba2_weights(wc: "WeightCache", mesh_device) -> None:
     those tensors here — before any forward-pass intermediates exist — assigns them to
     good addresses.  All subsequent _rep_keyed calls during the forward pass are cache hits,
     so no new DRAM allocations happen for these weights.
+
+    This must be called BEFORE allocate_kv_cache: a large KV cache (e.g. 262144 tokens)
+    shifts DRAM allocations enough to land small weights on defective pages, triggering an
+    L1 fallback that clashes with rms_norm kernel circular buffers.
     """
+    if id(mesh_device) in _MAMBA_PREWARM_DONE:
+        return
     m_indices = [li for li, t in enumerate(PATTERN) if t == "M"]
     print(f"  [prewarm] pre-uploading mamba2 weights for {len(m_indices)} M-layers...", flush=True)
     for li in m_indices:
@@ -203,7 +209,8 @@ def prewarm_mamba2_weights(wc: "WeightCache", mesh_device) -> None:
             )
         # MambaRMSNormGated scale weight
         _rep_keyed(id(norm_mix_w), norm_mix_w.bfloat16().unsqueeze(0).unsqueeze(0), mesh_device)
-    print(f"  [prewarm] done ({len(_MAMBA_PREWARM_DONE)+1} mesh).", flush=True)
+    _MAMBA_PREWARM_DONE.add(id(mesh_device))
+    print(f"  [prewarm] done ({len(_MAMBA_PREWARM_DONE)} mesh).", flush=True)
 
 
 def _moe_layer_forward(
@@ -289,10 +296,15 @@ def _layer_stack_forward(
     m_idx = 0  # index within M_LAYER_INDICES
     d_idx = 0  # index within D_LAYER_INDICES
 
+    # Per-type accumulated host-dispatch time (debug_sync=True prints summary at end)
+    _type_host_ms: dict = {"M": 0.0, "E": 0.0, "*": 0.0}
+    _type_sync_ms: dict = {"M": 0.0, "E": 0.0, "*": 0.0}
+
     for li in range(min(num_layers, N_LAYERS)):
         layer_type = PATTERN[li]
         p = f"backbone.layers.{li}"
 
+        _lstart = _time.perf_counter()
         if layer_type == "M":
             ssm_state = decoder_state.ssm_states[m_idx] if decoder_state else None
             conv_state = decoder_state.conv_states[m_idx] if decoder_state else None
@@ -352,11 +364,28 @@ def _layer_stack_forward(
                 current_pos=current_pos,
             )
             d_idx += 1
+        _type_host_ms[layer_type] += (_time.perf_counter() - _lstart) * 1000
 
         if debug_sync:
             _t0 = _time.perf_counter()
             ttnn.synchronize_device(mesh_device)
-            print(f"  [dbg] layer {li} ({layer_type}) sync: {(_time.perf_counter()-_t0)*1000:.0f}ms", flush=True)
+            _dt = (_time.perf_counter() - _t0) * 1000
+            _type_sync_ms[layer_type] += _dt
+            print(f"  [dbg] layer {li} ({layer_type}) sync: {_dt:.0f}ms", flush=True)
+
+    if debug_sync:
+        _th = _type_host_ms
+        _ts = _type_sync_ms
+        print(
+            f"  [dbg] HOST dispatch (ms): M={_th['M']:.0f}  E={_th['E']:.0f}  *={_th['*']:.0f}  "
+            f"total={sum(_th.values()):.0f}",
+            flush=True,
+        )
+        print(
+            f"  [dbg] DEVICE sync  (ms): M={_ts['M']:.0f}  E={_ts['E']:.0f}  *={_ts['*']:.0f}  "
+            f"total={sum(_ts.values()):.0f}",
+            flush=True,
+        )
 
     return hidden_states
 
@@ -425,12 +454,20 @@ def nemotron_h_prefill_stateful(
     wc: WeightCache,
     decoder_state: DecoderState,
     num_layers: int = N_LAYERS,
+    verbose: bool = False,
 ) -> ttnn.Tensor:
     """Chunked prefill: process all S prompt tokens in a single forward pass.
 
     Mamba2 layers use the chunked SSD scan (fast); dense-attention layers use
-    causal SDPA + paged_fill_cache (no per-position loop).  MoE (E) layers fall
-    back to a per-token loop — sparse_matmul kernel only supports m=1.
+    causal SDPA + paged_fill_cache (no per-position loop).  MoE (E) layers use
+    the bulk sparse_matmul prefill path (all S tokens in one shot).
+
+    cpu_gate=False: MoE gate runs entirely on device (float32 linear+sigmoid+topk,
+    then scatter to dense routing matrix).  Eliminates 23×44 MB D2H sync points
+    that cpu_gate=True would require for ISL=8192.
+
+    verbose=True: print per-layer-type timing (one ttnn.synchronize_device per
+    layer type boundary — adds ~3 syncs total, acceptable for profiling).
 
     Returns logits [B, 1, vocab_size] for the LAST prompt position only.
 
@@ -442,22 +479,81 @@ def nemotron_h_prefill_stateful(
     Call decoder_state.advance() after this call, then set current_pos = S,
     and proceed with the normal S=1 traced decode loop.
     """
+    import time as _time
+
     if id(mesh_device) not in _MAMBA_PREWARM_DONE:
         prewarm_mamba2_weights(wc, mesh_device)
         _MAMBA_PREWARM_DONE.add(id(mesh_device))
 
+    S = input_ids.shape[1]
+    if verbose:
+        print(f"[prefill] S={S} starting layer stack...", flush=True)
+        _t_stack = _time.perf_counter()
+
     hidden_states = embedding_forward(mesh_device, input_ids, wc["backbone.embeddings.weight"])
     hidden_states = _layer_stack_forward(
-        mesh_device, hidden_states, wc, num_layers, decoder_state, cpu_gate=True, debug_sync=False
+        mesh_device,
+        hidden_states,
+        wc,
+        num_layers,
+        decoder_state,
+        cpu_gate=False,
+        debug_sync=verbose,
     )
+
+    if verbose:
+        ttnn.synchronize_device(mesh_device)
+        print(f"[prefill] layer stack: {(_time.perf_counter()-_t_stack)*1000:.0f}ms", flush=True)
 
     # Slice to last position before LM head — avoids computing vocab projection
     # for S-1 positions that will never be sampled.
     B = hidden_states.shape[0]
-    S = hidden_states.shape[1]
-    H = hidden_states.shape[2]
-    last_hidden = ttnn.slice(hidden_states, [0, S - 1, 0], [B, S, H])  # [B, 1, H]
+    S_dim = hidden_states.shape[1]
+    H_dim = hidden_states.shape[2]
+    last_hidden = ttnn.slice(hidden_states, [0, S_dim - 1, 0], [B, S_dim, H_dim])  # [B, 1, H]
 
+    return lm_head_forward_device(
+        mesh_device,
+        last_hidden,
+        norm_f_weight=wc["backbone.norm_f.weight"],
+        lm_head_weight=wc["lm_head.weight"],
+    )
+
+
+def nemotron_h_prefill_stateful_tt(
+    mesh_device,
+    ids_tt: ttnn.Tensor,  # [B, S] uint32 pre-allocated on device (trace-compatible)
+    wc: WeightCache,
+    decoder_state: DecoderState,
+    num_layers: int = N_LAYERS,
+) -> ttnn.Tensor:
+    """Trace-compatible chunked prefill.
+
+    Identical to nemotron_h_prefill_stateful but uses a pre-allocated device
+    tensor (ids_tt) instead of uploading a CPU tensor each call.  The caller
+    must write the actual token ids into ids_tt via
+    ttnn.copy_host_to_device_tensor before capturing or replaying the trace.
+
+    Returns logits [B, 1, vocab_size] for the LAST prompt position only.
+    """
+    if id(mesh_device) not in _MAMBA_PREWARM_DONE:
+        prewarm_mamba2_weights(wc, mesh_device)
+        _MAMBA_PREWARM_DONE.add(id(mesh_device))
+
+    hidden_states = embedding_forward_tt(mesh_device, ids_tt, wc["backbone.embeddings.weight"])
+    hidden_states = _layer_stack_forward(
+        mesh_device,
+        hidden_states,
+        wc,
+        num_layers,
+        decoder_state,
+        cpu_gate=False,
+    )
+
+    B = hidden_states.shape[0]
+    S_dim = hidden_states.shape[1]
+    H_dim = hidden_states.shape[2]
+    last_hidden = ttnn.slice(hidden_states, [0, S_dim - 1, 0], [B, S_dim, H_dim])  # [B, 1, H]
     return lm_head_forward_device(
         mesh_device,
         last_hidden,

@@ -99,10 +99,6 @@ _L1 = ttnn.L1_MEMORY_CONFIG
 # forever — no per-chunk DRAM churn for these shapes.  TT-Metal's dispatch
 # queue is strictly ordered, so reuse across chunks within one request is safe.
 # ---------------------------------------------------------------------------
-# Diagnostic: count how many times this module has been called for prefill.
-# Used to log DRAM addresses only for the first few requests so logs stay small.
-_PREFILL_CALL_COUNT: int = 0
-
 _SSD_SCRATCH: dict = {}  # keyed by (id(mesh_device), B, C)
 
 # Pre-allocated y_mesh output buffers keyed by (S_pad, id(mesh_device)).
@@ -110,6 +106,11 @@ _SSD_SCRATCH: dict = {}  # keyed by (id(mesh_device), B, C)
 # _mamba2_ssd_all_chunks_ttlang always uploads to a V_bad-safe address.
 # Use ttnn.copy_host_to_device_tensor instead of ttnn.from_torch at ISL time.
 _TTLANG_Y_PREALLOC: dict = {}  # (S_pad, mesh_id) → ttnn.Tensor [1, S_pad, H, D]
+
+# Maximum tokens per SSD kernel call. n_chunks = _S_M_OUTER / CHUNK_SIZE = 128, which
+# is the safe upper bound for the [n_chunks, n_chunks] L-matrix in TILE layout.
+# Larger ISLs are handled by the outer-chunking loop in mamba2_prefill_layer_forward.
+_S_M_OUTER: int = 8192
 
 
 def warmup_ttlang_kernels(max_seq_len: int, mesh_device=None) -> None:
@@ -124,7 +125,9 @@ def warmup_ttlang_kernels(max_seq_len: int, mesh_device=None) -> None:
 
     from .mamba2_ssd_scan_ttlang import make_mamba2_ssd_scan_kernel
 
-    max_chunks = max_seq_len // CHUNK_SIZE
+    # Cap at _S_M_OUTER // CHUNK_SIZE (= 128): outer chunking means we never call
+    # the SSD kernel with n_chunks > _S_M_OUTER // CHUNK_SIZE regardless of max_seq_len.
+    max_chunks = min(max_seq_len // CHUNK_SIZE, _S_M_OUTER // CHUNK_SIZE)
     _R = _ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device is not None else None
 
     def _up(t):
@@ -263,7 +266,24 @@ def _causal_conv1d_prefill(
     # history: (h_tm3, h_tm2, h_tm1) from conv_state, else zeros
     if conv_state is not None:
         h_tm3, h_tm2, h_tm1 = conv_state
-        hist = ttnn.concat([h_tm3, h_tm2, h_tm1], dim=1)  # [B, 3, CONV_DIM]
+        # TTNN TILE-layout concat([3-row hist, 16384-row hBC]) has a kernel bug: the
+        # non-tile-aligned join (3 % 32 ≠ 0) leaves certain cross-tile-boundary positions
+        # in padded with stale DRAM data from a previous allocation.  Fix: build padded
+        # in ROW_MAJOR (no tile-padding, every element explicitly written), then convert
+        # back to TILE for the subsequent slice operations.
+        _h3_rm = ttnn.to_layout(h_tm3, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)
+        _h2_rm = ttnn.to_layout(h_tm2, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)
+        _h1_rm = ttnn.to_layout(h_tm1, ttnn.ROW_MAJOR_LAYOUT, memory_config=_L1)
+        _hist_rm = ttnn.concat([_h3_rm, _h2_rm, _h1_rm], dim=1)  # [B, 3, CONV_DIM] RM
+        _h3_rm.deallocate(True)
+        _h2_rm.deallocate(True)
+        _h1_rm.deallocate(True)
+        _hBC_rm = ttnn.to_layout(hBC, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _padded_rm = ttnn.concat([_hist_rm, _hBC_rm], dim=1)  # [B, S+3, CONV_DIM] RM — all elements written
+        _hist_rm.deallocate(True)
+        _hBC_rm.deallocate(True)
+        padded = ttnn.to_layout(_padded_rm, _TL, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        _padded_rm.deallocate(True)
     else:
         # [B, 3, 6144] = 18432 elements ≤ 32768 → force L1 to avoid defective DRAM pages.
         hist = ttnn.zeros(
@@ -273,10 +293,8 @@ def _causal_conv1d_prefill(
             layout=_TL,
             memory_config=_L1,
         )
-
-    # Padded input: [B, S+3, CONV_DIM]
-    padded = ttnn.concat([hist, hBC], dim=1)
-
+        # Padded input: [B, S+3, CONV_DIM]
+        padded = ttnn.concat([hist, hBC], dim=1)
     # Depthwise conv1d: out[s] = Σ_k w[:,k] * padded[:,s+k]   for k in [0..3]
     # Upload per-tap weights to device (replicated).
     # Keys match the decode path in mamba2_layer.py so prefill gets cache hits
@@ -674,19 +692,24 @@ def _mamba2_ssd_all_chunks_ttlang(
         )
 
     # ── (4) Pre-allocate output tensors on device ─────────────────────────
-    y_out_dev = ttnn.zeros(
-        [H * S_pad, D],
-        dtype=ttnn.bfloat16,
-        layout=_TL,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    # Use allocate_tensor_on_device (no device writes) instead of ttnn.zeros(TILE).
+    # ttnn.zeros(TILE) dispatches a device fill kernel that waits for NOC write acks;
+    # if the TILE buffer lands on the defective DRAM page the ack never arrives → hang.
+    # allocate_tensor_on_device just claims DRAM space without any write.
+    # y_out_dev and h_out_dev are pure outputs — the kernel writes before any read.
+    y_out_dev = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([H * S_pad, D]),
+        ttnn.bfloat16,
+        _TL,
+        mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
-    h_out_dev = ttnn.zeros(
-        [H * D, N],
-        dtype=ttnn.bfloat16,
-        layout=_TL,
-        device=mesh_device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    h_out_dev = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([H * D, N]),
+        ttnn.bfloat16,
+        _TL,
+        mesh_device,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
 
     # ── (5) Kernel dispatch ───────────────────────────────────────────────
@@ -918,7 +941,6 @@ def mamba2_prefill_layer_forward(
     # last chunk a second time WITHOUT padding to get the correct final state and
     # discard its output.  ssm_state/conv_state are read-only inside the function,
     # so both runs safely share the same pre-chunk state tensors.
-    _S_M_OUTER = 65536
     if S > _S_M_OUTER:
         _out_chunks = []
         _hs = ssm_state
@@ -1007,14 +1029,6 @@ def mamba2_prefill_layer_forward(
         for _oc in _out_chunks:
             _oc.deallocate(True)
         return _result, _hs, _cs
-
-    global _PREFILL_CALL_COUNT
-    _PREFILL_CALL_COUNT += 1
-    _call_id = _PREFILL_CALL_COUNT  # capture for logging (immune to later increments)
-
-    import logging as _logging
-
-    _log = _logging.getLogger(__name__)
 
     residual = hidden_states
     # ---- 1. Pre-block RMSNorm ----------------------------------------
@@ -1132,23 +1146,6 @@ def mamba2_prefill_layer_forward(
     S_pad = S + pad_S
     num_chunks = S_pad // CHUNK_SIZE
 
-    # Diagnostic: log source-tensor DRAM addresses before the chunk loop.
-    # x_dt_pad and x_pad are ~4 MB each (8 pages of 512 KB); V_bad would appear as
-    # an address that differs between request 1 (success) and request 2 (hang).
-    if _call_id <= 3:
-        try:
-            _log.info(
-                "[src_addr call=%d] x_dt_pad=0x%08x  x_pad=0x%08x  B_pad=0x%08x  C_pad=0x%08x  log_decay_pad=0x%08x",
-                _call_id,
-                x_dt_pad.buffer_address(),
-                x_pad.buffer_address(),
-                B_pad.buffer_address(),
-                C_pad.buffer_address(),
-                log_decay_pad.buffer_address(),
-            )
-        except Exception as _exc:
-            _log.info("[src_addr call=%d] buffer_address failed: %s", _call_id, _exc)
-
     # ---- 10b. tt-lang fused path (opt-in via NEMOTRON_USE_TTLANG_SSD=1) ----
     if _USE_TTLANG_SSD:
         y_full_raw, ssm_state_new = _mamba2_ssd_all_chunks_ttlang(
@@ -1232,24 +1229,6 @@ def mamba2_prefill_layer_forward(
         _C_g_c = ttnn.slice(C_pad, [0, t0, 0, 0], [B, t1, N_GROUPS, SSM_STATE_SIZE], memory_config=_L1)
         C_c = _expand_groups(_C_g_c)  # [B, C, NUM_HEADS, N]
         x_c = ttnn.slice(x_pad, [0, t0, 0, 0], [B, t1, NUM_HEADS, HEAD_DIM])
-
-        # Diagnostic: log DRAM addresses for ALL chunks of the first 100 calls so
-        # we can see which chunk's destination lands at V_bad (the defective page).
-        # Log chunk-level DRAM addresses for the first few M-layer calls only.
-        # Limit to ≤3 calls to avoid 94K log lines at ISL=256K.
-        if _call_id <= 3:
-            try:
-                _log.info(
-                    "[addr_diag call=%d c=%d] x_dt_c=0x%08x  B_c=0x%08x  C_c=0x%08x  x_c=0x%08x",
-                    _call_id,
-                    c,
-                    x_dt_c.buffer_address(),
-                    B_c.buffer_address(),
-                    C_c.buffer_address(),
-                    x_c.buffer_address(),
-                )
-            except Exception as _exc:
-                _log.info("[addr_diag call=%d c=%d] buffer_address failed: %s", _call_id, c, _exc)
 
         y_c, h_prev = _mamba2_ssd_chunk(log_decay_c, x_dt_c, B_c, C_c, D_tt, x_c, h_prev, mesh_device)
         y_chunks.append(y_c)

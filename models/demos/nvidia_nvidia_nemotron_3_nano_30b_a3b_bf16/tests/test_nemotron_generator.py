@@ -106,7 +106,7 @@ class TestGeneratorLifecycle:
 
         next_token = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
         current_pos = torch.tensor([PROMPT_LEN], dtype=torch.int64)
-        logits, log_probs = generator.decode_forward(next_token, current_pos=current_pos)
+        logits, log_probs = generator.decode_forward(next_token, start_pos=current_pos)
 
         assert logits.shape == (
             1,
@@ -124,7 +124,7 @@ class TestGeneratorLifecycle:
         for step in range(DECODE_STEPS):
             next_tok = torch.randint(1, 1000, (1, 1), dtype=torch.int64)
             pos = torch.tensor([PROMPT_LEN + step], dtype=torch.int64)
-            logits, _ = generator.decode_forward(next_tok, current_pos=pos)
+            logits, _ = generator.decode_forward(next_tok, start_pos=pos)
             assert torch.isfinite(logits).all(), f"NaN/Inf at decode step {step}"
 
     def test_decode_positions_advance(self, generator):

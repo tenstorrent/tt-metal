@@ -321,8 +321,13 @@ def generate(
 
     # --- Input validation ---
     if max_seq_len > MODEL_MAX_SEQ_LEN:
-        raise ValueError(
-            f"max_seq_len={max_seq_len} exceeds the model's max_position_embeddings " f"({MODEL_MAX_SEQ_LEN})."
+        import warnings
+
+        warnings.warn(
+            f"max_seq_len={max_seq_len} exceeds MODEL_MAX_SEQ_LEN={MODEL_MAX_SEQ_LEN}. "
+            f"Mamba2 layers are position-independent; attention RoPE extrapolates beyond "
+            f"the trained range for the extra {max_seq_len - MODEL_MAX_SEQ_LEN} positions.",
+            stacklevel=2,
         )
     if prompt_len >= max_seq_len:
         raise ValueError(

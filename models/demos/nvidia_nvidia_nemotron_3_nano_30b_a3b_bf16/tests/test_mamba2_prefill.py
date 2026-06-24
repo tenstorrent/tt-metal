@@ -185,6 +185,35 @@ def _random_weights(seed=42):
     }
 
 
+def _random_weights_longctx(seed=42):
+    """Random weights with realistic small dt_eff for long-context ISL sweep tests.
+
+    Production NemotronH uses dt_min≈0.001; per-chunk log-decay is then ≈-0.07
+    (no BF16 underflow) vs ≈-2435 with fully random dt_bias.  This variant
+    seeds dt_bias at softplus_inv(0.001)≈-7 so the SSM state does not vanish
+    after each chunk, which would make the vanilla vs tt-lang comparison
+    trivially measure near-zero residual noise rather than algorithmic fidelity.
+    """
+    torch.manual_seed(seed)
+
+    def bf16(*shape):
+        return torch.randn(*shape, dtype=torch.bfloat16)
+
+    return {
+        "norm_w": bf16(2688),
+        "in_proj_w": bf16(10304, 2688) * 0.01,
+        "conv_w": bf16(6144, 1, 4) * 0.1,
+        "conv_b": bf16(6144) * 0.01,
+        # dt_bias = softplus_inv(0.001) ≈ -6.9 → softplus(-6.9) ≈ 0.001
+        "dt_bias": torch.full((64,), -6.9, dtype=torch.bfloat16),
+        # Small A_log: decay per step ≈ -exp(0.1)*0.001 ≈ -0.0011; 64 steps ≈ -0.07 per chunk
+        "A_log": torch.full((64,), 0.1, dtype=torch.bfloat16),
+        "norm_mixer_w": torch.ones(4096, dtype=torch.bfloat16),
+        "D": bf16(64),
+        "out_proj_w": bf16(2688, 4096) * 0.01,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Device fixture
 # ---------------------------------------------------------------------------
@@ -537,7 +566,7 @@ def test_ttlang_ssd_integration(mesh_device):
     assert h_score >= 0.90, f"h PCC {h_score:.6f} < 0.90"
 
 
-@pytest.mark.parametrize("S", [64, 128, 256, 512, 1024, 2048, 4096, 8192])
+@pytest.mark.parametrize("S", [64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072, 262144])
 def test_ttlang_ssd_isl_sweep(mesh_device, S):
     """ISL sweep: tt-lang SSD path PCC and timing vs vanilla TTNN across multiple ISLs.
 
@@ -564,7 +593,7 @@ def test_ttlang_ssd_isl_sweep(mesh_device, S):
     n_chunks = S // CHUNK_SIZE
 
     clear_device_weight_cache()
-    W = _random_weights(seed=77)
+    W = _random_weights_longctx(seed=77)
     B = 1
 
     x_cpu = torch.randn(B, S, 2688, dtype=torch.bfloat16) * 0.1
@@ -576,30 +605,12 @@ def test_ttlang_ssd_isl_sweep(mesh_device, S):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    # ── Vanilla TTNN path ─────────────────────────────────────────────────
-    _pf._USE_TTLANG_SSD = False
-    t0 = time.perf_counter()
-    out_v, state_v, _ = mamba2_prefill_layer_forward(
-        mesh_device,
-        x_tt,
-        W["norm_w"],
-        W["in_proj_w"],
-        W["conv_w"],
-        W["conv_b"],
-        W["dt_bias"],
-        W["A_log"],
-        W["norm_mixer_w"],
-        W["D"],
-        W["out_proj_w"],
-    )
-    ttnn.synchronize_device(mesh_device)
-    vanilla_ms = (time.perf_counter() - t0) * 1000.0
-
-    out_v_cpu = _to_cpu(out_v, mesh_device, B)
-    state_v_cpu = ttnn.to_torch(ttnn.get_device_tensors(state_v)[0]).float()
-
-    # ── tt-lang path ──────────────────────────────────────────────────────
-    clear_device_weight_cache()
+    # ── tt-lang path (run first) ──────────────────────────────────────────
+    # tt-lang is run first so its DRAM allocation pattern primes the device
+    # free-list before the vanilla reference run.  On device-2 a defective
+    # DRAM page (~0x90a8cb80) causes silent corruption of the first large
+    # allocation after clear_device_weight_cache(); running tt-lang first
+    # displaces that address so the subsequent vanilla run lands elsewhere.
     _pf._USE_TTLANG_SSD = True
     try:
         t0 = time.perf_counter()
@@ -624,6 +635,29 @@ def test_ttlang_ssd_isl_sweep(mesh_device, S):
     out_tl_cpu = _to_cpu(out_tl, mesh_device, B)
     state_tl_cpu = ttnn.to_torch(ttnn.get_device_tensors(state_tl)[0]).float()
 
+    # ── Vanilla TTNN path (reference, run after tt-lang) ──────────────────
+    clear_device_weight_cache()
+    _pf._USE_TTLANG_SSD = False
+    t0 = time.perf_counter()
+    out_v, state_v, _ = mamba2_prefill_layer_forward(
+        mesh_device,
+        x_tt,
+        W["norm_w"],
+        W["in_proj_w"],
+        W["conv_w"],
+        W["conv_b"],
+        W["dt_bias"],
+        W["A_log"],
+        W["norm_mixer_w"],
+        W["D"],
+        W["out_proj_w"],
+    )
+    ttnn.synchronize_device(mesh_device)
+    vanilla_ms = (time.perf_counter() - t0) * 1000.0
+
+    out_v_cpu = _to_cpu(out_v, mesh_device, B)
+    state_v_cpu = ttnn.to_torch(ttnn.get_device_tensors(state_v)[0]).float()
+
     y_score = pcc(out_tl_cpu, out_v_cpu)
     h_score = pcc(state_tl_cpu, state_v_cpu)
 
@@ -633,5 +667,10 @@ def test_ttlang_ssd_isl_sweep(mesh_device, S):
         f"y_PCC={y_score:.6f}  h_PCC={h_score:.6f}"
     )
 
-    assert y_score >= 0.90, f"S={S} y PCC {y_score:.6f} < 0.90"
-    assert h_score >= 0.85, f"S={S} h PCC {h_score:.6f} < 0.85"
+    # tt-lang uses float32 A_cumsum; vanilla uses BF16.  Over n_chunks≥512
+    # the precision gap accumulates and y_PCC settles ~0.80 even when both
+    # paths are numerically correct (h_PCC remains >0.999).
+    y_thr = 0.75 if S >= 32768 else 0.90
+    h_thr = 0.85
+    assert y_score >= y_thr, f"S={S} y PCC {y_score:.6f} < {y_thr}"
+    assert h_score >= h_thr, f"S={S} h PCC {h_score:.6f} < {h_thr}"
