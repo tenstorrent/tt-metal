@@ -21,6 +21,7 @@
 
 #include <memory>
 #include <optional>
+#include <vector>
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -36,6 +37,13 @@ namespace tt::tt_metal::experimental {
 
 class MockAllocator;
 class MockAllocatorState;
+
+// Identifies a single allocation within a MockAllocatorState.
+struct AllocationRecord {
+    BufferType buffer_type = BufferType::L1;
+    DeviceAddr address = 0;
+    DeviceAddr size_per_bank = 0;
+};
 
 // Returns MockAllocator* if device is in mock mode, nullptr otherwise.
 MockAllocator* get_mock_allocator(distributed::MeshDevice& device);
@@ -55,6 +63,9 @@ public:
     DeviceAddr total_allocated_size(BufferType buffer_type) const;
     bool is_empty(BufferType buffer_type) const;
     std::optional<DeviceAddr> lowest_occupied(BufferType buffer_type) const;
+
+    // Return a state with this state's allocator (bank) config but its allocations replaced by `live`.
+    MockAllocatorState with_allocations(const std::vector<AllocationRecord>& live) const;
 
 private:
     struct Impl;

@@ -572,7 +572,7 @@
     uv pip install -r models/demos/qwen25_vl/requirements.txt
     export HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K
     pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
-  model: qwen2.5-72b-vl
+  model: qwen2.5-vl-72b
   skus:
     wh_llmbox_perf:
       timeout: 15
@@ -615,7 +615,7 @@
       timeout: 60
       tier: 1
     bh_quietbox_2:
-      timeout: 140
+      timeout: 115
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -650,3 +650,34 @@
 #   team: models
 #   owner_id: U06ECNVR0EN # Evan Smal
 #   team: models
+
+
+
+- name: TT-DiT Flux.1-schnell unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_schnell
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_schnell
+  model: flux.1-schnell
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+
+- name: TT-DiT Flux.1-dev unit tests
+  cmd: |
+    unset HF_HUB_OFFLINE
+    export NO_PROMPT=1
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_pipeline_flux1.py -k flux_dev
+    pytest --timeout 10000 models/tt_dit/tests/models/flux1/test_transformer_flux1.py -k flux_dev
+
+  model: flux.1-dev
+  skus:
+    bh_quietbox_2:
+      timeout: 20
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models

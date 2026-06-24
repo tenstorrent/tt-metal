@@ -82,7 +82,7 @@ ttnn:
     bh_p150b_civ2: 1015
     wh_n150_civ2: 1175
     wh_n300_civ2: 1155
-    bh_p150b_civ2_viommu: 110
+    bh_p150b_civ2_viommu: 115
   e2e:
     wh_llmbox: 90
     wh_galaxy: 120
@@ -130,6 +130,10 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  unit:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 115
+    bh_p150b_civ2: 70
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
@@ -153,6 +157,8 @@ scaleout:
     bh_galaxy: 60
     bh_spsg: 20 # single galaxy
     bh_sp1: 90
+    bh_sp1-blitz: 90 #blitz specific mgd sku
+    bh_sp1-mgd: 90 #general mgd sku
     bh_sp4: 150
     bh_loudbox: 80
     bh_p300: 80
@@ -225,10 +231,6 @@ models:
     bh_p150b_civ2_viommu: 110
   stress:
     wh_galaxy_perf: 500
-  l2:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 115
-    bh_p150b_civ2: 70
   e2e:
     wh_llmbox: 198
     bh_p150b_civ2: 63
@@ -241,7 +243,7 @@ models:
     wh_n150: 28
     wh_galaxy_perf: 120
     bh_p150: 27
-    bh_quietbox_2: 105
+    bh_quietbox_2: 145
     bh_galaxy: 78
   e2e_tier2:
     wh_llmbox_perf: 266
@@ -267,7 +269,7 @@ models:
     wh_galaxy: 45
     wh_galaxy_perf: 45
     bh_p150: 20
-    bh_quietbox_2: 195
+    bh_quietbox_2: 215
     bh_galaxy: 70
   unit_tier2:
     wh_llmbox: 114

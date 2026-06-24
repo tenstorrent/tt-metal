@@ -70,7 +70,7 @@ void kernel_main() {
 
     constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
     const uint32_t eps = get_arg_val<uint32_t>(5);
-    generate_bcast_col_scalar(eps_cb_id, eps);
+    generate_bcast_col_scalar(CircularBuffer(eps_cb_id), eps);
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
     uint32_t offs = 0;
