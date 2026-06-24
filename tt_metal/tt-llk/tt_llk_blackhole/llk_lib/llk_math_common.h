@@ -15,54 +15,6 @@
 using namespace ckernel::math;
 
 /**
- * @brief Set debug feature disable bit 11 to work around an FPU HW bug.
- *
- * DO NOT call this unless absolutely necessary.
- * We need to wait for both math and pack to be fully idle before writing
- * this bit because it affects both dest banks.
- * Changing it while either pipeline is active can cause a race condition.
- *
- * @note Workaround for bug tt-metal#46219. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
- */
-inline void _llk_math_dbg_feature_disable_()
-{
-    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
-    if (val & (1 << 11))
-    {
-        return;
-    }
-    tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-        asm volatile("nop");
-    };
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val | (1 << 11));
-}
-
-/**
- * @brief Clear debug feature disable bit 11, restoring default FPU behavior.
- *
- * Clears bit 11 to disable 32 bit mode for dest.
- * Same synchronization as @ref _llk_math_dbg_feature_disable_ is needed here to avoid racing.
- *
- * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219).
- */
-inline void _llk_math_dbg_feature_enable_()
-{
-    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
-    if (!(val & (1 << 11)))
-    {
-        return;
-    }
-    tensix_sync();
-    while (semaphore_read(semaphore::MATH_PACK) > 0)
-    {
-        asm volatile("nop");
-    };
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val & ~(1 << 11));
-}
-
-/**
  * @brief Enable or disable FP32 accumulation in the destination register for both FPU and SFPU.
  *
  * @param enable: True to enable FP32 dest accumulation, false to disable.
@@ -84,7 +36,6 @@ inline void _llk_math_set_fp32_dest_acc_(bool enable)
  * @tparam is_fp32_dest_acc_en: Enable FP32 accumulation in the destination register.
  * @param srca_data_format: Data format of source A (DataFormat enum underlying value).
  * @param srcb_data_format: Data format of source B (DataFormat enum underlying value).
- * @note May disable debug feature bit 11 via @ref _llk_math_dbg_feature_disable_ for INT8/UInt16 workarounds (budabackend#1948).
  * @note The SFPU reads ALU_FORMAT_SPEC_REG1_SrcB (the SrcB ALU format, programmed unpack-side on Blackhole, not here) to
  *       interpret data it loads from DEST. For SFPU work, ensure that format's exponent family (BF16 vs FP16) matches
  *       the data in DEST (tt-llk #951).
