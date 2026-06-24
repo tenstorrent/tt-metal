@@ -7,6 +7,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 
@@ -105,10 +106,14 @@ void kernel_main() {
                             {.offset_bytes = 0});
                         noc.async_read_barrier();
                         // Then copy actual size from scratch to final destination via local NoC
-                        uint32_t scratch_l1_write_addr = scratch_cb.get_write_ptr();
-                        uint64_t scratch_l1_noc_read_addr = get_noc_addr(scratch_l1_write_addr);
-                        noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, input_cb_page_size);
-                        noc_async_read_barrier();
+                        UnicastEndpoint scratch_src{
+                            .noc_x = static_cast<uint32_t>(my_x[0]),
+                            .noc_y = static_cast<uint32_t>(my_y[0]),
+                            .addr = scratch_cb.get_write_ptr(),
+                        };
+                        noc.async_read(
+                            scratch_src, input_cb, input_cb_page_size, {.offset_bytes = 0}, {.offset_bytes = 0});
+                        noc.async_read_barrier();
                     }
 
                     input_cb.push_back(onetile);
