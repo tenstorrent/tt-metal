@@ -107,6 +107,8 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
       tracy: true
+      # UMD test binaries are needed by the blackhole-sanity P100 leg (umd-unit-tests).
+      build-umd-tests: true
       skip-tt-train: false
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
@@ -149,6 +151,22 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       basic-ttnn-runtime-docker-image: ${{ needs.build-artifact.outputs.basic-ttnn-runtime-docker-image }}
+
+  # =============================================================================
+  # Blackhole P100 sanity (migrated off blackhole-sanity-tests' dedicated 0 7 UTC cron;
+  # now rides the L2 nightly schedule). Reuses L2's pre-built artifacts.
+  # =============================================================================
+  blackhole-sanity-p100:
+    needs: [build-artifact]
+    if: ${{ github.event_name == 'schedule' || inputs.run_blackhole }}
+    secrets: inherit
+    uses: ./.github/workflows/blackhole-sanity-tests.yaml
+    with:
+      runner-label: '["P100"]'
+      dev-docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
 
   # =============================================================================
   # Shield team

@@ -472,7 +472,7 @@ def main():
         # Blackhole
         "blackhole-demo-tests.yaml",
         "blackhole-e2e-tests.yaml",
-        "blackhole-post-commit.yaml",
+        "blackhole-sanity-tests.yaml",
     ]
 
     # Filter by category if specified
