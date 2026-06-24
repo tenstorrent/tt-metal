@@ -361,7 +361,6 @@ void kernel_main() {
 
                 uint16_t chunk_sizes[3] = {page_size, page_size, page_size};
                 uint64_t noc_addrs[4] = {0, 0, 0, 0};
-                uint32_t local_tile_ids[4] = {0, 0, 0, 0};
                 for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
                     uint32_t tile_id = tile_id_start + row_offset + pages_read_in_row;
                     pages_read_in_row++;
@@ -371,7 +370,6 @@ void kernel_main() {
                     }
 
                     noc_addrs[i] = tt::tt_fabric::linear::addrgen_detail::get_noc_address(output_addrgen, tile_id, 0);
-                    local_tile_ids[i] = tile_id;
                 }
 
             if (direction == 1) {
@@ -395,12 +393,10 @@ void kernel_main() {
                 }
 
                 for (uint32_t i = 0; i < tiles_to_put_in_current_packet; i++) {
-                    noc_obj.async_write(
-                        CoreLocalMem<uint8_t>(l1_read_addr + i * page_size),
-                        output_addrgen,
-                        page_size,
-                        {},
-                        {.page_id = local_tile_ids[i]});
+                    // Device 2.0 migration: legacy primitive retained: ShardedAddrGen has no noc_traits_t
+                    // specialization, so Noc::async_write rejects it at compile time. Reuse the
+                    // precomposed noc_addrs[] above to avoid recomputing per-tile NoC addresses.
+                    noc_async_write(l1_read_addr + i * page_size, noc_addrs[i], page_size);
                 }
                 noc_obj.async_write_barrier();
             } else {
