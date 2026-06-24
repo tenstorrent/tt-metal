@@ -13,6 +13,7 @@ without `config.workerinput`) so it happens once, not once per worker.
 """
 
 from accuracy.accuracy_harness import OUTPUT_DIR, clear_shards, merge_shards
+from helpers.logger import logger
 
 
 def _is_controller(config) -> bool:
@@ -29,4 +30,4 @@ def pytest_sessionfinish(session, exitstatus):
     if _is_controller(config):
         written = merge_shards()
         if written:
-            print(f"\n[accuracy] merged {len(written)} per-op CSV(s) into {OUTPUT_DIR}")
+            logger.success("Merged {} per-op CSV(s) into {}", len(written), OUTPUT_DIR)

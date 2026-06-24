@@ -53,7 +53,7 @@ def compute_pointwise_metrics(
         )
 
     ulp = local_ulp(golden, out_fmt)
-    ulp_defined = finite & golden_nonzero & np.isfinite(ulp) & (ulp > 0)
+    ulp_defined = finite & np.isfinite(ulp) & (ulp > 0)
     safe_ulp = np.where(ulp_defined, ulp, 1.0)
     signed_ulp_error = np.where(ulp_defined, signed_error / safe_ulp, np.nan)
 
