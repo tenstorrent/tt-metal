@@ -9,16 +9,17 @@ Goal completion requirements:
 - vLLM sampling tests, qualitative outputs, primary single-user benchmarks, and CI serving-burst benchmarks pass.
 - Warmed primary single-user TTFT, TPOT, ITL, aggregate throughput, and TPOT-derived decode t/s/u are measured before and after using the same run_vllm_server workload, generation mode, max-num-seqs, max-model-len, mesh, sampling mode, and TT config.
 - CI serving-burst metrics are measured before and after as capacity/nightly-parity evidence. Do not use CI burst as headline decode t/s/u.
-- The optimized serving path preserves the context contract. Do not improve performance by lowering `max_model_len`, benchmark context, or eval context below doc/context_contract.json. Do not complete after reducing advertised capability unless a hard physical device limit, e.g. DRAM, requires it and evidence records the largest feasible value.
+- Preserve the context contract. Do not lower `max_model_len`, benchmark context, or eval context below doc/context_contract.json except for a proven hard physical limit.
+- Preserve valid non-aligned prompt-length serving support while optimizing. Do not trade it away for an aligned-only faster path.
 - Optimized vLLM decode is about as fast as optimized full-model traced decode for comparable work.
-- The adapter implements async decode: decode_forward(..., read_from_device=False) returns device tensors; read_decode_output(..., async_read=True) performs the minimal deferred read; process_decode_output_host(...) only formats host results; supports_async_decode is true only when vLLM exercises this path.
+- The adapter implements async decode: `decode_forward(..., read_from_device=False)` returns device tensors; deferred reads are minimal; `supports_async_decode` is true only when vLLM exercises it.
 - Serving decode reuses persistent trace inputs and calls ttnn.execute_trace(..., blocking=False). Any synchronization or host read happens after the async boundary and is limited to the plugin contract.
 - sample_on_device_mode=all keeps sampling on device. The measured path has no host greedy/top-1 argmax, full-logits readback, or eager sampling.
 - Serving reuses full-model greedy split sampling. Do not accept force-argmax or slow generic sampling; if sampler work dominates token-out decode, fix the generator LM-head/sampling contract, not the adapter.
 - Token, position, RoPE, page-table, cache, and sampler trace inputs are persistent device tensors. Refresh them only when scheduler state changes. Stale-input tests cover changed token/current-position and changed/unchanged page tables.
-- Do not collect Tracy, tt-perf-report, live-server TT_METAL_DEVICE_PROFILER, serving-adapter profiler, or ttnn.ReadDeviceProfiler(mesh) evidence in this vLLM serving stage. Use run_vllm_server benchmark JSON, sampling tests, qualitative outputs, stale-input checks, async-split evidence, on-device sampler evidence, and no-host-fallback evidence instead.
+- Do not collect Tracy, tt-perf-report, live-server device profiler, adapter profiler, or ReadDeviceProfiler here. Use benchmark JSON, sampling tests, stale-input checks, async evidence, and no-host-fallback evidence.
 - Runtime fallback and cleanup are clean: no unnecessary torch/from_torch/to_torch, tilize/untilize, reshard, blocking readback, standalone-cache assumption, or leftover vLLM/EngineCore process.
-- models/autoports/<model>/doc/optimized_vllm/README.md and work_log.md record commands, before/after primary single-user metrics, secondary CI burst metrics, optimized-full-model comparison, trace/async decisions, profiler-disabled rationale, rejected options, limitations, and artifacts.
+- optimized_vllm README/work_log record commands, before/after single-user metrics, CI burst metrics, full-model comparison, trace/async decisions, rejected options, limitations, and artifacts.
 - Relevant $optimize checklist items are completed with evidence for the vLLM serving path.
 - Use $tt-enable-tracing for trace capture, nonblocking replay, async readback, stale inputs, or serving trace correctness.
 - README.md leads with primary single-user vLLM TTFT and decode t/s/u; CI serving-burst metrics are secondary. Workload shapes sit next to every number.

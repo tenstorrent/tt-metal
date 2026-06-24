@@ -17,6 +17,8 @@ The expensive source of truth is full-model top-1/top-5 accuracy. Decoder-layer 
 
 Datatype selection must preserve the capability and context contract. KV-cache dtype can change the largest feasible context, so recompute `models/autoports/<model>/doc/context_contract.json` for the selected config. If a candidate only passes by lowering context or another advertised capability, it fails unless a hard physical device limit prevents the advertised capability from fitting or running and evidence proves that the smaller value is the largest feasible one for that candidate.
 
+Datatype selection must also preserve valid non-aligned prompt lengths. If a candidate changes KV-cache dtype, cache layout, trace buffers, or prefill chunking, rerun the non-aligned prompt/prefill check before selecting it. A faster candidate that only accepts aligned prompt lengths fails the capability contract.
+
 If the user does not provide an accuracy bar, use:
 
 - top-1 >= 90%;

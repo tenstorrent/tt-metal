@@ -1,6 +1,6 @@
 ---
 name: tti-release
-description: Run the tt-inference-server model release workflow for the completed generated autoport TTNN/vLLM model and produce the customer-facing readiness markdown report. Use after optimized-vLLM or at model readiness handoff time, especially from an IRD reservation container where Codex must SSH to the physical loudbox host for Docker while using the reservation container for tt-smi health/reset.
+description: Run the tt-inference-server model release workflow for the completed generated autoport TTNN/vLLM model and produce the customer-facing readiness markdown report. Use after optimized-vLLM or at model readiness handoff time, especially when Codex must evaluate the generated autoport through an already-running OpenAI-compatible vLLM server, run small TTI smokes before expensive release workflows, or use Docker only as an explicit fallback.
 ---
 
 # TTI Release
@@ -15,6 +15,8 @@ The release stage is only valid when the release workflow evaluates the just-bro
 
 The release stage must evaluate the autoport at the context length recorded in `models/autoports/<model>/doc/context_contract.json`. Do not cap context, LongBench, benchmark prompt/completion lengths, or API limits to hide a model context bug. A reduced supported context is valid only when earlier stages recorded evidence that a hard physical device limit prevents the advertised context from fitting or running and proved the largest feasible value. Only adjust a request that is mathematically invalid because prompt plus completion exceeds the real supported context, and record that as a harness issue.
 
+Treat a valid TTI prompt length as a logical request length. If TTI sends a prompt whose length is within the supported context and the autoport fails because the length is not divisible by an internal chunk, tile, block, page, or trace size, that is an autoport model bug. Do not waive it, lower the context, or change the benchmark to an aligned length. Fix the model/generator/adapter padding, chunking, masking, or output slicing path and rerun the failing item.
+
 ## Topology
 
 Assume the agent usually starts inside an IRD reservation/Codex container:
@@ -22,16 +24,25 @@ Assume the agent usually starts inside an IRD reservation/Codex container:
 ```text
 reservation container:
   has tt-smi and the experiment/model context
-  may not have Docker
-  use it for device health, tt-smi reset, and local model evidence
+  has the generated tt-metal autoport checkout and optimized-vLLM evidence
+  use it for device health, tt-smi reset, autoport vLLM serving, and local model evidence
 
 physical loudbox host:
   has Docker
-  run tt-inference-server here with --docker-server
-  copy workflow reports back to the model doc/evidence directory
+  use only if the chosen TTI path truly needs Docker
 ```
 
-Do not try to run `--docker-server` inside the reservation container unless Docker socket access is deliberately mounted and `docker ps` works there. Prefer the physical host path.
+Prefer the client/server topology:
+
+```text
+1. Start the generated autoport vLLM server from the tt-metal reservation checkout.
+2. Run TTI workflows as a client against that server's OpenAI-compatible port.
+3. Do not pass --docker-server.
+```
+
+This deliberately keeps server-side vLLM, tokenizer, plugin, and autoport imports inside the already-working tt-metal environment. Do not try to fix server import/API mismatches by mixing the TTI Docker image's vLLM packages with the autoport server. TTI still needs a working benchmark client environment, but that client should only send OpenAI-compatible HTTP requests to the generated server.
+
+Use Docker only when the external autoport server path is unavailable after investigation, or when the user explicitly asks for the packaged Docker path. If Docker is used, make sure the container evaluates the generated autoport, not a stock implementation.
 
 ## Preflight
 
@@ -40,23 +51,28 @@ Do not try to run `--docker-server` inside the reservation container unless Dock
 ```text
 HF model id
 model autoport directory
-physical host name, for example wh-lb-80
+physical host name, for example wh-lb-80, only if Docker or host-level recovery is needed
 TTI device name, usually t3k for T3K loudboxes
 experiment evidence directory, if separate from models/autoports/<model>/doc/
 ```
 
-If the prompt does not give the physical host, infer it from reservation metadata or the reservation container hostname only when obvious. Otherwise stop and ask for the host; a wrong host can use the wrong hardware.
+If Docker is needed and the prompt does not give the physical host, infer it from reservation metadata or the reservation container hostname only when obvious. Otherwise stop and ask for the host; a wrong host can use the wrong hardware.
 
 The model autoport directory is the target implementation. Keep its exact relative path, for example `models/autoports/meta_llama_llama_3_1_8b_instruct`, and use that path in later spec checks.
 
-2. Check Docker on the physical host and devices in the reservation container:
+2. Check devices in the reservation container:
 
 ```bash
-ssh "$PHYSICAL_HOST" 'docker ps >/dev/null && echo DOCKER_OK'
 tt-smi -ls --local
 ```
 
-If `docker ps` fails on the physical host, do not continue with `--docker-server`. Report `physical-host Docker unavailable`.
+If Docker will be used, also check Docker on the physical host:
+
+```bash
+ssh "$PHYSICAL_HOST" 'docker ps >/dev/null && echo DOCKER_OK'
+```
+
+If `docker ps` fails on the physical host, do not continue with `--docker-server`. Use the external-server topology instead, or report `physical-host Docker unavailable` if Docker is truly required.
 
 3. Confirm vLLM readiness artifacts exist before this phase:
 
@@ -110,6 +126,18 @@ device = target TTI device
 
 The spec may reuse benchmark, eval, and API-test definitions from the matching stock model, but it must not reuse the stock implementation path.
 
+For the external-server path, create or edit a temporary TTI spec whose embedded `cli_args` are already correct:
+
+```text
+cli_args.workflow = release, benchmarks, evals, tests, spec_tests, or reports
+cli_args.docker_server = false
+cli_args.local_server = false
+cli_args.service_port = the running autoport server port, usually 8000
+cli_args.model_spec_json = path to this temporary spec
+```
+
+Do not rely on command-line flags alone to override a custom `--model-spec-json`. Some TTI checkouts load the JSON's embedded `cli_args` and do not apply the current CLI args to the loaded spec. Before running a workflow, inspect the run spec that TTI writes under `workflow_logs/run_specs/` and confirm `docker_server=false`, the expected `service_port`, and `impl.code_path=models/autoports/<model>`.
+
 If exact matching is unclear, inspect `model_spec.json` only to find the benchmark/eval recipe and to see how the local checkout names fields:
 
 ```bash
@@ -127,9 +155,64 @@ Do not stop at a matching TTI model name. Before launching, print the selected s
 
 Known TTI issue: some `tt-inference-server` checkouts accept a custom `--runtime-model-spec-json` or `--model-spec-json`, then still validate the model/device or benchmark setup against the built-in `MODEL_SPECS` / `BENCHMARK_CONFIGS`. Symptoms include a valid autoport spec failing with `model:=... does not support device:=...` or `not found in BENCHMARKS_CONFIGS`. This is fixed by tenstorrent/tt-inference-server#4345, branch `yieldthought/model-spec-json-custom-registry`, commit `0ab021986`. If that PR is not merged in the checkout being used, cherry-pick that fix before continuing. Do not work around this bug by switching to a stock TTI model spec or stock implementation.
 
+## External-Server Smoke
+
+Do not start with the full release workflow. First prove the topology with a small smoke that cannot run for hours.
+
+1. Start the generated autoport vLLM server from the tt-metal checkout using the same serving command and flags proven in optimized-vLLM. A typical LLM pattern is:
+
+```bash
+cd "$TT_METAL_HOME"
+source python_env/bin/activate
+MODEL_DIR=models/autoports/<model>
+MAX_MODEL_LEN=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["max_model_len"])' "$MODEL_DIR/doc/context_contract.json")
+export PYTHONPATH="$TT_METAL_HOME:$VLLM_CHECKOUT:${PYTHONPATH:-}"
+export TT_LLAMA_TEXT_VER=<autoport selector if required>
+python -m models.common.readiness_check.run_vllm_server \
+  --stages serve \
+  --model-dir "$MODEL_DIR" \
+  --hf-model "$HF_MODEL_OR_LOCAL_WEIGHTS" \
+  --mesh-device T3K \
+  --max-num-seqs 32 \
+  --max-model-len "$MAX_MODEL_LEN" \
+  --tt-config '{"sample_on_device_mode": "all"}' \
+  --additional-server-args "--served-model-name $HF_MODEL"
+```
+
+Match the optimized-vLLM stage's actual command where it differs. The important points are: the server imports the generated autoport, preserves the context contract, and serves the HF model name that TTI will request.
+
+2. Verify the server before invoking TTI:
+
+```bash
+curl -fsS "http://127.0.0.1:$SERVICE_PORT/health"
+curl -fsS "http://127.0.0.1:$SERVICE_PORT/v1/chat/completions" \
+  -H 'Content-Type: application/json' \
+  -d "{\"model\":\"$HF_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply in one short sentence.\"}],\"max_tokens\":8,\"temperature\":0}"
+```
+
+3. Run a tiny TTI client workflow against the live server. Use a temporary no-Docker spec with one 8-token-in / 8-token-out benchmark request, `disable_trace_capture=true`, and very loose performance targets. This proves that TTI can load the autoport spec, see the external server, send a request, write benchmark output, and run reports.
+
+```bash
+cd "$TTI_WORK_ROOT/tt-inference-server"
+export CACHE_ROOT="$SMOKE_EVIDENCE_DIR/tti_cache"
+export SERVICE_PORT=8000
+python3 run.py \
+  --model "$TTI_MODEL" \
+  --model-spec-json "$AUTOPORT_SMOKE_SPEC" \
+  --device "$TTI_DEVICE" \
+  --workflow benchmarks \
+  --no-auth \
+  --skip-system-sw-validation \
+  --disable-trace-capture
+```
+
+The smoke passes only if `run.py` exits `0`, the TTI-written run spec has `docker_server=false` and `impl.code_path=models/autoports/<model>`, and the benchmark JSON records `completed=1` with `failed=0`.
+
+If the smoke fails before a request is sent because the TTI benchmark client entry point is missing, fix the TTI client environment. For example, create/install the checkout's `BENCHMARKS_VLLM` venv or point the expected `vllm` client command at the already-installed vLLM CLI. Record this as a TTI setup fix. Do not respond by switching to `--docker-server` or a stock implementation.
+
 ## Run The Release Workflow
 
-Run from the physical host. Never print tokens.
+Run the full workflow only after the smoke passes. Keep the generated autoport vLLM server running and run TTI as a client. Never print tokens.
 
 ```bash
 cd "$WORK_ROOT/tt-inference-server"
@@ -138,36 +221,38 @@ export MODEL_SOURCE=huggingface
 export HOST_HF_HOME=/localdev/$USER/huggingface
 export HF_HOME=/localdev/$USER/huggingface
 export PERSISTENT_VOLUME_ROOT="$WORK_ROOT/persistent_volume"
-export JWT_SECRET=dummy
+export SERVICE_PORT=8000
 python3 run.py \
   --model "$TTI_MODEL" \
   --model-spec-json "$AUTOPORT_MODEL_SPEC" \
   --device "$TTI_DEVICE" \
   --workflow release \
-  --docker-server \
   --no-auth \
   --skip-system-sw-validation
 ```
 
 Notes:
 
-- `JWT_SECRET=dummy` may still be needed on older tags even with `--no-auth`.
-- `--skip-system-sw-validation` is acceptable when running from the physical host because `tt-smi` health is validated from the reservation container.
+- Do not pass `--docker-server` on the external-server path.
+- `JWT_SECRET=dummy` may still be needed on older tags even with `--no-auth`; set it only if the checkout requires it.
+- `--skip-system-sw-validation` is acceptable because `tt-smi` health is validated from the reservation container.
 - If the checkout supports `--tt-device` instead of `--device`, use the checkout's help output.
 - If the checkout does not support `--model-spec-json`, use the checkout's supported mechanism to point the workflow at the autoport spec. If no such mechanism exists, the stage is blocked on release integration; do not fall back to a built-in stock implementation.
-- If Docker is used, make sure the container can see the generated autoport code path. Mount, copy, or build from the current tt-metal checkout as needed. A Docker image that only contains stock `models/tt_transformers` cannot validate this stage.
+- If Docker is used as an explicit fallback, make sure the container can see the generated autoport code path. Mount, copy, or build from the current tt-metal checkout as needed. A Docker image that only contains stock `models/tt_transformers` cannot validate this stage.
 - If a Hugging Face cache location is already provided by the experiment, use it rather than re-downloading.
 
-Run the command in `tmux` or another durable session on the physical host. Tee stdout/stderr to a timestamped log under `WORK_ROOT`.
+Run long commands in `tmux` or another durable session. Tee stdout/stderr to a timestamped log under `WORK_ROOT`.
 
 ## Recovery Policy
 
 If the workflow fails during server/device initialization with ARC, ERISC, remote Ethernet, or `tt-smi` reset symptoms:
 
-1. Stop only the TTI release server/session on the physical host:
+1. Stop only the server/session for this run:
 
 ```bash
-ssh "$PHYSICAL_HOST" 'tmux kill-session -t tti-release-<run-name> 2>/dev/null || true; docker ps -aq --filter "name=tt-inference-server" | xargs -r docker rm -f'
+tmux kill-session -t tti-release-<run-name> 2>/dev/null || true
+tmux kill-session -t autoport-vllm-<run-name> 2>/dev/null || true
+ssh "$PHYSICAL_HOST" 'docker ps -aq --filter "name=tt-inference-server" | xargs -r docker rm -f'  # only if Docker was used
 ```
 
 2. Follow `$tt-device-usage` reset recovery from the reservation container. At minimum run the bounded list/reset/list sequence, retry reset once if devices or Ethernet links do not all return, and verify a mesh open/close before relaunching:
@@ -245,7 +330,7 @@ Include:
 - successful run log;
 - run spec and runtime model spec JSON;
 - small benchmark JSON files;
-- a `RUN_NOTES.md` with commands, versions, host/session, reset actions, report path, and pass/fail summary.
+- a `RUN_NOTES.md` with commands, versions, server mode, host/session, reset actions, report path, and pass/fail summary.
 
 Also include the run spec or report data that proves the implementation path. `RUN_NOTES.md` must have an "Autoport implementation check" line showing the target `models/autoports/<model>` path and whether the copied TTI artifacts matched it.
 
@@ -259,7 +344,7 @@ Do not copy:
 - raw profiler/op CSV bulk such as `tracy_ops_times.csv`, `profile_log_device.csv`, `ops_perf_results.csv`, and `*_decode_ops.csv`;
 - large raw eval sample dumps unless explicitly requested.
 
-After copy-back, remove any `.env` left in the physical-host repo and stop the finished tmux session. Do not release the reservation unless the user or monitor asks.
+After copy-back, remove any `.env` left in the TTI checkout and stop the finished tmux session. Do not release the reservation unless the user or monitor asks.
 
 ## Completion Criteria
 
@@ -269,11 +354,12 @@ Done means:
 - The copied run spec or release report data proves that the evaluated implementation path is the target `models/autoports/<model>` directory.
 - No copied final report or run spec identifies the evaluated implementation as stock `models/tt_transformers`, `models/demos`, or another packaged implementation for the same HF model.
 - The copied run spec, server launch, and report data preserve the supported context from `doc/context_contract.json`.
+- Valid non-aligned prompt lengths either pass, or the stage records the exact model bug and remains not ready.
 - Any failing release tests or API conformance rows were either fixed with `$autofix` and rerun, or explicitly classified as non-test readiness gaps with evidence.
 - Any failed accuracy, benchmark target, API conformance, or incomparable metric row is classified as `fixed`, `issue-waived`, or `readiness-fail`. A `readiness-fail` means the stage is not clean-pass.
 - `meta_ifeval` and `meta_gpqa_cot` pass for text LLMs, or each failure has a current linked issue proving the correct canonical implementation fails the same eval in the same way.
 - Final release markdown is copied under `models/autoports/<model>/doc/tti_release/`.
-- `RUN_NOTES.md` records the exact physical host, repo tag, Docker image/version, command, env variables that mattered, reset/retry actions, copied artifacts, release-readiness status, failed rows, and waiver issue links where applicable.
+- `RUN_NOTES.md` records the exact server mode, host/session, repo tag, Docker image/version if Docker was used, command, env variables that mattered, reset/retry actions, copied artifacts, release-readiness status, failed rows, and waiver issue links where applicable.
 - The report is skimmed and the README/RUN_NOTES call out any failing accuracy, benchmark target, or API conformance checks with the classification above.
-- The physical host has no leftover `tt-inference-server` Docker container from this run and no leftover release tmux session.
+- There is no leftover autoport vLLM server, TTI release tmux session, or `tt-inference-server` Docker container from this run.
 - The final response names the release report path and whether a Pushover or other requested notification was sent.

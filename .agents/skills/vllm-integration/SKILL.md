@@ -30,6 +30,8 @@ Before writing adapter code, load the datatype-sweep selection and confirm the g
 
 Load `models/autoports/<model>/doc/context_contract.json` and serve the recorded supported context. The default target is the HF-advertised context. Do not lower `--max-model-len`, model config context, benchmark context, API context, or any other advertised serving capability to work around a model bug. A smaller value is valid only when the context contract records evidence that a hard physical device limit prevents the advertised capability from fitting or running and that the selected value is the largest feasible one.
 
+Serving requests may have any valid prompt length up to that supported context. The adapter must not require prompt length to be divisible by an internal prefill chunk, tile, block, page, or trace size. If the model path pads or chunks internally, the adapter passes the logical prompt length through to masks, positions, cache fill, and output slicing. Include a direct OpenAI-compatible request or targeted runner check with a valid non-aligned prompt length, not only the default 128-token benchmark.
+
 Preserve larger-batch serving capability. The headline performance target is still batch-1 single-user latency, but the adapter must not assume `max_num_seqs=1` or batch size 1 in cache allocation, page tables, scheduler inputs, sampling, async decode, or output formatting. Test serving up to 32 concurrent sequences when the target hardware, memory, and harness allow it. If 32 cannot run, record the largest tested value and the hard physical limit.
 
 ## vLLM Adapter
@@ -186,6 +188,7 @@ Done means all of these are true and recorded:
 - Plugin registration path and architecture name.
 - Exact successful `run_vllm_server` invocation.
 - Served max context, matching `doc/context_contract.json`, with any hard-physical-limit reduction evidence.
+- Non-aligned prompt-length evidence through serving: a valid request length that is not divisible by internal chunk/page/block alignment succeeds without capping or truncating the advertised context.
 - Served batch/concurrency coverage, including the largest tested `max_num_seqs` up to 32 and any hard-physical-limit reduction evidence.
 - Capability flags with evidence: no unproven `supports_async_decode=True`, explicit `tt_async_decode_allows_overlap` value with proof if true, no prefix-caching claim without tests, and on-device sampling verified for the measured mode.
 - Evidence that serving uses the full-model split-sampling contract: internal sampling trace, `tt_out_tok` feedback into the persistent decode token input, greedy benchmarks using the fastest correct on-device sampling strategy measured for this mesh, and stale-token/current-position smoke coverage.
