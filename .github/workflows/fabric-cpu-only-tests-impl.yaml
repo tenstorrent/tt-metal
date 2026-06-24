@@ -3,6 +3,11 @@ name: "[internal] Fabric cpu-only tests impl"
 on:
   workflow_call:
     inputs:
+      runs-on-sku:
+        required: false
+        type: string
+        default: cpu_medium
+        description: "SKU from sku_config.yaml selecting the CPU runner pool (e.g. cpu_medium)."
       test-category:
         required: false
         type: string
@@ -49,7 +54,7 @@ jobs:
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
             ${{ env.TESTS_YAML_PATH }} \
-            "cpu_medium" \
+            "${{ inputs.runs-on-sku }}" \
             ./.github/sku_config.yaml
 
   fabric-cpu-unit-tests:
