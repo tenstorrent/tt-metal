@@ -13,9 +13,9 @@ Why this test exists
 The full prefill block hangs at the gate's `all_reduce_async` under FABRIC_2D_TORUS_Y.
 That op runs on cluster_axis = TP_AXIS = 1 (the column axis), which stays LINEAR even
 under TORUS_Y — only the SP/row axis (mesh dim 0) is closed into a ring. So the op
-correctly uses Topology.Linear; the ring lives on the *other* axis. The
-ring-aware dispatch/combine fix (commit 2d07b9c0fd7) does not touch all_reduce_async,
-and the full block under TORUS_Y was never run.
+correctly uses Topology.Linear; the ring lives on the *other* axis. The ring-aware
+dispatch/combine handshake fix (see the writer_dispatch.cpp / writer_combine.cpp change on
+this branch) does not touch all_reduce_async, and the full block under TORUS_Y was never run.
 
 This test runs the SAME op, on the SAME axis, with the SAME Topology.Linear, varying
 ONLY the fabric config:

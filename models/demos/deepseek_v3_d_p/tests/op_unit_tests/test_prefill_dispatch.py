@@ -111,6 +111,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 )
 @pytest.mark.parametrize("use_fp8_output", [False, True], ids=["bf16_out", "fp8_out"])
 @pytest.mark.parametrize("verbose", [False])
+# Bound the run so a ring-handshake regression on the FABRIC_2D_TORUS_Y/-XY configs surfaces as a
+# timeout instead of hanging CI indefinitely (the init/exit multicast deadlock mode this guards).
+@pytest.mark.timeout(300)
 def test_ttnn_dispatch(
     mesh_device,
     seq_len_per_chip,
