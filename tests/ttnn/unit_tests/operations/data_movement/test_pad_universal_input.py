@@ -110,7 +110,7 @@ PAD_CASES = [
     # --- height-only padding ---
     ([(0, 0), (0, 0), (0, 32), (0, 0)], [1, 1, 64, 128], [1, 1, 96, 128], "pad_h_small"),
     ([(0, 0), (0, 0), (0, 64), (0, 0)], [1, 1, 64, 128], [1, 1, 128, 128], "pad_h_large"),
-    # --- width-only padding ---
+    # --- width-only padding (trailing) ---
     ([(0, 0), (0, 0), (0, 0), (0, 64)], [1, 1, 64, 128], [1, 1, 64, 192], "pad_w_small"),
     ([(0, 0), (0, 0), (0, 0), (0, 128)], [1, 1, 64, 128], [1, 1, 64, 256], "pad_w_large"),
     # --- both H and W (triggers 2-pass decomposition in pad.cpp) ---
@@ -347,3 +347,64 @@ def test_pad_non_4d_sharded_input(device, padding_spec, input_shape, output_shap
     """Non-4D tensor (rank-2 or rank-3) with sharded input → DRAM output."""
     mem_cfg = make_sharded_memory_config(device, input_shape, strategy, layout)
     _run_pad(device, input_shape, padding_spec, output_shape, mem_cfg, layout)
+
+
+# ---------------------------------------------------------------------------
+# Category 6: RM WIDTH/BLOCK sharded — width front-padding
+#
+# Width front-padding (non-zero left pad on W axis) is only supported by the
+# RM pad kernel path.  TILE layout has a pre-existing TT_FATAL that rejects
+# front padding, and HEIGHT_SHARDED has its own factory-level issue with it.
+# These tests validate the native RM W/B sharded front-pad path added by
+# this PR (noc_async_*_sharded + memmove in reader kernel).
+# ---------------------------------------------------------------------------
+
+FRONT_PAD_CASES = [
+    # (padding_spec, input_shape, output_shape, test_id)
+    ([(0, 0), (0, 0), (0, 0), (64, 0)], [1, 1, 64, 128], [1, 1, 64, 192], "front_pad_w"),
+]
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    FRONT_PAD_CASES,
+    ids=[c[3] for c in FRONT_PAD_CASES],
+)
+@pytest.mark.parametrize(
+    "strategy,strat_id",
+    [
+        (ttnn.ShardStrategy.WIDTH, "width"),
+        (ttnn.ShardStrategy.BLOCK, "block"),
+    ],
+    ids=["width", "block"],
+)
+def test_pad_rm_wb_sharded_front_pad_input(
+    device, padding_spec, input_shape, output_shape, case_id, strategy, strat_id
+):
+    """RM WIDTH/BLOCK sharded input with width front-padding → DRAM output."""
+    in_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.ROW_MAJOR_LAYOUT)
+    _run_pad(device, input_shape, padding_spec, output_shape, in_cfg, ttnn.ROW_MAJOR_LAYOUT)
+
+
+@pytest.mark.parametrize(
+    "padding_spec,input_shape,output_shape,case_id",
+    FRONT_PAD_CASES,
+    ids=[c[3] for c in FRONT_PAD_CASES],
+)
+@pytest.mark.parametrize(
+    "strategy,strat_id",
+    [
+        (ttnn.ShardStrategy.WIDTH, "width"),
+        (ttnn.ShardStrategy.BLOCK, "block"),
+    ],
+    ids=["width", "block"],
+)
+def test_pad_rm_wb_sharded_front_pad_to_sharded(
+    device, padding_spec, input_shape, output_shape, case_id, strategy, strat_id
+):
+    """RM WIDTH/BLOCK sharded input with width front-padding → same sharded output."""
+    in_cfg = make_sharded_memory_config(device, input_shape, strategy, ttnn.ROW_MAJOR_LAYOUT)
+    out_cfg = make_sharded_memory_config(device, output_shape, strategy, ttnn.ROW_MAJOR_LAYOUT)
+    _run_pad(
+        device, input_shape, padding_spec, output_shape, in_cfg, ttnn.ROW_MAJOR_LAYOUT, output_memory_config=out_cfg
+    )
