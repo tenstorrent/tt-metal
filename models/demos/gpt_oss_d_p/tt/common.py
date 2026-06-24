@@ -28,13 +28,13 @@ def create_tt_model(
     GPT-OSS version of create_tt_model that matches tt_transformers interface
     Uses clean MeshConfig abstraction for optimal device parallelization
     """
-    from models.demos.gpt_oss.config import MeshConfig
-    from models.demos.gpt_oss.tt.model import Model
-    from models.demos.gpt_oss.tt.model_config import ModelArgs
+    from models.demos.gpt_oss_d_p.config import MeshConfig
+    from models.demos.gpt_oss_d_p.tt.model import Model
+    from models.demos.gpt_oss_d_p.tt.model_config import ModelArgs
 
     # Use provided mesh_config or create optimal MeshConfig for the mesh shape
     if mesh_config is None:
-        from models.demos.gpt_oss.config import ModeConfig
+        from models.demos.gpt_oss_d_p.config import ModeConfig
 
         mesh_config = MeshConfig(mesh_device.shape, decode=ModeConfig(tp=mesh_device.shape[1], ep=mesh_device.shape[0]))
 

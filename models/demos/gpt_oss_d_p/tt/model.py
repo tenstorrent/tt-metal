@@ -8,9 +8,9 @@ from loguru import logger
 import ttnn
 from models.common.sampling.generator import SamplingGenerator
 from models.common.utility_functions import nearest_32
-from models.demos.gpt_oss.config import MeshConfig, Mode, ModeConfig
 from models.demos.gpt_oss.utils.general_utils import get_cache_file_name, get_default_num_links
 from models.demos.gpt_oss.utils.substate import substate
+from models.demos.gpt_oss_d_p.config import MeshConfig, Mode, ModeConfig
 from models.tt_transformers.tt.common import copy_host_to_device, rope_scaling_model_factory
 from models.tt_transformers.tt.rope import RotarySetup
 
@@ -102,6 +102,7 @@ class Model:
         max_local_batch_size=1,
         users_row_sharded=False,
         use_throughput_experts=False,
+        max_seq_len=None,
     ):
         """
         Initialize GPT-OSS model
@@ -123,6 +124,7 @@ class Model:
         self.head_dim = hf_config.head_dim
         self.max_local_batch_size = max_local_batch_size
         self.users_row_sharded = users_row_sharded
+        self.max_seq_len = max_seq_len or getattr(hf_config, "max_position_embeddings", 131072)
 
         self.ccl_manager = ccl_manager
 
@@ -180,6 +182,7 @@ class Model:
                 users_row_sharded=users_row_sharded,
                 use_throughput_experts=use_throughput_experts,
                 tokens_per_device=max_local_batch_size,
+                max_seq_len=self.max_seq_len,
             )
             for layer_idx in range(hf_config.num_hidden_layers)
         ]
@@ -290,7 +293,7 @@ class Model:
     ):
         """Constructor compatible with tt_transformers.Transformer interface"""
         # Create a dummy CCL manager for GPT-OSS
-        from models.demos.gpt_oss.tt.ccl import CCLManager
+        from models.demos.gpt_oss_d_p.tt.ccl import CCLManager
 
         ccl_manager = CCLManager(mesh_device, num_links=get_default_num_links(mesh_device))
 
@@ -309,6 +312,7 @@ class Model:
             max_local_batch_size=args.max_local_batch_size,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
+            max_seq_len=args.max_seq_len,
         )
 
         # Add tt_transformers compatible attributes
