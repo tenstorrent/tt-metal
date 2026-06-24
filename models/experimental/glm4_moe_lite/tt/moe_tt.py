@@ -631,9 +631,12 @@ def moe_topk_tt(
     routed_scaling_factor = float(getattr(hparams, "routed_scaling_factor", 1.8))
     norm_topk_prob = bool(getattr(hparams, "norm_topk_prob", True))
 
-    # For decode (T<=32), keep all intermediates in L1 to avoid DRAM round-trips.
-    # Tensors are tiny ([1,1,T,64] and [1,1,T,4]) so they easily fit.
-    use_l1 = os.environ.get("GLM4_MOE_LITE_ROUTER_L1", "1").strip() == "1" and int(x.shape[2]) <= 32
+    # Keep router intermediates in L1 for decode and short prefill (T<=128 by default).
+    # Tensors are small ([1,1,T,64] scores + [1,1,T,K] top-k); override max via
+    # GLM4_MOE_LITE_ROUTER_L1_MAX_TOKENS or disable with GLM4_MOE_LITE_ROUTER_L1=0.
+    tokens = int(x.shape[2])
+    _router_l1_max = int(os.environ.get("GLM4_MOE_LITE_ROUTER_L1_MAX_TOKENS", "128").strip() or "128")
+    use_l1 = _env_bool("GLM4_MOE_LITE_ROUTER_L1", default=True) and tokens <= _router_l1_max
     mc = ttnn.L1_MEMORY_CONFIG if use_l1 else None
 
     # Tuned 1D multicast program config (compute_1d_prog_cfg) + LoFi/fp32-acc for decode/small-batch router.
@@ -704,9 +707,7 @@ def moe_topk_tt(
 
     if norm_topk_prob:
         denom = ttnn.sum(topk_weights, dim=3, keepdim=True, memory_config=mc)
-        # decode (use_l1): sigmoid > 0, sum of k=8 values is always > 0, so eps is dead code.
-        if not use_l1:
-            denom = ttnn.add(denom, 1e-20, output_tensor=denom)
+        # sigmoid > 0 => gathered top-k weights are strictly positive; sum over k is always > 0.
         topk_weights = ttnn.div(topk_weights, denom, memory_config=mc)
         ttnn.deallocate(denom, force=False)
 

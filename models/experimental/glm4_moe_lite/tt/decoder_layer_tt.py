@@ -728,6 +728,21 @@ def run_decoder_layer_prefill_update_cache_tt(
     mesh_rows, mesh_cols = _mesh_shape(device)
     tp_size = int((mesh_rows, mesh_cols)[tp_axis]) if tp_axis is not None else 1
     attn_dp = _env_bool("GLM4_MOE_LITE_ATTN_DP", default=True)
+    # HEAD_PARALLEL_ATTN (prefill): use the column-parallel w_q_b_hp / head-sharded w_kv_b1_hp
+    # copies so each device computes only num_heads/tp_size heads through q_b -> kv_b1 -> FlashMLA
+    # -> kv_b2, recombined by the single post-w_o all_reduce. Mirrors the decode path
+    # (attention_decode.py). Falls back to the replicated full-head path when the head-parallel
+    # weight copies are absent or heads don't divide evenly across TP.
+    head_parallel_attn = (
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_ATTN", "1").strip() == "1"
+        and os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "1").strip() == "1"
+        and tp_enabled
+        and tp_size > 1
+        and num_heads % tp_size == 0
+        and getattr(w, "w_q_b_hp", None) is not None
+        and getattr(w, "w_kv_b1_hp", None) is not None
+    )
+    heads_local = (num_heads // tp_size) if head_parallel_attn else num_heads
     ccl_num_links = int(os.environ.get("GLM4_MOE_LITE_CCL_NUM_LINKS", "2").strip() or "2")
     ccl_topology_str = os.environ.get("GLM4_MOE_LITE_CCL_TOPOLOGY", "linear").strip().lower()
     ccl_topology = ttnn.Topology.Ring if ccl_topology_str == "ring" else ttnn.Topology.Linear
@@ -810,7 +825,20 @@ def run_decoder_layer_prefill_update_cache_tt(
     elif w_q_kv_a is None:
         q_a = _run_sharded_q_a_norm(q_a, from_fused_slice=False)
     qk_head_dim = int(hparams.qk_head_dim)
-    if tp_enabled and not attn_dp:
+    if head_parallel_attn:
+        # Column-parallel w_q_b_hp: replicated q_a -> this device's heads_local heads, no collective.
+        q = _mlp_linear(
+            q_a,
+            w.w_q_b_hp,
+            skip_gather=False,
+            memory_config=prefill_q_nlp_input_memory_config(
+                seq_tokens=total_seq,
+                fused_q_dim=heads_local * qk_head_dim,
+            )
+            if use_sharded_q_a
+            else None,
+        )  # [1,1,T,heads_local*qk_head_dim]
+    elif tp_enabled and not attn_dp:
         q = _tp_row_parallel_linear_from_replicated(q_a, w.w_q_b)  # [1,1,T,H*qk_head_dim]
     elif use_sharded_q_a:
         # Fast 80-core w_q_b beats sharded-in0 on 8-core grid (~15 μs vs ~57 μs device).
@@ -829,41 +857,41 @@ def run_decoder_layer_prefill_update_cache_tt(
     ttnn.deallocate(q_a, force=False)
 
     q_heads_mc = prefill_q_heads_memory_config(
-        num_heads=num_heads,
+        num_heads=heads_local,
         seq_tokens=total_seq,
         head_dim=qk_head_dim,
     )
     q = q_split_heads(
         q,
-        num_heads=num_heads,
+        num_heads=heads_local,
         head_dim=qk_head_dim,
         total_seq=total_seq,
         batch=batch,
         seq_len=seq_len,
         device=device,
         memory_config=q_heads_mc,
-    )  # [B,H,S_pad,qk_head_dim]
+    )  # [B,heads_local,S_pad,qk_head_dim]
     # Full Q [1,H,S,576] exceeds 1 MiB L1 budget; slices fit (q_nope ~960 KiB, q_rope ~320 KiB).
     q_nope_mc = prefill_q_slice_memory_config(
-        num_heads=num_heads,
+        num_heads=heads_local,
         seq_tokens=seq_len,
         slice_dim=int(hparams.qk_nope_head_dim),
     )
     q_rope_mc = prefill_q_slice_memory_config(
-        num_heads=num_heads,
+        num_heads=heads_local,
         seq_tokens=seq_len,
         slice_dim=int(hparams.qk_rope_head_dim),
     )
     q_nope = ttnn.slice(
         q,
         [0, 0, 0, 0],
-        [batch, num_heads, seq_len, int(hparams.qk_nope_head_dim)],
+        [batch, heads_local, seq_len, int(hparams.qk_nope_head_dim)],
         memory_config=q_nope_mc,
     )
     q_rope = ttnn.slice(
         q,
         [0, 0, 0, int(hparams.qk_nope_head_dim)],
-        [batch, num_heads, seq_len, qk_head_dim],
+        [batch, heads_local, seq_len, qk_head_dim],
         memory_config=q_rope_mc,
     )
     ttnn.deallocate(q, force=False)
@@ -871,8 +899,11 @@ def run_decoder_layer_prefill_update_cache_tt(
     # Project q_nope into KV latent space (per-head).
     # TTNN non-bcast matmul requires dim-0==1 for 4D×2D. When batch>1, reshape
     # [B,H,S,D] → [1,B*H,S,D] so dim-0 is 1, then reshape back after.
-    # w_kv_b1 stays row-parallel under TP regardless of ATTN_DP.
-    use_tp_kv_b1 = tp_enabled
+    # w_kv_b1 stays row-parallel under TP regardless of ATTN_DP — unless HEAD_PARALLEL_ATTN, in
+    # which case w_kv_b1_hp is head-sharded (dim=1) and the per-head matmul runs locally with no
+    # collective (also sidesteps the qk_nope contraction tile-align fallback below).
+    w_kv_b1_use = w.w_kv_b1_hp if head_parallel_attn else w.w_kv_b1
+    use_tp_kv_b1 = tp_enabled and not head_parallel_attn
     if use_tp_kv_b1:
         qk_nope = int(hparams.qk_nope_head_dim)
         qk_nope_per_shard = qk_nope // max(1, int(tp_size))
@@ -893,8 +924,8 @@ def run_decoder_layer_prefill_update_cache_tt(
             kv_b1_fn = lambda a, b: _mlp_linear(a, b, memory_config=kv_b1_out_mc)
         q_nope_parts = []
         for bi in range(batch):
-            q_bi = ttnn.slice(q_nope, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.qk_nope_head_dim)])
-            q_bi = kv_b1_fn(q_bi, w.w_kv_b1)
+            q_bi = ttnn.slice(q_nope, [bi, 0, 0, 0], [bi + 1, heads_local, seq_len, int(hparams.qk_nope_head_dim)])
+            q_bi = kv_b1_fn(q_bi, w_kv_b1_use)
             q_nope_parts.append(q_bi)
         ttnn.deallocate(q_nope, force=False)
         q_nope = ttnn.concat(q_nope_parts, dim=0)  # [B,H,S,kv_lora_rank]
@@ -902,9 +933,9 @@ def run_decoder_layer_prefill_update_cache_tt(
             ttnn.deallocate(p, force=False)
     else:
         if use_tp_kv_b1:
-            q_nope = _tp_row_parallel_linear_from_replicated(q_nope, w.w_kv_b1)
+            q_nope = _tp_row_parallel_linear_from_replicated(q_nope, w_kv_b1_use)
         else:
-            q_nope = _mlp_linear(q_nope, w.w_kv_b1, memory_config=kv_b1_out_mc)
+            q_nope = _mlp_linear(q_nope, w_kv_b1_use, memory_config=kv_b1_out_mc)
     _profile_add(profile, "q_path_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
     # ---- KVPE for the prompt -> fill cache ----
@@ -1066,8 +1097,9 @@ def run_decoder_layer_prefill_update_cache_tt(
         ttnn.deallocate(kvpe, force=False)
     _profile_add(profile, "flash_mla_prefill_s", time.perf_counter() - t0 if profile is not None else 0.0)
 
-    # flash_mla_prefill pads heads up to q_chunk_size. Slice back to num_heads.
-    attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [batch, num_heads, seq_len, int(hparams.kv_lora_rank)])
+    # flash_mla_prefill pads heads up to q_chunk_size. Slice back to this device's head count
+    # (heads_local == num_heads unless HEAD_PARALLEL_ATTN, where q_b emitted num_heads/tp_size).
+    attn_latent = ttnn.slice(attn_latent, [0, 0, 0, 0], [batch, heads_local, seq_len, int(hparams.kv_lora_rank)])
 
     t0 = time.perf_counter() if profile is not None else 0.0
     use_nlp_concat = os.environ.get("GLM4_MOE_LITE_NLP_CONCAT_HEADS", "1").strip() != "0"
@@ -1084,11 +1116,17 @@ def run_decoder_layer_prefill_update_cache_tt(
 
         def _kvb2_head_parallel_prefill(a_latent: ttnn.Tensor) -> ttnn.Tensor:
             # a_latent: [1, H, S, kv_lora]
-            # Land the partition output directly in L1 so the kv_b2 matmul's input
-            # staging copy (CopyDeviceOperation) is avoided (~640 KiB fits L1).
-            a_part = ttnn.mesh_partition(a_latent, dim=1, cluster_axis=tp_axis, memory_config=ttnn.L1_MEMORY_CONFIG)
-            v_local = _mlp_linear(a_part, w.w_kv_b2, memory_config=kv_b2_out_mc)
-            ttnn.deallocate(a_part, force=False)
+            if head_parallel_attn:
+                # HEAD_PARALLEL_ATTN already produced this device's heads upstream (column-parallel
+                # w_q_b_hp), so FlashMLA output is already head-local — skip the post-SDPA head
+                # partition (mirrors attention_decode.py).
+                v_local = _mlp_linear(a_latent, w.w_kv_b2, memory_config=kv_b2_out_mc)
+            else:
+                # Land the partition output directly in L1 so the kv_b2 matmul's input
+                # staging copy (CopyDeviceOperation) is avoided (~640 KiB fits L1).
+                a_part = ttnn.mesh_partition(a_latent, dim=1, cluster_axis=tp_axis, memory_config=ttnn.L1_MEMORY_CONFIG)
+                v_local = _mlp_linear(a_part, w.w_kv_b2, memory_config=kv_b2_out_mc)
+                ttnn.deallocate(a_part, force=False)
             if use_nlp_concat:
                 v_local = ttnn.experimental.nlp_concat_heads(v_local)
                 return ttnn.reshape(v_local, (1, 1, seq_len, flat_dim))
@@ -1098,7 +1136,7 @@ def run_decoder_layer_prefill_update_cache_tt(
         if batch > 1:
             v_parts = []
             for bi in range(batch):
-                a_bi = ttnn.slice(attn_latent, [bi, 0, 0, 0], [bi + 1, num_heads, seq_len, int(hparams.kv_lora_rank)])
+                a_bi = ttnn.slice(attn_latent, [bi, 0, 0, 0], [bi + 1, heads_local, seq_len, int(hparams.kv_lora_rank)])
                 v_parts.append(_kvb2_head_parallel_prefill(a_bi))
             ttnn.deallocate(attn_latent, force=False)
             v = ttnn.concat(v_parts, dim=0)  # [B,1,S,flat_dim]
