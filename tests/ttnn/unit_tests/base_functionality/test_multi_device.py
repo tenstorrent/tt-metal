@@ -632,7 +632,7 @@ def test_visualize_mesh_device(mesh_device):
     ttnn.visualize_mesh_device(mesh_device)
 
 
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
 def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
@@ -640,8 +640,6 @@ def test_all_gather_multiple_submeshes(mesh_device):
         pytest.skip()
 
     def model(submesh):
-        # Reshape to a 1x4 mesh to enforce ring connected topological order.
-        submesh.reshape(ttnn.MeshShape(1, 4))
         full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
         for i in range(submesh.get_num_devices()):
             full_tensor[..., i * 32 : (i + 1) * 32] = i
@@ -654,7 +652,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
             device_tensor_torch = ttnn.to_torch(device_tensor)
             assert torch.all(device_tensor_torch == full_tensor)
 
-    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(1, 4))
     for submesh in submesh_devices:
         model(submesh)
 

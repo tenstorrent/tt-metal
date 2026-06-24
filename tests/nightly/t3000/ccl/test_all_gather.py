@@ -1202,27 +1202,13 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config):
         mesh_device,
     )
 
-    tile_size = tt_input.spec.tile.tile_shape[0]
-    rank = len(tt_input.shape)
-    gather_dim_normalized = dim if dim >= 0 else rank + dim
-    is_tile_padded = gather_dim_normalized >= rank - 2 and (
-        (gather_dim_normalized == rank - 2 and tt_input.shape[-2] % tile_size != 0)
-        or (gather_dim_normalized == rank - 1 and tt_input.shape[-1] % tile_size != 0)
-    )
-
+    # An all-gather along cluster_axis replicates the result across that axis
     input_topology = tt_input.tensor_topology()
-
-    # Create expected topology based on which all-gather path was used
-    if is_tile_padded:
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), list(input_topology.placements()), input_topology.mesh_coords()
-        )
-    else:
-        expected_placements = list(input_topology.placements())
-        expected_placements[cluster_axis] = ttnn.PlacementReplicate()
-        expected_topology = ttnn.TensorTopology(
-            input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
-        )
+    expected_placements = list(input_topology.placements())
+    expected_placements[cluster_axis] = ttnn.PlacementReplicate()
+    expected_topology = ttnn.TensorTopology(
+        input_topology.distribution_shape(), expected_placements, input_topology.mesh_coords()
+    )
 
     for i in range(NUM_ITERS):
         tt_out_tensor = ttnn.all_gather(
@@ -1239,14 +1225,14 @@ def test_nd(mesh_device, input_shape, dim, cluster_axis, dtype, memory_config):
         actual_topology = tt_out_tensor.tensor_topology()
         assert (
             actual_topology == expected_topology
-        ), f"output TensorTopology mismatch (tile_padded={is_tile_padded}):\n  Expected: {expected_topology}\n  Actual: {actual_topology}"
+        ), f"output TensorTopology mismatch:\n  Expected: {expected_topology}\n  Actual: {actual_topology}"
 
 
 @pytest.mark.parametrize(
     "device_params",
-    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_2D}],
     indirect=True,
-    ids=["fabric_linear", "fabric_2d"],
+    ids=["fabric_2d"],
 )
 @pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(

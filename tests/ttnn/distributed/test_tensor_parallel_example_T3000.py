@@ -9,6 +9,7 @@ import transformers
 import pytest
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.tests_common.skip_reasons import LEGACY_CCL_SKIP
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 
@@ -23,7 +24,6 @@ class TtFalconMLP:
         gelu = ttnn.gelu(ff1_linear)
 
         # Invoke CCL Ring All-Gather on gelu before passing to ff2_linear.
-        # Topology (Ring) is auto-detected from the configured FABRIC_1D_RING fabric.
         gelu = ttnn.all_gather(gelu, dim=3)
 
         ff2_linear: ttnn.Tensor = ttnn.linear(gelu, self.dense_4h_to_h_weights)
@@ -31,6 +31,7 @@ class TtFalconMLP:
         return ff2_linear
 
 
+@pytest.mark.skip(reason=LEGACY_CCL_SKIP)
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 def test_tensor_parallel_falcon_mlp(mesh_device):

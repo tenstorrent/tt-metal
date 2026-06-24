@@ -10,7 +10,7 @@ from tests.nightly.t3000.ccl.test_all_gather import run_all_gather_impl
 
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("num_links", [1], ids=["1link"])
-@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, ag_input_dtype",
     [
