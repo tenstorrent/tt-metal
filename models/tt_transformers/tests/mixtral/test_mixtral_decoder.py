@@ -157,11 +157,16 @@ def test_mixtral_decoder_inference(mesh_device, reset_seeds, batch, device_param
         position_ids = positions.unsqueeze(0)
         position_embeddings = reference_rotary_emb(pt_decode_input_bsh, position_ids)
 
-        ref_output_bsh, *_ = reference_model(
+        # transformers 5.x MixtralDecoderLayer.forward returns a single tensor (older versions
+        # returned a tuple). `ref_output_bsh, *_ =` would unpack the tensor along the batch dim,
+        # so assign directly and take element 0 only when a tuple/list is returned.
+        ref_output_bsh = reference_model(
             hidden_states=pt_decode_input_bsh,
             position_ids=position_ids,
             position_embeddings=position_embeddings,
         )
+        if isinstance(ref_output_bsh, (tuple, list)):
+            ref_output_bsh = ref_output_bsh[0]
         passing, pcc_message = comp_pcc(ref_output_bsh, tt_out, pcc)
 
         logger.info(comp_allclose(ref_output_bsh, tt_out))
