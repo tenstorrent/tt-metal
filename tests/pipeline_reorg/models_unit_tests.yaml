@@ -230,7 +230,7 @@
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
 
-# Janus Pro unit tests: Blackhole only (P150 / P300 / QuietBox 2).
+# Janus Pro unit tests: Blackhole only (P150).
 - name: Janus Pro-7B unit tests
   cmd: |
     pytest --timeout 600 models/experimental/janus_pro/tests/test_ci_dispatch.py
