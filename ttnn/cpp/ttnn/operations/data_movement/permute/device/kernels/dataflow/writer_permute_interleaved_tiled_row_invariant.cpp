@@ -135,18 +135,14 @@ void kernel_main() {
     // ------------------------------------------------------------------------
     // 4) Build padded and tiled shapes
     // ------------------------------------------------------------------------
-    uint32_t input_padded_shape[RANK];
     uint32_t input_tiled_shape[RANK];
     for (uint32_t i = 0; i < RANK; i++) {
         if (i < RANK - 2) {
-            input_padded_shape[i] = input_shape[i];
             input_tiled_shape[i] = input_shape[i];
         } else if (i == RANK - 2) {
-            input_padded_shape[i] = H_p;
             input_tiled_shape[i] = H_t;
         } else {
             // i == RANK - 1
-            input_padded_shape[i] = W_p;
             input_tiled_shape[i] = W_t;
         }
     }
