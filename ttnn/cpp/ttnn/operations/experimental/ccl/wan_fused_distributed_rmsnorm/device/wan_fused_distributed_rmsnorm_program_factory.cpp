@@ -68,41 +68,37 @@ uint32_t float_to_u32(float v) {
 // channels per core. For big shapes (Wan N=18944 with ~592 tile rows),
 // more workers means fewer chunks-per-worker, which keeps each worker's
 // chunk loop short and the per-chunk fabric overhead amortized.
-// Worker-count contention ceiling. A feat=1024 RoPE sweep (powers-of-2 tile-rows
-// x workers x chunk) showed parallel scaling is near-linear up to 32 workers, then
-// MUX-link + simultaneous-DRAM-read contention makes MORE workers SLOWER (64 was
-// 4-20% worse than 32 at seq 2048/4096). So 32 is a perf ceiling, not a core budget.
-// WAN_RMSNORM_WORKER_CAP overrides it for tuning/sweeps.
-constexpr uint32_t kMaxMuxWorkersPerChip = 32u;
-// num_tile_rows below this falls back to the LEGACY whole-tile writer
-// (single worker). The packed-page MUX writer has significant per-chunk
-// fabric overhead that doesn't pay off until we have ≥4 tile-rows worth
-// of compute per chip — at that point parallelism + packed bytes win.
+// num_tile_rows below this uses a single worker — the per-row forwarder overhead
+// doesn't pay off with <4 tile-rows of compute per chip.
 constexpr uint32_t kMuxRowsThreshold = 4u;
 
-// Pick num_workers for the MUX/packed path: one worker per tile-row, capped at
-// kMaxMuxWorkersPerChip (the contention ceiling). A powers-of-2 sweep (rope +
-// non-rope) showed min(num_tile_rows, 32) is optimal at every sequence length —
-// superseding the old SMALL/LARGE two-regime rule (which under-parallelized
-// medium shapes via rows/2 and over-parallelized large ones). With chunk pinned
-// to 1, fabric/AG is negligible (~2us), so there's no packet-count reason to use
-// fewer workers. See the commit history / RMSNORM_FUSION_FINDINGS.md.
-// Diagnostic override: WAN_RMSNORM_WORKER_CAP lets a perf sweep dial the
-// per-chip worker cap without rebuilding. Read once. Defaults to
-// kMaxMuxWorkersPerChip. Read inside the single-source-of-truth sizing path so
-// the op and create_stats_buffer agree on num_workers/buffer geometry.
-uint32_t mux_worker_cap() {
-    static const uint32_t cap = [] {
-        const char* env = std::getenv("WAN_RMSNORM_WORKER_CAP");
-        if (env != nullptr) {
-            const long v = std::strtol(env, nullptr, 10);
-            if (v > 0) {
-                return static_cast<uint32_t>(v);
-            }
+// Worker-count ceiling, derived from the device core grid (no hardcoded constant).
+// The fabric forwarder removed the shared-MUX contention that previously capped this
+// at 32 (a Wormhole-galaxy-specific number); a worker sweep then showed parallelism
+// keeps helping with more workers — but only up to WHOLE GRID ROWS. Workers are placed
+// row-major, so a count that is a multiple of grid.x tiles complete rows; pushing past
+// that into a ragged final row (and leaving zero idle cores) costs 3–9% to NoC/dispatch
+// contention (the 8x9 galaxy peaks at 64 = 8 full rows, regresses at the full-grid 68).
+// So: budget = grid − one forwarder core per link, rounded DOWN to whole rows. The few
+// idle cores that fall out (budget mod grid.x) are the slack that avoids the all-cores-
+// busy contention — derived from geometry, not a magic margin. Adapts to any grid.
+// `WAN_RMSNORM_WORKER_CAP` overrides for sweeps. Read inside the single-source-of-truth
+// sizing path so the op + create_stats_buffer agree on num_workers / buffer geometry.
+uint32_t derive_worker_cap(const CoreCoord& grid_size, uint32_t num_links) {
+    const char* env = std::getenv("WAN_RMSNORM_WORKER_CAP");
+    if (env != nullptr) {
+        const long v = std::strtol(env, nullptr, 10);
+        if (v > 0) {
+            return static_cast<uint32_t>(v);
         }
-        return kMaxMuxWorkersPerChip;
-    }();
-    return cap;
+    }
+    const uint32_t max_cores = grid_size.x * grid_size.y;
+    const uint32_t num_forwarders = std::max<uint32_t>(1u, num_links);  // one forwarder per link
+    const uint32_t budget = max_cores > num_forwarders ? max_cores - num_forwarders : 1u;
+    // Round down to whole grid rows (grid.x cores each); fall back to the raw budget if
+    // even a single row doesn't fit.
+    const uint32_t whole_rows = (grid_size.x > 0) ? (budget / grid_size.x) * grid_size.x : 0u;
+    return whole_rows > 0u ? whole_rows : budget;
 }
 // Diagnostic override: WAN_RMSNORM_INPUT_CB_CHUNKS dials how many chunks deep
 // the input_cb is buffered (default 2 = Phase-5 double-buffer). Deeper buffering
@@ -326,8 +322,7 @@ bool post_rotated_overflows_l1(
     constexpr uint64_t kFuseTriggerBytes = 1400000ull;                         // margin below the ~1.43 MB L1 cap
     return total + kPostFixedOverheadBytes > kFuseTriggerBytes;
 }
-uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
-    const uint32_t cap = mux_worker_cap();
+uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows, uint32_t cap) {
     if (num_tile_rows < kMuxRowsThreshold) {
         return 1u;
     }
@@ -335,11 +330,9 @@ uint32_t pick_num_workers_tp_gt_1(uint32_t num_tile_rows) {
     if (forced > 0u) {
         return std::min<uint32_t>(forced, num_tile_rows);
     }
-    // One worker per tile-row, capped at the contention ceiling (kMaxMuxWorkersPerChip).
-    // The sweep showed min(rows, 32) is optimal at every sequence length: below 32 rows
-    // more workers always help (compute-bound, ~linear scaling); above it the cap avoids
-    // the >32-worker contention regression. Supersedes the old rows/2 large-shape rule,
-    // which under-parallelized at 32 tile-rows and over-parallelized past 64.
+    // One worker per tile-row, capped at the core budget (grid − forwarders). A worker
+    // sweep on the forwarder showed parallelism keeps helping up to the grid limit, so
+    // we provision as many workers as fit; `cap` already excludes the forwarder cores.
     return std::min<uint32_t>(num_tile_rows, cap);
 }
 
@@ -360,7 +353,11 @@ WanFusedDistributedRmsnormSizing compute_sizing(
     // when ring_size > 1. From the kernel's perspective, this is "is_tp_1" =
     // no fabric, no MUX, legacy writer path.
     s.is_tp_1 = (args.ring_size == 1) || args.per_head_norm;
-    s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows);
+    // Worker cap = device compute grid − forwarder cores. Derived from the input's
+    // device so create_stats_buffer / validate / compute_output_specs / create_at all
+    // agree on num_workers (they share this single-source-of-truth path).
+    const uint32_t worker_cap = derive_worker_cap(input.device()->compute_with_storage_grid_size(), args.num_links);
+    s.num_workers = s.is_tp_1 ? 1u : pick_num_workers_tp_gt_1(s.num_tile_rows, worker_cap);
     // `use_mux` now means "uses the fabric-forwarder all-gather (+ DRAM scratch)".
     // The MUX and legacy single-worker writers are gone — one fabric path.
     s.use_mux = !s.is_tp_1;
@@ -500,10 +497,10 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
     if (is_tp_1) {
         num_workers = std::min<uint32_t>(max_cores, num_tile_rows);
     } else {
-        // TP>1: heuristic picks 1 worker for small shapes (MUX overhead beats
-        // parallelism), more workers for larger shapes. When num_workers=1 we
-        // SKIP MUX entirely and use the legacy direct-fabric writer.
-        num_workers = pick_num_workers_tp_gt_1(num_tile_rows);
+        // TP>1 (forwarder AG): one worker per tile-row, capped at the core budget
+        // (grid − forwarders). Same derivation as compute_sizing so the stats-buffer
+        // geometry matches. Tiny shapes (<kMuxRowsThreshold) collapse to 1 worker.
+        num_workers = pick_num_workers_tp_gt_1(num_tile_rows, derive_worker_cap(grid_size, args.num_links));
     }
     use_mux = !is_tp_1;  // "uses the fabric-forwarder all-gather"
 
