@@ -228,13 +228,13 @@ from loguru import logger  # noqa: E402
 
 import ttnn  # noqa: E402
 from models.common.utility_functions import comp_allclose, comp_pcc  # noqa: E402
-from models.experimental.deepseek_v4_flash.tt.deepseek_v4_flash import (  # noqa: E402
-    DeepSeekV4DecoderLayer,
-    DeepSeekV4PreloadedExperts,
-    WeightCache,
+from models.experimental.deepseek_v4_flash.tt.attention import (  # noqa: E402
     _LayerKVCache,
     make_rope_table,
 )
+from models.experimental.deepseek_v4_flash.tt.decoder_layer import DeepSeekV4DecoderLayer  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.moe import DeepSeekV4PreloadedExperts  # noqa: E402
+from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.quant import dequantize_weight  # noqa: E402
 from models.experimental.deepseek_v4_flash.tt.weight_loader import (  # noqa: E402
     DeepseekV4WeightLoader,
