@@ -671,13 +671,21 @@ tt::tt_metal::CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates
     }
 
     // Keeping the old behavior, although UMD does define translation for other cores as well.
-    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
+    if (core_type_to_use != CoreType::TENSIX && core_type != CoreType::DRAM && core_type != CoreType::ETH &&
+        core_type != CoreType::DISPATCH) {
         TT_THROW("Undefined conversion for core type.");
     }
 
     const auto& soc_desc = this->get_soc_desc(chip_id);
     if (core_type == CoreType::DRAM) {
         return soc_desc.get_physical_dram_core_from_logical(logical_coord);
+    }
+
+    if (core_type == CoreType::DISPATCH) {
+        const CoreCoord noc0_coord = soc_desc.get_physical_dispatch_engine_core_from_logical(logical_coord);
+        tt::umd::CoreCoord translated_coord = soc_desc.translate_coord_to(
+            {noc0_coord, CoreType::DISPATCH, CoordSystem::NOC0}, CoordSystem::TRANSLATED);
+        return {translated_coord.x, translated_coord.y};
     }
 
     tt::umd::CoreCoord translated_coord =

@@ -85,6 +85,7 @@ enum class EnvVarID {
     TT_METAL_KERNEL_MAP,                // Enable kernel build mapping
     TT_METAL_DISPATCH_DATA_COLLECTION,  // Enable dispatch debug data collection
     TT_METAL_GTEST_ETH_DISPATCH,        // Use Ethernet cores for dispatch in tests
+    TT_METAL_TENSIX_DISPATCH_CORES,     // Quasar: force interim Tensix dispatch cores from core descriptor YAML
     TT_METAL_SKIP_LOADING_FW,           // Skip firmware loading
     TT_METAL_DISABLE_XIP_DUMP,          // Disable XIP dump
 
@@ -605,6 +606,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: Worker cores (default dispatch type)
         // Usage: export TT_METAL_GTEST_ETH_DISPATCH=1
         case EnvVarID::TT_METAL_GTEST_ETH_DISPATCH: this->dispatch_core_type = tt_metal::DispatchCoreType::ETH; break;
+
+        // TT_METAL_TENSIX_DISPATCH_CORES
+        // Quasar: use interim Tensix dispatch cores from core descriptor YAML instead of soc dispatch-engine cores.
+        // Default: false (use soc dispatch-engine cores when present)
+        // Usage: export TT_METAL_TENSIX_DISPATCH_CORES=1
+        case EnvVarID::TT_METAL_TENSIX_DISPATCH_CORES:
+            this->use_quasar_tensix_dispatch_cores = is_env_enabled(value);
+            log_info(
+                tt::LogDevice,
+                "TT_METAL_TENSIX_DISPATCH_CORES=1: using interim Tensix dispatch cores from core descriptor YAML");
+            break;
 
         // TT_METAL_SKIP_LOADING_FW
         // Skip loading firmware during device initialization.
