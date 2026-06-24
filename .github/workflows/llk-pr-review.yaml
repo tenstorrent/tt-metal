@@ -66,13 +66,13 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.AI_GH_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       # 2. Switch to the PR's head branch, and ensure a local `main` exists so
       #    /code-review can diff the PR against it (main...HEAD).
       - name: Check out the PR branch
         env:
-          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh pr checkout "${PR_NUMBER}"
           git fetch origin +refs/heads/main:refs/heads/main
@@ -123,13 +123,16 @@ jobs:
           ANTHROPIC_MODEL: anthropic/claude-opus-4-5-20251101
           ANTHROPIC_SMALL_FAST_MODEL: anthropic/claude-haiku-4-5-20251001
           # So /code-review --comment can detect the PR and post via gh.
-          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          # GITHUB_TOKEN is the per-run automatic token; its write scope comes
+          # from the job's `permissions:` block (pull-requests/issues: write),
+          # so comments post as github-actions[bot] — no user PAT required.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # Present only to satisfy the action's auth precheck; actual auth +
           # routing is via the ANTHROPIC_* env vars above (AUTH_TOKEN takes
           # precedence, so no x-api-key is sent to the proxy).
           anthropic_api_key: ${{ secrets.TT_CHAT_API_KEY }}
-          github_token: ${{ secrets.AI_GH_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           trigger_phrase: "@llk-ai review"
           prompt: "/code-review max --comment"
           # No --model here: the model comes from ANTHROPIC_MODEL (needs the
