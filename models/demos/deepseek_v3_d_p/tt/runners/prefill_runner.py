@@ -233,6 +233,13 @@ def build_d2d_pipeline_endpoints(mesh_device, rank: int, num_ranks: int, chunk_s
             receiver_worker_cores=D2D_SYNC_WORKER_CORES,
             metadata_size_bytes=D2D_METADATA_SIZE_BYTES,
             share_fabric_links=True,
+            # The service currently asserts L1-only (d2d_stream_service.cpp:260); DRAM is opt-in via
+            # PREFILL_PP_D2D_BUFFER_TYPE=dram for when that lands, but defaults to the supported L1 path.
+            socket_buffer_type=(
+                ttnn.BufferType.DRAM
+                if os.environ.get("PREFILL_PP_D2D_BUFFER_TYPE", "l1").lower() == "dram"
+                else ttnn.BufferType.L1
+            ),
         )
 
     inbound = None
@@ -417,6 +424,12 @@ def run_standalone_loop(
         c += 1
         if meta["is_last"]:
             break
+    # Every rank must finish receiving + forwarding the final chunk before any rank reclaims its
+    # outbound fabric link in the drain. Without this, the producer reclaims the shared link
+    # (share_fabric_links) right after its last send and strands the downstream's final recv —
+    # the pipeline tail deadlocks (ranks 2/3 hang on the last chunk).
+    if num_ranks > 1:
+        ttnn.distributed_context_barrier()
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0)
 
     if os.environ.get("PREFILL_STANDALONE_PCC", "0") == "1":
@@ -457,6 +470,7 @@ def _print_config() -> None:
         ("PREFILL_PP_NUM_LINKS", os.environ.get("PREFILL_PP_NUM_LINKS", "2")),
         ("PREFILL_STANDALONE (pipeline/bring-up mode)", os.environ.get("PREFILL_STANDALONE", "0")),
         ("PREFILL_PP_D2D_FIFO_BYTES", str(D2D_FIFO_SIZE_BYTES)),
+        ("PREFILL_PP_D2D_BUFFER_TYPE", os.environ.get("PREFILL_PP_D2D_BUFFER_TYPE", "l1")),
         ("PREFILL_PP_H2D", os.environ.get("PREFILL_PP_H2D", "<unset; 0>")),
         ("PREFILL_H2D_SERVICE_ID", os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")),
         ("PREFILL_TRACE_DIR", os.environ.get("PREFILL_TRACE_DIR", VARIANT.prefill_trace_default)),
@@ -554,7 +568,7 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
     ttnn.distributed_context_barrier()
 
     # First rank in H2D mode: stand up the socket service so a producer can push token chunks.
-    h2d_service = None
+    h2d_service = None  ######## TODO JAKSA: why do we have h2d here? shoudnt standalone be reading from file?
     if is_first_rank and _h2d_request_mode():
         # compile() leaves a custom sub-device manager loaded; the service's init program validates its
         # worker cores against the default whole-chip sub-device, so revert first.
@@ -578,6 +592,10 @@ def _serve_standalone(runtime, mesh_device, hf_config, rank: int, num_ranks: int
     if num_ranks > 1:
         mesh_device.clear_loaded_sub_device_manager()
         d2d_in, d2d_out = build_d2d_pipeline_endpoints(mesh_device, rank, num_ranks, CHUNK_SIZE, hf_config.hidden_size)
+        # The chained D2D socket rendezvous finishes at staggered times per rank. Without this barrier
+        # rank 0 enters its produce loop first, fills the socket, and stalls ~6s waiting for the
+        # downstream ranks to enter their consume loops — moving that skew out of the timed chunk loop.
+        ttnn.distributed_context_barrier()
 
     logger.info(f"[pp rank {rank}] setup complete, entering standalone loop")
     run_standalone_loop(runtime, rank, num_ranks, h2d_service=h2d_service, d2d_in=d2d_in, d2d_out=d2d_out)
