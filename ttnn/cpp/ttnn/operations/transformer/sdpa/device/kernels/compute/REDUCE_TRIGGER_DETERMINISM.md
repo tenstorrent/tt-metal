@@ -71,6 +71,63 @@ Note this can *only* be a compute-side issue: the inputs are identical every
 iteration, so the ring all-gather reproduces identical bytes — a data-movement /
 semaphore / persistent-buffer race could only ever produce identical reads.
 
+## Root cause (confirmed, LLK-level)
+
+**The first half of the split reduce MOP reads `cb_qkt_im` with no producer→consumer
+barrier against the QK packer's writes.**
+
+Exact location — `_llk_unpack_AB_reduce_block_max_row_runtime_`
+(`tt_metal/tt-llk/tt_llk_{blackhole,wormhole_b0}/llk_lib/experimental/llk_unpack_AB_reduce_custom_runtime.h`):
+
+```
+TTI_SETADCZW(...);                       // reset Z counter
+TTI_UNPACR(SrcB, ...);                   // scaler
+if (respect_trigger) {
+    ckernel::ckernel_template::run();    // FIRST HALF: reads cols 0..block_ct_dim/2-1  <-- NO WAIT
+    t6_semaphore_wait_on_zero(FPU_SFPU); // the only producer sync — sits BETWEEN halves
+    ckernel::ckernel_template::run();     // SECOND HALF: cols block_ct_dim/2..end
+}
+```
+
+The MOP is programmed for `block_ct_dim/2` iterations per `run()`
+(`_llk_unpack_AB_reduce_block_max_row_mop_config_runtime_`, `outerloop = block_ct_dim/2`
+when `respect_trigger`). The producer (`blocked_matmul_and_pack`, `trigger_reduce`)
+posts `FPU_SFPU` **only after the last QK subblock pack**, so it gates only the second
+half. Combined with `reduce_c_row_group` **skipping `cb_wait_front`** on the trigger
+path, the first `run()` reads the first-half columns with nothing ensuring the
+subblock packs that wrote them have landed in L1.
+
+**Why those columns can be unwritten when read:** the reduce's unpacker (T0) finishes
+feeding the QK matmul and proceeds straight into the first-half reduce read; the QK
+**packer (T2) is the last pipeline stage and trails** — its early-subblock packs (the
+first-half columns) may still be in flight. Whether the first `run()` beats them is a
+pure T0-vs-T2 timing race ⇒ iteration-to-iteration nondeterminism. (Normally T2 leads
+by a wide margin, so release builds pass.)
+
+For the failing config: `block_ct_dim = Sk_chunk_t = 10`, `qkt_subblock_w = 2`
+(5 subblocks). First `run()` reads columns 0–4; `FPU_SFPU` is posted after subblock 4.
+So columns 0–4 (written by subblocks 0–2) are read with no guarantee subblocks 0–2 packed.
+
+Proven by: hash bisection (input bit-stable, post-reduce diverges), the NOP repro
+(producer-side delay triggers, consumer-side never does), and the isolation run
+(restoring only `wait_front`, with all split-MOP/`FPU_SFPU` instructions still running,
+flips FAIL→PASS).
+
+### Fix direction (keep the feature + the overlap)
+
+The optimization overlaps the first-half *read* with packing of the second half. To
+keep that overlap **and** be correct, the producer must publish the first half before
+the consumer reads it — a **two-signal handshake**:
+
+- Packer posts after the subblock that completes the **first half**
+  (`(block_ct_dim/2 - 1) / qkt_subblock_w`), *and* after the last subblock.
+- Unpacker: `wait → run(first half) → wait → run(second half)`.
+
+Overlap is preserved (the first-half read still runs while the packer finishes the
+second half), but the first-half read now waits for its data. A single all-at-once
+`push_back`/`FPU_SFPU` post at the end is why a partial first-half `wait_front` gives no
+overlap today — the producer must signal the first-half columns separately.
+
 ## Findings (controlled experiments)
 
 All under `TT_METAL_LLK_ASSERTS=1`, everything else equal:
