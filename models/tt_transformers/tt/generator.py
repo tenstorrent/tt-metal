@@ -140,7 +140,16 @@ class Generator(ModelCapabilitiesMixin, WarmupForwardMixin):
         self.already_warmed_up_prefill = True
 
         sequence_lengths_to_warmup = self.model_args[0].get_warmup_prefill_supported_seq_lens()
-        warmup_batch_sizes = (1,)
+        # Warm up ALL runtime batched-prefill batch sizes (not just batch-1) so no
+        # prefill trace is compiled/captured mid-serving. A prefill trace captured
+        # AFTER the decode trace (allocation-after-capture) clobbers the decode
+        # trace's device buffers -> seeded-sampling corruption under concurrency
+        # (batched prefill x trace interaction). Pre-warming every supported batch
+        # size moves all prefill allocations before decode-trace capture.
+        if getattr(self.model_args[0], "disable_batched_prefill", False):
+            warmup_batch_sizes = (1,)
+        else:
+            warmup_batch_sizes = SUPPORTED_PREFILL_BATCH_SIZES
 
         skip_sequence_lengths = False
 
