@@ -164,7 +164,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
 struct CrossProcessCase {
     ttnn::Shape global_shape;
     ttsl::SmallVector<MeshMapperConfig::Placement> placements;
-    uint32_t scratch_cb_size_bytes;
+    uint32_t max_socket_page_size_bytes;
     uint32_t fifo_size_bytes;
     CoreRange worker_cores;
     uint32_t num_iterations;
@@ -186,8 +186,7 @@ void run_owner(
         .mapper = ttnn::distributed::create_mesh_mapper(*mesh_device, MeshMapperConfig{.placements = cs.placements}),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = cs.fifo_size_bytes,
-        .scratch_cb_size_bytes = cs.scratch_cb_size_bytes,
-        .socket_mode = H2DMode::DEVICE_PULL,
+        .max_socket_page_size_bytes = cs.max_socket_page_size_bytes,
         .worker_cores = cs.worker_cores,
         .metadata_size_bytes = 0,
     };
@@ -404,7 +403,7 @@ TEST_F(CrossProcessH2DStreamServiceFixture, Sweep) {
                 CrossProcessCase cs{
                     .global_shape = global_shape,
                     .placements = pattern.placements,
-                    .scratch_cb_size_bytes = ch.cb_pages * per_row_bytes,
+                    .max_socket_page_size_bytes = ch.cb_pages * per_row_bytes,
                     .fifo_size_bytes = ch.fifo_pages * per_row_bytes,
                     .worker_cores = worker_cores,
                     .num_iterations = kNumIterations,

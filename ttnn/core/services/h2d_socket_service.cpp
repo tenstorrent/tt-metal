@@ -104,11 +104,15 @@ constexpr uint32_t kMinDataSlots = 2;  // double-buffering floor (reader/writer 
 constexpr uint32_t kNocBurstBytes = 16u * 1024;
 constexpr uint32_t kTargetReadBursts = 4;  // default socket-page target ~= 4 bursts (64 KB) of coalescing
 constexpr uint32_t kSlotCap = 64;          // upper bound on data-CB slots ("fill L1" knob; sweep validates)
+// Host FIFO depth (in socket pages) when Config::fifo_size_bytes == 0 (auto). The DEVICE_PULL FIFO is
+// host pinned memory, so a generous default is cheap.
+constexpr uint32_t kAutoFifoSocketPages = 8;
 // The data CB (program allocator, bottom-up) and the service-core scratch (ServiceCoreManager,
-// top-down) share the unreserved L1 with no cross-allocator overflow check. The CB budget starts
-// from svc.bytes_available(), which already excludes the socket config buffer, so this only holds
-// back headroom for the scratch words allocated AFTER the chunk plan -- termination, worker-sync
-// consumed, and per-coord completion-src -- plus a safety pad. Generous on purpose.
+// top-down) share the unreserved L1 with no cross-allocator overflow check. We compute the CB budget
+// from svc.bytes_available() BEFORE constructing sockets (so the socket page is known in time to
+// auto-size the FIFO), at which point nothing is allocated on the service core yet -- so this reserve
+// must hold back headroom for the socket config buffer AND the post-plan scratch words (termination,
+// worker-sync consumed, per-coord completion-src) plus a safety pad. Generous on purpose (>> their sum).
 constexpr uint64_t kServiceScratchReserveBytes = 16u * 1024;
 
 // H2D-specific chunk plan: like the shared ChunkPlan in socket_service_common.hpp but adds the
@@ -123,10 +127,11 @@ struct H2DChunkPlan {
 
 // Usable service-core L1 for the data CB, given the service core's measured free L1
 // (`free_l1_bytes` == svc.bytes_available()), after reserving the metadata CB (a bottom-up program
-// allocation) and kServiceScratchReserveBytes for the post-plan service scratch words. The socket
-// config buffer is already excluded by free_l1_bytes. Keeps the CB from colliding with the top-down
-// scratch; the caller also asserts the final footprint fits. NB: use bytes_available (spans
-// [DEFAULT_UNRESERVED, L1_end], where CBs actually start) rather than
+// allocation) and kServiceScratchReserveBytes. The caller measures free_l1_bytes BEFORE constructing
+// sockets, so it's the full unreserved region -- the socket config buffer and the post-plan scratch
+// words aren't allocated yet, but kServiceScratchReserveBytes is sized to cover them. Keeps the CB
+// from colliding with the top-down scratch; the caller also asserts the final footprint fits. NB: use
+// bytes_available (spans [DEFAULT_UNRESERVED, L1_end], where CBs actually start) rather than
 // hal::get_max_worker_l1_unreserved_size(), which is keyed off KERNEL_CONFIG and overshoots by the
 // kernel-config ringbuffer (CBs are placed after it, so that figure overflows L1).
 uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes, uint64_t metadata_cb_bytes) {
@@ -140,7 +145,7 @@ uint64_t service_core_cb_l1_budget(uint64_t free_l1_bytes, uint64_t metadata_cb_
 }
 
 // Size the socket page to a few NOC bursts for read coalescing (capped by `page_budget_hint`, which
-// is Config::scratch_cb_size_bytes -- 0 means use the burst-derived default), then fill the
+// is Config::max_socket_page_size_bytes -- 0 means use the burst-derived default), then fill the
 // remaining L1 with full-page slots above the kMinDataSlots overlap floor. No double-buffer
 // fallback: capping the page budget at usable/kMinDataSlots yields >= kMinDataSlots slots as long as
 // a single tensor page is itself <= usable/kMinDataSlots. A page that fits L1 but exceeds that (a
@@ -158,6 +163,15 @@ H2DChunkPlan derive_h2d_chunk_plan(
         "use a layout with smaller pages",
         tensor_page_size,
         usable_cb_l1_bytes);
+    // max_socket_page_size_bytes is an upper bound, but the socket page can't be smaller than one
+    // tensor page (the indivisible chunk unit). A nonzero hint below that would silently round UP to
+    // one tensor page, violating the "max" contract -- reject it instead so the bound stays honest.
+    TT_FATAL(
+        page_budget_hint == 0 || page_budget_hint >= tensor_page_size,
+        "H2DStreamService: max_socket_page_size_bytes ({} B) must be >= the tensor page size ({} B); "
+        "the socket page can't be smaller than one tensor page (pass 0 to auto-size)",
+        page_budget_hint,
+        tensor_page_size);
 
     const uint64_t burst_target = static_cast<uint64_t>(kTargetReadBursts) * kNocBurstBytes;
     const uint64_t requested = page_budget_hint > 0 ? page_budget_hint : burst_target;
@@ -417,8 +431,9 @@ Program build_persistent_h2d_program(
 H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice>& mesh_device, Config cfg) :
     mesh_device_(mesh_device), cfg_(std::move(cfg)) {
     TT_FATAL(mesh_device_ != nullptr, "H2DStreamService: mesh_device must not be null");
-    TT_FATAL(cfg_.fifo_size_bytes > 0, "H2DStreamService: fifo_size_bytes must be > 0");
-    // scratch_cb_size_bytes is now an OPTIONAL socket-page (coalescing) budget hint: 0 means use the
+    // fifo_size_bytes == 0 means auto (service sizes the host FIFO to a few socket pages); a non-zero
+    // value is validated against the derived socket page size once the chunk plan is known, below.
+    // max_socket_page_size_bytes is an OPTIONAL upper bound on the socket page: 0 means use the
     // burst-derived default, and slot depth is auto-sized to fill service-core L1 either way.
     TT_FATAL(
         cfg_.metadata_size_bytes == 0 || cfg_.worker_cores.has_value(),
@@ -454,18 +469,6 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         service_cores_.emplace(coord, chosen);
     }
 
-    // Iterate participating coords (not the full mesh shape) so replication-
-    // collapsed or shape-overridden mappings stay correct.
-    sockets_.reserve(coords.size());
-    for (const auto& coord : coords) {
-        sockets_.push_back(std::make_unique<distributed::H2DSocket>(
-            mesh_device_,
-            distributed::MeshCoreCoord(coord, service_cores_.at(coord)),
-            cfg_.socket_buffer_type,
-            cfg_.fifo_size_bytes,
-            cfg_.socket_mode));
-    }
-
     // Every per-device buffer shares the same spec, so this buffer is representative.
     const uint32_t tensor_page_size = device_tensor_.buffer()->page_size();
     const uint32_t tensor_num_pages = device_tensor_.buffer()->num_pages();
@@ -478,14 +481,17 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
             ? tt::align(cfg_.metadata_size_bytes, std::max(hal::get_l1_alignment(), hal::get_pcie_alignment()))
             : 0u;
 
-    // Usable L1 for the data CB = the service core's measured free L1 (ServiceCoreManager allocator,
-    // which spans [DEFAULT_UNRESERVED, L1_end] -- where CBs actually start). L1 layout is uniform
-    // across coords, so a representative service core suffices.
+    // Derive the chunk plan BEFORE constructing sockets, so socket_page_size is known in time to
+    // auto-size the FIFO (which the sockets need at construction). bytes_available() here is the full
+    // unreserved region -- the service core is claimed but nothing is allocated on it yet -- so the
+    // socket config buffer and the post-plan scratch words are not yet subtracted; the reserve inside
+    // service_core_cb_l1_budget (>> their combined size) covers them. L1 layout is uniform across
+    // coords, so a representative service core suffices.
     auto* rep_device = mesh_device_->get_device(coords.front());
     const uint64_t service_core_free_l1 = svc.bytes_available(rep_device, service_cores_.at(coords.front()));
     const uint64_t usable_cb_l1 = service_core_cb_l1_budget(service_core_free_l1, metadata_cb_page_size);
     const H2DChunkPlan plan =
-        derive_h2d_chunk_plan(tensor_page_size, tensor_num_pages, usable_cb_l1, cfg_.scratch_cb_size_bytes);
+        derive_h2d_chunk_plan(tensor_page_size, tensor_num_pages, usable_cb_l1, cfg_.max_socket_page_size_bytes);
     socket_page_size_ = plan.socket_page_size;
     num_socket_pages_ = plan.num_socket_pages;
     slot_count_ = plan.slot_count;
@@ -512,17 +518,45 @@ H2DStreamService::H2DStreamService(const std::shared_ptr<distributed::MeshDevice
         kServiceScratchReserveBytes,
         service_core_free_l1);
 
+    // Host FIFO size: caller's value, or auto-sized to kAutoFifoSocketPages socket pages when 0.
+    // Sizing in socket-page terms keeps the host run-ahead meaningful regardless of the derived page
+    // size; the DEVICE_PULL FIFO is host pinned memory, so a generous default is cheap. Either way it
+    // must hold at least one socket page (else the first push can't fit and the socket FATALs).
+    const uint32_t effective_fifo_size_bytes =
+        cfg_.fifo_size_bytes > 0 ? cfg_.fifo_size_bytes : kAutoFifoSocketPages * socket_page_size_;
+    TT_FATAL(
+        effective_fifo_size_bytes >= socket_page_size_,
+        "H2DStreamService: fifo_size_bytes ({} B) must be >= the derived socket_page_size ({} B); "
+        "increase fifo_size_bytes (or pass 0 to auto-size) or lower max_socket_page_size_bytes",
+        effective_fifo_size_bytes,
+        socket_page_size_);
+
     log_debug(
         tt::LogOp,
         "H2DStreamService L1: socket_page={} B, pages_per_chunk={}, num_socket_pages={}, slots={}, "
-        "data_cb={} B, metadata_cb={} B, usable_for_cb={} B",
+        "data_cb={} B, metadata_cb={} B, usable_for_cb={} B, fifo={} B",
         plan.socket_page_size,
         plan.pages_per_chunk,
         plan.num_socket_pages,
         plan.slot_count,
         data_cb_bytes,
         metadata_cb_page_size,
-        usable_cb_l1);
+        usable_cb_l1,
+        effective_fifo_size_bytes);
+
+    // Iterate participating coords (not the full mesh shape) so replication-
+    // collapsed or shape-overridden mappings stay correct.
+    sockets_.reserve(coords.size());
+    for (const auto& coord : coords) {
+        sockets_.push_back(std::make_unique<distributed::H2DSocket>(
+            mesh_device_,
+            distributed::MeshCoreCoord(coord, service_cores_.at(coord)),
+            cfg_.socket_buffer_type,
+            effective_fifo_size_bytes,
+            // DEVICE_PULL only: the persistent reader pulls each socket page from host pinned memory over
+            // PCIe; it has no local-L1 / HOST_PUSH read path. Not exposed as a Config knob.
+            distributed::H2DMode::DEVICE_PULL));
+    }
 
     for (auto& s : sockets_) {
         s->set_page_size(plan.socket_page_size);
@@ -1135,7 +1169,6 @@ std::string H2DStreamService::export_descriptor(const std::string& service_id) {
     desc.num_socket_pages = num_socket_pages_;
     desc.metadata_size_bytes = cfg_.metadata_size_bytes;
     desc.socket_buffer_type = cfg_.socket_buffer_type;
-    desc.socket_mode = cfg_.socket_mode;
     TT_FATAL(
         completion_shm_ && completion_shm_->is_open(),
         "H2DStreamService::export_descriptor: completion SHM unavailable");
@@ -1189,8 +1222,7 @@ std::unique_ptr<H2DStreamService> H2DStreamService::connect(
         .mapper = std::move(mapper),
         .socket_buffer_type = desc.socket_buffer_type,
         .fifo_size_bytes = 0,
-        .scratch_cb_size_bytes = 0,
-        .socket_mode = desc.socket_mode,
+        .max_socket_page_size_bytes = 0,
         .worker_cores = std::nullopt,
         .metadata_size_bytes = desc.metadata_size_bytes,
         // Preprocessor and parallel-push are process-local; not carried by the descriptor.

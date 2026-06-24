@@ -64,9 +64,9 @@ BENCHMARK_PREFIX = "BM_H2DStreamService"
 # family -> (swept-axis column, human-readable axis label)
 FAMILY_AXIS = {
     "size": ("per_device_pages", "per-device pages"),
-    "cb": ("cb_pages", "scratch-CB pages"),
+    "cb": ("cb_pages", "max socket-page (pages)"),
     "fifo": ("fifo_pages", "FIFO pages"),
-    "prod_tune": ("cb_pages", "scratch-CB pages"),
+    "prod_tune": ("cb_pages", "max socket-page (pages)"),
 }
 
 CASE_KEY = ["family", "per_device_pages", "cb_pages", "fifo_pages"]
@@ -99,7 +99,7 @@ NUMERIC_COLUMNS = [
     "cb_pages",
     "fifo_pages",
     "fifo_size_bytes",
-    "scratch_cb_size_bytes",
+    "max_socket_page_size_bytes",
     "worker_count",
     "per_shard_bytes",
     "socket_page_size",

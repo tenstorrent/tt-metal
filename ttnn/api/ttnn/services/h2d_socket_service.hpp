@@ -59,15 +59,19 @@ public:
         // supply one (build via ttnn::distributed::create_mesh_mapper).
         std::unique_ptr<ttnn::distributed::TensorToMesh> mapper;
 
-        // Buffer type backing the socket FIFO (host pinned memory in DEVICE_PULL mode).
+        // Buffer type backing the socket FIFO. The service is DEVICE_PULL-only: the data FIFO lives in
+        // host pinned memory and the reader pulls each socket page over PCIe (the persistent reader has
+        // no local-L1 / HOST_PUSH read path), so the socket mode is not configurable here.
         BufferType socket_buffer_type = BufferType::L1;
-        // Host FIFO size in bytes. Required (> 0).
+        // Host FIFO size in bytes. 0 = auto: the service sizes it to a few socket pages of host
+        // headroom (denominated in socket pages, not tensor pages). An explicit value must be >= the
+        // derived socket page size.
         uint32_t fifo_size_bytes = 0;
-        // Optional socket-page (read-coalescing) budget hint: caps the socket page size. 0 means use
-        // the burst-derived default. This is NOT the total scratch-CB size -- the data-CB slot depth
-        // is auto-sized to fill the service-core L1 regardless of this value.
-        uint32_t scratch_cb_size_bytes = 0;
-        distributed::H2DMode socket_mode = distributed::H2DMode::DEVICE_PULL;
+        // Optional upper bound on the socket page size (read-coalescing granularity), in bytes. 0 =
+        // auto (burst-derived default). NOT a total scratch-CB size -- the data-CB slot depth is
+        // auto-sized to fill the service-core L1 regardless. The effective page may be smaller (capped
+        // by L1 and by divisibility of the tensor page count).
+        uint32_t max_socket_page_size_bytes = 0;
 
         // Optional worker-core sync handshake. When set, after each transfer the
         // kernel multicasts a data-ready inc to a GlobalSemaphore on these cores

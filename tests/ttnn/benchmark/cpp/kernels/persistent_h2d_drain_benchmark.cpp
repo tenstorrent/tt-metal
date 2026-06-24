@@ -36,11 +36,6 @@ void kernel_main() {
             }
         }
 
-        for (uint32_t page = start_page; page < end_page; ++page) {
-            noc_async_read(input.get_noc_addr(page), cb_l1, page_size);
-            noc_async_read_barrier();
-        }
-
         noc_semaphore_inc(consumed_noc, 1);
         noc_async_atomic_barrier();
     }

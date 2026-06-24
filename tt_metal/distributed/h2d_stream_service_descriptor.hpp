@@ -44,7 +44,6 @@ struct H2DStreamServiceDescriptor {
     uint32_t metadata_size_bytes = 0;
 
     BufferType socket_buffer_type = BufferType::L1;
-    H2DMode socket_mode = H2DMode::DEVICE_PULL;
 
     // Shared writer-completion counters for cross-process barrier semantics.
     std::string completion_shm_name;

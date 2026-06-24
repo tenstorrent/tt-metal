@@ -60,7 +60,6 @@ using ::tt::tt_metal::Tensor;
 using ::tt::tt_metal::TensorLayout;
 using ::tt::tt_metal::TensorMemoryLayout;
 using ::tt::tt_metal::TensorSpec;
-using ::tt::tt_metal::distributed::H2DMode;
 using ::tt::tt_metal::distributed::MeshCoordinate;
 using ::tt::tt_metal::distributed::MeshCoordinateRange;
 using ::tt::tt_metal::distributed::MeshDevice;
@@ -285,17 +284,17 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     const auto placements = full_shard_2d_placements();
 
     const uint32_t tensor_page_bytes = kProdPerRow * kElemBytes;
-    const uint32_t scratch_cb_size_bytes = cs.cb_pages * tensor_page_bytes;
+    const uint32_t max_socket_page_size_bytes = cs.cb_pages * tensor_page_bytes;
     const uint32_t fifo_size_bytes = cs.fifo_pages * tensor_page_bytes;
     const uint32_t num_workers = worker_count(kWorkerCores);
 
     log_info(
         tt::LogTest,
-        "[{}] Starting: global_shape={}, fifo_size_bytes={}, scratch_cb_size_bytes={}, workers={}, perf_iters={}",
+        "[{}] Starting: global_shape={}, fifo_size_bytes={}, max_socket_page_size_bytes={}, workers={}, perf_iters={}",
         case_name,
         stream_string(global_shape),
         fifo_size_bytes,
-        scratch_cb_size_bytes,
+        max_socket_page_size_bytes,
         num_workers,
         kPerfIters);
 
@@ -310,8 +309,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         .mapper = ttnn::distributed::create_mesh_mapper(*g_mesh_device, MeshMapperConfig{.placements = placements}),
         .socket_buffer_type = BufferType::L1,
         .fifo_size_bytes = fifo_size_bytes,
-        .scratch_cb_size_bytes = scratch_cb_size_bytes,
-        .socket_mode = H2DMode::DEVICE_PULL,
+        .max_socket_page_size_bytes = max_socket_page_size_bytes,
         .worker_cores = kWorkerCores,
         .metadata_size_bytes = 0,
         .parallel_host_push = kParallelHostPush,
@@ -338,7 +336,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
     TT_FATAL(per_shard_payload_bytes % socket_page_size == 0, "per-shard payload bytes must divide socket page size");
     const uint32_t num_socket_pages = static_cast<uint32_t>(per_shard_payload_bytes / socket_page_size);
     const uint32_t pages_per_chunk = socket_page_size / backing_buf->page_size();
-    // The service auto-sizes slot depth from service-core L1 (no longer scratch_cb_size_bytes /
+    // The service auto-sizes slot depth from service-core L1 (no longer max_socket_page_size_bytes /
     // socket_page_size), so read the actual derived value rather than recomputing it.
     const uint32_t slot_count = service.get_slot_count();
     const WarmupPlan warmup_plan =
@@ -435,7 +433,7 @@ void run_h2d_stream_service_benchmark(benchmark::State& state, const BenchmarkCa
         state.counters["cb_pages"] = static_cast<double>(cs.cb_pages);
         state.counters["fifo_pages"] = static_cast<double>(cs.fifo_pages);
         state.counters["fifo_size_bytes"] = static_cast<double>(fifo_size_bytes);
-        state.counters["scratch_cb_size_bytes"] = static_cast<double>(scratch_cb_size_bytes);
+        state.counters["max_socket_page_size_bytes"] = static_cast<double>(max_socket_page_size_bytes);
         state.counters["worker_count"] = static_cast<double>(num_workers);
         state.counters["parallel_host_push"] = kParallelHostPush ? 1.0 : 0.0;
         state.counters["per_shard_bytes"] = static_cast<double>(per_shard_payload_bytes);
