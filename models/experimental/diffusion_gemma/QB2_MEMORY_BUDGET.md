@@ -7,18 +7,19 @@ that cannot be derived statically is marked `MEASURE` rather than guessed (R3).
 
 ## Box / mesh
 
-- **QB2 = `bh-qbge-06`** — 4× Blackhole `p300c`, `/dev/tenstorrent/{0..3}`.
+- **QB2 = `bh-qbge-06` = TT-QuietBox 2 (Blackhole)** — a desktop workstation with **4 Blackhole Tensix processors** on **2× `p300` dual-Blackhole PCIe cards** (NOT `p150`, which is a single-chip card), `/dev/tenstorrent/{0..3}`. Product spec: 480 Tensix cores, 720 MB SRAM, **128 GB DDR6 = 32 GB/chip** @ 1024 GB/s; Ryzen 7 9700X + 256 GB DDR5 host.
 - In the gemma4 mesh registry QB2 is **`MESH_DEVICE=P150x4 → (1, 4)`**
   (`models/demos/gemma4/demo/text_demo_v2.py:291`; default fallback is also
   `(1,4)`). The model path is **mesh-shape-agnostic**: TP is derived from
   `mesh_device.shape[1]` (`tt/common.py:59-65` → `MeshConfig((1,4), tp=4)`), CCL
   link count is arch-gated (2 on Blackhole, `tt/ccl.py`). **No mesh code edits are
-  needed to target QB2** — only `MESH_DEVICE=P150x4`.
+  needed to target QB2** — only `MESH_DEVICE=P150x4` (a tt-metal **mesh-shape launch label** for a 1×4 Blackhole mesh — *not* the card SKU; the cards are `p300`).
 - Per-chip DRAM: **8 banks × ~4 GB ≈ 32 GB/chip** (`tech_reports/memory/allocator.md:21`:
   "Blackhole devices have 8 ~4 GB DRAM banks"; telemetry `ENABLED_GDDR=0xff` = 8
-  channels). A portion of each bank is reserved (barrier) + L1/program; **usable
-  DRAM/chip ≈ 28-30 GB** `MEASURE`. (NB: an earlier automated estimate of
-  "~4 GB/chip" was a misread of *per-bank* as *per-chip* — corrected here.)
+  channels). **Measured usable DRAM/chip = 31.87 GiB** (2026-06-24, `ttnn.get_memory_view`)
+  — the allocator hands out ~all of the 32 GB/chip (only ~0.13 GiB reserved), consistent
+  with 128 GB / 4 chips. (NB: an earlier "~4 GB/chip" estimate misread *per-bank* as
+  *per-chip*; the "28-30 GB" estimate is superseded by this 31.87 measurement.)
 
 ## 26B-A4B weights (verified dims: hidden 2816, 30 layers, 16/8 heads, head_dim 256,
 intermediate 2112, MoE 128 experts top-8, moe_intermediate 704, vocab 262144,
@@ -201,3 +202,4 @@ KV cache (which fits to 256K with room to spare).
 ### Bottom line for #47487 (QB2)
 - **Documented budget (measured):** usable **31.87** − weights **13.25** − KV@256K **4.0** ⇒ **14.6 GiB/chip headroom** at 256K batch 1.
 - **Batch ceiling @256K:** **KV-bound ≈ 6**; **prefill-bound ≤ that** (single-chunk activation), so the shippable batch-1 256K config fits with margin, and raising batch at full context is gated by the **single-chunk prefill** (a gemma4 upstream follow-up: real `chunk_start_idx` support for bounded-memory long prefill), not by weights/KV.
+- **Diffusion-path additions (size these when #47462/#47463 land — NOT in the static budget above):** the denoise forward returns logits for **all 256 canvas positions every step**, so it must **disable gemma4's §2.8 last-tile LM-head slice** (which keeps only the last token). The full-canvas logits `[256, vocab]` are kept on device for sampling: ≈**34 MiB/chip** column-parallel (`vocab/4`) or ≈**137 MiB/chip** if all-gathered to full vocab, **plus** an equal-size softmax/probs buffer for the entropy + Gumbel-max step — recomputed every denoise step. Small vs the 14.6 GiB headroom, but count it together with the per-step canvas-scratch K/V (#47474) and the non-causal mask (#47462) against the headroom when sizing the **diffusion-path** batch ceiling (the static weights+KV ceiling above is the AR-backbone bound, not the denoise bound).
