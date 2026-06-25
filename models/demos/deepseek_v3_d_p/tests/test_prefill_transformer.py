@@ -88,6 +88,8 @@ INFINITEBENCH_SUBSET_NAMES = {"passkey", "kv_retrieval", "longdialogue_qa_eng", 
 SEQ_LEN_1K = 1024
 SEQ_LEN_5K = 5120
 SEQ_LEN_25K = 25600
+SEQ_LEN_50K = 51200
+SEQ_LEN_100K = 102400
 
 
 def _compare_intermediate_pcc(reference_items, tt_intermediates, number_of_non_padded_tokens, padding_side):
@@ -858,7 +860,7 @@ def run_model(
 @pytest.mark.parametrize("is_balanced", [True, False], ids=["balanced", "regular"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8)],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_25K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_50K, 8), (SEQ_LEN_100K, 8)],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -882,7 +884,9 @@ def run_model(
 # iter2000 is the long-running stability soak (program-cache growth, semaphore
 # desync, leaks). Kept opt-in via -k iter2000; CI selectors normally pick iter1.
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize(
+    "num_iterations", [1, 2, 5, 10, 25, 2000], ids=["iter1", "iter2", "iter5", "iter10", "iter25", "iter2000"]
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -1001,8 +1005,8 @@ def test_ds_prefill_transformer(
 @pytest.mark.parametrize("is_balanced", [False], ids=["non_balanced"])
 @pytest.mark.parametrize(
     "isl_total, dispatch_buffer_capacity_factor",
-    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8)],
-    ids=["1k", "5k", "25k"],
+    [(SEQ_LEN_1K, 8), (SEQ_LEN_5K, 8), (SEQ_LEN_25K, 8), (SEQ_LEN_50K, 8), (SEQ_LEN_100K, 8)],
+    ids=["1k", "5k", "25k", "50k", "100k"],
 )
 @pytest.mark.parametrize(
     "num_layers",
@@ -1019,7 +1023,9 @@ def test_ds_prefill_transformer(
     ids=["e384_device"],
 )
 @pytest.mark.parametrize("determinism_check", [False, True], ids=["no_determinism", "with_determinism"])
-@pytest.mark.parametrize("num_iterations", [1, 2, 5, 25, 2000], ids=["iter1", "iter2", "iter5", "iter25", "iter2000"])
+@pytest.mark.parametrize(
+    "num_iterations", [1, 2, 5, 10, 25, 2000], ids=["iter1", "iter2", "iter5", "iter10", "iter25", "iter2000"]
+)
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
