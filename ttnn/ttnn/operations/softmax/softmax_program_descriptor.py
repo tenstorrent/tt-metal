@@ -44,6 +44,13 @@ def create_program_descriptor(
     # Scaler tiles are always bfloat16 (reduce scaler convention)
     scaler_tile_size = ttnn.tile_size(ttnn.bfloat16)
 
+    # Intermediate accumulator CBs must be Float32 — fp32_dest_acc_en is
+    # always True (the op is fp32-dest-only), so accumulations cross the
+    # CB at full fp32 precision.  Using the input/output dtype here would
+    # truncate the accumulator at each phase boundary (pack_tile rounds
+    # to the CB's format), erasing the fp32-dest gain.
+    intermediate_tile_size = ttnn.tile_size(ttnn.float32)
+
     # ========== 2. CORE GRID AND WORK DISTRIBUTION ==========
     # Use the device's compute grid, capped at NC slabs
     device = input_tensor.device()
@@ -130,39 +137,39 @@ def create_program_descriptor(
                 )
             ],
         ),
-        # cb_max: full reduce-dim block, fp32
+        # cb_max: full reduce-dim block, Float32 (accumulator intermediate)
         ttnn.CBDescriptor(
-            total_size=reduce_dim_tiles * output_page_size,
+            total_size=reduce_dim_tiles * intermediate_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_MAX,
-                    data_format=output_tensor.dtype,
-                    page_size=output_page_size,
+                    data_format=ttnn.float32,
+                    page_size=intermediate_tile_size,
                 )
             ],
         ),
-        # cb_exp: full slab, fp32
+        # cb_exp: full slab, Float32 (accumulator intermediate)
         ttnn.CBDescriptor(
-            total_size=tiles_per_slab * output_page_size,
+            total_size=tiles_per_slab * intermediate_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_EXP,
-                    data_format=output_tensor.dtype,
-                    page_size=output_page_size,
+                    data_format=ttnn.float32,
+                    page_size=intermediate_tile_size,
                 )
             ],
         ),
-        # cb_recip_sum: full reduce-dim block, fp32
+        # cb_recip_sum: full reduce-dim block, Float32 (accumulator intermediate)
         ttnn.CBDescriptor(
-            total_size=reduce_dim_tiles * output_page_size,
+            total_size=reduce_dim_tiles * intermediate_tile_size,
             core_ranges=all_cores,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_RECIP_SUM,
-                    data_format=output_tensor.dtype,
-                    page_size=output_page_size,
+                    data_format=ttnn.float32,
+                    page_size=intermediate_tile_size,
                 )
             ],
         ),

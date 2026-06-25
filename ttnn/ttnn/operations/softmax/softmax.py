@@ -74,7 +74,7 @@ INPUT_TAGGERS = {
 # ---------------------------------------------------------------------------
 
 SUPPORTED = {
-    "dtype": [ttnn.float32],
+    "dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
     "rank": [4],
@@ -92,6 +92,11 @@ EXCLUSIONS = [
     # every dtype (the golden suite xfails those cells). The exclusion is
     # keyed only on fp32_dest_acc_en=False so it applies regardless of dtype.
     {"fp32_dest_acc_en": False},
+    # bfloat8_b is a block format; non-tile-aligned shapes need the masking
+    # from Refinement 3 first. These are pre-emptive — they activate when
+    # Refinement 3 adds w_non_aligned / h_non_aligned to SUPPORTED.
+    {"dtype": ttnn.bfloat8_b, "alignment": "w_non_aligned"},
+    {"dtype": ttnn.bfloat8_b, "alignment": "h_non_aligned"},
 ]
 
 
