@@ -101,7 +101,7 @@ class TtnnStem:
     def __call__(self, x: torch.Tensor) -> torch.Tensor:
         B, C, H, W = x.shape
         xt = _to_ttnn_tile(x, B, H, W, C, self._device)
-        out, Ho, Wo = _ttnn_conv2d(
+        out, Ho, Wo, _, _ = _ttnn_conv2d(
             self._device, xt, self._w, self._b, B, H, W, C, self._cout, self._k, self._s, self._p
         )
         if out.is_sharded():
