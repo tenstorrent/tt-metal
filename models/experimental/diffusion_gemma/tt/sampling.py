@@ -93,9 +93,7 @@ def canvas_sample(logits, temperature: float, gumbel_noise):
     return gumbel_max(logits, temperature, gumbel_noise)
 
 
-def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
-    """Generate device Gumbel(0,1) noise with a deterministic TTNN rand seed."""
-    u = ttnn.rand(shape, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, low=0.0, high=1.0, seed=seed)
+def _gumbel_from_uniform(u):
     u_eps = ttnn.add(u, 1.0e-10)
     log_u = ttnn.log(u_eps)
     neg_log_u = ttnn.multiply(log_u, -1.0)
@@ -109,6 +107,45 @@ def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
     neg_log_u_eps.deallocate(True)
     log_neg_log_u.deallocate(True)
     return gumbel
+
+
+def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
+    """Generate device Gumbel(0,1) noise with a deterministic TTNN rand seed."""
+    u = ttnn.rand(shape, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, low=0.0, high=1.0, seed=seed)
+    return _gumbel_from_uniform(u)
+
+
+def sample_gumbel_noise_by_vocab_chunks(shape, *, device, seed: int, vocab_chunk_size: int = 1, dtype=ttnn.float32):
+    """Slow iid-by-vocab-chunk Gumbel generator for distributional validation.
+
+    QB2 currently shows last-dimension correlation when one large ``ttnn.rand``
+    call generates all vocab noise at once. Generating each vocab chunk with a
+    distinct seed removes that toy-vocab bias, but this is intentionally a
+    validation/diagnostic path rather than the full-vocab production sampler.
+    """
+    if vocab_chunk_size <= 0:
+        raise ValueError("vocab_chunk_size must be positive")
+
+    shape = tuple(shape)
+    vocab_size = shape[-1]
+    parts = []
+    for offset in range(0, vocab_size, vocab_chunk_size):
+        chunk_size = min(vocab_chunk_size, vocab_size - offset)
+        chunk_shape = (*shape[:-1], chunk_size)
+        u = ttnn.rand(
+            chunk_shape,
+            device=device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            low=0.0,
+            high=1.0,
+            seed=seed + offset,
+        )
+        parts.append(_gumbel_from_uniform(u))
+
+    if len(parts) == 1:
+        return parts[0]
+    return ttnn.concat(parts, dim=-1)
 
 
 def softmax(logits, temperature: float = 1.0, *, compute_kernel_config: Optional[object] = None):
