@@ -1,0 +1,15 @@
+activation,precision,config_csv,native_maxulp,native_meanulp,native_us,native_pure,native_ml,ours_maxulp,ours_meanulp,ours_us,ours_pure,ours_ml,range_min,range_max,tiles,status
+asin,bf16,asin_n6d6_s1_uniform_rational_ulp.csv,1.504632769052528e-36,9.25699993264752e-41,5.68,128.0,99.80927771625446,0.25,0.00,2.71,225.0,99.810791015625,-0.99,0.99,256,pass
+cbrt,bf16,cbrt_p5_s1_uniform_fpminimax_ulp.csv,1.0,0.00035093876122677125,2.15,255.0,97.52003275428439,0.00,0.00,5.20,0.0,97.5738525390625,-100.0,100.0,256,pass
+digamma,bf16,digamma_n5d4_s2_uniform_rational_ulp.csv,1.0,0.06651064070089122,6.63,1.0,29.266862170087975,0.00,0.00,5.25,0.0,51.85813903808594,0.01,102.0,256,pass
+erfinv,bf16,erfinv_n7d6_s1_uniform_rational_ulp.csv,1.0,0.004832314113064476,5.97,255.0,99.45244247569829,0.06,0.00,2.87,255.0,99.847412109375,-0.99,0.99,256,pass
+hardmish,bf16,hardmish_p2_s3_uniform_any_mae.csv,0.03125,0.00021593842260168186,1.79,1.0,99.68811851496432,0.00,0.00,2.01,0.0,100.0,-10.0,10.0,256,pass
+hardtanh,bf16,hardtanh_p1_s3_uniform_any_ulp.csv,0.0,0.0,1.87,0.0,100.0,0.00,0.00,1.87,0.0,100.0,-10.0,10.0,256,pass
+leaky_relu,bf16,leaky_relu_p1_s2_uniform_any_ulp.csv,NAT_FAIL,,0,-,-,0.00,0.00,1.80,0.0,100.0,-10.0,10.0,256,native_fail
+logit,bf16,logit_n7d7_s1_uniform_rational_ulp.csv,1.0,0.05663151952214452,5.41,64.0,48.484848484848484,1.00,0.00,4.08,1.0,60.584259033203125,0.01,0.99,256,pass
+prelu,bf16,prelu_p1_s2_uniform_any_ulp.csv,NAT_FAIL,,0,-,-,0.00,0.00,1.81,128.0,100.0,-10.0,10.0,256,native_fail
+relu_min,bf16,relu_min_p1_s2_uniform_any_ulp.csv,NAT_FAIL,,0,-,-,0.00,0.00,1.78,0.0,100.0,-10.0,10.0,256,native_fail
+sigmoid_accurate,bf16,sigmoid_accurate_p5_s1_uniform_fpminimax_ulp.csv,0.5,0.0032268618662213045,2.88,1.0,99.22329514784381,-,-,FAILED,1.0,99.2095947265625,-10.0,10.0,256,pass
+softplus,bf16,softplus_n11d11_s2_uniform_rational_ulp.csv,0.125,9.486282450217746e-05,5.30,1.0,10.265099262280334,0.06,0.00,9.44,1.0,9.685516357421875,-10.0,10.0,256,pass
+swish,bf16,swish_n8d8_s1_uniform_rational_ulp.csv,0.25,9.19663955431311e-05,3.10,128.0,99.43921309902237,0.00,0.00,4.42,1.0695801939425686e+31,99.432373046875,-10.0,10.0,256,pass
+threshold,bf16,threshold_p1_s2_uniform_any_ulp.csv,NAT_FAIL,,0,-,-,0.00,0.00,1.79,0.0,100.0,-10.0,10.0,256,native_fail

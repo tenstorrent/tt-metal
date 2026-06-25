@@ -1,0 +1,16 @@
+activation,precision,config_csv,native_maxulp,native_meanulp,native_us,native_pure,native_ml,ours_maxulp,ours_meanulp,ours_us,ours_pure,ours_ml,range_min,range_max,tiles,status
+abs,bf16,abs_p1_s2_chebyshev_any_mae.csv,0.0,0.0,1.68,0.0,100.0,0.00,0.00,1.80,0.0,100.0,-128.0,128.0,256,pass
+asinh,bf16,asinh_n9d6_s1_uniform_rational_ulp.csv,1.0,0.01224488376362783,4.13,255.0,97.33701193546452,1.00,0.00,3.04,128.0,98.88992309570312,-10.0,10.0,256,pass
+celu,bf16,celu_p7_s2_uniform_any_ulp.csv,0.0,0.0,3.61,0.0,99.91603190787501,0.06,0.00,2.32,128.0,99.51934814453125,-10.0,10.0,256,pass
+elu,bf16,elu_p7_s2_uniform_any_ulp.csv,0.0,0.0,3.60,0.0,99.91603190787501,0.06,0.00,2.31,128.0,99.51934814453125,-10.0,10.0,256,pass
+exp,bf16,exp_p4_s1_uniform_any_ulp.csv,1.0,0.0001718617159289418,1.89,1.0,95.69963413902717,0.00,0.00,2.13,1.0,97.32437133789062,-10.0,10.0,256,pass
+hardmish,bf16,hardmish_p2_s3_uniform_any_mae.csv,0.03125,0.00021593842260168186,1.78,1.0,99.68811851496432,0.00,0.00,2.02,0.0,100.0,-10.0,10.0,256,pass
+hardtanh,bf16,hardtanh_p1_s3_uniform_any_ulp.csv,0.0,0.0,1.86,0.0,100.0,0.00,0.00,1.87,0.0,100.0,-10.0,10.0,256,pass
+leaky_relu,bf16,leaky_relu_p1_s2_uniform_any_ulp.csv,NAT_FAIL,,0,-,-,0.00,0.00,1.81,0.0,100.0,-10.0,10.0,256,native_fail
+log1p,bf16,log1p_p4_s1_uniform_any_ulp.csv,1.0,0.0003487892809384877,2.45,1.0,99.33746656941406,0.50,0.00,2.47,1171327.0,99.346923828125,-0.9,10.0,256,pass
+mish,bf16,mish_n8d4_s1_uniform_rational_ulp.csv,0.25,0.00015373140750460137,4.32,128.0,99.56816409764289,0.50,0.00,3.75,2.6620662604792817e+32,99.21302795410156,-10.0,10.0,256,pass
+relu,bf16,relu_p1_s2_uniform_any_mae.csv,0.0,0.0,1.74,0.0,100.0,0.00,0.00,1.79,0.0,100.0,-10.0,10.0,256,pass
+rsqrt,bf16,rsqrt_p1_s1_uniform_any_ulp.csv,0.0,0.0,2.47,0.0,66.22579121398205,0.00,0.00,2.02,0.0,66.17889404296875,0.001,100.0,256,pass
+silu,bf16,silu_n6d4_s1_uniform_rational_ulp.csv,0.25,9.19663955431311e-05,3.11,128.0,99.43921309902237,0.50,0.00,3.42,1.724004816310392e+33,99.29046630859375,-10.0,10.0,256,pass
+softshrink,bf16,softshrink_p1_s3_uniform_any_mae.csv,0.0,0.0,1.91,0.0,100.0,0.00,0.00,2.00,0.0,100.0,-11.0,11.0,256,pass
+tan,bf16,tan_p5_s1_uniform_any_ulp.csv,0.125,7.658844433551867e-06,2.94,1.0,99.61399424054899,1.00,0.00,3.19,1.0,99.609375,-1.5,1.5,256,pass
