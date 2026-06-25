@@ -20,6 +20,7 @@ struct QuasarDataMovementConfig;
 struct metal_SocDescriptor;
 
 namespace tt::tt_metal {
+class IDevice;
 class MetalEnvImpl;
 class Program;
 }  // namespace tt::tt_metal
@@ -62,5 +63,17 @@ KernelHandle CreateDispatchEngineKernel(
     const CoreCoord& core,
     DataMovementProcessor dm_processor,
     const experimental::quasar::QuasarDataMovementConfig& config);
+
+// SD cq-kernel test helpers (test_prefetcher / test_dispatcher).
+CoreType resolve_sd_cq_kernel_core_type(const tt::tt_metal::IDevice* device);
+CoreCoord dispatch_engine_core(const tt::tt_metal::IDevice* device, uint32_t index);
+CoreCoord dispatch_engine_virtual_core(const tt::tt_metal::IDevice* device, uint32_t index);
+CoreCoord sd_cq_prefetch_core(const tt::tt_metal::IDevice* device);
+CoreCoord sd_cq_dispatch_core(const tt::tt_metal::IDevice* device);
+CoreCoord sd_cq_virtual_core(const tt::tt_metal::IDevice* device, const CoreCoord& logical_core);
+bool sd_cq_kernel_tests_should_skip(const tt::tt_metal::IDevice* device);
+uint32_t fd_core_type_define_value(const tt::tt_metal::IDevice* device);
+DataMovementProcessor prefetch_dm_processor();
+DataMovementProcessor dispatch_dm_processor();
 
 }  // namespace tt::tt_metal::internal
