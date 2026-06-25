@@ -28,11 +28,11 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(2);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(3);
-    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(4);
+    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(0);
+    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(1);
+    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(2);
+    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(3);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
     constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
     constexpr uint32_t packet_size = get_compile_time_arg_val(6);
     constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(7) != 0;

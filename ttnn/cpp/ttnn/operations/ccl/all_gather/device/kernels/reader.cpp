@@ -27,18 +27,19 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
-    constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
-    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(2);
-    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(3);
-    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(4);
-    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(5);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(6);
-    constexpr uint32_t packet_size = get_compile_time_arg_val(7);
-    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(8) != 0;
-    constexpr uint32_t num_connections = get_compile_time_arg_val(9);
-    constexpr bool do_init_barrier = get_compile_time_arg_val(10) != 0;
-    constexpr auto input_tensor_args = TensorAccessorArgs<11>();
+    constexpr uint32_t input_page_size = get_compile_time_arg_val(0);
+    constexpr uint32_t output_chunk_size = get_compile_time_arg_val(1);
+    constexpr uint32_t output_chunks_per_page = get_compile_time_arg_val(2);
+    constexpr uint32_t output_chunks_per_stripe = get_compile_time_arg_val(3);
+    constexpr uint32_t output_page_stripe_jump = get_compile_time_arg_val(4);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(5);
+    constexpr uint32_t cb_depth = get_compile_time_arg_val(6);
+    constexpr uint32_t cb_page_size = get_compile_time_arg_val(7);
+    constexpr uint32_t packet_size = get_compile_time_arg_val(8);
+    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(9) != 0;
+    constexpr uint32_t num_connections = get_compile_time_arg_val(10);
+    constexpr bool do_init_barrier = get_compile_time_arg_val(11) != 0;
+    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
     constexpr bool enable_fabric = (num_connections > 0);
@@ -168,8 +169,9 @@ void kernel_main() {
     // MAIN
     ///////////////////////////////////////////////////
 
-    // TODO explain this (is loop general or only for 3 trids?)
-    uint32_t max_trid = 3;  // TODO = cb depth, <= 15
+    // NOC transaction IDs to cycle between, and vars to keep track of state
+    constexpr uint32_t max_trid = cb_depth;
+    static_assert(max_trid <= NOC_MAX_TRANSACTION_ID, "max_trid exceeds max supported value");
     uint32_t curr_trid = 1;
     uint32_t wait_trid = 1;
     bool txns_in_flight = false;
@@ -179,7 +181,7 @@ void kernel_main() {
     // after every reserve_back when using NOC transaction IDs, so get_read/write_ptr()
     // will return stale values.
     auto l1_base_addr = cb.get_write_ptr();
-    auto l1_end_addr = l1_base_addr + (3 * cb_page_size);  // TODO hardcoded number 3
+    auto l1_end_addr = l1_base_addr + (cb_depth * cb_page_size);
     auto l1_write_addr = l1_base_addr;
     auto l1_read_addr = l1_base_addr;
 

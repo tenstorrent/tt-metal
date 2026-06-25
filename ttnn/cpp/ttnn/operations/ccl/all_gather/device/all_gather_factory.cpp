@@ -308,12 +308,13 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
     // KERNEL CREATION
     // Reader (covers forward directions E-line + S-rect)
     std::vector<uint32_t> reader_compile_args = {
-        cb0_id,                          // cb0_id
         input_page_size,                 // input tensor page size
         output_chunk_size,               // NOC write size = min(input, output)
         output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
         output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
         output_page_stripe_jump,         // value added to output_page_id at stripe boundary
+        cb0_id,                          // cb id
+        cb_depth,                        // cb depth
         cb_page_size,                    // cb entry size
         packet_size,                     // packet_size
         load_balance_across_alt_routes,  // load_balance_across_alt_routes
@@ -325,11 +326,11 @@ AllGatherFactory::cached_program_t AllGatherFactory::create_at(
 
     // Writer (covers backward directions W-line + N-rect)
     std::vector<uint32_t> writer_compile_args = {
-        cb0_id,                          // cb0_id
         output_chunk_size,               // NOC write size = min(input, output)
         output_chunks_per_page,          // chunks per output buffer page (1 unless concat)
         output_chunks_per_stripe,        // stripe length in chunks (before a stripe jump)
         output_page_stripe_jump,         // value added to output_page_id at stripe boundary
+        cb0_id,                          // cb id
         cb_page_size,                    // cb entry size
         packet_size,                     // packet_size
         load_balance_across_alt_routes,  // load_balance_across_alt_routes

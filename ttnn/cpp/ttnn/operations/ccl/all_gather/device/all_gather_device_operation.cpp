@@ -97,15 +97,6 @@ AllGatherDeviceOperation::spec_return_value_t AllGatherDeviceOperation::compute_
             input_tensor.dtype(), input_tensor.tensor_spec().page_config(), args.output_mem_config));
 }
 
-AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create_output_tensors(
-    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
-    if (tensor_args.persistent_output_tensor.has_value()) {
-        return tensor_args.persistent_output_tensor.value();
-    }
-    auto output_spec = compute_output_specs(args, tensor_args);
-    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
-}
-
 AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::compute_output_topologies(
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
@@ -123,6 +114,15 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
 
     return {tt::tt_metal::TensorTopology(
         input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
+}
+
+AllGatherDeviceOperation::tensor_return_value_t AllGatherDeviceOperation::create_output_tensors(
+    const AllGatherParams& args, const AllGatherInputs& tensor_args) {
+    if (tensor_args.persistent_output_tensor.has_value()) {
+        return tensor_args.persistent_output_tensor.value();
+    }
+    auto output_spec = compute_output_specs(args, tensor_args);
+    return create_device_tensor(output_spec, tensor_args.input_tensor.device());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::tensor_return_value_t>
