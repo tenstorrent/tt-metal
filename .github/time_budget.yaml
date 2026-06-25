@@ -78,11 +78,11 @@ ttnn:
   unit:
     wh_llmbox: 50
     wh_galaxy: 35
-    bh_p100: 760
-    bh_p150b_civ2: 1015
+    bh_p100: 780
+    bh_p150b_civ2: 1035
     wh_n150_civ2: 1175
-    wh_n300_civ2: 1155
-    bh_p150b_civ2_viommu: 110
+    wh_n300_civ2: 1175
+    bh_p150b_civ2_viommu: 115
   e2e:
     wh_llmbox: 90
     wh_galaxy: 120
@@ -130,6 +130,10 @@ ttsim:
 shield:
   e2e:
     wh_llmbox: 110
+  unit:
+    wh_n150_civ2: 90
+    wh_n300_civ2: 115
+    bh_p150b_civ2: 70
 
 # Former fabric + scaleout budgets merged under team scaleout (see tests/pipeline_reorg).
 scaleout:
@@ -153,6 +157,8 @@ scaleout:
     bh_galaxy: 60
     bh_spsg: 20 # single galaxy
     bh_sp1: 90
+    bh_sp1-blitz: 90 #blitz specific mgd sku
+    bh_sp1-mgd: 90 #general mgd sku
     bh_sp4: 150
     bh_loudbox: 80
     bh_p300: 80
@@ -225,16 +231,12 @@ models:
     bh_p150b_civ2_viommu: 110
   stress:
     wh_galaxy_perf: 500
-  l2:
-    wh_n150_civ2: 90
-    wh_n300_civ2: 115
-    bh_p150b_civ2: 70
   e2e:
     wh_llmbox: 198
     bh_p150b_civ2: 63
     bh_p300: 20
     bh_loudbox: 160
-    bh_quietbox_2: 40
+    bh_quietbox_2: 80
   # Per-tier e2e budgets, consumed by the tiered model pipelines;
   # The plain `e2e` key is used for the non-tiered pipelines (blackhole-e2e, t3000-e2e).
   e2e_tier1:

@@ -23,7 +23,9 @@ enum class ArgConfig : uint8_t {
     RuntimeTensorShape = 1 << 4,
     RuntimeShardShape = 1 << 5,
     RuntimeBankCoords = 1 << 6,
-    Runtime = RuntimeRank | RuntimeNumBanks | RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords
+    RuntimePageSize = 1 << 7,
+    Runtime =
+        RuntimeRank | RuntimeNumBanks | RuntimeTensorShape | RuntimeShardShape | RuntimeBankCoords | RuntimePageSize
 };
 
 using ArgsConfig = Flags<ArgConfig>;

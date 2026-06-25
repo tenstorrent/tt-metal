@@ -395,4 +395,10 @@ void kernel_main() {
         untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
 #endif
     }  // NCHt loop
+    // The reduce scaler is generated once by the reader and reused (waited inside row_wise_mean)
+    // across every NCHt iteration but never popped. Pop the producer's tile count once here to
+    // balance the CB. The reader pushes a second scaler tile only when the last column tile is
+    // partial (W not a multiple of tile_width), matching row_wise_mean's wait count.
+    constexpr uint32_t num_scaler_tiles = (W % tile_width > 0) ? 2 : 1;
+    CircularBuffer(cb_scaler).pop_front(num_scaler_tiles);
 }
