@@ -112,8 +112,16 @@ struct dp_top_callstack_t {
 #if DEVICE_PRINT_IS_KERNEL
         const std::uint32_t launch_index = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
         const auto config = GET_MAILBOX_ADDRESS_DEV(launch[launch_index])->kernel_config;
+        // kernel_config_base[] is indexed by ProgrammableCoreType. cq kernels on Quasar dispatch-engine
+        // cores compile with FD_CORE_TYPE = ProgrammableCoreType::DISPATCH, so use that slot when present;
+        // ordinary kernels default to TENSIX.
+#if defined(FD_CORE_TYPE)
+        kernel_offset = config.kernel_config_base[FD_CORE_TYPE] +
+                        config.kernel_text_offset[internal_::get_hw_thread_idx()];
+#else
         kernel_offset = config.kernel_config_base[ProgrammableCoreType::TENSIX] +
                         config.kernel_text_offset[internal_::get_hw_thread_idx()];
+#endif
 #endif
 
         this->pc = pc == UINTPTR_MAX ? pc : (pc - kernel_offset);

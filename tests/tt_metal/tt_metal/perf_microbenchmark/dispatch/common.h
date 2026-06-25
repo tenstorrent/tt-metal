@@ -1583,6 +1583,7 @@ inline std::map<std::string, std::string> make_sd_prefetch_defines(
         {"OFFSETOF_MY_DEV_ID", "0"},
         {"OFFSETOF_TO_DEV_ID", "1"},
         {"OFFSETOF_ROUTER_DIRECTION", "2"},
+        {"DISPATCH_KERNEL", "1"},
         {"FD_CORE_TYPE", std::to_string(tt::tt_metal::internal::fd_core_type_define_value(device_))},
         {"PREFETCH_Q_ENTRY_BITS", std::to_string(entry_size * 8)},
         {"DISPATCH_TELEMETRY_ADDR", "0"},
