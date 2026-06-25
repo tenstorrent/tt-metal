@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/fmt.hpp>
+#include <optional>
 #include "context/metal_env_accessor.hpp"
 #include "core_coord.hpp"
 #include <common/TracyTTDeviceData.hpp>
@@ -1493,7 +1494,10 @@ void DeviceProfiler::readRiscProfilerResults(
 
     const auto& rtoptions = MetalContext::instance(context_id).rtoptions();
 
-    if (!rtoptions.get_profiler_trace_only()) {
+    // This early-out checks HOST_BUFFER_END_INDEX (the DRAM flush count). In trace-only and
+    // accumulate modes the data lives in L1 and may never be flushed to DRAM (HOST_BUFFER_END_INDEX
+    // stays 0), so skipping this guard is required or the L1 residual would never be read.
+    if (!rtoptions.get_profiler_trace_only() && !rtoptions.get_profiler_accumulate()) {
         if ((control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_BR_ER] == 0) &&
             (control_buffer[kernel_profiler::HOST_BUFFER_END_INDEX_NC] == 0)) {
             return;
@@ -2676,6 +2680,13 @@ void DeviceProfiler::updateTracyContext(const std::pair<ChipId, CoreCoord>& devi
     }
     const ChipId device_id = device_core.first;
     const CoreCoord worker_core = device_core.second;
+
+    // Accumulate mode uses the same device-context calibration fallback as the default profiler
+    // (device_time anchored to the smallest WORKER marker timestamp). Do NOT override with the
+    // realtime profiler's calibration here: its anchor is the dispatch core's raw device cycle,
+    // which is a different clock reference and bit-width than the worker zones' 44-bit marker
+    // timestamps, so feeding it to the worker contexts produced out-of-range sync values and the
+    // timelines failed to render (zones placed off-screen).
 
     if (!core_sync_info.contains(worker_core)) {
         const metal_SocDescriptor& soc_desc = MetalContext::instance(context_id).get_cluster().get_soc_desc(device_id);

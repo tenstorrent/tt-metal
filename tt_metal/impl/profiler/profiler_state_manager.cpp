@@ -85,6 +85,20 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
 
 ProfilerStateManager::ProfilerStateManager() : do_sync_on_close(true) {}
 
+void ProfilerStateManager::set_realtime_sync_info(ChipId device_id, const SyncInfo& info) {
+    std::lock_guard<std::mutex> lock(realtime_sync_info_mutex);
+    realtime_sync_info_map[device_id] = info;
+}
+
+std::optional<SyncInfo> ProfilerStateManager::get_realtime_sync_info(ChipId device_id) const {
+    std::lock_guard<std::mutex> lock(realtime_sync_info_mutex);
+    auto it = realtime_sync_info_map.find(device_id);
+    if (it == realtime_sync_info_map.end()) {
+        return std::nullopt;
+    }
+    return it->second;
+}
+
 void ProfilerStateManager::cleanup_device_profilers() {
     // This thread only exists when debug dump is enabled
     if (this->debug_dump_thread.joinable()) {

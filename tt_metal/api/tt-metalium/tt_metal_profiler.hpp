@@ -49,6 +49,17 @@ void InitDeviceProfiler(IDevice* device);
  * */
 void ProfilerSync(ProfilerSyncState state);
 
+/**
+ * Publish a device-host calibration point measured by the realtime (dispatch-core) profiler.
+ *
+ * In accumulate mode the dedicated host-device sync (ProfilerSync/syncDeviceHost) is skipped, so the
+ * per-core (worker) device profiler has no SyncInfo and its zones would be out of sync. The realtime
+ * profiler already computes a per-device calibration; this hands it to the worker-core profiler so its
+ * zones line up with host. host_time/device_time/frequency match the arguments of TracyTTContextCalibrate.
+ * No-op unless accumulate mode is enabled. Thread-safe.
+ */
+void PublishRealtimeSyncInfo(int device_id, double host_time, double device_time, double frequency);
+
 // clang-format off
 /**
  * Read device side profiler data for the device
