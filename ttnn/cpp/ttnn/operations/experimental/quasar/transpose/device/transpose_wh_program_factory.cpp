@@ -129,9 +129,7 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
     };
 
     std::vector<KernelSpec> kernels;
-    KernelRunArgs reader_run;
-    KernelRunArgs writer_run;
-    KernelRunArgs compute_run;
+    ttnn::spec::ProgramRunArgsBuilder rab;
 
     if (row_major) {
         // --------------------------------------------------------------------
@@ -220,14 +218,15 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
             compute_spec.compiler_options.defines = {{"DST_ACCUM_MODE", "1"}};
         }
 
-        kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
+        // push_back(move) not `= {…}`: initializer_list elements are const, so a braced move silently copies.
+        kernels.reserve(3);
+        kernels.push_back(std::move(reader_spec));
+        kernels.push_back(std::move(writer_spec));
+        kernels.push_back(std::move(compute_spec));
 
-        ttnn::spec::KernelRunArgsBuilder reader_b(READER_KERNEL, {"start_id", "num_hw_blocks"});
-        ttnn::spec::KernelRunArgsBuilder compute_b(COMPUTE_KERNEL, {"num_hw_blocks"});
-        ttnn::spec::KernelRunArgsBuilder writer_b(WRITER_KERNEL, {"start_id", "num_hw_blocks"});
-        reader_b.reserve(num_cores_total);
-        compute_b.reserve(num_cores_total);
-        writer_b.reserve(num_cores_total);
+        auto& reader_b = rab.kernel(READER_KERNEL, {"start_id", "num_hw_blocks"}).reserve(num_cores_total);
+        auto& compute_b = rab.kernel(COMPUTE_KERNEL, {"num_hw_blocks"}).reserve(num_cores_total);
+        auto& writer_b = rab.kernel(WRITER_KERNEL, {"start_id", "num_hw_blocks"}).reserve(num_cores_total);
 
         for (uint32_t i = 0, num_sticks_read = 0, num_sticks_write = 0; i < num_cores_total; i++) {
             const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -248,9 +247,6 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
             num_sticks_read += num_hw_blocks_per_core * H;
             num_sticks_write += num_hw_blocks_per_core * W;
         }
-        reader_run = reader_b.take();
-        compute_run = compute_b.take();
-        writer_run = writer_b.take();
     } else {
         // --------------------------------------------------------------------
         // Tiled path: reader streams tiles in NWH order into cb_in0, compute transposes each tile
@@ -301,7 +297,11 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
             .hw_config = compute_cfg,
         };
 
-        kernels = {std::move(reader_spec), std::move(writer_spec), std::move(compute_spec)};
+        // push_back(move) not `= {…}`: initializer_list elements are const, so a braced move silently copies.
+        kernels.reserve(3);
+        kernels.push_back(std::move(reader_spec));
+        kernels.push_back(std::move(writer_spec));
+        kernels.push_back(std::move(compute_spec));
 
         // Tiled work walk uses padded-shape tile counts (preserved from legacy).
         const auto input_shape = input_tensor.padded_shape();
@@ -309,13 +309,11 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
         const uint32_t Ht_walk = input_shape[2] / TILE_HEIGHT;
         const uint32_t HtWt_walk = Ht_walk * Wt_walk;
 
-        ttnn::spec::KernelRunArgsBuilder reader_b(
-            READER_KERNEL, {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"});
-        ttnn::spec::KernelRunArgsBuilder compute_b(COMPUTE_KERNEL, {"NHtWt"});
-        ttnn::spec::KernelRunArgsBuilder writer_b(WRITER_KERNEL, {"num_pages", "start_id"});
-        reader_b.reserve(num_cores_total);
-        compute_b.reserve(num_cores_total);
-        writer_b.reserve(num_cores_total);
+        auto& reader_b =
+            rab.kernel(READER_KERNEL, {"num_tiles", "start_id", "start_ht", "start_wt", "Ht", "Wt", "HtWt"})
+                .reserve(num_cores_total);
+        auto& compute_b = rab.kernel(COMPUTE_KERNEL, {"NHtWt"}).reserve(num_cores_total);
+        auto& writer_b = rab.kernel(WRITER_KERNEL, {"num_pages", "start_id"}).reserve(num_cores_total);
 
         for (uint32_t i = 0, num_tiles_read = 0; i < num_cores_total; i++) {
             const CoreCoord core = {i / num_cores_y, i % num_cores_y};
@@ -346,9 +344,6 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
 
             num_tiles_read += num_tiles_per_core;
         }
-        reader_run = reader_b.take();
-        compute_run = compute_b.take();
-        writer_run = writer_b.take();
     }
 
     WorkUnitSpec wu{
@@ -365,8 +360,8 @@ ttnn::device_operation::ProgramSpecArtifacts TransposeWHProgramFactory::create_p
         .work_units = {wu},
     };
 
-    ProgramRunArgs run_args;
-    run_args.kernel_run_args = {std::move(reader_run), std::move(writer_run), std::move(compute_run)};
+    // take() moves every kernel's run-args in -- no braced-init copy, no manual assembly.
+    ProgramRunArgs run_args = rab.take();
     run_args.tensor_args = {
         {INPUT_TENSOR, TensorArgument{std::cref(input_tensor.mesh_tensor())}},
         {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor.mesh_tensor())}}};

@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <initializer_list>
 #include <type_traits>
 #include <utility>
@@ -63,6 +64,31 @@ public:
 private:
     ttsl::SmallVector<RtaName, 8> names_;
     KernelRunArgs result_;
+};
+
+// Builds a whole program's run-args: declare each kernel once, emit per node, take() the lot.
+// take() MOVES every kernel in -- authors never write `kernel_run_args = {…}` (which silently copies).
+using tt::tt_metal::experimental::ProgramRunArgs;
+
+class ProgramRunArgsBuilder {
+public:
+    // Declare a kernel and its RTA names; returns a stable emitter (deque-backed, never invalidated).
+    KernelRunArgsBuilder& kernel(KernelSpecName name, std::initializer_list<RtaName> rta_names) {
+        return kernels_.emplace_back(std::move(name), rta_names);
+    }
+
+    // Move every kernel's run-args into one ProgramRunArgs. No copy: each KernelRunArgs is moved in.
+    ProgramRunArgs take() {
+        ProgramRunArgs out;
+        out.kernel_run_args.reserve(kernels_.size());
+        for (auto& k : kernels_) {
+            out.kernel_run_args.push_back(k.take());
+        }
+        return out;
+    }
+
+private:
+    std::deque<KernelRunArgsBuilder> kernels_;
 };
 
 }  // namespace ttnn::spec
