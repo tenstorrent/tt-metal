@@ -239,9 +239,9 @@ def _load_token_ids() -> list[int]:
 # ---------------------------------------------------------------------------
 
 
-def _first_rank_chunk_tokens(runtime, token_ids: list[int], kv_actual: int) -> ttnn.Tensor:
-    """Slice this chunk's tokens and build the SP-sharded input tensor. The runtime owns the
-    input format so it has one source of truth."""
+def _first_rank_chunk_tokens(runtime: TtPrefillRuntime, token_ids: list[int], kv_actual: int) -> ttnn.Tensor:
+    """Slice this chunk's tokens and build the SP-sharded input tensor. Delegates to the runtime's own
+    builder so the input format has one source of truth."""
     cfg = runtime.config
     return runtime.make_chunk_input(token_ids[kv_actual : kv_actual + cfg.chunk_size])
 
