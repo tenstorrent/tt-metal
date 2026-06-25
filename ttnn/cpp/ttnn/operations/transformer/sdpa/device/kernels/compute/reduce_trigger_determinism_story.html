@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ring_mla reduce_trigger race — #47911 (step-through)</title>
+<style>
+  :root{
+    --bg:#0e1320; --panel:#161e30; --panel2:#1b2438; --line:#2a3650; --line2:#37466a;
+    --text:#e7ecf5; --muted:#93a1bd; --dim:#5b6b8c;
+    --t0:#38bdf8;   /* UNPACK */
+    --t1:#fbbf24;   /* MATH  */
+    --t2:#a78bfa;   /* PACK  */
+    --bad:#f87171; --good:#34d399; --warn:#f59e0b; --accent:#60a5fa; --phase1:#f472b6;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:radial-gradient(1100px 600px at 75% -12%, #1b2742 0%, var(--bg) 55%);
+    color:var(--text); font:14.5px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial;
+    min-height:100vh; padding-bottom:78px;
+  }
+  header{display:flex;align-items:center;gap:14px;padding:13px 26px;border-bottom:1px solid var(--line)}
+  header .tag{font-size:11px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}
+  header h1{font-size:15px;margin:0;font-weight:650}
+  header .chap{margin-left:auto;font-size:12px;color:var(--accent);font-weight:700;letter-spacing:.04em}
+  .pill{padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid var(--line)}
+
+  main{max-width:1080px;margin:0 auto;padding:22px 22px 8px}
+  .explain{min-height:118px;margin-bottom:8px}
+  .kicker{font-size:11.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:800;margin-bottom:4px}
+  h2{font-size:23px;margin:0 0 8px;font-weight:750;letter-spacing:-.01em}
+  .body{color:var(--text);font-size:15px;max-width:880px}
+  .body b{color:#fff}
+  .muted{color:var(--muted)} .small{font-size:12.5px}
+  code{background:#0b1120;border:1px solid var(--line);border-radius:5px;padding:1px 6px;font-size:12px;color:#cbd5e1}
+  .good{color:var(--good)} .bad{color:var(--bad)} .warn{color:var(--warn)} .acc{color:var(--accent)}
+
+  /* ---- stage host ---- */
+  .stage{display:none;animation:fade .35s ease both}
+  .stage.on{display:block}
+  @keyframes fade{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+  .panel{background:linear-gradient(180deg,var(--panel),var(--panel2));border:1px solid var(--line);
+         border-radius:16px;padding:20px 22px;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+
+  /* ===== HARDWARE SCENE ===== */
+  .hw{display:grid;grid-template-columns:1fr 86px 1fr;gap:14px;align-items:center}
+  .hwbox{border:1px solid var(--line);border-radius:13px;padding:13px 15px;background:#0d1424;transition:all .25s}
+  .hwbox.dim{opacity:.32} .hwbox.hot{border-color:var(--accent);box-shadow:0 0 0 2px rgba(96,165,250,.35)}
+  .hwbox h4{margin:0 0 3px;font-size:14px}
+  .hwbox .s{font-size:12px;color:var(--muted)}
+  .t0 h4{color:var(--t0)} .t1 h4{color:var(--t1)} .t2 h4{color:var(--t2)}
+  .stack{display:flex;flex-direction:column;gap:11px}
+  .arrowcol{display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--dim);gap:30px;font-size:22px}
+  .reg{border:1px dashed var(--line2);border-radius:11px;padding:11px 13px;background:#0c1322;transition:all .25s}
+  .reg.dim{opacity:.32} .reg.hot{border-color:var(--good);box-shadow:0 0 0 2px rgba(52,211,153,.3)}
+  .reg b{font-size:13px;color:#e2e8f0} .reg .s{font-size:11.5px;color:var(--muted)}
+  .l1box{border:1px solid var(--t2);border-radius:13px;padding:12px 14px;background:#15112a;transition:all .25s}
+  .l1box.dim{opacity:.4} .l1box.hot{box-shadow:0 0 0 2px rgba(167,139,250,.45)}
+  .l1box b{color:#c4b5fd}
+  .note{margin-top:12px;font-size:13px;color:var(--muted);border-left:3px solid var(--accent);padding-left:11px}
+
+  /* ===== INNER LOOP SCENE ===== */
+  .loop{display:flex;flex-direction:column;gap:9px}
+  .lstep{display:flex;align-items:center;gap:13px;border:1px solid var(--line);border-radius:11px;padding:11px 15px;background:#0d1424;transition:all .25s}
+  .lstep .n{width:26px;height:26px;border-radius:50%;background:#1e293b;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:13px;flex:0 0 auto}
+  .lstep .tx{font-size:14px}
+  .lstep .who{margin-left:auto;font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .lstep.dim{opacity:.34}
+  .lstep.hot{border-color:var(--accent);box-shadow:0 0 0 2px rgba(96,165,250,.3)}
+  .lstep.bug{border-color:var(--bad);box-shadow:0 0 0 2px rgba(248,113,113,.4)}
+  .lstep.hot .who.pk{color:var(--t2);border-color:var(--t2)} .lstep.hot .who.up{color:var(--t0);border-color:var(--t0)}
+
+  /* ===== TILES / MOP SCENE ===== */
+  .tilewrap{display:flex;flex-direction:column;gap:6px;align-items:center}
+  .l1tiles{display:flex;gap:5px}
+  /* subblock grouping: qkt_subblock_w = 5 → two groups of 5 (gap before tile 5) */
+  .l1tiles.subgap .tile:nth-child(6){margin-left:18px}
+  .tile{width:50px;height:50px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+        font-size:12px;font-weight:800;color:#64748b;background:#111a2c;border:1px solid var(--line);
+        transition:all .22s;position:relative}
+  .tile small{position:absolute;bottom:2px;font-size:8px;color:#475569;font-weight:600}
+  .tile.packing{background:repeating-linear-gradient(45deg,#3b2f6b,#3b2f6b 5px,#4c3c86 5px,#4c3c86 10px);color:#ddd6fe;animation:pulse .7s infinite}
+  .tile.written{background:linear-gradient(180deg,#7c3aed,#6d28d9);color:#fff;border-color:#8b5cf6}
+  .tile.safe{background:linear-gradient(180deg,#7c3aed,#6d28d9);color:#fff;border-color:#8b5cf6;box-shadow:0 0 0 3px rgba(52,211,153,.9),0 0 16px rgba(52,211,153,.5)}
+  .tile.readok{box-shadow:0 0 0 3px rgba(52,211,153,.95),0 0 18px rgba(52,211,153,.55)}
+  .tile.stale{box-shadow:0 0 0 3px rgba(248,113,113,.95),0 0 20px rgba(248,113,113,.6);animation:shake .35s}
+  .tile.stale::after{content:"?";position:absolute;font-size:19px;color:#fff;top:50%;left:50%;transform:translate(-50%,-58%)}
+  @keyframes pulse{0%,100%{filter:brightness(1)}50%{filter:brightness(1.5)}}
+  @keyframes shake{0%,100%{transform:none}25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+  .halflbls{display:flex;gap:5px;width:100%;justify-content:center;margin-top:2px}
+  .halflbls span{font-size:11px;color:var(--muted);text-align:center;border-top:2px solid var(--line);padding-top:3px}
+  .h1lbl{color:var(--accent)!important;border-color:var(--accent)!important}
+  .h2lbl{color:var(--t2)!important;border-color:var(--t2)!important}
+  .mopbox{margin-top:14px;background:#0b1120;border:1px solid var(--line);border-radius:11px;padding:13px 15px;font-family:ui-monospace,monospace;font-size:13px;color:#cbd5e1}
+  .mopbox .hl{color:var(--good);font-weight:700}
+  .mopbox .cm{color:#64748b}
+
+  /* ===== ENGINE SCENE (race / fixes) ===== */
+  .engine{display:flex;flex-direction:column;gap:12px}
+  .lanes{display:flex;flex-direction:column;gap:7px}
+  .lane{display:flex;align-items:center;gap:11px;border:1px solid var(--line);border-radius:10px;padding:8px 12px;background:#0d1424}
+  .lane .nm{font-weight:800;font-size:13px;width:118px;flex:0 0 auto}
+  .lane.pk .nm{color:var(--t2)} .lane.mt .nm{color:var(--t1)} .lane.up .nm{color:var(--t0)}
+  .lane .pillst{font-size:10.5px;font-weight:800;padding:2px 8px;border-radius:999px;border:1px solid var(--line);color:var(--muted);flex:0 0 auto}
+  .lane .pillst.act{color:var(--good);border-color:var(--good)}
+  .lane .pillst.stall{color:var(--bad);border-color:var(--bad)}
+  .lane .pillst.over{color:var(--accent);border-color:var(--accent)}
+  .lane .doing{font-family:ui-monospace,monospace;font-size:12.5px;color:#cbd5e1}
+  .lane.hot{box-shadow:0 0 0 2px rgba(96,165,250,.35)}
+
+  .erow{display:flex;gap:12px;flex-wrap:wrap;align-items:stretch}
+  .ebox{border:1px solid var(--line);border-radius:11px;padding:9px 13px;background:#0b1120;display:flex;flex-direction:column;gap:3px;justify-content:center}
+  .ebox .lbl{font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700}
+  .ebox .val{font-family:ui-monospace,monospace;font-size:13px;color:#e2e8f0}
+  .ebox.src .val.stale{color:var(--bad);font-weight:800}
+  .ebox.src .val.okv{color:var(--good);font-weight:800}
+  .sem{min-width:150px}
+  .sem .val{display:flex;align-items:center;gap:8px}
+  .semdot{width:13px;height:13px;border-radius:50%;background:#334155;transition:all .2s}
+  .semdot.one{background:var(--good);box-shadow:0 0 12px rgba(52,211,153,.6)}
+  .sem.p1 .semdot.one{background:var(--phase1);box-shadow:0 0 12px rgba(244,114,182,.6)}
+  .semst{font-size:11px;font-weight:700;color:var(--muted)}
+  .semst.wait{color:var(--bad)} .semst.post{color:var(--good)}
+  .sem.p1 .semst.post{color:var(--phase1)}
+  .sem.dimsem{opacity:.4}
+  .edge{min-width:200px;justify-content:center}
+  .edge .val{font-weight:800}
+  .edge.broken{border-color:var(--bad);box-shadow:0 0 0 2px rgba(248,113,113,.35)} .edge.broken .val{color:var(--bad)}
+  .edge.ok{border-color:var(--good)} .edge.ok .val{color:var(--good)}
+  .ecap{font-size:14px;border-left:3px solid var(--accent);padding-left:12px;min-height:42px}
+  .ecap.bad{border-color:var(--bad)} .ecap.good{border-color:var(--good)} .ecap.warn{border-color:var(--warn)}
+  .elegend{display:flex;gap:14px;flex-wrap:wrap;font-size:11.5px;color:var(--muted)}
+  .elegend i{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:5px;vertical-align:-1px}
+
+  /* ===== ND dual timeline ===== */
+  .nd{display:flex;flex-direction:column;gap:14px}
+  .ndrun{border:1px solid var(--line);border-radius:12px;padding:13px 15px;background:#0d1424;transition:opacity .25s}
+  .ndrun.dim{opacity:.25}
+  .ndrun h4{margin:0 0 8px;font-size:13.5px;display:flex;align-items:center;gap:9px}
+  .ndverdict{margin-left:auto;font-weight:800;padding:2px 11px;border-radius:999px;font-size:12px}
+  .ndverdict.pass{color:#04231a;background:var(--good)} .ndverdict.fail{color:#2a0a0a;background:var(--bad)}
+  .ndstrip{display:flex;gap:5px}
+
+  /* ===== TIMELINE (slow vs fast) ===== */
+  .tlpanel{border:1px solid var(--line);border-radius:12px;padding:18px 14px 10px;margin-bottom:14px;background:#0d1424;transition:opacity .3s}
+  .tlpanel.tldim{opacity:.28}
+  .tltitle{font-size:13px;font-weight:800;margin-bottom:4px}
+  #tl-v1 .tltitle{color:var(--warn)} #tl-v2 .tltitle{color:var(--good)}
+  .tllane{display:flex;align-items:center;gap:10px;margin:16px 0 4px}
+  .tllbl{width:80px;font-size:11.5px;font-weight:800;color:var(--muted);flex:0 0 auto}
+  .tltrack{position:relative;height:40px;flex:1;min-width:540px}
+  .tlblk{position:absolute;top:4px;height:32px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:10.5px;font-weight:700;color:#fff;overflow:hidden;white-space:nowrap;border:1px solid rgba(255,255,255,.12)}
+  .tlblk span{padding:0 6px;overflow:hidden;text-overflow:ellipsis}
+  .tlblk.pack{background:linear-gradient(180deg,#7c3aed,#6d28d9)}
+  .tlblk.packsb{background:linear-gradient(180deg,#7c3aed,#6d28d9);box-shadow:inset 0 0 0 2px rgba(244,114,182,.7)}
+  .tlblk.mask{background:#475569}
+  .tlblk.push{background:#334155}
+  .tlblk.idle{background:repeating-linear-gradient(45deg,#3a2030,#3a2030 6px,#4a2a3e 6px,#4a2a3e 12px);color:#fda4af;border-color:rgba(248,113,113,.4)}
+  .tlblk.wait{background:repeating-linear-gradient(45deg,#26303f,#26303f 6px,#334052 6px,#334052 12px);color:#cbd5e1}
+  .tlblk.run2{background:linear-gradient(180deg,#38bdf8,#0ea5e9);color:#04212e}
+  .tlblk.run1over{background:linear-gradient(180deg,#34d399,#10b981);color:#04231a;box-shadow:0 0 0 2px rgba(52,211,153,.75),0 0 14px rgba(52,211,153,.5)}
+  .tlblk.saved{background:rgba(52,211,153,.12);border:1px dashed var(--good);color:var(--good)}
+  .tlmark{position:absolute;top:-2px;height:44px;border-left:2px dashed}
+  .tlmark.ph1{border-color:var(--phase1)} .tlmark.fpu{border-color:var(--good)}
+  .tlmark .ml{position:absolute;top:-13px;left:3px;font-size:9px;font-weight:800;white-space:nowrap}
+  .tlmark.ph1 .ml{color:var(--phase1)} .tlmark.fpu .ml{color:var(--good)}
+  .tlfin{position:absolute;top:0;height:40px;border-left:2px solid #e2e8f0}
+  .tlfin .ml{position:absolute;bottom:-14px;left:-22px;font-size:9px;font-weight:800;color:#e2e8f0;white-space:nowrap}
+
+  /* ===== TABLE SCENES ===== */
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:9px 11px;text-align:left;vertical-align:top}
+  th{background:#0d1424;color:var(--muted);font-weight:700}
+  tr.rev{opacity:0;transform:translateY(6px);transition:all .3s}
+  tr.rev.show{opacity:1;transform:none}
+  .v{font-weight:800}
+
+  /* ===== footer ===== */
+  footer{display:flex;align-items:center;gap:14px;padding:13px 26px;border-top:1px solid var(--line);
+         position:fixed;left:0;right:0;bottom:0;z-index:100;background:rgba(14,19,32,.96);backdrop-filter:blur(6px);
+         box-shadow:0 -8px 24px rgba(0,0,0,.45)}
+  .prog{flex:1;height:6px;background:#1e293b;border-radius:999px;overflow:hidden}
+  .prog i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--phase1));width:0;transition:width .3s}
+  .counter{font-size:12px;color:var(--muted);min-width:96px;text-align:center}
+  button.nav{background:var(--accent);color:#06121f;border:none;border-radius:10px;padding:10px 20px;font-weight:800;cursor:pointer;font-size:14px;transition:filter .15s,opacity .15s}
+  button.nav:hover{filter:brightness(1.08)} button.nav:disabled{opacity:.32;cursor:default}
+  button.nav.ghost{background:#22304c;color:var(--text)}
+</style>
+</head>
+<body>
+<header>
+  <span class="pill" style="color:var(--t2);border-color:var(--t2)">SDPA</span>
+  <div>
+    <div class="tag">Blackhole · ring_mla · reduce_trigger</div>
+    <h1>The L1 read/write race that made attention nondeterministic — built up step by step</h1>
+  </div>
+  <span class="chap" id="chap"></span>
+</header>
+
+<main>
+  <div class="explain">
+    <div class="kicker" id="kicker"></div>
+    <h2 id="title"></h2>
+    <div class="body" id="body"></div>
+  </div>
+
+  <!-- INTRO -->
+  <section class="stage" id="sc-intro">
+    <div class="panel">
+      <div class="hw">
+        <div class="hwbox t2"><h4>T2 · Pack</h4><div class="s">DST → L1 &nbsp;(the producer)</div></div>
+        <div class="arrowcol">⟶</div>
+        <div class="hwbox t0"><h4>T0 · Unpack</h4><div class="s">L1 → SrcA &nbsp;(the consumer)</div></div>
+      </div>
+      <div class="note">Same inputs, run 10×, must be bit-exact. On Blackhole it wasn't — iter 1 ≠ iter 0,
+      and the diff <b>changed every run</b>. That run-to-run wobble is the fingerprint of a <b>race</b>, not a math error.
+      We'll assemble the hardware, then watch the exact moment the race fires, then the fix. <b>Use Next / Prev (or ← →) — every micro-step is a click.</b></div>
+    </div>
+  </section>
+
+  <!-- HARDWARE -->
+  <section class="stage" id="sc-hw">
+    <div class="panel">
+      <div class="hw">
+        <div class="stack">
+          <div class="hwbox t0" id="hw-t0"><h4>T0 · Unpack</h4><div class="s">moves tiles L1 → register files</div></div>
+          <div class="hwbox t1" id="hw-t1"><h4>T1 · Math</h4><div class="s">FPU/SFPU: SrcA/SrcB → DST</div></div>
+          <div class="hwbox t2" id="hw-t2"><h4>T2 · Pack</h4><div class="s">DST → back out to L1</div></div>
+        </div>
+        <div class="arrowcol"><span>⇄</span></div>
+        <div class="stack">
+          <div class="l1box" id="hw-l1"><b>L1 (1.5 MB SRAM)</b><div class="s"><code>cb_qkt_im</code> — the QKᵀ score buffer</div></div>
+          <div class="reg" id="hw-srca"><b>SrcA</b> <span class="s">operand register file — unpack's destination</span></div>
+          <div class="reg" id="hw-srcb"><b>SrcB</b> <span class="s">holds the scaler (1.0)</span></div>
+        </div>
+      </div>
+      <div class="note" id="hw-note"></div>
+    </div>
+  </section>
+
+  <!-- INNER LOOP -->
+  <section class="stage" id="sc-loop">
+    <div class="panel">
+      <div class="loop">
+        <div class="lstep" id="ls0"><div class="n">1</div><div class="tx">QKᵀ → scores</div><div class="who pk">PACK writes cb_qkt_im</div></div>
+        <div class="lstep" id="ls1"><div class="n">2</div><div class="tx"><b>row-max (reduce)</b></div><div class="who up">UNPACK reads cb_qkt_im</div></div>
+        <div class="lstep" id="ls2"><div class="n">3</div><div class="tx">exp = softmax numerators (in place)</div><div class="who">same buffer</div></div>
+        <div class="lstep" id="ls3"><div class="n">4</div><div class="tx">· V &nbsp;(scores @ V)</div><div class="who">same buffer</div></div>
+        <div class="lstep" id="ls4"><div class="n">5</div><div class="tx">accumulate output (online-softmax rescale)</div><div class="who">—</div></div>
+      </div>
+      <div class="note" id="loop-note"></div>
+    </div>
+  </section>
+
+  <!-- TILES / MOP -->
+  <section class="stage" id="sc-tiles">
+    <div class="panel">
+      <div class="tilewrap">
+        <div class="l1tiles" id="tilerow" data-tiles></div>
+        <div class="halflbls" id="halflbls" style="display:none"><span class="h1lbl" style="flex:1">first half [0,5) → run()#1</span><span class="h2lbl" style="flex:1">second half [5,10) → run()#2</span></div>
+      </div>
+      <div class="mopbox" id="mopbox" style="display:none"></div>
+      <div class="note" id="tiles-note"></div>
+    </div>
+  </section>
+
+  <!-- ENGINE (race + fixes) -->
+  <section class="stage" id="sc-engine">
+    <div class="panel">
+      <div class="engine">
+        <div class="lanes">
+          <div class="lane pk" id="ln-pk"><span class="nm">T2 · PACK</span><span class="pillst" id="st-pk">idle</span><span class="doing" id="do-pk">—</span></div>
+          <div class="lane mt" id="ln-mt"><span class="nm">T1 · MATH</span><span class="pillst" id="st-mt">idle</span><span class="doing" id="do-mt">—</span></div>
+          <div class="lane up" id="ln-up"><span class="nm">T0 · UNPACK</span><span class="pillst" id="st-up">idle</span><span class="doing" id="do-up">—</span></div>
+        </div>
+        <div class="tilewrap">
+          <div class="l1tiles subgap" id="etiles" data-etiles></div>
+          <div class="halflbls"><span class="h1lbl" style="flex:1">first half [0,5)</span><span class="h2lbl" style="flex:1">second half [5,10)</span></div>
+        </div>
+        <div class="erow">
+          <div class="ebox src"><span class="lbl">SrcA ← L1 (last unpack)</span><span class="val" id="e-src">—</span></div>
+          <div class="ebox"><span class="lbl">MOP Z counter</span><span class="val" id="e-z">0</span></div>
+          <div class="ebox sem" id="e-fpu"><span class="lbl">sem · FPU_SFPU</span><span class="val"><span class="semdot"></span><span id="e-fpu-st" class="semst">init 0</span></span></div>
+          <div class="ebox sem p1" id="e-ph1"><span class="lbl">sem · PHASE-1 (UNPACK_MATH_DONE)</span><span class="val"><span class="semdot"></span><span id="e-ph1-st" class="semst">unused</span></span></div>
+          <div class="ebox edge" id="e-edge"><span class="lbl">happens-before: write → read</span><span class="val" id="e-edge-v">—</span></div>
+        </div>
+        <div class="ecap" id="e-cap">—</div>
+        <div class="elegend">
+          <span><i style="background:#111a2c;border:1px solid #2a3650"></i>empty L1</span>
+          <span><i style="background:#6d28d9"></i>written by PACK</span>
+          <span><i style="background:#6d28d9;box-shadow:0 0 0 2px #34d399"></i>safe read</span>
+          <span><i style="background:#111a2c;box-shadow:0 0 0 2px #f87171"></i>stale read (the bug)</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ND -->
+  <section class="stage" id="sc-nd">
+    <div class="panel">
+      <div class="nd">
+        <div class="ndrun" id="nd-a">
+          <h4><span class="acc">Run A</span> — T0 happens to lag ~3 cycles behind PACK <span class="ndverdict pass" id="nd-a-v" style="visibility:hidden">PASS</span></h4>
+          <div class="ndstrip" id="nd-a-strip"></div>
+        </div>
+        <div class="ndrun" id="nd-b">
+          <h4><span class="acc">Run B</span> — T0 happens to lead (asserts / HW timing nudge it) <span class="ndverdict fail" id="nd-b-v" style="visibility:hidden">FAIL</span></h4>
+          <div class="ndstrip" id="nd-b-strip"></div>
+        </div>
+        <div class="note" id="nd-note"></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- TIMELINE: why slow vs fast -->
+  <section class="stage" id="sc-tl">
+    <div class="panel">
+      <div class="tlpanel" id="tl-v1">
+        <div class="tltitle">Phase 1 — single FPU_SFPU token (correct, but serial)</div>
+        <div class="tllane"><span class="tllbl">T2 · PACK</span><div class="tltrack" id="tl1-pk"></div></div>
+        <div class="tllane"><span class="tllbl">T0 · reduce</span><div class="tltrack" id="tl1-up"></div></div>
+      </div>
+      <div class="tlpanel" id="tl-v2">
+        <div class="tltitle">Phase 2 — PHASE-1 + FPU_SFPU, two-phase (correct, and overlapped)</div>
+        <div class="tllane"><span class="tllbl">T2 · PACK</span><div class="tltrack" id="tl2-pk"></div></div>
+        <div class="tllane"><span class="tllbl">T0 · reduce</span><div class="tltrack" id="tl2-up"></div></div>
+      </div>
+      <div class="note" id="tl-note"></div>
+    </div>
+  </section>
+
+  <!-- EVIDENCE -->
+  <section class="stage" id="sc-evi">
+    <div class="panel"><table>
+      <tr><th>Probe</th><th>Result</th><th>Conclusion</th></tr>
+      <tr class="rev" id="ev0"><td>CB-hash bisection (FNV of <code>cb_qkt_im</code>)</td><td>reduce <b>input</b> bit-identical (0/400 cores); <b>post-softmax</b> diverges (70/400)</td><td class="v">ND is born <b>at the reduce</b>, not its input</td></tr>
+      <tr class="rev" id="ev1"><td>NOP-delay direction</td><td>delay <span style="color:var(--t2)">PACK</span> → <span class="bad">FAIL</span>; delay <span style="color:var(--t0)">UNPACK</span> → <span class="good">PASS</span></td><td class="v">exactly a missing <b>producer → consumer</b> order</td></tr>
+      <tr class="rev" id="ev2"><td>Barrier-restore isolation</td><td>keep all split-MOP code, restore <i>only</i> <code>cb_wait_front</code></td><td class="v">reliable-FAIL → <span class="good">PASS</span></td></tr>
+    </table></div>
+  </section>
+
+  <!-- OPTIONS -->
+  <section class="stage" id="sc-opt">
+    <div class="panel"><table>
+      <tr><th>Idea</th><th>Verdict</th><th>Why</th></tr>
+      <tr class="rev" id="op0"><td>Restore <code>cb_wait_front</code></td><td class="warn">works, but…</td><td>throws away the whole <code>reduce_trigger</code> overlap</td></tr>
+      <tr class="rev" id="op1"><td>Two-token <code>max=2</code> handshake</td><td class="bad">deadlocks</td><td>per-row gets = group_size+1 vs 2 posts → semaphore underflows → device hang for <code>group_size ≥ 2</code></td></tr>
+      <tr class="rev" id="op2"><td>Single semaphore, two phases</td><td class="bad">impossible</td><td><code>SEMINIT(0,1)</code> + non-consuming wait: once posted, <b>every</b> later wait passes → 2nd half loses its barrier</td></tr>
+      <tr class="rev" id="op3"><td>Just drop the 1st-half wait on no-mask</td><td class="bad">reopens the race</td><td><code>run#1(no wait); wait; run#2</code> is <b>exactly the buggy shape</b></td></tr>
+    </table></div>
+  </section>
+
+  <!-- PAVLE -->
+  <section class="stage" id="sc-pav">
+    <div class="panel"><table>
+      <tr><th>Pavle's claim</th><th>Verdict</th><th>Why</th></tr>
+      <tr class="rev" id="pv0"><td>Sync only needed on the <b>last</b> half</td><td class="bad">wrong</td><td>producer is the <b>trailing</b> T2 pack; with a mask the low columns are even rewritten <i>after</i> the QK packs</td></tr>
+      <tr class="rev" id="pv1"><td>Math in-order issue is a backstop</td><td class="bad">wrong</td><td>wrong thread pair — hazard is <b>T2 pack → T0 unpack</b> on L1; T1 orders neither</td></tr>
+      <tr class="rev" id="pv2"><td>The fix is just timing perturbation</td><td class="bad">wrong</td><td>it installs real ordering ops (<code>STALL_PACK</code> drain + <code>SEMWAIT</code>); the count-based barrier flips FAIL→PASS</td></tr>
+      <tr class="rev" id="pv3"><td>Cleaner to fuse mm+reduce in the LLK</td><td class="warn">right direction</td><td>good long-term <i>perf</i>, but not a refutation and not a drop-in (mask + 3 reads still need the L1 round-trip)</td></tr>
+    </table>
+    <div class="note" id="pav-note"></div></div>
+  </section>
+
+  <!-- COST -->
+  <section class="stage" id="sc-cost">
+    <div class="panel"><table>
+      <tr><th>config (ring4)</th><th>pre-fix</th><th>phase-1 fix</th><th>gate ±1%</th></tr>
+      <tr class="rev" id="co0"><td><code>wan2_2</code> q288/k512 <span class="muted">(no mask)</span></td><td>68.60%</td><td class="bad">67.06% (−1.54pp)</td><td class="bad">FAIL</td></tr>
+      <tr class="rev" id="co1"><td><code>mla_100k</code> q160/k320 <span class="muted">(causal)</span></td><td>62.85%</td><td class="bad">62.49% (−0.36pp)</td><td class="bad">FAIL</td></tr>
+    </table>
+    <div class="note" id="cost-note"></div></div>
+  </section>
+
+  <!-- RESULTS -->
+  <section class="stage" id="sc-res">
+    <div class="panel"><table>
+      <tr><th>config (ring4)</th><th>pre-fix</th><th>phase-1</th><th>phase-2</th><th>gate</th></tr>
+      <tr class="rev" id="re0"><td><code>wan2_2</code> (no mask)</td><td>68.60%</td><td class="bad">67.06%</td><td class="good">68.56%</td><td class="good">PASS</td></tr>
+      <tr class="rev" id="re1"><td><code>mla_100k</code> (causal)</td><td>62.85%</td><td class="bad">62.49%</td><td class="good">62.76%</td><td class="good">PASS</td></tr>
+    </table>
+    <div class="note" id="res-note"></div></div>
+  </section>
+
+</main>
+
+<footer>
+  <button type="button" class="nav ghost" id="prev">‹ Prev</button>
+  <div class="prog"><i id="progbar"></i></div>
+  <span class="counter" id="counter"></span>
+  <button type="button" class="nav" id="next">Next ›</button>
+</footer>
+
+<script>
+/* ---------- tiny DOM helpers ---------- */
+const $ = id => document.getElementById(id);
+function cls(el, on, name){ if(el) el.classList.toggle(name, !!on); }
+function setClassList(el, classes){ if(el) el.className = classes; }
+
+/* ---------- build tile rows ---------- */
+const NTILES = 10;
+function buildTiles(container, withLabels){
+  for(let i=0;i<NTILES;i++){
+    const t=document.createElement('div');
+    t.className='tile'; t.dataset.i=i;
+    t.innerHTML = i + (withLabels?('<small>'+i+'</small>'):'');
+    t.textContent = i;
+    container.appendChild(t);
+  }
+}
+
+/* ====================================================================
+   SCENE RENDERERS — every renderer sets ABSOLUTE state from k,
+   so Prev and Next are always exact (no incremental drift).
+   ==================================================================== */
+
+/* ----- HARDWARE ----- */
+function drawHW(k){
+  const all = ['hw-t0','hw-t1','hw-t2','hw-l1','hw-srca','hw-srcb'];
+  all.forEach(id=>{ $(id).classList.remove('hot'); $(id).classList.add('dim'); });
+  const show = ids => ids.forEach(id=>{ $(id).classList.remove('dim'); $(id).classList.add('hot'); });
+  const undim = ids => ids.forEach(id=> $(id).classList.remove('dim'));
+  let note='';
+  if(k===0){ undim(all); ['hw-t0','hw-t1','hw-t2','hw-l1','hw-srca','hw-srcb'].forEach(id=>$(id).classList.remove('hot'));
+    note='One Tensix core runs three threads at once. They are independent — they only become ordered where the code <b>explicitly</b> makes one wait for another (a circular-buffer flag, or a hardware semaphore).'; }
+  if(k===1){ undim(all); show(['hw-t0','hw-srca','hw-srcb']);
+    note='<b>T0 · Unpack</b> issues <code>UNPACR</code> instructions that copy tiles out of L1 into the <b>SrcA</b> register file (and the scaler into <b>SrcB</b>). SrcA is the operand the math unit reads.'; }
+  if(k===2){ undim(all); show(['hw-t1','hw-srca','hw-srcb']);
+    note='<b>T1 · Math</b> (FPU matmul / SFPU vector) consumes SrcA/SrcB and writes results into DST.'; }
+  if(k===3){ undim(all); show(['hw-t2','hw-l1']);
+    note='<b>T2 · Pack</b> writes DST results back out to L1. Pack is the <b>LAST</b> stage in T0→T1→T2, so it structurally <b>trails</b> the other two. Remember that — it is the crux of the bug.'; }
+  if(k===4){ undim(all); show(['hw-l1','hw-t2','hw-t0']);
+    note='<code>cb_qkt_im</code> in L1 is written by <b>T2 (pack)</b> and read back by <b>T0 (unpack)</b> for the row-max. That makes it a <b>producer → consumer handoff</b> — and a handoff between two free-running threads needs a synchronization edge, or it races.'; }
+  $('hw-note').innerHTML = note;
+}
+
+/* ----- INNER LOOP ----- */
+function drawLoop(k){
+  const ids=['ls0','ls1','ls2','ls3','ls4'];
+  ids.forEach(id=>setClassList($(id),'lstep dim'));
+  let note='';
+  if(k===0){ ids.forEach(id=>setClassList($(id),'lstep')); note='Per key-chunk, attention runs these five stages. Two of them touch the same L1 buffer.'; }
+  if(k===1){ setClassList($('ls0'),'lstep hot'); note='Stage 1: the QKᵀ matmul produces the attention <b>scores</b>. <b>T2 (pack)</b> writes them into <code>cb_qkt_im</code>.'; }
+  if(k===2){ setClassList($('ls1'),'lstep bug'); note='Stage 2: the row-max reduce. <b>T0 (unpack)</b> reads the scores back to find the max per row (needed for the numerically-stable <code>exp(score − max)</code>). <b>This is the step that races.</b>'; }
+  if(k===3){ setClassList($('ls2'),'lstep hot'); setClassList($('ls3'),'lstep hot');
+    note='Stages 3–4 read <code>cb_qkt_im</code> again (in-place exp, then ·V). So the buffer is read <b>three times</b> per chunk — it is published with <code>cb_push_back_hold_wr_ptr</code> (count advances, write pointer held) and only freed at the very end.'; }
+  $('loop-note').innerHTML = note;
+}
+
+/* ----- TILES / MOP ----- */
+function drawTiles(k){
+  const tiles=document.querySelectorAll('#tilerow .tile');
+  tiles.forEach(t=>t.className='tile');
+  $('tilerow').classList.toggle('subgap', k>=1);
+  $('halflbls').style.display = k>=3 ? 'flex':'none';
+  $('mopbox').style.display = k>=4 ? 'block':'none';
+  let note='';
+  if(k===0){ note='For this config (<code>q160 / k320</code>): the key chunk is <b>320 keys = N = 10 tiles</b> wide (<code>N = block_ct_dim = active_Sk = Sk_chunk_t</code>); the query chunk is 160 = 5 tiles tall. So the whole <code>cb_qkt_im</code> buffer is <b>5 × 10 = 50 tiles</b>. <b>Each cell is a whole 32×32 tile, not one element.</b> The strip below is one query row-group — the 10 key-tiles the reduce sweeps.'; }
+  if(k===1){ note='The packer emits scores one <b>subblock</b> at a time. Here <code>qkt_subblock_w = 5</code>, so N = 10 tiles = <b>2 subblocks of 5</b> (the two spaced groups). The 5 comes from <code>determine_largest_subblock_size</code> picking the widest subblock that divides 10 and fits the DST register file.'; }
+  if(k===2){ tiles.forEach(t=>t.classList.add('written'));
+    note='PACK writes them strictly <b>in order</b>, subblock by subblock, left → right: <b>subblock 0 = tiles 0–4</b>, then <b>subblock 1 = tiles 5–9</b>. The reduce later reads in the same order — which is what makes an early read <i>look</i> safe.'; }
+  if(k===3){ for(let i=0;i<10;i++) tiles[i].classList.add(i<5?'safe':'written');
+    note='<code>reduce_trigger</code> splits the reduce into two halves: <b>run()#1</b> walks tiles <b>[0,5)</b>, <b>run()#2</b> walks <b>[5,10)</b>. With width-5 subblocks the split lands exactly on the subblock boundary — <b>run()#1 = subblock 0, run()#2 = subblock 1</b>.'; }
+  if(k===4){ for(let i=0;i<10;i++) tiles[i].classList.add(i<5?'safe':'written');
+    $('mopbox').innerHTML =
+      '<span class="cm">// the reduce is an UNPACK MOP — a macro-op that loops:</span><br>'+
+      'for each tile:&nbsp; <span class="hl">UNPACR  SrcA &larr; L1[tile]</span> ; &nbsp; Z_counter += 1 tile<br><br>'+
+      '<span class="cm">// normal:</span> outerloop = N&nbsp;&nbsp; <span class="cm">// reduce_trigger:</span> outerloop = <span class="hl">N/2</span>, call run() twice<br>'+
+      'run()#1 → Z = 0..4 &nbsp;(tiles [0,5))<br>'+
+      'run()#2 → Z = 5..9 &nbsp;(tiles [5,10)) &nbsp;<span class="cm">// single Z reset; Z continues across the two run()s</span>';
+    note='The MOP issues one <code>UNPACR SrcA ← L1[tile]</code> per tile, bumping the <b>Z counter</b> by one tile each time. <code>reduce_trigger</code> sets the loop to <b>N/2</b> and calls <code>run()</code> twice — and it <b>drops <code>cb_wait_front</code></b>, putting a single <code>FPU_SFPU</code> semaphore wait <b>between</b> the two halves. So only the second half is guarded. Watch what that costs →'; }
+  $('tiles-note').innerHTML = note;
+}
+
+/* ----- ENGINE shared setters ----- */
+function eLane(role, pillTxt, pillCls, doing, hot){
+  const map={pk:['st-pk','do-pk','ln-pk'],mt:['st-mt','do-mt','ln-mt'],up:['st-up','do-up','ln-up']};
+  const [st,dz,ln]=map[role];
+  setClassList($(st),'pillst'+(pillCls?(' '+pillCls):'')); $(st).textContent=pillTxt;
+  $(dz).innerHTML=doing;
+  cls($(ln), hot, 'hot');
+}
+function eTiles(states){ // states: array len 10 of 'empty'|'packing'|'written'|'safe'|'stale'|'readok'
+  const tiles=document.querySelectorAll('#etiles .tile');
+  tiles.forEach((t,i)=>{ t.className='tile'; const s=states[i]; if(s&&s!=='empty') t.classList.add(s); });
+}
+function eSrc(txt, kind){ const e=$('e-src'); e.textContent=txt; setClassList(e,'val'+(kind?(' '+kind):'')); }
+function eZ(v){ $('e-z').textContent=v; }
+function eSem(which, on, stTxt, stKind, dim){
+  const box = which==='fpu'?$('e-fpu'):$('e-ph1');
+  const dot = box.querySelector('.semdot');
+  const st  = which==='fpu'?$('e-fpu-st'):$('e-ph1-st');
+  cls(dot,on,'one'); st.textContent=stTxt; setClassList(st,'semst'+(stKind?(' '+stKind):''));
+  cls(box,dim,'dimsem');
+}
+function eEdge(state, txt){ // state: 'broken'|'ok'|'neutral'
+  const e=$('e-edge'); setClassList(e,'ebox edge'+(state==='broken'?' broken':state==='ok'?' ok':''));
+  $('e-edge-v').textContent=txt;
+}
+function eCap(txt, kind){ const e=$('e-cap'); e.innerHTML=txt; setClassList(e,'ecap'+(kind?(' '+kind):'')); }
+
+/* ----- RACE (the heart) ----- */
+const W='written', E='empty', P='packing', S='safe', X='stale', R='readok';
+const RACE=[
+ { pk:['idle','','about to start',false], mt:['idle','','—',false], up:['idle','','split MOP armed: run()#1=[0,5), run()#2=[5,10)',false],
+   tiles:[E,E,E,E,E,E,E,E,E,E], src:['—',''], z:0, fpu:[false,'init 0',''], edge:['broken','first half: NONE'],
+   cap:['<code>reduce_trigger</code> ON. PACK produces the tiles, T0 consumes them. PACK is the LAST stage, so it <b>trails</b>. The first half has no wait — keep your eye on it.','warn'] },
+
+ { pk:['active','act','PACK: filling subblock 0 (tiles 0–4); 0,1 landed',true], mt:['idle','','—',false], up:['idle','','waiting to be released… but it won\'t wait',false],
+   tiles:[W,W,E,E,E,E,E,E,E,E], src:['—',''], z:0, fpu:[false,'init 0',''], edge:['broken','first half: NONE'],
+   cap:['PACK starts <b>subblock 0</b> — one width-5 subblock = tiles 0–4. Tiles 0,1 have landed in <code>cb_qkt_im</code>; tiles 2–4 are still in flight.','warn'] },
+
+ { pk:['active','act','PACK: still inside subblock 0 (tiles 2–4 pending)',false], mt:['idle','','—',false], up:['active','act','run()#1 starts — <b>NO WAIT</b>. UNPACR SrcA ← L1[tile 0]',true],
+   tiles:[R,W,P,E,E,E,E,E,E,E], src:['tile 0','okv'], z:0, fpu:[false,'still 0','wait'], edge:['broken','first half: NONE ✗'],
+   cap:['Here is the design flaw: <b>run()#1 has no semaphore wait.</b> T0 reads tile 0 immediately. It happens to be written → fine, but only by <b>luck</b>. Note FPU_SFPU is still 0.','bad'] },
+
+ { pk:['active','act','PACK: still finishing subblock 0',false], mt:['idle','','—',false], up:['active','act','UNPACR SrcA ← L1[tile 1] &nbsp;(Z=1)',true],
+   tiles:[S,R,P,E,E,E,E,E,E,E], src:['tile 1','okv'], z:1, fpu:[false,'still 0','wait'], edge:['broken','first half: NONE ✗'],
+   cap:['T0 reads tile 1 — also written, ok. But T0 is now <b>catching up to the packer</b>, which is still finishing tiles 2–4 of subblock 0.','warn'] },
+
+ { pk:['active','act','PACK: tile 2 (in subblock 0) NOT written yet',false], mt:['idle','','—',false], up:['active','act','UNPACR SrcA ← L1[tile 2] &nbsp;(Z=2) &nbsp;⚠',true],
+   tiles:[S,S,X,E,E,E,E,E,E,E], src:['tile 2  ← STALE','stale'], z:2, fpu:[false,'still 0','wait'], edge:['broken','write(tile2) → read(tile2): MISSING'],
+   cap:['<b>THE RACE.</b> T0 issues <code>UNPACR SrcA ← L1[tile 2]</code> — but PACK has not finished writing tile 2. SrcA latches <b>stale bytes</b> (leftovers from a previous iteration). Nothing orders this write before this read.','bad'] },
+
+ { pk:['active','act','PACK still behind T0',false], mt:['idle','','—',false], up:['active','act','UNPACR tiles 3,4 &nbsp;(Z=3,4)',true],
+   tiles:[S,S,X,X,X,E,E,E,E,E], src:['tile 4  ← STALE','stale'], z:4, fpu:[false,'0 (post comes after subblock 1, the last)','wait'], edge:['broken','first half: MISSING ✗'],
+   cap:['run()#1 finishes the whole first half [0,5) = <b>subblock 0</b>. Tiles 2–4 came back <b>stale</b>. The only <code>FPU_SFPU</code> post is scheduled <b>after subblock 1</b> (the last) — it never guards subblock 0.','bad'] },
+
+ { pk:['active','act','…writing rest of the block',false], mt:['active','act','reduce SrcA → row-max',true], up:['idle','','run()#1 done',false],
+   tiles:[S,S,X,X,X,E,E,E,E,E], src:['(garbage in max)','stale'], z:4, fpu:[false,'0','wait'], edge:['broken','first half: MISSING ✗'],
+   cap:['T1 folds SrcA into the row-max. Because some inputs were garbage, the <b>max is wrong</b>.','bad'] },
+
+ { pk:['active','act','subblock 1 (last) done → POST FPU_SFPU',false], mt:['idle','','—',false], up:['active','over','run()#2: wait FPU_SFPU → released → read [5,10)',true],
+   tiles:[S,S,X,X,X,S,S,S,S,S], src:['tiles 5..9 ok','okv'], z:9, fpu:[true,'posted (1)','post'], edge:['neutral','2nd half ordered ✓ · 1st half ✗'],
+   cap:['Now the post finally fires and run()#2\'s wait passes — the <b>second half is safe</b>. But the damage is already done: the first half poisoned the max.','warn'] },
+
+ { pk:['idle','','—',false], mt:['active','act','exp(score − WRONG max)',true], up:['idle','','—',false],
+   tiles:[S,S,X,X,X,S,S,S,S,S], src:['—',''], z:9, fpu:[true,'1','post'], edge:['broken','root cause: 1st-half edge missing'],
+   cap:['<code>exp(score − wrongMax)</code> → the softmax numerators come out different → the output differs. <b>The nondeterminism is born right here, at the reduce.</b> Next: why it differs run-to-run →','bad'] },
+];
+function drawRace(k){
+  const s=RACE[k];
+  eLane('pk',s.pk[0],s.pk[1],s.pk[2],s.pk[3]);
+  eLane('mt',s.mt[0],s.mt[1],s.mt[2],s.mt[3]);
+  eLane('up',s.up[0],s.up[1],s.up[2],s.up[3]);
+  eTiles(s.tiles); eSrc(s.src[0],s.src[1]); eZ(s.z);
+  eSem('fpu',s.fpu[0],s.fpu[1],s.fpu[2],false);
+  eSem('ph1',false,'unused','',true);
+  eEdge(s.edge[0],s.edge[1]); eCap(s.cap[0],s.cap[1]);
+}
+
+/* ----- ND dual timeline ----- */
+function ndStrip(elId, states){
+  const host=$(elId); host.innerHTML='';
+  states.forEach((st,i)=>{ const t=document.createElement('div'); t.className='tile'+(st!=='empty'?(' '+st):''); t.textContent=i; host.appendChild(t); });
+}
+function drawND(k){
+  cls($('nd-a'),k<1,'dim'); cls($('nd-b'),k<2,'dim');
+  $('nd-a-v').style.visibility = k>=1?'visible':'hidden';
+  $('nd-b-v').style.visibility = k>=2?'visible':'hidden';
+  // Run A: T0 lags → tile2 already written → all safe.  Run B: T0 leads → tile2 stale.
+  ndStrip('nd-a-strip', k>=1 ? [S,S,S,S,S,S,S,S,S,S] : new Array(10).fill(E));
+  ndStrip('nd-b-strip', k>=2 ? [S,S,X,X,X,S,S,S,S,S] : new Array(10).fill(E));
+  let note='';
+  if(k===0) note='Same inputs, same code. The ONLY difference between two runs is the cycle-level offset between T0 (reading) and T2 (writing). Watch two of them.';
+  if(k===1) note='<b>Run A:</b> T0 lags a few cycles, so by the time it reads tiles 2–4 the packer has already written them → correct max → <span class="good">PASS</span>.';
+  if(k===2) note='<b>Run B:</b> identical inputs, but T0 ran a touch ahead — it read tiles 2–4 before PACK wrote them → stale → wrong max → <span class="bad">FAIL</span>.';
+  if(k===3) note='<b>That is the nondeterminism.</b> Whether you get Run A or Run B is decided by timing alone. LLK asserts, or just QB2 hardware scheduling, nudge the interleaving — so the same test passes one run and fails the next.';
+  $('nd-note').innerHTML=note;
+}
+
+/* ----- FIX 1 ----- */
+const FIX1=[
+ { pk:['idle','','—',false], mt:['idle','','—',false], up:['idle','','reduce armed; will wait before BOTH halves',false],
+   tiles:[E,E,E,E,E,E,E,E,E,E], src:['—',''], z:0, fpu:[false,'init 0',''], edge:['ok','both halves: will be ordered'],
+   cap:['<b>Fix v1.</b> Remove the post that sat after the last QK subblock pack. Emit <b>one</b> <code>FPU_SFPU</code> post — but only <b>after</b> pack + mask + <code>cb_push_back</code>, with <code>STALL_PACK</code> to drain L1. And make the reduce wait <b>before both halves</b> on that one sticky token.',''] },
+ { pk:['active','act','PACK: writing the whole block + mask',false], mt:['idle','','—',false], up:['active','stall','wait FPU_SFPU (before run()#1) — STALLED',true],
+   tiles:[W,W,W,W,W,E,E,E,E,E], src:['(waiting)',''], z:0, fpu:[false,'0','wait'], edge:['ok','both halves guarded'],
+   cap:['Now T0 must wait before <b>even the first half</b>. The token is still 0, so T0 <b>sits idle</b> while PACK works. Correct — but the overlap is gone.','warn'] },
+ { pk:['active','act','…push → POST FPU_SFPU (STALL_PACK)',false], mt:['idle','','—',false], up:['active','over','released → read [0,5) then [5,10)',true],
+   tiles:[S,S,S,S,S,S,S,S,S,S], src:['all tiles ok','okv'], z:9, fpu:[true,'posted (1)','post'], edge:['ok','both halves ordered ✓'],
+   cap:['The token posts only after every writer (QK pack + mask + push) committed to L1. <code>STALL_PACK</code> guarantees the bytes are visible. T0 now reads both halves → <b>all safe</b>.','good'] },
+ { pk:['idle','','done',false], mt:['active','act','reduce → correct max',true], up:['idle','','—',false],
+   tiles:[S,S,S,S,S,S,S,S,S,S], src:['—',''], z:9, fpu:[true,'1','post'], edge:['ok','race closed ✓'],
+   cap:['Deterministic ✓ — but T0 was idle during packing → <b>measured perf regression</b> (wan −1.54pp). The barrier is correct; it just gave up the overlap. Next: recover it →','good'] },
+];
+function drawFix1(k){
+  const s=FIX1[k];
+  eLane('pk',s.pk[0],s.pk[1],s.pk[2],s.pk[3]); eLane('mt',s.mt[0],s.mt[1],s.mt[2],s.mt[3]); eLane('up',s.up[0],s.up[1],s.up[2],s.up[3]);
+  eTiles(s.tiles); eSrc(s.src[0],s.src[1]); eZ(s.z);
+  eSem('fpu',s.fpu[0],s.fpu[1],s.fpu[2],false); eSem('ph1',false,'unused','',true);
+  eEdge(s.edge[0],s.edge[1]); eCap(s.cap[0],s.cap[1]);
+}
+
+/* ----- FIX 2 ----- */
+const FIX2=[
+ { pk:['idle','','—',false], mt:['idle','','—',false], up:['idle','','reduce armed (no-mask path)',false],
+   tiles:[E,E,E,E,E,E,E,E,E,E], src:['—',''], z:0, fpu:[false,'init 0',''], ph1:[false,'init 0',''], edge:['ok','two-phase: both halves ordered'],
+   cap:['<b>Fix v2</b> (no-mask path). Add a <b>second</b> semaphore — borrow <code>UNPACK_MATH_DONE</code> as <b>PHASE-1</b>. PACK posts it the moment the first half is committed, so run()#1 can start while PACK is still on the second half.',''] },
+ { pk:['active','act','PACK: write subblock 0 → tiles 0–4',false], mt:['idle','','—',false], up:['idle','','wait PHASE-1',false],
+   tiles:[W,W,W,W,W,E,E,E,E,E], src:['(waiting PHASE-1)',''], z:0, fpu:[false,'0','wait'], ph1:[false,'0','wait'], edge:['ok','first half committing'],
+   cap:['PACK writes the first half [0,5) = subblock 0. (<code>first_half_last_sb = (10/2−1)/5 = 0</code>, so the half ends exactly at subblock 0.)','warn'] },
+ { pk:['active','act','subblock 0 done → POST PHASE-1 (STALL_PACK)',false], mt:['idle','','—',false], up:['idle','','PHASE-1 satisfied',false],
+   tiles:[W,W,W,W,W,E,E,E,E,E], src:['(released)',''], z:0, fpu:[false,'0','wait'], ph1:[true,'posted (1)','post'], edge:['ok','first half ordered ✓'],
+   cap:['The instant subblock 0 (the whole first half) is committed to L1, PACK posts <b>PHASE-1</b> (with <code>STALL_PACK</code> so the bytes are visible). This is the early, <i>honest</i> release the buggy code never had.','good'] },
+ { pk:['active','over','PACK: write tiles 5–9 (second half)',true], mt:['idle','','—',false], up:['active','over','run()#1: read [0,5) — SAFE',true],
+   tiles:[R,R,R,R,R,P,P,E,E,E], src:['tiles 0..4 ok','okv'], z:4, fpu:[false,'0','wait'], ph1:[true,'1','post'], edge:['ok','overlap, both ordered ✓'],
+   cap:['<b>Overlap recovered.</b> run()#1 reads the first half — guaranteed safe by PHASE-1 — <b>while PACK simultaneously fills the second half</b>. This is exactly the parallelism the single-token fix gave up, but now it is properly ordered.','good'] },
+ { pk:['active','act','…push → POST FPU_SFPU',false], mt:['idle','','—',false], up:['active','over','run()#2: wait FPU_SFPU → read [5,10)',true],
+   tiles:[S,S,S,S,S,S,S,S,S,S], src:['tiles 5..9 ok','okv'], z:9, fpu:[true,'posted (1)','post'], ph1:[true,'1','post'], edge:['ok','both halves ordered ✓'],
+   cap:['Second half is guarded by <code>FPU_SFPU</code> exactly as in v1. run()#2 reads [5,10) safely.','good'] },
+ { pk:['idle','','done',false], mt:['active','act','reduce → correct max',true], up:['idle','','—',false],
+   tiles:[S,S,S,S,S,S,S,S,S,S], src:['—',''], z:9, fpu:[true,'1','post'], ph1:[true,'1','post'], edge:['ok','race closed, overlap kept ✓'],
+   cap:['The barrier was moved <b>earlier, not removed</b>. Deterministic ✓ <b>and</b> fast ✓ — masked iterations fall back byte-identical to v1; rollback is one constexpr.','good'] },
+];
+function drawFix2(k){
+  const s=FIX2[k];
+  eLane('pk',s.pk[0],s.pk[1],s.pk[2],s.pk[3]); eLane('mt',s.mt[0],s.mt[1],s.mt[2],s.mt[3]); eLane('up',s.up[0],s.up[1],s.up[2],s.up[3]);
+  eTiles(s.tiles); eSrc(s.src[0],s.src[1]); eZ(s.z);
+  eSem('fpu',s.fpu[0],s.fpu[1],s.fpu[2],false);
+  eSem('ph1',s.ph1[0],s.ph1[1],s.ph1[2],false);
+  eEdge(s.edge[0],s.edge[1]); eCap(s.cap[0],s.cap[1]);
+}
+
+/* ----- TIMELINE: why v1 is slow and v2 is fast ----- */
+function tlBlock(id,start,dur,label,kls,S){
+  const b=document.createElement('div'); b.className='tlblk '+kls;
+  b.style.left=(start*S)+'px'; b.style.width=(dur*S-3)+'px';
+  b.innerHTML='<span>'+label+'</span>'; $(id).appendChild(b);
+}
+function tlMark(id,t,label,kls,S){
+  const m=document.createElement('div'); m.className='tlmark '+kls;
+  m.style.left=(t*S)+'px'; m.innerHTML='<span class="ml">'+label+'</span>'; $(id).appendChild(m);
+}
+function tlFin(id,t,label,S){
+  const f=document.createElement('div'); f.className='tlfin'; f.style.left=(t*S)+'px';
+  f.innerHTML='<span class="ml">'+label+'</span>'; $(id).appendChild(f);
+}
+function tlPackRow(id,S,split){
+  if(split){
+    tlBlock(id,0,5,'pack subblock 0 (0–4)','packsb',S);
+    tlBlock(id,5,5,'pack subblock 1 (5–9)','pack',S);
+    tlMark(id,5,'▲ post PHASE-1','ph1',S);
+  } else {
+    tlBlock(id,0,10,'pack tiles 0–9','pack',S);
+  }
+  tlBlock(id,10,2,'mask','mask',S);
+  tlBlock(id,12,1,'push','push',S);
+  tlMark(id,13,'▲ post FPU','fpu',S);
+}
+function drawTL(k){
+  const S=30;
+  ['tl1-pk','tl1-up','tl2-pk','tl2-up'].forEach(id=>$(id).innerHTML='');
+  cls($('tl-v2'), k<3, 'tldim');
+  // Phase 1
+  tlPackRow('tl1-pk',S,false);
+  if(k>=1){
+    tlBlock('tl1-up',0,13,'IDLE — stalled, waiting for FPU_SFPU','idle',S);
+    tlBlock('tl1-up',13,2,'run#1','run2',S);
+    tlBlock('tl1-up',15,2,'run#2','run2',S);
+  }
+  if(k>=2){ tlFin('tl1-up',17,'done @17',S); tlFin('tl1-pk',17,'',S); }
+  // Phase 2
+  if(k>=3){ tlPackRow('tl2-pk',S,true); }
+  if(k>=4){
+    tlBlock('tl2-up',0,5,'idle','idle',S);
+    tlBlock('tl2-up',5,2,'run#1','run1over',S);
+  }
+  if(k>=5){
+    tlBlock('tl2-up',7,6,'wait FPU_SFPU','wait',S);
+    tlBlock('tl2-up',13,2,'run#2','run2',S);
+    tlBlock('tl2-up',15,2,'saved','saved',S);
+    tlFin('tl2-up',15,'done @15',S);
+  }
+  const notes=[
+   'Time runs left → right (1 unit ≈ one tile packed). In Phase 1, PACK packs all 10 score tiles, stamps the mask, and pushes — and only AFTER all of that posts the single FPU_SFPU token (▲ green).',
+   'The reduce must wait on that one token before BOTH halves. So T0 — the reduce engine — is not allowed to do anything yet. The red hatched bar is the engine sitting completely idle while PACK works.',
+   'When the token finally posts, T0 runs run#1 then run#2 back-to-back. The work is fully SERIAL: all the packing, then all the reducing. Finish @17. That long idle bar is the wasted time.',
+   'Phase 2 splits the signal in two. The instant subblock 0 (tiles 0–4 = the whole first half) is committed, PACK posts PHASE-1 (▲ pink) — it does NOT wait for subblock 1, the mask, or the push.',
+   'That early token releases run#1 right away — so run#1 reduces the first half WHILE PACK is still packing subblock 1. The green block sits directly under PACK\'s second-half work: that reduce time is now hidden, not wasted. And it is safe — PHASE-1 was posted only after the first half was truly written (STALL_PACK drained it to L1).',
+   'run#2 still waits for FPU_SFPU after the full row — unchanged, still correct. But run#1 already happened during packing, so the reduce finishes @15 instead of @17 — earlier by exactly the run#1 duration (the dashed “saved” slot). Same correctness, less wall-clock: that is the recovered overlap (~the 1.5pp Phase 1 gave up).'
+  ];
+  $('tl-note').innerHTML=notes[k]||'';
+}
+
+/* ----- table reveal ----- */
+function revealRows(prefix, n){
+  for(let i=0;i<10;i++){ const r=$(prefix+i); if(r) cls(r, i<=n, 'show'); }
+}
+
+/* ====================================================================
+   STEP TABLE — drives Prev/Next. Each step = one click.
+   ==================================================================== */
+const STEPS = [];
+function add(chap, scene, k, kicker, title, body){ STEPS.push({chap,scene,k,kicker,title,body}); }
+
+add('Intro','intro',0,'issue #47911','A race that made attention give different answers',
+  'A determinism test runs ring-MLA attention 10× with identical inputs and demands bit-exact outputs. On Blackhole it failed — and the diff changed every run. We will build the hardware, watch the exact race fire tile-by-tile, see why it is nondeterministic, then walk both fixes. Click <b>Next</b>.');
+
+add('1 · Hardware','hw',0,'the machine','One Tensix core, three concurrent threads','Three independent threads, data flowing T0 → T1 → T2.');
+add('1 · Hardware','hw',1,'the machine','T0 · Unpack — L1 into the register files','');
+add('1 · Hardware','hw',2,'the machine','T1 · Math — register files into DST','');
+add('1 · Hardware','hw',3,'the machine','T2 · Pack — DST back to L1 (and it trails)','');
+add('1 · Hardware','hw',4,'the machine','cb_qkt_im — a producer → consumer handoff','');
+
+add('2 · The loop','loop',0,'attention inner loop','Five stages per key-chunk','');
+add('2 · The loop','loop',1,'attention inner loop','Stage 1 — scores written by PACK','');
+add('2 · The loop','loop',2,'attention inner loop','Stage 2 — the row-max reduce (the buggy step)','');
+add('2 · The loop','loop',3,'attention inner loop','The buffer is read three times','');
+
+add('3 · The tiles','tiles',0,'what N is','N = block_ct_dim tiles (= active_Sk)','');
+add('3 · The tiles','tiles',1,'what N is','N = 10 tiles = 2 subblocks of width 5','');
+add('3 · The tiles','tiles',2,'what N is','PACK writes them in order, left → right','');
+add('3 · The tiles','tiles',3,'reduce_trigger','The reduce is split into two halves','');
+add('3 · The tiles','tiles',4,'reduce_trigger','The MOP, the Z counter, and the dropped barrier','');
+
+add('4 · The race','engine',0,'the bug · step through','reduce_trigger armed — the first half has no wait','Now we run it. PACK produces; T0 consumes. Step through each UNPACR.');
+add('4 · The race','engine',1,'the bug · step through','PACK writes subblock 0','');
+add('4 · The race','engine',2,'the bug · step through','run()#1 starts with NO wait — reads tile 0','');
+add('4 · The race','engine',3,'the bug · step through','T0 catches up to the packer','');
+add('4 · The race','engine',4,'the bug · step through','⚠ T0 reads tile 2 before PACK wrote it','');
+add('4 · The race','engine',5,'the bug · step through','The whole first half came back partly stale','');
+add('4 · The race','engine',6,'the bug · step through','The row-max is computed from garbage','');
+add('4 · The race','engine',7,'the bug · step through','The single post finally fires (too late for half 1)','');
+add('4 · The race','engine',8,'the bug · step through','The nondeterminism is born at the reduce','');
+
+add('5 · Why ND','nd',0,'why run-to-run','Same inputs — only the timing differs','');
+add('5 · Why ND','nd',1,'why run-to-run','Run A: T0 lags → reads land safe → PASS','');
+add('5 · Why ND','nd',2,'why run-to-run','Run B: T0 leads → stale reads → FAIL','');
+add('5 · Why ND','nd',3,'why run-to-run','Timing alone decides the answer → nondeterministic','');
+
+add('6 · Evidence','evi',0,'how we proved it','Hash bisection — ND is born at the reduce','Three independent probes, all agreeing.');
+add('6 · Evidence','evi',1,'how we proved it','NOP-delay — only the producer-side delay triggers it','');
+add('6 · Evidence','evi',2,'how we proved it','Restore one barrier — FAIL flips to PASS','');
+
+add('7 · Options','opt',0,'the design space','Restore cb_wait_front — kills the overlap','What is possible, and what is not.');
+add('7 · Options','opt',1,'the design space','Two-token max=2 — deadlocks','');
+add('7 · Options','opt',2,'the design space','Single-semaphore two-phase — impossible','');
+add('7 · Options','opt',3,'the design space','Drop the first-half wait — reopens the race','');
+
+add('8 · Review','pav',0,'adversarial review','Pavle: "only the last half needs sync" — wrong','Every objection ruled against the actual code.');
+add('8 · Review','pav',1,'adversarial review','Pavle: "math ordering is a backstop" — wrong','');
+add('8 · Review','pav',2,'adversarial review','Pavle: "it is just timing perturbation" — wrong','');
+add('8 · Review','pav',3,'adversarial review','Pavle: "fuse mm+reduce" — right direction','');
+
+add('9 · Fix v1','engine',0,'fix · step through','One re-anchored token; wait before both halves','The minimal correct fix.');
+add('9 · Fix v1','engine',1,'fix · step through','T0 now stalls before even the first half','');
+add('9 · Fix v1','engine',2,'fix · step through','Post after pack+mask+push → both halves safe','');
+add('9 · Fix v1','engine',3,'fix · step through','Correct — but the overlap is gone','');
+
+add('10 · The cost','cost',0,'the catch','Correct, but a real perf regression','The biggest hit is a no-mask config → pure lost overlap.');
+
+add('11 · Fix v2','engine',0,'fix · step through','Add a second semaphore: PHASE-1','Recover the speed without reopening the race.');
+add('11 · Fix v2','engine',1,'fix · step through','PACK writes the first half','');
+add('11 · Fix v2','engine',2,'fix · step through','First half committed → post PHASE-1 early','');
+add('11 · Fix v2','engine',3,'fix · step through','run()#1 reads half 1 WHILE PACK writes half 2','');
+add('11 · Fix v2','engine',4,'fix · step through','Second half guarded by FPU_SFPU as before','');
+add('11 · Fix v2','engine',5,'fix · step through','Barrier moved earlier, not removed','');
+
+add('12 · Why faster','tl',0,'slow vs fast · step through','Phase 1 packs the whole row, THEN posts the one token',
+  'The Phase-1 fix was correct but measurably slower. Here is exactly why — and how Phase-2 wins the speed back without breaking determinism. Two threads, one shared time axis.');
+add('12 · Why faster','tl',1,'slow vs fast · step through','Phase 1: the reduce engine sits idle the whole time',
+  'Watch T0 (the reduce). It is not allowed to start until the single token posts.');
+add('12 · Why faster','tl',2,'slow vs fast · step through','Phase 1: pack then reduce — strictly serial (done @17)',
+  'Packing and reducing never overlap. The long idle bar is the cost.');
+add('12 · Why faster','tl',3,'slow vs fast · step through','Phase 2: signal the first half early',
+  'PACK posts PHASE-1 the moment subblock 0 is committed — without waiting for the rest.');
+add('12 · Why faster','tl',4,'slow vs fast · step through','Phase 2: run#1 runs DURING second-half packing',
+  'The first-half reduce is now hidden underneath the second-half pack — reclaimed time, and still safe.');
+add('12 · Why faster','tl',5,'slow vs fast · step through','Phase 2: finishes earlier (done @15) — overlap reclaimed',
+  'Same correctness as Phase 1, less wall-clock. The reduce of the first half no longer costs anything.');
+
+add('13 · Result','res',0,'the result','Deterministic ✓ and fast ✓','');
+
+/* engine steps need to know WHICH drawer (race / fix1 / fix2). Tag them. */
+let engineSeen=0;
+STEPS.forEach(s=>{
+  if(s.scene==='engine'){
+    if(s.chap.startsWith('4')) s.draw=drawRace;
+    else if(s.chap.startsWith('9')) s.draw=drawFix1;
+    else if(s.chap.startsWith('11')) s.draw=drawFix2;
+  }
+});
+const DRAW = { hw:drawHW, loop:drawLoop, tiles:drawTiles, nd:drawND, tl:drawTL,
+  evi:k=>revealRows('ev',k), opt:k=>revealRows('op',k), pav:k=>revealRows('pv',k),
+  cost:k=>revealRows('co',k), res:k=>revealRows('re',k), intro:()=>{} };
+
+/* ---------- driver ---------- */
+let cur=0;
+const scenes=[...document.querySelectorAll('.stage')];
+function showStep(i){
+  cur=Math.max(0,Math.min(STEPS.length-1,i));
+  const st=STEPS[cur];
+  scenes.forEach(sc=>cls(sc, sc.id==='sc-'+st.scene, 'on'));
+  $('chap').textContent=st.chap;
+  $('kicker').textContent=st.kicker;
+  $('title').textContent=st.title;
+  $('body').innerHTML=st.body;
+  // draw
+  if(st.draw) st.draw(st.k); else if(DRAW[st.scene]) DRAW[st.scene](st.k);
+  // extra notes for table scenes
+  if(st.scene==='pav' && st.k===3) $('pav-note').innerHTML='<b>Bottom line:</b> the fix is correct and the first-half wait is load-bearing — but Pavle was right it costs perf. That became Fix v2.';
+  else if($('pav-note')) $('pav-note').innerHTML='';
+  if(st.scene==='cost') $('cost-note').innerHTML='The <code>wan</code> hit is a <b>no-mask</b> config, so it is <b>pure lost pack↔reduce overlap</b> — the mask is not even involved. That is exactly where the overlap is safe to recover.';
+  if(st.scene==='res') $('res-note').innerHTML='Two-phase recovers +1.50pp on wan and +0.27pp on mla — all gates PASS. Accuracy 8/8. WH mirror is code-identical (CI owed). <b>Rollback is one line:</b> <code>ENABLE_REDUCE_FIRST_HALF_OVERLAP = false</code>.';
+  // nav + progress
+  $('prev').disabled = cur===0;
+  $('next').disabled = cur===STEPS.length-1;
+  $('counter').textContent = (cur+1)+' / '+STEPS.length;
+  $('progbar').style.width = ((cur)/(STEPS.length-1)*100)+'%';
+}
+$('prev').onclick=()=>showStep(cur-1);
+$('next').onclick=()=>showStep(cur+1);
+document.addEventListener('keydown',e=>{ if(e.key==='ArrowRight')showStep(cur+1); if(e.key==='ArrowLeft')showStep(cur-1); });
+
+/* ---------- init (AFTER all consts/functions exist — no TDZ) ---------- */
+buildTiles($('tilerow'), false);
+buildTiles($('etiles'), false);
+showStep(0);
+</script>
+</body>
+</html>

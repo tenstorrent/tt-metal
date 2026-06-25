@@ -143,9 +143,12 @@ straight into the first-half read, T2 may still be packing those very columns �
 stale L1 → wrong row-max. Whether it wins or loses the race is decided by the cycle-level
 T0/T2 interleaving, which shifts with any timing pressure → **nondeterministic**.
 
-For the failing config: `block_ct_dim = Sk_chunk_t = 10`, `qkt_subblock_w = 2` (5 subblocks);
-the first `run()` reads cols 0–4, written by subblocks 0–2, but the only post is after
-subblock 4 — so cols 0–4 are read with no guarantee they're packed.
+For the failing config (`q160`/`k320`): `block_ct_dim = Sk_chunk_t = 10`, and
+`determine_largest_subblock_size(Sq_chunk_t=5, Sk_chunk_t=10, dst_size=8)` picks
+`qkt_subblock_w = 5` → **2 subblocks** (subblock 0 = tiles 0–4, subblock 1 = tiles 5–9).
+The first `run()` reads the first half [0,5) = subblock 0, but the only post is after
+subblock 1 (the last, `kt_subblock == kt_num_full_subblocks - 1`) — so subblock 0's tiles
+are read with no guarantee they're packed.
 
 **A second, related defect:** the post was also anchored to the **wrong producer event**. The
 reduce reads `cb_qkt_im` *after* an in-place mask stamp (causal/padding,
