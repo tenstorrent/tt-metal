@@ -211,8 +211,8 @@ def run_layernorm_mix_precision_tests(test_id, in_dtype, gamma_dtype, in0_mem_co
 )
 @pytest.mark.parametrize(
     "gamma_dtype",
-    (ttnn.bfloat16,),
-    ids=["BFLOAT16"],
+    (ttnn.bfloat16, ttnn.float32),
+    ids=["BFLOAT16", "FLOAT32"],
 )
 @pytest.mark.parametrize(
     "in_dtype",
