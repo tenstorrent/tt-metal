@@ -15,14 +15,16 @@ Parse `ops_perf_results.csv` → filter `ReduceScatterDeviceOperation` / `AllGat
 
 ## Latency numbers (chips 24-31, sane devices 2/5/6/7)
 
-| Op             | Shape              | DK duration |
-|----------------|--------------------|-------------|
-| reduce_scatter | [1,1,768,1024]     | ~55 µs      |
-| all_gather     | [1,1,768,1024]     | ~39 µs      |
-| reduce_scatter | [1,1,768,4096]     | (not a production CCL — gate/up stays local) |
-| all_gather     | [1,1,768,4096]     | (not a production CCL — gate/up stays local) |
+Each VLM layer has **2 all-reduces** at hidden shape `[1,1,768,1024]`:
 
-Only the hidden `[1,1,768,1024]` shape is communicated in production: both MLP down_proj and attention o_proj all-reduce at this shape.
+| Location        | Op             | Shape          | DK duration |
+|-----------------|----------------|----------------|-------------|
+| MLP down_proj   | reduce_scatter | [1,1,768,1024] | ~55 µs      |
+| MLP down_proj   | all_gather     | [1,1,768,1024] | ~39 µs      |
+| Attention o_proj| reduce_scatter | [1,1,768,1024] | ~55 µs      |
+| Attention o_proj| all_gather     | [1,1,768,1024] | ~39 µs      |
+
+Gate/up projections (mlp_mid [1,1,768,4096]) are column-parallel and stay local — no CCL at that shape.
 
 ## 1-layer production prefill (chips 8-15)
 
