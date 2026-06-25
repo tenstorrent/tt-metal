@@ -52,7 +52,7 @@ inline void _llk_unpack_reduce_mop_config_(
     {
         constexpr std::uint32_t clr_mode = (POOL_TYPE == PoolType::MAX) ? p_unpacr::UNP_CLRSRC_NEGINF : p_unpacr::UNP_CLRSRC_ZERO;
         const std::uint32_t unpack_zero_srcA =
-            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, 0 /* UNP_CLR_SRC */);
+            TT_OP_UNPACR_NOP(p_unpacr::UNP_A, 0, p_unpacr::UNP_STALL_UNP_WR, 0 /* clear curr bank */, clr_mode, p_unpacr::UNP_CLRSRC_ZERO /* UNP_CLR_SRC */);
 
         ckernel_template temp(MOP_OUTER_LOOP, MOP_INNER_LOOP, unpack_zero_srcA, unpack_srcA_face);
         temp.set_start_op(unpack_srcB_face);
@@ -108,16 +108,11 @@ inline void _llk_unpack_reduce_(const std::uint32_t start_l1_tile_idx_0, const s
     // Reset Dest counters for Unpacker0/1 to 0
     // Set Source counter to L1 base + offset
 
-    if (tensor_shape.total_num_faces() == NUM_FACES)
-    {
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0);
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1);
-    }
-    else
-    {
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, start_l1_tile_idx_0 * tensor_shape.total_num_faces());
-        TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, start_l1_tile_idx_1 * tensor_shape.total_num_faces());
-    }
+    const std::uint32_t l1_idx_A = (tensor_shape.total_num_faces() == NUM_FACES) ? start_l1_tile_idx_0 : start_l1_tile_idx_0 * tensor_shape.total_num_faces();
+    const std::uint32_t l1_idx_B = (tensor_shape.total_num_faces() == NUM_FACES) ? start_l1_tile_idx_1 : start_l1_tile_idx_1 * tensor_shape.total_num_faces();
+
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, l1_idx_A);
+    TT_SET_SRC_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, l1_idx_B);
 
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_A, 0);
     TTI_SET_DST_TILE_FACE_ROW_IDX(p_set_inc_sel::TILE_SEL, p_unpacr::UNP_B, 0);

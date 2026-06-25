@@ -86,7 +86,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
         _llk_math_wait_for_dest_available_();
-        _llk_math_reduce_(ckernel::MAX_FACE_R_DIM * ckernel::MAX_NUM_FACES_R_DIM, 0 /*dest_idx*/);
+        _llk_math_reduce_(ckernel::DEFAULT_TENSOR_SHAPE, 0 /*dest_idx*/);
         _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
     }
 }
