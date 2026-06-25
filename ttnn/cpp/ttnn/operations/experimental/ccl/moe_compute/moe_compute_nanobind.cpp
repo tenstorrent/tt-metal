@@ -127,7 +127,7 @@ void bind_moe_compute(nb::module_& mod) {
         **Core placement**
 
         Tilize, matmul, and combine worker cores are selected dynamically on the device
-        worker grid (avoiding DRAM-bank matmul workers).         Use
+        worker grid (avoiding DRAM-bank matmul workers). Use
         ``get_moe_combine_cores(mesh_device, output_height_shard_dim,
         auto_output_width_shard_dim(hidden_size,
         matmul_ring_size=effective_matmul_ring_size(mesh_device)), hidden_size)``
