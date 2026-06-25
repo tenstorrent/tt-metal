@@ -1,21 +1,22 @@
 # CCL op-gen — Phase 2 resume (machine-switch-proof)
 
-**Written:** 2026-06-24 EOD · **Status:** Phase 1 DONE + green; Phase 2 NOT started (paused for the day).
-Also committed into git at the root of `origin/wransom/ccl_pipeline_phase1` (so it survives even if
-the weka home `~/ccl_op_gen` isn't mounted on tomorrow's machine).
+**Written:** 2026-06-24 EOD · **Updated:** 2026-06-25 (session 10, overnight) · **Status:** Phase 1 DONE+green;
+**Phase 2 headline DONE** — the pipeline GENERATED `all_gather` (the harder ring op) and it verified GREEN
+on the WH sim (22/22 acceptance + 8/8 precision). See memory "session 10" entry + OVERNIGHT_REPORT.md.
+Committed into git at the root of `origin/wransom/ccl_pipeline_phase1` (survives even if weka home isn't mounted).
 
 ## The work is on REMOTE git (source of truth — machine-independent)
-- **tt-metal:** `origin/wransom/ccl_pipeline_phase1` @ `4af69cdf157` (branched off `origin/wransom/ccl_help` @ `b7d848979e1`).
-  Contains: **W4** (B1 fix — `MeshProgramDescriptor.semaphores` slot + adapter parking + nanobind + single-device cache test),
-  **W2** (`scripts/run_multidevice_sim_pytest.py` + `scripts/multidevice_sim_topologies.yaml`),
-  the **pipeline-generated p2p op** (`ttnn/ttnn/operations/point_to_point/`), and the **green confirmation**
-  (`tests/ttnn/unit_tests/operations/point_to_point/test_p2p_confirm_topology.py`).
-- **pipeline (tt_ops_code_gen):** `origin/wransom/ccl_pipeline_prompts` @ `8e0fa68` (off `wransom/refresh-matmul-helper-references`).
-  Contains: **W1** (CCL fabric-dataflow + op-internal-sem prompts in planner/implementer/codex + verifier multi-device routing + topology-match guidance).
+- **tt-metal:** `origin/wransom/ccl_pipeline_phase1` @ `2f20bdc3643` (branched off `origin/wransom/ccl_help` @ `b7d848979e1`).
+  Contains: **W4** (B1 fix — `MeshProgramDescriptor.semaphores` slot + adapter parking + nanobind + single-device cache test, `90b5925f7f5`),
+  **W2** (`scripts/run_multidevice_sim_pytest.py` + `scripts/multidevice_sim_topologies.yaml` — runner covers BH p2p + WH all_gather, both green),
+  the **pipeline-generated p2p op** + the **green (2,4) confirmation** (`tests/ttnn/unit_tests/operations/point_to_point/test_p2p_confirm_topology.py`),
+  and the **pipeline-generated `all_gather` op** (`ttnn/ttnn/operations/all_gather/`, verifier-green on the WH sim, `2f20bdc3643`).
+- **pipeline (tt_ops_code_gen):** `origin/wransom/ccl_pipeline_prompts` @ `0e30fb7` (off `wransom/refresh-matmul-helper-references`).
+  Contains: **W1** (CCL fabric-dataflow + op-internal-sem prompts + verifier multi-device routing + topology-match guidance) + **dashboard wiring** (`run_eval.py` CCL grading branch via the multichip runner).
 - **CCL helper:** `origin/wransom/ccl_help` @ `b7d848979e1` (the typestate `FabricStreamSender` + bound `ccl_packet_dims`/`ccl_dm_route`).
-- Design docs (weka home, also referenced from memory): `B1_MESH_SEMAPHORE_DESIGN.md`, `CCL_GOLDEN_TESTS_DESIGN.md`,
-  `PIPELINE_CCL_VERIFICATION_PROMPT.md`, `point_to_point_phase1.txt` (the op prompt), `SETUP.md` (craq-sim recipe).
-- Full state + Phase-2 sizing is in auto-memory `project_ccl_op_gen.md` (the "session 9 cont." entry).
+- Design/report docs (weka home, also referenced from memory): `OVERNIGHT_REPORT.md` (session-10 results), `B1_MESH_SEMAPHORE_DESIGN.md`,
+  `CCL_GOLDEN_TESTS_DESIGN.md`, `DASHBOARD_WIRING_PLAN.md`, `all_gather_phase2.txt` + `point_to_point_phase1.txt` (op prompts), `SETUP.md`.
+- Full state + Phase-2 sizing is in auto-memory `project_ccl_op_gen.md` (the "session 10" entry).
 
 ## What's MACHINE-LOCAL (on `/localdev`, needs re-setup on a new box)
 craq-sim clone, the staged sims (`sim-bh`, `sim-wh`), the built worktree (`tt-metal-ccl-pipeline` + `build_Release/` + `python_env`).
