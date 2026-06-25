@@ -141,7 +141,7 @@ void kernel_main() {
                 cb_fused_attn,
                 ckl::BinaryFpuOp::Add,
                 mask_bcast,
-                ckl::InputLifecycle::Bulk,
+                ckl::InputLifecycle::Chunked,
                 ckl::InputLifecycle::CallerManaged,
                 ckl::BinaryDataFormatReconfig::Input,
                 ckl::Dst::D0,
