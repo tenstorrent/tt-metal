@@ -175,7 +175,7 @@ ALWI void silu_tile_init() {
 #endif
 }
 
-// TODO: Move to trigonometry.h
+// TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
 /**
  * Please refer to documentation for any_init.
  *
@@ -191,7 +191,7 @@ ALWI void tanh_tile_init() {
 #endif
 }
 
-// TODO: Move to trigonometry.h
+// TODO: Move to trigonometry.h (https://github.com/tenstorrent/tt-metal/issues/47942)
 // clang-format off
 /**
  * Performs element-wise computation of tanh on each element of a tile
