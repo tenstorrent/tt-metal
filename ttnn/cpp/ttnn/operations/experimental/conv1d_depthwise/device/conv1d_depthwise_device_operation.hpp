@@ -43,6 +43,13 @@ struct Conv1dDepthwiseOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
+
+    // The cache key must separate every input that changes the program's runtime-arg
+    // layout: K (= taps.size()) sets the reader's common-arg count, and (logical shape,
+    // stride) set the per-core work split. Two calls that share a key but differ in any
+    // of these reuse a program whose arg arrays are sized for the other call, and the
+    // cache-hit patch then over-indexes RuntimeArgsData.
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::experimental::conv1d_depthwise

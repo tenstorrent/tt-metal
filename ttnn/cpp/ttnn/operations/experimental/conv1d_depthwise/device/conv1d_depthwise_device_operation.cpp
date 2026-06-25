@@ -58,6 +58,21 @@ Conv1dDepthwiseOperation::tensor_return_value_t Conv1dDepthwiseOperation::create
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
+ttsl::hash::hash_t Conv1dDepthwiseOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // taps are hashed by count and value (count == K drives the reader common-arg layout);
+    // the input contributes only its logical shape and dtype, which is all the factory reads
+    // to size the work split. The buffer address is deliberately absent so same-shape calls
+    // share one cached program and the framework patches addresses on the fast path.
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<Conv1dDepthwiseOperation>,
+        operation_attributes.taps,
+        operation_attributes.stride,
+        operation_attributes.dtype,
+        tensor_args.input.logical_shape(),
+        tensor_args.input.dtype());
+}
+
 }  // namespace ttnn::operations::experimental::conv1d_depthwise
 
 namespace ttnn::prim {
