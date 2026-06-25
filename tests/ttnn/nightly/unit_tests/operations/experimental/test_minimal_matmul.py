@@ -168,6 +168,137 @@ def test_linear(device, M, K, N, M_block_size, K_block_size, N_block_size, subbl
 
 
 @pytest.mark.parametrize(
+    "M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # Realistic FLUX.2 proj_out shape (per device): in0 = [attn 768 | mlp 2304] -> 96 K-tiles.
+        # k_split (Ka/32 = 24) aligns to K_block (8) -> no K-block straddles the seam.
+        (1152, 768, 2304, 768, 8, 8, 8, 2, 2),
+        # Seam falls INSIDE a K-block: k_split=3 tiles, K_block=4 -> block [0,4) is part x_a (0..2),
+        # part x_b (3). Exercises the per-tile source switch across the boundary.
+        (256, 96, 160, 128, 4, 4, 4, 2, 2),
+        # M < N -> transpose_core_grid=False, so in0 is the output-writer + mcaster AND the two-source
+        # reader in the same kernel (the config MMRS uses). M=256, Ka=768(24t), Kb=2304(72t), N=768.
+        (256, 768, 2304, 768, 8, 8, 8, 2, 2),
+    ],
+    ids=["proj_out_aligned", "seam_in_block", "transpose_false_in0_writer"],
+)
+def test_linear_virtual_concat(device, M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w):
+    """Virtual concatenation of in0 over K: minimal_matmul([x_a, x_b], weight) (a 2-element input list)
+    must equal matmul(concat([x_a, x_b], -1), weight) without materializing the concat. The split point
+    is x_a's K width; weight is [Ka+Kb, N] in matching K order."""
+    torch_dtype = torch.float32
+    torch.manual_seed(0)
+    x_a = torch.randn((M, Ka), dtype=torch_dtype)
+    x_b = torch.randn((M, Kb), dtype=torch_dtype)
+    weight = torch.randn((Ka + Kb, N), dtype=torch_dtype)
+
+    with torch.no_grad():
+        torch_output = torch.cat([x_a, x_b], dim=-1) @ weight
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_x_a = ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_x_b = ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        [tt_x_a, tt_x_b],  # 2-element list -> virtual concat of in0 over K (concat-free)
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    result = assert_quality(torch_output, tt_output_torch)
+    assert result["pcc"] > 0.999_000
+    assert result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
+    "M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
+    [
+        # Ka=94 (Ka%32=30 != 0, padded to 96=3t), Kb=20 (Kb%32=20 != 0, padded to 32=1t).
+        # Total K_padded=128=4t. Weight is per-segment tile-padded (device_count=1).
+        (256, 94, 20, 128, 4, 4, 4, 2, 2),
+        # Ka=752 (Ka%32=16 != 0, padded to 768=24t), Kb=100 (Kb%32=4 != 0, padded to 128=4t).
+        # K_tiles=28, K_block_size=4 (divides 28).
+        (256, 752, 100, 128, 4, 4, 4, 2, 2),
+    ],
+    ids=["small_non_aligned", "large_non_aligned"],
+)
+def test_linear_virtual_concat_non_aligned(
+    device, M, Ka, Kb, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w
+):
+    """Virtual concat with non-tile-aligned segment K (Ka % 32 != 0 and/or Kb % 32 != 0).
+
+    The weight is built via prepare_weight_for_concatenated_input (device_count=1) which inserts
+    zero-padding rows at each segment's tile boundary.  The golden is exact matmul of the
+    concatenated logical activations against the original (un-padded) weight; the padding rows
+    must contribute zero to the contraction to match.
+    """
+    from models.tt_dit.layers.linear import prepare_weight_for_concatenated_input
+
+    torch_dtype = torch.float32
+    torch.manual_seed(42)
+    x_a = torch.randn((M, Ka), dtype=torch_dtype)
+    x_b = torch.randn((M, Kb), dtype=torch_dtype)
+    # Reference weight in [K, N] form (un-padded); golden uses the logical entries only.
+    weight_ref = torch.randn((Ka + Kb, N), dtype=torch_dtype)
+
+    with torch.no_grad():
+        torch_output = torch.cat([x_a, x_b], dim=-1) @ weight_ref
+
+    # Build per-segment tile-padded weight: transpose to [N, K], prep, transpose back to [K_padded, N].
+    weight_padded = prepare_weight_for_concatenated_input(weight_ref.T, [Ka, Kb], device_count=1).T
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+    )
+
+    tt_x_a = ttnn.from_torch(x_a, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_x_b = ttnn.from_torch(x_b, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_padded, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    tt_output = ttnn.experimental.minimal_matmul(
+        [tt_x_a, tt_x_b],
+        tt_weight,
+        compute_kernel_config=compute_config,
+        config=matmul_config,
+    )
+    tt_output_torch = ttnn.to_torch(tt_output)
+
+    result = assert_quality(torch_output, tt_output_torch)
+    assert result["pcc"] > 0.999_000
+    assert result["relative_rmse"] < 0.02
+
+
+@pytest.mark.parametrize(
     "M, K, N, M_block_size, K_block_size, N_block_size, subblock_h, subblock_w",
     [(512, 512, 512, 1, 1, 1, 1, 1)],
 )

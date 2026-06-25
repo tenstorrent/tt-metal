@@ -43,13 +43,15 @@ void MinimalMatmulStridedReduceScatterAsync::validate_on_program_cache_miss(
         return opt.has_value() ? std::optional<Tensor>(opt.value()) : std::nullopt;
     };
 
+    // Delegate to the matmul validator. The virtual-concat checks (two sources concatenable on K,
+    // K's sum to the weight K) are driven by the presence of optional_input_tensor below.
     matmul_device_operation_t::validate_on_program_cache_miss(
         attributes.matmul_struct,
         matmul_device_operation_t::tensor_args_t{
             .input_tensor = tensor_args.input_tensor,
             .weight_tensor = tensor_args.weight_tensor,
             .bias_tensor = to_mutable_opt(tensor_args.bias),
-            .optional_input_tensor = std::nullopt,
+            .optional_input_tensor = to_mutable_opt(tensor_args.mm_optional_input_tensor),
             .fused_ternary_input_a = std::nullopt,
             .fused_ternary_input_b = std::nullopt,
         });
@@ -228,7 +230,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
     const std::optional<float> fused_ternary_scalar,
     const std::optional<const Tensor>& addcmul_input_tensor1,
     const std::optional<const Tensor>& addcmul_input_tensor2,
-    std::optional<tt::tt_metal::DataType> dtype) {
+    std::optional<tt::tt_metal::DataType> dtype,
+    const std::optional<const Tensor>& mm_optional_input_tensor) {
     using OperationType = ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
 
     uint32_t num_devices = ::ttnn::ccl::get_topological_dimension(input_tensor, cluster_axis);
@@ -273,7 +276,8 @@ std::vector<Tensor> minimal_matmul_strided_reduce_scatter_async(
         optional_rs_output_tensor,
         bias,
         addcmul_input_tensor1,
-        addcmul_input_tensor2};
+        addcmul_input_tensor2,
+        mm_optional_input_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

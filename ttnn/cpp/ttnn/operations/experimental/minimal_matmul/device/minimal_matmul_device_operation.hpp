@@ -66,6 +66,9 @@ std::vector<Tensor> minimal_matmul(
     std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_a = std::nullopt,
     const std::optional<Tensor>& fused_ternary_input_b = std::nullopt,
-    bool fuse_swiglu = false);
+    bool fuse_swiglu = false,
+    // Virtual concat (concat-free): when set, in0's K is input_tensor (prefix) then optional_input_tensor
+    // (suffix); the split point is input_tensor's K width and the weight is stacked [W_prefix; W_suffix].
+    const std::optional<Tensor>& optional_input_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

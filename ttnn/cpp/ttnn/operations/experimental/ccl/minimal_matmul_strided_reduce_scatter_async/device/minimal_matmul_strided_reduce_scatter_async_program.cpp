@@ -141,8 +141,8 @@ void MinimalMatmulStridedReduceScatterAsyncProgramFactory::override_runtime_argu
             {tensor_args.input_tensor,
              tensor_args.weight_tensor,
              tensor_args.bias,
-             std::nullopt,
-             std::nullopt,  // addcmul fused in RS, not MM
+             tensor_args.mm_optional_input_tensor,  // virtual-concat 2nd in0 source; must re-point on cached reuse
+             std::nullopt,                          // addcmul fused in RS, not MM
              std::nullopt},
             mm_output_vec);
     }
@@ -183,7 +183,10 @@ minimal_matmul_strided_reduce_scatter_async_program(
     /* Fused addcmul params */
     const std::optional<float> fused_ternary_scalar = std::nullopt,
     const std::optional<const Tensor>& addcmul_input_tensor1 = std::nullopt,
-    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt) {
+    const std::optional<const Tensor>& addcmul_input_tensor2 = std::nullopt,
+
+    /* Virtual concat (concat-free): second in0 source (suffix half of K; input_tensor is the prefix). */
+    const std::optional<const Tensor>& mm_optional_input_tensor = std::nullopt) {
     tt::tt_metal::Program program{};
 
     // Derive matmul geometry parameters for the RS factory.
@@ -268,7 +271,9 @@ minimal_matmul_strided_reduce_scatter_async_program(
         std::nullopt,                // ternary fused in RS, not MM
         std::nullopt,
         std::nullopt,
-        srs_fused_op_signaler);  // MM -> RS signaling (populated from step 1)
+        srs_fused_op_signaler,  // MM -> RS signaling (populated from step 1)
+        false,                  // fuse_swiglu
+        mm_optional_input_tensor);
 
     return {std::move(program), {rs_shared_variables, mm_shared_variables}};
 }
@@ -325,7 +330,10 @@ MinimalMatmulStridedReduceScatterAsyncProgramFactory::create_at(
         /* Fused addcmul params */
         attributes.fused_ternary_scalar,
         tensor_args.addcmul_input_tensor1,
-        tensor_args.addcmul_input_tensor2);
+        tensor_args.addcmul_input_tensor2,
+
+        /* Virtual concat: second in0 source */
+        tensor_args.mm_optional_input_tensor);
 }
 
 }  // namespace ttnn::experimental::prim
