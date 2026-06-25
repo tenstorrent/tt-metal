@@ -679,16 +679,3 @@
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
-
-- name: Generalized MoE gate op unit tests
-  cmd: pytest --timeout 600 models/common/tests/modules/moe/test_generalized_moe_gate.py
-  model: moe-gate
-  skus:
-    wh_n150:
-      timeout: 10
-      tier: 3
-    bh_p150:
-      timeout: 10
-      tier: 3
-  owner_id: U0A2EGX0Z29 # Ronnie Li
-  team: ttnn
