@@ -456,6 +456,12 @@ class DropInVisionTransformer(torch.nn.Module):
 
 
 class Transformer(TTTransformer):
+    # Decode re-stages host token IDs every step, so the on-device decode-trace token buffer
+    # (device_inputs[0]) is not a valid preallocated ttnn.sampling output — feeding the sampled token back
+    # into it corrupts decode (degenerate generation) after the #45166 sampling-separation refactor. Mirror
+    # gemma4: don't reuse that buffer for sampling; refresh the trace inputs from host each step.
+    _tt_vllm_always_refresh_decode_trace_inputs = True
+
     def __init__(
         self,
         args,
