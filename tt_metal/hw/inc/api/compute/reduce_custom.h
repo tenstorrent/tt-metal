@@ -228,19 +228,26 @@ ALWI void reduce_block_max_row_init_runtime(uint32_t ocb, uint32_t block_ct_dim,
 }
 
 ALWI void reduce_block_max_row_runtime(
-    uint32_t icb, uint32_t icb_scaler, uint32_t row_start_index, uint32_t idst, bool respect_trigger = false) {
-    UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(icb, icb_scaler, row_start_index, respect_trigger)));
+    uint32_t icb,
+    uint32_t icb_scaler,
+    uint32_t row_start_index,
+    uint32_t idst,
+    bool respect_trigger = false,
+    bool overlap_first_half = false) {
+    UNPACK((llk_unpack_AB_reduce_block_max_row_runtime(
+        icb, icb_scaler, row_start_index, respect_trigger, overlap_first_half)));
     MATH((llk_math_reduce_block_max_row_runtime<DST_ACCUM_MODE>(idst)));
 }
 
-ALWI void reduce_block_max_row_uninit_runtime(uint32_t icb, bool respect_trigger = false) {
+ALWI void reduce_block_max_row_uninit_runtime(
+    uint32_t icb, bool respect_trigger = false, bool overlap_first_half = false) {
 #ifdef ARCH_BLACKHOLE
     MATH((llk_math_reduce_uninit<false>()));
 #else
     MATH((llk_math_reduce_uninit<false>(icb)));
 #endif
     PACK((llk_pack_reduce_mask_clear()));
-    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit_runtime(respect_trigger)));
+    UNPACK((llk_unpack_AB_reduce_block_max_row_uninit_runtime(respect_trigger, overlap_first_half)));
 }
 
 }  // namespace ckernel
