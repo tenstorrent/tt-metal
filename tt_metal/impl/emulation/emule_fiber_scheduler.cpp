@@ -37,7 +37,7 @@ namespace tt::tt_metal::emule_fiber {
 
 namespace {
 
-enum class FiberState : uint8_t { Ready, Running, Parked, Done };
+enum class FiberState : uint8_t { Ready, Running, Parked, LatencyParked, Done };
 
 struct Fiber {
     ucontext_t ctx{};
@@ -85,6 +85,8 @@ struct FiberSchedulerImpl {
     std::vector<std::deque<Fiber*>> ready_;            // per-worker ready queues (fibers are
                                                        // pinned: ready_[w] holds only home==w)
     std::unordered_map<const void*, Fiber*> parked_;   // key -> intrusive list head
+    std::vector<Fiber*> latency_parked_;               // fibers modeling NOC read latency:
+                                                       // released only at quiescence (below)
     std::vector<std::unique_ptr<Fiber>> all_;          // ownership of every spawned fiber
 
     unsigned K_ = 1;
@@ -142,16 +144,34 @@ void FiberSchedulerImpl::worker_loop(unsigned w) {
         if (ready_[w].empty()) {
             if (active_ == 0) break;
             ++idle_;
-            // Tier-1 quiescent deadlock: nothing executing, nothing runnable anywhere,
-            // and fibers still parked. The `!any_ready()` term is essential — `idle_ ==
-            // K_` alone is a false positive at K>1, because a worker counts itself idle
-            // before re-acquiring mu_ to observe a fiber a concurrent wake() just enqueued
-            // into its ready queue. Checking the queues (under mu_) closes that window.
-            if (idle_ == K_ && running_ == 0 && !any_ready() && !parked_.empty()) {
-                deadlock_ = true;
-                abort_flag_ = true;
-                --idle_;
-                break;
+            // Quiescence: nothing executing, nothing runnable in any queue. The
+            // `!any_ready()` term is essential — `idle_ == K_` alone is a false positive at
+            // K>1, because a worker counts itself idle before re-acquiring mu_ to observe a
+            // fiber a concurrent wake() just enqueued into its ready queue. Checking the
+            // queues (under mu_) closes that window.
+            if (idle_ == K_ && running_ == 0 && !any_ready()) {
+                // Read-latency model: a fiber latency-parked at its first noc_async_read
+                // barrier represents an in-flight read. At quiescence — every other runnable
+                // core has had its turn — the read "completes": release them all (lowest
+                // priority). This reproduces the silicon ordering some kernels lean on (e.g.
+                // argmax's first reduction iteration; see docs/fiber-engine.md).
+                if (!latency_parked_.empty()) {
+                    for (Fiber* f : latency_parked_) {
+                        f->state = FiberState::Ready;
+                        ready_[f->home].push_back(f);
+                    }
+                    latency_parked_.clear();
+                    cv_.notify_all();
+                    --idle_;
+                    continue;
+                }
+                // Tier-1 quiescent deadlock: nothing to release and fibers still sync-parked.
+                if (!parked_.empty()) {
+                    deadlock_ = true;
+                    abort_flag_ = true;
+                    --idle_;
+                    break;
+                }
             }
             {
                 std::unique_lock<std::mutex> wl(mu_, std::adopt_lock);
@@ -200,6 +220,20 @@ void FiberScheduler::park_locked(const void* key) {
     Fiber*& head = p_->parked_[key];         // inserts nullptr if absent
     f->park_link = head;
     head = f;
+    swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
+}
+
+void FiberScheduler::latency_park() {
+    // Model NOC read latency: defer the current fiber as lowest-priority "in-flight" work,
+    // released only at quiescence (see worker_loop). No key, no predicate; takes mu_ itself
+    // and hands it to the worker loop across the switch (mirrors park_locked).
+    Fiber* f = t_current;
+    if (!f) {
+        return;  // read barriers only run inside a fiber; insurance against a host-side call
+    }
+    p_->mu_.lock();
+    f->state = FiberState::LatencyParked;
+    p_->latency_parked_.push_back(f);
     swapcontext(&f->ctx, &t_sched);          // -> worker loop (mu_ held); resumes mu_-UNLOCKED
 }
 
@@ -301,6 +335,9 @@ std::string FiberSchedulerImpl::dump_parked() {
             os << " waiting on " << (name ? name : "sync object") << " (key " << key << ")\n";
         }
     }
+    if (!latency_parked_.empty()) {
+        os << "  " << latency_parked_.size() << " fiber(s) in read-latency flight\n";
+    }
     return os.str();
 }
 
@@ -350,6 +387,7 @@ void FiberScheduler::run_until_idle() {
         p_->deadlock_ = false;
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
+        p_->latency_parked_.clear();
         // Pin each fiber to a worker round-robin and seed that worker's ready queue.
         p_->ready_.assign(p_->K_, {});
         for (size_t i = 0; i < p_->all_.size(); ++i) {
@@ -392,6 +430,7 @@ void FiberScheduler::run_until_idle() {
     // Clear the registry for the next program / mesh.
     p_->ready_.clear();
     p_->parked_.clear();
+    p_->latency_parked_.clear();
     p_->all_.clear();   // frees Fiber stacks via ~Fiber
 
     // A real kernel exception is the root cause; report it before any deadlock symptom.

@@ -58,6 +58,7 @@ public:
     void lock();
     void unlock();
     void park_locked(const void* key);  // pre: lock held; post: lock released
+    void latency_park();                 // model NOC read latency; released at quiescence
     void wake(const void* key);
     void yield();
     void note_publish(unsigned pages);
