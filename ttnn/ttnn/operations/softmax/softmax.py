@@ -42,15 +42,30 @@ def default_compute_kernel_config():
 
 
 def tag_alignment(inputs, axes):
-    """Last two dims tile-aligned (divisible by 32)."""
+    """Three-value alignment split matching feature_spec.
+
+    - tile_aligned  — both H (-2) and W (-1) divisible by 32.
+    - w_non_aligned — W not divisible by 32 (regardless of H).
+    - h_non_aligned — W aligned, H not aligned.
+    """
     shape = inputs[0]
-    if shape[-1] % 32 == 0 and shape[-2] % 32 == 0:
+    w_aligned = shape[-1] % 32 == 0
+    h_aligned = shape[-2] % 32 == 0
+    if w_aligned and h_aligned:
         return "tile_aligned"
-    return "non_tile_aligned"
+    if not w_aligned:
+        return "w_non_aligned"
+    return "h_non_aligned"
+
+
+def tag_rank(inputs, axes):
+    """Tensor rank as an integer (2, 3, 4, ...)."""
+    return len(inputs[0])
 
 
 INPUT_TAGGERS = {
     "alignment": tag_alignment,
+    "rank": tag_rank,
 }
 
 
@@ -62,6 +77,7 @@ SUPPORTED = {
     "dtype": [ttnn.float32],
     "layout": [ttnn.TILE_LAYOUT],
     "alignment": ["tile_aligned"],
+    "rank": [4],
     "dim": [-1, -2],
     "fp32_dest_acc_en": [True],
 }
@@ -72,8 +88,10 @@ SUPPORTED = {
 # ---------------------------------------------------------------------------
 
 EXCLUSIONS = [
-    # fp32 input with fp32_dest_acc_en=False is legal but lossy — rejected.
-    {"dtype": ttnn.float32, "fp32_dest_acc_en": False},
+    # This op is fp32-dest-only: fp32_dest_acc_en=False is rejected for
+    # every dtype (the golden suite xfails those cells). The exclusion is
+    # keyed only on fp32_dest_acc_en=False so it applies regardless of dtype.
+    {"fp32_dest_acc_en": False},
 ]
 
 
