@@ -22,6 +22,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt.hpp"
 #include <impl/dispatch/dispatch_core_manager.hpp>
+#include <internal/dispatch/dispatch_engine_cores.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "llrt/hal.hpp"
 #include "internal/tt-2xx/quasar/error_handling.h"
@@ -62,6 +63,14 @@ inline static CoreDescriptorSet GetAllCores(
         const auto& soc_desc = cluster.get_soc_desc(device_id);
         for (const auto& dram_core : soc_desc.get_cores(CoreType::DRAM, CoordSystem::LOGICAL)) {
             all_cores.insert({{dram_core.x, dram_core.y}, CoreType::DRAM});
+        }
+    }
+    // Quasar dispatch-engine tiles use synthetic logical coords CoreCoord(index, 0) over the soc
+    // `dispatch:` list (see dispatch_engine_cores). They are printable just like worker/eth/dram cores.
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        const auto& soc_desc = cluster.get_soc_desc(device_id);
+        for (const auto& logical_core : internal::get_quasar_soc_dispatch_engine_logical_cores(soc_desc)) {
+            all_cores.insert({{logical_core.x, logical_core.y}, CoreType::DISPATCH});
         }
     }
 
@@ -223,6 +232,22 @@ inline EnableSymbolsInfo get_enable_symbols_info(HalProgrammableCoreType core_ty
         for (uint32_t i = 0; i < num; ++i) {
             std::string abbrev = hal.get_processor_class_name(core_type, i, true);
             add_legacy_entry(abbrev, info.processor_names[i]);
+        }
+    } else if (core_type == HalProgrammableCoreType::DISPATCH) {
+        // Quasar dispatch-engine cores run DM-only firmware/kernels; display the DM enable flags using a
+        // hex bitmask, mirroring the Quasar TENSIX DM / ETH style.
+        uint32_t num = hal.get_num_risc_processors(core_type);
+        for (uint32_t i = 0; i < num; ++i) {
+            info.processor_names.push_back(hal.get_processor_class_name(core_type, i, false));
+        }
+        if (is_quasar) {
+            info.symbols.push_back("DM:");
+            legend_parts.push_back(fmt::format("DM:[hex]=DataMovement(0-{})", num - 1));
+        } else {
+            for (uint32_t i = 0; i < num; ++i) {
+                std::string abbrev = hal.get_processor_class_name(core_type, i, true);
+                add_legacy_entry(std::string{abbrev[0]}, info.processor_names[i]);
+            }
         }
     } else {
         // ACTIVE_ETH/IDLE_ETH: collect names (arch-independent), then symbols (arch-specific)

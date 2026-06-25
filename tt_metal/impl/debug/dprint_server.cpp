@@ -1062,9 +1062,30 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
     if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         core_types_to_check.push_back(CoreType::DRAM);
     }
+    // Quasar dispatch-engine cores are a distinct CoreType::DISPATCH (DM-only firmware/kernels).
+    if (hal.has_programmable_core_type(HalProgrammableCoreType::DISPATCH)) {
+        core_types_to_check.push_back(CoreType::DISPATCH);
+    }
+    // TT_METAL_DPRINT_CORES=dispatch records its "dispatch" selection under CoreType::WORKER. On the Quasar
+    // dispatch-engine path the cores returned by GetDispatchCores() are CoreType::DISPATCH and would never
+    // match the WORKER loop, so reroute that selection to the DISPATCH iteration (and clear it from WORKER)
+    // to match without double counting. On WH/BH and the Quasar interim Tensix path the dispatch cores are
+    // WORKER-typed and the original WORKER-loop handling is unchanged.
+    const bool dispatch_cores_are_dispatch_type =
+        !dispatch_cores.empty() && dispatch_cores.begin()->type == CoreType::DISPATCH;
+    const bool worker_selects_dispatch =
+        rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, CoreType::WORKER) ==
+        tt::llrt::RunTimeDebugClassDispatch;
     for (CoreType core_type : core_types_to_check) {
-        if (rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassAll) {
+        int cores_class = rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type);
+        if (dispatch_cores_are_dispatch_type && worker_selects_dispatch) {
+            if (core_type == CoreType::WORKER) {
+                cores_class = tt::llrt::RunTimeDebugClassNoneSpecified;
+            } else if (core_type == CoreType::DISPATCH) {
+                cores_class = tt::llrt::RunTimeDebugClassDispatch;
+            }
+        }
+        if (cores_class == tt::llrt::RunTimeDebugClassAll) {
             // Print from all cores of the given type, cores returned here are guaranteed to be valid.
             for (umd::CoreDescriptor logical_core : all_cores) {
                 if (logical_core.type == core_type) {
@@ -1076,9 +1097,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 "DPRINT enabled on device {}, all {} cores.",
                 device_id,
                 tt::tt_metal::get_core_type_name(core_type));
-        } else if (
-            rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassDispatch) {
+        } else if (cores_class == tt::llrt::RunTimeDebugClassDispatch) {
             for (umd::CoreDescriptor logical_core : dispatch_cores) {
                 if (logical_core.type == core_type) {
                     print_cores_sanitized.push_back(logical_core);
@@ -1089,9 +1108,7 @@ void DPrintServer::Impl::attach_device(ChipId device_id) {
                 "DPRINT enabled on device {}, {} dispatch cores.",
                 device_id,
                 tt::tt_metal::get_core_type_name(core_type));
-        } else if (
-            rtoptions.get_feature_all_cores(tt::llrt::RunTimeDebugFeatureDprint, core_type) ==
-            tt::llrt::RunTimeDebugClassWorker) {
+        } else if (cores_class == tt::llrt::RunTimeDebugClassWorker) {
             // For worker cores, take all cores and remove dispatch cores.
             for (umd::CoreDescriptor logical_core : all_cores) {
                 if (!dispatch_cores.contains(logical_core)) {
