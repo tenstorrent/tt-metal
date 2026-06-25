@@ -13,14 +13,18 @@ import ttnn
 from ...blocks.attention_opt import Attention
 from ...blocks.transformer_block_opt import TransformerBlock
 from ...layers.embeddings import CombinedTimestepGuidanceTextProjEmbeddings
-from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear, prepare_chunked_linear_output
+from ...layers.linear import (
+    ColParallelLinear,
+    Linear,
+    RowParallelLinear,
+    prepare_chunked_linear_output,
+    prepare_weight_for_concatenated_input,
+)
 from ...layers.module import Module, ModuleList
 from ...layers.normalization import DistributedLayerNorm
 from ...utils.substate import rename_substate
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from ...parallel.config import DiTParallelConfig
     from ...parallel.manager import CCLManager
     from ...utils.padding import PaddingConfig
@@ -146,115 +150,11 @@ class Flux2SingleTransformerBlock(Module):
 
         proj_out_weight = state.pop("attn.to_out.weight", None)
         if proj_out_weight is not None:
-            state["proj_out.weight"] = _prepare_weight_for_concatenated_input(
+            state["proj_out.weight"] = prepare_weight_for_concatenated_input(
                 proj_out_weight,
                 [self._dim, self._mlp_hidden_dim],
                 device_count=self._tp_factor,
             )
-
-    def x_c_agmm(
-        self,
-        spatial,
-        x,
-        spatial_prompt_concat,
-        spatial_size,
-        combined_rope,
-        spatial_sequence_length,
-        compute_prompt_output,
-        temb_mod_params,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        _, _, gate_msa = temb_mod_params
-
-        x = self._ccl_manager.all_gather_persistent_buffer(x, dim=-1, mesh_axis=self._tp_axis, use_hyperparams=True)
-
-        x_mlp = self.proj_mlp(x)
-
-        x_c, _ = self.attn.forward(
-            spatial_prompt_concat=spatial_prompt_concat,
-            spatial_size=spatial_size,
-            combined_rope=combined_rope,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-        x = x_c[:, :spatial_size, :]
-
-        spatial, prompt = self.post_mm_common(spatial, None, x, x_mlp, None, None, compute_prompt_output, gate_msa)
-        return spatial, prompt
-
-    def post_mm_common(self, spatial, prompt, x, x_mlp, c, c_mlp, compute_prompt_output, gate_msa):
-        x = ttnn.concat([x, x_mlp], dim=-1)
-        # del x_mlp
-
-        is_ring = self._ccl_manager.topology == ttnn.Topology.Ring
-        # Ring: fuse RS + addcmul at the final write step (spatial + proj_out(x) * gate_msa).
-        if is_ring:
-            spatial = self.proj_out.forward_fused_addcmul(x, spatial, gate_msa, scalar=1.0)
-        else:
-            spatial = ttnn.addcmul(spatial, self.proj_out(x), gate_msa)
-
-        if not compute_prompt_output:
-            return spatial, None
-
-        c = ttnn.concat([c, c_mlp], dim=-1)
-        # del c_mlp
-        if is_ring:
-            prompt = self.proj_out.forward_fused_addcmul(c, prompt, gate_msa, scalar=1.0)
-        else:
-            prompt = ttnn.addcmul(prompt, self.proj_out(c), gate_msa)
-
-        return spatial, prompt
-
-    def x_c_merged_fused(
-        self,
-        spatial_prompt_concat,
-        spatial_size,
-        combined_rope,
-        spatial_sequence_length,
-        compute_prompt_output,
-        temb_mod_params,
-    ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        shift_msa, scale_msa, gate_msa = temb_mod_params
-
-        x_c = ttnn.squeeze(
-            self.norm(ttnn.unsqueeze(spatial_prompt_concat, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0
-        )
-
-        # skip for compute_prompt_output = False
-        if not compute_prompt_output:
-            spatial = spatial_prompt_concat[:, :spatial_size, :]
-            x = x_c[:, :spatial_size, :]
-            return self.x_c_agmm(
-                spatial,
-                x,
-                x_c,
-                spatial_size,
-                combined_rope,
-                spatial_sequence_length,
-                compute_prompt_output,
-                temb_mod_params,
-            )[
-                0
-            ]  # spatial only
-
-        x_c_mlp = self.proj_mlp(
-            x_c,
-            parallel_config=self._parallel_config,
-            use_heuristic_mmcfg=True,
-            core_grid=Attention.get_core_grid(x_c.shape[-2], self._mesh_device.compute_with_storage_grid_size()),
-        )
-
-        x_c, _ = self.attn.forward(
-            spatial_prompt_concat=x_c,
-            spatial_size=spatial_size,
-            combined_rope=combined_rope,
-            spatial_sequence_length=spatial_sequence_length,
-        )
-
-        # now concatenate on -1 dimension.
-        spatial_prompt_concat, _ = self.post_mm_common(
-            spatial_prompt_concat, None, x_c, x_c_mlp, None, None, False, gate_msa
-        )
-
-        return spatial_prompt_concat
 
     # Since we do not have operations to concatenate and slice a tensor along a sharded dimension,
     # we keep the spatial and prompt tensors separate for now.
@@ -278,15 +178,36 @@ class Flux2SingleTransformerBlock(Module):
         and ``None`` is returned for the prompt. Used by the final single block, whose prompt
         output is discarded by the transformer.
         """
-        spatial_prompt_concat = self.x_c_merged_fused(
-            spatial_prompt_concat,
-            spatial_size,
-            combined_rope,
-            spatial_sequence_length,
-            compute_prompt_output,
-            temb_mod_params,
+
+        shift_msa, scale_msa, gate_msa = temb_mod_params
+
+        x_c = ttnn.squeeze(
+            self.norm(ttnn.unsqueeze(spatial_prompt_concat, 0), dynamic_weight=scale_msa, dynamic_bias=shift_msa), 0
         )
-        return spatial_prompt_concat
+
+        x_c_attn, _ = self.attn.forward(
+            spatial_prompt_concat=x_c,
+            spatial_size=spatial_size,
+            combined_rope=combined_rope,
+            spatial_sequence_length=spatial_sequence_length,
+        )
+
+        # slice out spatial only. Prompt not needed. The variable names are left to prevent code bloat. But this is just spatial after the slice.
+        if not compute_prompt_output:
+            x_c = x_c[:, :spatial_size, :]
+            x_c_attn = x_c_attn[:, :spatial_size, :]
+            spatial_prompt_concat = spatial_prompt_concat[:, :spatial_size, :]
+
+        x_c_mlp = self.proj_mlp(
+            x_c,
+            parallel_config=self._parallel_config,
+            use_heuristic_mmcfg=True,
+            core_grid=Attention.get_core_grid(x_c.shape[-2], self._mesh_device.compute_with_storage_grid_size()),
+        )
+
+        if self._ccl_manager.topology == ttnn.Topology.Ring:
+            return self.proj_out.forward_fused_addcmul([x_c_attn, x_c_mlp], spatial_prompt_concat, gate_msa, scalar=1.0)
+        return ttnn.addcmul(spatial_prompt_concat, self.proj_out([x_c_attn, x_c_mlp]), gate_msa)
 
 
 # adapted from https://github.com/huggingface/diffusers/blob/v0.31.0/src/diffusers/models/transformers/transformer_flux.py
@@ -409,10 +330,6 @@ class Flux2Transformer(Module):
             rename_substate(state, f"{prefix}ff.linear_out", f"{prefix}ff.net.2")
             rename_substate(state, f"{prefix}ff_context.linear_out", f"{prefix}ff_context.net.2")
 
-    # We do not shard the last dimension of spatial, because its dimension is less than the tile
-    # size for a device count of four and more. This requires padding, which is not currently
-    # supported by `reduce_scatter_minimal_async`.
-    # @traced_function(device=lambda self: self.device, clone_prep_inputs=False)
     def forward(
         self,
         spatial: ttnn.Tensor,
@@ -441,11 +358,6 @@ class Flux2Transformer(Module):
         time_embed = time_embed.reshape([time_embed.shape[-2], 1, time_embed.shape[-1]])
 
         double_stream_mod_img = self.double_stream_modulation_img(time_embed, skip_act_fn=True)
-        # Pre-cast gate params to BF16 so blocks avoid fp32 × bf16 addcmul broadcasts, and
-        # pre-add 1 to the scale params once here. These tuples are shared across all 8 double
-        # blocks, so doing (1 + scale) once avoids each block recomputing it. The double block
-        # consumes scale params with the +1 already applied (see transformer_block_opt).
-        # Layout: (shift_attn, scale_attn, gate_attn, shift_ff, scale_ff, gate_ff)
         shift_attn_i, scale_attn_i, gate_attn_i, shift_ff_i, scale_ff_i, gate_ff_i = double_stream_mod_img
         double_stream_mod_img = (
             shift_attn_i,
@@ -468,8 +380,6 @@ class Flux2Transformer(Module):
         )
 
         single_stream_mod = self.single_stream_modulation(time_embed, skip_act_fn=True)
-        # Pre-add 1 to scale and typecast all params to BF16 so the single-stream block
-        # avoids expensive BF16 × FP32 broadcast multiplies on the full spatial tensor.
         shift, scale, gate = single_stream_mod
         single_stream_mod = (
             ttnn.typecast(shift, ttnn.bfloat16),
@@ -505,9 +415,6 @@ class Flux2Transformer(Module):
         combined_rope = (combined_cos_rope, combined_sin_rope)
         spatial_size = spatial.shape[1]
         for i, block in enumerate(self.single_transformer_blocks, start=1):
-            # The final single block's prompt output is unused (only spatial is projected out
-            # below), so skip its prompt projection. The prompt still feeds that block's
-            # attention as K/V context for the spatial stream.
             spatial_prompt_concat = block.forward(
                 spatial_prompt_concat=spatial_prompt_concat,
                 spatial_size=spatial_size,
@@ -516,13 +423,15 @@ class Flux2Transformer(Module):
                 temb_mod_params=single_stream_mod,
                 spatial_sequence_length=spatial_sequence_length,
                 skip_time_embed_activation_fn=True,
-                compute_prompt_output=(i < num_single_blocks) or compute_prompt_output,
+                compute_prompt_output=(i < num_single_blocks)
+                or compute_prompt_output,  # prompt is unused for the last block.
             )
 
             # if i % 6 == 0:
             #     ttnn.ReadDeviceProfiler(spatial.device())
 
-        spatial = spatial_prompt_concat[:, :spatial_size, :]
+        # We return spatial only
+        spatial = spatial_prompt_concat  # [:, :spatial_size, :]
 
         time_embed_proj = self.time_embed_out(time_embed)
         [scale, shift] = ttnn.chunk(time_embed_proj, 2, dim=-1)
@@ -536,14 +445,3 @@ class Flux2Transformer(Module):
         )
 
         return self.proj_out(spatial)
-
-
-def _prepare_weight_for_concatenated_input(
-    weight: torch.Tensor,
-    sizes: Sequence[int],
-    *,
-    device_count: int,
-) -> torch.Tensor:
-    weights = weight.split(sizes, dim=1)
-    weights = [w.unflatten(1, [device_count, -1]) for w in weights]
-    return torch.cat(weights, dim=2).flatten(1, 2)
