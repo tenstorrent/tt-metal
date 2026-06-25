@@ -93,6 +93,24 @@ def canvas_sample(logits, temperature: float, gumbel_noise):
     return gumbel_max(logits, temperature, gumbel_noise)
 
 
+def sample_gumbel_noise(shape, *, device, seed: int, dtype=ttnn.float32):
+    """Generate device Gumbel(0,1) noise with a deterministic TTNN rand seed."""
+    u = ttnn.rand(shape, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, low=0.0, high=1.0, seed=seed)
+    u_eps = ttnn.add(u, 1.0e-10)
+    log_u = ttnn.log(u_eps)
+    neg_log_u = ttnn.multiply(log_u, -1.0)
+    neg_log_u_eps = ttnn.add(neg_log_u, 1.0e-10)
+    log_neg_log_u = ttnn.log(neg_log_u_eps)
+    gumbel = ttnn.multiply(log_neg_log_u, -1.0)
+    u.deallocate(True)
+    u_eps.deallocate(True)
+    log_u.deallocate(True)
+    neg_log_u.deallocate(True)
+    neg_log_u_eps.deallocate(True)
+    log_neg_log_u.deallocate(True)
+    return gumbel
+
+
 def softmax(logits, temperature: float = 1.0, *, compute_kernel_config: Optional[object] = None):
     """``softmax(logits / T)`` over the vocab axis (the self-conditioning soft-embed prob)."""
     z = temperature_scale(logits, temperature)

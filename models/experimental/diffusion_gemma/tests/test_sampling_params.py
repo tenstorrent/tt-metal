@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+from dataclasses import dataclass
+
+import pytest
+
+from models.experimental.diffusion_gemma.tt.sampling_params import (
+    MODEL_CAPABILITIES,
+    canvas_sampling_config_from_params,
+)
+
+
+@dataclass(frozen=True)
+class DuckTypedTTSamplingParams:
+    temperature: float | list[float]
+    top_k: int | list[int]
+    top_p: float | list[float]
+    seed: int | list[int] | None = None
+
+
+def test_canvas_sampling_params_defaults_and_capability():
+    config = canvas_sampling_config_from_params(None, default_temperature=0.8, default_seed=47472)
+
+    assert MODEL_CAPABILITIES["supports_sample_on_device"] is True
+    assert config.temperature == pytest.approx(0.8)
+    assert config.seed == 47472
+    assert config.top_k is None
+    assert config.top_p is None
+    assert config.top_k_top_p_supported is False
+
+
+def test_canvas_sampling_params_duck_type_vllm_fields():
+    params = DuckTypedTTSamplingParams(
+        temperature=[0.6, 0.7],
+        top_k=[64, 32],
+        top_p=[0.95, 0.9],
+        seed=[1234, 5678],
+    )
+
+    config = canvas_sampling_config_from_params(params, default_temperature=0.8)
+
+    assert config.temperature == pytest.approx(0.6)
+    assert config.seed == 1234
+    assert config.top_k == 64
+    assert config.top_p == pytest.approx(0.95)
+    assert config.top_k_top_p_supported is False
+
+
+def test_canvas_sampling_params_rejects_greedy_temperature():
+    params = {"temperature": 0.0, "top_k": 1, "top_p": 1.0}
+
+    with pytest.raises(ValueError, match="temperature > 0"):
+        canvas_sampling_config_from_params(params, default_temperature=0.8)
