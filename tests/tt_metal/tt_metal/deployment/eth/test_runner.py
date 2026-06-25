@@ -789,6 +789,7 @@ async def main():
     parser.add_argument("-i", type=str, help="Input file to parse instead of running the tests")
     parser.add_argument("-o", type=str, help="Output path for the json file")
     parser.add_argument("-f", type=str, help="File to use for logging")
+    parser.add_argument("-c", type=str, help="Path to the MGD config file to use")
     opts = parser.parse_args()
 
     logpath = opts.f if opts.f else None
@@ -833,6 +834,9 @@ async def main():
         env["ETH_TEST_EXPECTED_LINKS"] = str(10)
         if not opts.v:
             env["TT_LOGGER_TYPES"] = "Test"
+
+        if opts.c:
+            env["TT_MESH_GRAPH_DESC_PATH"] = opts.c
 
         proc = await asyncio.create_subprocess_exec(program, *args, stdout=asyncio.subprocess.PIPE, env=env)
 
