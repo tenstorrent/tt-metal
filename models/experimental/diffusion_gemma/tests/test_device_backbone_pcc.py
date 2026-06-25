@@ -25,9 +25,10 @@ Run on QB2 (4x Blackhole):
     DG_RUN_DEVICE=1 MESH_DEVICE=P150x4 pytest \
       models/experimental/diffusion_gemma/tests/test_device_backbone_pcc.py -k "1x4" -v -s
 
-Threshold is env-driven (`DG_BACKBONE_PCC`, default 0.83 — the established
-Blackhole-1x4 baseline); the per-token argmax match is logged as the
-text-quality signal.
+Target threshold is env-driven (`DG_BACKBONE_PCC`, default 0.99). The current
+Blackhole-1x4 Gemma4 MoE fidelity lands around 0.85-0.88; values above the known
+floor (`DG_BACKBONE_KNOWN_QB2_PCC_FLOOR`, default 0.83) are recorded as xfail so
+the gap stays visible without weakening shared Gemma4 thresholds.
 
 ## Precision investigation (2026-06-24) — why PCC caps at ~0.88, not 0.98
 
@@ -81,7 +82,8 @@ DG_CKPT = os.getenv(
 )
 GEMMA_CONFIG_DIR = os.getenv("GEMMA_CONFIG_DIR", "/home/zni/dg_models/gemma-4-26B-A4B-it")
 PROMPT = os.getenv("DG_PROMPT", "The capital of France is")
-PCC_THRESHOLD = float(os.getenv("DG_BACKBONE_PCC", "0.83"))
+PCC_THRESHOLD = float(os.getenv("DG_BACKBONE_PCC", "0.99"))
+KNOWN_QB2_PCC_FLOOR = float(os.getenv("DG_BACKBONE_KNOWN_QB2_PCC_FLOOR", "0.83"))
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("DG_RUN_DEVICE") != "1",
@@ -245,8 +247,8 @@ def test_diffusiongemma_backbone_logits_pcc(mesh_device, reset_seeds, request):
     hf_cmp = ref_logits[:, :seq_len, :]
     tt_cmp = tt_logits_torch[:, :seq_len, :]
 
-    passing, pcc_msg = compare_tensors(tt_cmp, hf_cmp, pcc_threshold=PCC_THRESHOLD)
-    logger.info(f"DiffusionGemma backbone logits PCC (seq_len={seq_len}, tp={tp}): {pcc_msg}")
+    passing, pcc_value = compare_tensors(tt_cmp, hf_cmp, pcc_threshold=PCC_THRESHOLD)
+    logger.info(f"DiffusionGemma backbone logits PCC (seq_len={seq_len}, tp={tp}): {pcc_value}")
 
     argmatch = 0
     for t in range(seq_len):
@@ -261,4 +263,11 @@ def test_diffusiongemma_backbone_logits_pcc(mesh_device, reset_seeds, request):
         )
     logger.info(f"argmax match: {argmatch}/{seq_len}  (greedy-decode equivalence)")
 
-    assert passing, f"DiffusionGemma backbone PCC too low: {pcc_msg} (< {PCC_THRESHOLD})"
+    if not passing and pcc_value >= KNOWN_QB2_PCC_FLOOR:
+        pytest.xfail(
+            "Known QB2 Gemma4 MoE fidelity gap for DiffusionGemma causal backbone: "
+            f"PCC={pcc_value:.5f}, target={PCC_THRESHOLD}, floor={KNOWN_QB2_PCC_FLOOR}. "
+            "Keep this local to DiffusionGemma instead of lowering shared Gemma4 thresholds."
+        )
+
+    assert passing, f"DiffusionGemma backbone PCC too low: {pcc_value} (< {PCC_THRESHOLD})"
