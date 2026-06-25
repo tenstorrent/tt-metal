@@ -191,8 +191,8 @@ class TtQwen36GDNAttention(LightweightModule):
             packer_l1_acc=True,
         )
         # Lower-fidelity kernel for the bulk input/output projections (qkvz, ba,
-        # out). The recurrent state + norm stay HiFi4/fp32; the projections feed
-        # bf8 weights and tolerate HiFi2 without fp32 dest-acc (cheaper MACs).
+        # out). Weights and activations are BF16; HiFi2 gives sufficient quality
+        # while saving MACs (no fp32 dest-acc needed for these bulk projections).
         self.compute_kernel_proj = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -372,7 +372,7 @@ class TtQwen36GDNAttention(LightweightModule):
             z_i = Z_w_T[:, i * v_per_chip : (i + 1) * v_per_chip]  # [H, 768]
             QKVZ_chunks.append(torch.cat([q_i, k_i, v_i, z_i], dim=-1))  # [H, 2048]
         QKVZ_w_T = torch.cat(QKVZ_chunks, dim=-1)  # [H, 16384]
-        self.w_qkvz = self._to_device(QKVZ_w_T, shard_out_dim1)  # per-chip [H, 2048]
+        self.w_qkvz = self._to_device(QKVZ_w_T, shard_out_dim1, dtype=ttnn.bfloat16)  # per-chip [H, 2048]
 
         # B + A fused (note in_proj_ba layout is b|a; here built b_i|a_i per chip).
         a_w_T = a_w.T.contiguous()  # [H, n_v=48]
@@ -383,7 +383,7 @@ class TtQwen36GDNAttention(LightweightModule):
             a_i = a_w_T[:, i * self.n_v_per_chip : (i + 1) * self.n_v_per_chip]  # [H, 6]
             BA_chunks.append(torch.cat([b_i, a_i], dim=-1))  # [H, 12]
         BA_w_T = torch.cat(BA_chunks, dim=-1)  # [H, 96]
-        self.w_ba = self._to_device(BA_w_T, shard_out_dim1)  # per-chip [H, 12]
+        self.w_ba = self._to_device(BA_w_T, shard_out_dim1, dtype=ttnn.bfloat16)  # per-chip [H, 12]
 
         # ---- conv1d weights: per-chip interleave [Q_i | K_i | V_i] on the
         #      channel dim, then shard that channel dim (dim 2) 8-way. --------
@@ -421,8 +421,10 @@ class TtQwen36GDNAttention(LightweightModule):
         A_log_3d = A_log.reshape(1, 1, n_v)
         dt_bias_3d = dt_bias.reshape(1, 1, n_v)
         shard_head = ttnn.ShardTensorToMesh(self.mesh_device, dim=2)
-        self.A_log = self._to_device(A_log_3d, shard_head, layout=ttnn.TILE_LAYOUT)  # per-chip [1,1,6]
-        self.dt_bias = self._to_device(dt_bias_3d, shard_head, layout=ttnn.TILE_LAYOUT)
+        self.A_log = self._to_device(
+            A_log_3d, shard_head, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+        )  # per-chip [1,1,6]
+        self.dt_bias = self._to_device(dt_bias_3d, shard_head, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
 
         # ---- norm weight (replicated; per-head-dim head-local RMSNorm) ------
         norm_w = self._resolve_weight(sd, "linear_attn.norm.weight", "norm.weight")
@@ -438,7 +440,7 @@ class TtQwen36GDNAttention(LightweightModule):
         out_proj_w = self._resolve_weight(sd, "linear_attn.out_proj.weight", "out_proj.weight")
         out_proj_w_T = out_proj_w.T.contiguous()  # [value_dim=6144, H=5120]
         shard_in_dim0 = ttnn.ShardTensorToMesh(self.mesh_device, dim=0)
-        self.w_out = self._to_device(out_proj_w_T, shard_in_dim0)  # per-chip [768, 5120]
+        self.w_out = self._to_device(out_proj_w_T, shard_in_dim0, dtype=ttnn.bfloat16)  # per-chip [768, 5120]
 
     # ------------------------------------------------------------------
     # Persistent buffer constructors (1D replicated)
@@ -903,7 +905,7 @@ class TtQwen36GDNAttention(LightweightModule):
         mem = ttnn.DRAM_MEMORY_CONFIG
         ck = self.compute_kernel_proj
 
-        qkvz = ttnn.linear(x, self.w_qkvz, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        qkvz = ttnn.linear(x, self.w_qkvz, dtype=ttnn.bfloat16, memory_config=mem, compute_kernel_config=ck)
         out_rank = len(qkvz.shape)
         q_per = self.q_per_chip
         v_per = self.v_per_chip
@@ -922,7 +924,7 @@ class TtQwen36GDNAttention(LightweightModule):
         qkvz.deallocate(True)
 
         # B + A — again COMPLETE per chip (K == full H), no all_reduce.
-        ba = ttnn.linear(x, self.w_ba, dtype=self.dtype, memory_config=mem, compute_kernel_config=ck)
+        ba = ttnn.linear(x, self.w_ba, dtype=ttnn.bfloat16, memory_config=mem, compute_kernel_config=ck)
         n_v_per = self.n_v_per_chip
         if out_rank == 3:
             B_, T_, _ = list(ba.shape)

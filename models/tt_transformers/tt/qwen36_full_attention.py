@@ -281,11 +281,10 @@ class TtQwen36FullAttention(LightweightModule):
         self.rope_dim = getattr(self.args, "rope_dim", int(self.head_dim * self.partial_rotary_factor))  # 64
         self.attn_output_gate = getattr(self.args, "attn_output_gate", True)
         # qwen3.6 q/k norm is zero-centered (HF Qwen3NextRMSNorm: w' = w + 1).
-        # The framework ModelArgs defaults rms_norm_add_unit_offset=False and does
-        # not set zero_centered_norm; for qwen3.6 the FA qk_norm REQUIRES the +1.
-        self.zero_centered_norm = bool(
-            getattr(self.args, "zero_centered_norm", getattr(self.args, "rms_norm_add_unit_offset", True))
-        )
+        # ModelArgs.rms_norm_add_unit_offset defaults to False globally, so we
+        # cannot rely on it here — this class is Qwen3.6-specific and ALWAYS
+        # needs the +1 offset baked into the QK-norm weights.
+        self.zero_centered_norm = True
 
         # --- KV padding 4 -> tp_size, then per-chip head counts -------------
         # Pad n_kv to the TP size so it divides 8 chips cleanly (1 KV head/chip).
@@ -315,8 +314,8 @@ class TtQwen36FullAttention(LightweightModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
-        # Lower-fidelity kernel for the bulk QKVG / output projections (qk_norm
-        # and SDPA keep HiFi4). bf8 weights tolerate HiFi2 w/o fp32 dest-acc.
+        # QKVG / WO projections: HiFi2 (BF16 weights tolerate this; HiFi4 gives
+        # no measurable PCC improvement while increasing latency).
         self.compute_kernel_proj = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
@@ -580,8 +579,19 @@ class TtQwen36FullAttention(LightweightModule):
         x2.deallocate(True)
         neg_x2.deallocate(True)
 
-        x_rot_cos = ttnn.multiply(x_rot, cos_tt)
-        x_rotated = ttnn.addcmul(x_rot_cos, rotate_half, sin_tt, value=1.0)
+        # Expand cos/sin from [1, 1, T, rd] → [1, n_heads, T, rd] when n_heads > 1.
+        # TTNN's binary_ng does not support subtile broadcast on dim 1 for all
+        # n_head values (fails on Blackhole with n_q_per_chip != 1). Explicit
+        # repeat avoids the broadcast and works for any chip count.
+        cos_bc, sin_bc = cos_tt, sin_tt
+        if ndim == 4 and shape_rot[1] > 1 and list(cos_tt.shape)[1] == 1:
+            cos_bc = ttnn.repeat(cos_tt, ttnn.Shape([1, shape_rot[1], 1, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            sin_bc = ttnn.repeat(sin_tt, ttnn.Shape([1, shape_rot[1], 1, 1]), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_rot_cos = ttnn.multiply(x_rot, cos_bc)
+        x_rotated = ttnn.addcmul(x_rot_cos, rotate_half, sin_bc, value=1.0)
+        if cos_bc is not cos_tt:
+            cos_bc.deallocate(True)
+            sin_bc.deallocate(True)
         x_rot.deallocate(True)
         rotate_half.deallocate(True)
         x_rot_cos.deallocate(True)
@@ -671,6 +681,7 @@ class TtQwen36FullAttention(LightweightModule):
         if len(partial.shape) == 3:
             _b, _t, _h = list(partial.shape)
             partial = ttnn.reshape(partial, [1, 1, _b * _t, _h])
+
         reduced = tt_all_reduce(
             partial,
             self.mesh_device,

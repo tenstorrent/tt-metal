@@ -105,6 +105,7 @@ def _fused_decay_and_write_fp32(
     device=None,
     outer_product_prog_cfg=None,
     matmul_compute_cfg=None,
+    pre_decayed=False,
 ):
     """fp32-state version of ``fused_decay_and_write_ttnn``.
 
@@ -119,7 +120,6 @@ def _fused_decay_and_write_fp32(
     K = h.shape[2]
     V = h.shape[3]
 
-    decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     k_col = ttnn.to_layout(
@@ -156,26 +156,22 @@ def _fused_decay_and_write_fp32(
     k_col.deallocate(True)
     d_row.deallocate(True)
 
-    # V2-11 (lever G): fuse h*decay + outer*beta into 2 ops via addcmul.
-    # Original (3 ops):
-    #   outer_beta = outer * beta
-    #   h_decayed = h * decay
-    #   h_new = h_decayed + outer_beta
-    # Fused (2 ops):
-    #   h_decayed = h * decay
-    #   h_new = addcmul(h_decayed, outer, beta_expanded, value=1.0)
-    #          = h_decayed + 1.0 * outer * beta_expanded
-    # 1 fewer op × 48 DeltaNet layers = 48 fewer ops per decode step.
-    h_decayed = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
-    decay.deallocate(True)
-    h_new = ttnn.addcmul(
-        h_decayed,
-        outer,
-        beta_expanded,
-        value=1.0,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    h_decayed.deallocate(True)
+    if pre_decayed:
+        # h is already decayed by the caller; skip the internal h*decay multiply.
+        h_new = ttnn.addcmul(h, outer, beta_expanded, value=1.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    else:
+        # V2-11 (lever G): fuse h*decay + outer*beta into 2 ops via addcmul.
+        decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        h_decayed = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
+        decay.deallocate(True)
+        h_new = ttnn.addcmul(
+            h_decayed,
+            outer,
+            beta_expanded,
+            value=1.0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        h_decayed.deallocate(True)
     outer.deallocate(True)
     beta_expanded.deallocate(True)
 
@@ -191,6 +187,7 @@ def _fused_decay_and_write_fp32_tiled(
     device=None,
     outer_product_prog_cfg=None,
     matmul_compute_cfg=None,
+    pre_decayed=False,
 ):
     """Fuse B tiled variant of ``_fused_decay_and_write_fp32``.
 
@@ -214,7 +211,6 @@ def _fused_decay_and_write_fp32_tiled(
     K = h.shape[2]
     V = h.shape[3]
 
-    decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # k_col: genuine K-major transpose of the tiled [B,H,1,K] k_row -> [B,H,K,1].
@@ -249,16 +245,20 @@ def _fused_decay_and_write_fp32_tiled(
     )
     k_col.deallocate(True)
 
-    h_decayed = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
-    decay.deallocate(True)
-    h_new = ttnn.addcmul(
-        h_decayed,
-        outer,
-        beta_expanded,
-        value=1.0,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
-    )
-    h_decayed.deallocate(True)
+    if pre_decayed:
+        h_new = ttnn.addcmul(h, outer, beta_expanded, value=1.0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    else:
+        decay = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+        h_decayed = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
+        decay.deallocate(True)
+        h_new = ttnn.addcmul(
+            h_decayed,
+            outer,
+            beta_expanded,
+            value=1.0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        h_decayed.deallocate(True)
     outer.deallocate(True)
     beta_expanded.deallocate(True)
 
@@ -335,6 +335,11 @@ def _recurrent_delta_rule_step_fp32(
             except Exception:
                 pass
 
+    # Decay h before reading: reference algorithm decays first, then reads.
+    _decay_4d = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    h_decayed = ttnn.multiply(h, _decay_4d, memory_config=ttnn.L1_MEMORY_CONFIG)
+    _decay_4d.deallocate(True)
+
     k_row = ttnn.to_layout(
         ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG),
         ttnn.TILE_LAYOUT,
@@ -342,7 +347,7 @@ def _recurrent_delta_rule_step_fp32(
     )
     v_read_4d = ttnn.matmul(
         k_row,
-        h,
+        h_decayed,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         program_config=read_query_prog_cfg,
         compute_kernel_config=matmul_compute_cfg,
@@ -354,7 +359,7 @@ def _recurrent_delta_rule_step_fp32(
     v_read_4d.deallocate(True)
 
     h = _fused_decay_and_write_fp32(
-        h=h,
+        h=h_decayed,
         k_t=k_t,
         delta=delta,
         decay_t=decay_t,
@@ -362,7 +367,9 @@ def _recurrent_delta_rule_step_fp32(
         device=device,
         outer_product_prog_cfg=outer_product_prog_cfg,
         matmul_compute_cfg=matmul_compute_cfg,
+        pre_decayed=True,
     )
+    h_decayed.deallocate(True)
     delta.deallocate(True)
 
     q_row = ttnn.to_layout(
@@ -433,16 +440,20 @@ def _recurrent_delta_rule_step_fp32_tiled(
             except Exception:
                 pass
 
+    # Decay h before reading: reference algorithm decays first, then reads.
+    _decay_4d = ttnn.reshape(decay_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+    h_decayed = ttnn.multiply(h, _decay_4d, memory_config=ttnn.L1_MEMORY_CONFIG)
+    _decay_4d.deallocate(True)
+
     # Fuse E: when k_t/v_t arrive bf16 (QWEN36_DN_RECUR_BF16_IN), the read matmul
     # is mixed bf16(k) x fp32(h).  Force dtype=fp32 on the output so the state
     # read-back keeps full precision (a mixed matmul otherwise packs to bf16,
     # which would pinch the fp32 state at the read boundary).  No-op when inputs
     # are fp32.
-    # READ: v_read = k @ h.  k_t is already [B,H,1,K] tiled — the read_query
-    # matmul's exact in0 contract.  Output stays [B,H,1,V] (no reshape-back).
+    # READ: v_read = k @ h_decayed.  k_t is already [B,H,1,K] tiled.
     v_read = ttnn.matmul(
         k_t,
-        h,
+        h_decayed,
         memory_config=ttnn.L1_MEMORY_CONFIG,
         program_config=read_query_prog_cfg,
         compute_kernel_config=matmul_compute_cfg,
@@ -455,7 +466,7 @@ def _recurrent_delta_rule_step_fp32_tiled(
     v_read.deallocate(True)
 
     h = _fused_decay_and_write_fp32_tiled(
-        h=h,
+        h=h_decayed,
         k_row=k_t,
         delta_row=delta,
         decay_t=decay_t,
@@ -463,7 +474,9 @@ def _recurrent_delta_rule_step_fp32_tiled(
         device=device,
         outer_product_prog_cfg=outer_product_prog_cfg,
         matmul_compute_cfg=matmul_compute_cfg,
+        pre_decayed=True,
     )
+    h_decayed.deallocate(True)
     delta.deallocate(True)
 
     # READOUT: o = q @ h_new.  q_t is already [B,H,1,K] tiled.  Output [B,H,1,V]
