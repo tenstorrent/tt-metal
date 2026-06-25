@@ -6,26 +6,50 @@ Shapes match pi0.5 prefill MLP (seq=768, hidden=1024, mlp_dim=4096, TP=8):
   hidden   [1,1,768,1024]  — down-proj all_reduce target
   mlp_mid  [1,1,768,4096]  — gate/up scatter target
 
+Chips 24-31 span rows 6-7 of the 8×4 BH galaxy (2×4 block).
+The test opens the full 8×4 parent mesh and carves a 2×4 submesh at (6,0).
+
 Wall-clock time is printed by pytest -s.  Device-kernel duration (which
 matches the prefill budget) requires running under tracy:
 
   python -m tracy -p -r -n ccl_prefill_tp8 -o /tmp/tracy_ccl_tp8 \\
     models/experimental/pi0_5/tests/perf/test_ccl_prefill_tp8_perf.py
 
-Requires 8 BH chips + fabric.  Reset with tt-smi -glx_reset if needed.
+Requires 8 BH chips (24-31) + fabric.  Reset with tt-smi -glx_reset if needed.
 """
 
+import os
 import statistics
 import time
+from contextlib import contextmanager
 
 import torch
 import ttnn
 
 from models.experimental.pi0_5.tt.tt_bh_glx.mesh_setup import open_prefill_tp4_mesh
 
+# Expose chips 24-31 as devices 0-7 via TT_VISIBLE_DEVICES so open_prefill_tp4_mesh
+# opens a 1×8 logical mesh over these physical chips under FABRIC_1D.
+_VISIBLE_DEVICES = ",".join(str(i) for i in range(24, 32))
+
+
+@contextmanager
+def _open_8chip_mesh():
+    """Open chips 24-31 as a 1×8 TP=8 ring mesh under FABRIC_1D."""
+    prev = os.environ.get("TT_VISIBLE_DEVICES")
+    os.environ["TT_VISIBLE_DEVICES"] = _VISIBLE_DEVICES
+    try:
+        with open_prefill_tp4_mesh(tp=8, l1_small_size=24576, trace_region_size=134_217_728) as mesh:
+            yield mesh
+    finally:
+        if prev is None:
+            os.environ.pop("TT_VISIBLE_DEVICES", None)
+        else:
+            os.environ["TT_VISIBLE_DEVICES"] = prev
+
+
 N_WARMUP = 3
 N_ITER = 10
-TP = 8
 
 _SHAPES = {
     "hidden": (1, 1, 768, 1024),
@@ -119,7 +143,7 @@ def _bench_op(name, shape, mesh):
 
 def _run_all(shape_name):
     shape = _SHAPES[shape_name]
-    with open_prefill_tp4_mesh(tp=TP, l1_small_size=24576, trace_region_size=134_217_728) as mesh:
+    with _open_8chip_mesh() as mesh:
         print(f"\n=== CCL TP=8  shape={shape_name} {list(shape)} ===")
         rs_us = _bench_op("reduce_scatter", shape, mesh)
         ag_us = _bench_op("all_gather", shape, mesh)
