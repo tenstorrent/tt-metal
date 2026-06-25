@@ -14,9 +14,9 @@
 // ProgramSpec is reflection-hashable via ttsl::hash out of the box, so almost all
 // of it is hashed generically. The single semantic generic reflection can't express
 // is shape *relaxation*: a TensorParameter may declare dynamic_tensor_shape /
-// match_padded_shape_only, meaning the Program is invariant to (part of) the tensor
-// shape. The implementation honors that so volume-equivalent shapes (e.g. [2,3] and
-// [3,2], both one tile) share a cache entry instead of fragmenting it. Every other
+// match_padded_shape_only (see advanced_options.hpp), meaning the Program is
+// invariant to (part of) the tensor shape, so shapes that differ only where the
+// Program doesn't care share a cache entry instead of fragmenting it. Every other
 // field is folded in via reflection, so adding a field to
 // KernelSpec/DataflowBufferSpec/etc. is picked up automatically; a static_assert in
 // the .cpp guards the one place that isn't (the top-level ProgramSpec field set), so

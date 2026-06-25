@@ -12,7 +12,6 @@
 #include "ttnn/mesh_device_operation_adapter.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include "ttnn/program_spec_artifacts.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operations/examples/example/device/example_device_operation.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -160,24 +159,32 @@ TEST(LaunchOperationTest, MetalV2AdapterCompiles) {
 // No real op uses create_program_spec yet, so force-instantiate the ProgramSpec adapter bodies here.
 // Runtime behavior (miss->hit re-bind, owned-tensor liveness) needs a real dispatched op.
 struct ProgramSpecFactory {
-    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
-        return ttnn::device_operation::ProgramSpecArtifacts{};
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_run_args(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return {};
     }
 };
 
-// Spec factory that also owns tensors: get_owned_tensors + the span overload of create_program_spec.
+// Spec factory that also owns tensors: get_owned_tensors + the span overload of create_run_args.
 struct ProgramSpecOwnedFactory {
     static std::vector<tt::tt_metal::MeshTensor> get_owned_tensors(
         const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
         return {};
     }
-    static ttnn::device_operation::ProgramSpecArtifacts create_program_spec(
+    static tt::tt_metal::experimental::ProgramSpec create_program_spec(
+        const OperationAttributes& /*attrs*/, const Tensor& /*tensor_args*/, Tensor& /*tensor_return_value*/) {
+        return {};
+    }
+    static tt::tt_metal::experimental::ProgramRunArgs create_run_args(
         const OperationAttributes& /*attrs*/,
         const Tensor& /*tensor_args*/,
         Tensor& /*tensor_return_value*/,
         std::span<const tt::tt_metal::MeshTensor> /*owned*/) {
-        return ttnn::device_operation::ProgramSpecArtifacts{};
+        return {};
     }
 };
 

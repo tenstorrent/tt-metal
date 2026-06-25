@@ -4,8 +4,6 @@
 
 #include "ttnn/program_spec_hash.hpp"
 
-#include <cstdint>
-
 #include <reflect>
 #include <tt_stl/reflection.hpp>
 
@@ -24,8 +22,7 @@ std::size_t hash_tensor_parameter(const tt::tt_metal::experimental::TensorParame
         p.unique_id.get(), spec.data_type(), spec.layout(), spec.memory_config());
 
     if (p.advanced_options.dynamic_tensor_shape) {
-        // Program depends only on element/page count, not on tensor shape.
-        hash = ttsl::hash::hash_objects(hash, static_cast<uint64_t>(spec.padded_shape().volume()));
+        // Program is agnostic to the tensor's shape (shape is an implicit runtime arg); fold no shape in.
     } else if (p.advanced_options.match_padded_shape_only) {
         // Logical shape may vary; the padded shape (and thus access pattern) is fixed.
         hash = ttsl::hash::hash_objects(hash, spec.padded_shape());

@@ -30,7 +30,6 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/metal_v2_artifacts.hpp"
-#include "ttnn/program_spec_artifacts.hpp"
 #include "ttnn/program_spec_hash.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
@@ -804,23 +803,21 @@ public:
     // -----------------------------------------------------------------------
     // ProgramSpecMeshWorkloadFactoryAdapter (Spec)
     //
-    // Adapts a ProgramSpecFactoryConcept factory. The launch builds the spec once (create_spec), hashes
-    // its ProgramSpec content for the cache key (always from the spec), then builds a Program per
-    // coordinate range on a miss or re-binds tensors on a hit.
+    // Adapts a ProgramSpecFactoryConcept factory: build+hash the ProgramSpec for the key, build the
+    // ProgramRunArgs separately and apply them on both miss and hit.
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryConcept SpecFactory>
     struct ProgramSpecMeshWorkloadFactoryAdapter {
-        // No per-entry state: a Spec op's run args are rebuilt from the spec every dispatch.
+        // No per-entry state: a base Spec op owns no device tensors, so nothing is parked across dispatches.
         struct shared_variables_t {};
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        // The build product of one dispatch: just the artifacts (spec + run args).
+        // The keying product: just the immutable ProgramSpec. Run args are built separately each dispatch.
         struct BuiltSpec {
-            ProgramSpecArtifacts artifacts;
+            tt::tt_metal::experimental::ProgramSpec spec;
         };
 
-        // Explicit create_spec: build the ProgramSpecArtifacts. Run args reference this dispatch's
-        // tensors, so they can be applied directly on both miss and hit.
+        // Build the ProgramSpec (the cache key). No allocation, no run-arg binding -- safe before lookup.
         static BuiltSpec create_spec(
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
@@ -829,31 +826,39 @@ public:
         }
 
         // Cache key: the ProgramSpec content combined with the op type. Always from the spec.
-        static ttsl::hash::hash_t cache_hash(const ProgramSpecArtifacts& artifacts) {
-            return ttsl::hash::hash_objects(
-                ttsl::hash::type_hash<DeviceOperation>, program_spec_cache_key(artifacts.spec));
+        static ttsl::hash::hash_t cache_hash(const BuiltSpec& built) {
+            return ttsl::hash::hash_objects(ttsl::hash::type_hash<DeviceOperation>, program_spec_cache_key(built.spec));
         }
 
-        // Cache miss: build one Program per coordinate range from the spec and supply its run args.
+        // Cache miss: build one Program per coordinate range from the spec and apply this dispatch's run args.
         static cached_mesh_workload_t build_mesh_workload(
-            const BuiltSpec& built, const ttnn::MeshCoordinateRangeSet& tensor_coords, ttnn::MeshDevice* mesh_device) {
+            const BuiltSpec& built,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            ttnn::MeshDevice* mesh_device) {
+            auto run_args = SpecFactory::create_run_args(attrs, tensor_args, tensor_return_value);
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, built.artifacts.spec);
-                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params);
+                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, built.spec);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, run_args);
                 shared_variables.emplace(range, shared_variables_t{});
                 mesh_workload.add_program(range, std::move(program));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // Cache hit: supply this dispatch's freshly-built run args to each cached Program -- the canonical
-        // per-execution apply, not a tensor-arg patch. (create_spec already ran to produce the key, so
-        // run_params reference this dispatch's tensors.)
-        static void apply_run_args(cached_mesh_workload_t& cached_workload, const BuiltSpec& built) {
+        // Cache hit: build this dispatch's run args and apply them (SetProgramRunArgs) to each Program.
+        static void apply_run_args(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
+            auto run_args = SpecFactory::create_run_args(attrs, tensor_args, tensor_return_value);
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, run_args);
             }
         }
     };
@@ -861,61 +866,70 @@ public:
     // -----------------------------------------------------------------------
     // ProgramSpecWithOwnedTensorsMeshWorkloadFactoryAdapter (SpecWithOwnedTensors)
     //
-    // Opt-in and discouraged: the factory allocates its own device tensors via get_owned_tensors that its
-    // run args reference. ttnn keeps them alive for the cache entry so they outlive the async enqueue.
-    // Everything owned-tensor-specific lives here -- the base Spec adapter has none of it. Reach for this
-    // only if an op genuinely cannot express every tensor as an io arg.
+    // Discouraged opt-in: the factory allocates its own device tensors via get_owned_tensors. They are
+    // allocated ONCE on a miss, parked, and reused on every hit -- never reallocated per dispatch (which
+    // would churn the allocator and fragment memory). The spec is built every dispatch but carries owned
+    // tensors by TensorSpec only, so keying never allocates.
     // -----------------------------------------------------------------------
     template <ProgramSpecFactoryWithOwnedTensorsConcept SpecFactory>
     struct ProgramSpecWithOwnedTensorsMeshWorkloadFactoryAdapter {
         struct shared_variables_t {
-            // Op-owned tensors kept alive for the cache entry so they outlive the async enqueue.
+            // Owned tensors, allocated once on the miss and kept alive at a stable address for the cache entry.
             std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> owned_tensors;
         };
         using cached_mesh_workload_t = AdaptedCachedMeshWorkload<shared_variables_t>;
 
-        // The build product of one dispatch: the artifacts plus the owned tensors they reference.
+        // The keying product: just the ProgramSpec. Owned tensors are allocated on the miss path, not here.
         struct BuiltSpec {
-            ProgramSpecArtifacts artifacts;
-            std::shared_ptr<std::vector<tt::tt_metal::MeshTensor>> owned;
+            tt::tt_metal::experimental::ProgramSpec spec;
         };
 
-        // Explicit create_spec: allocate the owned tensors, then build the artifacts referencing them.
+        // Build the ProgramSpec (the cache key) without allocating owned tensors (spec carries them by spec only).
         static BuiltSpec create_spec(
             const operation_attributes_t& attrs,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value) {
+            return BuiltSpec{SpecFactory::create_program_spec(attrs, tensor_args, tensor_return_value)};
+        }
+
+        static ttsl::hash::hash_t cache_hash(const BuiltSpec& built) {
+            return ttsl::hash::hash_objects(ttsl::hash::type_hash<DeviceOperation>, program_spec_cache_key(built.spec));
+        }
+
+        // Cache miss: allocate owned tensors once, park them, then build a Program per range and apply run args.
+        static cached_mesh_workload_t build_mesh_workload(
+            const BuiltSpec& built,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value,
+            const ttnn::MeshCoordinateRangeSet& tensor_coords,
+            ttnn::MeshDevice* mesh_device) {
             auto owned = std::make_shared<std::vector<tt::tt_metal::MeshTensor>>(
                 SpecFactory::get_owned_tensors(attrs, tensor_args, tensor_return_value));
-            auto artifacts = SpecFactory::create_program_spec(
+            auto run_args = SpecFactory::create_run_args(
                 attrs, tensor_args, tensor_return_value, std::span<const tt::tt_metal::MeshTensor>(*owned));
-            return BuiltSpec{std::move(artifacts), std::move(owned)};
-        }
-
-        static ttsl::hash::hash_t cache_hash(const ProgramSpecArtifacts& artifacts) {
-            return ttsl::hash::hash_objects(
-                ttsl::hash::type_hash<DeviceOperation>, program_spec_cache_key(artifacts.spec));
-        }
-
-        // Cache miss: build a Program per range from the spec and park the owned tensors so they stay alive.
-        static cached_mesh_workload_t build_mesh_workload(
-            const BuiltSpec& built, const ttnn::MeshCoordinateRangeSet& tensor_coords, ttnn::MeshDevice* mesh_device) {
             tt::tt_metal::distributed::MeshWorkload mesh_workload;
             std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
             for (const auto& range : tensor_coords.ranges()) {
-                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, built.artifacts.spec);
-                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params);
-                shared_variables.emplace(range, shared_variables_t{.owned_tensors = built.owned});
+                auto program = tt::tt_metal::experimental::MakeProgramFromSpec(*mesh_device, built.spec);
+                tt::tt_metal::experimental::SetProgramRunArgs(program, run_args);
+                shared_variables.emplace(range, shared_variables_t{.owned_tensors = owned});
                 mesh_workload.add_program(range, std::move(program));
             }
             return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_variables)};
         }
 
-        // Cache hit: apply this dispatch's fresh run args and re-park this dispatch's owned tensors.
-        static void apply_run_args(cached_mesh_workload_t& cached_workload, const BuiltSpec& built) {
+        // Cache hit: reuse the parked owned tensors (no reallocation), bind them in fresh run args, apply.
+        static void apply_run_args(
+            cached_mesh_workload_t& cached_workload,
+            const operation_attributes_t& attrs,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& tensor_return_value) {
             for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
-                tt::tt_metal::experimental::SetProgramRunArgs(program, built.artifacts.run_params);
-                cached_workload.shared_variables.at(coordinate_range).owned_tensors = built.owned;
+                const auto& owned = cached_workload.shared_variables.at(coordinate_range).owned_tensors;
+                auto run_args = SpecFactory::create_run_args(
+                    attrs, tensor_args, tensor_return_value, std::span<const tt::tt_metal::MeshTensor>(*owned));
+                tt::tt_metal::experimental::SetProgramRunArgs(program, run_args);
             }
         }
     };

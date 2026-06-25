@@ -367,9 +367,8 @@ inline constexpr bool is_program_spec_mesh_op_v =
     all_alternatives_program_spec<typename mesh_device_operation_t::program_factory_t>(
         std::make_index_sequence<std::variant_size_v<typename mesh_device_operation_t::program_factory_t>>{});
 
-// Shared spec-as-key flow, parameterized on the spec adapter (base or owned-tensor). Build the
-// ProgramSpec once (the explicit create_spec step), key the cache on its content -- always from the spec,
-// never a cheap attribute hash -- then re-apply run args on a hit or build the workload on a miss.
+// Shared spec-as-key flow, parameterized on the spec adapter (base or owned-tensor). Build the spec and
+// key the cache on its content, then apply run args on a hit or build the workload on a miss.
 template <typename Adapter, DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void run_spec_flow(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
@@ -391,13 +390,13 @@ void run_spec_flow(
         }
     }
 
-    // Build the spec once, explicitly; its ProgramSpec content is the cache key.
+    // Build the spec; its ProgramSpec content is the cache key.
     auto built = Adapter::create_spec(operation_attributes, tensor_args, tensor_return_value);
 
     ProgramCacheKey program_key;
     bool program_cache_hit = false;
     if (program_cache.is_enabled()) {
-        program_key.hash = Adapter::cache_hash(built.artifacts);
+        program_key.hash = Adapter::cache_hash(built);
         for (const auto& coord : target_coords) {
             program_key.hash = ttsl::hash::hash_objects(program_key.hash, coord);
         }
@@ -422,12 +421,13 @@ void run_spec_flow(
         }
         auto& cached_program_factory = program_cache.get(program_key);
         auto& cached_mesh_workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>();
-        Adapter::apply_run_args(cached_mesh_workload, built);
+        Adapter::apply_run_args(cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
         enqueue_mesh_workload<mesh_device_operation_t>(
             operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
     } else {
         mesh_device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
-        auto cached_workload = Adapter::build_mesh_workload(built, tensor_coords, mesh_device);
+        auto cached_workload = Adapter::build_mesh_workload(
+            built, operation_attributes, tensor_args, tensor_return_value, tensor_coords, mesh_device);
 
         bool hook_blocks = false;
         if (auto hook = tt::tt_metal::GraphTracker::instance().get_hook()) {
@@ -449,9 +449,8 @@ void run_spec_flow(
     }
 }
 
-// Launch path for Spec ops: route to the base spec adapter, or -- for the discouraged owned-tensor opt-in
-// -- the separate owned adapter, which exists apart precisely so it reads as "you are doing something
-// wrong" and can be deleted wholesale once no op needs it.
+// Launch path for Spec ops: route to the base spec adapter, or -- for the discouraged owned-tensor
+// opt-in -- the separate owned adapter, deletable wholesale once no op needs it.
 template <DeviceOperationWithMeshDeviceAdapter mesh_device_operation_t>
 void launch_mesh_program_spec(
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,

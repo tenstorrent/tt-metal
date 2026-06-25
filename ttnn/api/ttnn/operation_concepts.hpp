@@ -93,15 +93,20 @@ template <typename T>
 concept MetalV2FactoryConcept = requires { &T::create_program_artifacts; } && !ProgramFactoryConcept<T> &&
                                 !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T>;
 
-// === Spec === keys the program cache on the ProgramSpec content (always hashed from the spec, never a
-// cheap attribute hash). Factory returns ProgramSpecArtifacts from create_program_spec.
+// === Spec === keys the cache on the ProgramSpec content. The spec's two partner objects stay separate:
+// create_program_spec -> ProgramSpec (immutable identity, the key, no allocation); create_run_args ->
+// ProgramRunArgs (this dispatch's tensor bindings, applied on both miss and hit).
 template <typename T>
 concept ProgramSpecFactoryConcept =
-    requires { &T::create_program_spec; } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> &&
-    !ProgramDescriptorFactoryConcept<T> && !MetalV2FactoryConcept<T>;
+    requires {
+        &T::create_program_spec;
+        &T::create_run_args;
+    } && !ProgramFactoryConcept<T> && !MeshWorkloadFactoryConcept<T> && !ProgramDescriptorFactoryConcept<T> &&
+    !MetalV2FactoryConcept<T>;
 
 // === SpecWithOwnedTensors === a Spec factory that also allocates its own device tensors via
-// get_owned_tensors (scratch/config). Discouraged; prefer expressing every tensor as an io arg.
+// get_owned_tensors. Discouraged. Owned tensors are allocated once on a miss and reused on hits (never
+// reallocated per dispatch); create_run_args takes them as a span to bind the parked instances.
 template <typename T>
 concept ProgramSpecFactoryWithOwnedTensorsConcept = ProgramSpecFactoryConcept<T> && requires { &T::get_owned_tensors; };
 
