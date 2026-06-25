@@ -449,13 +449,16 @@ void kernel_main() {
 
                         // // Now let us do the actual computation for the current group here
                         // // a. x-u
-                        // SrcA must be reconfigured to cb_in0's format. On the FP32 path cb_in0 is
-                        // FP32 while the preceding add_tiles(var,eps) / accumulate left SrcA as the
-                        // bf16 stats/intermediate format; without this, sub_tiles_bcast_scalar would
-                        // read the FP32 input as bf16 -> garbage (x - mean). (bf16 path: no-op.)
+                        // Both SrcA and SrcB must be reset to the correct format here. SrcA must follow
+                        // cb_in0 (FP32 on the fp32-input path); without it sub_tiles_bcast_scalar reads
+                        // the FP32 input as bf16 -> garbage (x - mean). SrcB must be reset to
+                        // cb_ex_global unconditionally: with FP32 gamma/beta the previous tile's
+                        // gamma/beta step leaves SrcB as FP32, and a 2-arg reconfig against the bf16
+                        // stats (cb_eps -> cb_ex_global) would be a no-op and fail to reset it, so the
+                        // bf16 mean would be read as FP32.
                         sub_tiles_bcast_scalar_init_short(cb_in0_id, cb_ex_global_id);
                         reconfig_data_format_srca(cb_in0_id);
-                        reconfig_data_format_srcb(cb_eps_id, cb_ex_global_id);
+                        reconfig_data_format_srcb(cb_ex_global_id);
 
                         tile_regs_acquire();
                         sub_tiles_bcast_scalar(cb_in0_id, cb_ex_global_id, 0, 0 + (g << 1), dst0);
@@ -484,6 +487,11 @@ void kernel_main() {
                         // // c. a * b
                         cb_xmm.wait_front(2);
                         mul_tiles_init(cb_xmm_id, cb_xmm_id);
+                        // SrcA must be reset to cb_xmm here. The mask-multiply above left SrcA pointing
+                        // at cb_input_mask's format; with an FP32 mask that is FP32, so reading the bf16
+                        // cb_xmm intermediate on SrcA without this reset interprets it as FP32 -> garbage.
+                        // (bf16 mask path: no-op.)
+                        reconfig_data_format_srca(cb_xmm_id);
                         reconfig_data_format_srcb(cb_ex2pe_id, cb_xmm_id);
                         tile_regs_acquire();
                         mul_tiles(cb_xmm_id, cb_xmm_id, 0, 1, dst0);
@@ -561,8 +569,12 @@ void kernel_main() {
                     }
 
                     if constexpr (do_gamma) {
-                        mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
+                        // SrcA must be reset to cb_x. With an FP32 mask the (mask * rstd) step left SrcA
+                        // as FP32; the bcast-rows multiply reads the bf16 cb_x on SrcA and would
+                        // misinterpret it otherwise. (bf16 path: no-op.)
+                        reconfig_data_format_srca(cb_x_id);
                         reconfig_data_format_srcb(cb_xmm_id, cb_gamma_id);
+                        mul_bcast_rows_init_short(cb_x_id, cb_gamma_id);
 
                         cb_x.wait_front(1);
                         tile_regs_acquire();
@@ -577,8 +589,10 @@ void kernel_main() {
                     }
 
                     if constexpr (do_beta) {
-                        add_bcast_rows_init_short(cb_x_id, cb_beta_id);
+                        // SrcA must follow cb_x for the same reason as the gamma step above.
+                        reconfig_data_format_srca(cb_x_id);
                         reconfig_data_format_srcb(do_gamma ? cb_gamma_id : cb_xmm_id, cb_beta_id);
+                        add_bcast_rows_init_short(cb_x_id, cb_beta_id);
 
                         cb_x.wait_front(1);
                         tile_regs_acquire();
@@ -594,6 +608,7 @@ void kernel_main() {
 
                     // Write out the final output
                     copy_tile_init(cb_x_id);
+                    reconfig_data_format_srca(cb_x_id);
                     reconfig_data_format_srcb(do_beta ? cb_beta_id : cb_xmm_id, cb_x_id);
 
                     cb_x.wait_front(1);

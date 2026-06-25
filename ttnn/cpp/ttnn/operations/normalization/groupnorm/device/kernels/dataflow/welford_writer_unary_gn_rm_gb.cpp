@@ -127,6 +127,12 @@ void kernel_main() {
 
     if constexpr (fuse_gamma) {
         constexpr uint32_t gamma_tile_bytes = get_tile_size(cb_gamma_id);
+        // Datum-aware face byte strides (tile = 32x32 = 1024 datums, face = 16x16 = 256, face row = 16).
+        // bf16 -> element=2, face_w=32, face=512; fp32 -> element=4, face_w=64, face=1024. The literal
+        // 64/512/32 offsets below were bf16-only and corrupted fp32 gamma sticks (-> nan output).
+        constexpr uint32_t gamma_element_bytes = gamma_tile_bytes / 1024;
+        constexpr uint32_t gamma_face_w_bytes = gamma_element_bytes * 16;
+        constexpr uint32_t gamma_face_bytes = gamma_element_bytes * 256;
         const auto gamma = TensorAccessor(gamma_args, gamma_addr);
 
         cb_gamma.reserve_back(num_cols_tile_gamma_beta);
@@ -146,21 +152,21 @@ void kernel_main() {
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             uint32_t tile_id = gamma_tile_start_id + w;
             noc.async_read(
-                gamma, CoreLocalMem<uint32_t>(l1_write_addr_gamma), 64, {.page_id = tile_id}, {});
+                gamma, CoreLocalMem<uint32_t>(l1_write_addr_gamma), gamma_face_w_bytes * 2, {.page_id = tile_id}, {});
             l1_write_addr_gamma += gamma_tile_bytes;
         }
         noc.async_read_barrier();
 
-        // Copy the second set of 32 bytes into the second face
+        // Copy the second face-row's datums into the second face
         l1_write_addr_gamma = base_l1_write_addr_gamma;
 
         UnicastEndpoint self_ep_gamma;
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             noc.async_read(
                 self_ep_gamma,
-                CoreLocalMem<uint32_t>(l1_write_addr_gamma + 512),
-                32,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + 32},
+                CoreLocalMem<uint32_t>(l1_write_addr_gamma + gamma_face_bytes),
+                gamma_face_w_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_gamma + gamma_face_w_bytes},
                 {});
             l1_write_addr_gamma += gamma_tile_bytes;
         }
@@ -173,6 +179,10 @@ void kernel_main() {
         // Just like gamma, we read at a 64 byte granularity for Blackhole NOC compatibility
         // Then copy the second set of 32 bytes into the second face
         constexpr uint32_t beta_tile_bytes = get_tile_size(cb_beta_id);
+        // Datum-aware face byte strides (see gamma above): bf16 -> 2/32/512, fp32 -> 4/64/1024.
+        constexpr uint32_t beta_element_bytes = beta_tile_bytes / 1024;
+        constexpr uint32_t beta_face_w_bytes = beta_element_bytes * 16;
+        constexpr uint32_t beta_face_bytes = beta_element_bytes * 256;
         const auto beta = TensorAccessor(beta_args, beta_addr);
 
         cb_beta.reserve_back(num_cols_tile_gamma_beta);
@@ -184,21 +194,21 @@ void kernel_main() {
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             uint32_t tile_id = beta_tile_start_id + w;
             noc.async_read(
-                beta, CoreLocalMem<uint32_t>(l1_write_addr_beta), 64, {.page_id = tile_id}, {});
+                beta, CoreLocalMem<uint32_t>(l1_write_addr_beta), beta_face_w_bytes * 2, {.page_id = tile_id}, {});
             l1_write_addr_beta += beta_tile_bytes;
         }
         noc.async_read_barrier();
 
-        // Copy the second set of 32 bytes into the second face
+        // Copy the second face-row's datums into the second face
         l1_write_addr_beta = base_l1_write_addr_beta;
 
         UnicastEndpoint self_ep_beta;
         for (uint32_t w = 0; w < num_cols_tile_gamma_beta; w++) {
             noc.async_read(
                 self_ep_beta,
-                CoreLocalMem<uint32_t>(l1_write_addr_beta + 512),
-                32,
-                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + 32},
+                CoreLocalMem<uint32_t>(l1_write_addr_beta + beta_face_bytes),
+                beta_face_w_bytes,
+                {.noc_x = my_x[0], .noc_y = my_y[0], .addr = l1_write_addr_beta + beta_face_w_bytes},
                 {});
             l1_write_addr_beta += beta_tile_bytes;
         }
