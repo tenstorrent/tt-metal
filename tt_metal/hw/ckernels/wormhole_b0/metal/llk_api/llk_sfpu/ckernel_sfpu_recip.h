@@ -41,7 +41,7 @@ sfpi_inline sfpi::vFloat sfpu_reciprocal_iter(const sfpi::vFloat in) {
     // Not only is 255-in.Exp more efficient via SFPNOT, but it also ensures
     // that in.Exp == 0 results in ±inf, and in.Exp == 255 results in ±0.
     // See the scale factor adjustment via scale*0.5 below for further details.
-    sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(in);
+    sfpi::vUInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(in);
 
     // Continue with quadratic estimate.
     y = sfpi::vConstFloatPrgm2 + y * negative_x;
