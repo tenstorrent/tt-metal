@@ -54,6 +54,7 @@ void kernel_main() {
     constexpr uint32_t K_blocks = get_compile_time_arg_val(4);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t fused_gelu = get_compile_time_arg_val(6);
+    constexpr uint32_t fused_gelu_approx = get_compile_time_arg_val(7);
 
     const uint32_t k_idx = get_arg_val<uint32_t>(0);
     const uint32_t is_base = get_arg_val<uint32_t>(1);
@@ -118,7 +119,7 @@ void kernel_main() {
     binary_op_init_common(reduce_cb_id, reduce_cb_id, out_cb_id);
     add_tiles_init(reduce_cb_id, reduce_cb_id, true /* acc_to_dest */);
     if (fused_gelu) {
-        gelu_tile_init<false /* fast_and_approx */>();
+        gelu_tile_init<(bool)fused_gelu_approx>();
     }
 
     cb_reserve_back(out_cb_id, block_num_tiles);
@@ -137,7 +138,7 @@ void kernel_main() {
             // Fuse the GeGLU gate activation directly onto the reduced output tile in DST,
             // so the gate projection needs no separate elementwise gelu op afterwards.
             if (fused_gelu) {
-                gelu_tile<false /* fast_and_approx */>(0);
+                gelu_tile<(bool)fused_gelu_approx>(0);
             }
             tile_regs_commit();
             tile_regs_wait();

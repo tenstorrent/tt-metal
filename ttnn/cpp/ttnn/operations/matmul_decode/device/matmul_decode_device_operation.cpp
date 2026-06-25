@@ -204,7 +204,8 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     bool fused_gelu,
-    bool interleaved_output) {
+    bool interleaved_output,
+    bool fused_gelu_approx) {
     using OperationType = ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation;
 
     // For the partial width-sharded layout the caller reshapes/permutes B, so its
@@ -237,6 +238,7 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
         compute_kernel_config,
         fused_gelu,
         interleaved_output,
+        fused_gelu_approx,
     };
     auto tensor_args = OperationType::tensor_args_t{input_tensor_a, input_tensor_b};
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);

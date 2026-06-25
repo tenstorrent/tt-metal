@@ -523,7 +523,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::PartialWidthSharded::create_descr
         Nc_tiles,
         K_blocks,
         inA_K_tiles_per_core,  // needed to translate global K-tile -> sender-major full_in0 slot (M_tiles>1)
-        static_cast<uint32_t>(operation_attributes.fused_gelu),  // fuse (erf) gelu into phase-2 output pack
+        static_cast<uint32_t>(operation_attributes.fused_gelu),         // fuse (erf) gelu into phase-2 output pack
+        static_cast<uint32_t>(operation_attributes.fused_gelu_approx),  // 0=erf, 1=tanh-approx
     };
     log_debug(
         tt::LogOp,

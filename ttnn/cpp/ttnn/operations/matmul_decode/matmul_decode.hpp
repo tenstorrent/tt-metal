@@ -25,6 +25,7 @@ Tensor matmul_decode(
     std::optional<const DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool fused_gelu = false,
-    bool interleaved_output = false);
+    bool interleaved_output = false,
+    bool fused_gelu_approx = false);
 
 }  // namespace ttnn

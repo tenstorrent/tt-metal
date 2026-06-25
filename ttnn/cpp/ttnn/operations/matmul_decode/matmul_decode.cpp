@@ -15,7 +15,8 @@ Tensor matmul_decode(
     std::optional<const DataType> dtype,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     bool fused_gelu,
-    bool interleaved_output) {
+    bool interleaved_output,
+    bool fused_gelu_approx) {
     return ttnn::prim::matmul_decode(
         input_tensor_a,
         input_tensor_b,
@@ -23,7 +24,8 @@ Tensor matmul_decode(
         dtype,
         compute_kernel_config,
         fused_gelu,
-        interleaved_output);
+        interleaved_output,
+        fused_gelu_approx);
 }
 
 }  // namespace ttnn

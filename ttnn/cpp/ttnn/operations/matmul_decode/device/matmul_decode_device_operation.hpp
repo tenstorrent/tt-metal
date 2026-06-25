@@ -50,6 +50,9 @@ struct MatmulDecodeDeviceOperation {
         // interleaved buffer) instead of a width-sharded output -- folding the
         // sharded->interleaved reshard the caller would otherwise do into the op.
         bool interleaved_output = false;
+        // When true (and fused_gelu is set), the fused GELU uses the tanh-approx
+        // variant (gelu_tile<true>) instead of the exact-erf variant (gelu_tile<false>).
+        bool fused_gelu_approx = false;
     };
 
     // Tensors passed in/out of the operation.
@@ -120,5 +123,6 @@ ttnn::operations::matmul_decode::MatmulDecodeDeviceOperation::tensor_return_valu
     std::optional<const DataType> dtype = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     bool fused_gelu = false,
-    bool interleaved_output = false);
+    bool interleaved_output = false,
+    bool fused_gelu_approx = false);
 }  // namespace ttnn::prim
