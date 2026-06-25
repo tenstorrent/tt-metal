@@ -288,7 +288,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts TransposeHCShardedProgramFactory::create_program_spec(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     // Metal 2.0 named resource handles (locals to avoid unity-build name collisions).
     const DFBSpecName CB_IN{"cb_in"};    // legacy c_0: input shard (borrowed)
@@ -542,7 +542,7 @@ ttnn::device_operation::ProgramArtifacts TransposeHCShardedProgramFactory::creat
         {INPUT_TENSOR, TensorArgument{std::cref(input_tensor.mesh_tensor())}},
         {OUTPUT_TENSOR, TensorArgument{std::cref(output_tensor.mesh_tensor())}}};
 
-    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+    return ttnn::device_operation::ProgramSpecArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
 }  // namespace ttnn::prim::qsr

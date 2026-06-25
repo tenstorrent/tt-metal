@@ -29,7 +29,7 @@ const TensorParamName OUTPUT{"output"};
 
 }  // namespace
 
-ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_program_artifacts(
+ttnn::device_operation::ProgramSpecArtifacts TransposeCNProgramFactory::create_program_spec(
     const TransposeParams& /*operation_attributes*/, const TransposeInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor = tensor_args.input;
     const auto& input_mesh_tensor = input_tensor.mesh_tensor();
@@ -232,7 +232,7 @@ ttnn::device_operation::ProgramArtifacts TransposeCNProgramFactory::create_progr
     run_args.tensor_args.emplace(INPUT, input_mesh_tensor);
     run_args.tensor_args.emplace(OUTPUT, output_mesh_tensor);
 
-    return ttnn::device_operation::ProgramArtifacts{
+    return ttnn::device_operation::ProgramSpecArtifacts{
         .spec = std::move(spec),
         .run_params = std::move(run_args),
     };
