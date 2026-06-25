@@ -550,7 +550,7 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     if (use_cur_pos_tensor) {
         // #44366: cur_pos is consumed by both the writer and compute kernels.
         // A single shared CB races: whichever consumer pops first drains the
-        // count and the other hangs in cb_wait_front. Use one CB per consumer
+        // count and the other hangs waiting for tiles. Use one CB per consumer
         // — c_8 for the writer, c_15 for compute — each with capacity 1. The
         // reader fills c_8 (from DRAM, or via the aliased sharded buffer)
         // then does an L1->L1 copy into c_15.

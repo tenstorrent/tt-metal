@@ -7,6 +7,7 @@
 #include <cstring>
 
 #include "ckernel.h"
+#include "llk_assert.h"
 #include "sanitizer/settings.h"
 #include "sanitizer/types.h"
 
@@ -139,6 +140,8 @@ TT_ALWAYS_INLINE void operand_assert(const State<T> expected, const State<T> act
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
+
+    LLK_ASSERT(false, "Operand assertion, look at Sanitizer log");
 }
 
 template <Trigger level>
@@ -171,6 +174,8 @@ NOINLINE NOCLONE bool operation_assert(const Operation expected, const Operation
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
+
+    LLK_ASSERT(false, "Operation assertion, look at Sanitizer log");
 
     return false;
 }
@@ -206,6 +211,8 @@ NOINLINE NOCLONE void operation_argument_assert(
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
+
+    LLK_ASSERT(false, "Operation argument assertion, look at Sanitizer log");
 }
 
 static inline ct_string fsm_state_name(const FsmState state)
@@ -274,6 +281,8 @@ NOINLINE NOCLONE void fsm_assert(
     _print_compute_info(current);
 
     DEVICE_PRINT("└─────────────────────────────\n");
+
+    LLK_ASSERT(false, "FSM assertion, look at Sanitizer log");
 }
 
 } // namespace llk::san

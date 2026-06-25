@@ -51,9 +51,9 @@ def run_resnet_50(
 @pytest.mark.parametrize(
     "batch_size, act_dtype, weight_dtype, math_fidelity",
     (
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.HiFi2),
-        (16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
-        (32, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),
+        (16, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.HiFi2),
+        (16, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),
+        (32, ttnn.bfloat16, ttnn.bfloat16, ttnn.MathFidelity.LoFi),
     ),
 )
 @pytest.mark.parametrize(

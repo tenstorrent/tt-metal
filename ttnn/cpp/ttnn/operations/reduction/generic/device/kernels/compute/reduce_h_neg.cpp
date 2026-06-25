@@ -41,9 +41,13 @@ void kernel_main() {
         constexpr uint32_t row_chunk = compute_kernel_lib::DEST_AUTO_LIMIT - 1;
         constexpr uint32_t work_dst = row_chunk;
 
+        CircularBuffer cb_input_obj(cb_input);
+        CircularBuffer cb_scaler_obj(cb_scaler);
+        CircularBuffer cb_output_obj(cb_output);
+
         init_sfpu(cb_input, cb_output);
         copy_tile_to_dst_init_short(cb_input);
-        cb_wait_front(cb_scaler, onetile);
+        cb_scaler_obj.wait_front(onetile);
         PACK((llk_pack_reduce_mask_config<REDUCE_DIM, PackMode::Default>(cb_output)));
 
         for (uint32_t nc = 0; nc < NC; ++nc) {
@@ -58,7 +62,7 @@ void kernel_main() {
 
                 for (uint32_t ht = 0; ht < Ht; ++ht) {
                     for (uint32_t k = 0; k < current_chunk; ++k) {
-                        cb_wait_front(cb_input, onetile);
+                        cb_input_obj.wait_front(onetile);
                         if (ht == 0) {
                             copy_tile(cb_input, 0, k);
                             if constexpr (reduce_format == DataFormat::Int32) {
@@ -75,7 +79,7 @@ void kernel_main() {
                             }
                             compute_kernel_lib::detail::sfpu_reduce_max_fold_tile<reduce_format>(k, work_dst, k);
                         }
-                        cb_pop_front(cb_input, onetile);
+                        cb_input_obj.pop_front(onetile);
                     }
                 }
 
@@ -97,9 +101,9 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 for (uint32_t k = 0; k < current_chunk; ++k) {
-                    cb_reserve_back(cb_output, onetile);
+                    cb_output_obj.reserve_back(onetile);
                     pack_tile(k, cb_output);
-                    cb_push_back(cb_output, onetile);
+                    cb_output_obj.push_back(onetile);
                 }
                 tile_regs_release();
             }

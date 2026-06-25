@@ -79,7 +79,35 @@ ALWI void rel_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
     }
 }
 
+template <SfpuType OP, DataFormat data_format>
+ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format. Supported: Int32, UInt32, UInt16");
+    SFPU_BINARY_CALL(
+        DST_SYNC_MODE,
+        DST_ACCUM_MODE,
+        calculate_binary_eq_int,
+        (APPROX, 8 /* ITERATIONS */, OP, data_format),
+        idst0,
+        idst1,
+        odst,
+        VectorMode::RC);
+}
+
 }  // namespace detail
+#endif
+
+#ifndef ARCH_QUASAR
+template <DataFormat data_format>
+ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((detail::eq_int_tile_dispatch<SfpuType::eq, data_format>(idst0, idst1, odst)));
+}
+
+template <DataFormat data_format>
+ALWI void ne_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
+    MATH((detail::eq_int_tile_dispatch<SfpuType::ne, data_format>(idst0, idst1, odst)));
+}
 #endif
 
 #ifndef ARCH_QUASAR
@@ -115,9 +143,26 @@ ALWI void ge_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 
 /**
  * The following functions initialize the relational operations. They should be invoked prior to calling the execution
- * API. Please refer to execution API documentation (lt_int_tile/gt_int_tile/le_int_tile/ge_int_tile) to find out more
- * about the relational operations.
+ * API. Please refer to execution API documentation to find out more about the relational operations.
  */
+#ifndef ARCH_QUASAR
+template <DataFormat data_format>
+ALWI void eq_int_tile_init() {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for eq_int. Supported data formats are: Int32, UInt32, UInt16");
+    MATH((SFPU_BINARY_INIT(eq_int)));
+}
+
+template <DataFormat data_format>
+ALWI void ne_int_tile_init() {
+    static_assert(
+        data_format == DataFormat::Int32 || data_format == DataFormat::UInt32 || data_format == DataFormat::UInt16,
+        "Unsupported data format for ne_int. Supported data formats are: Int32, UInt32, UInt16");
+    MATH((SFPU_BINARY_INIT(ne_int)));
+}
+#endif
+
 #ifndef ARCH_QUASAR
 template <DataFormat data_format>
 ALWI void lt_int_tile_init() {

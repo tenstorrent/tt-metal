@@ -17,24 +17,49 @@ using namespace ckernel::math;
 /**
  * @brief Set debug feature disable bit 11 to work around an FPU HW bug.
  *
+ * DO NOT call this unless absolutely necessary.
+ * We need to wait for both math and pack to be fully idle before writing
+ * this bit because it affects both dest banks.
+ * Changing it while either pipeline is active can cause a race condition.
+ *
  * @note Workaround for bug tt-metal#46219. Paired with @ref _llk_math_dbg_feature_enable_ to restore.
  */
 inline void _llk_math_dbg_feature_disable_()
 {
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 1 << 11); // Set debug feature disable bit 11
-                                                             // workaround for bug tt-metal#46219
+    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    if (val & (1 << 11))
+    {
+        return;
+    }
+    tensix_sync();
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val | (1 << 11));
 }
 
 /**
  * @brief Clear debug feature disable bit 11, restoring default FPU behavior.
  *
- * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219). Issues a tensix_sync() first.
+ * Clears bit 11 to disable 32 bit mode for dest.
+ * Same synchronization as @ref _llk_math_dbg_feature_disable_ is needed here to avoid racing.
+ *
+ * @note Reverses @ref _llk_math_dbg_feature_disable_ (workaround for bug tt-metal#46219).
  */
 inline void _llk_math_dbg_feature_enable_()
 {
+    const std::uint32_t val = reg_read(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE);
+    if (!(val & (1 << 11)))
+    {
+        return;
+    }
     tensix_sync();
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Clear debug feature disable bit 11
-                                                       // workaround for bug tt-metal#46219
+    while (semaphore_read(semaphore::MATH_PACK) > 0)
+    {
+        asm volatile("nop");
+    };
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, val & ~(1 << 11));
 }
 
 /**

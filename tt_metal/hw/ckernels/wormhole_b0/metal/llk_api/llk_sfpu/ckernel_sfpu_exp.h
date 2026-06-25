@@ -160,7 +160,7 @@ sfpi_inline sfpi::vFloat _sfpu_round_to_nearest_int32_(sfpi::vFloat z, sfpi::vIn
 
     sfpi::vFloat tmp = z + c231;
     sfpi::vFloat k = tmp - c231;
-    k_int = sfpi::reinterpret<sfpi::vInt>(tmp) - sfpi::reinterpret<sfpi::vInt>(c231);
+    k_int = sfpi::as<sfpi::vInt>(tmp) - sfpi::as<sfpi::vInt>(c231);
 
     return k;
 }
@@ -445,13 +445,13 @@ sfpi_inline sfpi::vFloat _calculate_exponential_body_(sfpi::vFloat in) {
 
         // Clear exp bits
         sfpi::vInt c23_73 = p_exp::C23_73;
-        sfpi::vInt tmp = sfpi::reinterpret<sfpi::vInt>(conv) - c23_73;
+        sfpi::vInt tmp = sfpi::as<sfpi::vInt>(conv) - c23_73;
 
         // Add bias
         tmp += SP_BIAS;
 
         // SHL to move integer bits to exponent
-        out = sfpi::reinterpret<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
+        out = sfpi::as<sfpi::vFloat>(tmp << (10 - FRAC_BITS));
     } else {
         // Force sign to 0 (make number positive)
         out = _sfpu_exp_(sfpi::setsgn(in, 0));

@@ -27,6 +27,7 @@ from models.common.utility_functions import (
 from models.demos.utils.device_sku import get_current_device_sku_name
 from models.demos.utils.llm_demo_utils import verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
+from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
 
 
 def load_and_cache_context(context_url, cache_dir, max_length=None):
@@ -783,7 +784,7 @@ def create_tt_model(
     "device_params",
     [
         {
-            "trace_region_size": 216580672,
+            TRACE_MODEL_KEY_PARAM: "llama3.3-70b-galaxy",
             "num_command_queues": 1,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
             "worker_l1_size": 1345000,

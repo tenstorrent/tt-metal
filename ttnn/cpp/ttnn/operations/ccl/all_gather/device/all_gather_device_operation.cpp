@@ -125,30 +125,6 @@ AllGatherDeviceOperation::topology_return_value_t AllGatherDeviceOperation::comp
         input_topology.distribution_shape(), output_placements, input_topology.mesh_coords())};
 }
 
-ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
-
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = args.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
-
-    return tt::tt_metal::operation::hash_operation<AllGatherDeviceOperation>(
-        args.dim,
-        args.output_mem_config,
-        args.cluster_axis,
-        args.axis_topology[0],
-        args.axis_topology[1],
-        args.axis_num_devices[0],
-        args.axis_num_devices[1],
-        args.axis_num_links[0],
-        args.axis_num_links[1],
-        tensor_args.persistent_output_tensor.has_value(),
-        subdevice_core_range_set,
-        args.sub_core_grid,
-        tensor_args);
-}
-
 tt::tt_metal::operation::OpPerformanceModelGeneral<AllGatherDeviceOperation::tensor_return_value_t>
 AllGatherDeviceOperation::create_op_performance_model(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
@@ -279,7 +255,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
     return {
-        AllGatherParams(
+        AllGatherParams{
             gather_dim,
             memory_config.value_or(input_tensor.memory_config()),
             cluster_axis,
@@ -288,7 +264,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
             axis_num_links,
             num_devices,
             subdevice_id,
-            sub_core_grid),
+            sub_core_grid},
         AllGatherInputs{.input_tensor = input_tensor, .persistent_output_tensor = persistent_output_tensor}};
 }
 
