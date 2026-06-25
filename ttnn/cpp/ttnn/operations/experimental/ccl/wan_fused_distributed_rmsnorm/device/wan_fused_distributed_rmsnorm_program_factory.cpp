@@ -634,21 +634,30 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         args.per_head_norm);
     // Block-major POST: even input-streaming leaves intermediate/rotated/output
     // whole-row, which overflows L1 on wide low-TP shards. When so, shrink those
-    // CBs to block-local + run the fused per-block POST. Implies streaming_low_l1.
-    // Gated on streaming_input so it can only engage on the whole-row-norm path
-    // (per_head_norm never auto-streams). Margin below l1_size_per_core covers the
-    // ~72 KB firmware/kernel-config reserve plus slack.
+    // CBs to block-local + run the fused per-block POST. Margin below l1_size_per_core
+    // covers the ~72 KB firmware/kernel-config reserve plus slack.
+    //
+    // Two flavors:
+    //  - whole-row norm: needs input STREAMING (the POST re-reads input pass 1), so it
+    //    only engages when decide_streaming_low_l1 already chose to stream.
+    //  - per_head_norm: keeps input RESIDENT and runs a HEAD-MAJOR POST (each head's
+    //    head_dim_tiles cols fully processed: per-head 1/rms -> affine -> rope ->
+    //    output, head-local CBs). No streaming needed (input stays resident through
+    //    PRE+POST), so it engages on per_head_norm directly. per_head_norm forces
+    //    is_tp_1, so there's no fabric/mux ordering to worry about.
     const uint64_t l1_cap_bytes = static_cast<uint64_t>(device->l1_size_per_core()) - 112640ull;
-    const bool block_major_post = streaming_input && decide_block_major_post(
-                                                         num_tile_cols,
-                                                         block_size,
-                                                         intermediate_tile_size,
-                                                         output_tile_size,
-                                                         has_weight,
-                                                         has_bias,
-                                                         fuse_rope,
-                                                         l1_cap_bytes);
-    const bool streaming_low_l1 = streaming_input || block_major_post;
+    const bool overflows_resident_post = decide_block_major_post(
+        num_tile_cols,
+        block_size,
+        intermediate_tile_size,
+        output_tile_size,
+        has_weight,
+        has_bias,
+        fuse_rope,
+        l1_cap_bytes);
+    const bool block_major_post = overflows_resident_post && (streaming_input || args.per_head_norm);
+    // Whole-row block-major streams input; per_head_norm block-major keeps it resident.
+    const bool streaming_low_l1 = streaming_input;
     // Clamp to a single resident row for (a) per-head RoPE — its cos/sin CBs are
     // chunk*num_tile_cols fp32 tiles (overflow L1 at feat>=1024) and the compute
     // deadlocks at chunk>=2 with many rows; and (b) the streaming-low-L1 path,
@@ -988,7 +997,7 @@ WanFusedDistributedRmsnormMeshWorkloadFactory::create_at(
         // reader a window to push weight/cos before the POST block loop needs them, so
         // it must push them first. The mux (ring>1) block-major path keeps input-first
         // (the AG window covers the side-input pushes) — deferring there raced the AG.
-        static_cast<uint32_t>(block_major_post && is_tp_1),  // reader "defer_input" (CT arg 17)
+        static_cast<uint32_t>(block_major_post && is_tp_1 && streaming_low_l1),  // reader "defer_input" (CT arg 17)
     };
     TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     if (has_weight) {
