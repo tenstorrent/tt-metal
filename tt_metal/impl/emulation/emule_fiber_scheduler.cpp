@@ -28,8 +28,8 @@
 
 // Silicon-named per-RISC globals that cannot move into the ctx (read by unmodified
 // upstream). Defined in emulated_program_runner.cpp; the scheduler restores them on
-// every swap-in so a fiber sees its own core's coords regardless of which worker
-// resumes it. __emule_self is extern-declared in emule_thread_ctx.h.
+// every swap-in (one worker hosts many fibers, so the coords must be reset to the
+// incoming fiber's core). __emule_self is extern-declared in emule_thread_ctx.h.
 extern thread_local uint8_t my_x[2];
 extern thread_local uint8_t my_y[2];
 
@@ -50,6 +50,9 @@ struct Fiber {
     const void* park_key = nullptr;
     Fiber* park_link = nullptr;     // intrusive parked-list
     std::exception_ptr eptr;
+    unsigned home = 0;              // pinned worker — a fiber NEVER migrates across workers
+                                    // (the JIT kernel caches the thread_local __emule_self
+                                    //  address; migration would dereference a stale slot)
 
     ~Fiber() {
         if (map_base) {
@@ -58,11 +61,12 @@ struct Fiber {
     }
 };
 
-// Per-worker state. A fiber may resume on a different worker than it parked on;
-// these are set by the worker that currently runs the fiber.
+// Per-worker state. Fibers are pinned (Fiber::home), so a fiber always runs on the
+// same worker — these are read/written only by that worker.
 thread_local ucontext_t t_sched;          // the worker loop's context (swap target)
 thread_local Fiber*     t_current = nullptr;
 thread_local struct FiberSchedulerImpl* t_impl = nullptr;
+thread_local unsigned   t_worker = 0;      // this worker's index (== home of its fibers)
 
 size_t env_size(const char* name, size_t dflt) {
     if (const char* s = std::getenv(name)) {
@@ -78,7 +82,8 @@ size_t env_size(const char* name, size_t dflt) {
 struct FiberSchedulerImpl {
     std::mutex mu_;
     std::condition_variable cv_;                       // workers wait here for ready fibers
-    std::deque<Fiber*> ready_;
+    std::vector<std::deque<Fiber*>> ready_;            // per-worker ready queues (fibers are
+                                                       // pinned: ready_[w] holds only home==w)
     std::unordered_map<const void*, Fiber*> parked_;   // key -> intrusive list head
     std::vector<std::unique_ptr<Fiber>> all_;          // ownership of every spawned fiber
 
@@ -95,8 +100,14 @@ struct FiberSchedulerImpl {
 
     size_t stack_bytes_ = 1u << 20;          // 1 MB default
 
-    void worker_loop();
+    void worker_loop(unsigned w);
     void install_fiber(Fiber* f);
+    bool any_ready() const {                 // any runnable fiber in any worker's queue?
+        for (const auto& q : ready_) {
+            if (!q.empty()) return true;
+        }
+        return false;
+    }
     std::string dump_parked();               // single-threaded (post-join)
     void watchdog();                         // tier-2
     std::atomic<bool> run_active_{false};
@@ -122,30 +133,36 @@ void FiberSchedulerImpl::install_fiber(Fiber* f) {
     my_y[0] = my_y[1] = f->id.phys_y;
 }
 
-void FiberSchedulerImpl::worker_loop() {
+void FiberSchedulerImpl::worker_loop(unsigned w) {
     t_impl = this;
+    t_worker = w;
     mu_.lock();
     for (;;) {
         if (abort_flag_) break;
-        if (ready_.empty()) {
+        if (ready_[w].empty()) {
             if (active_ == 0) break;
             ++idle_;
-            if (idle_ == K_ && running_ == 0 && !parked_.empty()) {
-                deadlock_ = true;            // tier-1: quiescent deadlock
+            // Tier-1 quiescent deadlock: nothing executing, nothing runnable anywhere,
+            // and fibers still parked. The `!any_ready()` term is essential — `idle_ ==
+            // K_` alone is a false positive at K>1, because a worker counts itself idle
+            // before re-acquiring mu_ to observe a fiber a concurrent wake() just enqueued
+            // into its ready queue. Checking the queues (under mu_) closes that window.
+            if (idle_ == K_ && running_ == 0 && !any_ready() && !parked_.empty()) {
+                deadlock_ = true;
                 abort_flag_ = true;
                 --idle_;
                 break;
             }
             {
                 std::unique_lock<std::mutex> wl(mu_, std::adopt_lock);
-                cv_.wait(wl, [&] { return !ready_.empty() || active_ == 0 || abort_flag_; });
+                cv_.wait(wl, [&] { return !ready_[w].empty() || active_ == 0 || abort_flag_; });
                 wl.release();                // mu_ stays locked, back to manual management
             }
             --idle_;
             continue;
         }
-        Fiber* f = ready_.front();
-        ready_.pop_front();
+        Fiber* f = ready_[w].front();
+        ready_[w].pop_front();
         f->state = FiberState::Running;
         ++running_;
         t_current = f;
@@ -198,7 +215,7 @@ void FiberScheduler::wake(const void* key) {
         f->park_link = nullptr;
         f->park_key = nullptr;
         f->state = FiberState::Ready;
-        p_->ready_.push_back(f);
+        p_->ready_[f->home].push_back(f);    // back to its pinned worker
         f = nx;
     }
     p_->parked_.erase(it);
@@ -209,7 +226,7 @@ void FiberScheduler::yield() {
     Fiber* f = t_current;
     p_->mu_.lock();
     f->state = FiberState::Ready;
-    p_->ready_.push_back(f);
+    p_->ready_[f->home].push_back(f);        // back to its pinned worker (== this worker)
     p_->cv_.notify_all();
     swapcontext(&f->ctx, &t_sched);          // mu_ held -> worker loop; resumes mu_-UNLOCKED
 }
@@ -244,8 +261,7 @@ void FiberScheduler::spawn(std::function<void()> entry, std::unique_ptr<ThreadCo
     f->state = FiberState::Ready;
 
     std::lock_guard<std::mutex> g(p_->mu_);
-    p_->ready_.push_back(f.get());
-    p_->all_.push_back(std::move(f));
+    p_->all_.push_back(std::move(f));   // home + ready-queue placement happens in run_until_idle
 }
 
 std::string FiberSchedulerImpl::dump_parked() {
@@ -276,7 +292,9 @@ std::string FiberSchedulerImpl::dump_parked() {
                 auto base = reinterpret_cast<uintptr_t>(ctx->bridge_l1);
                 auto k = reinterpret_cast<uintptr_t>(key);
                 if (k >= base) {
-                    std::snprintf(buf, sizeof(buf), "L1 sem @ 0x%lx", (unsigned long)(k - base));
+                    std::snprintf(buf, sizeof(buf), "L1 sem @ 0x%lx (cur=%u)",
+                                  (unsigned long)(k - base),
+                                  *reinterpret_cast<const volatile uint32_t*>(key));
                     name = buf;
                 }
             }
@@ -332,9 +350,20 @@ void FiberScheduler::run_until_idle() {
         p_->deadlock_ = false;
         p_->abort_flag_ = false;
         p_->first_eptr_ = nullptr;
+        // Pin each fiber to a worker round-robin and seed that worker's ready queue.
+        p_->ready_.assign(p_->K_, {});
+        for (size_t i = 0; i < p_->all_.size(); ++i) {
+            Fiber* f = p_->all_[i].get();
+            f->home = static_cast<unsigned>(i % p_->K_);
+            p_->ready_[f->home].push_back(f);
+        }
     }
     p_->progress_.store(0);
     p_->resumptions_.store(0);
+    if (std::getenv("TT_EMULE_FIBER_LOG_N")) {
+        std::fprintf(stderr, "[EMULE FIBER] program: %u fibers on K=%u workers\n",
+                     p_->active_, p_->K_);
+    }
     if (p_->active_ == 0) {
         return;
     }
@@ -345,7 +374,7 @@ void FiberScheduler::run_until_idle() {
     std::vector<std::thread> workers;
     workers.reserve(p_->K_);
     for (unsigned i = 0; i < p_->K_; ++i) {
-        workers.emplace_back([this] { p_->worker_loop(); });
+        workers.emplace_back([this, i] { p_->worker_loop(i); });
     }
     for (auto& t : workers) {
         t.join();
