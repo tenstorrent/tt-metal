@@ -1035,7 +1035,29 @@ class Model:
         # Embed the tokens
         device = None if trace_enabled else self.mesh_device
 
-        if batched_prefill:
+        if self.sequence_parallel:
+            # Sequence-parallel prefill: ONE prompt of seq_len tokens, sharded by SEQUENCE across the
+            # SP rows (row r -> tokens [r*s_local:(r+1)*s_local]) and replicated across the TP cols.
+            # Each device embeds its 1/sp seq-shard; the residual stream then stays SP-sharded through
+            # every layer (attention gathers across the SP ring internally, MoE routes per-row).
+            if tokens.dim() == 1:
+                tokens = tokens.reshape(1, -1)
+            seq_total = tokens.shape[-1]
+            sp = self.mesh_device.shape[self.mesh_config.sp_axis]
+            assert seq_total % sp == 0, f"SP prefill needs seq_len ({seq_total}) divisible by sp ({sp})"
+            tokens = tokens.reshape(1, 1, 1, seq_total)
+            tdims = [None, None]
+            tdims[self.mesh_config.sp_axis] = 3  # seq dim across SP rows
+            tokens = ttnn.from_torch(
+                tokens,
+                device=device,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=tuple(tdims), mesh_shape=self.mesh_device.shape
+                ),
+            )
+        elif batched_prefill:
             # Row-parallel batched prefill: tokens is [num_rows, seq_len]
             # Shard across mesh rows so each row gets one user's tokens [1, seq_len]
             num_rows = tokens.shape[0]
@@ -1063,10 +1085,37 @@ class Model:
 
         # Prepare rotation matrices (slice from rope_setup like tt-transformers model.py lines 156-159)
         seq_len = self.args.max_seq_len if trace_enabled else tokens_embd.shape[-2]
-        rot_mats_global = [
-            self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
-            self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
-        ]
+        if self.sequence_parallel and not trace_enabled:
+            # Per-row RoPE: the global cos/sin are computed for positions [0:seq_total]; re-shard them
+            # across the SP rows so row r rotates its OWN positions [r*s_local:(r+1)*s_local] (matching
+            # its token shard), replicated across the TP cols. Re-use the model's own (format-exact)
+            # prefill cos/sin rather than rebuilding the Meta-swizzled tables.
+            sp = self.mesh_device.shape[self.mesh_config.sp_axis]
+            seq_total = seq_len * sp
+            rdims = [None, None]
+            rdims[self.mesh_config.sp_axis] = 2  # seq dim across SP rows
+
+            def _reshard_rope(dev_tensor):
+                full = ttnn.to_torch(ttnn.get_device_tensors(dev_tensor)[0])[:, :, :seq_total, :]
+                return ttnn.from_torch(
+                    full,
+                    device=device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=ttnn.bfloat16,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=tuple(rdims), mesh_shape=self.mesh_device.shape
+                    ),
+                )
+
+            rot_mats_global = [
+                _reshard_rope(self.rope_setup.cos_matrix_prefill),
+                _reshard_rope(self.rope_setup.sin_matrix_prefill),
+            ]
+        else:
+            rot_mats_global = [
+                self.rope_setup.cos_matrix_prefill[:, :, :seq_len, :],
+                self.rope_setup.sin_matrix_prefill[:, :, :seq_len, :],
+            ]
         rot_mats_local = None
 
         # Prepare page tables if provided
