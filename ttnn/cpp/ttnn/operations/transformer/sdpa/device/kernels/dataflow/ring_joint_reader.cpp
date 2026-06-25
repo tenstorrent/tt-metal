@@ -12,6 +12,9 @@
 #include "chunked_prefill_utils.hpp"
 #include "chain_link.hpp"
 #include "fused_op_receiver.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
+
+namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 template <bool has_joint_inputs, uint32_t joint_tensor_args_offset>
 constexpr uint32_t get_post_tensor_args_offset() {
@@ -162,9 +165,6 @@ void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
     constexpr uint32_t NHK = get_compile_time_arg_val(2);
-    // K chain selection: batch chain when NHK == 1 (MLA mode), else head chain
-    // Derived from NHK to enable conditional arg layout (saves resources when unused)
-    constexpr bool k_uses_batch_chain = (NHK == 1);
     constexpr uint32_t DHt = get_compile_time_arg_val(3);
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
@@ -199,6 +199,8 @@ void kernel_main() {
     constexpr uint32_t NHV = get_compile_time_arg_val(30);
     // Latent-V mode: absent V is materialized from the prefix of K tiles already in L1.
     constexpr bool v_shares_k_buffer = get_compile_time_arg_val(31) == 1;
+    constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
+    constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
     // reader never materializes V. Shared with the program factory and compute kernel.
     constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
@@ -241,12 +243,18 @@ void kernel_main() {
     // Head chain runtime args (always present)
     const ChainConfig head_cfg = ChainConfig::read_from_args(argidx);
 
-    // Batch chain runtime args (only present when k_uses_batch_chain / NHK == 1)
+    // Batch chain runtime args (only present for non-GQA shared-K modes).
     ChainConfig batch_cfg;  // default zero-initialized
     uint32_t max_q_per_core = 0;
     if constexpr (k_uses_batch_chain) {
         batch_cfg = ChainConfig::read_from_args(argidx);
         max_q_per_core = get_arg_val<uint32_t>(argidx++);
+    }
+    ChainConfig gqa_cfg;  // default zero-initialized
+    uint32_t gqa_max_q_per_core = 0;
+    if constexpr (gqa_grouped_kv) {
+        gqa_cfg = ChainConfig::read_from_args(argidx);
+        gqa_max_q_per_core = get_arg_val<uint32_t>(argidx++);
     }
 
     const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
@@ -257,12 +265,27 @@ void kernel_main() {
 
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
-    uint32_t head_sender_semaphore_id = get_compile_time_arg_val(post_tensor_args_offset);
-    uint32_t head_receiver_semaphore_id = get_compile_time_arg_val(post_tensor_args_offset + 1);
-    uint32_t head_valid_semaphore_id = get_compile_time_arg_val(post_tensor_args_offset + 2);
-    constexpr bool head_mcast_enabled = get_compile_time_arg_val(post_tensor_args_offset + 3) == 1;
+    constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
+    constexpr uint32_t chain_receiver_semaphore_arg_offset = ring_joint::kChainReceiverSemaphoreCompileArgOffset;
+    constexpr uint32_t chain_valid_semaphore_arg_offset = ring_joint::kChainValidSemaphoreCompileArgOffset;
+    constexpr uint32_t chain_mcast_enabled_arg_offset = ring_joint::kChainMcastEnabledCompileArgOffset;
+    constexpr uint32_t chain_compile_arg_count = ring_joint::kChainCompileArgCount;
 
-    // Batch chain semaphores (only present when k_uses_batch_chain / NHK == 1).
+    uint32_t head_sender_semaphore_id =
+        get_compile_time_arg_val(post_tensor_args_offset + chain_sender_semaphore_arg_offset);
+    uint32_t head_receiver_semaphore_id =
+        get_compile_time_arg_val(post_tensor_args_offset + chain_receiver_semaphore_arg_offset);
+    uint32_t head_valid_semaphore_id =
+        get_compile_time_arg_val(post_tensor_args_offset + chain_valid_semaphore_arg_offset);
+    constexpr bool head_mcast_enabled =
+        get_compile_time_arg_val(post_tensor_args_offset + chain_mcast_enabled_arg_offset) == 1;
+    constexpr uint32_t head_chain_arg_count = chain_compile_arg_count;
+    constexpr uint32_t batch_chain_arg_count = k_uses_batch_chain ? chain_compile_arg_count : 0;
+    constexpr uint32_t gqa_chain_arg_count = gqa_grouped_kv ? chain_compile_arg_count : 0;
+    constexpr uint32_t batch_chain_ct_offset = post_tensor_args_offset + head_chain_arg_count;
+    constexpr uint32_t gqa_chain_ct_offset = batch_chain_ct_offset + batch_chain_arg_count;
+
+    // Batch chain semaphores (only present for non-GQA shared-K modes).
     // Initialize to 0; will be overwritten if k_uses_batch_chain. Non-participants never use them.
     uint32_t batch_sender_semaphore_id = 0;
     uint32_t batch_receiver_semaphore_id = 0;
@@ -271,20 +294,35 @@ void kernel_main() {
     // batch_mcast_enabled: read from compile-time args if present, else false (for template instantiation)
     constexpr bool batch_mcast_enabled = []() {
         if constexpr (k_uses_batch_chain) {
-            return get_compile_time_arg_val(post_tensor_args_offset + 7) == 1;
+            return get_compile_time_arg_val(batch_chain_ct_offset + chain_mcast_enabled_arg_offset) == 1;
         }
         return false;
     }();
 
     if constexpr (k_uses_batch_chain) {
-        batch_sender_semaphore_id = get_compile_time_arg_val(post_tensor_args_offset + 4);
-        batch_receiver_semaphore_id = get_compile_time_arg_val(post_tensor_args_offset + 5);
-        batch_valid_semaphore_id = get_compile_time_arg_val(post_tensor_args_offset + 6);
+        batch_sender_semaphore_id = get_compile_time_arg_val(batch_chain_ct_offset + chain_sender_semaphore_arg_offset);
+        batch_receiver_semaphore_id =
+            get_compile_time_arg_val(batch_chain_ct_offset + chain_receiver_semaphore_arg_offset);
+        batch_valid_semaphore_id = get_compile_time_arg_val(batch_chain_ct_offset + chain_valid_semaphore_arg_offset);
     }
 
-    constexpr uint32_t head_chain_arg_count = 4;
-    constexpr uint32_t batch_chain_arg_count = k_uses_batch_chain ? 4 : 0;
-    constexpr uint32_t cb_arg_offset = post_tensor_args_offset + head_chain_arg_count + batch_chain_arg_count;
+    uint32_t gqa_sender_semaphore_id = 0;
+    uint32_t gqa_receiver_semaphore_id = 0;
+    uint32_t gqa_valid_semaphore_id = 0;
+    constexpr bool gqa_mcast_enabled = []() {
+        if constexpr (gqa_grouped_kv) {
+            return get_compile_time_arg_val(gqa_chain_ct_offset + chain_mcast_enabled_arg_offset) == 1;
+        }
+        return false;
+    }();
+    if constexpr (gqa_grouped_kv) {
+        gqa_sender_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_sender_semaphore_arg_offset);
+        gqa_receiver_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_receiver_semaphore_arg_offset);
+        gqa_valid_semaphore_id = get_compile_time_arg_val(gqa_chain_ct_offset + chain_valid_semaphore_arg_offset);
+    }
+
+    constexpr uint32_t cb_arg_offset =
+        post_tensor_args_offset + head_chain_arg_count + batch_chain_arg_count + gqa_chain_arg_count;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -299,7 +337,7 @@ void kernel_main() {
 
     Noc noc;
 
-    // Head chain (head-level): matches (batch, head), used by V and optionally K
+    // Head chain (query-head level): MHA uses it for K/V; separate-V shared-K uses it for V only.
     ChainLink<head_mcast_enabled, true> head_chain(
         head_cfg.participates,
         head_cfg.is_injector,
@@ -323,7 +361,7 @@ void kernel_main() {
         head_cfg.head,
         head_cfg.next_core_q_chunks);
 
-    // Batch chain (batch-level): matches batch only, used by K when NHK == 1 (MLA mode)
+    // Batch chain (batch-level): matches batch only, used by K in non-GQA shared-K modes.
     ChainLink<batch_mcast_enabled, false> batch_chain(
         batch_cfg.participates,
         batch_cfg.is_injector,
@@ -347,12 +385,44 @@ void kernel_main() {
         0,  // chain_head unused for batch-level chain
         batch_cfg.next_core_q_chunks);
 
-    // Non-shared V uses the head chain. Latent-V reads V from K and does not need a separate V chain.
-    auto& v_chain = head_chain;
+    // GQA grouped chain (head-level where head means KV head): used by both K and V in GQA_GROUPED_KV.
+    ChainLink<gqa_mcast_enabled, true> gqa_chain(
+        gqa_cfg.participates,
+        gqa_cfg.is_injector,
+        gqa_cfg.is_sink,
+        gqa_sender_semaphore_id,
+        gqa_receiver_semaphore_id,
+        gqa_valid_semaphore_id,
+        gqa_cfg.signal_target_x<gqa_mcast_enabled>(),
+        gqa_cfg.signal_target_y<gqa_mcast_enabled>(),
+        gqa_cfg.next_physical_x,
+        gqa_cfg.next_physical_y,
+        gqa_cfg.mcast_start_x,
+        gqa_cfg.mcast_start_y,
+        gqa_cfg.mcast_end_x,
+        gqa_cfg.mcast_end_y,
+        gqa_cfg.mcast_num_dests,
+        gqa_cfg.mcast_sender_wait,
+        v_chunk_tiles,
+        v_tile_bytes,
+        gqa_cfg.batch,
+        gqa_cfg.head,
+        gqa_cfg.next_core_q_chunks);
 
-    // K uses batch chain when NHK == 1 (MLA), else head chain (compile-time IIFE selection)
+    // Non-shared V uses the head chain, except GQA where K and V share the grouped KV-head chain.
+    auto& v_chain = [&]() -> auto& {
+        if constexpr (gqa_grouped_kv) {
+            return gqa_chain;
+        } else {
+            return head_chain;
+        }
+    }();
+
+    // K uses the grouped GQA chain, the batch chain for shared-K modes, otherwise the query-head chain.
     auto& k_chain = [&]() -> auto& {
-        if constexpr (k_uses_batch_chain) {
+        if constexpr (gqa_grouped_kv) {
+            return gqa_chain;
+        } else if constexpr (k_uses_batch_chain) {
             return batch_chain;
         } else {
             return head_chain;
@@ -453,12 +523,19 @@ void kernel_main() {
             }
         }
 
-        // When K mcast is enabled, loop max_q_per_core times to stay synchronized with injector
-        // Cores with less work do padded iterations (K mcast sync only, no real work)
-        const uint32_t loop_q_count = (k_uses_batch_chain && batch_mcast_enabled) ? max_q_per_core : q_per_core;
+        // When K/V mcast is enabled, loop the per-chain max so receivers with less real Q work
+        // still participate in padded multicast handshakes without pushing compute-visible data.
+        uint32_t loop_q_count = q_per_core;
+        if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
+            loop_q_count = max_q_per_core;
+        }
+        if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
+            loop_q_count = gqa_max_q_per_core;
+        }
+        uint32_t gqa_group_q_iter = 0;
 
         for (uint32_t q_iter = 0; q_iter < loop_q_count; ++q_iter) {
-            // Check if this is a real iteration (has actual work) or padded (K mcast sync only)
+            // Check if this is a real iteration or only padded chain/mcast synchronization.
             const bool is_padded_iter = (q_iter >= q_per_core);
 
             // Calculate global_q_chunk for all iterations (including padded).
@@ -470,8 +547,21 @@ void kernel_main() {
             const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
             const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
             const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+            const uint32_t nk = nq / q_heads_per_k;
             const auto q_row_start_tile = q_chunk * Sq_chunk_t;
             const bool is_joint_q = has_joint_q ? (q_chunk >= num_local_q_chunks) : false;
+            const uint32_t q_iter_local = [&]() {
+                if constexpr (gqa_grouped_kv) {
+                    return gqa_group_q_iter;
+                } else {
+                    return q_iter;
+                }
+            }();
+            if constexpr (gqa_grouped_kv) {
+                if (nb == gqa_cfg.batch && nk == gqa_cfg.head) {
+                    gqa_group_q_iter++;
+                }
+            }
 
             const bool balanced_skip_q = q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
@@ -479,7 +569,7 @@ void kernel_main() {
             // nothing (no Q, no K/V) — compute's normalize-only path on the last ring iter does
             // not read Q (normalize uses only restored sum/out).
             // Skip logic applies to all iterations (including padded) so injector and receivers
-            // make the same skip decisions, keeping K mcast sync aligned.
+            // make the same skip decisions, keeping chain/mcast sync aligned.
             if (balanced_skip_q) {
                 continue;
             }
@@ -494,9 +584,6 @@ void kernel_main() {
                     q_end_seq_tile = Lt;
                 }
             }
-
-            // Iteration counter for chain forwarding decisions
-            const uint32_t q_iter_local = q_iter;
 
             // When q_per_core == 1, Q is identical across ring iterations: compute keeps it
             // fronted in the CB, so we only need to read it once on the first active ring iteration.
@@ -525,7 +612,6 @@ void kernel_main() {
                 // Default to local/gathered KV; override below for joint KV when applicable.
                 Slice k_slice;
                 uint32_t end_seq_tile;
-                const uint32_t nk = nq / q_heads_per_k;
                 // Local KV reads the indexed cache slot; gathered KV is at slot 0 of the scratch buffer.
                 const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
                 const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
@@ -548,8 +634,15 @@ void kernel_main() {
                 }
 
                 // K: either read locally (injector or not participant) or receive from chain
+                const uint32_t k_chain_head = [&]() {
+                    if constexpr (gqa_grouped_kv) {
+                        return nk;
+                    } else {
+                        return nq;
+                    }
+                }();
                 CircularBuffer cb_k(cb_k_in);
-                if constexpr (k_uses_batch_chain && batch_mcast_enabled) {
+                if constexpr ((k_uses_batch_chain && batch_mcast_enabled) || (gqa_grouped_kv && gqa_mcast_enabled)) {
                     // Ensures that compute has completed with the previous K chunk before we overwrite the buffer with
                     // the next K chunk for mcast.
                     const uint32_t reserve_tiles = is_padded_iter ? 2 * k_chunk_tiles : k_chunk_tiles;
@@ -558,7 +651,7 @@ void kernel_main() {
                     cb_k.reserve_back(k_chunk_tiles);
                 }
                 uint32_t cb_k_start_address = cb_k.get_write_ptr();
-                if (k_chain.should_receive(nb, nq)) {
+                if (k_chain.should_receive(nb, k_chain_head)) {
                     k_chain.receive(noc);
                 } else {
                     // Injector or non-participant: read K from DRAM. Dispatch directly so
@@ -584,17 +677,26 @@ void kernel_main() {
                 }
 
                 // Forward K chunk via chain (uses K's data size explicitly)
-                if (k_chain.should_forward(nb, nq, q_iter_local)) {
+                if (k_chain.should_forward(nb, k_chain_head, q_iter_local)) {
                     k_chain.forward(noc, cb_k_start_address, k_chunk_tiles, k_tile_bytes);
                 }
 
-                // Skip Q and compute-visible pushes for padded K-mcast iterations.
+                // Skip Q and compute-visible pushes for padded mcast iterations.
                 // Note: push_back is intentionally skipped — without it, the write pointer
                 // doesn't advance, so reserve_back returns the same address each iteration.
                 // This lets the buffer act as a reusable staging area for the mcast.
                 if (is_padded_iter) {
-                    // Padded iterations participate in the chain handshake but do not generate
-                    // compute-visible K/V. In latent-V mode, only the K^T segment is transported.
+                    // Padded GQA receivers must also receive V, because the row injector multicasts
+                    // both K and V and waits for every receiver's ready signal. The data remains
+                    // staging-only because we intentionally do not push it to compute.
+                    if constexpr (gqa_grouped_kv && gqa_mcast_enabled) {
+                        const uint32_t nv = nq / q_heads_per_v;
+                        CircularBuffer cb_v(cb_v_in);
+                        cb_v.reserve_back(2 * v_cb_entry_tiles);
+                        if (v_chain.should_receive(nb, nv)) {
+                            v_chain.receive(noc);
+                        }
+                    }
                     continue;
                 }
 

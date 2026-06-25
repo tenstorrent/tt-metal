@@ -285,10 +285,14 @@ inline void drain_phantom_band_q() {
 /** Stamp the causal -inf mask onto q_row's masked suffix [valid, KC) in place, so the strip still
  *  untilizes via the fast W=KC path (empty loop when the row is fully valid). */
 inline void stamp_masked_suffix(
-    const WorkUnitSpan& span, uint32_t q_row, uint32_t slot_base, uint32_t k_tiles_in_unit) {
+    const WorkUnitSpan& span,
+    uint32_t q_row,
+    uint32_t slot_base,
+    uint32_t k_tiles_in_unit,
+    uint32_t chunk_start_tiles) {
     const uint32_t k_tile0 = span.k_tile_start();
     const uint32_t diag_tile = chunk_start_tiles + span.q_tile_start() + q_row;
-    const uint32_t valid = row_valid_prefix(span.q_tile_start() + q_row, k_tile0, k_tiles_in_unit);
+    const uint32_t valid = row_valid_prefix(span.q_tile_start() + q_row, k_tile0, k_tiles_in_unit, chunk_start_tiles);
     for (uint32_t k_col = valid; k_col < k_tiles_per_unit; ++k_col) {
         stamp_mask_tile<cb_acc_strip, cb_mask>(slot_base + k_col, k_tile0 + k_col, diag_tile);
     }
@@ -307,6 +311,8 @@ void kernel_main() {
     // Valid KV length in tiles: caps each cell's valid columns (the causal mask suffix grows to cover the
     // unwritten tail). Full k_len_tiles when not set, so the dense path is unchanged. Excluded from the hash.
     const uint32_t kv_len_tiles = get_arg_val<uint32_t>(6);
+    // Per-device chunk-start offset (tiles), from the mesh coordinate; runtime so distinct values reuse one program.
+    const uint32_t chunk_start_tiles = get_arg_val<uint32_t>(7);
     if (num_groups == 0 || num_bands == 0) {
         return;
     }
@@ -370,7 +376,8 @@ void kernel_main() {
                     accumulate_row_streaming(q_row, slot_base);  // PHASE 1+2 head-streaming / KC==1 fallback
                 }
 
-                stamp_masked_suffix(span, q_row, slot_base, k_tiles_in_unit);  // causal -inf on masked suffix
+                // causal -inf on masked suffix; chunk_start_tiles is the per-device runtime offset.
+                stamp_masked_suffix(span, q_row, slot_base, k_tiles_in_unit, chunk_start_tiles);
             }
             acc.push_back(unit_strip);
 

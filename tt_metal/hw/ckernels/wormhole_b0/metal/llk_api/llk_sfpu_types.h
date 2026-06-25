@@ -95,6 +95,8 @@ enum class SfpuType {
     gt_int,
     le_int,
     ge_int,
+    eq_int,
+    ne_int,
     eq,
     topk_local_sort,
     topk_merge,

@@ -19,11 +19,16 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      runs-on:
+        required: false
+        type: string
+        default: "tt-ubuntu-2204-medium-stable"
+        description: "Runner label for fabric CPU-only unit tests"
 
 jobs:
   fabric-cpu-unit-tests:
     name: ${{ inputs.arch }} fabric cpu unit tests (${{ matrix.shard.name }})
-    runs-on: tt-ubuntu-2204-medium-stable
+    runs-on: ${{ inputs.runs-on }}
     strategy:
       fail-fast: false
       matrix:

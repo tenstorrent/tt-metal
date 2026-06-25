@@ -1219,12 +1219,16 @@ inline void init_reduce(std::uint32_t block_ct_dim = 1) {
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs. Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates
-    // on two's-complement values. Int32 MAX/MIN keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX)
-    // is a float/sign-magnitude comparator and orders sign-magnitude integers correctly, whereas
-    // two's-complement negatives would be mis-ordered.
+    // Int32 DEST representation per reduction: SUM and MAX/MIN are two's-complement; AVG is sign-magnitude.
+    // SUM loads with plain INT32 so the word reaches SFPIADD (a two's-complement adder) unchanged;
+    // INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt two's-complement negatives. MAX/MIN
+    // load with INT32_2S_COMP so the word becomes sign-magnitude, which is the order SFPSWAP compares in.
+    // AVG keeps INT32_2S_COMP; its operands sit in DEST as sign-magnitude and its divide-by-32 step assumes
+    // that mode. init_reduce has no reduce_dim, so every Int32 MAX/MIN takes INT32_2S_COMP here; the row-MAX
+    // path re-records its own replay buffer regardless.
     constexpr InstrModLoadStore INSTRUCTION_MODE =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG))
+        (format == DataFormat::Int32 &&
+         (pool_type == PoolType::AVG || pool_type == PoolType::MAX || pool_type == PoolType::MIN))
             ? InstrModLoadStore::INT32_2S_COMP
         : (format == DataFormat::Float16_b) ? InstrModLoadStore::DEFAULT
                                             : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
@@ -1290,14 +1294,19 @@ inline void calculate_reduce(std::uint32_t block_ct_dim = 1, std::uint32_t block
         is_supported_reduce_format(format),
         "Unsupported data format. Supported formats: Int32, UInt32, UInt16, Float32, Float16_b");
 
-    // Determine InstrModLoadStore from llk_defs.
-    // Int32 SUM/AVG use INT32_2S_COMP so SFPIADD operates on two's-complement values. Int32 MAX/MIN
-    // (both dims) keep plain INT32 (sign-magnitude): SFPSWAP(VEC_MIN_MAX) is a float/sign-magnitude
-    // comparator that orders sign-magnitude integers correctly; two's-complement negatives are
-    // mis-ordered (max of negatives would return the most-negative value).
-    constexpr bool int32_sum_avg =
-        (format == DataFormat::Int32 && (pool_type == PoolType::SUM || pool_type == PoolType::AVG));
-    constexpr InstrModLoadStore INSTRUCTION_MODE = int32_sum_avg ? InstrModLoadStore::INT32_2S_COMP
+    // Int32 load/store mode per reduction. DEST encoding is two's-complement for SUM and MAX/MIN, and
+    // sign-magnitude for AVG.
+    //   SUM (two's-complement): plain INT32 so SFPIADD (a two's-complement adder) gets the word unchanged;
+    //        INT32_2S_COMP applies SignMagToTwosComp on load and would corrupt negatives.
+    //   MAX/MIN column reduce (two's-complement): INT32_2S_COMP so the word becomes sign-magnitude for
+    //        SFPSWAP, which compares in sign-magnitude. Scoped to REDUCE_COL so the row-MAX path keeps
+    //        plain INT32.
+    //   AVG (sign-magnitude): INT32_2S_COMP, which perform_int_average's divide-by-32 step assumes.
+    constexpr bool int32_avg = (format == DataFormat::Int32 && pool_type == PoolType::AVG);
+    constexpr bool int32_max_min_col =
+        (format == DataFormat::Int32 && (pool_type == PoolType::MAX || pool_type == PoolType::MIN) &&
+         reduce_dim == ReduceDim::REDUCE_COL);
+    constexpr InstrModLoadStore INSTRUCTION_MODE = (int32_avg || int32_max_min_col) ? InstrModLoadStore::INT32_2S_COMP
                                                    : (format == DataFormat::Float16_b)
                                                        ? InstrModLoadStore::DEFAULT
                                                        : GetSfpLoadStoreInstrMod<format, is_fp32_dest_accum_en>();
