@@ -52,7 +52,7 @@ def test_rms_norm(device, batch_size, h, w):
 @pytest.mark.parametrize("w", [32, 4096])
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4, ttnn.MathFidelity.HiFi2])
 @pytest.mark.parametrize("math_approx_mode", [True, False])
-@pytest.mark.parametrize("fp32_dest_acc_en", [True, False])
+@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])  # :/
 @pytest.mark.parametrize("packer_l1_acc", [True, False])
 def test_rms_norm_row_major(device, batch_size, h, w, math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc):
     torch.manual_seed(0)
