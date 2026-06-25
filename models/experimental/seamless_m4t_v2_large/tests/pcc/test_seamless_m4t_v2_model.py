@@ -350,7 +350,7 @@ def test_seamless_m4t_v2_generate_matches_hf_all_tasks(mesh_device, device_param
             sample_count_ratio=(_SAMPLE_COUNT_RATIO_LO, _SAMPLE_COUNT_RATIO_HI),
         )
 
-        audio_inputs = processor(audios=hf_hin_wav, sampling_rate=sr, return_tensors="pt")
+        audio_inputs = processor(audio=hf_hin_wav, sampling_rate=sr, return_tensors="pt")
         sp_input_features = audio_inputs["input_features"]
         sp_attn = audio_inputs["attention_mask"]
 

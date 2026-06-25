@@ -138,7 +138,7 @@ def ensure_long_story(url: str = STORY_URL, dest: Path = STORY_FILE) -> str:
 
 
 def _mel_frame_count(processor: AutoProcessor, waveform: np.ndarray, sample_rate: int) -> int:
-    audio = processor(audios=waveform, sampling_rate=sample_rate, return_tensors="pt")
+    audio = processor(audio=waveform, sampling_rate=sample_rate, return_tensors="pt")
     return int(audio["attention_mask"].sum().item())
 
 
@@ -703,7 +703,7 @@ def main(argv: list[str] | None = None) -> None:
         min_mel_frames=args.max_len,
         url=args.audio_url,
     )
-    full_audio = processor(audios=long_wav, sampling_rate=sample_rate, return_tensors="pt")
+    full_audio = processor(audio=long_wav, sampling_rate=sample_rate, return_tensors="pt")
     full_speech_features = full_audio["input_features"].to(torch.bfloat16)
     full_speech_mask = full_audio["attention_mask"]
     max_mel_frames = int(full_speech_mask.sum().item())

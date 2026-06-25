@@ -155,7 +155,7 @@ def _synthetic_speech_inputs(processor: Any) -> Tuple[torch.Tensor, torch.Tensor
     drift between consecutive tracy runs."""
     torch.manual_seed(42)
     wav = (torch.randn(1, 16_000, dtype=torch.float32) * 0.01).numpy().reshape(-1)
-    audio = processor(audios=wav, sampling_rate=16_000, return_tensors="pt")
+    audio = processor(audio=wav, sampling_rate=16_000, return_tensors="pt")
     return audio["input_features"].to(torch.bfloat16), audio["attention_mask"]
 
 

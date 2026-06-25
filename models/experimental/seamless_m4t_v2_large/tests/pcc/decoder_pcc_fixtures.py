@@ -190,7 +190,7 @@ def _s2tt_encoder_timeline_from_wav(
     torch.manual_seed(seed)
     n_samples = max(1, int(16_000 * wav_seconds))
     wav = (torch.randn(n_samples, dtype=torch.float32) * 0.01).numpy().reshape(-1)
-    audio = processor(audios=wav, sampling_rate=16_000, return_tensors="pt")
+    audio = processor(audio=wav, sampling_rate=16_000, return_tensors="pt")
     input_features = audio["input_features"].to(dtype=next(model.parameters()).dtype)
     mel_mask = audio["attention_mask"]
     encoder_hidden, enc_attn = _hf_speech_encoder_hidden_and_mask(model, input_features, mel_mask)
