@@ -18,12 +18,12 @@ namespace device {
 using IDevice = ttnn::IDevice;
 using MeshDevice = tt::tt_metal::distributed::MeshDevice;
 
-// Build a cluster/arch-aware DispatchCoreConfig (TTNN's opinionated default that prefers maximum
-// available worker cores). Any field left unspecified is resolved from the active cluster/arch:
+// Build a cluster/arch-aware DispatchCoreConfig. Any field left unspecified is resolved from
+// the active cluster/arch:
 //   type:  ETH for N300/T3K/N300_2x2 clusters; otherwise WORKER.
 //   axis:  Blackhole without fabric tensix MUX -> COL; otherwise ROW.
 // Throws if type == ETH and axis == COL, or if axis == ROW on Blackhole without fabric tensix MUX.
-tt::tt_metal::DispatchCoreConfig create_dispatch_core_config(
+tt::tt_metal::DispatchCoreConfig create_cluster_aware_dispatch_config(
     std::optional<tt::tt_metal::DispatchCoreType> type = std::nullopt,
     std::optional<tt::tt_metal::DispatchCoreAxis> axis = std::nullopt,
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config = tt::tt_fabric::FabricTensixConfig::DISABLED);

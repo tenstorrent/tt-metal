@@ -213,7 +213,7 @@ void device_module(nb::module_& m_device) {
         [](std::optional<tt::tt_metal::DispatchCoreType> type,
            std::optional<tt::tt_metal::DispatchCoreAxis> axis,
            std::optional<tt::tt_fabric::FabricTensixConfig> fabric_tensix_config) {
-            return ttnn::device::create_dispatch_core_config(
+            return ttnn::device::create_cluster_aware_dispatch_config(
                 type, axis, fabric_tensix_config.value_or(tt::tt_fabric::FabricTensixConfig::DISABLED));
         },
         nb::kw_only(),
@@ -235,7 +235,7 @@ void device_module(nb::module_& m_device) {
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config.value_or(ttnn::device::create_dispatch_core_config()),
+                dispatch_core_config.value_or(ttnn::device::create_cluster_aware_dispatch_config()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },
@@ -268,7 +268,7 @@ void device_module(nb::module_& m_device) {
                 l1_small_size,
                 trace_region_size,
                 num_command_queues,
-                dispatch_core_config.value_or(ttnn::device::create_dispatch_core_config()),
+                dispatch_core_config.value_or(ttnn::device::create_cluster_aware_dispatch_config()),
                 /*l1_bank_remap=*/{},
                 worker_l1_size);
         },

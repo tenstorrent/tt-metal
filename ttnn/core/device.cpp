@@ -49,7 +49,7 @@ void validate_dispatch_core_config(
 
 }  // namespace
 
-tt::tt_metal::DispatchCoreConfig create_dispatch_core_config(
+tt::tt_metal::DispatchCoreConfig create_cluster_aware_dispatch_config(
     std::optional<tt::tt_metal::DispatchCoreType> type,
     std::optional<tt::tt_metal::DispatchCoreAxis> axis,
     tt::tt_fabric::FabricTensixConfig fabric_tensix_config) {
@@ -71,7 +71,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
         l1_small_size,
         trace_region_size,
         num_command_queues,
-        dispatch_core_config.value_or(create_dispatch_core_config()),
+        dispatch_core_config.value_or(create_cluster_aware_dispatch_config()),
         {},
         worker_l1_size);
 }
