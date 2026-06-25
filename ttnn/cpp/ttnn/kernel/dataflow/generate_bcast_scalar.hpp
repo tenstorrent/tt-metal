@@ -5,6 +5,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
+#include "api/dataflow/circular_buffer.h"
 
 // W-bcast scalar
 // Tile is assumed to have 16-bit elements
@@ -41,9 +42,9 @@ FORCE_INLINE void generate_bcast_row_scalar(const uint32_t cb_id, const uint32_t
 // Tile is assumed to have 16-bit elements
 // Scalar is assumed to be a 16-bit value double packed into a u32
 FORCE_INLINE void generate_bcast_unary_scalar(const uint32_t cb_id, const uint32_t scalar) {
-    const uint32_t scalar_val = scalar >> 16;
-    cb_reserve_back(cb_id, 1);
-    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_id));
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
     ptr[0] = scalar >> 16;
-    cb_push_back(cb_id, 1);
+    cb.push_back(1);
 }
