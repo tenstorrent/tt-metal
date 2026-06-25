@@ -11,6 +11,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.experimental.diffusion_gemma.tt import sampling as TS
+from models.experimental.diffusion_gemma.tt.sampling_params import canvas_sample_from_params
 
 pytestmark = [
     pytest.mark.skipif(
@@ -86,6 +87,35 @@ def test_canvas_sample_chunked_regenerated_noise_distribution(device):
     print(
         f"\n[canvas sampling chunked dist] N={num_samples} max_top1_freq_error={max_top1_freq_error:.4f} "
         f"mean_kl={mean_kl:.4f}"
+    )
+    assert max_top1_freq_error < 0.05
+    assert mean_kl < 0.05
+
+
+def test_canvas_sample_from_params_chunked_regenerated_noise_distribution(device):
+    # Covers the vLLM seam's seed-regenerated path without using the known-biased
+    # single-call ttnn.rand noise over the whole vocab axis.
+    num_samples = 4096
+    length = 32
+    vocab_size = 32
+    temperature = 0.7
+    logits = _structured_logits(num_samples, length, vocab_size)
+    expected_probs = F.softmax(logits[0] / temperature, dim=-1)
+    sampling_params = {"temperature": temperature, "top_k": 64, "top_p": 0.95, "seed": 47472}
+
+    samples = canvas_sample_from_params(
+        _to_device(device, logits),
+        sampling_params,
+        default_temperature=0.8,
+        use_vocab_chunked_noise=True,
+        vocab_chunk_size=1,
+    )
+    sample_ids = ttnn.to_torch(samples).squeeze(-1).to(torch.long)
+
+    max_top1_freq_error, mean_kl = _distribution_metrics(sample_ids, expected_probs)
+    print(
+        f"\n[canvas sampling params chunked dist] N={num_samples} "
+        f"max_top1_freq_error={max_top1_freq_error:.4f} mean_kl={mean_kl:.4f}"
     )
     assert max_top1_freq_error < 0.05
     assert mean_kl < 0.05
